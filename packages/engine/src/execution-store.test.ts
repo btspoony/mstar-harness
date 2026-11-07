@@ -1594,7 +1594,7 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
     await expect(attempt(leased, "merge-lease")).rejects.toMatchObject({ code: "execution.not-empty" });
 
     // Accepted delivery evidence belongs to a lifecycle that already delivered.
-    const delivered = creationInput("wf-1", [planRow("p-1")], { delivery: { pr: { repo: "o/r", head: "h", target: "main" } } });
+    const delivered = creationInput("wf-1", [planRow("p-1")], { delivery: { compound: { outcome: "created" }, merge: {} } });
     await expect(attempt(delivered, "delivery")).rejects.toMatchObject({ code: "execution.not-empty" });
 
     // A terminal snapshot is never registered as an ACTIVE lifecycle.

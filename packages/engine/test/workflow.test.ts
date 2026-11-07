@@ -40,6 +40,7 @@ import {
   PREPARE_PHASE,
   consultDeliveryEvidence,
   deliveryBranchOf,
+  deliveryEvidenceViolations,
   deriveLifecyclePhase,
   derivePlanRegistration,
   WORKFLOW_SNAPSHOT_FILE,
@@ -454,12 +455,10 @@ describe("validateWorkflowSnapshot — registration-declared fields (contract §
 
 
 describe("consultDeliveryEvidence — pure delivery rules", () => {
-  test("accepts complete registered evidence and rejects missing registration or evidence", () => {
-    const delivery = {
-      compound: { outcome: "created" },
-      pr: { repo: "btspoony/mstar-harness", head: "feature/fixture", target: "main" },
-      merge: { provider: "github", evidence: "verified merge" },
-    };
+  test("accepts compound-only development evidence and rejects missing registration or evidence", () => {
+    // §4f `delivery.merge` is optional: with the delivery contained in the
+    // target, the compound disposition is the whole recorded evidence.
+    const delivery = { compound: { outcome: "created" } };
     const complete = validSnapshot({
       type: "plan",
       delivery_kind: "development",
@@ -469,7 +468,7 @@ describe("consultDeliveryEvidence — pure delivery rules", () => {
     expect(consultDeliveryEvidence(complete as never)).toEqual([]);
 
     // The pre-rename spelling of the delivery branch resolves through the same
-    // reader, so a row registered before the rename passes the identical check...
+    // reader, so a row registered before the rename passes the identical check.
     const legacy = validSnapshot({
       type: "plan",
       delivery_kind: "development",
@@ -477,26 +476,37 @@ describe("consultDeliveryEvidence — pure delivery rules", () => {
       delivery,
     });
     expect(consultDeliveryEvidence(legacy as never)).toEqual([]);
-    // ...and the comparison reads the VALUE under either spelling, so a legacy
-    // row whose recorded PR head contradicts it is incomplete like any other.
-    const legacyContradiction = validSnapshot({
-      type: "plan",
-      delivery_kind: "development",
-      branch: { source: "feature/fixture", target: "main" },
-      delivery: { ...delivery, pr: { repo: "btspoony/mstar-harness", head: "feature/elsewhere", target: "main" } },
-    });
-    expect(consultDeliveryEvidence(legacyContradiction as never).map((item) => item.code)).toContain(
-      "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE",
-    );
 
     const unregistered = consultDeliveryEvidence(validSnapshot({ type: "plan", status: "running", ended_at: undefined }) as never);
     expect(unregistered.map((item) => item.code)).toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
 
+    // The pure rule still demands the one fact the operator records.
     const incomplete = consultDeliveryEvidence(validSnapshot({
       ...complete,
-      delivery: { ...complete.delivery, merge: undefined },
+      delivery: {},
     }) as never);
     expect(incomplete.map((item) => item.code)).toContain("PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+  });
+
+  test("a stored pre-\u00a74f delivery block stays readable, while the writer rule refuses its members", () => {
+    // Existing authorities already record the retired shape: a recorded block
+    // is history and must not invalidate the whole snapshot.
+    const legacyPr = { repo: "synthetic/example", head: "feature/fixture", target: "main" };
+    const stored = validSnapshot({
+      type: "plan",
+      delivery_kind: "development",
+      branch: { work: "feature/fixture", target: "main" },
+      delivery: { compound: { outcome: "created" }, pr: legacyPr, merge: { provider: "synthetic", evidence: "fixture" } },
+    });
+    expect(validateWorkflowSnapshot(stored).violations.map((entry) => entry.code))
+      .not.toContain("workflow.snapshot.invalid-delivery-evidence");
+    // The consultation judges presence only, so the tolerated block still counts.
+    expect(consultDeliveryEvidence(stored as never)).toEqual([]);
+    // A WRITE of either retired member is still refused by the strict rule.
+    const code = "workflow.snapshot.invalid-delivery-evidence";
+    expect(deliveryEvidenceViolations({ pr: legacyPr }, "patch").map((entry) => entry.code)).toContain(code);
+    expect(deliveryEvidenceViolations({ merge: { provider: "x", evidence: "y" } }, "patch").map((entry) => entry.code)).toContain(code);
+    expect(deliveryEvidenceViolations({ merge: { commit: "1".repeat(40) } }, "patch")).toEqual([]);
   });
 
   test("a terminal plan header without a registered kind is accepted history, never an actionable violation", () => {

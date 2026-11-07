@@ -17,13 +17,13 @@
  *   transition this route can perform) and no caller-supplied gate verdict is
  *   ever read;
  * - the lifecycle transition runs the existing terminal rules: every owned row
- *   `Done`, the existing `consultDeliveryEvidence` consultation for a
- *   `completed` close (the SAME function the file route's close and the
- *   read-only Phase-6 gate consult), and the existing terminal invariant that a
- *   terminal lifecycle owns no execution or integration lease;
- * - the delivery transition runs the existing structural validator and the
- *   contract §4d/§4c ordering and immutability rules of `recordWorkflowDelivery`
- *   (one member map, one shape rule — exported by `workflow.ts`, not copied);
+ *   `Done`, the existing delivery-evidence consultation for a `completed` close
+ *   (the SAME `verifyDeliveryEvidence` the read-only Phase-6 gate consults — pure
+ *   evidence rules plus the local Git merge proof), and the existing terminal
+ *   invariant that a terminal lifecycle owns no execution or integration lease;
+ * - the delivery transition runs the existing structural validator only: the
+ *   delivery evidence records the compound disposition and the optional provider
+ *   merge commit, never a copy of the branch anchors (contract §4c/§4f);
  * - the integration-checkout transition runs the existing worktree/branch
  *   validators (`readMainWorktree` / `probeCheckoutRoot` / `isDistinctCheckout`
  *   / `assertBranchAlignment`) with the same rule `readIntegrationWorktreePath`
@@ -86,6 +86,7 @@ import {
   PLAN_PARALLELISM_VALUES,
   gitRead,
   prepareAmendmentComponent,
+  verifyDeliveryEvidence,
 } from "./coordination.js";
 import { rowStatusOf, summarize } from "./coordination-transitions.js";
 import {
@@ -160,8 +161,6 @@ import { StoreError, storeDbPath } from "./store-db.js";
 import {
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_TERMINAL_STATUSES,
-  consultDeliveryEvidence,
-  deliveryBranchOf,
   deliveryEvidenceMembers,
   deliveryEvidenceViolations,
   isTerminalSnapshot,
@@ -661,7 +660,9 @@ async function readPhaseEvidence(
   const probes: PhaseGateOptions = {};
   const integrationBranch = header.branch?.integration;
   if (isNonEmptyString(integrationBranch)) probes.specIntegrationBranch = integrationBranch;
-  const prTarget = header.delivery?.pr?.target;
+  // §4d the PR base branch IS the registered delivery target: the identity is
+  // derived from the anchor, never read back from a recorded copy.
+  const prTarget = header.branch?.target;
   if (isNonEmptyString(prTarget)) probes.prBaseBranch = prTarget;
 
   const integrationPath = isNonEmptyString(header.integration_worktree_path)
@@ -1513,9 +1514,6 @@ function applyWorkflowOperation(input: {
         ...(isNonEmptyString(operation.branch.work) ? { work: operation.branch.work } : {}),
         ...(isNonEmptyString(operation.branch.target) ? { target: operation.branch.target } : {}),
       };
-      // §4d the merged anchors are the RESULT this write stores; the warning is
-      // decided on them, never on a snapshot read before this transaction.
-      warnings = deliveryAnchorWarnings(workflowId, header);
       break;
     }
   }
@@ -1524,51 +1522,6 @@ function applyWorkflowOperation(input: {
   writeWorkflowState(tx, { workflowId, state: header });
   if (membershipLost) recordRootMembershipLoss(tx, { workflowId, now: at });
   return { receipt: readExecutionStateGraph(tx), membershipLost, warnings };
-}
-
-/**
- * §4d the advisory a delivery-anchor repair carries when the anchors it
- * just stored no longer name the PR identity the SAME header already records.
- *
- * That identity is frozen at its first `workflow evidence` record and the close
- * consultation requires `delivery.pr.head` / `delivery.pr.target` to BE the
- * registered anchors, so a header that disagrees can never reach a `completed`
- * close. The repair still applies - an anchor stays revisable for as long as the
- * lifecycle runs - and the warning names the recorded identity, the anchors it
- * stored and the ONE call that puts them back into agreement.
- *
- * Exactly one of the two comparisons can fail, and only for the anchor THIS
- * operation names: `branch.work` (resolved through `deliveryBranchOf`) when
- * `--branch-work` moved it, `branch.target` when `--branch-target` did. An
- * anchor the operation does NOT name keeps the value the recorded identity was
- * already checked against, so its comparison cannot fail here. `pr.repo` has no
- * anchor to compare with, and `branch.base` is not a PR member.
- *
- * A terminal header never reaches this code: the amend guard at the top of
- * `applyWorkflowOperation` refuses every repair on a closed lifecycle, so the
- * recovery named here is always executable.
- */
-function deliveryAnchorWarnings(workflowId: string, header: Record<string, unknown>): ResolutionWarning[] {
-  const delivery = isPlainObject(header.delivery) ? header.delivery : undefined;
-  const pr = delivery === undefined ? undefined : delivery.pr;
-  // A stored PR identity always carries both members (deliveryEvidenceViolations
-  // requires non-empty strings), so the recovery below names real values.
-  if (!isPlainObject(pr) || !isNonEmptyString(pr.head) || !isNonEmptyString(pr.target)) return [];
-  const branch = isPlainObject(header.branch) ? header.branch : {};
-  const work = deliveryBranchOf(branch) ?? null;
-  const target = isNonEmptyString(branch.target) ? branch.target : null;
-  if (pr.head === work && pr.target === target) return [];
-  return [
-    {
-      code: "workflow.delivery-anchors.pr-identity",
-      message:
-        `the repair stored branch.work ${JSON.stringify(work)} / branch.target ${JSON.stringify(target)}, which no longer name the ` +
-        `recorded PR identity (delivery.pr.head ${JSON.stringify(pr.head)}, delivery.pr.target ${JSON.stringify(pr.target)}): that ` +
-        `identity is frozen at its first record, so a \`completed\` close refuses this workflow until the two agree again (\u00A74d). ` +
-        `Restore agreement with \`mstar workflow delivery-anchors --workflow ${workflowId} --branch-work ${pr.head} ` +
-        `--branch-target ${pr.target} --reason "<why the anchors are restored>"\`.`,
-    },
-  ];
 }
 
 /** The pre-transaction evidence a transition must have read (an internal invariant). */
@@ -1716,12 +1669,19 @@ function applyLifecycleTransition(input: {
         },
       );
     }
-    const violations = consultDeliveryEvidence({ ...(header as unknown as WorkflowSnapshot), plans: [...rows] });
+    const violations = verifyDeliveryEvidence({ ...(header as unknown as WorkflowSnapshot), plans: [...rows] });
     if (violations.length > 0) {
       throw invalidWorkflowTransition(
         "The workflow cannot complete; inspect the workflow with mstar status validate.",
         {
           violations: violations.map((entry) => entry.message),
+          // The recovery each violation names, in the same order, so a caller
+          // reaches the instruction the read-only Phase-6 gate publishes in its
+          // own `fix` channel.
+          recovery: violations.flatMap((entry) => (entry.fix === undefined ? [] : [entry.fix])),
+          // The FIRST violation's machine code, so a caller reaches the same
+          // code the read-only Phase-6 gate publishes for the same state.
+          code: violations[0]?.code,
           workflow_id: workflowId,
         },
       );
@@ -1810,14 +1770,16 @@ function applyExecutionPolicy(workflowId: string, policy: WorkflowExecutionPolic
 }
 
 /**
- * §3 the `delivery` transition: the same evidence rules the file route's
- * `recordWorkflowDelivery` enforces — the declared kind decides which members
- * exist (one shared member map), the structural validator decides their shape,
- * and §4d requires an incoming identity to BE the registered delivery by field
- * value. Re-recording a delivery (the PR identity, the report-only `completion`
- * fulfilment, the compound disposition, the merge record) is a revisable
+ * §3 the `delivery` transition: the declared kind decides which members exist
+ * (one shared member map) and the structural validator decides their shape.
+ * Re-recording a delivery (the report-only `completion` fulfilment, the
+ * compound disposition, the optional provider merge commit) is a revisable
  * mutation under a new operation id; a tampered replay of the SAME operation id
  * is refused by the request-hash conflict. An identical re-record is a no-op.
+ *
+ * Nothing here compares the evidence with the delivery anchors: the PR identity
+ * IS those anchors (§4d), and the merge is proven from Git at the close
+ * (`verifyDeliveryEvidence`), so a repaired anchor cannot strand a frozen copy.
  */
 function applyDeliveryEvidence(input: {
   header: Record<string, unknown>;
@@ -1852,39 +1814,6 @@ function applyDeliveryEvidence(input: {
     });
   }
   const stored = (isPlainObject(header.delivery) ? header.delivery : {}) as Record<string, unknown>;
-  const incomingPr = isPlainObject(delivery.pr) ? delivery.pr : undefined;
-  const recordedPr = isPlainObject(stored.pr) ? stored.pr : undefined;
-  if (recordedPr !== undefined && incomingPr !== undefined &&
-      (recordedPr.repo !== incomingPr.repo || recordedPr.head !== incomingPr.head || recordedPr.target !== incomingPr.target)) {
-    throw invalidWorkflowTransition(
-      "The workflow records a different PR identity; use the registered delivery identity, then inspect the workflow with mstar status validate.",
-      {
-        recorded_pr: recordedPr ?? null,
-        incoming_pr: incomingPr ?? null,
-        workflow_id: workflowId,
-      },
-    );
-  }
-  const branch = isPlainObject(header.branch) ? header.branch : {};
-  // The registered delivery branch, whichever spelling the row carries: a row
-  // registered before the rename must satisfy this check exactly like a new one.
-  const registeredWork = deliveryBranchOf(branch);
-  if (incomingPr !== undefined) {
-    if (isNonEmptyString(registeredWork) && incomingPr.head !== registeredWork) {
-      throw invalidWorkflowTransition(
-        `workflow ${workflowId} records delivery.pr.head ${JSON.stringify(incomingPr.head)}, but the registered delivery ` +
-          `branch is ${JSON.stringify(registeredWork)} (\u00A74d: the recorded PR identity must be the registered delivery)`,
-        { workflow_id: workflowId },
-      );
-    }
-    if (isNonEmptyString(branch.target) && incomingPr.target !== branch.target) {
-      throw invalidWorkflowTransition(
-        `workflow ${workflowId} records delivery.pr.target ${JSON.stringify(incomingPr.target)}, but the registered delivery ` +
-          `target is ${JSON.stringify(branch.target)} (\u00A74d)`,
-        { workflow_id: workflowId },
-      );
-    }
-  }
   // §R5/A19/A21 the completion freeze protects an ACCEPTED fulfilment, not the
   // absence of one. Once the workflow is Done against a completion whose policy
   // IS the registered one, that recorded policy/reference is frozen: editing the

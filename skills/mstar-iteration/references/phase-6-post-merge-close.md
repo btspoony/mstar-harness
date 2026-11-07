@@ -1,6 +1,6 @@
 # Phase 6: post-merge close（terminal execution state → unregister → reconcile → cleanup handoff）
 
-> Loaded by `mstar-iteration` SKILL.md when entering Phase 6. **Read `mstar-harness-core` first.** 进入前置：§5.2 第 1–5、7、8 项全 `[x]`（第 1–5 项 merge-ready **且** 第 7 项 §5.3 授权成立 **且** 第 8 项 merge 已完成；第 6 项 todo 勾选随前五项达成，不另设门）**且 PR 已 merge**（verified merged）。mergeable ≠ merged；引擎无法探测远端 PR 状态 —— merged 与否由 PM 核实后再调用，close verb **不**充当 merge 验证器。
+> Loaded by `mstar-iteration` SKILL.md when entering Phase 6. **Read `mstar-harness-core` first.** 进入前置：§5.2 第 1–5、7、8 项全 `[x]`（第 1–5 项 merge-ready **且** 第 7 项 §5.3 授权成立 **且** 第 8 项 merge 已完成；第 6 项 todo 勾选随前五项达成，不另设门）**且 PR 已 merge**（verified merged）。mergeable ≠ merged；引擎不探测远端 PR 状态，而是用**本地 Git 祖先关系**证明 merged —— close 与只读 Phase-6 gate 跑同一条规则，且 `delivery.merge` 只能携带可选的 provider merge/squash commit，绝不接受一句自述作为证明。
 
 ## Entry
 
@@ -21,7 +21,8 @@ mstar status workflow-close --workflow <id> --session-ref <wire> --expect <full-
 
 - Close rereads current authoritative state under its transaction, validates identity/shape, returns valid terminal no-op or requires all rows Done and no dangling workflow integration exclusion, then writes completed + ended_at. The terminal state and the DB root unregister commit in the same transaction and a failed transition rolls back whole. Per-row execution leases are removed.
 - dangling lease / 非 `Done` 行 / 缺失或身份不符则拒绝；不提交失败 transition。
-- **`type: plan` 交付证据 consult**：completed close 与只读 Phase-6 gate 共享 `consultDeliveryEvidence`；development 缺 compound disposition / PR 身份 / verified merge，或 report-only 缺完成策略履行，均以 `PHASE6_DELIVERY_*` 拒绝，当前权威保持 running + registered。补齐只经 `mstar workflow evidence`（session reference + scope token + operation id；flags 见 help），不手写状态。PR 身份一次写入，compound / merge 可覆写；failed / stopped 不要求 successful-delivery 证据。
+- **`type: plan` 交付证据 consult**：completed close 与只读 Phase-6 gate 共享 `verifyDeliveryEvidence`（纯证据规则 + 本地 Git merge 证明）。development 缺 compound disposition，或 report-only 缺完成策略履行，以 `PHASE6_DELIVERY_EVIDENCE_INCOMPLETE` 拒绝；`delivery.merge` **可选**——不记录即由本地祖先关系证明（成员本身不携带任何事实）。merge 证明在 plan 行记录的 `metadata.worktree_path` 内判定：目标引用先取 `refs/remotes/origin/<branch.target>`（`git fetch` 推进的是远端引用，本地 head 可能滞后），缺失再取 `refs/heads/<branch.target>`；`branch.work` tip（本地引用优先）是目标祖先即通过；否则只有记录的 `delivery.merge.commit` 存在且为目标祖先才通过；其余以 `PHASE6_DELIVERY_MERGE_UNPROVEN` 拒绝，当前权威保持 running + registered。补齐只经 `mstar workflow evidence`（session reference + scope token + operation id；flags 见 help），不手写状态。PR 身份由 `branch.work` / `branch.target` 派生（记录 `delivery.pr` 会被当作未使用成员拒绝）；compound / merge 可覆写；failed / stopped 不要求 successful-delivery 证据。
+- **squash / rebase merge 的已知边界**：祖先关系无法单独证明它（tip 不是目标祖先），必须记录 provider merge/squash commit（`{"merge":{"commit":"<full commit id>"}}`）。目标引用在本地与远端都不存在时同样是**拒绝**而非放行：先在 plan checkout 内 fetch 目标分支（远端引用优先读取），或记录该 commit。
 - **delivery kind 在注册期显式声明**：由创建路线的 `mstar workflow register`（以及 `migrate` 对 ACTIVE plan 的 lift）声明，不发明补 kind 通道。注册与声明的完整约束 → 冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`，命令形状见 help。
 - **禁止**为通过 close 释放 lease 或伪造 Done —— close 从不释放（甚至 caller 自己的）；close 只组合当前权威已记录证据所蕴含的合法 bookkeeping，不夺取外来所有权；exclusion 的释放由 direct complete 在其已验证尝试中完成。
 - close 记录其自身时间戳（引擎不接受自身时钟读数）；带 `--ended-at` 是 usage 拒绝
@@ -54,15 +55,15 @@ mstar status workflow-close --workflow <id> --session-ref <wire> --expect <full-
 - Cleanup/close never releases exclusion to force eligibility. Direct complete owns release for its verified attempt; a remaining foreign/in-flight claim stays protected and must be resolved through its owning authority. Never hand-edit state or revive a transfer sequence.
 - squash-merged 分支（tip 非 base 祖先）→ STOP → residual；禁止 `git branch -D`
 
-Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease + root 条目已注销 + `type: plan` 交付证据，§6.1），**不**验证远端 merged 证据，**不**检查物理清理是否完成。
+Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease + root 条目已注销 + `type: plan` 交付证据与其 §4f 本地 merge 证明，§6.1），**不**发起任何远端/provider 查询，**不**检查物理清理是否完成。
 
 > **Engine check (when available):** run `mstar iteration gate --phase 6 --workflow <id>` (or `import { evaluatePostMergeCloseFromExecutionAuthority } from "@mstar-harness/engine"` in a host hook) to gate the local post-merge close state（valid terminal shape + 无 dangling lease + root 条目已注销；稳定码 `PHASE6_*`；invalid/unreadable root 不是条目已注销的证明）. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Standalone plans & abandonment
 
-- 独立 plan 交付生命周期的语义权威（注册 → 交付尾段 → verified merge → terminal close）→ 冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`；本节仅固定 close 侧契约（同一命令 close、本地 gate 不验证远端 merged 证据）
+- 独立 plan 交付生命周期的语义权威（注册 → 交付尾段 → 本地 merge 证明 → terminal close）→ 冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`；本节仅固定 close 侧契约（同一命令 close；本地 gate 与 close 跑同一条 merge 证明，均不发起远端查询）
 - `type: plan` 独立 lifecycle 在其 PR merge 后用**同一** completed-close 命令关闭（无第二 verb、无 `--outcome` / `--force`）
-- abandoned lifecycle **不得**静默跑 completed close：已 terminal（`failed` / `stopped`）的 lifecycle 保持原状态，CLI 如实报告实际 status；completed close 只属于 verified-merged 完成
+- abandoned lifecycle **不得**静默跑 completed close：已 terminal（`failed` / `stopped`）的 lifecycle 保持原状态，CLI 如实报告实际 status；completed close 只属于已证明 merge 的完成
 
 ## Evidence
 

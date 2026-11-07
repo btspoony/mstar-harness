@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -233,6 +233,14 @@ async function runFixture(
   roots.push(root);
   const harness = path.join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
+  // A real repository and plan checkout: the completed close proves the delivery
+  // merge from refs in the plan row's recorded worktree, never from a sentence.
+  const git = (...args: string[]): void =>
+    void execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  git("init", "-q", "-b", "main");
+  git("commit", "-q", "--allow-empty", "-m", "init");
+  const planWorktree = path.join(root, "wt-plan");
+  git("worktree", "add", "-q", "-b", RUN_BRANCH, planWorktree);
   const store = await initializeStore({ harnessDir: harness });
   store.close();
   const context = executionContextFor(
@@ -254,7 +262,11 @@ async function runFixture(
       branch: { base: "main", work: RUN_BRANCH, target: "main" },
       execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
       plans: [
-        { id: RUN_PLAN, title: "Run plan", file: `plans/${RUN_PLAN}.md`, status: options.status === "completed" ? "Done" : "Todo" },
+        {
+          id: RUN_PLAN, title: "Run plan", file: `plans/${RUN_PLAN}.md`,
+          status: options.status === "completed" ? "Done" : "Todo",
+          metadata: { working_branch: RUN_BRANCH, worktree_path: planWorktree },
+        },
       ],
     } as never,
     expected: initialized.token,
@@ -272,8 +284,6 @@ async function runFixture(
   if (options.status === "completed") {
     const deliveries = [
       { compound: { outcome: "created" } },
-      { pr: { repo: "o/r", head: RUN_BRANCH, target: "main" } },
-      { merge: { provider: "github", evidence: "PR #1 merged" } },
     ] as const;
     for (const [index, delivery] of deliveries.entries()) {
       await mutateExecutionWorkflow(context, {

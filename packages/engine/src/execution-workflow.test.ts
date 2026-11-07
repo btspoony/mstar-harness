@@ -238,6 +238,7 @@ type Fixture = {
   context: StoreContext;
   repoRoot: string;
   integrationPath: string;
+  planPath: string;
   compassPath: string;
   storeId: string;
   epoch: number;
@@ -261,6 +262,12 @@ async function workflowFixture(
   const initialized = await readExecutionState(context);
   const integrationPath = join(repoRoot, "wt-integration");
   runGit(["worktree", "add", "-q", "-b", INTEGRATION_BRANCH, integrationPath], repoRoot);
+  // The plan's OWN checkout, on its registered delivery branch: a worktree of
+  // the same repository, so the delivery tip starts at the `main` tip and the
+  // close's ancestry proof has a real fact to read. A test that needs an
+  // unmerged delivery commits here without merging.
+  const planPath = join(repoRoot, "wt-plan");
+  runGit(["worktree", "add", "-q", "-b", SOURCE_BRANCH, planPath], repoRoot);
   const compassPath = join(harnessRoot, COMPASS_REF);
   const planIds = [PLAN_ID, ...additionalPlanIds];
   writeCompass(compassPath, { status: "active", plans: planIds, targetBranch: "main" });
@@ -293,7 +300,12 @@ async function workflowFixture(
       execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
       plans: planIds.map((id) => ({
         id, title: `${id} title`, file: `plans/${id}.md`, status: "Todo",
-        metadata: { working_branch: id === PLAN_ID ? SOURCE_BRANCH : `feature/${id}` },
+        // The plan row records its own checkout: the close's merge proof reads
+        // the delivery/target refs from THAT repository, never from the caller.
+        metadata: {
+          working_branch: id === PLAN_ID ? SOURCE_BRANCH : `feature/${id}`,
+          ...(id === PLAN_ID ? { worktree_path: planPath } : {}),
+        },
       })),
     } as unknown as WorkflowSnapshot,
     expected: initialized.token,
@@ -309,6 +321,7 @@ async function workflowFixture(
     context,
     repoRoot,
     integrationPath,
+    planPath,
     compassPath,
     storeId: created.storeId,
     epoch: created.epoch,
@@ -419,12 +432,18 @@ async function refusalOf(
 
 
 
-/** The development delivery tail every close needs (contract §4c/§4d/§4f). */
+/**
+ * The development delivery tail every close needs (contract §4c): the compound
+ * disposition ONLY. `delivery.merge` is optional and absent here, because the
+ * ordinary shape - the delivery branch tip contained in the registered target -
+ * is proven from local Git; a squash/rebase delivery records its provider
+ * commit instead.
+ */
 const DELIVERY_TAIL = {
   compound: { outcome: "created" },
-  pr: { repo: "o/r", head: SOURCE_BRANCH, target: "main" },
-  merge: { provider: "github", evidence: "PR #255 merged" },
 } as const;
+/** A synthetic full commit id for the squash-merge shapes (never a real one). */
+const SQUASH_COMMIT = "1".repeat(40);
 
 
 /* ------------------------------------------------------------------------ *
@@ -722,12 +741,12 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     );
   });
 
-  test("delivery evidence follows the declared kind, records once, accepts a valid re-record and refuses a contradictory source", async () => {
+  test("delivery evidence follows the declared kind, records once and refuses an unused or malformed member", async () => {
     const fixture = await workflowFixture("delivery");
-    // §R5/A19 the delivery tail (compound | pr | merge) is EXTERNAL evidence:
-    // it is captured when it is observed, whatever the row's own `Done`
-    // projection is, because the close composes that projection itself from the
-    // same evidence - the ordering is bookkeeping, never a caller ceremony.
+    // §R5/A19 the delivery tail (compound | merge) is EXTERNAL evidence: it is
+    // captured when it is observed, whatever the row's own `Done` projection is,
+    // because the close composes that projection itself from the same evidence -
+    // the ordering is bookkeeping, never a caller ceremony.
     const captured = await workflowMutation(fixture, "op-delivery-early", {
       kind: "delivery",
       delivery: { compound: { outcome: "created" } },
@@ -738,30 +757,20 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     const before = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
     const receipt = await workflowMutation(fixture, "op-delivery-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
     const state = receipt.data.workflows[0]!.state as unknown as Record<string, unknown>;
-    expect(state.delivery).toMatchObject({
-      compound: { outcome: "created" },
-      pr: { head: SOURCE_BRANCH, target: "main" },
-      merge: { evidence: "PR #255 merged" },
-    });
+    expect(state.delivery).toMatchObject({ compound: { outcome: "created" } });
     expect(identityAnchors(state)).toEqual(identityAnchors(before));
 
-    // PR identity is protected by its named values, not serialized bytes.
-    const refusal = await refusalOf(() => workflowMutation(fixture, "op-delivery-rewrite", {
-      kind: "delivery",
-      delivery: { pr: { repo: "o/other", head: SOURCE_BRANCH, target: "main" } },
-    }));
-    expect(refusal.code).toBe("coordination.invalid-transition");
-    expect((await readExecutionState(fixture.context)).data.workflows[0]!.state.delivery).toEqual(receipt.data.workflows[0]!.state.delivery);
-
-    // The branch anchors remain the authority: a head that contradicts the
-    // registered source is still refused by field value.
-    const contradictory = await refusalOf(() =>
-      workflowMutation(fixture, "op-delivery-contradict", {
+    // §4d the PR identity is the registered anchors, so a recorded copy is an
+    // unused member: the delivery kind has exactly compound and merge.
+    const unusedPr = await refusalOf(() =>
+      workflowMutation(fixture, "op-delivery-pr", {
         kind: "delivery",
-        delivery: { pr: { repo: "o/r", head: "feature/somewhere-else", target: "main" } },
+        delivery: { pr: { repo: "o/r", head: SOURCE_BRANCH, target: "main" } } as never,
       }),
     );
-    expect(contradictory.code).toBe("coordination.invalid-transition");
+    expect(unusedPr.code).toBe("coordination.invalid-transition");
+    expect(unusedPr.message).toContain("pr");
+    expect((await readExecutionState(fixture.context)).data.workflows[0]!.state.delivery).toEqual(receipt.data.workflows[0]!.state.delivery);
 
     const foreignMember = await refusalOf(() =>
       workflowMutation(fixture, "op-delivery-member", {
@@ -771,10 +780,21 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     );
     expect(foreignMember.code).toBe("coordination.invalid-transition");
 
+    // The merge member carries ONE optional fact: a full commit id.
     const malformed = await refusalOf(() =>
-      workflowMutation(fixture, "op-delivery-malformed", { kind: "delivery", delivery: { pr: { repo: "o/r" } } } as never),
+      workflowMutation(fixture, "op-delivery-malformed", {
+        kind: "delivery",
+        delivery: { merge: { commit: "not-a-commit" } } as never,
+      }),
     );
     expect(malformed.code).toBe("coordination.invalid-input");
+    const providerShape = await refusalOf(() =>
+      workflowMutation(fixture, "op-delivery-provider", {
+        kind: "delivery",
+        delivery: { merge: { provider: "github", evidence: "PR #255 merged" } } as never,
+      }),
+    );
+    expect(providerShape.code).toBe("coordination.invalid-input");
   });
 
   test("a terminal close refuses an unfinished row, incomplete evidence and outstanding ownership", async () => {
@@ -816,6 +836,113 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(parsedJson(after.workflow_state).ended_at).toBeUndefined();
     expect(after.registered).toBe(1);
   });
+
+/* ------------------------------------------------------------------------ *
+ * §4f the delivery merge proof — local Git ancestry, never an attestation
+ * ------------------------------------------------------------------------ */
+
+/** One real commit on the plan's delivery branch, returned as its full id. */
+function commitDelivery(fixture: Fixture, message: string): string {
+  writeText(join(fixture.planPath, "delivery.txt"), `${message}\n`);
+  runGit(["add", "-A"], fixture.planPath);
+  runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", message], fixture.planPath);
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture.planPath, encoding: "utf8" }).trim();
+}
+
+describe("execution-workflow: \u00A74f the delivery merge proof", () => {
+  test("a close completes with no evidence payload when the delivery tip is contained in the target", async () => {
+    const fixture = await workflowFixture("merge-ancestor");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    // Only the compound disposition is recorded: no `merge` member exists, and
+    // the close still passes because the proof reads the delivery tip and the
+    // target ref itself.
+    await workflowMutation(fixture, "op-ancestor-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    const closed = await workflowMutation(fixture, "op-ancestor-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the delivery was verified",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
+  test("a fetched remote target proves the merge even when the local target head is stale", async () => {
+    const fixture = await workflowFixture("merge-stale-local-target");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-stale-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    const delivered = commitDelivery(fixture, "delivered while the local target stayed behind");
+    // `git fetch` advances the remote ref, never the local head: this IS the
+    // recovery the refusal names, so it must be enough. The local `main` here
+    // still points before the delivery.
+    runGit(["update-ref", "refs/remotes/origin/main", delivered], fixture.repoRoot);
+    const localMain = execFileSync("git", ["rev-parse", "refs/heads/main"], { cwd: fixture.repoRoot, encoding: "utf8" }).trim();
+    expect(localMain).not.toBe(delivered);
+    const closed = await workflowMutation(fixture, "op-stale-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the fetched target contains the delivery",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
+  test("an unmerged delivery refuses the close, and the Phase-6 gate publishes the same code", async () => {
+    const fixture = await workflowFixture("merge-unproven");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-unproven-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    commitDelivery(fixture, "work the target never received");
+    const before = await workflowFootprint(fixture.context);
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-unproven-close", { kind: "lifecycle", status: "completed", reason: "done" }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
+    // The refusal names the cause and both executable recoveries.
+    const stated = JSON.stringify(refused.details);
+    expect(stated).toContain(`is not contained in main`);
+    expect(stated).toContain("Fetch the target branch");
+    expect(stated).toContain("mstar workflow evidence");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+
+    // The read-only gate runs the SAME function over the same stored state, so
+    // an unmerged completed header it is handed publishes that identical code.
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      state.status = "completed";
+      state.ended_at = TS;
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+    });
+    const gate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
+    const mergeViolation = gate.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN");
+    expect(mergeViolation?.fix).toContain("mstar workflow evidence");
+  });
+
+  test("a squash merge is proven by its recorded commit, and refused while that commit is not in the target", async () => {
+    const fixture = await workflowFixture("merge-squash");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-squash-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    const delivery = commitDelivery(fixture, "squashed work");
+
+    // (1) A commit that EXISTS but is not contained in the target proves nothing:
+    // the delivery tip and the recorded commit are both outside `main`.
+    await workflowMutation(fixture, "op-squash-tip", { kind: "delivery", delivery: { merge: { commit: delivery } } });
+    const unproven = await refusalOf(() =>
+      workflowMutation(fixture, "op-squash-unproven", { kind: "lifecycle", status: "completed", reason: "done" }),
+    );
+    expect(unproven.details.code).toBe("PHASE6_DELIVERY_MERGE_UNPROVEN");
+
+    // (2) The provider's squash commit is the fact that proves the delivery.
+    runGit(["merge", "--squash", "-q", SOURCE_BRANCH], fixture.repoRoot);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "squash the delivery"], fixture.repoRoot);
+    const squash = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture.repoRoot, encoding: "utf8" }).trim();
+    await workflowMutation(fixture, "op-squash-commit", { kind: "delivery", delivery: { merge: { commit: squash } } });
+    const closed = await workflowMutation(fixture, "op-squash-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the squash merge was verified",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+});
 
   test("a completed report-only plan terminally unregisters after its completion evidence", async () => {
     const fixture = await workflowFixture("close-report-only");
@@ -2186,8 +2313,8 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
 
   test("renewed stop evidence preserves the current binding, settles its predecessor claim and permits ordinary completion", async () => {
     const fixture = await workflowFixture("recovery-claim-continuation");
-    const sourcePath = join(fixture.repoRoot, "wt-source");
-    runGit(["worktree", "add", "-q", "-b", SOURCE_BRANCH, sourcePath], fixture.repoRoot);
+    // The fixture's plan checkout already carries the delivery branch.
+    const sourcePath = fixture.planPath;
     const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: sourcePath, encoding: "utf8" }).trim();
     const harness = dirname(storeDbPath(fixture.context));
     writeText(join(harness, "plans", `${PLAN_ID}.md`), `# ${PLAN_ID}\n`);
@@ -2272,8 +2399,8 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
 
   test("interrupted integration completion refuses until the current replacement renews stop proof, then completes and replays", async () => {
     const fixture = await workflowFixture("recovery-integration-completion", [], "iteration");
-    const sourcePath = join(fixture.repoRoot, "wt-source");
-    runGit(["worktree", "add", "-q", "-b", SOURCE_BRANCH, sourcePath], fixture.repoRoot);
+    // The fixture's plan checkout already carries the delivery branch.
+    const sourcePath = fixture.planPath;
     runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "reviewed source"], sourcePath);
     const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: sourcePath, encoding: "utf8" }).trim();
     const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture.integrationPath, encoding: "utf8" }).trim();
@@ -3364,11 +3491,12 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     expect(deliveryBranchOf(state.branch)).toBe("fix/renamed");
   });
 
-  test("a row registered before the rename still passes the PR-identity check and still completes", async () => {
+  test("a row registered before the rename resolves the same delivery and still completes", async () => {
     // The compatibility contract, exercised end to end: a workflow registered
     // BEFORE the rename stored `branch.source` instead of `branch.work`, and such
-    // a row must still pass the PR-identity check and still close. The header is
-    // rewritten to the pre-rename shape this test's fixture would have had.
+    // a row must still resolve the same delivery branch and still close. The
+    // header is rewritten to the pre-rename shape this test's fixture would have
+    // had.
     const fixture = await workflowFixture("delivery-anchors-legacy-close");
     withRaw(fixture.context, (db) => {
       const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
@@ -3378,22 +3506,15 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     });
     setRowStatus(fixture.context, PLAN_ID, "Done");
 
-    // (1) PR identity. The registered delivery branch resolves to the legacy
-    // value, so a contradicting head is still refused BY FIELD VALUE - and the
-    // matching delivery tail is accepted.
-    const contradictory = await refusalOf(() =>
-      workflowMutation(fixture, "op-legacy-contradict", {
-        kind: "delivery",
-        delivery: { pr: { repo: "o/r", head: "feature/somewhere-else", target: "main" } },
-      }),
-    );
-    expect(contradictory.code).toBe("coordination.invalid-transition");
+    // (1) The delivery tail records the same evidence as any current row: the
+    // legacy spelling is a read-compatibility concern only.
     const recorded = await workflowMutation(fixture, "op-legacy-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
-    expect(recorded.data.workflows[0]!.state.delivery).toMatchObject({ pr: { head: SOURCE_BRANCH, target: "main" } });
+    expect(recorded.data.workflows[0]!.state.delivery).toMatchObject({ compound: { outcome: "created" } });
 
-    // (2) The close. `applyLifecycleTransition` consults `consultDeliveryEvidence`
-    // over the stored header, which resolves the delivery branch through the same
-    // helper - so the legacy row completes with no missing-evidence refusal.
+    // (2) The close. `applyLifecycleTransition` runs `verifyDeliveryEvidence`
+    // over the stored header, which resolves the delivery branch through the
+    // same `deliveryBranchOf` helper - so the legacy row proves its merge and
+    // completes with no missing-evidence refusal.
     const closed = await workflowMutation(fixture, "op-legacy-close", {
       kind: "lifecycle",
       status: "completed",
@@ -3410,75 +3531,6 @@ describe("execution-workflow: \u00A73 the delivery-anchor repair", () => {
     expect(stored!.status).toBe("completed");
     // The close never rewrites how the row was registered.
     expect(JSON.parse(String(stored!.branch))).toEqual({ source: SOURCE_BRANCH, target: "main" });
-  });
-
-  test("a repair that leaves the anchors disagreeing with the recorded PR identity warns, and stays silent when it does not", async () => {
-    // The recorded identity is `workflow evidence`'s own frozen fact. It was
-    // checked against the anchors registered at record time, and the close
-    // consultation requires the two to keep agreeing - so a repair that moves one
-    // of them WARNS (it never refuses): the running lifecycle stays repairable,
-    // and the operator learns the one call that puts it back.
-    const fixture = await workflowFixture("delivery-anchors-pr-identity");
-    const recorded = await workflowMutation(fixture, "op-anchors-identity", { kind: "delivery", delivery: DELIVERY_TAIL });
-    expect(recorded.data.workflows[0]!.state.delivery).toMatchObject({ pr: { head: SOURCE_BRANCH, target: "main" } });
-
-    // (1) the delivery BRANCH moves: `delivery.pr.head` against the resolved
-    // delivery branch is the comparison that fails. The `delivery.pr.target` one
-    // cannot: the anchor this operation does not name keeps the value the
-    // recorded identity was already checked against.
-    const reworked = await workflowMutation(fixture, "op-anchors-rework", {
-      kind: "delivery-anchors",
-      branch: { work: "fix/elsewhere" },
-      reason: "the delivery branch moved after the PR was recorded",
-    });
-    expect(reworked.replayed).toBe(false);
-    expect(reworked.recovery?.outcome).toBe("applied");
-    const [headWarning] = reworked.recovery?.warnings ?? [];
-    expect(headWarning?.code).toBe("workflow.delivery-anchors.pr-identity");
-    expect(headWarning?.message).toContain(`branch.work ${JSON.stringify("fix/elsewhere")}`);
-    expect(headWarning?.message).toContain(`branch.target ${JSON.stringify("main")}`);
-    expect(headWarning?.message).toContain(`delivery.pr.head ${JSON.stringify(SOURCE_BRANCH)}`);
-    expect(headWarning?.message).toContain(`delivery.pr.target ${JSON.stringify("main")}`);
-    expect(headWarning?.message).toContain(
-      `mstar workflow delivery-anchors --workflow ${WORKFLOW_ID} --branch-work ${SOURCE_BRANCH} --branch-target main --reason`,
-    );
-
-    // (2) the anchors agree again: the repair carries no advisory at all.
-    const agreed = await workflowMutation(fixture, "op-anchors-agreed", {
-      kind: "delivery-anchors",
-      branch: { work: SOURCE_BRANCH },
-      reason: "restore the recorded PR identity's delivery branch",
-    });
-    expect(agreed.recovery?.warnings).toEqual([]);
-
-    // (3) the delivery TARGET moves: now `delivery.pr.target` is the comparison
-    // that fails, and the header the repair STORED is the one it warns about.
-    const retargeted = await workflowMutation(fixture, "op-anchors-retarget", {
-      kind: "delivery-anchors",
-      branch: { target: "release" },
-      reason: "the PR was retargeted",
-    });
-    const [targetWarning] = retargeted.recovery?.warnings ?? [];
-    expect(targetWarning?.code).toBe("workflow.delivery-anchors.pr-identity");
-    expect(targetWarning?.message).toContain(`delivery.pr.target ${JSON.stringify("main")}`);
-    expect(targetWarning?.message).toContain(`branch.target ${JSON.stringify("release")}`);
-    const state = retargeted.data.workflows[0]!.state as unknown as Record<string, unknown>;
-    // The message describes the anchors THIS transaction stored, never a snapshot
-    // read before it.
-    expect(state.branch).toMatchObject({ target: "release" });
-  });
-
-  test("a repair on a workflow with no recorded PR identity carries no advisory", async () => {
-    const fixture = await workflowFixture("delivery-anchors-no-pr");
-    const repair = await workflowMutation(fixture, "op-anchors-no-pr", {
-      kind: "delivery-anchors",
-      branch: { work: "fix/registered-by-mistake" },
-      reason: "the registered delivery branch was the delivery target",
-    });
-    // Nothing has been frozen yet, so there is no identity to disagree with.
-    expect(repair.recovery?.warnings).toEqual([]);
-    const state = repair.data.workflows[0]!.state as unknown as Record<string, unknown>;
-    expect(state.branch).toMatchObject({ work: "fix/registered-by-mistake" });
   });
 
   test("an iteration workflow's base and integration anchors survive a single-anchor correction", async () => {
@@ -3959,8 +4011,9 @@ async function claimFixture(label: string): Promise<{
   sourceSha: string;
 }> {
   const fixture = await workflowFixture(label);
-  const sourcePath = join(fixture.repoRoot, "wt-source");
-  runGit(["worktree", "add", "-q", "-b", SOURCE_BRANCH, sourcePath], fixture.repoRoot);
+  // The fixture's plan checkout already carries the delivery branch: a second
+  // worktree on it would be refused by Git.
+  const sourcePath = fixture.planPath;
   const harness = dirname(storeDbPath(fixture.context));
   writeText(join(harness, "plans", `${PLAN_ID}.md`), `# ${PLAN_ID}\n`);
   return {
