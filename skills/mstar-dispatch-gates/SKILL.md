@@ -56,22 +56,15 @@ description: "Dispatch gates: PM-only leaf dispatch, executor/delegation identit
 
 ## 并发分派完整性门禁（PM 强制 · Evidence）
 
-当 PM 声明「并发分派」时，须同时满足**文案并发**与**工具并发**：
+当 PM 声明「并发分派」时，须同时满足**文案并发**与**工具并发**；宿主封装限制不构成串行理由，无法真实并发时如实报告限制。批调用与逐次异步启动的差异、count 自检、角色绑定字段自检、准备回合与派发回合分离、未齐不发 → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules / § Self-check before send / § Prerequisite vs dispatch turn。
 
-同消息批调用在宿主支持时使用；仅支持逐次异步启动的宿主，连续启动所有 ready calls，全部启动前不等待任何结果。不得将工具封装限制误作任务必须串行；无法真实并发时如实报告限制。
-
-- **工具并发**：同一调度轮次内，多个 subagent 调用须在**同一条 assistant 消息**里一次性发出（宿主允许时）。
 - **QC tri-review（SDD 强制）**：`Execution mode: sdd` 且全部 task 完成后 → `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 同条消息 **N=3**（写 `{SDD_DIR}/review/qc1.md`…`qc3.md`；PM 汇总 `qc-consolidated.md` + durable plan summary）。Assignment 须含 branch **review-package** 路径与 report paths。适用于**单 plan 与 iteration**。
 - **QC 单席（例外）**：`Execution mode: inline`（hotfix 等），或 Assignment 显式 `QC mode: single` / `QC mode: single — override: <reason>` → `qc-specialist` ×1，`N=1`，写 `{SDD_DIR}/review/qc.md`。
 - **QC targeted re-review**：Assignment 含 **`QC re-review: targeted — reviewers: …`** 时，**N** = 所列席位数（1–3），同条消息发满 **N**。
-- **先自检再发送**：发送前核对「Assignment 条数 = 本条消息中的实际 **派发** 调用条数」。
-- **先自检字段再发送（与 count 同级门禁）**：核对**每条** invoke 都携带与 **`Execute as`** 匹配的角色绑定字段——**字段名以当前宿主的 `mstar-host` reference 为准**（共享文本不假定任何宿主的字段名）；宿主判定以 **`mstar-host`** §Detect active host 的 tool-shape 检测为准（禁以 config 路径/仓库内容判定）。**漏写或取默认通用值**（部分宿主会**静默回退 generic worker**、无报错）= **派发未完成**，与 paste-only（零 invoke）**同等级**：当场补齐重发，不得进入下一 gate。**N=1 顺序链（Review & Edit）不豁免**——count 门在 N=1 恒过，**字段门是唯一保护**。
-- **前置步骤与派发回合分离（防串行 rollout）**：为派发准备的 **`bash` / `read` / `glob` / `grep`**（如 `merge-base`、`Review range`、`git rev-parse`）**不计入** `N` 次派发；可在上一条仅含准备的消息完成。准备完成后，**下一条派发消息**须**一次性**含 **`N` 次** Task / subagent invoke。**禁止**先发 `1` 次、等返回再补发其余 `N-1` 次。
-- **未齐不发（emit zero until batch-ready）**：宿主支持批调用且需并发 `N≥2` 而当前 payload 只齐 `1` 条时，本条应发 **`0` 条派发 invoke`**（可继续 read/bash 补齐），**禁止**「先发一个顶一下」；`N` 份 payload 就绪后**单次消息发满 `N`**。见 **`mstar-host`** → `references/parallel-dispatch.md`（具备 invoke / Task / subagent 工具的宿主共用）。
 
 ### 具名 subagent 宿主：文案分派 ≠ 调度完成
 
-在支持具名角色 / Task 的宿主上，`## Assignment` **正文不会**拉起子会话。PM 须在**同一条 assistant 消息**（或宿主等价机制）发出与 Assignment **条数一致**的 invoke / Task；仅打印 Markdown = **分派未完成**。**几条 Assignment ⇒ 几次 tool 调用**（默认同消息并行）。
+在支持具名角色 / Task 的宿主上，`## Assignment` **正文不会**拉起子会话；派发回合的条数、顺序、角色绑定字段与「未齐不发」规则 → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules。
 
 > **On dsh:** the mounted layer decides the channel, not the shape of one task — **Agent Teams** is the default whenever `spawn_teammate` is mounted (one teammate per writable track, each handed its own absolute checkout path in the prompt; which scope the board may carry → `references/dsh-agent-teams.md` § Worktree hand-off and write isolation), **`subagent`** is the fallback when it is absent, and **`workflow`** carries read-only fan-out only. A board-task dispatch counts as a delegation, so the invariant stays **1 Assignment ⇒ 1 delegation** on every channel; board protocol, seat budget and wake discipline are not restated here → **`mstar-host`** → `references/dsh.md` § Delegation channels + `references/dsh-agent-teams.md`.
 

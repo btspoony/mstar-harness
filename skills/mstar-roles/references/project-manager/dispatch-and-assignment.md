@@ -6,9 +6,7 @@ The concise gate summary remains in `references/project-manager.md`.
 ## Core Dispatch Invariants
 
 - Only `project-manager` dispatches subagents.
-- Each independent Assignment requires one matching host invoke.
-- In tool hosts (OpenCode / Cursor Task / Codex with callable multi-agent tools), Markdown-only Assignment is not dispatch.
-- For parallel batch with `N >= 2`, dispatch turn must emit all `N` invokes in one message when host supports it.
+- Each independent Assignment needs one matching host invoke: counting, dispatch-turn ordering, batch-readiness and the paste-only failure → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules.
 - **Same-repo writable parallel tracks**: tool concurrency and worktree isolation are **separate gates**. Before implement invokes, complete **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**.
 - **Scope and stopping are explicit**: apply `mstar-harness-core` § 定向执行与验证边界. Give each leaf one result, owned paths/symbols, relevant inputs, named checks/selectors, and an evidence-based stopping condition. Reuse unaffected evidence; do not inject a suite merely because the repo exposes it. Independent ready assignments run concurrently after their dependency/isolation checks.
 - **Review/QC rounds are quantitative, not adjectival**: a read-only review / QC dispatch states a `Budget` (expansion cap) and a `Return shape`, so the seat stops when its assigned questions are answered or the cap is reached, returns the verdict it has plus a truncated-coverage declaration, and never expands until a human steers. Budget defaults, the truncation marker, and its relation to `Unconfirmed` → `mstar-harness-core` § 定向执行与验证边界. The severity bar for the round's findings → `mstar-artifacts` `references/status-and-residuals.md`.
