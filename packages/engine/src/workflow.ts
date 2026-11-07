@@ -87,9 +87,11 @@ export type WorkflowCompoundOutcome = (typeof WORKFLOW_COMPOUND_OUTCOMES)[number
  * - `merge` - §4f: the OPTIONAL provider merge/squash commit. Nothing else is
  *   recorded here: the PR identity is the registered
  *   `branch.work`/`branch.target` pair (derived, §4d), and the merge is proven
- *   by local Git ancestry (`verifyDeliveryEvidence`), never by a sentence. The
- *   commit exists for the one shape ancestry cannot show on its own - a squash
- *   or rebase merge whose provider commit is not the delivery branch tip.
+ *   by local Git (`verifyDeliveryEvidence`), never by a sentence. The commit
+ *   exists for the one shape patch equivalence cannot show on its own - a squash
+ *   of a multi-commit delivery, whose single commit is not the delivery branch
+ *   tip; it must carry the delivery's own diff (equal patch id), not merely be
+ *   an ancestor of the target.
  *
  * A `verification/report-only` workflow records NO delivery evidence: its
  * registered `completion_policy` is a registration-time declaration of what the
@@ -964,9 +966,10 @@ export function assertDeliveryRegistrationCoherence(
  * - `development` → registered `branch.work`/`branch.target` (the delivery
  *   branch resolves through `deliveryBranchOf`, so a pre-rename `branch.source`
  *   row closes the same way) plus the compound disposition. `delivery.merge`
- *   stays OPTIONAL: it carries the one fact ancestry cannot show (a
- *   squash/rebase provider commit), and the merge itself is proven from local
- *   Git by `verifyDeliveryEvidence`, so this pure rule never demands it;
+ *   stays OPTIONAL: it carries the one fact patch equivalence cannot show (the
+ *   single commit of a multi-commit squash), and the merge itself is proven
+ *   from local Git by `verifyDeliveryEvidence`, so this pure rule never
+ *   demands it;
  * - `verification/report-only` → the registered `completion_policy` alone. A
  *   report-only workflow records no fulfilment payload: the policy declares
  *   what the deliverable is, and the close verifies Done rows plus QC/QA, not a
@@ -1007,9 +1010,9 @@ export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationR
     if (!nonEmptyString(deliveryBranch)) missing.push("branch.work");
     if (!nonEmptyString(branch?.target)) missing.push("branch.target");
     if (!isPlainObject(delivery?.compound)) missing.push("delivery.compound (compound disposition, \u00a74c)");
-    // §4f `merge` is OPTIONAL on purpose: it exists for the one fact ancestry
-    // cannot show (a squash/rebase provider commit), so requiring the member
-    // would reinstate a placeholder that carries nothing. The Git proof
+    // §4f `merge` is OPTIONAL on purpose: it exists for the one fact patch
+    // equivalence cannot show (the single commit of a multi-commit squash), so
+    // requiring the member would reinstate a placeholder that carries nothing. The Git proof
     // (`verifyDeliveryEvidence`) is the merge gate; this pure rule judges only
     // the facts the operator must record.
   } else if (!nonEmptyString(snapshot.completion_policy)) {

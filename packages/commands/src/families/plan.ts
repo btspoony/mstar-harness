@@ -139,7 +139,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
         // A development completion needs its compound disposition recorded
         // first; a report-only policy is fixed at registration and has no
         // fulfilment payload, so no QC/QA evidence substitutes for it.
-        ? "Record the missing delivery evidence named by the refusal — a development needs its compound disposition — with mstar workflow evidence --workflow <workflow-id> --file <absolute-json>, then retry plan complete. A missing report-only completion policy cannot be added after registration; close that workflow as failed and register a replacement with --completion-policy."
+        ? "Record the missing delivery evidence named by the refusal — a development workflow needs its compound disposition — with mstar workflow evidence --workflow <workflow-id> --file <absolute-json>, then retry plan complete. A missing report-only completion policy cannot be added after registration; close that workflow as failed and register a replacement with --completion-policy."
         : id === "plan.complete" && code === "coordination.invalid-transition" && typeof details?.required === "string"
           // The submission's gate is not the row's configured gate: either the
           // evidence or the recorded configuration is what changes.

@@ -58,6 +58,16 @@ describe("session and workflow command families", () => {
     expect(iteration.payloads?.row?.schema.safeParse({ id: "plan-a" }).success).toBe(false);
   });
 
+  test("the delivery payload schema refuses an empty merge member and accepts a recorded commit", () => {
+    const schema = definition("workflow.evidence").payloads?.delivery?.schema;
+    if (schema === undefined) throw new Error("workflow.evidence publishes no delivery payload");
+    // The engine refuses `{"merge":{}}`; the CLI surface must refuse it too.
+    expect(schema.safeParse({ merge: { commit: "a".repeat(40) } }).success).toBe(true);
+    expect(schema.safeParse({ merge: {} }).success).toBe(false);
+    // The MEMBER stays optional: a clean delivery proves itself from local Git.
+    expect(schema.safeParse({ compound: { outcome: "created" } }).success).toBe(true);
+  });
+
   test("public workflow FILE routes redact malformed source bytes", async () => {
     const context = testContext({ sessionId: "caller-session" });
     const harness = path.join(context.cwd, ".mstar");

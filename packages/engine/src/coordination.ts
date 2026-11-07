@@ -1102,6 +1102,21 @@ function gitUnavailable(cwd: string, args: readonly string[], error: unknown): C
   );
 }
 
+/** The raw read; `gitRead` is its trimmed form, `stdin` is how a diff reaches `patch-id`. */
+function gitPipe(cwd: string, args: readonly string[], stdin?: string): string | undefined {
+  try {
+    return execFileSync("git", ["-C", cwd, ...args], {
+      stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      input: stdin,
+      encoding: "utf8",
+      timeout: GIT_READ_TIMEOUT_MS,
+    });
+  } catch (error) {
+    if (typeof propertyOf(error, "status") === "number") return undefined;
+    throw gitUnavailable(cwd, args, error);
+  }
+}
+
 /**
  * One read-only `git` read. Every argument is a separate argv entry, so branch
  * names, worktree paths and revisions never reach a shell.
@@ -1116,16 +1131,7 @@ function gitUnavailable(cwd: string, args: readonly string[], error: unknown): C
  * file-byte witnesses; they never await or take a harness lock.
  */
 export function gitRead(cwd: string, args: readonly string[]): string | undefined {
-  try {
-    return execFileSync("git", ["-C", cwd, ...args], {
-      stdio: ["ignore", "pipe", "pipe"],
-      encoding: "utf8",
-      timeout: GIT_READ_TIMEOUT_MS,
-    }).trim();
-  } catch (error) {
-    if (typeof propertyOf(error, "status") === "number") return undefined;
-    throw gitUnavailable(cwd, args, error);
-  }
+  return gitPipe(cwd, args)?.trim();
 }
 
 export function gitObjectExists(cwd: string, sha: string): boolean {
@@ -1135,6 +1141,19 @@ export function gitObjectExists(cwd: string, sha: string): boolean {
 /** `git merge-base --is-ancestor`: the repository's own answer, never a heuristic. */
 export function gitIsAncestor(cwd: string, ancestor: string, descendant: string): boolean {
   return gitRead(cwd, ["merge-base", "--is-ancestor", ancestor, descendant]) !== undefined;
+}
+
+/**
+ * `git patch-id --stable` over one diff range: the content hash a cherry-pick,
+ * rebase or squash keeps even though its commit id changes. `undefined` when the
+ * range has no diff or Git cannot read it. The diff reaches `patch-id` on stdin,
+ * so no revision, path or byte ever becomes part of a command line.
+ */
+function gitPatchId(cwd: string, from: string, to: string): string | undefined {
+  const diff = gitPipe(cwd, ["diff", "--no-color", "--no-ext-diff", from, to]);
+  if (diff === undefined || diff.trim() === "") return undefined;
+  const id = gitPipe(cwd, ["patch-id", "--stable"], diff)?.trim().split(" ")[0];
+  return isNonEmptyString(id) ? id : undefined;
 }
 
 /** `undefined` when `path` is not a readable Git worktree. */
@@ -1322,23 +1341,31 @@ function deliveryRef(cwd: string, branch: string, remoteFirst: boolean): string 
  * stored state.
  *
  * The proof runs only after the pure rule accepted the evidence, and it reads
- * the repository the plan row's own checkout belongs to (all rows of a plan
- * workflow are worktrees of one repository, so the first recorded checkout is
- * the authority):
+ * the repository one of the plan rows' own recorded checkouts belongs to:
  *
  * 1. the target anchor is the fetched `refs/remotes/origin/<branch.target>`,
  *    else the local `refs/heads/<branch.target>` — remote-first, because a
  *    provider merge lands there and `git fetch` advances it while a local head
  *    may stay stale;
  * 2. an ancestor delivery branch tip (`branch.work`, local ref first) proves a
- *    linear/fast-forward merge;
- * 3. otherwise a recorded `delivery.merge.commit` that exists as a commit and
- *    is an ancestor of that target proves a squash/rebase merge.
+ *    merge commit or fast-forward;
+ * 3. otherwise every commit in `fork..tip` patch-equivalent upstream
+ *    (`git cherry <target> <tip>` all `-`) proves a rebase, or a squash of one
+ *    delivery commit, with no recorded value;
+ * 4. otherwise a recorded `delivery.merge.commit` proves a squash when it exists
+ *    as a commit, is an ancestor of the target, AND carries the delivery's own
+ *    diff: `git patch-id --stable` of `<commit>^..<commit>` equals that of
+ *    `fork..tip` (`fork` = `git merge-base <target> <tip>`).
+ *
+ * Reachability alone is NOT proof. The fork point of an unmerged delivery is an
+ * ancestor of the target too, so "some ancestor was recorded" is exactly the
+ * unverifiable attestation this rule replaced.
  *
  * Anything else is refused with the cause and a recovery; the engine never
- * queries a provider. A checkout with neither target ref, or a squash commit
- * that was never fetched, is therefore a refusal, never a pass — while a stale
- * LOCAL target head is not, because the fetched remote ref is read first.
+ * queries a provider. A checkout with neither target ref, a delivery branch with
+ * no surviving ref, or a squash commit that was never fetched is therefore a
+ * refusal, never a pass — while a stale LOCAL target head is not, because the
+ * fetched remote ref is read first.
  */
 export function verifyDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationResult[] {
   const violations = consultDeliveryEvidence(snapshot);
@@ -1362,8 +1389,8 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
   const recorded = (snapshot.plans ?? [])
     .map((row) => (isPlainObject(row.metadata) ? row.metadata.worktree_path : undefined))
     .filter((path): path is string => isNonEmptyString(path));
-  const checkout = recorded.find((path) => isAbsolute(path) && existsSync(path));
-  if (checkout === undefined) {
+  const readable = recorded.filter((path) => isAbsolute(path) && existsSync(path));
+  if (readable.length === 0) {
     return refuse(
       recorded.length === 0
         ? `Workflow '${workflowId}' records no plan worktree, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in the plan's own checkout`
@@ -1371,40 +1398,81 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
       `Record the plan's own checkout with 'mstar plan prepare --workflow ${workflowId} --plan <plan-id> --worktree-path <absolute-checkout> --working-branch <branch>', then retry the close. If the merge was a squash or rebase, ${record}.`,
     );
   }
-  if (gitRead(checkout, ["rev-parse", "--show-toplevel"]) === undefined) {
+  const checkouts = readable.filter((path) => gitRead(path, ["rev-parse", "--show-toplevel"]) !== undefined);
+  if (checkouts.length === 0) {
     return refuse(
-      `Workflow '${workflowId}' cannot prove its delivery merge: ${checkout} is not a readable Git checkout`,
+      `Workflow '${workflowId}' cannot prove its delivery merge: ${readable[0]} is not a readable Git checkout`,
       `Repair or re-record the plan checkout, then retry the close; if the merge was a squash or rebase, ${record}.`,
     );
   }
-  const target = deliveryRef(checkout, targetBranch, true);
+  // A recorded checkout can be repointed at a different clone, where neither ref
+  // exists; the first one that resolves the target ref is the authority and the
+  // first readable one is only the fallback that names the refusal.
+  const resolving = checkouts
+    .map((path) => ({ path, target: deliveryRef(path, targetBranch, true) }))
+    .find((candidate) => candidate.target !== undefined);
+  const checkout = resolving?.path ?? checkouts[0]!;
+  const target = resolving?.target;
   if (target === undefined) {
     return refuse(
       `Workflow '${workflowId}' cannot prove its delivery merge: the plan checkout ${checkout} has neither refs/remotes/origin/${targetBranch} nor refs/heads/${targetBranch}, so ${deliveryBranch} has no ref to be an ancestor of`,
       `Fetch the target branch into the plan checkout, then retry the close; a recorded merge commit cannot substitute for the missing target ref.`,
     );
   }
+  // A merge commit or fast-forward: the delivery tip is itself upstream.
   const tip = deliveryRef(checkout, deliveryBranch, false);
   if (tip !== undefined && gitIsAncestor(checkout, tip, target)) return [];
+
   const recordedCommit = isPlainObject(snapshot.delivery) && isPlainObject(snapshot.delivery.merge)
     ? snapshot.delivery.merge.commit
     : undefined;
   const mergeCommit = isNonEmptyString(recordedCommit) ? recordedCommit : undefined;
-  if (mergeCommit !== undefined) {
-    if (!gitObjectExists(checkout, mergeCommit)) {
-      return refuse(
-        `Workflow '${workflowId}' records delivery.merge.commit ${mergeCommit}, which is not a commit in the plan checkout ${checkout}`,
-        `Fetch that commit into the plan checkout, or correct the recorded value with 'mstar workflow evidence --workflow ${workflowId} --file <absolute-json>'.`,
-      );
-    }
-    if (gitIsAncestor(checkout, mergeCommit, target)) return [];
+  // The delivery's own diff is what any association is measured against, so a
+  // delivery branch with no surviving ref leaves nothing to associate.
+  const fork = tip === undefined ? undefined : gitRead(checkout, ["merge-base", target, tip]);
+  const deliveryPatch = tip === undefined || fork === undefined ? undefined : gitPatchId(checkout, fork, tip);
+  const unproven: string[] = [];
+
+  // A rebase (or a squash of one delivery commit) needs no recorded value: every
+  // delivery commit keeps its patch id, so `git cherry` marks each one `-`.
+  if (tip === undefined) {
+    unproven.push(`${deliveryBranch} has no ref in ${checkout}, so its commits cannot be associated with ${targetBranch}`);
+  } else if (fork === undefined || deliveryPatch === undefined) {
+    unproven.push(`${deliveryBranch} tip ${tip} shares no readable diff with ${targetBranch} (${target})`);
+  } else {
+    const cherry = gitRead(checkout, ["cherry", target, tip]);
+    if (cherry !== undefined && cherry !== "" && cherry.split("\n").every((line) => line.startsWith("-"))) return [];
+    unproven.push(
+      cherry === undefined || cherry === ""
+        ? `${fork}..${tip} carries no commit to associate with ${targetBranch} (${target})`
+        : `${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and ${cherry.split("\n").filter((line) => !line.startsWith("-")).length} of ${fork}..${tip}'s commits have no patch-equivalent commit there`,
+    );
   }
-  const container = `is not contained in ${targetBranch} (${target})`;
+
+  // A recorded squash commit proves the delivery only by carrying its content.
+  if (mergeCommit === undefined) {
+    unproven.push("no delivery.merge.commit is recorded");
+  } else if (!gitObjectExists(checkout, mergeCommit)) {
+    unproven.push(`the workflow records delivery.merge.commit ${mergeCommit}, which is not a commit in the plan checkout ${checkout}`);
+  } else if (!gitIsAncestor(checkout, mergeCommit, target)) {
+    unproven.push(`the recorded delivery.merge.commit ${mergeCommit} is not contained in ${targetBranch} (${target})`);
+  } else if (tip === undefined || fork === undefined || deliveryPatch === undefined) {
+    unproven.push(
+      `the recorded delivery.merge.commit ${mergeCommit} cannot be associated: ${deliveryBranch} supplies no delivery diff in ${checkout} to compare it with`,
+    );
+  } else {
+    const mergedPatch = gitPatchId(checkout, `${mergeCommit}^`, mergeCommit);
+    if (mergedPatch !== undefined && mergedPatch === deliveryPatch) return [];
+    unproven.push(
+      mergedPatch === undefined
+        ? `the recorded delivery.merge.commit ${mergeCommit} has no readable diff in ${checkout}`
+        : `the recorded delivery.merge.commit ${mergeCommit} is an ancestor of ${targetBranch} (${target}) but carries different content (patch id ${mergedPatch}) than the delivery ${fork}..${tip} (patch id ${deliveryPatch})`,
+    );
+  }
+
   return refuse(
-    tip === undefined
-      ? `Workflow '${workflowId}' cannot prove its delivery merge: ${deliveryBranch} has no ref in ${checkout}, and ${mergeCommit === undefined ? "no delivery.merge.commit is recorded" : `the recorded delivery.merge.commit ${mergeCommit} ${container}`}`
-      : `Workflow '${workflowId}' cannot prove its delivery merge: the ${deliveryBranch} tip ${tip} ${container}, and ${mergeCommit === undefined ? "no delivery.merge.commit is recorded" : `the recorded delivery.merge.commit ${mergeCommit} ${container}`}`,
-    `Fetch the target branch into the plan checkout and retry (a stale local target ref is the usual cause); if the merge was a squash or rebase, ${record}.`,
+    `Workflow '${workflowId}' cannot prove its delivery merge: ${unproven.join("; ")}`,
+    `Fetch the target branch into the plan checkout and retry the close; if ${deliveryBranch} has no ref there, restore or fetch refs/heads/${deliveryBranch} first, then ${record}. A recorded commit must carry the delivery's own diff, and a squash that resolved conflicts differently has no local proof — record that outcome instead with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'.`,
   );
 }
 
