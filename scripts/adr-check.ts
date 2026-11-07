@@ -12,6 +12,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
+import { fencedBlocks } from "./dsh-contract-lint.ts";
 
 export const ADR_BUCKETS = ["proposed", "implemented", "rejected"] as const;
 export const ADR_CLASSES = [
@@ -86,16 +87,26 @@ function walkFiles(dir: string): string[] {
   return out;
 }
 
+/** The document's lines outside fenced code blocks: a `## ` line quoted in a
+ * fence is example text, not a section (`docs/adr/README.md` § Header and
+ * skeletons fixes headings, not the fenced shapes a record may quote). */
+function unfencedLines(text: string): string[] {
+  const fenced = new Set<number>();
+  for (const block of fencedBlocks(text)) {
+    for (let offset = 0; offset < block.lines.length; offset++) fenced.add(block.line + offset);
+  }
+  return text.split(/\r?\n/).filter((_, index) => !fenced.has(index + 1));
+}
+
 /** Every line before the first level-2 ATX heading (`docs/adr/README.md` § Header and skeletons). */
 function headerLines(text: string): string[] {
-  const lines = text.split(/\r?\n/);
+  const lines = unfencedLines(text);
   const end = lines.findIndex((line) => line.startsWith("## "));
   return end === -1 ? lines : lines.slice(0, end);
 }
 
 function headingNames(text: string): string[] {
-  return text
-    .split(/\r?\n/)
+  return unfencedLines(text)
     .filter((line) => line.startsWith("## "))
     .map((line) => line.slice(3));
 }
