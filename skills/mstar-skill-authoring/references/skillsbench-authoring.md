@@ -84,7 +84,7 @@ principles above. Pull one in when it fits — do not encode all six into every 
 1. **Calibrated examples file** (serves P2/P5) — keep one small reference of real cases
    distilled into annotated judgments; readers identify the governing principle, not text
    templates, and it is written back when a new rule settles. In this harness: the Q1–Q8
-   worked judgments in `mstar-compound` `references/compound-workflow.md`; this iteration's
+   worked judgments in `mstar-knowledge` `references/compound-workflow.md`; this iteration's
    fold-B overcorrection checklist (device 3) is a softer second instance.
 
 2. **Recall batteries** (serves P5) — for audit/hunt skills: over-matching probes that
@@ -95,7 +95,7 @@ principles above. Pull one in when it fits — do not encode all six into every 
 
 3. **Overcorrection traps** (adjacent to P6) — a short section per skill naming the failure
    modes of over-applying its own rules, so the skill guards its own bias. In this harness:
-   the overcorrection-traps row in `mstar-compound` `references/compound-workflow.md`
+   the overcorrection-traps row in `mstar-knowledge` `references/compound-workflow.md`
    (obligation↛endorsement flips, hypotheticals stay marked, delete clauses, not sentences).
 
 4. **Required-explicit-input** (adjacent to P3) — when the required scope or answers are

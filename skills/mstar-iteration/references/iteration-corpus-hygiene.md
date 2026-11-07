@@ -10,7 +10,7 @@
 | **Primary** | `{ITERATION_DIR}/<iteration-id>/**` | Only this round's affected prototypes/guides/specs, compass/plan links, draft-vs-locked status and current design baseline |
 | **Existing only** | Directly related `{KNOWLEDGE_DIR}/` references | Archive / misplaced correction as needed — no new knowledge or whole-corpus scan |
 | **Out of scope** | `{SPECS_DIR}/**` writes | 全局 specs 在 **Phase 3 iteration-close** 提升时写入 |
-| **Out of scope** | New `{KNOWLEDGE_DIR}/` writes | → **`mstar-compound`** @ iteration-close |
+| **Out of scope** | New `{KNOWLEDGE_DIR}/` writes | → **`mstar-knowledge`** @ iteration-close |
 
 ## Placement corrections
 

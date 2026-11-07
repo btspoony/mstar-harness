@@ -131,7 +131,7 @@ Notes:
 
 - 结晶文档数：<N>
 - 新增 CONCEPTS.md 条目：<N>
-- 触发 compound-refresh：<是/否>
+- 触发知识维护（`mstar-knowledge` `## Workflow — Maintain`）：<是/否>
 
 ## Iteration Retrospective (minimal)
 

@@ -199,7 +199,7 @@ ACTIVE 的中途增减范围先经 `mstar plan bind --execution --workflow <id> 
 
 Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（HARD）；三棵树的落点、长期价值与写者 → **`mstar-artifacts`** `references/knowledge-and-designs.md` § 与公开文档目录的分工。
 
-**写入边界**：Phase 1（含 §1.6）的规格落在 `<iteration-id>/specs/`；全局 `{SPECS_DIR}/` 在 Phase 3 iteration-close 提升时写入；`{KNOWLEDGE_DIR}/` 由 **`mstar-compound`** @ iteration-close 写入。
+**写入边界**：Phase 1（含 §1.6）的规格落在 `<iteration-id>/specs/`；全局 `{SPECS_DIR}/` 在 Phase 3 iteration-close 提升时写入；`{KNOWLEDGE_DIR}/` 由 **`mstar-knowledge`** @ iteration-close 写入。
 
 ## 1.6 Review & Edit chain（integration 分支前强制）
 

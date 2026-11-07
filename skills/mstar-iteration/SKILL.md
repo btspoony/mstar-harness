@@ -7,7 +7,7 @@ description: "Start, drive, resume or close an iteration (also without a slash c
 
 ## Load order
 
-**Read `mstar-harness-core` first.** Path symbols → **`mstar-conventions`**. Per-plan gates → **`mstar-phase-gates`**. Knowledge crystallization → **`mstar-compound`**. Phase 2 implement 波次（进入 per-plan implement 前）→ **`mstar-sdd`** + **`mstar-dispatch-gates`**；Phase 2 QC 前 → **`mstar-review-qc`**。Git/worktree 载体（有 git 写或 lease 时）→ **`mstar-branch-worktree`**。**Phase 1 角色派发 preflight**（每次 invoke 前的 assignment preflight；`enforcement: hard` fail-fast）→ **`references/command-shared-invariants.md`**（本 skill 直接触发时不依赖 command 层）。On conflict, **`mstar-harness-core` wins**.
+**Read `mstar-harness-core` first.** Path symbols → **`mstar-conventions`**. Per-plan gates → **`mstar-phase-gates`**. Knowledge crystallization → **`mstar-knowledge`**. Phase 2 implement 波次（进入 per-plan implement 前）→ **`mstar-sdd`** + **`mstar-dispatch-gates`**；Phase 2 QC 前 → **`mstar-review-qc`**。Git/worktree 载体（有 git 写或 lease 时）→ **`mstar-branch-worktree`**。**Phase 1 角色派发 preflight**（每次 invoke 前的 assignment preflight；`enforcement: hard` fail-fast）→ **`references/command-shared-invariants.md`**（本 skill 直接触发时不依赖 command 层）。On conflict, **`mstar-harness-core` wins**.
 
 Phase 1 roadmap/milestone reads and Phase 3 close updates → **`mstar-project-governance`**, the sole owner of project roadmap/milestone read/write rules.
 
@@ -107,7 +107,7 @@ Phase 6: post-merge close —— merge 授权完成、PR merged 后 §6.1–§6.
 
 完整 topic-skill 索引见 **`mstar-harness-core`**。本 skill 迭代级关键引用：
 
-- **`mstar-compound`** — iteration-close 中触发知识结晶（**唯一**默认 knowledge 新增路径）
+- **`mstar-knowledge`** — iteration-close 中触发知识结晶（**唯一**默认 knowledge 新增路径）
 - **`references/phase-1-prepare.md`** — start route detail（§1.1–§1.6）
 - references/phase-2-worktree-lease.md — direct coordinator execution, isolated feature/integration checkouts, atomic writes and real serial merge proof
 - **`references/autonomous-direction-lock.md`** — §1.2 autonomous direction lock、scale budget、branch resolve
@@ -124,12 +124,12 @@ Phase 6: post-merge close —— merge 授权完成、PR merged 后 §6.1–§6.
 - **不要在缺 §5.3 授权时 merge PR** — merge-ready / CI 绿 / QC Approve / review `ship it` 各自都不构成 merge 授权；三分支完整谓词、外部 bot 的 P1/未达标分数与 `pr_merge_policy` 缺失时的 STOP → **`references/phase-4-5-pr-delivery.md`** § 5.3
 - **不要在 integration worktree 或主 checkout（control root）上直接编辑产品代码** — Phase 5 修复走 fix feature worktree，review 后 merge 回 integration worktree（`phase-4-5-pr-delivery.md` §5.0）
 - **不要在缺 `iteration_base_branch` / `target_branch` 时默认 `main` / `master`**（门禁、例外写法与 base 解析 → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库））
-- **不要在 Phase 1 §1.6 由 product/architect 向 `{KNOWLEDGE_DIR}/` 新增**（知识 → iteration-close **`mstar-compound`**）
+- **不要在 Phase 1 §1.6 由 product/architect 向 `{KNOWLEDGE_DIR}/` 新增**（知识 → iteration-close **`mstar-knowledge`**）
 - **不要在 per-plan Done 后立即 compound** — 等 iteration-close 统一做
 
 ## Workflow
 
-Phase 1–6 总览见上文 **`## 设计思路`** 图。执行时按 **`## Phase route map`** 选当前动作的一行 detail：`start`（范围 + compass + §1.6 Review & Edit 链）→ `Autonomous Execute`（五道闸 → §2.4 per-plan 循环：分支 → 实现 → QC → QA gate → Done → 串行 merge）→ `iteration-close`（§3.1–§3.5 + `mstar-compound`）→ `PR delivery`（Phase 4）→ `PR merge-ready loop`（Phase 5 至 §5.2 第 1–5 项全 `[x]`，即 merge-ready）→ `post-merge close`（Phase 6，PR merged 后 §6.1–§6.4）。每波用 §2.1 session todos 设护栏防范围漂移；phase 切换以上方 **Phase transition gates** 为准。
+Phase 1–6 总览见上文 **`## 设计思路`** 图。执行时按 **`## Phase route map`** 选当前动作的一行 detail：`start`（范围 + compass + §1.6 Review & Edit 链）→ `Autonomous Execute`（五道闸 → §2.4 per-plan 循环：分支 → 实现 → QC → QA gate → Done → 串行 merge）→ `iteration-close`（§3.1–§3.5 + `mstar-knowledge`）→ `PR delivery`（Phase 4）→ `PR merge-ready loop`（Phase 5 至 §5.2 第 1–5 项全 `[x]`，即 merge-ready）→ `post-merge close`（Phase 6，PR merged 后 §6.1–§6.4）。每波用 §2.1 session todos 设护栏防范围漂移；phase 切换以上方 **Phase transition gates** 为准。
 
 ## Evidence
 

@@ -16,7 +16,7 @@
  * supply-chain checks and writes the codebase-audit review report into its
  * `{REVIEW_DIR}` run directory, and `compound` validates
  * knowledge-doc schema, reference existence, index rows and the
- * compound-refresh scope. `roles` validates the role reference mapping +
+ * Maintain scope. `roles` validates the role reference mapping +
  * parameter tables and the load-order contract, `prreview` implements the
  * PR-review tally/score/verdict arithmetic and the merge-class/verdict
  * constants (mstar-audit pr-review.md § Tally and derived score), `qcreview`

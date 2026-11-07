@@ -68,7 +68,7 @@ A good strategy document is opinionated and concise. It should fit in one screen
 
 ## Creating STRATEGY.md
 
-Creating and maintaining `STRATEGY.md` follows the **project knowledge bootstrap**: **`mstar-compound-refresh`** → `references/project-knowledge-bootstrap.md` **Phase 2 (Distill STRATEGY.md)** — survey context → interview → draft/review → stale/partial/current handling. The six-section structure and the engine check above stay authoritative here.
+Creating and maintaining `STRATEGY.md` follows the **project knowledge bootstrap**: **`mstar-knowledge`** → `references/project-knowledge-bootstrap.md` **Phase 2 (Distill STRATEGY.md)** — survey context → interview → draft/review → stale/partial/current handling. The six-section structure and the engine check above stay authoritative here.
 
 ### Interview (ask PM the 5 questions one at a time)
 
@@ -101,7 +101,7 @@ Review triggers: after a major architectural decision, when a plan introduces a 
 
 ## Workflow
 
-主链：**创建/维护**（survey → 访谈 = 五问 → draft/review → 更新/替换/跳过）细节 → **`mstar-compound-refresh`** `references/project-knowledge-bootstrap.md` **Phase 2**。作为 brainstorm / plan 的上游锚点被引用。
+主链：**创建/维护**（survey → 访谈 = 五问 → draft/review → 更新/替换/跳过）细节 → **`mstar-knowledge`** `references/project-knowledge-bootstrap.md` **Phase 2**。作为 brainstorm / plan 的上游锚点被引用。
 
 ## Evidence
 
@@ -110,5 +110,5 @@ Review triggers: after a major architectural decision, when a plan introduces a 
 ## References
 
 - 迭代级战略对齐（iteration-start §1.1 读 STRATEGY.md）→ **`mstar-iteration`**
-- 知识维护 / bootstrap（战略变更后的知识对账）→ **`mstar-compound-refresh`**
+- 知识维护 / bootstrap（战略变更后的知识对账）→ **`mstar-knowledge`**（`## Workflow — Maintain`）
 - 路径符号与产物存储 SSOT → **`mstar-conventions`**

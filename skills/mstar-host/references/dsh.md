@@ -534,7 +534,7 @@ compatibility tool. Those twelve duplicated an MCP tool 1:1, so two identical
 surfaces competed for the same call and the whole set cost ~10k characters of
 fixed context per request. **One exception to that 1:1 phrasing:** the dsh
 compound-validate mirror also published a dsh-only `repo_root` parameter for
-reference-existence checks (the compound-refresh Phase 2 check), and
+reference-existence checks (the Maintain Phase 2 check), and
 `compound.validate` in `packages/commands/src/families/validation.ts` carries
 neither that parameter nor that check — so the capability went with the tool and
 has no MCP twin. Recovery: call the folded family instead —
@@ -544,7 +544,7 @@ parameters with `mcp__mstar__mstar_schema` (`family: <name>`, or
 `command: <command-id>` for one leaf contract) instead of guessing from the old
 name. For the knowledge-doc checks use MCP `mstar_compound` with
 `action: "validate"` (or the CLI `mstar compound validate`) without `repo_root`;
-the reference-existence half is the `mstar-compound-refresh` knowledge-write
+the reference-existence half is the `mstar-knowledge` knowledge-write
 seam's job, not an on-demand tool. The former plugin-owned command
 **`/mstar-execution`** stays removed; the
 ADR `docs/adr/dsh-native-identity-channels.md` (§ Superseded rationale) explains

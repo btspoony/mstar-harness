@@ -59,7 +59,7 @@
 
 ## Knowledge 与 compound 提升
 
-- iteration-close 的 knowledge / specs package 盘点、准入、结构化提升与历史保留规则 → **`mstar-compound`**「Iteration package promotion」及 **`mstar-artifacts/references/knowledge-and-designs.md`**；本轨写入 integration worktree，随 close commit 交付。
+- iteration-close 的 knowledge / specs package 盘点、准入、结构化提升与历史保留规则 → **`mstar-knowledge`**「Iteration package promotion」及 **`mstar-artifacts/references/knowledge-and-designs.md`**；本轨写入 integration worktree，随 close commit 交付。
 - **iteration-start §1.6**：product / architect **不得**向 `{KNOWLEDGE_DIR}/` **新增**；误写由 writing-specialist 迁回 **package**。
 
 ## §1.6 selected-role editing scope
