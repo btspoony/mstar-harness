@@ -63,7 +63,7 @@ Payload authoring: consult `mstar-harness schema CaptureInput` for `issue add`, 
 
 ### Historical register fields and closure
 
-Register shape, required fields/enums, provenance and historical in-place closure → **`mstar-engine-legacy`** `references/migration-source-shapes.md`; this is a migration mapping, never a live writer.
+Register shape, required fields/enums, provenance and historical in-place closure → `references/migration-source-shapes.md`; this is a migration mapping, never a live writer.
 
 Live capture and closure use § Issue capture and the contract §4 closure authority; `QA gate: mandatory` requires QA verification, otherwise PM acceptance. Current severity, cleanup and issue closure → **`mstar-artifacts`** `references/status-and-residuals.md`.
 
@@ -98,6 +98,6 @@ Live capture and closure use § Issue capture and the contract §4 closure autho
 ## References
 
 - **`mstar-artifacts`**（`references/status-and-residuals.md`）— 字段语义 SSOT：severity 含义与门禁关系、findings cleanup modes 全文、close 协议、engine-check 查询示例
-- **`mstar-engine-legacy`** `references/migration-source-shapes.md` — historical register shape, required fields/enums, provenance and closure mapping; no execution route or live writer
+- `references/migration-source-shapes.md` — historical register shape, required fields/enums, provenance and closure mapping; no execution route or live writer
 - **`mstar-conventions`** — `{PROJECT_DIR}` / `{WORKFLOW_DIR}` 路径符号、`.mstarc` 声明、gitignore 策略
 - **`mstar-review-qc`** — PM QC 编排与 findings 捕获 / QC gate（PM 同轮必读）

@@ -4,7 +4,7 @@
 
 Execution authority is the ACTIVE DB domain in `{HARNESS_DIR}/store.db`. There is no file execution route. Root `status.json` and `{WORKFLOW_DIR}/<id>/snapshot.json` are **migration sources / retained history**, not authority.
 
-`mstar store upgrade` directly imports recognized v1/v2 execution sources, preserving original bytes; standalone `mstar migrate` staging is retired. Historical shapes → **`mstar-engine-legacy`** `references/migration-source-shapes.md` (archive, no execution route or live writer).
+`mstar store upgrade` directly imports recognized v1/v2 execution sources, preserving original bytes; standalone `mstar migrate` staging is retired. Historical shapes → **`mstar-project-governance`** `references/migration-source-shapes.md` (archive, no execution route or live writer).
 
 > **Authority:** ACTIVE execution state is the DB domain. Ordinary coordinator operations are store transactions with CAS receipts. Surviving `status.json` / snapshot files are migration sources / retained history, not live state. A harness with no ACTIVE store has no execution authority.
 
@@ -337,4 +337,4 @@ mstar status tech-debt                                    # open-issue rollup
 
 Import recognized v1/v2 execution sources directly with `mstar store upgrade --operator <name> [--harness <path>]`. Preserve original source bytes; standalone `mstar migrate` staging is retired.
 
-Historical execution/register file shapes, field history and retired validators → **`mstar-engine-legacy`** `references/migration-source-shapes.md` + `references/status-field-history.md` (archive; no execution route or live writer).
+Historical execution/register file shapes, field history and retired validators → **`mstar-project-governance`** `references/migration-source-shapes.md` (no execution route or live writer).

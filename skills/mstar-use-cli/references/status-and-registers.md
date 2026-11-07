@@ -34,7 +34,7 @@ Complete synthetic `CaptureInput` example (adapt evidence, timestamp and semanti
 
 ACTIVE root/workflow/plan/merge-exclusion/session authority is `{HARNESS_DIR}/store.db` (`execution_*`), read through `mstar status validate` / `mstar plan show` and written only through public workflow/plan verbs. The files below are **read-only import/history**. `mstar store upgrade` directly reads recognized v1/v2 execution sources and preserves their original bytes; standalone `mstar migrate` staging is retired. Public persist and engine `ArtifactKind` accept `review` and `json` only.
 
-The two retained import files — root `{HARNESS_DIR}/status.json` and workflow `{WORKFLOW_DIR}/<workflow-id>/snapshot.json` — and what each one holds (root registry; one lifecycle's blocks) → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
+The two retained import files — root `{HARNESS_DIR}/status.json` and workflow `{WORKFLOW_DIR}/<workflow-id>/snapshot.json` — and what each one holds (root registry; one lifecycle's blocks) → **`mstar-project-governance`** `references/migration-source-shapes.md`.
 
 The root register is a registry, not a plan store: plan rows live in `execution_plans`; open findings live in store issues.
 
