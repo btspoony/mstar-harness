@@ -1,5 +1,5 @@
 const a = args ?? {}
-const missing = ['worktree', 'target', 'diffBase', 'reportsDir', 'auditRef', 'budgetLine']
+const missing = ['worktree', 'target', 'diffBase', 'auditRef', 'budgetLine']
   .filter((key) => typeof a[key] !== 'string' || a[key].length === 0)
 if (missing.length > 0) {
   throw new Error('mstar-pr-seats missing args: ' + missing.join(', ') +

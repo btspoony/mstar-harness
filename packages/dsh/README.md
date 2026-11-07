@@ -259,7 +259,7 @@ The four read-only fan-out scripts the model hands to the dsh **`workflow`** too
 | --- | --- | --- |
 | `workflows/mstar-qc-tri.js` | Plan QC tri-review: three independent read-only QC seats, each returning a verdict envelope | `planId`, `planPath`, `range`, `reviewCwd`, `branch`, `sddDir` |
 | `workflows/mstar-audit-fanout.js` | Codebase audit: one read-only seat per category, batched to the 8-seat subagent pool | `repo`, `auditRef`, `recon` (+ optional `categories`, default all nine) |
-| `workflows/mstar-pr-seats.js` | PR review seats: 2-3 domain seats plus an optional cross-domain security seat, findings only | `worktree`, `target`, `diffBase`, `reportsDir`, `auditRef`, `budgetLine` (+ `domains`, `security`, `diffFile`) |
+| `workflows/mstar-pr-seats.js` | PR review seats: 2-3 domain seats plus an optional cross-domain security seat, findings only | `worktree`, `target`, `diffBase`, `auditRef`, `budgetLine` (+ `domains`, `security`, `diffFile`) |
 | `workflows/mstar-review-single.js` | One fresh-context SDD task reviewer that takes no Team roster seat | `planId`, `taskId`, `reviewCwd`, `branch`, `briefPath`, `implementerReport`, `diffFile`, `diffBase`, `diffHead`, `globalConstraints` |
 
 ## Native command surface
