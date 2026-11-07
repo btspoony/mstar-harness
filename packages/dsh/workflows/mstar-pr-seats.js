@@ -49,8 +49,8 @@ const seatPrompt = (domain, extra) => `## Assignment
 Execute as: code-reviewer
 Delegation: forbidden
 Task category: audit
-**Budget (review / QC seats)**: /1 round — one pass over the assigned categories
-**Return shape (review / QC seats)**: the seat findings in the audit format; stop when the assigned categories or the budget bound are reached
+**Budget (review / QC seats)**: /1 round — one pass over the diff
+**Return shape (review / QC seats)**: the seat findings in the audit format; stop when the diff or the budget bound is reached
 
 Review target: ${a.target}
 Review worktree: ${a.worktree}
