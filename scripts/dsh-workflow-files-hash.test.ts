@@ -1,45 +1,75 @@
 /**
- * The four dsh read-only fan-out scripts are shipped as real files under
- * `packages/dsh/workflows/`. Each body was captured byte-for-byte from the
- * fenced block of `skills/mstar-host/references/dsh-workflow-scripts.md`
- * before the files were created; these are those bodies' SHA-256 digests.
+ * The dsh workflow-script delivery surface, verified from its own sources —
+ * no digest, version or file list is pinned here, because a legitimate
+ * deliberate edit must not turn this red for having edited.
  *
- * Those bytes are the deliverable, not implementation detail: the host passes
- * the shipped body verbatim as the `workflow` tool's `script` argument, so this
- * pins what a caller actually executes — a BEHAVIOUR assertion, not a
- * source-shape one. A deliberate script edit records its new digest here in the
- * same change; that is the design intent, not a maintenance burden.
+ * - every script in `packages/dsh/workflows/` exists and parses as a body;
+ * - `packages/dsh/package.json` ships that directory, so an installed host
+ *   receives the files the skill tells it to read;
+ * - the skill's per-script `meta` identity and its `**File**` anchors name
+ *   exactly the files the directory holds, both sides read from source.
+ *
+ * The call contract passes a shipped body verbatim as the `workflow` tool's
+ * `script` argument, so the shipped set is what the host actually executes:
+ * that is a behaviour assertion over the delivery surface, not a pin on how
+ * the source is written. The shipped set comes from `readdirSync`, so a
+ * rename, an added script or an unshipped directory fails with no edit here.
  *
  * Run: `bun test scripts/dsh-workflow-files-hash.test.ts` (repo root).
  */
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import vm from "node:vm";
 
-const WORKFLOW_DIR = join(import.meta.dir, "..", "packages", "dsh", "workflows");
+const ROOT = join(import.meta.dir, "..");
+const PACKAGE_DIR = join(ROOT, "packages", "dsh");
+const WORKFLOW_DIR = join(PACKAGE_DIR, "workflows");
+const CONTRACT = join(ROOT, "skills", "mstar-host", "references", "dsh-workflow-scripts.md");
 
-/** Recorded SHA-256 of each shipped script body, keyed by file stem. */
-const RECORDED: Record<string, string> = {
-  "mstar-qc-tri": "49aae2d007406378ec941c8e0a122fed203f5b1e350ee33ae9ec539ff1275781",
-  "mstar-audit-fanout": "87cd92b59b6de5e36a5b61893334763edd4f0bc6457aaf0f000c0dd9aa1469fc",
-  "mstar-pr-seats": "3a77b308e6ad3303ef62c754b20a7ee496e9d7040c7aa3a0526d80680cee8e05",
-  "mstar-review-single": "6050aeccd06b192ef186308aa92c5d7ad34f357ef3df8d2accb1faadb7647ff4",
-};
+const contract = readFileSync(CONTRACT, "utf8");
+const shipped = readdirSync(WORKFLOW_DIR)
+  .filter((name) => name.endsWith(".js"))
+  .map((name) => name.slice(0, -".js".length))
+  .sort();
 
-describe("shipped dsh workflow scripts are byte-identical to their recorded bodies", () => {
-  for (const [stem, digest] of Object.entries(RECORDED)) {
-    test(`${stem}.js matches its recorded SHA-256`, () => {
-      const body = readFileSync(join(WORKFLOW_DIR, `${stem}.js`));
-      expect(createHash("sha256").update(body).digest("hex")).toBe(digest);
-    });
-  }
+describe("dsh workflow scripts are a shipped, self-consistent surface", () => {
+  test("every shipped script exists and parses as a workflow body", () => {
+    expect(shipped.length).toBeGreaterThan(0);
+    for (const name of shipped) {
+      // A body is a statement list ending in a top-level `return`, so it
+      // compiles inside the async IIFE the workflow tool wraps it in — the
+      // same syntax check `node --check` performs, without a second runtime.
+      const source = readFileSync(join(WORKFLOW_DIR, `${name}.js`), "utf8");
+      expect(() => new vm.Script(`(async () => {\n${source}\n})`)).not.toThrow();
+    }
+  });
 
-  test("the shipped set is exactly the recorded scripts", () => {
-    const shipped = readdirSync(WORKFLOW_DIR)
-      .filter((name) => name.endsWith(".js"))
-      .map((name) => name.slice(0, -3))
+  test("package.json ships the workflows directory", () => {
+    const parsed: unknown = JSON.parse(readFileSync(join(PACKAGE_DIR, "package.json"), "utf8"));
+    const files = parsed !== null && typeof parsed === "object" && "files" in parsed ? parsed.files : undefined;
+    expect(Array.isArray(files) ? files : []).toContain("workflows");
+  });
+
+  test("each script's meta identity is its own file stem", () => {
+    const metaNames = [...contract.matchAll(/\*\*`meta`\*\*\n```json\n(.*?)\n```/g)]
+      .map((match): unknown => JSON.parse(match[1]!))
+      .map((meta) => (meta !== null && typeof meta === "object" && "name" in meta ? meta.name : undefined))
+      .filter((name): name is string => typeof name === "string")
       .sort();
-    expect(shipped).toEqual(Object.keys(RECORDED).sort());
+    expect(metaNames).toEqual([...shipped]);
+    for (const name of shipped) {
+      // The body's own argument guard names the workflow, so the meta/files
+      // pairing is provable from both sides without a literal list here.
+      expect(readFileSync(join(WORKFLOW_DIR, `${name}.js`), "utf8")).toContain(`${name} missing args:`);
+    }
+  });
+
+  test("the contract's File anchors cover exactly the shipped files", () => {
+    const anchored = [...contract.matchAll(/^\*\*File\*\* `@mstar-harness\/dsh\/workflows\/([^`]+)\.js`/gm)].map(
+      (match) => match[1]!,
+    );
+    expect(anchored.length).toBeGreaterThan(0);
+    expect([...anchored].sort()).toEqual([...shipped]);
   });
 });

@@ -6,7 +6,7 @@ Templates for the dsh **`workflow`** tool (`@deepseek-ai/dsh-tool-workflow`, mou
 
 One `workflow` tool call carries three parameters:
 
-- `script` — the shipped file's body, passed **verbatim**: read the file at the dsh package root — `@mstar-harness/dsh/workflows/<name>.js` in an installed host, `packages/dsh/workflows/<name>.js` in this repo's checkout — and hand its text over unchanged. It is plain JavaScript (native TypeScript is not accepted), it declares no `export const meta` statement, and it ends with `return <JSON value>`. `scripts/dsh-workflow-files-hash.test.ts` pins each file's SHA-256, so an edit to a body is a deliberate contract change, never a silent drift.
+- `script` — the shipped file's body, passed **verbatim**: read the file at the dsh package root — `@mstar-harness/dsh/workflows/<name>.js` in an installed host, `packages/dsh/workflows/<name>.js` in this repo's checkout — and hand its text over unchanged. It is plain JavaScript (native TypeScript is not accepted), it declares no `export const meta` statement, and it ends with `return <JSON value>`. `scripts/dsh-workflow-files-hash.test.ts` checks the delivery surface instead — every shipped body parses, `package.json` ships the `workflows` directory, and each `meta` identity here plus the `**File**` anchors below name exactly the scripts on disk.
 - `meta` — plain JSON identity: `name` (short kebab-case, the allowlist key of the host's `workflowGate`), `description`, optional `whenToUse`, optional `phases[] = { title, detail? }`. `phase()` calls and `agent({ phase })` strings match `phases[].title` by exact string. Each section below carries its `meta` as one JSON line.
 - `args` — plain JSON object, exposed to the script verbatim as the `args` global.
 
