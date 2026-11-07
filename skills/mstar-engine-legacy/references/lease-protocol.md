@@ -7,7 +7,7 @@ Follow the host-selected lifecycle authority first. This reference supplies safe
 1. Keep process state under the primary checkout/control harness root. Product edits use distinct feature checkouts; integration uses its recorded separate checkout and branch. Never bootstrap a second process authority in a feature tree.
 2. The coordinator selects the workflow/plan, records source facts and effective QA/cleanup configuration in conversation/plan docs, and dispatches ordinary leaf tasks. Default QA is mandatory and cleanup allow-residual; configuration stays revisable. No per-plan claim, identity or binding is required.
 3. Apply Prepare/Execute, SDD task review, plan QC tri and QA obligations; keep the work in review until its QC/QA evidence is complete.
-4. For iteration work, serialize the real Git merge in the recorded integration checkout and retain actual base/source/result SHAs. Standalone development verifies its own source; report-only consumes recorded policy fulfilment without invented Git.
+4. For iteration work, serialize the real Git merge in the recorded integration checkout and retain actual base/source/result SHAs. Standalone development verifies its own source; report-only needs only its declared completion policy without invented Git.
 5. Engine-absent hosts track execution state in conversation (no-plan mode). If a supported CLI/host operation is available, use it instead of hand-editing state — restoring that capability is an optional transition, never a requirement for no-plan tracking. A validator, manual lock, hand-edited snapshot or recreated transfer state is not a substitute for a supported operation.
 
 ## Decision Rules

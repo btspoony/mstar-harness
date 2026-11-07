@@ -98,7 +98,7 @@ Use `references/preconditions.md` when the intended verb refuses for a required 
 
 ### 3. Lifecycle shape
 
-The primary coordinator's ordinary prepare/progress/complete operations replace ownership-transfer completion. Iteration complete verifies the already-performed serial merge; standalone development verifies registered source without integration inputs; report-only consumes matching fulfilment recorded before Done without fabricated Git. All retain QC/QA and their distinct outer delivery/close obligations. No per-row execution lease or bind exists.
+The primary coordinator's ordinary prepare/progress/complete operations replace ownership-transfer completion. Iteration complete verifies the already-performed serial merge; standalone development verifies registered source without integration inputs; report-only needs only QC/QA under its declared completion policy, without fabricated Git. All retain QC/QA and their distinct outer delivery/close obligations. No per-row execution lease or bind exists.
 
 Complete writes Done/evidence/ownership atomically and releases applicable integration exclusion; exact replay preserves timestamps. Retry the same intended action with current facts rather than introducing another protocol. Parameters/recovery → references/plan-and-workflow.md.
 

@@ -89,14 +89,15 @@ export type WorkflowCompoundOutcome = (typeof WORKFLOW_COMPOUND_OUTCOMES)[number
  *   `branch.work`/`branch.target` pair (derived, §4d), and the merge is proven
  *   by local Git ancestry (`verifyDeliveryEvidence`), never by a sentence. The
  *   commit exists for the one shape ancestry cannot show on its own - a squash
- *   or rebase merge whose provider commit is not the delivery branch tip;
- * - `completion` - the fulfilment record of the `completion_policy` recorded
- *   at registration (§1) for `verification/report-only` workflows.
+ *   or rebase merge whose provider commit is not the delivery branch tip.
+ *
+ * A `verification/report-only` workflow records NO delivery evidence: its
+ * registered `completion_policy` is a registration-time declaration of what the
+ * deliverable is, not a runtime artifact to fulfil with a sentence (§1).
  */
 export type WorkflowDeliveryEvidence = {
   compound?: { outcome: WorkflowCompoundOutcome; reason?: string };
   merge?: { commit?: string };
-  completion?: { policy: string; evidence: string };
 };
 
 export type WorkflowLifecycleStatus = (typeof WORKFLOW_LIFECYCLE_STATUSES)[number];
@@ -462,7 +463,7 @@ const DELIVERY_COMMIT_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
 /**
  * Validate the optional `delivery` block (contract §3/§4c/§4f): known
- * members only, `compound`/`completion` exact-key objects of non-empty strings,
+ * members only, `compound` an exact-key object of non-empty strings,
  * `merge` a `{commit}` object carrying a full lowercase 40/64-hex Git object id
  * (the member is optional, an empty one is not), the compound outcome inside
  * the recorded enum, and `skipped` carrying its mandatory reason. Structural
@@ -483,7 +484,7 @@ export function deliveryEvidenceViolations(value: unknown, what: string): Valida
     invalid("must be an object");
     return violations;
   }
-  const members = ["compound", "merge", "completion"] as const;
+  const members = ["compound", "merge"] as const;
   const unknownMembers = Object.keys(value).filter((key) => !(members as readonly string[]).includes(key));
   if (unknownMembers.length > 0) invalid(`unknown member(s) ${unknownMembers.join(", ")} \u2014 expected ${members.join(" | ")}`);
 
@@ -520,39 +521,27 @@ export function deliveryEvidenceViolations(value: unknown, what: string): Valida
     }
   }
 
-  const completion = value.completion;
-  if (completion !== undefined) {
-    if (!isPlainObject(completion)) invalid("completion must be an object");
-    else {
-      const unknown = Object.keys(completion).filter((key) => key !== "policy" && key !== "evidence");
-      if (unknown.length > 0) invalid(`completion has unknown key(s) ${unknown.join(", ")}`);
-      for (const field of ["policy", "evidence"] as const) {
-        if (typeof completion[field] !== "string" || completion[field].trim() === "") {
-          invalid(`completion.${field} must be a non-empty string`);
-        }
-      }
-    }
-  }
   return violations;
 }
 
 /** The delivery-evidence members one declared kind records (contract §1/§4c/§4f). */
 export function deliveryEvidenceMembers(kind: WorkflowDeliveryKind): readonly string[] {
-  return kind === "development" ? ["compound", "merge"] : ["completion"];
+  return kind === "development" ? ["compound", "merge"] : [];
 }
 
 /**
  * The delivery block as a STORED document may carry it. The pre-§4f shape
- * recorded `delivery.pr` and a free-text `merge {provider, evidence}`; a stored
- * block is history and is never rewritten, so persisted-state validation reads
- * those legacy members as ABSENT instead of refusing the whole snapshot - the
- * same read tolerance the pre-rename `branch.source` spelling gets. Every WRITE
- * path refuses them (`deliveryEvidenceMembers` plus the strict shape rule), so
- * the tolerated shape can never be recorded again.
+ * recorded `delivery.pr` and a free-text `merge {provider, evidence}`; the
+ * report-only route recorded `delivery.completion`. A stored block is history
+ * and is never rewritten, so persisted-state validation reads those legacy
+ * members as ABSENT instead of refusing the whole snapshot - the same read
+ * tolerance the pre-rename `branch.source` spelling gets. Every WRITE path
+ * refuses them (`deliveryEvidenceMembers` plus the strict shape rule), so the
+ * tolerated shape can never be recorded again.
  */
 function storedDeliveryEvidence(value: unknown): unknown {
   if (!isPlainObject(value)) return value;
-  const { pr: _legacyPr, merge, ...members } = value;
+  const { pr: _legacyPr, completion: _legacyCompletion, merge, ...members } = value;
   // A non-object merge is not the retired spelling: leave it for the shape rule
   // to name instead of silently discarding structured state.
   if (!isPlainObject(merge)) return merge === undefined ? members : { ...members, merge };
@@ -978,8 +967,10 @@ export function assertDeliveryRegistrationCoherence(
  *   stays OPTIONAL: it carries the one fact ancestry cannot show (a
  *   squash/rebase provider commit), and the merge itself is proven from local
  *   Git by `verifyDeliveryEvidence`, so this pure rule never demands it;
- * - `verification/report-only` → registered `completion_policy` plus a
- *   fulfilment record naming that same policy.
+ * - `verification/report-only` → the registered `completion_policy` alone. A
+ *   report-only workflow records no fulfilment payload: the policy declares
+ *   what the deliverable is, and the close verifies Done rows plus QC/QA, not a
+ *   self-reported sentence (§1).
  *
  * A terminal (`completed`/`failed`/`stopped`) `type: plan` header without a
  * registered kind is a LEGACY snapshot: the kind is fixed at registration, so
@@ -1021,17 +1012,8 @@ export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationR
     // would reinstate a placeholder that carries nothing. The Git proof
     // (`verifyDeliveryEvidence`) is the merge gate; this pure rule judges only
     // the facts the operator must record.
-  } else {
-    const policy = snapshot.completion_policy;
-    if (!nonEmptyString(policy)) missing.push("completion_policy (the recorded alternative completion policy, \u00a71)");
-    const completion = isPlainObject(delivery?.completion) ? delivery.completion : undefined;
-    if (completion === undefined) {
-      missing.push("delivery.completion (the fulfilment record of the registered policy, \u00a71)");
-    } else if (nonEmptyString(policy) && completion.policy !== policy) {
-      missing.push(
-        `delivery.completion.policy (\u00a71 \u2014 recorded ${JSON.stringify(completion.policy)}, registered completion_policy ${JSON.stringify(policy)})`,
-      );
-    }
+  } else if (!nonEmptyString(snapshot.completion_policy)) {
+    missing.push("completion_policy (the recorded alternative completion policy, \u00a71)");
   }
   if (missing.length === 0) return [];
   const incomplete = (fix: string): ValidationResult =>
@@ -1047,7 +1029,9 @@ export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationR
       ? incomplete(
           `${record}: the compound disposition (\u00a74c). The PR identity is the registered branch anchors, not a recorded copy, and the merge is proven from local Git \u2014 record \u00a74f's optional provider commit only when the merge was a squash or rebase. Done rows alone are not delivery evidence`,
         )
-      : incomplete(`${record}: the fulfilment record must name the registered completion policy and its evidence (\u00a71)`),
+      : incomplete(
+          `completion_policy is declared at registration and cannot be added to an existing workflow: close it honestly with 'mstar workflow lifecycle --workflow ${workflowId} --status failed --reason "<blocker>"', then register a replacement with --completion-policy (\u00a71)`,
+        ),
   ];
 }
 

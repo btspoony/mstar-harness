@@ -354,12 +354,11 @@ function workflowVerbArgs(
 }
 
 describe("mstar workflow \u2014 documented invocation", () => {
-  test("registers through the authority, then moves the lifecycle and records its policy and delivery evidence", async () => {
+  test("registers through the authority, then moves the lifecycle and refuses the retired delivery member", async () => {
     const fixture = await activeFixture("mstar-workflow-active");
     const identity = coordinatorIdentity();
-    // `verification/report-only`: its only delivery member is `completion`,
-    // which is the ONE member the engine records before every owned row is Done
-    // (a `development` tail — compound/merge — is refused until then, §3).
+    // `verification/report-only`: its registered completion policy is a
+    // registration-time declaration, so it records no delivery evidence.
     const registered = registerReportOnlyWorkflow(fixture, identity, await rootTokenOf(fixture));
     expect(registered.exitCode).toBe(0);
     expect(jsonOf(registered).status).toBe("ok");
@@ -386,10 +385,9 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(policy.exitCode).toBe(0);
     expect((await storedHeader(fixture)).execution_policy).toEqual({ plan_parallelism: "parallel" });
 
-    // Delivery evidence is recorded stage by stage on the RUNNING lifecycle,
-    // before the status move below (the close consultation reads it later). For
-    // this kind the recorded member is `completion` — the fulfilment of the
-    // registered completion policy.
+    // The report-only route records no delivery evidence: its registered
+    // completion policy is a declaration, so the retired `completion` member is
+    // refused by the payload contract and nothing is written.
     const deliveryPath = join(fixture.root, "delivery.json");
     writeJson(deliveryPath, {
       completion: { policy: REPORT_ONLY_POLICY, evidence: "acceptance report at plans/" + PLAN_ID + "/report.md" },
@@ -399,8 +397,10 @@ describe("mstar workflow \u2014 documented invocation", () => {
       fixture,
       identity,
     );
-    expect(delivery.exitCode).toBe(0);
-    expect((await storedHeader(fixture)).delivery).toMatchObject({ completion: { policy: REPORT_ONLY_POLICY } });
+    expect(delivery.exitCode).toBe(1);
+    expect(jsonOf(delivery)).toMatchObject({ status: "refused", code: "coordination.invalid-transition" });
+    expect(String(jsonOf(delivery).message)).toContain("records no delivery evidence");
+    expect((await storedHeader(fixture)).delivery).toBeUndefined();
 
     const pausedToken = await workflowTokenOf(fixture);
     const paused = runCli(

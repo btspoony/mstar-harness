@@ -409,16 +409,16 @@ export async function standaloneGitFixture(): Promise<GitFixture> {
 }
 
 /**
- * A single-row report-only workflow: its registered completion policy and its
- * recorded fulfilment exist, its source facts are provenance only, and it has
- * no integration anchors to verify.
+ * A single-row report-only workflow: its registered completion policy exists,
+ * its source facts are provenance only, and it has no integration anchors to
+ * verify. The registered policy is a declaration, so no delivery evidence is
+ * recorded.
  */
 export async function reportOnlyGitFixture(): Promise<GitFixture> {
   const fixture = await standaloneGitFixture();
   const snapshot = snapshotOf(fixture);
   snapshot.delivery_kind = "verification/report-only";
   snapshot.completion_policy = "acceptance report";
-  snapshot.delivery = { completion: { policy: "acceptance report", evidence: "report.md" } };
   writeJson(fixture.snapshotPath, snapshot);
   return fixture;
 }

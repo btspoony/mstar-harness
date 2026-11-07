@@ -775,7 +775,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     const foreignMember = await refusalOf(() =>
       workflowMutation(fixture, "op-delivery-member", {
         kind: "delivery",
-        delivery: { completion: { policy: "x", evidence: "y" } },
+        delivery: { completion: { policy: "x", evidence: "y" } } as never,
       }),
     );
     expect(foreignMember.code).toBe("coordination.invalid-transition");
@@ -975,8 +975,11 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
   });
 });
 
-  test("a completed report-only plan terminally unregisters after its completion evidence", async () => {
+  test("a report-only close reads a stored legacy fulfilment block as history and needs no rewrite", async () => {
     const fixture = await workflowFixture("close-report-only");
+    // A pre-existing report-only header that recorded the retired
+    // `delivery.completion` member. A stored block is history: the close reads
+    // it as absent and completes on the registered completion policy alone.
     withRaw(fixture.context, (db) => {
       const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
       const state = JSON.parse(row.state_json) as Record<string, unknown>;
@@ -996,27 +999,30 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     const [stored] = rows(
       fixture.context,
       `select (select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
-        `(select json_extract(state_json, '$.status') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as status`,
+        `(select json_extract(state_json, '$.status') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as status, ` +
+        `(select json_extract(state_json, '$.delivery') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as delivery`,
     );
     expect(stored!.registered).toBe(0);
     expect(stored!.status).toBe("completed");
+    // The tolerated block is never rewritten by the close.
+    expect(JSON.parse(String(stored!.delivery))).toEqual({
+      completion: { policy: "acceptance report", evidence: "acceptance.md" },
+    });
   });
 
-  test("a report-only close refuses without the explicitly recorded fulfilment and never synthesizes one from QA", async () => {
-    const fixture = await workflowFixture("close-report-only-missing-fulfilment");
+  test("a report-only close completes with no fulfilment record and never synthesizes one from QA", async () => {
+    const fixture = await workflowFixture("close-report-only-no-fulfilment");
     withRaw(fixture.context, (db) => {
       const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
       const state = JSON.parse(row.state_json) as Record<string, unknown>;
       state.delivery_kind = "verification/report-only";
       state.completion_policy = "acceptance report";
       delete state.branch;
-      // No `delivery.completion` recorded: the outer lifecycle fact is absent.
+      // No delivery evidence at all: the report-only route never records one.
       delete state.delivery;
       db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
     });
-    // The row is already Done (an imported/historical report-only row) with a
-    // REAL passing QC/QA completion record — exactly the state that must NOT be
-    // turned into fulfilment.
+    // The row is already Done with a REAL passing QC/QA completion record.
     setRowStatus(fixture.context, PLAN_ID, "Done");
     withRaw(fixture.context, (db) => {
       db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(
@@ -1037,39 +1043,10 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
         PLAN_ID,
       );
     });
-    // The plan's stored completion record is the provenance: capture it BEFORE
-    // the refusal so the comparison detects mutation by the refusal itself too.
     const completionBefore = storedCompletion(fixture.context);
-    const before = await workflowFootprint(fixture.context);
-    const refused = await refusalOf(() =>
-      workflowMutation(fixture, "op-close-report-only-missing", {
-        kind: "lifecycle",
-        status: "completed",
-        reason: "acceptance report verified",
-      }),
-    );
-    expect(refused.code).toBe("coordination.invalid-transition");
-    // State and routing are untouched; the caller is told to record the fact.
-    expect(await workflowFootprint(fixture.context)).toEqual(before);
-    expect(storedCompletion(fixture.context)).toEqual(completionBefore);
-    const [stored] = rows(
-      fixture.context,
-      `select (select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
-        `(select json_extract(state_json, '$.status') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as status, ` +
-        `(select json_extract(state_json, '$.delivery') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as delivery`,
-    );
-    expect(stored!.registered).toBe(1);
-    expect(stored!.status).toBe("running");
-    expect(stored!.delivery).toBeNull();
-
-    // The refusal names ordinary recovery: a `delivery` operation records the
-    // explicitly matching registered-policy fulfilment. The Do not-synthesize
-    // rule is preserved — the value comes from the caller, never from QA.
-    await workflowMutation(fixture, "op-close-report-only-evidence", {
-      kind: "delivery",
-      delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } },
-    });
-    const closed = await workflowMutation(fixture, "op-close-report-only-recovered", {
+    // No `mstar workflow evidence` call happens here: the registered policy is
+    // a registration-time declaration, so the close is the whole remaining act.
+    const closed = await workflowMutation(fixture, "op-close-report-only", {
       kind: "lifecycle",
       status: "completed",
       reason: "acceptance report verified",
@@ -1083,133 +1060,55 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     );
     expect(after!.registered).toBe(0);
     expect(after!.status).toBe("completed");
-    expect(JSON.parse(String(after!.delivery))).toEqual({ completion: { policy: "acceptance report", evidence: "acceptance.md" } });
-    // The completion provenance the caller recorded is exactly what it was: the
-    // evidence action records the OUTER fulfilment, never rewrites QC/QA,
-    // completed_by or completed_at.
+    expect(after!.delivery).toBeNull();
+    // A QA pass never becomes fulfilment: the completion record the caller
+    // recorded stays exactly as it was.
     expect(storedCompletion(fixture.context)).toEqual(completionBefore);
   });
 
-  test("a mismatched recorded fulfilment is replaced only by ordinary matching evidence, and an accepted fact stays frozen", async () => {
-    const fixture = await workflowFixture("close-report-only-mismatch");
+  test("recording a report-only fulfilment is refused as an unused member, while a stored legacy block stays readable", async () => {
+    const fixture = await workflowFixture("close-report-only-refused-member");
     setRowStatus(fixture.context, PLAN_ID, "Done");
-    // A REAL historical completion record: QC approved, mandatory QA passed, the
-    // coordinator's completion identity and timestamp. Its provenance must
-    // survive the mismatch refusal, the evidence action and the close unchanged.
-    withRaw(fixture.context, (db) => {
-      db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(
-        JSON.stringify({
-          completion: {
-            source_branch: SOURCE_BRANCH,
-            source_sha: null,
-            worktree_path: null,
-            review_base: null,
-            review_head: null,
-            qc: { decision: "Approve", reports: [{ path: join(fixture.repoRoot, "qc.md"), sha256: "b".repeat(64) }], consolidated: { path: join(fixture.repoRoot, "qc-s.md"), sha256: "c".repeat(64) } },
-            qa: { gate: "mandatory", decision: "pass", report: { path: join(fixture.repoRoot, "qa.md"), sha256: "d".repeat(64) } },
-            completed_by: COORDINATOR_ID,
-            completed_at: TS,
-          },
-        }),
-        WORKFLOW_ID,
-        PLAN_ID,
-      );
-    });
     withRaw(fixture.context, (db) => {
       const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
       const state = JSON.parse(row.state_json) as Record<string, unknown>;
       state.delivery_kind = "verification/report-only";
       state.completion_policy = "acceptance report";
       delete state.branch;
-      // A fulfilment recorded against a DIFFERENT policy: not the accepted fact.
+      // A stored legacy fulfilment naming a DIFFERENT policy is history: the
+      // consultation reads only the registered policy.
       state.delivery = { completion: { policy: "a stale policy", evidence: "old.md" } };
       db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
     });
-    const completion = storedCompletion(fixture.context);
     const before = await workflowFootprint(fixture.context);
+    // A report-only workflow has no recordable delivery member: the retired
+    // `completion` payload is refused as unused and nothing is written.
     const refused = await refusalOf(() =>
-      workflowMutation(fixture, "op-close-report-only-mismatch", { kind: "lifecycle", status: "completed", reason: "verified" }),
+      workflowMutation(fixture, "op-report-only-completion", {
+        kind: "delivery",
+        delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } } as never,
+      }),
     );
     expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.message).toContain("completion");
+    expect(refused.message).toContain("records no delivery evidence");
     expect(await workflowFootprint(fixture.context)).toEqual(before);
-    expect(storedCompletion(fixture.context)).toEqual(completion);
 
-    // Ordinary matching evidence replaces the mismatched policy, preserving the
-    // completion record itself.
-    await workflowMutation(fixture, "op-close-report-only-mismatch-evidence", {
-      kind: "delivery",
-      delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } },
-    });
-    expect(storedCompletion(fixture.context)).toEqual(completion);
-    const closed = await workflowMutation(fixture, "op-close-report-only-mismatch-recovered", {
+    // The stored legacy block is read as history, so the close completes on the
+    // registered policy alone and never rewrites it.
+    const closed = await workflowMutation(fixture, "op-report-only-close", {
       kind: "lifecycle",
       status: "completed",
-      reason: "verified",
+      reason: "acceptance report verified",
     });
     expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
-    expect(storedCompletion(fixture.context)).toEqual(completion);
-
-    // ACCEPTED-fact freeze: once the recorded policy IS the registered one, a
-    // different policy or reference is refused, while identical evidence replays.
-    const freeze = await workflowFixture("close-report-only-freeze");
-    setRowStatus(freeze.context, PLAN_ID, "Done");
-    withRaw(freeze.context, (db) => {
-      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
-      const state = JSON.parse(row.state_json) as Record<string, unknown>;
-      state.delivery_kind = "verification/report-only";
-      state.completion_policy = "acceptance report";
-      delete state.branch;
-      state.delivery = { completion: { policy: "acceptance report", evidence: "acceptance.md" } };
-      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
-    });
-    withRaw(freeze.context, (db) => {
-      db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(
-        JSON.stringify({ completion }), WORKFLOW_ID, PLAN_ID,
-      );
-    });
-    const acceptedCompletion = storedCompletion(freeze.context);
-    expect(acceptedCompletion).toEqual(completion);
-    const beforeFreeze = workflowFootprint(freeze.context);
-    const changedPolicy = await refusalOf(() =>
-      workflowMutation(freeze, "op-freeze-policy", {
-        kind: "delivery",
-        delivery: { completion: { policy: "another policy", evidence: "other.md" } },
-      }),
+    const [stored] = rows(
+      fixture.context,
+      `select json_extract(state_json, '$.delivery') as delivery from execution_workflows where workflow_id = '${WORKFLOW_ID}'`,
     );
-    expect(changedPolicy.code).toBe("coordination.completion-frozen");
-    expect(workflowFootprint(freeze.context)).toEqual(beforeFreeze);
-    expect(storedCompletion(freeze.context)).toEqual(acceptedCompletion);
-    const changedEvidence = await refusalOf(() =>
-      workflowMutation(freeze, "op-freeze-evidence", {
-        kind: "delivery",
-        delivery: { completion: { policy: "acceptance report", evidence: "other.md" } },
-      }),
-    );
-    expect(changedEvidence.code).toBe("coordination.completion-frozen");
-    expect(workflowFootprint(freeze.context)).toEqual(beforeFreeze);
-    expect(storedCompletion(freeze.context)).toEqual(acceptedCompletion);
-    // Identical evidence remains admissible, and its replay returns the same
-    // recorded receipt without touching the completion provenance again.
-    const first = await workflowMutation(freeze, "op-freeze-identical", {
-      kind: "delivery",
-      delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } },
+    expect(JSON.parse(String(stored!.delivery))).toEqual({
+      completion: { policy: "a stale policy", evidence: "old.md" },
     });
-    expect(first.replayed).toBe(false);
-    expect(storedCompletion(freeze.context)).toEqual(acceptedCompletion);
-    const afterFirst = workflowFootprint(freeze.context);
-    const replay = await workflowMutation(freeze, "op-freeze-identical", {
-      kind: "delivery",
-      delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } },
-    });
-    expect(replay.replayed).toBe(true);
-    expect(replay.data).toEqual(first.data);
-    expect(replay.token).toBe(first.token);
-    expect(workflowFootprint(freeze.context)).toEqual(afterFirst);
-    expect(storedCompletion(freeze.context)).toEqual(acceptedCompletion);
-    await workflowMutation(freeze, "op-freeze-close", {
-      kind: "lifecycle", status: "completed", reason: "accepted report",
-    });
-    expect(storedCompletion(freeze.context)).toEqual(acceptedCompletion);
   });
 
   test("the terminal close removes routing and keeps history in ONE commit", async () => {

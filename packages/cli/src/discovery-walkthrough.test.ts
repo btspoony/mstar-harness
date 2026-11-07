@@ -90,8 +90,9 @@ describe("#324 fixture discovery walkthrough", () => {
         "--plan-id", "p-walk",
         "--plan-title", "Walk plan",
         "--plan-file", path.join(plansDir, "p-walk.md"),
-        "--delivery-kind", "verification/report-only",
-        "--completion-policy", "walkthrough policy",
+        "--delivery-kind", "development",
+        "--branch-work", "feature/walk",
+        "--branch-target", "main",
         "--expect", rootToken,
         "--operation", "op-reg-1",
         "--harness", harnessDir,
@@ -133,10 +134,10 @@ describe("#324 fixture discovery walkthrough", () => {
     expect(tokenLookups).toBeLessThanOrEqual(3);
 
     // The derived session reference, identity and workflow token pass a real
-    // CAS write: recording delivery evidence commits.
+    // CAS write: recording the compound disposition commits.
     const evidenceDir = mkdtempSync(path.join(tmpdir(), "mstar-324-evidence-"));
     const evidenceFile = path.join(evidenceDir, "evidence.json");
-    writeFileSync(evidenceFile, JSON.stringify({ completion: { policy: "walkthrough policy", evidence: "walkthrough verification record" } }));
+    writeFileSync(evidenceFile, JSON.stringify({ compound: { outcome: "created" } }));
     const recorded = envelope(
       cli([
         "workflow", "evidence",
@@ -154,7 +155,7 @@ describe("#324 fixture discovery walkthrough", () => {
 
     // The close then reaches the workflow-lifecycle DOMAIN guard — every #324
     // input (identity, sessionRef, token) passed its gate; the remaining refusal
-    // is lifecycle evidence content, out of #324 scope (see header).
+    // is the row-completion prerequisite, out of #324 scope (see header).
     const closeOut = cli([
       "status", "workflow-close",
       "--workflow", "wf-walk",

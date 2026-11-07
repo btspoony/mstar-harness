@@ -35,7 +35,6 @@ import {
   type ExecutionPlanCall,
 } from "../src/execution-coordination.js";
 import { captureIssue, getIssue, type CaptureInput } from "../src/issue.js";
-import { mutateExecutionWorkflow } from "../src/execution-workflow.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -941,19 +940,6 @@ async function realStandaloneFixture(
   } finally {
     handle.close();
   }
-  if (deliveryKind === "verification/report-only") {
-    // Record the explicit matching fulfilment through the ordinary public
-    // workflow evidence action, never a raw injection.
-    const workflow = (await readExecutionState(context)).data.workflows.find((entry) => entry.state.id === WORKFLOW_ID);
-    if (workflow === undefined) throw new Error("fixture: workflow not registered");
-    await mutateExecutionWorkflow(domainContext(context, fixture.coordinatorCaller), {
-      operationId: `delivery-${label}`,
-      session: fixture.coordinator,
-      expected: workflow.workflowToken,
-      workflowId: WORKFLOW_ID,
-      operation: { kind: "delivery", delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } } },
-    } as Parameters<typeof mutateExecutionWorkflow>[1]);
-  }
   return { ...fixture, sourceSha, worktree };
 }
 
@@ -1165,7 +1151,7 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     expect({ ...replay, replayed: false }).toEqual(receipt);
   }, 30000);
 
-  test("the report-only route completes on its recorded policy fulfilment with no source Git at all", async () => {
+  test("the report-only route completes on its registered completion policy with no source Git or fulfilment record", async () => {
     const fixture = await realStandaloneFixture("complete-report-only", "verification/report-only");
     const { context } = fixture;
     await preparePlan(fixture, OWN_PLAN, "prepare-ro", undefined);
@@ -1202,16 +1188,8 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     });
     expect(completion?.integration).toBeUndefined();
 
-    // Replay is byte-stable and does NOT re-consume the recorded fulfilment: remove
-    // it from the header before retrying the identical request.
-    withRaw(context, (db) => {
-      const [row] = db
-        .prepare("select state_json from execution_workflows where workflow_id = ?")
-        .all(WORKFLOW_ID) as Array<{ state_json?: unknown }>;
-      const state = JSON.parse(String(row!.state_json)) as Record<string, unknown>;
-      delete (state.delivery as Record<string, unknown>).completion;
-      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
-    });
+    // Replay is byte-stable on the same evidence: no fulfilment payload exists
+    // to consume, remove or re-read.
     const storedAfter = storedReplaySurface(context, OWN_PLAN);
     const footprintAfter = footprint(context);
     const replay = await planCall(fixture, OWN_PLAN, "complete-ro", await planTokenOf(fixture, OWN_PLAN), {
@@ -1222,32 +1200,6 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     expect(storedReplaySurface(context, OWN_PLAN)).toEqual(storedAfter);
     expect(footprint(context)).toEqual(footprintAfter);
     expect({ ...replay, replayed: false }).toEqual(receipt);
-  }, 30000);
-
-  test("a report-only row whose registered fulfilment is missing refuses with its own cause", async () => {
-    const fixture = await realStandaloneFixture("complete-report-only-unfulfilled", "verification/report-only");
-    const { context } = fixture;
-    await preparePlan(fixture, OWN_PLAN, "prepare-rou", undefined);
-    await progressPlan(fixture, OWN_PLAN, "progress-rou", "InProgress");
-    const handle = await openStore(context, "write");
-    try {
-      const [row] = handle.db
-        .prepare("select state_json from execution_workflows where workflow_id = ?")
-        .all(WORKFLOW_ID) as Array<{ state_json?: unknown }>;
-      const state = JSON.parse(String(row!.state_json)) as Record<string, unknown>;
-      delete (state.delivery as Record<string, unknown>).completion;
-      handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
-    } finally {
-      handle.close();
-    }
-    const before = footprint(context);
-    const evidence = reportOnlyEvidence(context);
-    const token = await planTokenOf(fixture, OWN_PLAN);
-    const refusal = await refusalOf(() =>
-      planCall(fixture, OWN_PLAN, "complete-rou", token, { kind: "complete", evidence } as CoordinationOperation),
-    );
-    expect(refusal.code).toBe("coordination.invalid-transition");
-    expect(footprint(context)).toEqual(before);
   }, 30000);
 
   test("a source checkout advanced between the proof and the commit refuses with no DB mutation", async () => {

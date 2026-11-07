@@ -268,7 +268,7 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 
 ## Workflow
 
-PM selects branches → isolated source tasks → all reviewed commits converge on one Working branch HEAD → aligned QC tri/QA → explicit serial Git merge in the integration checkout → direct complete verifies its actual base/result and QC/QA. Standalone development instead verifies its registered source checkout; report-only uses declared fulfilment without fabricated Git. Main remains on its recorded branch. L1/L2 isolation precedes dispatch; transaction/CAS protects state.
+PM selects branches → isolated source tasks → all reviewed commits converge on one Working branch HEAD → aligned QC tri/QA → explicit serial Git merge in the integration checkout → direct complete verifies its actual base/result and QC/QA. Standalone development instead verifies its registered source checkout; report-only uses its declared completion policy without fabricated Git. Main remains on its recorded branch. L1/L2 isolation precedes dispatch; transaction/CAS protects state.
 
 ## References
 

@@ -56,7 +56,6 @@ import {
   gitProof,
   integrationAnchors,
   integrationDiverged,
-  missingDecision,
   projectBucketOf,
   readCompletionEvidence,
   requireProgressStatus,
@@ -93,7 +92,6 @@ import {
   type ExecutionRead,
   type ExecutionReceipt,
   type ExecutionSessionRef,
-  type ExecutionState,
   type ExecutionToken,
   type ExecutionTransaction,
   type ResolvedPlanRead,
@@ -128,7 +126,6 @@ import {
 } from "./recovery-intent.js";
 import { storeDbPath } from "./store-db.js";
 import {
-  consultDeliveryEvidence,
   isStandaloneDevelopmentWorkflow,
   isStandaloneReportOnlyWorkflow,
   rowValidationRoute,
@@ -1269,14 +1266,6 @@ export function deliveryRouteOf(snapshot: WorkflowSnapshot): DeliveryRoute {
   return "integration";
 }
 
-/** §4.1 the route/policy pair a transition proved BEFORE its transaction pinned. */
-export type DeliveryRoutePin = { route: DeliveryRoute; completionPolicy: string | undefined };
-
-/** The pair one snapshot declares, as a caller pins it before taking ownership. */
-export function deliveryRoutePin(snapshot: WorkflowSnapshot): DeliveryRoutePin {
-  return { route: deliveryRouteOf(snapshot), completionPolicy: snapshot.completion_policy };
-}
-
 /**
  * §D/§E one plan's own scope as the addressed ROW records it: the plan worktree
  * and branch an authorized `prepare` recorded into `metadata`. The DB route has
@@ -1350,59 +1339,6 @@ async function readWorkflowSnapshot(context: ExecutionContext, workflowId: strin
     plans: workflow.plans,
     integrationLease: workflow.integrationLease,
   });
-}
-
-/**
- * §E the report-only route's completion evidence: the workflow must RECORD the
- * fulfilment of its registered completion policy. `consultDeliveryEvidence`
- * owns the completeness rule, so this route cannot invent a second one.
- */
-function assertReportOnlyCompletionEvidence(snapshot: WorkflowSnapshot, planId: string): void {
-  const failure = consultDeliveryEvidence(snapshot).find((entry) => !entry.ok);
-  if (failure !== undefined) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      "The report-only route completes only after its registered completion policy is RECORDED as fulfilled. Record that fulfilment with mstar workflow evidence --workflow <id> --file <absolute-json>, then retry plan complete.",
-      {
-        message: failure.message,
-        plan_id: planId,
-        code: failure.code,
-      },
-    );
-  }
-}
-
-/**
- * §4.1 the delivery route and registered completion policy a transition proved
- * BEFORE SQLite ownership must still be the ones the transaction commits
- * against. The plan's CAS guards the ROW; it cannot guard the workflow header,
- * whose revision a workflow-level transition advances — so a completion that
- * pinned report-only evidence refuses when the header moved to another route or
- * re-registered another policy in the window, instead of judging the changed
- * pair against itself.
- */
-function requirePinnedDeliveryRoute(
-  snapshot: WorkflowSnapshot,
-  pinned: DeliveryRoutePin,
-  planId: string,
-  what: string,
-): void {
-  const route = deliveryRouteOf(snapshot);
-  if (route !== pinned.route) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      "The transition requires the pinned delivery route to be proven before the transaction; inspect the workflow with mstar status validate.",
-      { plan_id: planId, expected: pinned.route, actual: route },
-    );
-  }
-  if (route === "report-only" && snapshot.completion_policy !== pinned.completionPolicy) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `${what} requires plan ${planId} to keep the completion policy pinned before the transaction \u2014 recorded ` +
-        `${JSON.stringify(snapshot.completion_policy)}, pinned ${JSON.stringify(pinned.completionPolicy)}`,
-      { plan_id: planId, expected: pinned.completionPolicy, actual: snapshot.completion_policy },
-    );
-  }
 }
 
 type CompletionEvidenceRefs = {
@@ -1689,8 +1625,9 @@ export function setCompleteWitnessGapForTest(callback: (() => void) | undefined)
  * obsolete anchors:
  *
  * - a single-row `verification/report-only` workflow completes on its QC/QA
- *   evidence plus the EXPLICITLY RECORDED fulfilment of its declared completion
- *   policy, needs no source, integration or merge, and rejects integration input;
+ *   evidence under the completion policy declared at registration, needs no
+ *   source, integration or merge, records no fulfilment payload, and rejects
+ *   integration input;
  * - a single-row `development` workflow completes on its QC/QA evidence and its
  *   registered source branch: the row worktree is clean, on that branch and at
  *   the pinned source commit, with the review range an ancestry;
@@ -1785,10 +1722,9 @@ async function captureCompletionWitnesses(
   const planAreas = planAreaRoots(controlHarnessRoot(context), read.planId);
   assertEvidenceInsidePlanArea(planAreas, evidence.evidence_refs);
   const evidenceRefs = completionEvidenceRefs(evidence);
-  if (route === "report-only") {
-    assertReportOnlyCompletionEvidence(snapshot, read.planId);
-    return { git: [], planAreas, evidenceRefs };
-  }
+  // A report-only row consults no Git and records no fulfilment payload: its
+  // registered completion_policy is a registration-time declaration (§1).
+  if (route === "report-only") return { git: [], planAreas, evidenceRefs };
   const scope = planScopeOf(before.data, read.planId);
   if (route === "development") {
     const anchors = standaloneDeliveryAnchors(snapshot, read.planId);
@@ -1862,11 +1798,7 @@ function completeInTransaction(
     completed_by: witness.session.sessionId,
     completed_at: at,
   };
-  if (route === "report-only") {
-    // §E no Git and no integration proof is invented here: the workflow must
-    // already RECORD the fulfilment of its registered completion policy.
-    assertReportOnlyCompletionEvidence(snapshot, planId);
-  } else if (route === "development") {
+  if (route === "development") {
     const anchors = standaloneDeliveryAnchors(snapshot, planId);
     if (scope!.workingBranch !== anchors.sourceBranch) {
       throw new CoordinationError(
@@ -1881,7 +1813,7 @@ function completeInTransaction(
     record.source_sha = proven.source_sha;
     record.review_base = proven.review_base;
     record.review_head = proven.review_head;
-  } else {
+  } else if (route === "integration") {
     const anchors = integrationAnchors(snapshot, planId);
     const checkout = assertIntegrationCheckout(anchors, planId);
     const requested = operation.integration!;
@@ -1994,136 +1926,6 @@ function requireOwnMergeClaim(
       supported_route: "mstar session recover (--workflow, --prior-session, --reason, --attestation, --expect, --operation)",
     },
   );
-}
-
-/* ------------------------------------------------------------------------ *
- * §R5/§R10 the fulfilment a CLOSE records
- * ------------------------------------------------------------------------ */
-
-/**
- * §R5/§R10 one owned row's outstanding obligation, derived BEFORE a close takes
- * SQLite ownership and re-verified inside it. `fulfilment` is the report-only
- * completion-policy fulfilment the close still has to RECORD (null when the
- * workflow already records it).
- *
- * A close composes no row completion: `complete` is the ONE row-completion
- * operation, so an owned row that is not `Done` is refused with the decision the
- * close cannot supply instead of demanding a route's fields.
- */
-export type EntailedRowCompletion = {
-  planId: string;
-  fulfilment: { policy: string; evidence: string } | null;
-};
-
-/**
- * §R5/§R10 the close reports only what the workflow ALREADY records: whether the
- * registered report-only completion policy is still unfulfilled. It never
- * synthesizes a fulfilment — a QA pass is not the fulfilment of a registered
- * policy — so an unrecorded policy is reported as outstanding and the close's
- * own caller must refuse with the ordinary `workflow evidence` action that
- * records it. An imported/Done row is held to exactly the same rule.
- */
-function reportOnlyFulfilmentOutstanding(snapshot: WorkflowSnapshot, planId: string): boolean {
-  const policy = snapshot.completion_policy;
-  if (!isNonEmptyString(policy)) {
-    throw missingDecision({
-      planId,
-      what: "close",
-      component: "workflow-delivery",
-      field: "completion_policy",
-      source: "workflow snapshot delivery_kind verification/report-only",
-      message:
-        `close requires report-only plan ${planId}'s lifecycle to declare the completion_policy its report is accepted against, ` +
-        `and this workflow records none \u2014 declare the policy through workflow registration, then retry`,
-    });
-  }
-  const recorded = isPlainObject(snapshot.delivery) && isPlainObject(snapshot.delivery.completion)
-    ? (snapshot.delivery.completion as Record<string, unknown>)
-    : undefined;
-  if (recorded === undefined) {
-    throw missingDecision({
-      planId,
-      what: "close",
-      component: "workflow-delivery",
-      field: "delivery.completion",
-      source: "workflow snapshot delivery evidence",
-      message:
-        `close requires the workflow to RECORD the fulfilment of its registered completion policy ${JSON.stringify(policy)}, and ` +
-        `nothing is recorded \u2014 record it through the ordinary \`mstar workflow evidence\` action (which records its explicit ` +
-        `fulfilment), then retry; a QA pass alone is not the fulfilment of a policy`,
-    });
-  }
-  if (recorded.policy !== policy) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `close cannot complete report-only plan ${planId}: the recorded fulfilment names policy ${JSON.stringify(recorded.policy)} ` +
-        `while the lifecycle registers ${JSON.stringify(policy)} \u2014 a re-pointed completion is never the basis of a Done`,
-      { plan_id: planId, recorded: recorded.policy, registered: policy },
-    );
-  }
-  return false;
-}
-
-/**
- * §R5/§R10 one owned row's outstanding obligation, or `null` when the row
- * records `Done` and the workflow already records everything the terminal close
- * needs. The development and integration routes own no close-time row work:
- * their rows complete through the ordinary `complete` operation.
- */
-export async function readEntailedRowCompletion(
-  _context: ExecutionContext,
-  snapshot: WorkflowSnapshot,
-  row: ExecutionPlanView,
-): Promise<EntailedRowCompletion | null> {
-  const planId = String(row.plan.id);
-  const status = rowStatusOf(row.plan as unknown as PlanRow);
-  if (deliveryRouteOf(snapshot) === "report-only") {
-    if (status !== "Done") {
-      throw missingDecision({
-        planId,
-        what: "close",
-        component: "plan-completion",
-        field: "coordination.completion",
-        source: "plan row coordination block",
-        message:
-          `close requires plan ${planId} to record Done, and this row records ${status || "no status"} \u2014 ` +
-          `complete it with the ordinary plan complete operation, then retry the close`,
-      });
-    }
-    return reportOnlyFulfilmentOutstanding(snapshot, planId) ? { planId, fulfilment: null } : null;
-  }
-  if (status === "Done") return null;
-  throw missingDecision({
-    planId,
-    what: "close",
-    component: "plan-completion",
-    field: "coordination.completion",
-    source: "plan row coordination block",
-    message:
-      `close requires every owned row to record Done, and plan ${planId} records ${status || "no status"} \u2014 ` +
-      `complete it with the ordinary plan complete operation, then retry the close`,
-  });
-}
-
-/**
- * §R5/§R10 the same derivation for every owned row of one ACTIVE workflow, in
- * row order: the fulfilments a terminal `completed` close records.
- */
-export async function readEntailedCompletions(
-  context: ExecutionContext,
-  workflow: ExecutionState["workflows"][number],
-): Promise<{ completions: readonly EntailedRowCompletion[]; pinned: DeliveryRoutePin }> {
-  const snapshot = workflowSnapshotOf({
-    state: workflow.state,
-    plans: workflow.plans,
-    integrationLease: workflow.integrationLease,
-  });
-  const completions: EntailedRowCompletion[] = [];
-  for (const row of workflow.plans) {
-    const proof = await readEntailedRowCompletion(context, snapshot, row);
-    if (proof !== null) completions.push(proof);
-  }
-  return { completions, pinned: deliveryRoutePin(snapshot) };
 }
 
 /* ------------------------------------------------------------------------ *

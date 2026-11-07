@@ -63,7 +63,6 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.merge-lease-foreign",
   "coordination.merge-lease-stopped-owner",
   "coordination.findings-open",
-  "coordination.completion-frozen",
   "coordination.invalid-input",
   "coordination.forbidden-field",
   "coordination.not-in-git",

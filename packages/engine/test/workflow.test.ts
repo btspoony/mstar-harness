@@ -488,6 +488,30 @@ describe("consultDeliveryEvidence — pure delivery rules", () => {
     expect(incomplete.map((item) => item.code)).toContain("PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
   });
 
+  test("a report-only workflow consults only its registered completion policy", () => {
+    // No fulfilment payload exists on this route: the registered policy is a
+    // declaration, so a running workflow with nothing recorded passes.
+    const registered = validSnapshot({
+      type: "plan",
+      status: "running",
+      ended_at: undefined,
+      delivery_kind: "verification/report-only",
+      completion_policy: "acceptance report",
+    });
+    expect(consultDeliveryEvidence(registered as never)).toEqual([]);
+
+    // The policy itself is fixed at registration; a legacy header without one
+    // cannot record evidence to repair it.
+    const missing = consultDeliveryEvidence(validSnapshot({
+      type: "plan",
+      status: "running",
+      ended_at: undefined,
+      delivery_kind: "verification/report-only",
+    }) as never);
+    expect(missing.map((entry) => entry.code)).toContain("PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
+    expect(missing[0]?.fix).toContain("--completion-policy");
+  });
+
   test("a stored pre-\u00a74f delivery block stays readable, while the writer rule refuses its members", () => {
     // Existing authorities already record the retired shape: a recorded block
     // is history and must not invalidate the whole snapshot.
@@ -509,6 +533,20 @@ describe("consultDeliveryEvidence — pure delivery rules", () => {
     // An EMPTY merge records nothing: the member exists to carry its commit.
     expect(deliveryEvidenceViolations({ merge: {} }, "patch").map((entry) => entry.code)).toContain(code);
     expect(deliveryEvidenceViolations({ merge: { commit: "1".repeat(40) } }, "patch")).toEqual([]);
+
+    // The report-only completion fulfilment is retired the same way: a stored
+    // block stays readable, and a write of the member is refused.
+    const legacyCompletion = { policy: "acceptance report", evidence: "report.md" };
+    const storedReportOnly = validSnapshot({
+      type: "plan",
+      delivery_kind: "verification/report-only",
+      completion_policy: "acceptance report",
+      delivery: { completion: legacyCompletion },
+    });
+    expect(validateWorkflowSnapshot(storedReportOnly).violations.map((entry) => entry.code))
+      .not.toContain("workflow.snapshot.invalid-delivery-evidence");
+    expect(consultDeliveryEvidence(storedReportOnly as never)).toEqual([]);
+    expect(deliveryEvidenceViolations({ completion: legacyCompletion }, "patch").map((entry) => entry.code)).toContain(code);
   });
 
   test("a terminal plan header without a registered kind is accepted history, never an actionable violation", () => {

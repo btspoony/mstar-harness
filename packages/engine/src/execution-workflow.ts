@@ -294,7 +294,7 @@ function assertWorkflowOperationShape(operation: unknown): asserts operation is 
       assertExactKeys(op, ["kind", "delivery"], "a delivery operation");
       if (!isPlainObject(op.delivery)) throw invalidWorkflowInput("Invalid delivery operation: provide a delivery evidence object; retry through mstar workflow evidence.");
       if (Object.keys(op.delivery).length === 0) {
-        throw invalidWorkflowInput("Invalid delivery operation: provide at least one evidence member (compound, pr, merge, or completion); retry through mstar workflow evidence.");
+        throw invalidWorkflowInput("Invalid delivery operation: provide at least one evidence member (compound or merge); retry through mstar workflow evidence.");
       }
       return;
     }
@@ -856,9 +856,9 @@ async function readWorkflowEvidence(
     case "compass-ref":
       return readCompassRefEvidence(context, workflowId, operation);
     case "lifecycle":
-      // A terminal `completed` close synthesizes NOTHING: the report-only
-      // fulfilment is the outer lifecycle fact an authorized `workflow evidence`
-      // call records, and a passing QA report never supplies it. The transaction
+      // A terminal `completed` close synthesizes NOTHING: the delivery evidence
+      // and the registered completion policy are facts the snapshot already
+      // records, and a passing QA report never supplies them. The transaction
       // consults the delivery evidence the snapshot itself records.
       return {};
     default:
@@ -1386,10 +1386,11 @@ export async function mutateExecutionWorkflow(
  * so a close that refuses leaves both the routing and the terminal state
  * exactly where they were.
  *
- * §R5/§R10 a terminal `completed` close composes the ONE report-only fulfilment
- * its owned rows' recorded evidence entails (E10) BEFORE the terminal decision.
- * A row `Done` is NOT composed here: the plan's own `complete` is the single
- * place that happens, so this close never completes a row in a sibling step.
+ * §R5/§R10 a terminal `completed` close composes no row work: every row must
+ * already be `Done`. The plan's own `complete` is the single place a row
+ * completes, so this close never completes a row in a sibling step, and a
+ * report-only workflow owes no separate fulfilment payload — its registered
+ * `completion_policy` is a registration-time declaration.
  * Everything therefore commits on ONE handle in ONE transaction: a crash leaves
  * either the whole close or none of it.
  *
@@ -1441,8 +1442,8 @@ function applyWorkflowOperation(input: {
   // §R5 the ownership the terminal decision reads is the ownership this
   // transaction just released, so a settled claim re-reads the witness from the
   // handle the transaction owns. A `completed` close synthesizes NOTHING: the
-  // report-only fulfilment is the outer lifecycle fact an authorized `workflow
-  // evidence` call records, never a value this close derives from a QA report.
+  // delivery evidence and the registered completion policy are facts the
+  // snapshot already records, never values this close derives from a QA report.
   const effective = settledClaim ? readExecutionWorkflowWitness(tx, read) : witness;
   const rows = effective.view.plans.map((plan) => plan.plan as unknown as PlanRow);
   const header = { ...(effective.view.state as unknown as Record<string, unknown>) };
@@ -1468,7 +1469,7 @@ function applyWorkflowOperation(input: {
       header.compass_ref = requireCompassRefEvidence(evidence).compassRef.relative;
       break;
     case "delivery":
-      header.delivery = applyDeliveryEvidence({ header, rows, workflowId, delivery: operation.delivery });
+      header.delivery = applyDeliveryEvidence({ header, workflowId, delivery: operation.delivery });
       break;
     case "delivery-anchors": {
       // §1 the members a repair may name are the ADDRESSED header's own type's:
@@ -1772,10 +1773,12 @@ function applyExecutionPolicy(workflowId: string, policy: WorkflowExecutionPolic
 /**
  * §3 the `delivery` transition: the declared kind decides which members exist
  * (one shared member map) and the structural validator decides their shape.
- * Re-recording a delivery (the report-only `completion` fulfilment, the
- * compound disposition, the optional provider merge commit) is a revisable
- * mutation under a new operation id; a tampered replay of the SAME operation id
- * is refused by the request-hash conflict. An identical re-record is a no-op.
+ * Re-recording a delivery (the compound disposition, the optional provider merge
+ * commit) is a revisable mutation under a new operation id; a tampered replay of
+ * the SAME operation id is refused by the request-hash conflict. An identical
+ * re-record is a no-op. A `verification/report-only` workflow has no recordable
+ * member: its registered `completion_policy` is a registration-time
+ * declaration, never a runtime artifact.
  *
  * Nothing here compares the evidence with the delivery anchors: the PR identity
  * IS those anchors (§4d), and the merge is proven from Git at the close
@@ -1783,11 +1786,10 @@ function applyExecutionPolicy(workflowId: string, policy: WorkflowExecutionPolic
  */
 function applyDeliveryEvidence(input: {
   header: Record<string, unknown>;
-  rows: readonly PlanRow[];
   workflowId: string;
   delivery: WorkflowDeliveryEvidence;
 }): WorkflowDeliveryEvidence {
-  const { header, rows, workflowId, delivery } = input;
+  const { header, workflowId, delivery } = input;
   const kind = header.delivery_kind;
   if (header.type !== "plan" || (kind !== "development" && kind !== "verification/report-only")) {
     throw invalidWorkflowTransition(
@@ -1802,8 +1804,11 @@ function applyDeliveryEvidence(input: {
   const unused = members.filter((member) => !allowed.includes(member));
   if (unused.length > 0) {
     throw invalidWorkflowTransition(
-      `workflow ${workflowId} cannot record member(s) ${unused.join(", ")}: the declared delivery_kind '${kind}' uses ` +
-        `${allowed.join(" | ")}`,
+      allowed.length === 0
+        ? `workflow ${workflowId} cannot record member(s) ${unused.join(", ")}: a '${kind}' workflow records no delivery evidence — ` +
+          `its registered completion_policy is a registration-time declaration, not a fulfilment payload`
+        : `workflow ${workflowId} cannot record member(s) ${unused.join(", ")}: the declared delivery_kind '${kind}' uses ` +
+          `${allowed.join(" | ")}`,
       { workflow_id: workflowId },
     );
   }
@@ -1814,30 +1819,6 @@ function applyDeliveryEvidence(input: {
     });
   }
   const stored = (isPlainObject(header.delivery) ? header.delivery : {}) as Record<string, unknown>;
-  // §R5/A19/A21 the completion freeze protects an ACCEPTED fulfilment, not the
-  // absence of one. Once the workflow is Done against a completion whose policy
-  // IS the registered one, that recorded policy/reference is frozen: editing the
-  // referenced document is normal, a different completed intent uses its own
-  // workflow. But an imported/historical Done row that recorded NO matching
-  // fulfilment (or one whose policy is not the registered policy) has no accepted
-  // fact to preserve, so ordinary `workflow evidence` is exactly the supported
-  // way to record the missing matching fulfilment — never QA-derived synthesis.
-  if (members.includes("completion") && rows.some((row) => rowStatusOf(row) === "Done")) {
-    const incoming = isPlainObject(delivery.completion) ? delivery.completion : undefined;
-    const recorded = isPlainObject(stored.completion) ? stored.completion : undefined;
-    const registered = isNonEmptyString(header.completion_policy) ? header.completion_policy : undefined;
-    const recordedIsAccepted = recorded !== undefined && registered !== undefined && recorded.policy === registered;
-    const changesAccepted =
-      recordedIsAccepted &&
-      (incoming === undefined || incoming.policy !== recorded.policy || incoming.evidence !== recorded.evidence);
-    if (changesAccepted) {
-      throw new CoordinationError(
-        "coordination.completion-frozen",
-        "The workflow already has accepted completion evidence; its recorded fulfilment cannot be replaced. Inspect the workflow with mstar status validate.",
-        { workflow_id: workflowId },
-      );
-    }
-  }
   return { ...stored, ...delivery } as WorkflowDeliveryEvidence;
 }
 

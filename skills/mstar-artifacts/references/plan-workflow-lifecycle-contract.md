@@ -18,13 +18,13 @@ Four facts that are not interchangeable: plan-row `Done`, workflow `completed`, 
 Every workflow declares its delivery kind at registration, as part of the registration evidence (§4a). Declared kinds:
 
 - **`development`** — the full lifecycle of §3 applies: PR submission, merge-ready milestone, verified merge, and evidence-backed terminal close. The PR obligation is the declared delivery path, not an optional extra.
-- **`verification/report-only`** — an explicit alternative completion policy is recorded at registration. Fulfilment matching that policy is recorded before row Done, consumed by direct completion and consulted again by evidence-backed terminal close. QC/QA remain required; no Git/integration, compound-before-PR, PR or merge obligation is invented.
+- **`verification/report-only`** — an explicit alternative completion policy is recorded at registration. That policy is a registration-time declaration of what the deliverable is: direct completion needs only QC/QA, and the terminal close verifies every row `Done` plus the registered policy. No fulfilment payload is recorded, and no Git/integration, compound-before-PR, PR or merge obligation is invented.
 
 Binding rules:
 
 - The declared kind is recorded at registration. It is never inferred retroactively from runtime behavior, from the presence or absence of fields, or from convenience.
 - Absence of `branch.target` (or of any other registration field) is not an implicit exemption. Missing fields never select a kind and never waive the declared obligation; a `development` workflow with missing branch fields is incomplete registration, not an exempt workflow.
-- Verification/report-only workflows follow their recorded explicit completion policy, not an accidental PR exemption inferred from missing fields.
+- Verification/report-only workflows follow their recorded explicit completion policy as a declaration, not an accidental PR exemption inferred from missing fields.
 - An iteration uses the same outer lifecycle around its multiple plan rows (§3). Its child plan rows are not standalone workflows and gain no independent delivery PR obligation.
 
 ## 2. Cardinality stance
@@ -60,7 +60,7 @@ register → recall → prepare/lock → execute + review/acceptance → compoun
 |---|---|---|---|
 | iteration | Non-standalone workflow | QC/QA/source-review proof plus actual already-performed serial merge `integration: {base_sha,result_sha}` verified against the recorded integration checkout/target and ancestry | Row Done only; parent compound/merge proof/close |
 | standalone development | `type: plan`, `delivery_kind: development`, exactly one row | QC/QA plus clean registered source checkout/ref and commit; integration input refuses | Row Done precedes own compound/merge proof/close; workflow stays running |
-| standalone report-only | `type: plan`, `delivery_kind: verification/report-only`, exactly one row | QC/QA plus already-recorded matching completion-policy fulfilment; no invented Git, integration input refuses | Row Done precedes evidence-backed terminal close; no PR/merge |
+| standalone report-only | `type: plan`, `delivery_kind: verification/report-only`, exactly one row | QC/QA under the registered completion policy; no fulfilment payload, no invented Git, integration input refuses | Row Done precedes the terminal close, which consults the registered policy and QC/QA; no PR/merge |
 
 All routes use coordinator `complete`, not an ownership-transfer protocol. Missing anchors never select another route. Effective QA/cleanup configuration defaults to mandatory/allow-residual and is revisable through ordinary prepare; recorded source metadata/defaults do not require a ceremonial prepare record. Direct complete re-witnesses relevant Git at commit, retains source metadata, releases applicable exclusion and preserves replay timestamps. Evidence hashes record provenance, not byte-level plan or Assignment admission.
 
@@ -84,7 +84,7 @@ All routes use coordinator `complete`, not an ownership-transfer protocol. Missi
 
 Anything else refuses with the cause and a recovery: fetch the target branch into the plan checkout and retry, or record the provider merge commit through `mstar workflow evidence`. The engine queries no provider and issues no network call. Consequences to state plainly: a squash/rebase merge is NOT provable from ancestry alone, so it needs that recorded commit; and a stale local target ref is a refusal, never a pass — fetch it. Opened, mergeable and merged remain different facts.
 
-**(g) Terminal close.** Existing `closeWorkflow` semantics (`packages/engine/src/workflow.ts:665-725`): close-timestamp validation, snapshot identity check, coordinated-writer authority, every row `Done`, strict terminal validation that refuses leases without deleting them, and idempotent preservation of an existing valid terminal snapshot (including `failed`/`stopped`); it never releases leases. Ordering per phase-6 (`packages/engine/src/iteration.ts:514-616` reuse): snapshot terminal → unregister → reconcile. The same §4(f) proof runs on both consumers, so the gate cannot report a verdict the close would accept. `closeWorkflow` does not inspect PR or compound evidence; seam S3 adds exactly that delivery-kind evidence consultation while reusing every existing guard.
+**(g) Terminal close.** Existing `closeWorkflow` semantics (`packages/engine/src/workflow.ts:665-725`): close-timestamp validation, snapshot identity check, coordinated-writer authority, every row `Done`, strict terminal validation that refuses leases without deleting them, and idempotent preservation of an existing valid terminal snapshot (including `failed`/`stopped`); it never releases leases. Ordering per phase-6 (`packages/engine/src/iteration.ts:514-616` reuse): snapshot terminal → unregister → reconcile. The same §4(f) proof runs on both consumers, so the gate cannot report a verdict the close would accept. `closeWorkflow` does not inspect PR or compound evidence; seam S3 adds exactly that delivery-kind evidence consultation while reusing every existing guard. For `verification/report-only` that consultation is only the registered `completion_policy`: the policy declares what the deliverable is, and `completed` means every row `Done` plus QC/QA. No fulfilment record is demanded or synthesized — a self-reported sentence nothing verifies is exactly what this route stopped requiring.
 
 ## 5. Failure and abandonment
 
@@ -115,7 +115,7 @@ The direction and reason columns record the reasoning behind each answer; the an
 
 | Decision | Answer | Direction | Reason |
 |---|---|---|---|
-| Does every `type: plan` mean a development PR? | **No.** Delivery kind is declared at registration (§1). Development plans require PR; verification/report-only workflows follow the explicit alternative completion policy recorded at registration. | Declare the delivery obligation explicitly for the workflow's purpose. Development plans require PR; verification/report-only workflows need an explicit alternative completion contract. | `type: plan` is also used for independent verification. Do not force empty PRs or make absence of `branch.target` an implicit escape hatch. The strict universal alternative is possible but must be consciously selected. |
+| Does every `type: plan` mean a development PR? | **No.** Delivery kind is declared at registration (§1). Development plans require PR; verification/report-only workflows follow the explicit alternative completion policy recorded at registration. | Declare the delivery obligation explicitly for the workflow's purpose. Development plans require PR; verification/report-only workflows need an explicit alternative completion contract. | `type: plan` is also used for independent verification. Do not force empty PRs or make absence of `branch.target` an implicit escape hatch. The strict universal alternative is possible but must be consciously selected; the report-only policy is a declaration, and its `completed` is row completion plus QC/QA. |
 | Is `type: plan` exactly one plan row? | **One independently owned development plan per workflow for the normal route.** | Prefer one independently owned development plan for the new normal route; inventory current multi-row producers before tightening schema. | A type label alone does not establish cardinality; inventory multi-row producers before enforcing a one-row invariant. |
 | Where does compound run for a standalone plan? | **On its delivery branch/worktree, before the PR head is finalized (§3, §4c).** | On its delivery branch/worktree before the PR head is finalized. | Do not invent an iteration compass or extra integration branch solely to reuse iteration-close. Preserve control-root process artifacts versus tracked-result write ownership. |
 | What completes the workflow? | **A provable merge plus common close; PR submission and merge-ready remain resumable milestones (§3, §4e–g).** | A provable merge plus common close; PR submission and merge-ready remain resumable milestones. | Preserves the stronger existing post-merge-close semantics while replacing the unverifiable sentence with local ancestry. A user request to submit a PR is not authorization to merge it. |
@@ -124,7 +124,7 @@ The direction and reason columns record the reasoning behind each answer; the an
 ## Binding negatives
 
 - No part of this contract authorizes auto-merge. Submitting a PR never implies merge authorization; merging is a separate authorized act, proven by the local ancestry rule in §4f.
-- No forced PR for `verification/report-only` workflows. Their completion follows the policy recorded at registration (§1).
+- No forced PR for `verification/report-only` workflows. Their completion follows the policy recorded at registration (§1), and their `completed` means every row `Done` plus QC/QA — not a recorded self-attestation.
 - No silent completion anywhere. Every stage transition records its evidence; failure renders the workflow blocked/active, never implicitly done.
 - No cleanup authorization is implied by lifecycle completion: worktree/branch deletion stays explicit and ownership/merge-guarded, exactly as the existing post-merge-close contract requires.
 - Close never releases leases, and terminal `failed`/`stopped` states are never rewritten as `completed` (§5).

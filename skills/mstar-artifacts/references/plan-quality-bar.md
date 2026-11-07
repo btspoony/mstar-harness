@@ -102,7 +102,7 @@ Each task fits **one focused implementer round** — the round closes the task's
 
 ### 8. Engine lifecycle ownership
 
-**Who advances this row's state, when and with what evidence?** Name the primary coordinator's ordinary prepare/progress/complete actions and declared route: iteration complete verifies the already-performed serial merge; standalone development verifies its registered source without iteration integration; standalone report-only consumes explicit matching policy fulfilment recorded before Done. After Done, iteration/development retain compound/PR/verified-merge/close; report-only retains evidence-backed close without fabricated Git/PR. Missing facts use the supported ordinary operation, not hand-edited state. Semantic authority → `plan-workflow-lifecycle-contract.md`; steps → `mstar-roles/references/project-manager/plan-management.md`.
+**Who advances this row's state, when and with what evidence?** Name the primary coordinator's ordinary prepare/progress/complete actions and declared route: iteration complete verifies the already-performed serial merge; standalone development verifies its registered source without iteration integration; standalone report-only needs only QC/QA under the completion policy declared at registration. After Done, iteration/development retain compound/PR/verified-merge/close; report-only retains the terminal close on Done rows plus QC/QA and the registered policy, without fabricated Git/PR. Missing facts use the supported ordinary operation, not hand-edited state. Semantic authority → `plan-workflow-lifecycle-contract.md`; steps → `mstar-roles/references/project-manager/plan-management.md`.
 
 ## Relationship to existing plan elements
 
