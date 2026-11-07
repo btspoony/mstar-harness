@@ -83,9 +83,13 @@ export function checkSkillBudgets(root: string, budgets: SkillBudget[]): SkillBu
   return { filesChecked: files.length, failures };
 }
 
-/** `wc -l`-equivalent count: newline-separated lines, one trailing newline ignored. */
+/**
+ * `wc -l`-equivalent count: newline-separated lines, one trailing newline
+ * ignored. Every line-break convention ends a line — CRLF, LF, and a bare CR,
+ * which `/\r?\n/` alone would leave unbroken and undercount as one line.
+ */
 function countLines(text: string): number {
-  const lines = text.split("\n");
+  const lines = text.split(/\r\n|\r|\n/);
   if (lines[lines.length - 1] === "") lines.pop();
   return lines.length;
 }

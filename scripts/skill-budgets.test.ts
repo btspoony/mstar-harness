@@ -107,6 +107,29 @@ describe("skill budgets", () => {
     }
   });
 
+  // One logical line = one line break of any convention. CRLF is one break, and
+  // a bare CR is a break too, so a CR-only file cannot pass as a single line.
+  test("CRLF and bare CR each end a line", () => {
+    const repo = fixture(
+      {
+        "skills/crlf/SKILL.md": "line 1\r\nline 2\r\n",
+        "skills/bare-cr/SKILL.md": "line 1\rline 2\rline 3",
+      },
+      [
+        { file: "skills/bare-cr/SKILL.md", maxLines: 2 },
+        { file: "skills/crlf/SKILL.md", maxLines: 2 },
+      ],
+    );
+    try {
+      const result = checkSkillBudgets(repo.root, readSkillBudgets(repo.root));
+      expect(result.failures).toEqual([
+        { kind: "over-budget", file: "skills/bare-cr/SKILL.md", lines: 3, maxLines: 2 },
+      ]);
+    } finally {
+      repo.close();
+    }
+  });
+
   // countLines counts logical lines, so a file with no trailing newline reports
   // one more line than `wc -l`. AGENTS.md requires exactly one trailing newline,
   // so a ceiling derived from `wc -l` can only ever be conservative here — never
