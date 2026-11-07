@@ -61,6 +61,18 @@
  * 8. tracked Markdown links and anchors resolve within the checkout using
  * the canonical tracked-file set; each real diagnostic is reported as a
  * drift row.
+ * 9. skills corpus — per-file size ceilings: every shipped skill Markdown
+ * file is compared against `scripts/skill-budgets.manifest.json` (ceiling =
+ * the size at introduction, rounded up to a multiple of 10, floor 20). A
+ * file over its ceiling fails, and so does manifest drift in either
+ * direction (`manifest-stale` for a ceiling whose file is gone,
+ * `budget-missing` for a shipped file with no ceiling).
+ * 10. skills corpus — duplicate HARD rules: the same rule wording may live in
+ * one file only; a second file points at it (arrow -> backticked skill ->
+ * section marker) instead of re-vendoring it. Report-only for now: the
+ * current corpus copies are pruned by plan
+ * `skill-pointerization`, which flips this guard to blocking when it
+ * lands.
  *
  * The forward callout citation check also validates the **binary prefix**
  * of every backticked CLI
@@ -84,6 +96,18 @@ import { join, relative } from "node:path";
 import { getCommandDefinitions } from "../packages/commands/src/definitions.ts";
 import { commentMask } from "./ascii-literal-utils.ts";
 import { checkMarkdownLinks } from "./markdown-links.ts";
+import { checkParagraphAnchoring, type ParagraphAnchoringResult } from "./markdown-wrap.ts";
+import {
+  checkRuleDuplication,
+  ruleFingerprintHash,
+  type RuleDuplicationResult,
+} from "./rule-duplication.ts";
+import {
+  SKILL_BUDGETS_MANIFEST,
+  checkSkillBudgets,
+  readSkillBudgets,
+  type SkillBudgetResult,
+} from "./skill-budgets.ts";
 import {
   AUDIT_CATEGORIES,
   LEGACY_ARCHIVE_SKILL,
@@ -1018,6 +1042,51 @@ function reportOversizedTests(): void {
   }
 }
 
+/**
+ * Advisory inventory of Guard 10 duplicate groups. Report-only until plan
+ * `skill-pointerization` prunes the known corpus copies and flips
+ * this guard to blocking; each row names its fingerprint so an accepted
+ * exception can be allowlisted verbatim.
+ */
+function reportRuleDuplication(result: RuleDuplicationResult): void {
+  if (result.duplicates.length === 0 && result.exemptGroups.length === 0) return;
+  console.warn(
+    `advisory: Guard 10 duplicate HARD rules ${result.duplicates.length} duplicate groups across ${result.duplicates.reduce(
+      (sum, group) => sum + group.hits.length,
+      0,
+    )} sites (${result.exemptGroups.length} allowlisted groups) - advisory until plan skill-pointerization lands; that plan prunes the known corpus copies`,
+  );
+  for (const group of [...result.duplicates, ...result.exemptGroups]) {
+    const sites = [...group.hits, ...group.exempt].map((hit) => `${hit.file}:${hit.line}`).join(", ");
+    console.warn(
+      `advisory:   [${ruleFingerprintHash(group.normalized)}] ${group.hits.length} active, ${group.exempt.length} exempt - ${sites}`,
+    );
+  }
+}
+
+/** Advisory rows printed for Guard 11 before the tail line takes over. */
+const PARAGRAPH_ADVISORY_SAMPLES = 20;
+
+/**
+ * Advisory inventory of Guard 11 multi-line paragraphs. Report-only: the rule
+ * binds new and modified paragraphs now, and existing wrapped paragraphs are
+ * reflowed when their file is next edited, so the count shrinks without a
+ * whole-corpus reformat commit.
+ */
+function reportParagraphAnchoring(result: ParagraphAnchoringResult): void {
+  if (result.violations.length === 0) return;
+  const files = new Set(result.violations.map((violation) => violation.file)).size;
+  console.warn(
+    `advisory: Guard 11 paragraph anchoring ${result.violations.length} multi-line paragraphs across ${files} of ${result.filesChecked} skill files - new and modified paragraphs must be single-line; existing paragraphs are reflowed when their file is next edited`,
+  );
+  for (const violation of result.violations.slice(0, PARAGRAPH_ADVISORY_SAMPLES)) {
+    console.warn(`advisory:   ${violation.file}:${violation.startLine}-${violation.endLine}`);
+  }
+  if (result.violations.length > PARAGRAPH_ADVISORY_SAMPLES) {
+    console.warn(`advisory:   ... ${result.violations.length - PARAGRAPH_ADVISORY_SAMPLES} more`);
+  }
+}
+
 
 if (import.meta.main) {
  /* ------------------------------------------------------------------ */
@@ -1339,7 +1408,67 @@ if (import.meta.main) {
     );
   }
 
- /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Guard 9: skills corpus — per-file size ceilings */
+/* ------------------------------------------------------------------ */
+
+  let skillBudgets: SkillBudgetResult = { filesChecked: 0, failures: [] };
+  try {
+    skillBudgets = checkSkillBudgets(root, readSkillBudgets(root));
+  } catch (error) {
+    fail(`Guard 9 skill budgets: ${(error as Error).message}`);
+  }
+  for (const failure of skillBudgets.failures) {
+    if (failure.kind === "over-budget") {
+      fail(
+        `${failure.file}: ${failure.lines} lines exceeds its ${failure.maxLines}-line ceiling in ${SKILL_BUDGETS_MANIFEST} (relocate -> condense -> raise the ceiling in the PR)`,
+      );
+    } else if (failure.kind === "manifest-stale") {
+      fail(
+        `${SKILL_BUDGETS_MANIFEST}: ${failure.file} has a ${failure.maxLines}-line ceiling but the file no longer exists - drop the entry`,
+      );
+    } else {
+      fail(
+        `${failure.file}: no line ceiling in ${SKILL_BUDGETS_MANIFEST} (${failure.lines} lines) - add one`,
+      );
+    }
+  }
+
+/* ------------------------------------------------------------------ */
+/* Guard 10: skills corpus — duplicate HARD rules (advisory) */
+/* ------------------------------------------------------------------ */
+
+  let ruleDuplication: RuleDuplicationResult = {
+    filesChecked: 0,
+    duplicates: [],
+    exemptGroups: [],
+    allowlistFailures: [],
+  };
+  try {
+    ruleDuplication = checkRuleDuplication(
+      root,
+      skillFiles.map((file) => relative(root, file)),
+    );
+  } catch (error) {
+    fail(`Guard 10 rule duplication: ${(error as Error).message}`);
+  }
+  for (const row of ruleDuplication.allowlistFailures) fail(row);
+
+/* ------------------------------------------------------------------ */
+/* Guard 11: skills corpus — paragraph anchoring (advisory) */
+/* ------------------------------------------------------------------ */
+
+  let paragraphAnchoring: ParagraphAnchoringResult = { filesChecked: 0, violations: [] };
+  try {
+    paragraphAnchoring = checkParagraphAnchoring(
+      root,
+      skillFiles.map((file) => relative(root, file)),
+    );
+  } catch (error) {
+    fail(`Guard 11 paragraph anchoring: ${(error as Error).message}`);
+  }
+
+/* ------------------------------------------------------------------ */
 
  // Guard 4 footer fragment: report each check's own verdict + count so a
  // load-order-only failure is never misstated as a combined/OK status.
@@ -1353,17 +1482,29 @@ if (import.meta.main) {
 
   const markdownLinksSummary = `Guard 8 Markdown links ${markdownLinks.filesScanned} files scanned, ${markdownLinks.linksChecked} links resolved, ${markdownLinks.anchorsChecked} anchors checked, ${markdownLinks.diagnostics.length} diagnostics`;
 
+  const skillBudgetsSummary = `Guard 9 skill budgets ${skillBudgets.filesChecked} files checked, ${
+    skillBudgets.failures.filter((failure) => failure.kind === "over-budget").length
+  } over budget`;
+
+  const ruleDuplicationSummary = `Guard 10 duplicate HARD rules ${ruleDuplication.duplicates.length} groups (${
+    ruleDuplication.exemptGroups.length
+  } allowlisted; advisory until skill-pointerization)`;
+
+  const paragraphAnchoringSummary = `Guard 11 paragraph anchoring ${paragraphAnchoring.filesChecked} files checked, ${paragraphAnchoring.violations.length} multi-line paragraphs (advisory; new and modified paragraphs must be single-line)`;
+
   reportOversizedTests();
+  reportRuleDuplication(ruleDuplication);
+  reportParagraphAnchoring(paragraphAnchoring);
   if (failures.length > 0) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}`,
   );
 }
