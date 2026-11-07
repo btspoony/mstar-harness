@@ -338,8 +338,8 @@ export const LEGACY_ARCHIVE_SKILL = "mstar-engine-legacy";
 
 /**
  * Merge the engine-absent archive's reference texts into `skillTexts` so the
- * inbound-only rule covers `SKILL.md` **and** `references/*.md` (the archive
- * carries contract prose in both). Unconditional in the archive's favor:
+ * inbound-only rule covers `SKILL.md` **and** any `references/*.md` it ships.
+ * Unconditional in the archive's favor:
  * whenever reference texts exist the `mstar-engine-legacy` key is present and
  * linted even when its `SKILL.md` was not collected; with no references the
  * input is copied unchanged (no key is invented). Pure — the caller's map is

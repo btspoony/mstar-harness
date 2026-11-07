@@ -1,57 +1,39 @@
 ---
 name: mstar-engine-legacy
-description: "Engine-absent safety and historical-field archive: field history, checkout/atomic safety, dispatch/QC invariants. Use only when the host has no CLI/engine (execution state = conversation tracking)."
+description: "Engine-absent execution-state boundary: without a CLI/engine, execution state is conversation tracking (no-plan mode) and no file execution route is recreated. Use only when the host has no engine capability."
 ---
 
-# mstar-engine-legacy（条件契约档案 / Engine-absent archive）
+# mstar-engine-legacy（engine-absent 执行状态边界档案）
 
 ## Load Order
 
 - Follow the host-selected lifecycle authority first; this archive never overrides runtime authorization and names no other `mstar-*` skill (inbound-only).
-- **条件加载**：仅当宿主**无 engine 能力**时读取本 skill 及其 references —— 无 `mstar` CLI、无 engine import、engine 约束未激活。engine 约束激活（或宿主含 engine 能力）时**不加载**：此时运行时 skills 的 engine-check 指针 + 短契约文本为权威。
-- 本 skill 是**单一条件归档**：承接因 engine 校验而从运行时 skills 中移除的 contract 全文，engine-absent 宿主在此找回完整文本。归档只提供字段历史与安全/流程散文——**不**提供文件执行路径；engine-absent 宿主的执行状态走对话追踪（no-plan mode）。
+- **条件加载**：仅当宿主**无 engine 能力**时读取本 skill —— 无 `mstar` CLI、无 engine import、engine 约束未激活。engine 约束激活（或宿主含 engine 能力）时**不加载**：engine-present 宿主以运行时 skills 的指针 + engine 校验为权威。
 
 ## Scope
 
-- 归档**被承接的完整契约散文**（Task 2 displaced prose 的单一收容处）：
-  1. `status.json` v1→v2 字段历史表（字段、severity、lifecycle、jq/flock 示例）与 `references/migration-source-shapes.md`（root/snapshot/register 历史形状；无执行路径或 live writer）
-  2. Concurrent-write and checkout safety without recreated claim/bind/transfer APIs
-  3. 各宿主 QC 座次 N=3/N=1 重述（omp / opencode / cursor / codex / kimi / zcode / dsh）
-  4. 反递归完整清单（leaf executor checklist、红线、NEVER 规则）
-  5. Engine-check 样板含义（运行时 skills 中 `Engine check (when available)` blockquote 的语义与 standalone guarantee 规则）
-- **执行状态边界**：engine-absent 宿主无文件执行路径——执行状态 = 对话追踪（no-plan mode），门禁（QC/QA）仍适用；本归档不重建任何文件执行面。
-- 运行时 skills 只保留短指针 + engine-check 命令；完整全文一律在本 skill 的 `references/` 中（避免全仓重复）。
+- 本 skill 只承接**一件事**：engine-absent 宿主的**执行状态边界**。字段历史与迁移形状随 engine 留在运行时侧，不在本归档。
+- engine-absent 宿主没有文件执行路径：执行状态走对话追踪（no-plan mode），门禁（QC/QA）仍适用；本归档不重建任何文件执行面。
+- 本归档**不**承载字段表、迁移映射、派发座次或反递归清单——这些契约的当前 owner 是运行时 skills。
 
 ## Workflow
 
 1. 确认触发条件：宿主**无 engine**（无 CLI / import；约束未激活）。满足才继续。
-2. 按需打开对应 reference（见下表），把其中的历史/安全文本作为参考应用；**不**用它们重建文件执行路径——执行状态走对话追踪（no-plan mode）。
-3. engine 恢复后回到运行时 skills 的指针契约，停止使用本文件作为权威。
-
-| 需要 | 打开 |
-|------|------|
-| status 字段 / severity / lifecycle / 迁移 / jq-flock 示例 | `references/status-field-history.md` |
-| Historical root/snapshot/register shapes, provenance, closure, read aliases and retired rollups | `references/migration-source-shapes.md` |
-| Checkout/atomic safety; no supported writer means report capability, never edit protected state | `references/lease-protocol.md` |
-| 各宿主 QC 座次 N=3/N=1 重述 | `references/qc-seat-n-restatements.md` |
-| 反递归完整清单（leaf checklist + 红线） | `references/anti-recursion-checklists.md` |
-| Engine-check 样板含义与 standalone guarantee 规则 | `references/engine-check-boilerplate.md` |
+2. 在会话内追踪执行状态：plan / task 进度、门禁结论与证据以对话持有（必要时落在 authored plan 文件里），**不**写 `status.json` / snapshot / lease 之类的执行面。
+3. engine 恢复后停止使用本文件作为权威，回到运行时 skills 的指针契约。
 
 ## Decision Rules
 
 - **不加载条件**：engine 约束激活，或宿主含 engine 能力（`mstar` CLI / engine import 可用）→ 本 skill 不加载。
-- **归档唯一性**：完整契约文本只存在于本文件；不得同时在运行时 skills 重复维护全文（运行时只放指针 + engine-check）。
-- **Inbound-only**：运行时 skills 可指向本归档（条件归档指针），本归档**永不点名其它 `mstar-*` skill**——指代运行时契约时用中性描述（如 the runtime dispatch rules / the current field reference / the host references）；engine lint 以 `roles.loadorder.legacy.archive.reference` 强制。
-- **权威性**：engine-absent 时，本文件的完整文本是字段历史与安全/流程参考；engine-present 时，运行时 skills + engine 校验是权威，本文件不是。
-- **不改契约语义**：承接文本的字段名、severity 枚举、N 规则与反递归清单逐字保留；只做整理与归档（并移除文件执行路径的退役措辞），不重写规则。
-- **无文件执行路径**：不得以 `status.json` / snapshot / lease 文件重建执行状态；engine-absent 宿主的执行状态 = 对话追踪（no-plan mode），门禁（QC/QA）仍适用。
+- **无文件执行路径**：不得以 `status.json` / snapshot / lease 文件重建执行状态；「先建一个文件承载状态」本身就是重建已退役的执行面。
+- **Inbound-only**：运行时 skills 可指向本归档；本归档**永不点名其它 `mstar-*` skill**——需要指代运行时契约时用中性描述（the runtime dispatch rules / the current field reference / the host references）。
+- **缺契约照实报**：需要本归档不承载的字段、迁移或派发细节时，报告缺的是哪一份运行时契约，不凭记忆重建。
 
 ## Evidence
 
-- 正确结果 = references 中的历史/安全文本可独立支撑 engine-absent 宿主的字段查阅与安全判断（执行状态仍走对话追踪）；`bun run validation:drift` 绿（skill corpus lint 通过）；`mstar skill lint skills/mstar-engine-legacy` 绿。
-- 回归 = grep 验证运行时 skills 已不再携带被承接的全文（原全文位置只剩指针 / engine-check）。
+- 正确结果 = engine-absent 会话按对话追踪推进，且没有新建文件执行面；`bun run validation:drift` 绿（archive 引用 lint 通过）；`mstar skill lint skills/mstar-engine-legacy` 绿。
 
 ## References
 
-- 本 skill 的 references（见 When Workflow 表）。
-- Current execution, issue and lifecycle authority belongs to the runtime field reference and domain operations; this archive supplies history only.
+- 本 skill 无本地 `references/`：只有这份 SKILL.md。
+- Current execution, issue and lifecycle authority belongs to the runtime field reference and domain operations; this archive supplies the engine-absent execution-state boundary only.

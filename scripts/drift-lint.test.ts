@@ -968,8 +968,8 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
     ).toBe(true);
   });
 
-  test("red probe: a cross-reference inside an archive reference file fails (roles.loadorder.legacy.archive.reference)", () => {
-    const rel = "skills/mstar-engine-legacy/references/status-field-history.md";
+  test("red probe: a cross-reference inside the archive skill text fails (roles.loadorder.legacy.archive.reference)", () => {
+    const rel = "skills/mstar-engine-legacy/SKILL.md";
     const corpus = realCorpus();
     expect(corpus.find((entry) => entry.rel === rel)).toBeDefined();
     const gapped = corpus.map((entry) =>
@@ -984,7 +984,7 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
         (row) => row.includes("roles.loadorder.legacy.archive.reference") && row.includes("mstar-artifacts"),
       ),
     ).toBe(true);
- // Restore: the shipped reference files are green through the same seam.
+ // Restore: the shipped archive text is green through the same seam.
     expect(checkRolesCorpus(corpus, ROLES_DIR).loadOrderViolations).toBe(0);
   });
 

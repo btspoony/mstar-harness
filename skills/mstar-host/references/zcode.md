@@ -20,21 +20,17 @@ Parallel PM dispatch: read **`parallel-dispatch.md`** when dispatching **N ≥ 2
 
 ## Runtime and upgrade
 
-- **Runtime**: the plugin **hooks** are Node scripts — run them under **Node >=24.18.0** (in-process native `node:sqlite`; the store capability is acquired lazily, so a status-only write never opens the database). Harness **commands** invoked as CLI go through the installed binary's own Node entrypoint (**Node >=24.18.0**; the explicit `node <bundle>` form is the same floor) — one runtime floor for both, never two. Below-floor or missing-capability refuses actionably; no transport or JSON fallback.
-- **Upgrade / reload**: update **morning-star-harness** from the `mstar-local` marketplace (see § Plugin/CLI version alignment) or re-run `init --target zcode`, then reload the plugin. Materialized sources under `~/.zcode/cli/plugins/` are refreshed by that install, not by editing this checkout.
-- **Readiness, not an action**: refreshing an *installed* copy is a bounded, authorized ops act — an authority flip first quiesces, then reloads/upgrades (or explicitly excludes) every installed reader/writer and attests the versions it saw. Editing harness docs or source performs none of it. If this host cannot reload safely, stop at the exact manual-restart step, have the user restart, then re-verify entrypoint/runtime/version/session identity read-only before the flip.
+- **Runtime**: the plugin **hooks** are Node scripts, and harness **commands** invoked as CLI go through the installed binary's own Node entrypoint — one runtime floor for both, never two; the store capability is acquired lazily, so a status-only write never opens the database → `_shared/host-runtime-contract.md` § Node floor.
+- **Upgrade / reload**: update **morning-star-harness** from the `mstar-local` marketplace (see § Plugin/CLI version alignment) or re-run `init --target zcode`, then reload the plugin. Materialized sources under `~/.zcode/cli/plugins/` are refreshed by that install, not by editing this checkout. The readiness flip that precedes an authority change → same file § Readiness, not an action.
 
 ## MCP delivery
 
-- **Native install and loading**: install **morning-star-harness** from the `mstar-local` marketplace. `.zcode-plugin/mcp.json` launches `command: "npx"` with args the harness CLI `mcp` subcommand; its comment requires a published CLI release containing `mcp`. Require **Node >=24.18.0**.
-- **Context boundary**: optional `host` selects validated host context, not a role or authority; `sessionId` is the main conversation session. Per-call child-agent attribution is neither required nor performed. Shared workflow ownership, path, transition and CAS checks remain authoritative.
-- **Doctor and evidence**: `mstar-harness doctor --target zcode` reports aligned / mismatch / unavailable from the MCP launch config, checks Node's floor, and never opens `store.db`. H6b's config-launched package smoke is superseded by the in-CLI server; installed-host behavior remains unverified and separately authorized.
+- **Native install and loading**: install **morning-star-harness** from the `mstar-local` marketplace; `.zcode-plugin/mcp.json` carries the `npx` launch → same file § MCP delivery (including the context boundary this host shares).
+- **Doctor and evidence**: `mstar-harness doctor --target zcode` → `_shared/host-runtime-contract.md` § MCP delivery; the config-launched package smoke is superseded by the in-CLI server.
 
 ## Coordination transport (no host-native seat)
 
-This host ships no native execution transport: skills, commands and agents mount as text (plus the ZCode PreToolUse hook, which gates Git commands, not coordination writes), so every coordinated write goes through the **shared CLI** under an **independently acquired execution identity** — the ACTIVE route (`--session-ref` + the addressed scope's full execution token as `--expect` + `--operation`). There is no host-side session file here, no per-call identity injection and nothing to pass down to a child: a session reference is a **lookup, not a bearer credential**, and the engine compares the acquired caller inside its own transaction (→ `mstar-use-cli/references/plan-and-workflow.md`).
-
-Restarting this host or opening a new session does **not** re-issue an identity: a launcher that mints a local identity mints a **new** one, and a copied id is never claimed. A stopped or unreachable coordinator is replaced only by the explicit recovery verb that owns the current authority (`mstar session recover`) — never by restarting a process, re-running a command, or editing a document.
+Mount shape on this host: skills, commands and agents mount as text, plus the ZCode **PreToolUse** hook, which gates Git commands, not coordination writes — no native execution transport → `_shared/host-runtime-contract.md` § Coordination transport.
 
 ## Skill loading
 

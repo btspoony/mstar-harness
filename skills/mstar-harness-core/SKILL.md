@@ -12,7 +12,7 @@ description: "Lifecycle and authorization authority: delivery loop, state machin
 - 本 skill 是 harness 的**生命周期 / 授权语义权威**（状态机、Done 权限、门禁、路由以本 skill 为准）；加载**选择**权威是 **`mstar-roles`**（hub bootstrap → 角色身份 → Assignment `Skill presets:` 决策，见其 § Load Order）。本 skill 不维护第二份全局必读角色表。
 - Directly invoked `mstar-*` topics declare `mstar-harness-core` first in Load Order / First action unless `lintLoadOrder` exempts their exact identity: standalone `mstar-coding-behavior` and the inbound-only `mstar-engine-legacy` archive — the archive may be referenced by runtime skills, it never names another topic skill. The existing `mstar-roles` hub bootstraps role-preset selection; explicit `none` still retains identity and shared-leaf authorization, anti-recursion, and evidence obligations.
 - Load only topics selected by `mstar-roles` and the relevant topic index; do not read all topics as a precaution. General-engineering wording is not a load-order exemption.
-- **加载条件（`mstar-engine-legacy`）**：`mstar-engine-legacy` 是**条件契约档案**（engine-absent archive）。**engine 约束激活（或宿主含 engine 能力）时不加载**——engine-present 宿主以运行时 skills 的 engine-check 指针 + engine 校验为权威；仅 engine-absent 宿主（无 `mstar` CLI / engine import）为找回被 engine 校验接管的 contract 全文而读取（触发契约见其 description）。engine-absent 宿主没有文件执行路径：执行状态走对话追踪（no-plan mode）。
+- **加载条件（`mstar-engine-legacy`）**：`mstar-engine-legacy` 是 **engine-absent 执行状态边界档案**。**engine 约束激活（或宿主含 engine 能力）时不加载**——engine-present 宿主以运行时 skills 的 engine-check 指针 + engine 校验为权威；仅 engine-absent 宿主（无 `mstar` CLI / engine import）为确认执行状态边界而读取（触发契约见其 description）：执行状态走对话追踪（no-plan mode），不重建任何文件执行路径。字段历史与迁移形状不在该归档——它们随 engine 留在运行时侧。
 
 ## Standalone harness（`mstar-*` 自洽）
 
@@ -97,7 +97,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-phase-gates` | per-plan 双阶段门禁：Prepare/Execute、意图门禁、hotfix、可验证编辑 |
 | `mstar-iteration` | 迭代管理：Phase 1–5（start / Autonomous Execute / iteration-close / PR delivery / PR merge-ready loop） |
 | `mstar-dispatch-gates` | 派发、Delegation、反递归、依赖与隔离驱动并行、SDD 路径 plan QC 强制 tri |
-| `mstar-engine-legacy` | Engine-absent safety/field-history archive; execution state = conversation tracking; no recreated file execution route |
+| `mstar-engine-legacy` | Engine-absent execution-state boundary; execution state = conversation tracking (no-plan mode); no recreated file execution route |
 | `mstar-sdd` | Subagent-driven development：file handoff、per-task review、ledger |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |

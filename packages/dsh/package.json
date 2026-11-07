@@ -41,7 +41,8 @@
     "locale",
     "harness-skills",
     "harness-agents",
-    "harness-commands"
+    "harness-commands",
+    "workflows"
   ],
   "dsh": {
     "bundle": {

@@ -318,7 +318,7 @@ function registeredPlanIds(compassDoc: CompassDoc): string[] {
 
 /**
  * Locate the snapshot plans[] row for a plan id. Reads accept `id` or
- * `plan_id` (`mstar-engine-legacy/references/migration-source-shapes.md`
+ * `plan_id` (`mstar-project-governance/references/migration-source-shapes.md`
  * § "Plan-key compatibility": read accepts both, write prefers `id`).
  */
 function findPlanRow(snapshotDoc: SnapshotDoc, planId: string): Record<string, unknown> | null {

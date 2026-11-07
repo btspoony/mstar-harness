@@ -260,6 +260,6 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 - `references/harness-bootstrap-and-agents-layering.md` — 新仓 harness + AGENTS 分层
 - `references/effort-estimation.md` — agent-oriented 工期（禁人天/FTE）
 - `references/artifact-storage-paths.md` — **产物存储路径 SSOT**（知识文档、CONCEPTS.md、STRATEGY.md 等落盘位置；`mstar-compound`、`mstar-compound-refresh`、`mstar-strategy` 等技能引用此表，不得本地重定义）
-- **`mstar-engine-legacy`** `references/migration-source-shapes.md` — historical execution/register file shapes; no execution route or live writer
+- **`mstar-project-governance`** `references/migration-source-shapes.md` — historical execution/register file shapes; no execution route or live writer
 
 **Current artifact details** (main plans, review bundles / durable summaries, execution/issue fields, knowledge and templates) → **`mstar-artifacts`**.
