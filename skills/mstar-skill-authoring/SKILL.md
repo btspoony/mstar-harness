@@ -38,7 +38,7 @@ description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门�
 
 - `bun run validation:drift` 对 `skills/**` 施加三条门禁；逐文件行数上限存放在 `scripts/skill-budgets.manifest.json`，Guard 9 在超出上限、上限条目过期、或随包文件没有条目时失败。
 - 上限是护栏而非缩减目标：处于或低于上限的文件永不要求缩短；触碰上限的唯一合法顺序是 **迁移 → 压缩 → 提高上限** —— 先搬进 `references/`，再压缩，最后才在同一 PR 内提高该条目并说明新增文字的理由。
-- Guard 10（跨文件重复 HARD 规则）今天只报告、不失败：同一句 HARD 规则只写在一处，第二个文件改写成指针 → `<skill>` § 小节，例外只进 `scripts/rule-duplication.allowlist.json` 并注明其覆盖文件。
+- Guard 10（跨文件重复 HARD 规则）失败即退出非零：同一句 HARD 规则只写在一处，第二个文件改写成指针 → `<skill>` § 小节，例外只进 `scripts/rule-duplication.allowlist.json` 并注明其覆盖文件。
 - Guard 11（段落锚定）今天只报告、不失败，但新增与修改的段落立即受其约束：一个段落必须是一个物理行（宽度不限），存量折行段落在其文件下次被编辑时顺势合并，不做整仓重排。
 
 ## Body 必须回答的 5 问

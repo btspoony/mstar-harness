@@ -69,10 +69,10 @@
  * `budget-missing` for a shipped file with no ceiling).
  * 10. skills corpus — duplicate HARD rules: the same rule wording may live in
  * one file only; a second file points at it (arrow -> backticked skill ->
- * section marker) instead of re-vendoring it. Report-only for now: the
- * current corpus copies are pruned by plan
- * `skill-pointerization`, which flips this guard to blocking when it
- * lands.
+ * section marker) instead of re-vendoring it. A group that still duplicates
+ * fails the run; genuine exceptions live in
+ * `scripts/rule-duplication.allowlist.json` with a reason naming the file each
+ * entry covers, and allowlisted groups are reported without failing.
  *
  * The forward callout citation check also validates the **binary prefix**
  * of every backticked CLI
@@ -98,6 +98,7 @@ import { commentMask } from "./ascii-literal-utils.ts";
 import { checkMarkdownLinks } from "./markdown-links.ts";
 import { checkParagraphAnchoring, type ParagraphAnchoringResult } from "./markdown-wrap.ts";
 import {
+  RULE_DUPLICATION_ALLOWLIST,
   checkRuleDuplication,
   ruleFingerprintHash,
   type RuleDuplicationResult,
@@ -1043,23 +1044,20 @@ function reportOversizedTests(): void {
 }
 
 /**
- * Advisory inventory of Guard 10 duplicate groups. Report-only until plan
- * `skill-pointerization` prunes the known corpus copies and flips
- * this guard to blocking; each row names its fingerprint so an accepted
- * exception can be allowlisted verbatim.
+ * Report Guard 10 allowlisted groups. A duplicate group is a failure row (the
+ * guard is blocking); this prints only the accepted exceptions, each with its
+ * fingerprint so the matching allowlist entry is findable.
  */
 function reportRuleDuplication(result: RuleDuplicationResult): void {
-  if (result.duplicates.length === 0 && result.exemptGroups.length === 0) return;
+  if (result.exemptGroups.length === 0) return;
+  const exemptSites = result.exemptGroups.reduce((sum, group) => sum + group.exempt.length, 0);
   console.warn(
-    `advisory: Guard 10 duplicate HARD rules ${result.duplicates.length} duplicate groups across ${result.duplicates.reduce(
-      (sum, group) => sum + group.hits.length,
-      0,
-    )} sites (${result.exemptGroups.length} allowlisted groups) - advisory until plan skill-pointerization lands; that plan prunes the known corpus copies`,
+    `allowlisted: Guard 10 duplicate HARD rules ${result.exemptGroups.length} groups (${exemptSites} exempt sites) - accepted exceptions from ${RULE_DUPLICATION_ALLOWLIST}`,
   );
-  for (const group of [...result.duplicates, ...result.exemptGroups]) {
+  for (const group of result.exemptGroups) {
     const sites = [...group.hits, ...group.exempt].map((hit) => `${hit.file}:${hit.line}`).join(", ");
     console.warn(
-      `advisory:   [${ruleFingerprintHash(group.normalized)}] ${group.hits.length} active, ${group.exempt.length} exempt - ${sites}`,
+      `allowlisted:   [${ruleFingerprintHash(group.normalized)}] ${group.hits.length} active, ${group.exempt.length} exempt - ${sites}`,
     );
   }
 }
@@ -1435,7 +1433,7 @@ if (import.meta.main) {
   }
 
 /* ------------------------------------------------------------------ */
-/* Guard 10: skills corpus — duplicate HARD rules (advisory) */
+/* Guard 10: skills corpus — duplicate HARD rules (blocking) */
 /* ------------------------------------------------------------------ */
 
   let ruleDuplication: RuleDuplicationResult = {
@@ -1453,6 +1451,13 @@ if (import.meta.main) {
     fail(`Guard 10 rule duplication: ${(error as Error).message}`);
   }
   for (const row of ruleDuplication.allowlistFailures) fail(row);
+  for (const group of ruleDuplication.duplicates) {
+    fail(
+      `Guard 10 duplicate HARD rules [${ruleFingerprintHash(group.normalized)}] ${group.hits
+        .map((hit) => `${hit.file}:${hit.line}`)
+        .join(", ")} - state the rule in one file and point at that owner (→ <skill> § <Section>); a genuine exception goes in ${RULE_DUPLICATION_ALLOWLIST} with a reason naming the file it covers`,
+    );
+  }
 
 /* ------------------------------------------------------------------ */
 /* Guard 11: skills corpus — paragraph anchoring (advisory) */
@@ -1488,7 +1493,7 @@ if (import.meta.main) {
 
   const ruleDuplicationSummary = `Guard 10 duplicate HARD rules ${ruleDuplication.duplicates.length} groups (${
     ruleDuplication.exemptGroups.length
-  } allowlisted; advisory until skill-pointerization)`;
+  } allowlisted)`;
 
   const paragraphAnchoringSummary = `Guard 11 paragraph anchoring ${paragraphAnchoring.filesChecked} files checked, ${paragraphAnchoring.violations.length} multi-line paragraphs (advisory; new and modified paragraphs must be single-line)`;
 

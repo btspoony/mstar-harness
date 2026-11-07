@@ -7,7 +7,8 @@
  * do not defeat normalization; an allowlisted site is reported as exempt
  * instead of failing; and ordinary repeated prose is never a rule fingerprint.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -231,6 +232,54 @@ describe("rule duplication", () => {
       expect(result.exemptGroups).toEqual([]);
     } finally {
       repo.close();
+    }
+  });
+});
+
+describe("Guard 10 blocking (drift-lint executable)", () => {
+  const REPO_ROOT = join(import.meta.dir, "..");
+  const SCRIPT = join(REPO_ROOT, "scripts/drift-lint.ts");
+  /** Inputs the executable reads before Guard 10 runs; a missing one aborts the run. */
+  const REQUIRED_INPUTS = [
+    "packages/engine/src/index.ts",
+    "packages/cli/package.json",
+    "packages/cli/src/command-adapter.ts",
+    "README.md",
+    "README_CN.md",
+  ];
+
+  test("a duplicated rule group exits non-zero and names both sites", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-guard10-"));
+    try {
+      for (const rel of [...REQUIRED_INPUTS, RULE_DUPLICATION_ALLOWLIST]) {
+        const dest = join(dir, rel);
+        mkdirSync(dirname(dest), { recursive: true });
+        writeFileSync(
+          dest,
+          rel === RULE_DUPLICATION_ALLOWLIST ? "[]\n" : readFileSync(join(REPO_ROOT, rel), "utf8"),
+        );
+      }
+      for (const skill of ["mstar-alpha", "mstar-beta"]) {
+        const dest = join(dir, "skills", skill, "SKILL.md");
+        mkdirSync(dirname(dest), { recursive: true });
+        writeFileSync(dest, `${RULE}\n`);
+      }
+      let status = 0;
+      let stderr = "";
+      try {
+        execFileSync("bun", [SCRIPT], { cwd: dir, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      } catch (error) {
+        const err = error as { status?: number; stderr?: string };
+        status = err.status ?? 0;
+        stderr = String(err.stderr ?? "");
+      }
+      expect(status).toBe(1);
+      // A failure row (not the old `advisory:` notice) is what enters `failures` and exits non-zero.
+      expect(stderr).toMatch(/✗ Guard 10 duplicate HARD rules/);
+      expect(stderr).toContain("skills/mstar-alpha/SKILL.md:1");
+      expect(stderr).toContain("skills/mstar-beta/SKILL.md:1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
