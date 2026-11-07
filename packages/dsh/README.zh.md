@@ -258,7 +258,7 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 | --- | --- | --- |
 | `workflows/mstar-qc-tri.js` | Plan QC 三席复审：三个独立的只读 QC 席位，各自返回 verdict envelope | `planId`, `planPath`, `range`, `reviewCwd`, `branch`, `sddDir` |
 | `workflows/mstar-audit-fanout.js` | 代码库审计：每个类别一个只读席位，按 8 席 subagent 池分批 | `repo`, `auditRef`, `recon`（可选 `categories`，缺省为全部九类） |
-| `workflows/mstar-pr-seats.js` | PR 审查席位：2-3 个域席位加可选的跨域安全席位，只出 findings | `worktree`, `target`, `diffBase`, `auditRef`, `budgetLine`（另有 `domains`, `security`, `diffFile`） |
+| `workflows/mstar-pr-seats.js` | PR 审查席位：2-3 个域席位加可选的跨域安全席位，只出 findings | `worktree`, `target`, `diffBase`, `auditRef`, `budgetLine`, `domains`（2–3 个标签）（另有 `security`, `diffFile`） |
 | `workflows/mstar-review-single.js` | 单席 SDD task 审查者，不占用 Team roster 席位 | `planId`, `taskId`, `reviewCwd`, `branch`, `briefPath`, `implementerReport`, `diffFile`, `diffBase`, `diffHead`, `globalConstraints` |
 
 ## Native command surface
