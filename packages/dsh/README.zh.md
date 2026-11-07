@@ -250,6 +250,17 @@ mstar 技能通过 dsh skill-filesystem 提供者以**单一规范挂载**接入
 
 插件把 bundled 的 mstar 命令（omp/opencode 对齐面）注册到 `ctx.commands`：`harness-commands/*.md`——仓库根 `commands/` 镜像（`iteration-start`、`iteration-drive`、`iteration-loop`、`codebase-audit`）由 `bundle-assets` 在构建时同步（gitignore）。每条注册读取命令的 `name`/`description`/`input` frontmatter；声明了 `input` hint 的注册会将其作为 `input.hint` 公布，使 dsh web 客户端的决策表从「脱离式裸执行」翻转为 leadingInput **claim**——菜单点选后把 `/name ` 插入输入框（命令色 token + ghost hint），按 Enter 才提交，用户可以键入后续参数（与 `/plan`、`/goal`、`/advisor` 相同的交互）。handler 把**命令正文以 USER source 消息 steer 进接收 agent**（dsh-plan-mode 命令先例——`source: { kind: 'user' }`，模型把正文当作要执行的任务而非注入上下文；即 dsh-commands 的「经接收 Agent 显式调度模型可见工作」路径），用户键入的参数以 `## User input` 小节追加在正文后，返回成功结果。注册以 `ctx.inject(['commands'], …)` 延迟进行——与工具注册相同的可选单元模式——插件在无 commands 服务时也能启动；镜像缺失（未跑 `bundle-assets`）则不注册任何命令。
 
+## Workflow scripts
+
+模型交给 dsh **`workflow`** 工具的四个只读扇出脚本以包相对的普通 JavaScript 放在 `workflows/`——不是 TypeScript，也没有 `export const meta` 语句——因此脚本可被原样读取、diff 与回传。`scripts/dsh-workflow-files-hash.test.ts`（仓库根）钉住每个正文的 SHA-256，改动已发布脚本因此是一次显式、可审的动作，而非静默漂移。何时使用、其 `meta` 身份、参数规则、席位数守卫与失败面见 skill `mstar-host` → `references/dsh-workflow-scripts.md`；本表是文件清单。
+
+| 文件 | 用途 | 必需 `args` |
+| --- | --- | --- |
+| `workflows/mstar-qc-tri.js` | Plan QC 三席复审：三个独立的只读 QC 席位，各自返回 verdict envelope | `planId`, `planPath`, `range`, `reviewCwd`, `branch`, `sddDir` |
+| `workflows/mstar-audit-fanout.js` | 代码库审计：每个类别一个只读席位，按 8 席 subagent 池分批 | `repo`, `auditRef`, `recon`（可选 `categories`，缺省为全部九类） |
+| `workflows/mstar-pr-seats.js` | PR 审查席位：2-3 个域席位加可选的跨域安全席位，只出 findings | `worktree`, `target`, `diffBase`, `reportsDir`, `auditRef`, `budgetLine`（另有 `domains`, `security`, `diffFile`） |
+| `workflows/mstar-review-single.js` | 单席 SDD task 审查者，不占用 Team roster 席位 | `planId`, `taskId`, `reviewCwd`, `branch`, `briefPath`, `implementerReport`, `diffFile`, `diffBase`, `diffHead`, `globalConstraints` |
+
 ## Native command surface
 
 本宿主的可写 mstar 命令面是 **MCP 路线**：整个宿主**共享一条** `mstar-mcp` 连接（即 bundle 行——见 § Shared MCP connection），每个命令家族一个工具（`mcp__mstar__mstar_<family>` + `action` 参数）。该连接**自身不携带任何身份**，但随发行的行以 `--trust-caller-session-id` opt-in，因此需要会话身份的操作在这条连接上传 `sessionId`（未 opt-in 的连接不发布选择器并拒绝传入的 id）。下列三个 dsh 原生工具只留给本 MCP 面做不到的事——写不了的插件本地状态，或没有发布的能力；那里身份来自 `exec.agent.id`。
