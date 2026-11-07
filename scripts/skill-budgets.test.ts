@@ -4,7 +4,7 @@
  * only above its ceiling, and both directions of manifest drift fail — a
  * stale entry hides a deletion, a missing entry hides growth.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -104,6 +104,28 @@ describe("skill budgets", () => {
       expect(result.filesChecked).toBe(2);
     } finally {
       repo.close();
+    }
+  });
+
+  // A symlink is not a shipped skill file (the shared collector skips
+  // non-regular entries): a link to external Markdown must not report as an
+  // untracked corpus file, and a dangling link must not fail the guard.
+  test("symlinked and dangling Markdown entries are skipped, not read", () => {
+    const outside = mkdtempSync(join(tmpdir(), "skill-budgets-outside-"));
+    try {
+      writeFileSync(join(outside, "external.md"), body(500));
+      const repo = fixture({ "skills/a/SKILL.md": body(10) }, [{ file: "skills/a/SKILL.md", maxLines: 20 }]);
+      try {
+        symlinkSync(join(outside, "external.md"), join(repo.root, "skills", "a", "linked.md"));
+        symlinkSync(join(outside, "missing.md"), join(repo.root, "skills", "a", "dangling.md"));
+        const result = checkSkillBudgets(repo.root, readSkillBudgets(repo.root));
+        expect(result.filesChecked).toBe(1);
+        expect(result.failures).toEqual([]);
+      } finally {
+        repo.close();
+      }
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
     }
   });
 

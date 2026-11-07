@@ -11,7 +11,7 @@
  * justifies the words (relocate -> condense -> raise).
  */
 import { readdirSync, readFileSync } from "node:fs";
-import { join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 
 export const SKILL_BUDGETS_MANIFEST = "scripts/skill-budgets.manifest.json";
 
@@ -59,9 +59,12 @@ export function readSkillBudgets(root: string): SkillBudget[] {
 /** Compare every shipped skill Markdown file against its ceiling. */
 export function checkSkillBudgets(root: string, budgets: SkillBudget[]): SkillBudgetResult {
   const ceilings = new Map(budgets.map((budget) => [budget.file, budget.maxLines]));
-  const files = readdirSync(join(root, "skills"), { recursive: true, encoding: "utf8" })
-    .filter((rel) => rel.endsWith(".md"))
-    .map((rel) => `skills/${rel.split(sep).join("/")}`)
+  const skillsDir = join(root, "skills");
+  // A symlink is not a shipped skill file: skip non-regular entries, matching
+  // the shared corpus collector, so external or dangling Markdown is never read.
+  const files = readdirSync(skillsDir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => `skills/${relative(skillsDir, join(entry.parentPath, entry.name)).split(sep).join("/")}`)
     .sort();
 
   const failures: SkillBudgetFailure[] = [];
