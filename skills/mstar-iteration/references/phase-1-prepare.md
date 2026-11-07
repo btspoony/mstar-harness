@@ -46,7 +46,7 @@ compass/plans 初稿落盘前，必须锁定**单一**迭代方向、成功标�
 **宿主 Plan UX（interactive）**：若宿主提供 Plan 会话（先写 session plan、后点 Build 才执行 todos）：
 
 - Where the host permits it, scaffold only the session-plan outline and todos, then update that same session plan from user feedback. Do not author the formal compass, guides, plans or specs before §1.2.5; an empty outline is not design approval.
-- Branch policy：在 plan 中写推荐值 + rationale（不得静默 `main`/`master`）；用户可用反馈改正；仅在用户明确结束反馈后仍缺字段时再追问。
+- Branch policy：在 plan 中写推荐值 + rationale（不得静默 `main`/`master`，门禁 → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库））；用户可用反馈改正；仅在用户明确结束反馈后仍缺字段时再追问。
 - 访谈式收敛 **仅**在反馈结束后仍有阻塞缺口时可选发起。
 - **禁止**为更新内容再开第二份 session plan。
 
@@ -54,7 +54,7 @@ The prototype checkpoint in §1.2.5 applies with or without a Plan session. Obey
 
 **禁止**：在未显式 opt-in 时自行切换到 `autonomous`（例如仅因读了本 reference 或存在 roadmap next）。
 
-**Branch policy gate（interactive — 默认路径）**：若用户、现有 roadmap、或项目约定未明确 `iteration_base_branch` / `target_branch`，PM 必须检查当前分支并向用户确认（**Plan 会话**走上方「推荐写入 plan + 反馈改正」；非 Plan 仍须确认）。**不得**因为存在 `main` / `master` 就默认从默认分支开 iteration 或向默认分支提 PR。
+**Branch policy gate（interactive — 默认路径）**：若用户、现有 roadmap、或项目约定未明确 `iteration_base_branch` / `target_branch`，PM 必须检查当前分支并向用户确认（**Plan 会话**走上方「推荐写入 plan + 反馈改正」；非 Plan 仍须确认）。**不得**因为存在 `main` / `master` 就默认从默认分支开 iteration 或向默认分支提 PR（默认分支门禁与 `Branch policy: direct on <branch>` 例外写法 → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库））。
 
 **Autonomous branch resolve**：仅 `autonomous` 模式；解析顺序与 STOP 规则见 **`references/autonomous-direction-lock.md`**（勿把该顺序套用到 interactive 以跳过向用户确认）。
 

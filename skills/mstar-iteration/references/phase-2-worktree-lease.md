@@ -30,7 +30,7 @@ This Phase owns the complete per-plan dispatch loop: entry checks, session todos
 1. ACTIVE `execution_plans` 至少一条 plan `status` ≠ `Done`，且 `execution_registry` 含该 iteration（经 `mstar status validate` / `mstar plan show` 读取）
 2. **Pre-implement gate = GO**：plan 已 locked、tasks ready（见 `mstar-phase-gates`）
 3. 用户意图为 **continue Autonomous Execute**（推进迭代 Execute、继续 per-plan 循环等）
-4. **Branch metadata gate:** verify the `--entry` branch-metadata fact (workflow `branch.base` / `branch.target` / `branch.integration` registered) and require at least one active plan's `metadata.spec_integration_branch`; resolve missing facts through §2.3. Missing → **STOP**; never default to `main` / `master`.
+4. **Branch metadata gate:** verify the `--entry` branch-metadata fact (workflow `branch.base` / `branch.target` / `branch.integration` registered) and require at least one active plan's `metadata.spec_integration_branch`; resolve missing facts through §2.3. Missing → **STOP**; never default to `main` / `master` (default-branch prohibition → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库）).
 5. **Worktree and concurrent-write safety:** establish a separate integration checkout and distinct feature checkouts before writable dispatch; verify the `--entry` main-residency and recorded-integration-checkout facts. Record missing or corrected source branch/worktree through ordinary prepare. Execution state is read/written through public verbs against control `{HARNESS_DIR}/store.db`; authored plans, Assignments, iteration package, SDD and append-only `notes.jsonl` use absolute control paths. Leaf Assignments include absolute feature `Worktree path`, `Working branch`, control `Plan Path` and `SDD dir`. Shared coordination writes use the control DB transaction/CAS authority; independent writable tasks use L1/L2 isolation. Missing gitignored plans in a feature checkout never justify waiver. Serial scheduling does not waive checkout isolation; integration merges always remain serial.
 
 > **Engine-check pointer:** `mstar worktree check --workflow <id> --entry` owns the workflow-entry facts (branch metadata, main residency, recorded integration checkout, merge-lease state — the engine-enforced subset only); per-plan L1 uses `mstar worktree check --workflow <id> --plan <plan-id>`. `mstar-branch-worktree` owns the L1/L2 isolation callout. These checks do not confer row authority.
@@ -59,7 +59,7 @@ Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agno
 
 本节的 integration-worktree checklist **也被 Phase 1 路线复用**（`iteration-start` 的 integration-branch 步骤）—— 在该路线上它承载 `phase-1-lock` marker，且**不**触发 `phase-2-entry`。
 
-**Branch anchors 解析顺序**（任一环节缺失则 STOP，**禁止**默认 `main`/`master`）：
+**Branch anchors 解析顺序**（任一环节缺失则 STOP，**禁止**默认 `main`/`master`；门禁与例外 → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库））：
 
 1. ACTIVE workflow 执行行 → `branch.base` / `branch.target` / `branch.integration`；plan 行 → `metadata.spec_integration_branch`
 2. 若缺字段 → 读当前 compass frontmatter 同名键：优先 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`，否则 legacy flat compass
