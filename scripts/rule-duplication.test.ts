@@ -8,7 +8,7 @@
  * instead of failing; and ordinary repeated prose is never a rule fingerprint.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -315,5 +315,24 @@ describe("Guard 10 blocking (drift-lint executable)", () => {
     expect(row).toContain("skills/mstar-alpha/SKILL.md:1");
     expect(row).toContain("skills/mstar-beta/SKILL.md:1");
     expect(row).toContain("1 exempt: skills/mstar-gamma/SKILL.md:1");
+  });
+
+  test("a symlinked skill file is skipped, not read into the guards", () => {
+    const outside = mkdtempSync(join(tmpdir(), "drift-symlink-target-"));
+    try {
+      const target = join(outside, "SKILL.md");
+      writeFileSync(target, `${RULE}\n`);
+      // Were the symlink collected, it would pair with mstar-alpha and fail as
+      // a duplicate group; the regular copy alone must not.
+      const { stderr } = runGuard10([], (dir) => {
+        writeSkill(dir, "mstar-alpha", `${RULE}\n`);
+        const link = join(dir, "skills", "mstar-beta", "SKILL.md");
+        mkdirSync(dirname(link), { recursive: true });
+        symlinkSync(target, link);
+      });
+      expect(stderr).not.toMatch(/✗ Guard 10 duplicate HARD rules/);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

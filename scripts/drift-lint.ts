@@ -140,7 +140,9 @@ function collectFiles(dir: string, ext: string): string[] {
     const full = join(root, dir, entry.name);
     if (entry.isDirectory()) {
       out.push(...collectFiles(join(dir, entry.name), ext));
-    } else if (entry.name.endsWith(ext)) {
+    } else if (entry.isFile() && entry.name.endsWith(ext)) {
+      // A symlink is not a shipped skill file: skipping non-regular entries
+      // keeps tree-external content out of every guard reading this corpus.
       out.push(full);
     }
   }
