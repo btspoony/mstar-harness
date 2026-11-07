@@ -15,14 +15,14 @@ description: "Plan artifacts: main plans, durable review summaries, QC/QA bundle
 | Plan template (Global Constraints, Interfaces) | `templates/plan.main.md` |
 | knowledge / iterations / specs boundaries and indexes | `references/knowledge-and-designs.md` |
 | ACTIVE execution rows, coordinator configuration/progress/completion and CAS, issue capture, residual severity/lifecycle | `references/status-and-residuals.md` |
-| Plan-level workflow lifecycle: delivery-kind declaration, stages, evidence contracts, engine seams | `references/plan-workflow-lifecycle-contract.md` (closing amendment **File-route retirement** is the live route) |
+| Plan-level workflow lifecycle: delivery-kind declaration, stages, evidence contracts, engine seams, migration sources | `references/plan-workflow-lifecycle-contract.md` |
 | Open-issue rollup (read-only) | `mstar status tech-debt` (issue-store rollup; see `references/status-and-residuals.md`) |
 
 **Out of scope:** branch and QC/QA checkout alignment → **`mstar-branch-worktree`**; leaf QC checklist and verdict → **`mstar-roles/references/qc-specialist/`**; PM QC orchestration → **`mstar-review-qc`**; `{HARNESS_DIR}` discovery and init → **`mstar-conventions`**.
 
 ## Execution authority, migration sources, and open residual (summary)
 
-- **ACTIVE root register**: `{HARNESS_DIR}/store.db` (`execution_registry` + `execution_meta.root_updated_at`), read through `mstar status validate` (no path; a path is refused). The PM-facing close caller is post-merge `mstar status workflow-close --workflow <id>` — one store transaction writes the terminal workflow state and unregisters the workflow (procedure → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2; route semantics → the lifecycle contract's **File-route retirement** amendment).
+- **ACTIVE root register**: `{HARNESS_DIR}/store.db` (`execution_registry` + `execution_meta.root_updated_at`), read through `mstar status validate` (no path; a path is refused). The PM-facing close caller is post-merge `mstar status workflow-close --workflow <id>` — one store transaction writes the terminal workflow state and unregisters the workflow (procedure → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2; route semantics → the lifecycle contract §4g).
 - **ACTIVE workflow / plan state**: `execution_workflows`, `execution_plans`, workflow-wide `execution_integration_leases`, coordinator `execution_sessions` and registered `execution_inputs` in the store; read through `mstar plan show` / `mstar status validate`. Rows contain ordinary source metadata/configuration/progress/completion; per-row execution leases are removed. Main/control is Git-derived.
 - **Migration sources / retained history**: read-only root/snapshot/session inputs; `mstar store upgrade` preserves original execution-source bytes and standalone `mstar migrate` staging is retired. Historical shapes → **`mstar-engine-legacy`** `references/migration-source-shapes.md` (no execution route or live writer).
 - **Persist surface**: the user-facing persist family and engine `ArtifactKind` accept `review` and `json` only. No internal status/snapshot file writer or runtime file-state fallback remains.
@@ -49,7 +49,7 @@ Current field semantics, severity mapping, findings cleanup and issue closure �
 
 ## Workflow
 
-Write the main plan under `{PLAN_DIR}` → primary coordinator advances its explicitly selected rows through ordinary domain operations → raw review bundle and durable summaries → capture confirmed findings as linked issues → direct complete with QC/QA and declared-route proof → the workflow's outer delivery/close obligations. ACTIVE identity/session/token defaults may be derived when unambiguous; explicit constraints still validate. Registration/unregistration stays workflow-owned on the ACTIVE store route (lifecycle contract, **File-route retirement** amendment).
+Write the main plan under `{PLAN_DIR}` → primary coordinator advances its explicitly selected rows through ordinary domain operations → raw review bundle and durable summaries → capture confirmed findings as linked issues → direct complete with QC/QA and declared-route proof → the workflow's outer delivery/close obligations. ACTIVE identity/session/token defaults may be derived when unambiguous; explicit constraints still validate. Registration/unregistration stays workflow-owned on the ACTIVE store route (lifecycle contract §4a).
 
 ## Decision Rules
 
@@ -67,4 +67,4 @@ Write the main plan under `{PLAN_DIR}` → primary coordinator advances its expl
 - `references/plan-files-and-reports.md` — 主 plan / review bundle 命名、QC 波次、durable summaries
 - `references/status-and-residuals.md` — ACTIVE execution fields, coordinator configuration/progress/completion, issue capture and current severity/lifecycle; migration-source shapes live in **`mstar-engine-legacy`** `references/migration-source-shapes.md`
 - `references/knowledge-and-designs.md` — knowledge / iterations / specs 边界与索引
-- `references/plan-workflow-lifecycle-contract.md` — plan-level workflow lifecycle contract: delivery-kind declaration, stages, evidence contracts, engine seams; closing amendment **File-route retirement**
+- `references/plan-workflow-lifecycle-contract.md` — plan-level workflow lifecycle contract: delivery-kind declaration, stages, evidence contracts, engine seams, migration sources

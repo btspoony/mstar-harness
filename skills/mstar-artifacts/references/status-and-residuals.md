@@ -8,7 +8,7 @@ Execution authority is the ACTIVE DB domain in `{HARNESS_DIR}/store.db`. There i
 
 > **Authority:** ACTIVE execution state is the DB domain. Ordinary coordinator operations are store transactions with CAS receipts. Surviving `status.json` / snapshot files are migration sources / retained history, not live state. A harness with no ACTIVE store has no execution authority.
 
-- **ACTIVE root register** — `{HARNESS_DIR}/store.db` (`execution_registry` + `execution_meta.root_updated_at`), read through `mstar status validate` (no path). PM close caller: `mstar status workflow-close --workflow <id>` — one store transaction writes the terminal workflow state and unregisters the workflow (procedure → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2; route → lifecycle contract amendment **File-route retirement**).
+- **ACTIVE root register** — `{HARNESS_DIR}/store.db` (`execution_registry` + `execution_meta.root_updated_at`), read through `mstar status validate` (no path). PM close caller: `mstar status workflow-close --workflow <id>` — one store transaction writes the terminal workflow state and unregisters the workflow (procedure → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2; route → lifecycle contract §4g).
 - **ACTIVE workflow / plan state** — store `execution_*` tables, read through `mstar plan show` / `mstar status validate`. Rows hold source metadata, configuration, progress and completion. Workflow-wide integration merge exclusion is `execution_integration_leases`. Per-row execution leases are removed. `<id>` is the plan or iteration workflow id.
 - **Persist surface** — user-facing `mstar persist` and engine `ArtifactKind` accept `review` and `json` only. No internal status/snapshot writer remains. `mstar harness scaffold` does not write `status.json`.
 - **Project files** — roadmap Markdown is reviewed import/export transport/history; content authority and rules → `mstar-project-governance`. Residual registers are migration history; open items live in store issues, with project-less flows assigned to `_default`.
@@ -238,7 +238,7 @@ Register files are migration history and have no live replacement writer; issue 
 
 ### Prepare configuration and coordinator recovery
 
-Prepare configuration revisions use `mstar plan prepare` on the ACTIVE route. Integration checkout and execution policy use `mstar workflow integration-worktree` and `mstar workflow execution-policy`. Coordinator recovery uses `mstar session recover`. There is no file-envelope writer and no snapshot structural-amendment writer.
+Prepare configuration revisions use `mstar plan prepare` on the ACTIVE route. Integration checkout and execution policy use `mstar workflow integration-worktree` and `mstar workflow execution-policy`. Coordinator recovery uses `mstar session recover`. There is no file-envelope writer and no snapshot writer.
 
 ---
 
