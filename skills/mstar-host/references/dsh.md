@@ -28,8 +28,7 @@ or a custom profile).
   injected context), returning a success result. The plugin registers **no
   duplicated** mstar command tools: the writable mstar command surface on this
   host is the **MCP** route (`packages/dsh/README.md` § Native command surface),
-  and the
-  only native tools are the three the MCP route cannot replace.
+  and the only native tools are the three the MCP route cannot replace.
 - **No `sessionStart.skill`** — enter PM manually via the `pm` skill (the
   `mstar-roles` load path), then **Read next** → `mstar-harness-core` →
   `project-manager.md`.
@@ -38,12 +37,11 @@ or a custom profile).
   **`mstar_audit_validate`** (no MCP twin) and **`mstar_execution_clear`** (no
   shared command); the membership rule and each tool's unique contribution are
   in `packages/dsh/README.md` § Native command surface. Every other RUNTIME
-  capability is an MCP tool
-  of the one shared connection — store-level commands (`store.*`: init, upgrade,
-  migrate, backup, activate, retire, execution restore/export) are CLI-only and
-  are not published there, because their payload is the whole store; discovery
-  marks those family members `transport: "cli"` — published one tool per command
-  family
+  capability is an MCP tool of the one shared connection — store-level commands
+  (`store.*`: init, upgrade, migrate, backup, activate, retire, execution
+  restore/export) are CLI-only and are not published there, because their
+  payload is the whole store; discovery marks those family members
+  `transport: "cli"` — published one tool per command family
   (`mcp__mstar__mstar_plan`, `mstar_workflow`, `mstar_issue`, `mstar_sdd`,
   `mstar_iteration`, `mstar_design_md`, `mstar_audit`, `mstar_compound`,
   `mstar_roles`, …) with an `action` argument selecting the member command.
