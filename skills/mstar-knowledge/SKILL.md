@@ -97,7 +97,7 @@ Full mode dispatches research subagents through the host's task tool. PM selects
 6. **Catalog** — 新文档在 `{HARNESS_DIR}/store.db` 的 catalog 中登记为 `kind=document`（`document_kind=knowledge`）：单行 `mstar catalog register`，或 reviewed `mstar catalog discover` + `mstar catalog import`；provenance/supersession 用 `mstar catalog link`（`derived-from` / `supersedes` 关系）；生命周期变更用 `mstar catalog update`（`active` / `archived` / `superseded`；revision 守卫见 help）。**不再**要求 `{KNOWLEDGE_DIR}/README.md` 索引行（README 是散文，不是登记表）。知识关联载体是 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 仅 legacy 只读，不是写入面。每篇新 doc 必须完成本 Phase
 7. **Refresh trigger** — 新知识暗示旧 doc 过时 → 推荐 `/pm compound-refresh <scope>`（不自动跑，仅 flag；维护执行 → `## Workflow — Maintain`）
 
-> **Engine check (when available):** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (or `import { validateSchemaYaml, assertKnowledgeCatalogCompleteness } from "@mstar-harness/engine"` in a host hook) to validate the frontmatter against `references/schema.yaml` (Phase 3 Write) and assert that every knowledge body under `{KNOWLEDGE_DIR}` has a catalog row (Phase 6 Catalog, contract §4). The former README index-row assert is retired: the `assertIndexRows` export refuses actionably (`compound.index.retired`) instead of passing, and the `mstar compound validate --knowledge-dir` index-row check fails for the same reason. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (or `import { validateSchemaYaml, assertKnowledgeCatalogCompleteness } from "@mstar-harness/engine"` in a host hook) to validate the frontmatter against `references/schema.yaml` (Phase 3 Write) and assert that every knowledge body under `{KNOWLEDGE_DIR}` has a catalog row (Phase 6 Catalog, contract §4). The `assertIndexRows` export refuses actionably (`compound.index.retired`) instead of passing, and the `mstar compound validate --knowledge-dir` index-row check fails for the same reason. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Workflow — Maintain
 
@@ -241,4 +241,4 @@ If `CONCEPTS.md` doesn't exist but knowledge docs contain qualifying domain term
 | 项目知识 bootstrap（absent/stale `STRATEGY.md` / `CONCEPTS.md` / `{KNOWLEDGE_DIR}`），on demand | `references/project-knowledge-bootstrap.md` |
 
 - **`mstar-conventions`** — path symbols（`{KNOWLEDGE_DIR}`、`{HARNESS_DIR}`）与产物存储 SSOT（`references/artifact-storage-paths.md`）
-- **`mstar-artifacts`** — store.db catalog 登记与生命周期（snapshot 为迁移源；project register 仅迁移历史）（README index maintenance retired）
+- **`mstar-artifacts`** — store.db catalog 登记与生命周期（snapshot 为迁移源；project register 仅迁移历史）

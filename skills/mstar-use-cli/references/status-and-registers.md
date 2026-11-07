@@ -38,7 +38,7 @@ The two retained import files — root `{HARNESS_DIR}/status.json` and workflow 
 
 The root register is a registry, not a plan store: plan rows live in `execution_plans`; open findings live in store issues.
 
-A third legacy document still exists — the project register `{PROJECT_DIR}/<project-id>/residuals.json`. It is **migration history only**: it stays readable for the migration mapping, but it is no longer a write surface, and no command maintains it (see § Open items and § Store lifecycle).
+A third legacy document still exists — the project register `{PROJECT_DIR}/<project-id>/residuals.json`. It is **migration history only**: it stays readable for the migration mapping, but it is not a write surface, and no command maintains it (see § Open items and § Store lifecycle).
 
 ## Protection levels
 
@@ -116,7 +116,7 @@ mstar store retire --manifest <path>          # moves the reviewed legacy source
 - **`activate`** is the barrier. It requires the reviewed apply receipt to be the **final** one, a compatible-consumer attestation (generated from the executing consumer's live facts plus the quiesced rows this epoch bump invalidates, or supplied explicitly as an override — never session credentials), the invoking `--operator`, and a verified backup; the state flip, the epoch increment and the receipt commit in one transaction. Ordinary mutations work only afterwards, and every command checks epoch and state.
 - **`retire`** moves the reviewed legacy registers and index sections into `{HARNESS_DIR}/archived/store-migration/<receipt-id>/` under a resumable per-item ledger, checking active identity, epoch, current paths and item state and preserving copy-before-remove ordering. Content-digest changes alone do not refuse retirement or replay. An unreviewed register path still refuses `store.legacy-write-detected`; resume uses current item/path/state facts and archive presence, not recorded-byte equality.
 
-Execution migration apply/activate/retire requests no longer take `manifestHash`, activation no longer takes `coverageDigest`, and restore no longer takes `acceptLossDigest`. Generated manifest/coverage/loss digests remain historical diagnostics only. Use current verb help for the remaining actor, authorization, identity, path, state and numeric revision inputs; no digest-confirmation flag or replacement seal is required.
+Execution migration apply/activate/retire requests take no `manifestHash`; activation takes no `coverageDigest`; restore takes no `acceptLossDigest`. Generated manifest/coverage/loss digests are historical diagnostics only. Use current verb help for the remaining actor, authorization, identity, path, state and numeric revision inputs; no digest-confirmation flag or replacement seal is required.
 
 **Execution restore.** `mstar store execution restore-preview` assesses whole-domain loss from a verified backup; `restore` uses the same live database pathname/inode and one native owning transaction to replace issue/catalog/execution/host authority with a new epoch. Trust, schema/integrity/FK safety, operator authorization, loss acknowledgement, stale-preview refusal and operation replay remain required. A verified pre-restore safety image is captured outside the mutation transaction. No live database rename, WAL/SHM removal, retained-body freeze or ordinary-file rollback is part of restore. Current verb help owns exact inputs and post-commit retry/recovery; a committed outcome is never described as mutation-free failure.
 

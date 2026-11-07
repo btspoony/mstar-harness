@@ -130,7 +130,7 @@ After writing, validate the YAML frontmatter:
 
 ### 3.5 知识文档质量门：HEAD-resolvability & prose hygiene
 
-写作完成、进入 Phase 4 前，对文档运行本质量门（writing-specialist 编辑 durable harness artifacts 时适用同一 rubric — 见 `mstar-roles/references/writing-specialist.md` Output Guidance 指针）：
+写作完成、进入 Phase 4 前，对文档运行本质量门（writing-specialist 编辑 durable harness artifacts 时适用同一 rubric — 见 `mstar-roles/references/writing-specialist.md` Output Guidance 指针）。跨面判断（代码注释、prompt、diagnostics、agent 指令等任意 surface 的 HEAD 可解析性）归 **`mstar-prose`**；本节只拥有知识文档特有的类别。
 
 - **The one test**：读者在 HEAD（无 chat transcript / dispatch prompt / 未合并草稿访问权）能否解析每个引用并验证每个声明？
 - **mstar 泄漏分类**（vantage 来自 authoring session 而非仓库现状；修剪或重述）：

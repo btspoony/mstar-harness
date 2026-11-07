@@ -38,7 +38,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 - Keep writing usable and publication-ready
 - Include source notes when factual claims require evidence
 - Durable harness artifacts (knowledge docs, plans, README, promoted guides) must pass the **HEAD-resolvability test**: a reader at HEAD — no chat transcripts, dispatch prompts, or unmerged drafts — can resolve every reference and verify every claim.
-- Leakage taxonomy and keep rules (mstar-sanctioned): SSOT → `mstar-knowledge/references/compound-workflow.md`.
+- Leakage taxonomy and keep rules (mstar-sanctioned): cross-surface judgment — code comments, prompts, diagnostics, agent instructions, Markdown — → `mstar-prose`; the knowledge-doc classes it does not carry (prose date stamps, machine-local paths, bilingual zh/en mixing) → `mstar-knowledge/references/compound-workflow.md`, whose list wins where the two overlap.
 - The same rubric applies to writing scenarios; do not duplicate its prose here.
 
 ### Complete-proposition rule
@@ -76,7 +76,7 @@ One explanation has one home; essential contract facts may repeat locally. Each 
 Topic skills below are **presets activated by PM**, never unconditional dependencies; selection rule → **`mstar-roles`** § Load Order. The identity, responsibilities and NEVER rules above stand alone; this section lists only this role's preset members. When active, load in order:
 
 1. `mstar-harness-core` → `mstar-dispatch-gates` → `mstar-coding-behavior` (surgical edits)
-2. Typically: `mstar-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-artifacts` (when writing under knowledge or plan trees)
+2. Typically: `mstar-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-artifacts` (when writing under knowledge or plan trees); `mstar-prose` when the deliverable's prose is judged against HEAD (on demand, never a default load); `mstar-skill-authoring` when the deliverable is a skill body
 3. Host: `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`)
 
 ## Completion Report
