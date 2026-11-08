@@ -133,6 +133,8 @@ Custom agent TOMLs must be regular files: Codex can discover a symlinked role bu
 
 Re-run `init --target codex --scope global` (or `project`) to install from the current `~/.mstar/harness/codex/agents/` source. Identical bytes are left untouched. A differing regular file is backed up as `<role>.toml.<uuid>.bak` before atomic replacement; a legacy symlink to the expected harness source is replaced without writing through it. Unrelated symlinks, non-file destinations, and a symlinked agent directory are refused.
 
+On upgrade, `init` moves a recognized retired Morning Star `qa-engineer.toml` shell to a UUID-suffixed `.bak` outside Codex discovery; `doctor` reports a remaining managed shell and the matching `init` command. Unrecognized or customized files and symlinks are preserved and reported: review and migrate any instructions, then move or remove the file yourself if it should no longer be selectable.
+
 `init` does not pull an existing source checkout: refresh that checkout first when upgrading agent definitions, then re-run `init`. Project iteration skill symlinks are unchanged. After `doctor --target codex --scope <global|project>` passes, have Codex invoke a named role (for example, `fullstack-dev` on a short read-only task) and confirm that it starts; role discovery alone is insufficient.
 
 Full CLI flags: the **`mstar-use-cli`** skill. `doctor` checks and the path tables: each target's own section above and [Install path layout](#install-path-layout) below.

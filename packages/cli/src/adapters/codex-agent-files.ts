@@ -109,3 +109,63 @@ export function validateCodexAgentFile(source: string, target: string, scope: st
     return [`Could not validate agent file ${target}: ${error instanceof Error ? error.message : String(error)}. ${hint}`];
   }
 }
+
+const LEGACY_QA_SHELL = /^name = "qa-engineer"\r?\ndescription = "Morning Star QA Engineer: (?:tiered L4 acceptance \(DoD mapping, residual verify, report-only\); dispatched when PM sets QA gate mandatory\.|test planning, automated tests, verification evidence, and acceptance validation\.)"\r?\ndeveloper_instructions = """\r?\nYou are the Morning Star `qa-engineer` role\.\r?\nThis Codex custom agent file is a thin routing shell, not the full role prompt\.\r?\n\r?\nMandatory first steps:\r?\n1\. Load `mstar-harness-core`\.\r?\n2\. Load `mstar-host`; detect Codex and read `references\/codex\.md`\.\r?\n3\. Load `mstar-roles` and read `references\/qa-engineer\.md`\.\r?\n\r?\nExecute the assigned QA scope personally and return Completion Report v2 with reproducible evidence\.\r?\nDo not spawn dev or QC roles unless the Assignment explicitly says `Delegation: allowed \(\.\.\.\)`\.\r?\n"""\r?\n?$/;
+
+function inspectRetiredQa(target: string): "missing" | "managed" | "unknown" {
+  checkParent(target);
+  const stat = statIfPresent(target);
+  if (!stat) return "missing";
+  if (!stat.isFile()) return "unknown";
+  const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    return LEGACY_QA_SHELL.test(fs.readFileSync(fd, "utf8")) ? "managed" : "unknown";
+  } finally { fs.closeSync(fd); }
+}
+
+function unknownQaNote(target: string): string {
+  return `Retired QA agent has unknown ownership: ${target}. Preserved it; review and migrate any custom instructions, then move or remove this file yourself if it should no longer be selectable.`;
+}
+
+export function retireCodexQaAgent(target: string, dryRun: boolean): string[] {
+  let status: "missing" | "managed" | "unknown";
+  try { status = inspectRetiredQa(target); }
+  catch (error) {
+    throw new Error(`Could not inspect retired QA agent ${target}. Check the agent directory and permissions, then re-run init: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (status === "missing") return [];
+  if (status === "unknown") return [unknownQaNote(target)];
+  if (dryRun) return [`Would retire managed QA agent outside Codex discovery with a backup: ${target}`];
+  const backup = `${target}.${randomUUID()}${BACKUP_SUFFIX}`;
+  try {
+    fs.closeSync(fs.openSync(backup, "wx", 0o600));
+    // Rename captures the actual directory entry even if it changed after inspection.
+    fs.renameSync(target, backup);
+  } catch (error) {
+    throw new Error(`Could not retire QA agent ${target}; inspect any reserved backup at ${backup}, check the directory and permissions, then re-run init: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    if (inspectRetiredQa(backup) !== "managed") {
+      try {
+        fs.linkSync(backup, target);
+        return [`QA agent changed during retirement; restored ${target} and preserved ${backup}. ${unknownQaNote(target)}`];
+      } catch (error) {
+        throw new Error(`QA agent changed during retirement; preserved it at ${backup}, but could not restore ${target}: ${error instanceof Error ? error.message : String(error)}. Review both paths and restore or migrate the backup yourself.`);
+      }
+    }
+  } catch (error) {
+    throw new Error(`Could not confirm retired QA agent; preserved captured entry at ${backup}. Review it and ${target} before re-running init: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return [`Retired managed QA agent to ${backup}; preserved its contents outside Codex discovery.`];
+}
+
+export function validateRetiredCodexQaAgent(target: string, scope: string): string[] {
+  try {
+    const status = inspectRetiredQa(target);
+    if (status === "missing") return [];
+    if (status === "unknown") return [unknownQaNote(target)];
+    return [`Retired managed QA agent is still selectable: ${target}. Run: mstar-harness init --target codex --scope ${scope}`];
+  } catch (error) {
+    return [`Could not inspect retired QA agent ${target}: ${error instanceof Error ? error.message : String(error)}. Check the agent directory and permissions, then run: mstar-harness init --target codex --scope ${scope}`];
+  }
+}
