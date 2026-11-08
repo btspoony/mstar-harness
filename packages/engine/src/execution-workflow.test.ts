@@ -59,7 +59,7 @@ import { prepareAmendmentComponent } from "../src/coordination.js";
 import { ACTIVATION_PROTOCOL_VERSION, validateActivationAttestation, type ActivationAttestation } from "../src/store-activation.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
-import { deliveryBranchOf } from "../src/workflow.js";
+import { deliveryBranchOf, deliveryEvidenceViolations, storedDeliveryEvidence } from "../src/workflow.js";
 import { integrationAnchors } from "../src/coordination-transitions.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-workflow-"));
@@ -1167,6 +1167,98 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     expect(stated).toContain("mstar workflow evidence");
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
+  test("the close persists its merge proof, so the gate passes after routine cleanup removes the checkout", async () => {
+    const fixture = await workflowFixture("merge-proof-survives-cleanup");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-proof-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    const closed = await workflowMutation(fixture, "op-proof-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the merge was proven",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+
+    // The durable record the close itself wrote, atomically with the terminal state.
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+      const delivery = (JSON.parse(row.state_json) as { delivery?: Record<string, unknown> }).delivery ?? {};
+      const proof = delivery.proof as Record<string, unknown>;
+      // Shape only: the durable facts a cleanup-surviving gate trusts, no hash
+      // comparison against anything recomputed here.
+      expect(typeof proof.target).toBe("string");
+      expect((proof.target as string).length).toBeGreaterThan(0);
+      expect(typeof proof.tip).toBe("string");
+      expect((proof.tip as string).length).toBe(40);
+      expect(typeof proof.at).toBe("string");
+    });
+
+    // Supported cleanup removes the plan checkout entirely.
+    rmSync(fixture.planPath, { recursive: true, force: true });
+    const gate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
+    expect(gate.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN")).toBeUndefined();
+  });
+
+  test("a delivery whose diff exceeds the old 1 MiB buffer still proves itself", async () => {
+    const fixture = await workflowFixture("merge-large-diff");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-large-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    // ~2 MiB of unique content: the default execFileSync buffer would have
+    // refused this close before its proof could run.
+    for (let i = 0; i < 24; i += 1) {
+      writeText(join(fixture.planPath, `bulk-${String(i).padStart(2, "0")}.txt`), `${"x".repeat(90_000)}\n${i}\n`);
+    }
+    runGit(["add", "-A"], fixture.planPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "bulk delivery"], fixture.planPath);
+    runGit(["merge", "--squash", "-q", SOURCE_BRANCH], fixture.repoRoot);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "squash the bulk delivery"], fixture.repoRoot);
+    const squash = headOf(fixture.repoRoot);
+    await workflowMutation(fixture, "op-large-commit", { kind: "delivery", delivery: { merge: { commit: squash } } });
+    const closed = await workflowMutation(fixture, "op-large-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the large squash was verified",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+  });
+
+
+  test("no write path can supply a close-owned proof, and a persisted one survives stored reads", async () => {
+    const proof = { target: "main", tip: "a".repeat(40), at: TS };
+    // (1) The caller-facing member set refuses `proof` outright.
+    const refused = deliveryEvidenceViolations({ compound: { outcome: "created" }, proof }, "delivery");
+    expect(refused.map((entry) => entry.message).join(" ")).toContain("unknown member(s) proof");
+
+    // (1b) The real write entry refuses it the same way, before any state moves.
+    const fixture = await workflowFixture("merge-proof-forgery");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    const before = await workflowFootprint(fixture.context);
+    const denied = await refusalOf(() =>
+      workflowMutation(fixture, "op-forged-proof", {
+        kind: "delivery",
+        delivery: { compound: { outcome: "created" }, proof } as unknown as Record<string, never>,
+      }),
+    );
+    expect(denied.code).toBeDefined();
+    expect(JSON.stringify({ code: denied.code, details: denied.details })).toContain("proof");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+
+    // (2) The persisted-state read accepts the close-owned shape.
+    const accepted = deliveryEvidenceViolations({ compound: { outcome: "created" }, proof }, "delivery", { allowProof: true });
+    expect(accepted).toEqual([]);
+
+    // (3) The tolerant stored read keeps the proof while stripping history.
+    const kept = storedDeliveryEvidence({
+      pr: { repo: "r", number: 1 },
+      completion: { policy: "p" },
+      merge: { provider: "github", evidence: "merged on the provider" },
+      proof,
+    }) as Record<string, unknown>;
+    expect(kept.proof).toEqual(proof);
+    expect(kept.pr).toBeUndefined();
+    expect(kept.completion).toBeUndefined();
+    expect(kept.merge).toBeUndefined();
+  });
+
 });
 
   test("a report-only close reads a stored legacy fulfilment block as history and needs no rewrite", async () => {
@@ -4436,6 +4528,69 @@ describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to run
     expect(paused.code).toBe("workflow.reopen-not-terminal");
     expect(paused.message).toContain("paused");
     expect(await workflowFootprint(active.context)).toEqual(pausedBefore);
+  });
+
+  test("a pre-\u00A74f completed snapshot recovers through reopen, a rebuilt checkout and the ordinary close", async () => {
+    const fixture = await workflowFixture("merge-legacy-rebuild");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-legacy-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    await workflowMutation(fixture, "op-legacy-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "delivery tail verified",
+    });
+
+    // Simulate the pre-\u00A74f history (no stored proof) plus routine cleanup.
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      const delivery = state.delivery as Record<string, unknown> | undefined;
+      if (delivery !== undefined) delete delivery.proof;
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+    });
+    runGit(["worktree", "remove", "--force", fixture.planPath], fixture.repoRoot);
+
+    // The gate refusal names the repair chain: rebuild the checkout, reopen.
+    const before = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
+    const fix = before.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN")?.fix ?? "";
+    expect(fix).toContain("git worktree add");
+    expect(fix).toContain("mstar workflow reopen");
+
+    // The reopen admits exactly this unproven history and nothing else.
+    const reopened = await reopenWorkflow(fixture, {
+      operationId: "op-legacy-reopen",
+      reason: "the pre-proof close must be re-proven",
+      attestation: attestation([]),
+    });
+    expect(reopened.replayed).toBe(false);
+    expect(storedHeader(fixture.context)).toMatchObject({ registered: 1, status: "running", ended_at: null });
+
+    // A completed lifecycle WITHOUT the unproven shape stays closed.
+    const stillClosed = await refusalOf(() => reopenWorkflow(fixture, {
+      operationId: "op-legacy-reopen-again",
+      reason: "a running lifecycle is not terminal",
+      attestation: attestation([]),
+    }));
+    expect(stillClosed.code).toBe("workflow.reopen-not-terminal");
+
+    // Rebuild the checkout and let the ordinary close re-prove the merge.
+    runGit(["worktree", "add", fixture.planPath, SOURCE_BRANCH], fixture.repoRoot);
+    const reclosed = await workflowMutation(fixture, "op-legacy-reclose", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the merge was re-proven",
+    });
+    expect(reclosed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+      const delivery = (JSON.parse(row.state_json) as { delivery?: Record<string, unknown> }).delivery ?? {};
+      expect(delivery.proof).toBeDefined();
+    });
+
+    // The persisted proof carries the gate with no checkout at all.
+    rmSync(fixture.planPath, { recursive: true, force: true });
+    const gate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
+    expect(gate.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN")).toBeUndefined();
   });
 
   test("a stale terminal CAS refuses without a footprint, while an omitted authorization document is generated", async () => {

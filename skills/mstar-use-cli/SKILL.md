@@ -54,7 +54,7 @@ The CLI publishes each command's owning skill itself: a refusal envelope carries
 | Register a standalone plan workflow; record delivery evidence | `mstar workflow register`, `mstar workflow evidence` |
 | Register an iteration workflow | `mstar iteration register` |
 | Close one finished lifecycle (terminal workflow state + root unregister in the current authority) | `mstar status workflow-close` |
-| Return a `failed`/`stopped` lifecycle to `running` on the same id under explicit operator authorization (`completed` is never reopened) | `mstar workflow reopen` |
+| Return a `failed`/`stopped` lifecycle to `running` on the same id under explicit operator authorization (`completed` reopens only to re-prove its merge) | `mstar workflow reopen` |
 | Validate a coordination document before trusting or replacing it | `mstar status validate` |
 | Read the open-issue rollup; enforce a plan's findings-cleanup mode over the issues linked to it | `mstar status tech-debt`, `mstar status findings-cleanup` |
 | Initialize a fresh issue/catalog store; upgrade/import recognizable execution state and activate authority; or run staged migration, backup, activation and retirement | the `store` group (`init` / `upgrade` / `migrate` / `backup` / `activate` / `retire`) |
