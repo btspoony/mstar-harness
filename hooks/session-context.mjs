@@ -2179,10 +2179,10 @@ function resolveAll(constructs2, events, context) {
   const called = [];
   let index = -1;
   while (++index < constructs2.length) {
-    const resolve26 = constructs2[index].resolveAll;
-    if (resolve26 && !called.includes(resolve26)) {
-      events = resolve26(events, context);
-      called.push(resolve26);
+    const resolve32 = constructs2[index].resolveAll;
+    if (resolve32 && !called.includes(resolve32)) {
+      events = resolve32(events, context);
+      called.push(resolve32);
     }
   }
   return events;
@@ -2663,7 +2663,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
     effects.exit(types.codeFenced);
     return ok2(code);
   }
-  function tokenizeCloseStart(effects2, ok22, nok2) {
+  function tokenizeCloseStart(effects2, ok3, nok2) {
     let size = 0;
     return startBefore;
     function startBefore(code) {
@@ -2700,7 +2700,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
     function sequenceCloseAfter(code) {
       if (code === codes.eof || markdownLineEnding(code)) {
         effects2.exit(types.codeFencedFence);
-        return ok22(code);
+        return ok3(code);
       }
       return nok2(code);
     }
@@ -2738,8 +2738,8 @@ function tokenizeCodeIndented(effects, ok2, nok) {
 }
 function tokenizeFurtherStart(effects, ok2, nok) {
   const self = this;
-  return furtherStart;
-  function furtherStart(code) {
+  return furtherStart2;
+  function furtherStart2(code) {
     if (self.parser.lazy[self.now().line]) {
       return nok(code);
     }
@@ -2747,12 +2747,12 @@ function tokenizeFurtherStart(effects, ok2, nok) {
       effects.enter(types.lineEnding);
       effects.consume(code);
       effects.exit(types.lineEnding);
-      return furtherStart;
+      return furtherStart2;
     }
     return factorySpaceMinMax(effects, ok2, onNotEnoughPrefix, types.linePrefix, constants.tabSize, constants.tabSize)(code);
   }
   function onNotEnoughPrefix(code) {
-    return markdownLineEnding(code) ? furtherStart(code) : nok(code);
+    return markdownLineEnding(code) ? furtherStart2(code) : nok(code);
   }
 }
 function resolveCodeText(events) {
@@ -3422,8 +3422,8 @@ function tokenizeDefinition(effects, ok2, nok) {
   }
 }
 function tokenizeTitleBefore(effects, ok2, nok) {
-  return titleBefore;
-  function titleBefore(code) {
+  return titleBefore2;
+  function titleBefore2(code) {
     return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, beforeMarker)(code) : nok(code);
   }
   function beforeMarker(code) {
@@ -4750,10 +4750,10 @@ function initializeFactory(field) {
   function initializeText(effects) {
     const self = this;
     const constructs2 = this.parser.constructs[field];
-    const text = effects.attempt(constructs2, start, notText);
+    const text2 = effects.attempt(constructs2, start, notText);
     return start;
     function start(code) {
-      return atBreak(code) ? text(code) : notText(code);
+      return atBreak(code) ? text2(code) : notText(code);
     }
     function notText(code) {
       if (code === codes.eof) {
@@ -4767,7 +4767,7 @@ function initializeFactory(field) {
     function data(code) {
       if (atBreak(code)) {
         effects.exit(types.data);
-        return text(code);
+        return text2(code);
       }
       effects.consume(code);
       return data;
@@ -6176,7 +6176,7 @@ function visitParents(tree, test, visitor, reverse) {
   } else {
     check = test;
   }
-  const is = convert(check);
+  const is2 = convert(check);
   const step = reverse ? -1 : 1;
   factory(tree, undefined, [])();
   function factory(node2, index2, parents) {
@@ -6193,7 +6193,7 @@ function visitParents(tree, test, visitor, reverse) {
       let subresult;
       let offset;
       let grandparents;
-      if (!test || is(node2, index2, parents[parents.length - 1] || undefined)) {
+      if (!test || is2(node2, index2, parents[parents.length - 1] || undefined)) {
         result = toResult(visitor(node2, parents));
         if (result[0] === EXIT) {
           return result;
@@ -6655,65 +6655,65 @@ function tokenizeEmailAutolink(effects, ok3, nok) {
   let dot;
   let data;
   return start;
-  function start(code) {
-    if (!gfmAtext(code) || !previousEmail.call(self, self.previous) || previousUnbalanced(self.events)) {
-      return nok(code);
+  function start(code2) {
+    if (!gfmAtext(code2) || !previousEmail.call(self, self.previous) || previousUnbalanced(self.events)) {
+      return nok(code2);
     }
     effects.enter("literalAutolink");
     effects.enter("literalAutolinkEmail");
-    return atext(code);
+    return atext(code2);
   }
-  function atext(code) {
-    if (gfmAtext(code)) {
-      effects.consume(code);
+  function atext(code2) {
+    if (gfmAtext(code2)) {
+      effects.consume(code2);
       return atext;
     }
-    if (code === codes.atSign) {
-      effects.consume(code);
+    if (code2 === codes.atSign) {
+      effects.consume(code2);
       return emailDomain;
     }
-    return nok(code);
+    return nok(code2);
   }
-  function emailDomain(code) {
-    if (code === codes.dot) {
-      return effects.check(emailDomainDotTrail, emailDomainAfter, emailDomainDot)(code);
+  function emailDomain(code2) {
+    if (code2 === codes.dot) {
+      return effects.check(emailDomainDotTrail, emailDomainAfter, emailDomainDot)(code2);
     }
-    if (code === codes.dash || code === codes.underscore || asciiAlphanumeric(code)) {
+    if (code2 === codes.dash || code2 === codes.underscore || asciiAlphanumeric(code2)) {
       data = true;
-      effects.consume(code);
+      effects.consume(code2);
       return emailDomain;
     }
-    return emailDomainAfter(code);
+    return emailDomainAfter(code2);
   }
-  function emailDomainDot(code) {
-    effects.consume(code);
+  function emailDomainDot(code2) {
+    effects.consume(code2);
     dot = true;
     return emailDomain;
   }
-  function emailDomainAfter(code) {
+  function emailDomainAfter(code2) {
     if (data && dot && asciiAlpha(self.previous)) {
       effects.exit("literalAutolinkEmail");
       effects.exit("literalAutolink");
-      return ok3(code);
+      return ok3(code2);
     }
-    return nok(code);
+    return nok(code2);
   }
 }
 function tokenizeWwwAutolink(effects, ok3, nok) {
   const self = this;
   return wwwStart;
-  function wwwStart(code) {
-    if (code !== codes.uppercaseW && code !== codes.lowercaseW || !previousWww.call(self, self.previous) || previousUnbalanced(self.events)) {
-      return nok(code);
+  function wwwStart(code2) {
+    if (code2 !== codes.uppercaseW && code2 !== codes.lowercaseW || !previousWww.call(self, self.previous) || previousUnbalanced(self.events)) {
+      return nok(code2);
     }
     effects.enter("literalAutolink");
     effects.enter("literalAutolinkWww");
-    return effects.check(wwwPrefix, effects.attempt(domain, effects.attempt(path, wwwAfter), nok), nok)(code);
+    return effects.check(wwwPrefix, effects.attempt(domain, effects.attempt(path, wwwAfter), nok), nok)(code2);
   }
-  function wwwAfter(code) {
+  function wwwAfter(code2) {
     effects.exit("literalAutolinkWww");
     effects.exit("literalAutolink");
-    return ok3(code);
+    return ok3(code2);
   }
 }
 function tokenizeProtocolAutolink(effects, ok3, nok) {
@@ -6721,68 +6721,68 @@ function tokenizeProtocolAutolink(effects, ok3, nok) {
   let buffer = "";
   let seen = false;
   return protocolStart;
-  function protocolStart(code) {
-    if ((code === codes.uppercaseH || code === codes.lowercaseH) && previousProtocol.call(self, self.previous) && !previousUnbalanced(self.events)) {
+  function protocolStart(code2) {
+    if ((code2 === codes.uppercaseH || code2 === codes.lowercaseH) && previousProtocol.call(self, self.previous) && !previousUnbalanced(self.events)) {
       effects.enter("literalAutolink");
       effects.enter("literalAutolinkHttp");
-      buffer += String.fromCodePoint(code);
-      effects.consume(code);
+      buffer += String.fromCodePoint(code2);
+      effects.consume(code2);
       return protocolPrefixInside;
     }
-    return nok(code);
+    return nok(code2);
   }
-  function protocolPrefixInside(code) {
-    if (asciiAlpha(code) && buffer.length < 5) {
-      buffer += String.fromCodePoint(code);
-      effects.consume(code);
+  function protocolPrefixInside(code2) {
+    if (asciiAlpha(code2) && buffer.length < 5) {
+      buffer += String.fromCodePoint(code2);
+      effects.consume(code2);
       return protocolPrefixInside;
     }
-    if (code === codes.colon) {
+    if (code2 === codes.colon) {
       const protocol = buffer.toLowerCase();
       if (protocol === "http" || protocol === "https") {
-        effects.consume(code);
+        effects.consume(code2);
         return protocolSlashesInside;
       }
     }
-    return nok(code);
+    return nok(code2);
   }
-  function protocolSlashesInside(code) {
-    if (code === codes.slash) {
-      effects.consume(code);
+  function protocolSlashesInside(code2) {
+    if (code2 === codes.slash) {
+      effects.consume(code2);
       if (seen) {
         return afterProtocol;
       }
       seen = true;
       return protocolSlashesInside;
     }
-    return nok(code);
+    return nok(code2);
   }
-  function afterProtocol(code) {
-    return code === codes.eof || asciiControl(code) || markdownLineEndingOrSpace(code) || unicodeWhitespace(code) || unicodePunctuation(code) ? nok(code) : effects.attempt(domain, effects.attempt(path, protocolAfter), nok)(code);
+  function afterProtocol(code2) {
+    return code2 === codes.eof || asciiControl(code2) || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2) || unicodePunctuation(code2) ? nok(code2) : effects.attempt(domain, effects.attempt(path, protocolAfter), nok)(code2);
   }
-  function protocolAfter(code) {
+  function protocolAfter(code2) {
     effects.exit("literalAutolinkHttp");
     effects.exit("literalAutolink");
-    return ok3(code);
+    return ok3(code2);
   }
 }
 function tokenizeWwwPrefix(effects, ok3, nok) {
   let size = 0;
   return wwwPrefixInside;
-  function wwwPrefixInside(code) {
-    if ((code === codes.uppercaseW || code === codes.lowercaseW) && size < 3) {
+  function wwwPrefixInside(code2) {
+    if ((code2 === codes.uppercaseW || code2 === codes.lowercaseW) && size < 3) {
       size++;
-      effects.consume(code);
+      effects.consume(code2);
       return wwwPrefixInside;
     }
-    if (code === codes.dot && size === 3) {
-      effects.consume(code);
+    if (code2 === codes.dot && size === 3) {
+      effects.consume(code2);
       return wwwPrefixAfter;
     }
-    return nok(code);
+    return nok(code2);
   }
-  function wwwPrefixAfter(code) {
-    return code === codes.eof ? nok(code) : ok3(code);
+  function wwwPrefixAfter(code2) {
+    return code2 === codes.eof ? nok(code2) : ok3(code2);
   }
 }
 function tokenizeDomain(effects, ok3, nok) {
@@ -6790,126 +6790,126 @@ function tokenizeDomain(effects, ok3, nok) {
   let underscoreInLastLastSegment;
   let seen;
   return domainInside;
-  function domainInside(code) {
-    if (code === codes.dot || code === codes.underscore) {
-      return effects.check(trail, domainAfter, domainAtPunctuation)(code);
+  function domainInside(code2) {
+    if (code2 === codes.dot || code2 === codes.underscore) {
+      return effects.check(trail, domainAfter, domainAtPunctuation)(code2);
     }
-    if (code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code) || code !== codes.dash && unicodePunctuation(code)) {
-      return domainAfter(code);
+    if (code2 === codes.eof || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2) || code2 !== codes.dash && unicodePunctuation(code2)) {
+      return domainAfter(code2);
     }
     seen = true;
-    effects.consume(code);
+    effects.consume(code2);
     return domainInside;
   }
-  function domainAtPunctuation(code) {
-    if (code === codes.underscore) {
+  function domainAtPunctuation(code2) {
+    if (code2 === codes.underscore) {
       underscoreInLastSegment = true;
     } else {
       underscoreInLastLastSegment = underscoreInLastSegment;
       underscoreInLastSegment = undefined;
     }
-    effects.consume(code);
+    effects.consume(code2);
     return domainInside;
   }
-  function domainAfter(code) {
+  function domainAfter(code2) {
     if (underscoreInLastLastSegment || underscoreInLastSegment || !seen) {
-      return nok(code);
+      return nok(code2);
     }
-    return ok3(code);
+    return ok3(code2);
   }
 }
 function tokenizePath(effects, ok3) {
   let sizeOpen = 0;
   let sizeClose = 0;
   return pathInside;
-  function pathInside(code) {
-    if (code === codes.leftParenthesis) {
+  function pathInside(code2) {
+    if (code2 === codes.leftParenthesis) {
       sizeOpen++;
-      effects.consume(code);
+      effects.consume(code2);
       return pathInside;
     }
-    if (code === codes.rightParenthesis && sizeClose < sizeOpen) {
-      return pathAtPunctuation(code);
+    if (code2 === codes.rightParenthesis && sizeClose < sizeOpen) {
+      return pathAtPunctuation(code2);
     }
-    if (code === codes.exclamationMark || code === codes.quotationMark || code === codes.ampersand || code === codes.apostrophe || code === codes.rightParenthesis || code === codes.asterisk || code === codes.comma || code === codes.dot || code === codes.colon || code === codes.semicolon || code === codes.lessThan || code === codes.questionMark || code === codes.rightSquareBracket || code === codes.underscore || code === codes.tilde) {
-      return effects.check(trail, ok3, pathAtPunctuation)(code);
+    if (code2 === codes.exclamationMark || code2 === codes.quotationMark || code2 === codes.ampersand || code2 === codes.apostrophe || code2 === codes.rightParenthesis || code2 === codes.asterisk || code2 === codes.comma || code2 === codes.dot || code2 === codes.colon || code2 === codes.semicolon || code2 === codes.lessThan || code2 === codes.questionMark || code2 === codes.rightSquareBracket || code2 === codes.underscore || code2 === codes.tilde) {
+      return effects.check(trail, ok3, pathAtPunctuation)(code2);
     }
-    if (code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
-      return ok3(code);
+    if (code2 === codes.eof || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2)) {
+      return ok3(code2);
     }
-    effects.consume(code);
+    effects.consume(code2);
     return pathInside;
   }
-  function pathAtPunctuation(code) {
-    if (code === codes.rightParenthesis) {
+  function pathAtPunctuation(code2) {
+    if (code2 === codes.rightParenthesis) {
       sizeClose++;
     }
-    effects.consume(code);
+    effects.consume(code2);
     return pathInside;
   }
 }
 function tokenizeTrail(effects, ok3, nok) {
-  return trail;
-  function trail(code) {
-    if (code === codes.exclamationMark || code === codes.quotationMark || code === codes.apostrophe || code === codes.rightParenthesis || code === codes.asterisk || code === codes.comma || code === codes.dot || code === codes.colon || code === codes.semicolon || code === codes.questionMark || code === codes.underscore || code === codes.tilde) {
-      effects.consume(code);
-      return trail;
+  return trail2;
+  function trail2(code2) {
+    if (code2 === codes.exclamationMark || code2 === codes.quotationMark || code2 === codes.apostrophe || code2 === codes.rightParenthesis || code2 === codes.asterisk || code2 === codes.comma || code2 === codes.dot || code2 === codes.colon || code2 === codes.semicolon || code2 === codes.questionMark || code2 === codes.underscore || code2 === codes.tilde) {
+      effects.consume(code2);
+      return trail2;
     }
-    if (code === codes.ampersand) {
-      effects.consume(code);
+    if (code2 === codes.ampersand) {
+      effects.consume(code2);
       return trailCharacterReferenceStart;
     }
-    if (code === codes.rightSquareBracket) {
-      effects.consume(code);
+    if (code2 === codes.rightSquareBracket) {
+      effects.consume(code2);
       return trailBracketAfter;
     }
-    if (code === codes.lessThan || code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
-      return ok3(code);
+    if (code2 === codes.lessThan || code2 === codes.eof || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2)) {
+      return ok3(code2);
     }
-    return nok(code);
+    return nok(code2);
   }
-  function trailBracketAfter(code) {
-    if (code === codes.eof || code === codes.leftParenthesis || code === codes.leftSquareBracket || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
-      return ok3(code);
+  function trailBracketAfter(code2) {
+    if (code2 === codes.eof || code2 === codes.leftParenthesis || code2 === codes.leftSquareBracket || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2)) {
+      return ok3(code2);
     }
-    return trail(code);
+    return trail2(code2);
   }
-  function trailCharacterReferenceStart(code) {
-    return asciiAlpha(code) ? trailCharacterReferenceInside(code) : nok(code);
+  function trailCharacterReferenceStart(code2) {
+    return asciiAlpha(code2) ? trailCharacterReferenceInside(code2) : nok(code2);
   }
-  function trailCharacterReferenceInside(code) {
-    if (code === codes.semicolon) {
-      effects.consume(code);
-      return trail;
+  function trailCharacterReferenceInside(code2) {
+    if (code2 === codes.semicolon) {
+      effects.consume(code2);
+      return trail2;
     }
-    if (asciiAlpha(code)) {
-      effects.consume(code);
+    if (asciiAlpha(code2)) {
+      effects.consume(code2);
       return trailCharacterReferenceInside;
     }
-    return nok(code);
+    return nok(code2);
   }
 }
 function tokenizeEmailDomainDotTrail(effects, ok3, nok) {
   return start;
-  function start(code) {
-    effects.consume(code);
+  function start(code2) {
+    effects.consume(code2);
     return after;
   }
-  function after(code) {
-    return asciiAlphanumeric(code) ? nok(code) : ok3(code);
+  function after(code2) {
+    return asciiAlphanumeric(code2) ? nok(code2) : ok3(code2);
   }
 }
-function previousWww(code) {
-  return code === codes.eof || code === codes.leftParenthesis || code === codes.asterisk || code === codes.underscore || code === codes.leftSquareBracket || code === codes.rightSquareBracket || code === codes.tilde || markdownLineEndingOrSpace(code);
+function previousWww(code2) {
+  return code2 === codes.eof || code2 === codes.leftParenthesis || code2 === codes.asterisk || code2 === codes.underscore || code2 === codes.leftSquareBracket || code2 === codes.rightSquareBracket || code2 === codes.tilde || markdownLineEndingOrSpace(code2);
 }
-function previousProtocol(code) {
-  return !asciiAlpha(code);
+function previousProtocol(code2) {
+  return !asciiAlpha(code2);
 }
-function previousEmail(code) {
-  return !(code === codes.slash || gfmAtext(code));
+function previousEmail(code2) {
+  return !(code2 === codes.slash || gfmAtext(code2));
 }
-function gfmAtext(code) {
-  return code === codes.plusSign || code === codes.dash || code === codes.dot || code === codes.underscore || asciiAlphanumeric(code);
+function gfmAtext(code2) {
+  return code2 === codes.plusSign || code2 === codes.dash || code2 === codes.dot || code2 === codes.underscore || asciiAlphanumeric(code2);
 }
 function previousUnbalanced(events) {
   let index2 = events.length;
@@ -6954,7 +6954,7 @@ function gfmFootnote() {
     }
   };
 }
-function tokenizePotentialGfmFootnoteCall(effects, ok22, nok) {
+function tokenizePotentialGfmFootnoteCall(effects, ok3, nok) {
   const self = this;
   let index2 = self.events.length;
   const defined = self.parser.gfmFootnotes || (self.parser.gfmFootnotes = []);
@@ -6982,7 +6982,7 @@ function tokenizePotentialGfmFootnoteCall(effects, ok22, nok) {
     effects.enter("gfmFootnoteCallLabelMarker");
     effects.consume(code2);
     effects.exit("gfmFootnoteCallLabelMarker");
-    return ok22(code2);
+    return ok3(code2);
   }
 }
 function resolveToPotentialGfmFootnoteCall(events, context) {
@@ -7040,7 +7040,7 @@ function resolveToPotentialGfmFootnoteCall(events, context) {
   events.splice(index2, events.length - index2 + 1, ...replacement);
   return events;
 }
-function tokenizeGfmFootnoteCall(effects, ok22, nok) {
+function tokenizeGfmFootnoteCall(effects, ok3, nok) {
   const self = this;
   const defined = self.parser.gfmFootnotes || (self.parser.gfmFootnotes = []);
   let size = 0;
@@ -7078,7 +7078,7 @@ function tokenizeGfmFootnoteCall(effects, ok22, nok) {
       effects.consume(code2);
       effects.exit("gfmFootnoteCallLabelMarker");
       effects.exit("gfmFootnoteCall");
-      return ok22;
+      return ok3;
     }
     if (!markdownLineEndingOrSpace(code2)) {
       data = true;
@@ -7096,7 +7096,7 @@ function tokenizeGfmFootnoteCall(effects, ok22, nok) {
     return callData(code2);
   }
 }
-function tokenizeDefinitionStart(effects, ok22, nok) {
+function tokenizeDefinitionStart(effects, ok3, nok) {
   const self = this;
   const defined = self.parser.gfmFootnotes || (self.parser.gfmFootnotes = []);
   let identifier;
@@ -7165,7 +7165,7 @@ function tokenizeDefinitionStart(effects, ok22, nok) {
     return nok(code2);
   }
   function whitespaceAfter(code2) {
-    return ok22(code2);
+    return ok3(code2);
   }
 }
 function tokenizeDefinitionContinuation(effects, ok3, nok) {
@@ -7248,7 +7248,7 @@ function gfmStrikethrough(options) {
     }
     return events;
   }
-  function tokenizeStrikethrough(effects, ok22, nok) {
+  function tokenizeStrikethrough(effects, ok3, nok) {
     const previous3 = this.previous;
     const events = this.events;
     let size = 0;
@@ -7276,7 +7276,7 @@ function gfmStrikethrough(options) {
       const after = classifyCharacter(code2);
       token._open = !after || after === constants.attentionSideAfter && Boolean(before);
       token._close = !before || before === constants.attentionSideAfter && Boolean(after);
-      return ok22(code2);
+      return ok3(code2);
     }
   }
 }
@@ -7363,7 +7363,7 @@ function gfmTable() {
     }
   };
 }
-function tokenizeTable(effects, ok22, nok) {
+function tokenizeTable(effects, ok3, nok) {
   const self = this;
   let size = 0;
   let sizeB = 0;
@@ -7537,7 +7537,7 @@ function tokenizeTable(effects, ok22, nok) {
       }
       effects.exit("tableDelimiterRow");
       effects.exit("tableHead");
-      return ok22(code2);
+      return ok3(code2);
     }
     return headDelimiterNok(code2);
   }
@@ -7557,7 +7557,7 @@ function tokenizeTable(effects, ok22, nok) {
     }
     if (code2 === codes.eof || markdownLineEnding(code2)) {
       effects.exit("tableRow");
-      return ok22(code2);
+      return ok3(code2);
     }
     if (markdownSpace(code2)) {
       return factorySpace(effects, bodyRowBreak, types.whitespace)(code2);
@@ -7745,7 +7745,7 @@ function gfmTaskListItem() {
     text: { [codes.leftSquareBracket]: tasklistCheck }
   };
 }
-function tokenizeTasklistCheck(effects, ok22, nok) {
+function tokenizeTasklistCheck(effects, ok3, nok) {
   const self = this;
   return open;
   function open(code2) {
@@ -7786,10 +7786,10 @@ function tokenizeTasklistCheck(effects, ok22, nok) {
   }
   function after(code2) {
     if (markdownLineEnding(code2)) {
-      return ok22(code2);
+      return ok3(code2);
     }
     if (markdownSpace(code2)) {
-      return effects.check({ tokenize: spaceThenNonSpace }, ok22, nok)(code2);
+      return effects.check({ tokenize: spaceThenNonSpace }, ok3, nok)(code2);
     }
     return nok(code2);
   }
@@ -13983,6 +13983,10 @@ function bindRecoveredSession(tx, input) {
   tx.db.prepare("update execution_sessions set state='active', epoch=?, revision=?, bound_at=? where workflow_id=? and role='coordinator' and session_id=?").run(input.epoch, revision, input.now, input.workflowId, input.sessionId);
   return revision;
 }
+function claimIntegrationMergeLease(tx, input) {
+  const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
+  tx.db.prepare("insert or replace into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, ?, ?, ?)").run(input.workflowId, existing === null ? 1 : existing.revision + 1, tx.epoch, JSON.stringify({ ...input.lease, status: "held" }));
+}
 function releaseIntegrationMergeLease(tx, input) {
   const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
   if (existing === null || existing.status === "released")
@@ -15111,11 +15115,11 @@ function requireCaptureSeat(actor) {
   }
 }
 async function readScopedSession(context, sessionRefWire) {
-  await Promise.resolve().then(() => init_execution_session());
+  const { decodeExecutionSessionRef: decodeExecutionSessionRef2, resumeExecutionSession: resumeExecutionSession2 } = await Promise.resolve().then(() => (init_execution_session(), exports_execution_session));
   let sessionRef2;
   if (sessionRefWire !== undefined) {
     try {
-      sessionRef2 = decodeExecutionSessionRef(sessionRefWire);
+      sessionRef2 = decodeExecutionSessionRef2(sessionRefWire);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new IssueError("issue.scope-refused", `${message}. Obtain the current ACTIVE coordinator identity and retry; file-envelope inputs are not accepted. --session-ref is an optional checked constraint.`);
@@ -15125,7 +15129,7 @@ async function readScopedSession(context, sessionRefWire) {
     }
   }
   try {
-    return (await resumeExecutionSession(context, sessionRef2)).data;
+    return (await resumeExecutionSession2(context, sessionRef2)).data;
   } catch (error) {
     if (error instanceof IssueError)
       throw error;
@@ -17341,8 +17345,8 @@ function nowRfc33393() {
   return new Date().toISOString();
 }
 async function withJournalWrite(context, fn) {
-  await Promise.resolve().then(() => init_execution_store());
-  return await withExecutionTransaction(context, (tx) => {
+  const { withExecutionTransaction: withExecutionTransaction2 } = await Promise.resolve().then(() => (init_execution_store(), exports_execution_store));
+  return await withExecutionTransaction2(context, (tx) => {
     assertStoreActive(tx.db);
     return fn(tx.db, { storeId: tx.storeId, epoch: tx.epoch });
   });
@@ -18273,8 +18277,8 @@ function prepareAmendmentComponent(kind, value) {
   return kind === "append" ? `append plan ${value}` : kind === "correct-plan-file" ? `correct-plan-file ${value}` : `${kind} ${value}`;
 }
 async function validatedActivationAttestation(value) {
-  await Promise.resolve().then(() => init_store_activation());
-  return validateActivationAttestation(value);
+  const { validateActivationAttestation: validateActivationAttestation2 } = await Promise.resolve().then(() => (init_store_activation(), exports_store_activation));
+  return validateActivationAttestation2(value);
 }
 function parsedInstant(value) {
   if (typeof value !== "string" || value === "")
@@ -28159,7 +28163,7 @@ async function readCompassRefEvidence(context, workflowId, operation) {
     throw invalidWorkflowTransition(`workflow ${workflowId} records type ${JSON.stringify(header.type)}, which carries no reviewed delivery compass; a compass_ref is repaired only on an iteration workflow`, { workflow_id: workflowId, type: header.type });
   }
   const harnessRoot = controlHarnessRoot2(context);
-  const relative5 = normalizeIterationCompassRef(operation.compassPath, harnessRoot, (detail) => invalidWorkflowInput(detail));
+  const relative112 = normalizeIterationCompassRef(operation.compassPath, harnessRoot, (detail) => invalidWorkflowInput(detail));
   const path2 = canonicalizeNearestExisting(isAbsolute18(operation.compassPath) ? operation.compassPath : join31(harnessRoot, operation.compassPath));
   const text6 = readFileSync24(path2, "utf8");
   if (text6.trim() === "") {
@@ -28188,7 +28192,7 @@ async function readCompassRefEvidence(context, workflowId, operation) {
   if (doc.iteration_id !== workflowId) {
     throw new CoordinationError("coordination.scope-mismatch", "the named compass belongs to a different iteration than the addressed workflow; name this workflow's own reviewed delivery compass, then retry through mstar workflow compass-ref.", { workflow_id: workflowId, compass_path: path2, compass_iteration_id: String(doc.iteration_id) });
   }
-  return { compassRef: { path: path2, relative: relative5 } };
+  return { compassRef: { path: path2, relative: relative112 } };
 }
 async function readWorkflowEvidence(context, resolved) {
   const operation = resolved.call.operation;
@@ -33435,17 +33439,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
       configurable: true,
       set: __exportSetter2.bind(all, name)
     });
-}, __esm2 = (fn, res, err) => () => {
-  if (fn)
-    try {
-      res = fn(fn = 0);
-    } catch (e) {
-      err = [e];
-    }
-  if (err)
-    throw err[0];
-  return res;
-}, CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, ENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at, source_hash", LINK_COLUMNS = "from_kind, from_id, relation, to_kind, to_id, ordinal", LINK_ORDER = "order by from_kind asc, from_id asc, relation asc, to_kind asc, to_id asc", init_catalog, MSTARC_FILE = ".mstarc", MSTARC_SECTION = "config", LINEAR_SECTION = "linear", LINEAR_MAPPING_SECTION = "linear.mapping", MSTARC_HARNESS_DIR_KEY = "harness_dir", MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, convert = function(test) {
+}, __esm2 = (fn, res) => () => (fn && (res = fn(fn = 0)), res), CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, ENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at, source_hash", LINK_COLUMNS = "from_kind, from_id, relation, to_kind, to_id, ordinal", LINK_ORDER = "order by from_kind asc, from_id asc, relation asc, to_kind asc, to_id asc", init_catalog, MSTARC_FILE = ".mstarc", MSTARC_SECTION = "config", LINEAR_SECTION = "linear", LINEAR_MAPPING_SECTION = "linear.mapping", MSTARC_HARNESS_DIR_KEY = "harness_dir", MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, convert = function(test) {
   if (test === null || test === undefined) {
     return ok2;
   }
@@ -33459,7 +33453,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
     return typeFactory(test);
   }
   throw new Error("Expected function, string, or object as test");
-}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, ACTIVATION_PROTOCOL_VERSION = 1, init_core, DEFAULT_PROBE_TIMEOUT_MS = 1e4, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, init_activation_provisioning, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
+}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, ACTIVATION_PROTOCOL_VERSION = 1, init_core, DEFAULT_PROBE_TIMEOUT_MS = 1e4, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, init_activation_provisioning, exports_store_activation, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
@@ -37739,6 +37733,28 @@ var init_engine = __esm(() => {
   init_activation_provisioning = __esm2(() => {
     init_core();
   });
+  exports_store_activation = {};
+  __export2(exports_store_activation, {
+    ACTIVATION_PROTOCOL_VERSION: () => ACTIVATION_PROTOCOL_VERSION,
+    BACKUP_RECEIPT_VERSION: () => BACKUP_RECEIPT_VERSION,
+    CONSUMER_KINDS: () => CONSUMER_KINDS,
+    DISPOSITIONS: () => DISPOSITIONS,
+    SESSION_STATES: () => SESSION_STATES,
+    StoreActivationError: () => StoreActivationError,
+    activateStore: () => activateStore,
+    activationReceiptFor: () => activationReceiptFor,
+    appliedReceiptFor: () => appliedReceiptFor,
+    assertAuthorityCurrent: () => assertAuthorityCurrent,
+    assertBackupDescribesStore: () => assertBackupDescribesStore,
+    backupStore: () => backupStore,
+    canonicalPath: () => canonicalPath,
+    currentAuthorityHandle: () => currentAuthorityHandle,
+    inspectBackupCopy: () => inspectBackupCopy,
+    isPathWithin: () => isPathWithin,
+    retireStoreSources: () => retireStoreSources,
+    validateActivationAttestation: () => validateActivationAttestation,
+    validateRecoveryAttestation: () => validateRecoveryAttestation
+  });
   init_store_activation = __esm2(() => {
     init_catalog();
     init_catalog_import();
@@ -37763,6 +37779,61 @@ var init_engine = __esm(() => {
       "excluded:superseded-binary": true
     };
     SESSION_STATES = { stopped: true, reloaded: true };
+  });
+  exports_execution_store = {};
+  __export2(exports_execution_store, {
+    ExecutionError: () => ExecutionError,
+    adoptTerminalWorkflow: () => adoptTerminalWorkflow,
+    advancePlanOperationRevisions: () => advancePlanOperationRevisions,
+    advanceWorkflowHeaderRevision: () => advanceWorkflowHeaderRevision,
+    assertAuthorityGeneration: () => assertAuthorityGeneration,
+    assertExecutionToken: () => assertExecutionToken,
+    assertOperationId: () => assertOperationId,
+    bindExecutionSession: () => bindExecutionSession,
+    bindRecoveredSession: () => bindRecoveredSession,
+    claimIntegrationMergeLease: () => claimIntegrationMergeLease,
+    createExecutionWorkflow: () => createExecutionWorkflow,
+    executionRootTokenOf: () => executionRootTokenOf,
+    executionToken: () => executionToken,
+    initializeExecutionAuthority: () => initializeExecutionAuthority,
+    parseExecutionToken: () => parseExecutionToken,
+    pruneWorkflowOperationReceipts: () => pruneWorkflowOperationReceipts,
+    readExecutionCleanupSnapshots: () => readExecutionCleanupSnapshots,
+    readExecutionPlan: () => readExecutionPlan,
+    readExecutionPlanAdmission: () => readExecutionPlanAdmission,
+    readExecutionPlanWitness: () => readExecutionPlanWitness,
+    readExecutionSealedInput: () => readExecutionSealedInput,
+    readExecutionSession: () => readExecutionSession,
+    readExecutionState: () => readExecutionState,
+    readExecutionStateGraph: () => readExecutionStateGraph,
+    readExecutionWorkflowWitness: () => readExecutionWorkflowWitness,
+    readLiveSessionIdentities: () => readLiveSessionIdentities,
+    readOperationReplay: () => readOperationReplay,
+    readOwnExecutionSession: () => readOwnExecutionSession,
+    readPlanOperationReplay: () => readPlanOperationReplay,
+    readPlanOperationReplayBeforeProof: () => readPlanOperationReplayBeforeProof,
+    readWorkflowOperationReplayBeforeProof: () => readWorkflowOperationReplayBeforeProof,
+    readWorkflowSessionRows: () => readWorkflowSessionRows,
+    recordRootMembershipLoss: () => recordRootMembershipLoss,
+    releaseIntegrationMergeLease: () => releaseIntegrationMergeLease,
+    requireWorkflowState: () => requireWorkflowState,
+    resolveCreateWorkflow: () => resolveCreateWorkflow,
+    resolvePlanRead: () => resolvePlanRead,
+    resolveTokenFreshness: () => resolveTokenFreshness,
+    resolveWorkflowSession: () => resolveWorkflowSession,
+    resolveWorkflowWrite: () => resolveWorkflowWrite,
+    revokeSessionRow: () => revokeSessionRow,
+    semanticRequestHash: () => semanticRequestHash,
+    serializeExecutionValue: () => serializeExecutionValue,
+    suppliedCatalogPin: () => suppliedCatalogPin,
+    withExecutionTransaction: () => withExecutionTransaction,
+    withRecoveryDetails: () => withRecoveryDetails,
+    writeExecutionCreation: () => writeExecutionCreation,
+    writeExecutionInputPin: () => writeExecutionInputPin,
+    writeOperationReceipt: () => writeOperationReceipt,
+    writePlanCoordinationRow: () => writePlanCoordinationRow,
+    writePlanOperationReceipt: () => writePlanOperationReceipt,
+    writeWorkflowState: () => writeWorkflowState
   });
   init_execution_store = __esm2(() => {
     init_coordination();
@@ -37804,6 +37875,15 @@ var init_engine = __esm(() => {
   init_session_identity = __esm2(() => {
     init_coordination_write();
     init_path();
+  });
+  exports_execution_session = {};
+  __export2(exports_execution_session, {
+    assertExecutionSessionCurrent: () => assertExecutionSessionCurrent,
+    createLocalExecutionIdentity: () => createLocalExecutionIdentity,
+    decodeExecutionSessionRef: () => decodeExecutionSessionRef,
+    encodeExecutionSessionRef: () => encodeExecutionSessionRef,
+    executionContextFor: () => executionContextFor,
+    resumeExecutionSession: () => resumeExecutionSession
   });
   init_execution_session = __esm2(() => {
     init_coordination_write();
