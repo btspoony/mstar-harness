@@ -28,7 +28,7 @@ The first line is `# ADR: <title>`. The header block also carries one bare line 
 
 - `proposed/TEMPLATE.md` — `Problem`, `Proposal`, `Alternatives considered`, `Acceptance criteria`, `Risks`.
 - `implemented/TEMPLATE.md` — `Problem`, `Decision`, `Alternatives considered`, `Consequences`. `Decision` is present tense ("identity flows through native channels"), never "we will".
-- `rejected/` has no third template: it reuses the proposed skeleton with a **frozen body**. After rejection, problem, proposal and alternatives are never rewritten — only the Status line says why the proposal died.
+- `rejected/` has no third template: it reuses the proposed skeleton's shape with a **frozen body**, but the gate requires only `Problem`, `Proposal` and `Alternatives considered` — the proposal-era `Acceptance criteria` and `Risks` sections are not required of a rejected record. After rejection, problem, proposal and alternatives are never rewritten — only the Status line says why the proposal died.
 
 `Proposal`, `Plan`, `Migration plan` and `Acceptance criteria` are banned as sections of an implemented record: they are proposal-era scaffolding, and a promotion that keeps them is half-finished. Extra sections that are neither required nor banned stay — the contract fixes required and banned, not the whole skeleton.
 
