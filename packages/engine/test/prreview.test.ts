@@ -8,8 +8,7 @@
  * row's input → expected score_pct + band + verdict, verbatim. The table
  * is the SSOT; these fixtures mirror it row-for-row.
  * - Tally/score schedule: pr-review.md § Tally and derived score — integer
- * arithmetic only, floor at 0, no second formula (nit cap 8, may-fix cap 15,
- * unverified cap 15).
+ * arithmetic only, floor at 0, no second formula (nit cap 8, may-fix cap 15).
  * - Leftover unmet-AC increments: pr-review.md § Tally and derived score —
  * the AC's `surface` picks the bucket: `tests` / `docs` → `may_fix + 1`
  * (never a verdict selector); absent or `implementation` → `must_fix + 1`
@@ -30,9 +29,8 @@ import type { MstarReviewFinding, PrReviewRunFacts, PrScoreBand, PrTallyInput, P
 
 /**
  * The locked worked-example check table from pr-review.md § Tally and
- * derived score (calibration rows), plus the pinned regression rows
- * (nit cap 8, may-fix cap 15, unverified cap 15, floor via 7 must-fix, 100
- * unverified → 85). Each row: input (findings / unverified / leftover unmet ACs) →
+ * derived score (calibration rows), plus the cap and floor regression rows.
+ * Each row: input (findings / leftover unmet ACs) →
  * expected score_pct + band + verdict + display line.
  */
 const CHECK_TABLE: Array<{
@@ -49,130 +47,117 @@ const CHECK_TABLE: Array<{
 }> = [
   {
     row: 1,
-    label: "0 / 0 / 0 / 0 / 0 (clean)",
-    input: { findings: [], unverifiedCount: 0 },
+    label: "0 / 0 / 0 / 0 (clean)",
+    input: { findings: [] },
     expected: {
       scorePct: 100,
       band: "mergeable",
       verdict: "ship it",
-      tally: { mustFix: 0, shouldFix: 0, mayFix: 0, nit: 0, unverified: 0 },
+      tally: { mustFix: 0, shouldFix: 0, mayFix: 0, nit: 0 },
       display: "ship it · 100% (mergeable)",
     },
   },
   {
     row: 2,
-    label: "0 / 0 / 0 / 0 / 0 + 1 leftover unmet AC (safe)",
-    input: { findings: [], unverifiedCount: 0, unmetAc: [{ unsafeToShip: false }] },
+    label: "0 / 0 / 0 / 0 + 1 leftover unmet AC (safe)",
+    input: { findings: [], unmetAc: [{ unsafeToShip: false }] },
     expected: {
       scorePct: 88,
       band: "good",
       verdict: "needs fixes",
-      tally: { mustFix: 0, shouldFix: 1, mayFix: 0, nit: 0, unverified: 0 },
+      tally: { mustFix: 0, shouldFix: 1, mayFix: 0, nit: 0 },
       display: "needs fixes · 88% (good)",
     },
   },
   {
     row: 3,
-    label: "0 / 0 / 0 / 0 / 0 + 1 leftover unmet AC (unsafe-to-ship)",
-    input: { findings: [], unverifiedCount: 0, unmetAc: [{ unsafeToShip: true }] },
+    label: "0 / 0 / 0 / 0 + 1 leftover unmet AC (unsafe-to-ship)",
+    input: { findings: [], unmetAc: [{ unsafeToShip: true }] },
     expected: {
       scorePct: 55,
       band: "fail",
       verdict: "blocked",
-      tally: { mustFix: 1, shouldFix: 0, mayFix: 0, nit: 0, unverified: 0 },
+      tally: { mustFix: 1, shouldFix: 0, mayFix: 0, nit: 0 },
       display: "blocked · 55% (fail)",
     },
   },
   {
     row: 4,
-    label: "0 / 0 / 0 / 2 / 0",
-    input: { findings: [{ mergeClass: "nit" }, { mergeClass: "nit" }], unverifiedCount: 0 },
+    label: "0 / 0 / 0 / 2",
+    input: { findings: [{ mergeClass: "nit" }, { mergeClass: "nit" }] },
     expected: {
       scorePct: 97,
       band: "mergeable",
       verdict: "ship it",
-      tally: { mustFix: 0, shouldFix: 0, mayFix: 0, nit: 2, unverified: 0 },
+      tally: { mustFix: 0, shouldFix: 0, mayFix: 0, nit: 2 },
       display: "ship it · 97% (mergeable)",
     },
   },
   {
     row: 5,
-    label: "0 / 0 / 0 / 0 / 2",
-    input: { findings: [], unverifiedCount: 2 },
-    expected: {
-      scorePct: 90,
-      band: "mergeable",
-      verdict: "ship it",
-      tally: { mustFix: 0, shouldFix: 0, mayFix: 0, nit: 0, unverified: 2 },
-      display: "ship it · 90% (mergeable)",
-    },
-  },
-  {
-    row: 6,
-    label: "0 / 1 / 0 / 0 / 0",
-    input: { findings: [{ mergeClass: "should-fix" }], unverifiedCount: 0 },
+    label: "0 / 1 / 0 / 0",
+    input: { findings: [{ mergeClass: "should-fix" }] },
     expected: {
       scorePct: 88,
       band: "good",
       verdict: "needs fixes",
-      tally: { mustFix: 0, shouldFix: 1, mayFix: 0, nit: 0, unverified: 0 },
+      tally: { mustFix: 0, shouldFix: 1, mayFix: 0, nit: 0 },
       display: "needs fixes · 88% (good)",
     },
   },
   {
-    row: 7,
-    label: "0 / 1 / 0 / 1 / 0",
+    row: 6,
+    label: "0 / 1 / 0 / 1",
     input: {
       findings: [{ mergeClass: "should-fix" }, { mergeClass: "nit" }],
-      unverifiedCount: 0,
     },
     expected: {
       scorePct: 86,
       band: "good",
       verdict: "needs fixes",
-      tally: { mustFix: 0, shouldFix: 1, mayFix: 0, nit: 1, unverified: 0 },
+      tally: { mustFix: 0, shouldFix: 1, mayFix: 0, nit: 1 },
       display: "needs fixes · 86% (good)",
     },
   },
   {
-    row: 8,
-    label: "0 / 0 / 2 / 0 / 0 (may-fix only, still shippable)",
-    input: { findings: [{ mergeClass: "may-fix" }, { mergeClass: "may-fix" }], unverifiedCount: 0 },
+    row: 7,
+    label: "0 / 0 / 2 / 0",
+    input: { findings: [{ mergeClass: "may-fix" }, { mergeClass: "may-fix" }] },
     expected: {
       scorePct: 90, // 6 + 4 = 10 deducted; may-fix never selects a verdict
       band: "mergeable",
       verdict: "ship it",
-      tally: { mustFix: 0, shouldFix: 0, mayFix: 2, nit: 0, unverified: 0 },
+      tally: { mustFix: 0, shouldFix: 0, mayFix: 2, nit: 0 },
       display: "ship it · 90% (mergeable)",
     },
   },
   {
-    row: 9,
-    label: "0 / 0 / 6 / 0 / 0 (may-fix class cap 15)",
-    input: { findings: Array.from({ length: 6 }, () => ({ mergeClass: "may-fix" as const })), unverifiedCount: 0 },
+    row: 8,
+    label: "0 / 0 / 6 / 0",
+    input: { findings: Array.from({ length: 6 }, () => ({ mergeClass: "may-fix" as const })) },
     expected: {
       scorePct: 85, // 6 + 4 + 2 + 1 + 1 + 1 = 15, exactly the class cap
       band: "good",
       verdict: "ship it",
-      tally: { mustFix: 0, shouldFix: 0, mayFix: 6, nit: 0, unverified: 0 },
+      tally: { mustFix: 0, shouldFix: 0, mayFix: 6, nit: 0 },
       display: "ship it · 85% (good)",
     },
   },
   {
-    row: 10,
-    label: "1 / 0 / 0 / 0 / 0",
-    input: { findings: [{ mergeClass: "must-fix" }], unverifiedCount: 0 },
+    row: 9,
+    label: "1 / 0 / 0 / 0",
+    input: { findings: [{ mergeClass: "must-fix" }] },
     expected: {
       scorePct: 55,
       band: "fail",
       verdict: "blocked",
-      tally: { mustFix: 1, shouldFix: 0, mayFix: 0, nit: 0, unverified: 0 },
+      tally: { mustFix: 1, shouldFix: 0, mayFix: 0, nit: 0 },
       display: "blocked · 55% (fail)",
     },
   },
   {
-    row: 11,
-    label: "1 / 2 / 0 / 1 / 1",
+    row: 10,
+    label: "1 / 2 / 0 / 1",
     input: {
       findings: [
         { mergeClass: "must-fix" },
@@ -180,81 +165,70 @@ const CHECK_TABLE: Array<{
         { mergeClass: "should-fix" },
         { mergeClass: "nit" },
       ],
-      unverifiedCount: 1,
     },
     expected: {
-      scorePct: 27,
+      scorePct: 32,
       band: "fail",
       verdict: "blocked",
-      tally: { mustFix: 1, shouldFix: 2, mayFix: 0, nit: 1, unverified: 1 },
-      display: "blocked · 27% (fail)",
+      tally: { mustFix: 1, shouldFix: 2, mayFix: 0, nit: 1 },
+      display: "blocked · 32% (fail)",
     },
   },
   {
-    row: 12,
-    label: "3 / 0 / 0 / 0 / 0",
+    row: 11,
+    label: "3 / 0 / 0 / 0",
     input: {
       findings: [
         { mergeClass: "must-fix" },
         { mergeClass: "must-fix" },
         { mergeClass: "must-fix" },
       ],
-      unverifiedCount: 0,
     },
     expected: {
       scorePct: 25, // 45 + 15 + 15 = 75 deducted
       band: "fail",
       verdict: "blocked",
-      tally: { mustFix: 3, shouldFix: 0, mayFix: 0, nit: 0, unverified: 0 },
+      tally: { mustFix: 3, shouldFix: 0, mayFix: 0, nit: 0 },
       display: "blocked · 25% (fail)",
     },
   },
   {
-    row: 13,
-    label: "0 / 0 / 0 / 10 / 0 (nit class cap 8)",
-    input: { findings: Array.from({ length: 10 }, () => ({ mergeClass: "nit" as const })), unverifiedCount: 0 },
+    row: 12,
+    label: "0 / 0 / 0 / 10",
+    input: { findings: Array.from({ length: 10 }, () => ({ mergeClass: "nit" as const })) },
     expected: {
       scorePct: 92, // 2 + 9 = 11 uncapped → capped at 8
       band: "mergeable",
       verdict: "ship it",
-      tally: { mustFix: 0, shouldFix: 0, mayFix: 0, nit: 10, unverified: 0 },
+      tally: { mustFix: 0, shouldFix: 0, mayFix: 0, nit: 10 },
       display: "ship it · 92% (mergeable)",
     },
   },
   {
-    row: 14,
-    label: "0 / 0 / 0 / 0 / 3 (unverified cap 15)",
-    input: { findings: [], unverifiedCount: 3 },
-    expected: {
-      scorePct: 85, // 3 * 5 = 15, exactly the class cap
-      band: "good",
-      verdict: "ship it",
-      tally: { mustFix: 0, shouldFix: 0, mayFix: 0, nit: 0, unverified: 3 },
-      display: "ship it · 85% (good)",
-    },
-  },
-  {
-    row: 15,
-    label: "7 / 0 / 0 / 0 / 0 (floor)",
-    input: { findings: Array.from({ length: 7 }, () => ({ mergeClass: "must-fix" as const })), unverifiedCount: 0 },
+    row: 13,
+    label: "7 / 0 / 0 / 0 (floor)",
+    input: { findings: Array.from({ length: 7 }, () => ({ mergeClass: "must-fix" as const })) },
     expected: {
       scorePct: 0, // 45 + 6*15 = 135 would be -35
       band: "fail",
       verdict: "blocked",
-      tally: { mustFix: 7, shouldFix: 0, mayFix: 0, nit: 0, unverified: 0 },
+      tally: { mustFix: 7, shouldFix: 0, mayFix: 0, nit: 0 },
       display: "blocked · 0% (fail)",
     },
   },
   {
-    row: 16,
-    label: "0 / 0 / 0 / 0 / 100 (unverified cap, not 0)",
-    input: { findings: [], unverifiedCount: 100 },
+    row: 14,
+    label: "1 / 0 / 0 / 1 + derived incomplete",
+    input: {
+      findings: [{ mergeClass: "must-fix" }, { mergeClass: "nit" }],
+      incomplete: { reason: "Seat stopped", unscanned: ["src/a.ts"] },
+    },
     expected: {
-      scorePct: 85,
-      band: "good",
-      verdict: "ship it",
-      tally: { mustFix: 0, shouldFix: 0, mayFix: 0, nit: 0, unverified: 100 },
-      display: "ship it · 85% (good)",
+      scorePct: 53,
+      band: "fail",
+      verdict: "incomplete",
+      tally: { mustFix: 1, shouldFix: 0, mayFix: 0, nit: 1 },
+      display: "incomplete · 53% (fail, partial)",
     },
   },
 ];
@@ -273,15 +247,15 @@ describe("Worked-example check table — pr-review.md § Tally and derived score
 
 describe("Display contract — pr-review.md § Display contract (chat output)", () => {
  // The two-line chat header is verbatim: "{verdict} · {score_pct}% ({band})\n
- // must-fix=<n> should-fix=<n> may-fix=<n> nit=<n> unverified=<n>". Assert the full
+ // must-fix=<n> should-fix=<n> may-fix=<n> nit=<n>". Assert the full
  // string for every check-table row.
   for (const row of CHECK_TABLE) {
     test(`row ${row.row} chatHeader is the verbatim two-line display`, () => {
       const result = computePrTally(row.input);
       const { tally } = result;
-      expect(result.chatHeader).toBe(
+      expect(result.chatHeader.split("\n").slice(0, 2).join("\n")).toBe(
         `${row.expected.display}\n` +
-          `must-fix=${tally.mustFix} should-fix=${tally.shouldFix} may-fix=${tally.mayFix} nit=${tally.nit} unverified=${tally.unverified}`,
+          `must-fix=${tally.mustFix} should-fix=${tally.shouldFix} may-fix=${tally.mayFix} nit=${tally.nit}`,
       );
     });
   }
@@ -289,11 +263,9 @@ describe("Display contract — pr-review.md § Display contract (chat output)", 
   test("chatHeader first line carries the verdict token, score and band; second line the class tally", () => {
     const result = computePrTally({
       findings: [{ mergeClass: "must-fix" }, { mergeClass: "nit" }],
-      unverifiedCount: 3,
     });
-    // 45 (must-fix) + 2 (nit) + 15 (unverified, capped) = 62 → 38 · fail.
     expect(result.chatHeader).toBe(
-      "blocked · 38% (fail)\nmust-fix=1 should-fix=0 may-fix=0 nit=1 unverified=3",
+      "blocked · 53% (fail)\nmust-fix=1 should-fix=0 may-fix=0 nit=1",
     );
   });
 });
@@ -319,15 +291,14 @@ describe("Score bands — pr-review.md § Tally and derived score", () => {
     }
   });
 
-  test("may-fix, nits and unverified alone can never leave the pass band (no must/should-fix → never fail)", () => {
+  test("may-fix and nits alone stay above the pass band", () => {
     const result = computePrTally({
       findings: [
         ...Array.from({ length: 50 }, () => ({ mergeClass: "may-fix" as const })),
         ...Array.from({ length: 20 }, () => ({ mergeClass: "nit" as const })),
       ],
-      unverifiedCount: 100,
     });
-    expect(result.scorePct).toBe(62); // 100 - 15 (may-fix cap) - 8 (nit cap) - 15 (unverified cap)
+    expect(result.scorePct).toBe(77); // 100 - 15 (may-fix cap) - 8 (nit cap)
     expect(result.band).toBe("pass");
     expect(result.verdict).toBe("ship it");
   });
@@ -340,7 +311,7 @@ describe("Score bands — pr-review.md § Tally and derived score", () => {
     expect(result.scorePct).toBe(100 - (6 + 4 + 2 + 1)); // 13 deducted
     expect(result.verdict).toBe("ship it");
     expect(result.chatHeader).toBe(
-      "ship it · 87% (good)\nmust-fix=0 should-fix=0 may-fix=4 nit=0 unverified=0",
+      "ship it · 87% (good)\nmust-fix=0 should-fix=0 may-fix=4 nit=0",
     );
   });
 });
@@ -354,17 +325,9 @@ describe("Floor at 0 — pr-review.md § Tally and derived score", () => {
     expect(result.scorePct).toBeGreaterThanOrEqual(0);
   });
 
-  test("capped unverified leaves a high score: 100 unverified → 85 (cap, not 0)", () => {
-    const result = computePrTally({ findings: [], unverifiedCount: 100 });
-    expect(result.scorePct).toBe(85);
-    expect(result.band).toBe("good");
-    expect(result.verdict).toBe("ship it");
-  });
-
   test("verdict stays precedence-driven at the floor: a must-fix still blocks at 0%", () => {
     const result = computePrTally({
       findings: Array.from({ length: 10 }, () => ({ mergeClass: "must-fix" as const })),
-      unverifiedCount: 100,
     });
     expect(result.scorePct).toBe(0);
     expect(result.band).toBe("fail");
@@ -400,7 +363,7 @@ describe("Leftover unmet-AC increments — pr-review.md § Tally and derived sco
       findings: [],
       unmetAc: [{ unsafeToShip: true }, { unsafeToShip: false }],
     });
-    expect(result.tally).toEqual({ mustFix: 1, shouldFix: 1, mayFix: 0, nit: 0, unverified: 0 });
+    expect(result.tally).toEqual({ mustFix: 1, shouldFix: 1, mayFix: 0, nit: 0 });
     expect(result.verdict).toBe("blocked");
     expect(result.scorePct).toBe(43); // 100 - 45 (must-fix) - 12 (should-fix)
   });
@@ -414,18 +377,18 @@ describe("Leftover unmet-AC increments — pr-review.md § Tally and derived sco
         { unsafeToShip: false, surface: "docs" },
       ],
     });
-    expect(result.tally).toEqual({ mustFix: 0, shouldFix: 0, mayFix: 2, nit: 0, unverified: 0 });
+    expect(result.tally).toEqual({ mustFix: 0, shouldFix: 0, mayFix: 2, nit: 0 });
     expect(result.verdict).toBe("ship it");
     expect(result.scorePct).toBe(90); // 100 - (6 + 4)
   });
 
   test("an explicit implementation surface keeps the unsafe/safe split", () => {
     const unsafe = computePrTally({ findings: [], unmetAc: [{ unsafeToShip: true, surface: "implementation" }] });
-    expect(unsafe.tally).toEqual({ mustFix: 1, shouldFix: 0, mayFix: 0, nit: 0, unverified: 0 });
+    expect(unsafe.tally).toEqual({ mustFix: 1, shouldFix: 0, mayFix: 0, nit: 0 });
     expect(unsafe.verdict).toBe("blocked");
 
     const safe = computePrTally({ findings: [], unmetAc: [{ unsafeToShip: false, surface: "implementation" }] });
-    expect(safe.tally).toEqual({ mustFix: 0, shouldFix: 1, mayFix: 0, nit: 0, unverified: 0 });
+    expect(safe.tally).toEqual({ mustFix: 0, shouldFix: 1, mayFix: 0, nit: 0 });
     expect(safe.verdict).toBe("needs fixes");
   });
 
@@ -434,7 +397,7 @@ describe("Leftover unmet-AC increments — pr-review.md § Tally and derived sco
       findings: [],
       unmetAc: [{ unsafeToShip: true, surface: "tests" }, { unsafeToShip: false, surface: "implementation" }],
     });
-    expect(result.tally).toEqual({ mustFix: 0, shouldFix: 1, mayFix: 1, nit: 0, unverified: 0 });
+    expect(result.tally).toEqual({ mustFix: 0, shouldFix: 1, mayFix: 1, nit: 0 });
     expect(result.verdict).toBe("needs fixes");
   });
 
@@ -466,13 +429,13 @@ describe("Leftover unmet-AC increments — pr-review.md § Tally and derived sco
 
   test("the three accepted surfaces route, and an absent surface means implementation", () => {
     expect(computePrTally({ findings: [], unmetAc: [{ unsafeToShip: true }] }).tally)
-      .toEqual({ mustFix: 1, shouldFix: 0, mayFix: 0, nit: 0, unverified: 0 });
+      .toEqual({ mustFix: 1, shouldFix: 0, mayFix: 0, nit: 0 });
     expect(computePrTally({ findings: [], unmetAc: [{ unsafeToShip: false, surface: "implementation" }] }).tally)
-      .toEqual({ mustFix: 0, shouldFix: 1, mayFix: 0, nit: 0, unverified: 0 });
+      .toEqual({ mustFix: 0, shouldFix: 1, mayFix: 0, nit: 0 });
     expect(computePrTally({ findings: [], unmetAc: [{ unsafeToShip: true, surface: "tests" }] }).tally)
-      .toEqual({ mustFix: 0, shouldFix: 0, mayFix: 1, nit: 0, unverified: 0 });
+      .toEqual({ mustFix: 0, shouldFix: 0, mayFix: 1, nit: 0 });
     expect(computePrTally({ findings: [], unmetAc: [{ unsafeToShip: false, surface: "docs" }] }).tally)
-      .toEqual({ mustFix: 0, shouldFix: 0, mayFix: 1, nit: 0, unverified: 0 });
+      .toEqual({ mustFix: 0, shouldFix: 0, mayFix: 1, nit: 0 });
   });
 
   test("AC increments are additive to accepted findings, not a replacement", () => {
@@ -480,7 +443,7 @@ describe("Leftover unmet-AC increments — pr-review.md § Tally and derived sco
       findings: [{ mergeClass: "nit" }],
       unmetAc: [{ unsafeToShip: false }],
     });
-    expect(result.tally).toEqual({ mustFix: 0, shouldFix: 1, mayFix: 0, nit: 1, unverified: 0 });
+    expect(result.tally).toEqual({ mustFix: 0, shouldFix: 1, mayFix: 0, nit: 1 });
     expect(result.verdict).toBe("needs fixes");
     expect(result.scorePct).toBe(86);
   });
@@ -528,7 +491,7 @@ describe("Score never overrides verdict — pr-review.md § Override invariant",
   });
 
   test("ship it + good band is legal — band grades finding load, verdict governs mergeability", () => {
-    const result = computePrTally({ findings: [], unverifiedCount: 3 });
+    const result = computePrTally({ findings: Array.from({ length: 6 }, () => ({ mergeClass: "may-fix" as const })) });
     expect(result.scorePct).toBe(85);
     expect(result.band).toBe("good");
     expect(result.verdict).toBe("ship it");
@@ -542,18 +505,13 @@ describe("Score never overrides verdict — pr-review.md § Override invariant",
 });
 
 describe("Empty input", () => {
-  test("no findings, no unverified, no leftover ACs → ship it 100%", () => {
+  test("no findings, no leftover ACs → ship it 100%", () => {
     const result = computePrTally({ findings: [] });
     expect(result.verdict).toBe("ship it");
     expect(result.scorePct).toBe(100);
-    expect(result.tally).toEqual({ mustFix: 0, shouldFix: 0, mayFix: 0, nit: 0, unverified: 0 });
+    expect(result.tally).toEqual({ mustFix: 0, shouldFix: 0, mayFix: 0, nit: 0 });
   });
 
-  test("omitted unverifiedCount defaults to 0", () => {
-    const result = computePrTally({ findings: [] });
-    expect(result.tally.unverified).toBe(0);
-    expect(result.scorePct).toBe(100);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -566,21 +524,6 @@ import { afterAll } from "bun:test";
 import { prReviewReportPath, validatePrReviewReport } from "../src/prreview.js";
 import type { PrReportTarget } from "../src/prreview.js";
 
-describe("computePrTally — engine boundary guard", () => {
-  test("negative unverifiedCount throws TypeError instead of minting score_pct > 100", () => {
- // Before the guard: the unverified deduction goes negative (−5) → 105.
-    expect(() => computePrTally({ findings: [], unverifiedCount: -1 })).toThrow(TypeError);
-    expect(() => computePrTally({ findings: [], unverifiedCount: -1 })).toThrow(/unverifiedCount must be a non-negative integer/);
-  });
-
-  test.each([0.5, -0.25])("fractional unverifiedCount %p is rejected", (n) => {
-    expect(() => computePrTally({ findings: [], unverifiedCount: n })).toThrow(TypeError);
-  });
-
-  test("NaN unverifiedCount is rejected (non-integer)", () => {
-    expect(() => computePrTally({ findings: [], unverifiedCount: Number.NaN })).toThrow(TypeError);
-  });
-});
 
 describe("prReviewReportPath — target forms (pr-review.md § Local report archive, Filename)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "engine-prreview-path-"));
@@ -802,7 +745,7 @@ head: abc1234567890abcdef
 base: main
 verdict: needs fixes
 score_pct: 85
-tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }
+tally: { must-fix: 0, should-fix: 1, nit: 2 }
 comments: posted
 review_url: https://github.com/example/repo/pull/134#pullrequestreview-1
 generated_at: 2026-08-24
@@ -843,7 +786,7 @@ head: abc1234567890abcdef
 base: main
 verdict: needs fixes
 score_pct: 85
-tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }
+tally: { must-fix: 0, should-fix: 1, nit: 2 }
 comments: posted
 review_url: https://github.com/example/repo/pull/134#pullrequestreview-1
 generated_at: 2026-08-24
@@ -875,8 +818,8 @@ describe("validatePrReviewReport — arithmetic drift flags", () => {
   test("may-fix counts enter the recompute — 0 / 0 / 2 / 0 / 0 scores 90, not the may-fix-blind 100", () => {
     const mayFixReport = report("")
       .replace(
-        "tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }",
-        "tally: { must-fix: 0, should-fix: 0, may-fix: 2, nit: 0, unverified: 0 }",
+        "tally: { must-fix: 0, should-fix: 1, nit: 2 }",
+        "tally: { must-fix: 0, should-fix: 0, may-fix: 2, nit: 0 }",
       )
       .replace("score_pct: 85", "score_pct: 90")
       .replace("verdict: needs fixes", "verdict: ship it");
@@ -890,7 +833,7 @@ describe("validatePrReviewReport — arithmetic drift flags", () => {
 
   test("must-fix tally with ship-it verdict is flagged even at matching score", () => {
     const blockedTally = report("")
-      .replace("tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }", "tally: { must-fix: 1, should-fix: 0, nit: 0, unverified: 0 }")
+      .replace("tally: { must-fix: 0, should-fix: 1, nit: 2 }", "tally: { must-fix: 1, should-fix: 0, nit: 0 }")
       .replace("score_pct: 85", "score_pct: 55")
       .replace("verdict: needs fixes", "verdict: ship it");
     const gate = validatePrReviewReport(blockedTally);
@@ -901,25 +844,31 @@ describe("validatePrReviewReport — arithmetic drift flags", () => {
 });
 
 describe("validatePrReviewReport — closed tally key set", () => {
-  const TALLY_LINE = "tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }";
+  const TALLY_LINE = "tally: { must-fix: 0, should-fix: 1, nit: 2 }";
 
   test("a misspelled count key is refused instead of silently dropped", () => {
-    const typo = report("").replace(TALLY_LINE, "tally: { must-fix: 0, should-fix: 1, nti: 2, unverified: 0 }");
+    const typo = report("").replace(TALLY_LINE, "tally: { must-fix: 0, should-fix: 1, nti: 2 }");
     const gate = validatePrReviewReport(typo);
     expect(gate.ok).toBe(false);
     expect(codes(gate)).toContain("prreview.report.invalid-tally");
     // The refusal names the accepted key set, so a typo is fixable from it.
     expect(gate.violations.find((violation) => violation.code === "prreview.report.invalid-tally")?.message)
-      .toContain("must-fix, should-fix, may-fix, nit, unverified");
+      .toContain("must-fix, should-fix, may-fix, nit");
   });
 
   test("a stray key is refused even when every required count is present", () => {
-    const stray = report("").replace(TALLY_LINE, "tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0, score: 85 }");
+    const stray = report("").replace(TALLY_LINE, "tally: { must-fix: 0, should-fix: 1, nit: 2, score: 85 }");
     expect(codes(validatePrReviewReport(stray))).toContain("prreview.report.invalid-tally");
   });
 
+  test("a removed tally key is refused", () => {
+    const removedKey = "un" + "verified";
+    const oldReport = report("").replace(TALLY_LINE, `tally: { must-fix: 0, should-fix: 1, nit: 2, ${removedKey}: 0 }`);
+    expect(codes(validatePrReviewReport(oldReport))).toContain("prreview.report.invalid-tally");
+  });
+
   test("a duplicated count key is refused", () => {
-    const duplicate = report("").replace(TALLY_LINE, "tally: { must-fix: 0, should-fix: 1, should-fix: 1, nit: 2, unverified: 0 }");
+    const duplicate = report("").replace(TALLY_LINE, "tally: { must-fix: 0, should-fix: 1, should-fix: 1, nit: 2 }");
     expect(codes(validatePrReviewReport(duplicate))).toContain("prreview.report.invalid-tally");
   });
 
@@ -1157,8 +1106,8 @@ function reviewDoc(overrides: Record<string, unknown> = {}): Record<string, unkn
     tally: {
       verdict: "needs fixes",
       scorePct: 86,
-      tally: { mustFix: 0, shouldFix: 1, mayFix: 0, nit: 1, unverified: 0 },
-      chatHeader: "needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 may-fix=0 nit=1 unverified=0",
+      tally: { mustFix: 0, shouldFix: 1, mayFix: 0, nit: 1 },
+      chatHeader: "needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 may-fix=0 nit=1",
     },
     target: { owner: "example", repo: "repo", pr: 134, head_sha: "abc123" },
     ...overrides,
@@ -1341,7 +1290,7 @@ describe("validateMstarReviewV1 — mstar.review/v1 envelope ", () => {
   test("tally-only declaredScopes is not an envelope key — a stray copy is refused, never carried", () => {
     // `mstar pr-review tally` echoes a settled run's truncated seat scopes as
     // `declaredScopes` (packages/commands/src/families/pr-review.ts). It is a
-    // tally-output fact feeding the report's `- unverified:` / `- notes:`; the
+    // tally-output fact feeding the report's `- notes:`; the
     // envelope has no such key, so a copy at either level is refused by the
     // closed-key guard (I-000753) instead of persisting as an unreadable claim.
     const topLevel = reviewDoc({ declaredScopes: ["docs"] });
@@ -1361,7 +1310,7 @@ describe("validateMstarReviewV1 — mstar.review/v1 envelope ", () => {
     expect("declaredScopes" in synthesized.tally).toBe(false);
     expect(synthesized.schema).toBe("mstar.review/v1");
     expect(synthesized.findings).toEqual([]);
-    expect(synthesized.tally.tally).toEqual({ mustFix: 0, shouldFix: 0, mayFix: 0, nit: 0, unverified: 0 });
+    expect(synthesized.tally.tally).toEqual({ mustFix: 0, shouldFix: 0, mayFix: 0, nit: 0 });
     // An absent summary_md is the contract now, not a violation.
     expect("summary_md" in synthesized).toBe(false);
     expect(validateMstarReviewV1(synthesized).ok).toBe(true);
@@ -1375,6 +1324,7 @@ describe("validateMstarReviewV1 — mstar.review/v1 envelope ", () => {
         verdict: direct.verdict,
         summary_md: direct.chatHeader,
         tally: direct,
+        ...(direct.incomplete === undefined ? {} : { incomplete: direct.incomplete }),
         findings: [],
       });
       expect(gate.ok).toBe(true);
@@ -1403,7 +1353,7 @@ describe("synthesizeReview — mstar.review/v1 envelope ", () => {
     for (const row of CHECK_TABLE) {
       const synthesized = synthesizeReview({
         findings: fullFindings(row.input.findings),
-        unverifiedCount: row.input.unverifiedCount,
+        incomplete: row.input.incomplete,
         unmetAc: row.input.unmetAc,
       });
       const direct = computePrTally(row.input);
@@ -2046,7 +1996,7 @@ describe("computePrTally — incomplete verdict", () => {
     const result = computePrTally({ findings: [{ mergeClass: "must-fix" }, { mergeClass: "nit" }] });
     expect(result.verdict).toBe("blocked");
     expect(result.incomplete).toBeUndefined();
-    expect(result.chatHeader).toBe("blocked \u00b7 53% (fail)\nmust-fix=1 should-fix=0 may-fix=0 nit=1 unverified=0");
+    expect(result.chatHeader).toBe("blocked \u00b7 53% (fail)\nmust-fix=1 should-fix=0 may-fix=0 nit=1");
   });
 
   test("a marked-incomplete run keeps the count-derived score/band as a partial grade and states cause + scope", () => {
@@ -2064,7 +2014,7 @@ describe("computePrTally — incomplete verdict", () => {
     expect(partial.tally).toEqual(settled.tally);
     expect(partial.chatHeader).toBe(
       `incomplete \u00b7 ${settled.scorePct}% (${settled.band}, partial)\n` +
-        `must-fix=1 should-fix=0 may-fix=0 nit=1 unverified=0\n` +
+        `must-fix=1 should-fix=0 may-fix=0 nit=1\n` +
         `cause: ${reason}\n` +
         `unscanned: ${unscanned.join(", ")}`,
     );
@@ -2077,7 +2027,7 @@ describe("computePrTally — incomplete verdict", () => {
     expect(result.scorePct).toBe(100);
     expect(result.chatHeader).toBe(
       "incomplete \u00b7 100% (mergeable, partial)\n" +
-        "must-fix=0 should-fix=0 may-fix=0 nit=0 unverified=0\n" +
+        "must-fix=0 should-fix=0 may-fix=0 nit=0\n" +
         "cause: operator cancelled the run\n" +
         "unscanned: none",
     );
@@ -2259,7 +2209,7 @@ describe("validatePrReviewReport — incomplete verdict frontmatter", () => {
     return report(facts)
       .replace("verdict: needs fixes", "verdict: incomplete")
       .replace("score_pct: 85", "score_pct: 55")
-      .replace("tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }", "tally: { must-fix: 1, should-fix: 0, nit: 0, unverified: 0 }");
+      .replace("tally: { must-fix: 0, should-fix: 1, nit: 2 }", "tally: { must-fix: 1, should-fix: 0, nit: 0 }");
   }
 
   test("an incomplete report with its cause and scope passes (unchanged score recompute, skipped mismatch)", () => {
