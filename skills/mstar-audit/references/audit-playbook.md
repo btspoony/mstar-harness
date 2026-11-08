@@ -89,7 +89,7 @@ For the deep method behind this category — value bar, authoring gate (used bot
 
 ### Prove-or-reject before reporting DEBT (`simplify` scope)
 
-**Proof bar — every candidate carries six clauses, one each, no narrative:** current owner; the effective producer-to-consumer path that makes it live; what disappears; what remains; the capability or compatibility given up; the strongest reason to retain it. No reachable producer or reader does not make a candidate removable — name the extension point or dynamic loader that could reach it, or record insufficient evidence.
+**Proof bar — every candidate carries six clauses, one each, no narrative:** current owner; the effective producer-to-consumer path that makes it live; what disappears; what remains; the capability or compatibility given up; the strongest reason to retain it. A candidate with no reachable producer or reader is not thereby removable — name the extension point or dynamic loader that could reach it, or record insufficient evidence.
 
 **Rejection grading.** (a) Removal of unreachable or unread behaviour; (b) a narrower public or product behaviour with the loss stated explicitly; (c) a protected obligation or insufficient evidence. Reject a candidate that breaks a retained obligation, merely relocates the same complexity, or has no meaningful reduction — read each rejection at the level of the proposed change, so one stale inventory does not settle every independent item.
 
