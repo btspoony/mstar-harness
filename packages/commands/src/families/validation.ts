@@ -7,6 +7,7 @@ import {
   assertQcAlignment,
   assertSddTddTriple,
   assertTriIdentity,
+  canonicalizeNearestExisting,
   catalogRootDir,
   classifySkillLint,
   activeLifecyclePlanId,
@@ -31,6 +32,8 @@ import {
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
+  probeCheckoutRoot,
+  probePathOwnership,
   planQualityBar,
   scopeGuard,
   SddScriptError,
@@ -288,7 +291,8 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         const file = absolute(context.cwd, required(input.assignmentFile, "usage: dispatch validate <assignment-file> [--branch <branch>]"));
         if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
         const text = readFileSync(file, "utf8");
-        const readOnly = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "");
+        const fields = parseAssignmentFields(text);
+        const readOnly = isReadOnlyAssignmentRole(fields.executeAs ?? "");
         const violations: Violation[] = [...validateAssignmentFields(text, { writable: readOnly ? false : undefined }).violations];
         if (!readOnly) {
           const forms = parseAssignmentBranchForms(text);
@@ -301,7 +305,65 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
               fix: "use the branch declared by the Assignment or update the Assignment",
             });
           }
-          if (branch?.trim()) violations.push(...assertDefaultBranchProtected(branch, { directOnException: parseBranchPolicyDirectOnBranch(text) === branch.trim() }).violations);
+          if (fields.writeDomain !== "control") {
+            if (branch?.trim()) violations.push(...assertDefaultBranchProtected(branch, { directOnException: parseBranchPolicyDirectOnBranch(text) === branch.trim() }).violations);
+          } else {
+            const main = readMainWorktree(context.cwd);
+            if (main === null) {
+              violations.push({
+                ok: false, severity: "high", code: "dispatch.control-write.control-root-unresolved",
+                message: `cannot resolve the control checkout from ${context.cwd}`,
+                fix: "run mstar dispatch validate from a checkout of this repository",
+              });
+            } else {
+              const controlRoot = canonicalizeNearestExisting(main.root);
+              if (fields.worktreePath && fields.worktreePath !== "N/A") {
+                const target = path.resolve(path.dirname(file), fields.worktreePath);
+                if (probeCheckoutRoot(target) !== controlRoot || canonicalizeNearestExisting(target) !== controlRoot) {
+                  violations.push({
+                    ok: false, severity: "high", code: "dispatch.control-write.worktree-not-control",
+                    message: `Worktree path "${fields.worktreePath}" is not the control checkout ${controlRoot}`,
+                    fix: `set "Worktree path: ${controlRoot}" in the Assignment`,
+                  });
+                }
+              }
+              if (fields.workingBranch && fields.workingBranch !== "N/A" && fields.workingBranch !== main.branch) {
+                violations.push({
+                  ok: false, severity: "high", code: "dispatch.control-write.branch-mismatch",
+                  message: `Working branch "${fields.workingBranch}" does not match the control checkout branch "${main.branch || "(detached)"}"`,
+                  fix: main.branch ? `set "Working branch: ${main.branch}" in the Assignment` : "attach the control checkout to a branch, then set Working branch to that branch",
+                });
+              }
+              const worktree = fields.worktreePath && fields.worktreePath !== "N/A"
+                ? path.resolve(path.dirname(file), fields.worktreePath)
+                : undefined;
+              for (const declared of fields.controlWritePaths ?? []) {
+                if (/[*?[\]{}]/.test(declared) || (!path.isAbsolute(declared) && worktree === undefined)) continue;
+                const target = path.resolve(worktree ?? controlRoot, declared);
+                const ownership = probePathOwnership({ path: target }, controlRoot);
+                if (ownership.ignored === false) {
+                  violations.push({
+                    ok: false, severity: "high", code: "dispatch.control-write.target-committable",
+                    message: `control write target ${target} is not Git-ignored and content there would be committed`,
+                    fix: "declare only gitignored process targets, or dispatch the change on a work branch with Write domain: work",
+                  });
+                } else if (ownership.ignored === null) {
+                  violations.push({
+                    ok: false, severity: "medium", code: "dispatch.control-write.target-unverifiable",
+                    message: `cannot verify the Git ignore status of control write target ${target}`,
+                    fix: `run git -C "${controlRoot}" check-ignore -v -- "${target}", then rerun mstar dispatch validate`,
+                  });
+                }
+                if (ownership.checkoutRoot === null || canonicalizeNearestExisting(ownership.checkoutRoot) !== controlRoot) {
+                  violations.push({
+                    ok: false, severity: "high", code: "dispatch.control-write.target-outside-control",
+                    message: `control write target ${target} is not in the control checkout ${controlRoot}`,
+                    fix: `set Control write paths to targets inside ${controlRoot}`,
+                  });
+                }
+              }
+            }
+          }
         }
         const gate = { ok: violations.length === 0, violations };
         return gate.ok ? ok(id, gateData(gate)) : rejected(id, gate, "dispatch.assignment.invalid");
@@ -590,7 +652,7 @@ async function awaitSpawn(context: InvocationContext, argv: readonly string[], c
 }
 
 const contract: Record<(typeof verbs)[number], { path: string[]; args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; context?: "sessionId" }[]; effects: CommandDefinition["effects"]; description: string }> = {
-  "dispatch.validate": { path: ["dispatch", "validate"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "branch", flags: "--branch <branch>" }], effects: ["read", "validate"], description: "Validate Assignment fields and branch protection." },
+  "dispatch.validate": { path: ["dispatch", "validate"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "branch", flags: "--branch <branch>" }], effects: ["read", "validate"], description: "Validate Assignment fields and branch protection. Write domain: control requires Worktree path, Working branch, and Control write paths: <path>[, <path>...]; paths are concrete, absolute or relative to Worktree path, and must be gitignored in the control checkout." },
   "worktree.check": { path: ["worktree", "check"], args: [{ key: "planId", required: false, variadic: false }], options: [{ key: "plan", flags: "--plan <plan-id>" }, { key: "workflow", flags: "--workflow <id>" }, { key: "entry", flags: "--entry" }, { key: "harness", flags: "--harness <path>" }, { key: "integration", flags: "--integration <path>" }, { key: "mainBranch", flags: "--main-branch <branch>" }, { key: "control", flags: "--control <path>" }, { key: "l2", flags: "--l2" }, { key: "tracks", flags: "--tracks <json>" }], effects: ["read", "validate", "process"], description: "Check engine-enforced workflow-entry facts or the L1/L2 worktree pre-dispatch gate." },
   "worktree.qc-alignment": { path: ["worktree", "qc-alignment"], args: [{ key: "files", required: true, variadic: true }], options: [], effects: ["read", "validate"], description: "Assert QC/QA Assignment alignment." },
   "review.seats": { path: ["review", "seats"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "mode", flags: "--mode <mode>" }, { key: "reviewers", flags: "--reviewers <list>" }], effects: ["read", "validate"], description: "Map execution mode to QC seat count and assert tri identity." },

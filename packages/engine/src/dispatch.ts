@@ -64,6 +64,9 @@ export type AssignmentFields = {
   delegation?: string;
   taskCategory?: string;
   workingBranch?: string;
+  worktreePath?: string;
+  writeDomain?: string;
+  controlWritePaths?: string[];
   branchPolicy?: string;
   /**
    * `Budget (review / QC seats)` round cap. Required (present, non-empty,
@@ -118,7 +121,7 @@ export type ExecutionModeToNOptions = {
 /** Result of {@link executionModeToN}: a GateResult carrying `n` on success. */
 export type ExecutionModeToNResult = GateResult & { n?: number };
 
-const REQUIRED_FIELDS: ReadonlyArray<{ key: keyof AssignmentFields; label: string; code: string }> = [
+const REQUIRED_FIELDS: ReadonlyArray<{ key: "executeAs" | "delegation" | "taskCategory"; label: string; code: string }> = [
   { key: "executeAs", label: "Execute as", code: "execute-as" },
   { key: "delegation", label: "Delegation", code: "delegation" },
   { key: "taskCategory", label: "Task category", code: "task-category" },
@@ -200,6 +203,9 @@ export function parseAssignmentFields(assignmentText: string): AssignmentFields 
     }
     if (label === "Working branch") fields.workingBranch = value;
     else if (label === "Branch policy") fields.branchPolicy = value;
+    else if (label === "Worktree path") fields.worktreePath = value;
+    else if (label === "Write domain") fields.writeDomain = value;
+    else if (label === "Control write paths") fields.controlWritePaths = value.split(",").map((item) => item.trim()).filter(Boolean);
     else if (BUDGET_LABELS.includes(label)) fields.budget = value;
     else if (RETURN_SHAPE_LABELS.includes(label)) fields.returnShape = value;
     else if (TASK_BUDGET_LABELS.includes(label)) fields.taskBudget = value;
@@ -449,6 +455,30 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
 
   for (const { key, label, code } of REQUIRED_FIELDS) {
     requireField(violations, fields[key], label, code);
+  }
+  if (fields.writeDomain !== undefined && fields.writeDomain !== "control" && fields.writeDomain !== "work") {
+    violations.push(violation("high", "assignment.field.write-domain-unknown",
+      `unknown Write domain: ${JSON.stringify(fields.writeDomain)}`, 'set "Write domain: control" or "Write domain: work"'));
+  }
+  if (fields.writeDomain === "control") {
+    if (describeAbsence(fields.worktreePath) !== undefined) {
+      violations.push(violation("high", "assignment.field.control-write-missing-worktree",
+        "control-domain assignment requires Worktree path", 'add "Worktree path: <control checkout path>"'));
+    }
+    if (describeAbsence(fields.workingBranch) !== undefined) {
+      violations.push(violation("high", "assignment.field.control-write-missing-branch",
+        "control-domain assignment requires Working branch", 'add "Working branch: <control checkout branch>"'));
+    }
+    if (!fields.controlWritePaths?.length) {
+      violations.push(violation("high", "assignment.field.control-write-paths-missing",
+        "control-domain assignment requires Control write paths", 'add "Control write paths: .mstar/plans/run.md"'));
+    }
+    for (const target of fields.controlWritePaths ?? []) {
+      if (/[*?[\]{}]/.test(target)) {
+        violations.push(violation("high", "assignment.field.control-write-path-invalid",
+          `Control write paths does not accept globs: ${target}`, 'list concrete paths in "Control write paths"'));
+      }
+    }
   }
 
 // Review/audit rounds are bounded (mstar-harness-core § 定向执行与验证边界);

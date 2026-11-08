@@ -203,6 +203,44 @@ Task budget: S — one implementer round
   });
 });
 
+describe("control write assignment fields", () => {
+  const base = {
+    "Write domain": "control",
+    "Worktree path": "/control",
+    "Working branch": "main",
+    "Control write paths": ".mstar/plans/run.md",
+    "Task budget": "one round",
+  };
+
+  test("parses fields and comma-separated paths using the header grammar", () => {
+    const fields = parseAssignmentFields("- Worktree path: /control\n**Write domain**: control\nControl write paths: a, b , , c\n## Task\nWrite domain: work\n");
+    expect(fields.worktreePath).toBe("/control");
+    expect(fields.writeDomain).toBe("control");
+    expect(fields.controlWritePaths).toEqual(["a", "b", "c"]);
+  });
+
+  test("accepts control and work, rejects unknown domains", () => {
+    expect(validateAssignmentFields(assignment(base)).ok).toBe(true);
+    expect(validateAssignmentFields(assignment({ ...base, "Write domain": "work" })).ok).toBe(true);
+    const result = validateAssignmentFields(assignment({ ...base, "Write domain": "other" }));
+    expect(result.violations.some((v) => v.code === "assignment.field.write-domain-unknown" && v.severity === "high" && v.fix)).toBe(true);
+  });
+
+  test("requires both control fields and preserves the branch-form gate", () => {
+    const missing = validateAssignmentFields(assignment({ ...base, "Worktree path": undefined, "Working branch": undefined }));
+    const codes = missing.violations.map((v) => v.code);
+    expect(codes).toContain("assignment.field.control-write-missing-worktree");
+    expect(codes).toContain("assignment.field.control-write-missing-branch");
+    expect(codes).toContain("assignment.field.branch-missing");
+    const missingPaths = validateAssignmentFields(assignment({ ...base, "Control write paths": " ,  " }));
+    expect(missingPaths.violations.map((v) => v.code)).toContain("assignment.field.control-write-paths-missing");
+    const glob = validateAssignmentFields(assignment({ ...base, "Control write paths": ".mstar/plans/*.md" }));
+    expect(glob.violations.map((v) => v.code)).toContain("assignment.field.control-write-path-invalid");
+    const multiple = validateAssignmentFields(assignment({ ...base, "Branch policy": "direct on main - reason" }));
+    expect(multiple.violations.map((v) => v.code)).toContain("assignment.field.branch-multiple");
+  });
+});
+
 describe("validateAssignmentFields — branch-form matrix (writable)", () => {
  // Implement/ops rounds must carry the Task budget capacity field (spec § A1)
  // — every otherwise-valid fixture here gains it so the branch-form cases

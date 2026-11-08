@@ -28,6 +28,12 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 - 不得在**默认保护分支**（常见名：`main`、`master`；以项目约定为准）上直接实现功能改动，除非 Assignment 含显式例外。
 - 例外须在 Assignment 中写明一行：**`Branch policy: direct on <branch> — <reason>`**（典型：团队约定的热修直接打默认分支）。
 
+### 控制域写入（`Write domain: control`）
+
+仅当 Assignment **只写控制根的 gitignored 过程目标**（plans、assignments、sdd、iterations、workflows、projects、reviews、`store.db`）时声明 **`Write domain: control`**（取值 `control` | `work`；缺省 = `work`），并用 **`Control write paths: <path>[, <path>…]`** 列出实际要写的目标（绝对路径，或相对 `Worktree path` 解析）。这类单子可写 **`Worktree path`** = 控制根、**`Working branch: main`**，**豁免**默认保护分支门禁；分支写法仍须三选一。
+
+引擎核验（`mstar dispatch validate`）：`Worktree path`（按 Assignment 所在目录解析后 realpath）等于控制根、`Working branch` 等于控制根当前检出分支，且**逐个探测声明的目标**——每个目标须被 Git 忽略且位于控制根内。核验的是真实声明目标而非整个 harness：仓库只忽略 `.mstar/plans/` 时，声明 `plans/` 下的目标即通过；声明被跟踪的目标（如 `.mstar/specs/…`）被拒。拒绝码：`dispatch.control-write.control-root-unresolved`（从本仓库的检出运行）、`dispatch.control-write.worktree-not-control`、`dispatch.control-write.branch-mismatch`、`dispatch.control-write.target-committable`（该目标会被提交 ⇒ 改用工作分支/PR）、`dispatch.control-write.target-outside-control`、`dispatch.control-write.target-unverifiable`。字段层另有 `assignment.field.write-domain-unknown`、`assignment.field.control-write-missing-worktree`、`assignment.field.control-write-missing-branch`、`assignment.field.control-write-paths-missing`（`control` 域必须写 `Worktree path`、`Working branch` 与 `Control write paths`）。
+
 ### `<base>` 与叠分支（stacked branches）
 
 - 门禁的目标是**不在未授权的默认分支上直接提交**，不是「只能从 `main` 开新分支」。
@@ -84,6 +90,8 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 - `Branch policy: direct on <branch> — <reason>`
 
 若是新开分支但缺少 `<base>`，必须暂停并向用户澄清，不能猜测。
+
+控制域写入（只写控制根 gitignored harness）另须声明 `Write domain: control`，见「控制域写入」。
 
 ### 可写角色执行规则
 

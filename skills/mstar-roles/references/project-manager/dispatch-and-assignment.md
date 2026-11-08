@@ -98,7 +98,9 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **plan_id**: <plan-id or N/A + scope label>
 **Plan scope**: <inherited from the dispatching PM (`plan_id` + absolute `Plan Path`) — read-only for the leaf: no plan selection/preparation, workflow-snapshot or root-register writes, no lease release, and no session path / session reference / `--expect` token / operation id> | N/A
 **Review range / Diff basis**: <reproducible basis; merge-base = `metadata.target_branch` or PM-specified ref — not assumed `origin/main`>
-**Worktree path**: <absolute feature implementer path when L1/L2 isolation used; default `../<repo>.worktrees/<plan-id>-<slug>` relative to the realpath of the Git top-level, with `<repo>` its basename (L2 tracks: `<track-slug>`); must ≠ the main worktree (control root) ≠ `integration_worktree_path`>
+**Worktree path**: <absolute feature implementer path when L1/L2 isolation used; default `../<repo>.worktrees/<plan-id>-<slug>` relative to the realpath of the Git top-level, with `<repo>` its basename (L2 tracks: `<track-slug>`); a `work`-domain Assignment (default) must ≠ the main worktree (control root) ≠ `integration_worktree_path`; a `Write domain: control` Assignment names the control root itself>
+**Write domain**: `control` | `work` (absent = `work`) — `control` = writes only under the control root's gitignored process targets (plans/assignments/sdd/iterations/workflows/projects/reviews/`store.db`), may use `Working branch: main`, and is exempt from default-branch protection; the engine verifies worktree = control root, branch = its checked-out branch, and every `Control write paths` target Git-ignored and inside the control root (`mstar-branch-worktree` § 控制域写入)
+**Control write paths**: <required on `Write domain: control`; comma list of the actual process targets this Assignment writes, absolute or resolved against `Worktree path` — each must be Git-ignored and inside the control root; a repo ignoring only `.mstar/plans/` passes for a target under `plans/`, a tracked target like `.mstar/specs/…` is refused>
 **Main worktree branch**: <recorded residency branch of the primary checkout (main worktree), from the main plan header — passed unchanged; never a lifecycle-owned branch>
 **QA gate**: mandatory | pm-acceptance | report-only — see `references/project-manager/qa-trigger-matrix.md`
 **QA gate reason**: <tier label, e.g. hotfix-inline | small-feature-clean-qc | mandatory-medium-feature>
@@ -151,7 +153,9 @@ When iteration **L1** is active (the integration worktree is recorded in the wor
 
 | Field | Must be |
 |-------|---------|
-| **Worktree path** | Absolute feature checkout from row metadata.worktree_path; product/source edits only, distinct from main/control and integration |
+| **Worktree path** | Absolute feature checkout from row metadata.worktree_path; product/source edits only, distinct from main/control and integration for a `work`-domain Assignment — a control-domain Assignment instead names the control root itself |
+| **`Write domain`** | `control` \| `work` (absent = `work`); `control` requires `Worktree path` = control root and `Working branch` = its checked-out branch, writes only gitignored control-root process targets, and skips default-branch protection |
+| **`Control write paths`** | Required on `Write domain: control`: comma list of the actual process targets written (absolute, or resolved against `Worktree path`); each must be Git-ignored and inside the control root — a tracked target such as `.mstar/specs/…` is refused |
 | **`Main worktree branch`** | The recorded residency branch from the main plan header, passed unchanged — the main worktree's attached branch must equal it (never a lifecycle-owned branch; never invented at check time) |
 | **`Control harness root`** | Absolute `<main-repo-root>/{HARNESS_DIR}` — the control root is the primary checkout (main worktree), derived from Git (`readMainWorktree`) |
 | **`Plan Path`** | Absolute under control harness (not relative from feature cwd) |
