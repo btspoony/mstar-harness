@@ -206,7 +206,7 @@ Hard block when:
 - Board tasks map ID/owner/deps to their Assignment; every implement Assignment declares `PM Task Board coverage`.
 - The plan row stays the delivery authority and the board a coordination projection — mirror one board task per Assignment and keep both records in step (dsh Agent Teams board protocol → **`mstar-host`** → `references/dsh-agent-teams.md`).
 - Recovery from board/row drift: a board task with no plan row, or a row with no board task, is reconciled in the same coordination round with the row as authority; never dispatch from the board alone.
-- Default batch size is 1–2 coverage IDs per dispatch; `>= 3` requires the Assignment's `Why batching is safe` field.
+- Default batch size is 1–2 coverage IDs per dispatch; `>= 3` requires the Assignment's `Why batching is safe` field, and a single-batch dispatch states why the whole plan fits one batch.
 
 ---
 
