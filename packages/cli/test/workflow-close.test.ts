@@ -3,7 +3,8 @@
  *
  * The close runs on the ACTIVE execution authority only: it is one terminal
  * `lifecycle` transition on the workflow mutation API, which re-checks the
- * plan-row completion prerequisite, consults the registered delivery evidence,
+ * plan-row completion prerequisite, consults the registered delivery-kind
+ * evidence,
  * refuses a dangling integration merge claim, writes the terminal state and
  * unregisters the root entry in one transaction. The pre-activation file route
  * (`closeFileWorkflow`, the `--ended-at` / `--session <path>` transports) is
@@ -164,8 +165,8 @@ function gitOut(args: string[], cwd: string): string {
 /**
  * A temp Git workspace whose `.mstar` holds an ACTIVE execution authority, a
  * real feature checkout and the registered report-only plan document. The row's
- * delivery is `verification/report-only`, so its completion is the recorded
- * fulfilment of the declared policy plus QC/QA evidence — no merge, no
+ * delivery is `verification/report-only`, so its completion is QC/QA evidence
+ * under the registered completion policy — no fulfilment payload, no merge, no
  * integration pair.
  */
 async function activeFixture(label: string): Promise<Fixture> {
@@ -235,7 +236,7 @@ function closeArgs(fixture: Fixture, extra: string[] = []): string[] {
   return ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--harness", fixture.harness, ...extra];
 }
 
-/** Drive the row and the delivery evidence up to the close prerequisite. */
+/** Drive the row up to the close prerequisite. */
 async function driveToDone(fixture: Fixture): Promise<void> {
   const prepared = runCli([
     "plan", "prepare",
@@ -254,11 +255,6 @@ async function driveToDone(fixture: Fixture): Promise<void> {
     const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", payload, "--harness", fixture.harness], fixture.root, identityEnv());
     if (moved.exitCode !== 0) throw new Error(`plan progress ${status} failed: ${moved.stdout}${moved.stderr}`);
   }
-
-  const delivery = join(fixture.root, "delivery.json");
-  writeJson(delivery, { completion: { policy: COMPLETION_POLICY, evidence: "acceptance/plan-close/report.md" } });
-  const recorded = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", delivery, "--harness", fixture.harness], fixture.root, identityEnv());
-  if (recorded.exitCode !== 0) throw new Error(`workflow evidence failed: ${recorded.stdout}${recorded.stderr}`);
 
   const completion = join(fixture.root, "completion.json");
   writeJson(completion, {
@@ -483,9 +479,9 @@ describe("mstar status workflow-close — the report-only row reaches Done witho
   /**
    * A standalone `verification/report-only` row that was never prepared: prepare
    * does not apply to a row with no feature working branch, so the documented
-   * route (`progress` → `complete` → close) must reach Done and close on its own,
-   * and the refusal a caller hits BEFORE the policy fulfilment is recorded must
-   * name the command that records it.
+   * route (`progress` → `complete` → close) must reach Done and close on its own.
+   * The registered completion policy is a registration-time declaration, so no
+   * fulfilment record is written before either step.
    */
   test("a report-only row goes progress → complete → close", async () => {
     const fixture = await activeFixture("mstar-close-report-only");
@@ -504,19 +500,8 @@ describe("mstar status workflow-close — the report-only row reaches Done witho
       qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
     });
 
-    // Nothing is recorded yet: the refusal names the command that records the
-    // registered policy's fulfilment, which is the only way forward here.
-    const early = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
-    expect(early.exitCode).toBe(1);
-    expect(envelope(early).code).toBe("coordination.invalid-transition");
-    expect(message(early)).toContain("mstar workflow evidence");
-    expect(recoveryOf(early)).toContain("mstar workflow evidence");
-
-    const delivery = join(fixture.root, "delivery-report-only.json");
-    writeJson(delivery, { completion: { policy: COMPLETION_POLICY, evidence: "acceptance/plan-close/report.md" } });
-    const recorded = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", delivery, "--harness", fixture.harness], fixture.root, identityEnv());
-    expect(recorded.exitCode, recorded.stdout).toBe(0);
-
+    // No fulfilment record is written: the registered policy completes the row
+    // and the close without an evidence call.
     const completed = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
     expect(completed.exitCode, completed.stdout).toBe(0);
     expect(dataOf(completed)).toMatchObject({ data: { plan: { status: "Done" } } });
@@ -544,13 +529,8 @@ describe("mstar plan complete — a refusal names the verb that actually advance
     const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", started, "--harness", fixture.harness], fixture.root, identityEnv());
     expect(moved.exitCode, moved.stdout).toBe(0);
 
-    // The policy fulfilment IS recorded, so the report-only question is settled;
-    // the row's QA gate defaults to mandatory and the payload says pm-acceptance.
-    const delivery = join(fixture.root, "delivery-gate-mismatch.json");
-    writeJson(delivery, { completion: { policy: COMPLETION_POLICY, evidence: "acceptance/plan-close/report.md" } });
-    const recorded = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", delivery, "--harness", fixture.harness], fixture.root, identityEnv());
-    expect(recorded.exitCode, recorded.stdout).toBe(0);
-
+    // The row's QA gate defaults to mandatory and the payload says pm-acceptance;
+    // the report-only route records no fulfilment payload at all.
     const completion = join(fixture.root, "completion-gate-mismatch.json");
     writeJson(completion, {
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },

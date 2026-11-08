@@ -45,18 +45,18 @@ import { existsSync as existsSync10, mkdirSync as mkdirSync4, readdirSync as rea
 import { execFileSync as execFileSync4 } from "node:child_process";
 import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute6, join as join13, relative as relative3, resolve as resolve11 } from "node:path";
 import { basename as basename8, isAbsolute as isAbsolute8, join as join15, relative as relative4, resolve as resolve12, sep as sep7 } from "node:path";
-import { createHash as createHash9 } from "node:crypto";
-import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7 } from "node:fs";
+import { createHash as createHash9, randomUUID as randomUUID4 } from "node:crypto";
+import { closeSync, existsSync as existsSync13, fstatSync, openSync, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
 import { dirname as dirname10, isAbsolute as isAbsolute10, join as join17, resolve as resolve14, sep as sep9 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync8, unlinkSync as unlinkSync3 } from "node:fs";
+import { closeSync as closeSync2, existsSync as existsSync14, fstatSync as fstatSync2, fsyncSync, linkSync, lstatSync as lstatSync6, openSync as openSync2, readSync, statSync as statSync8, unlinkSync as unlinkSync4 } from "node:fs";
 import { basename as basename9, dirname as dirname11, join as join18, resolve as resolve15 } from "node:path";
 import { existsSync as existsSync15, statSync as statSync10 } from "node:fs";
-import { basename as basename12, dirname as dirname14, join as join20, relative as relative7, resolve as resolve17 } from "node:path";
+import { basename as basename11, dirname as dirname13, join as join20, relative as relative7, resolve as resolve17 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
-import { basename as basename13, dirname as dirname15, relative as relative8, resolve as resolve18 } from "node:path";
-import { createHash as createHash17 } from "node:crypto";
+import { basename as basename12, dirname as dirname14, relative as relative8, resolve as resolve18 } from "node:path";
+import { createHash as createHash16 } from "node:crypto";
 import { readFileSync as readFileSync23 } from "node:fs";
 import { join as join29 } from "node:path";
 var __defProp = Object.defineProperty;
@@ -175,11 +175,14 @@ function validateCompletionRecord(value, what, route) {
     if (!isNonEmptyString(value[key]))
       violations.push(invalid("coordination.row.completion-field", `${what}.${key} is required`));
   }
-  for (const key of ["source_sha", "review_base", "review_head"]) {
+  for (const key of ["source_sha", "review_head"]) {
     const item = value[key];
     if (!(reportOnly && item === null) && (typeof item !== "string" || !GIT_SHA.test(item))) {
       violations.push(invalid("coordination.row.completion-field", `${what}.${key} must be a full Git object id${reportOnly ? " or null" : ""}`));
     }
+  }
+  if (value.review_base !== null && (typeof value.review_base !== "string" || !GIT_SHA.test(value.review_base))) {
+    violations.push(invalid("coordination.row.completion-field", `${what}.review_base must be a full Git object id or null`));
   }
   if (!(reportOnly && value.worktree_path === null) && (!isNonEmptyString(value.worktree_path) || !isAbsolute(value.worktree_path))) {
     violations.push(invalid("coordination.row.completion-field", `${what}.worktree_path must be an absolute source checkout${reportOnly ? " or null" : ""}`));
@@ -15008,7 +15011,7 @@ function deliveryEvidenceViolations(value, what) {
     invalid3("must be an object");
     return violations;
   }
-  const members = ["compound", "pr", "merge", "completion"];
+  const members = ["compound", "merge"];
   const unknownMembers = Object.keys(value).filter((key) => !members.includes(key));
   if (unknownMembers.length > 0)
     invalid3(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
@@ -15029,30 +15032,30 @@ function deliveryEvidenceViolations(value, what) {
       }
     }
   }
-  const stringMembers = {
-    pr: ["repo", "head", "target"],
-    merge: ["provider", "evidence"],
-    completion: ["policy", "evidence"]
-  };
-  for (const member of ["pr", "merge", "completion"]) {
-    const block = value[member];
-    if (block === undefined)
-      continue;
-    if (!isPlainObject(block)) {
-      invalid3(`${member} must be an object`);
-      continue;
-    }
-    const fields = stringMembers[member];
-    const unknown = Object.keys(block).filter((key) => !fields.includes(key));
-    if (unknown.length > 0)
-      invalid3(`${member} has unknown key(s) ${unknown.join(", ")}`);
-    for (const field of fields) {
-      if (typeof block[field] !== "string" || block[field].trim() === "") {
-        invalid3(`${member}.${field} must be a non-empty string`);
+  const merge = value.merge;
+  if (merge !== undefined) {
+    if (!isPlainObject(merge))
+      invalid3("merge must be an object");
+    else {
+      const unknown = Object.keys(merge).filter((key) => key !== "commit");
+      if (unknown.length > 0)
+        invalid3(`merge has unknown key(s) ${unknown.join(", ")} — expected commit`);
+      else if (merge.commit === undefined) {
+        invalid3("merge must record its commit — an empty merge carries no fact; record a full commit id, or omit the member when the delivery branch tip is contained in the registered target");
+      } else if (typeof merge.commit !== "string" || !DELIVERY_COMMIT_RE.test(merge.commit)) {
+        invalid3(`merge.commit must be a full lowercase 40- or 64-hex Git object id — got ${JSON.stringify(merge.commit)}`);
       }
     }
   }
   return violations;
+}
+function storedDeliveryEvidence(value) {
+  if (!isPlainObject(value))
+    return value;
+  const { pr: _legacyPr, completion: _legacyCompletion, merge, ...members } = value;
+  if (!isPlainObject(merge))
+    return merge === undefined ? members : { ...members, merge };
+  return merge.commit === undefined ? members : { ...members, merge: { commit: merge.commit } };
 }
 function validateWorkflowSnapshot(doc) {
   const violations = [];
@@ -15157,7 +15160,7 @@ function validateWorkflowSnapshot(doc) {
     validateNonEmptyString4(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
   }
   if (doc.delivery !== undefined) {
-    violations.push(...deliveryEvidenceViolations(doc.delivery, "delivery"));
+    violations.push(...deliveryEvidenceViolations(storedDeliveryEvidence(doc.delivery), "delivery"));
   }
   const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
   if (terminal) {
@@ -15185,6 +15188,7 @@ var WORKFLOW_COMPOUND_OUTCOMES;
 var DATE_PART;
 var RFC3339_Z_RE;
 var DATE_ONLY_RE;
+var DELIVERY_COMMIT_RE;
 var LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path";
 var WorkflowSnapshotValidationError;
 var init_workflow = __esm(() => {
@@ -15201,6 +15205,7 @@ var init_workflow = __esm(() => {
   DATE_PART = String.raw`\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])`;
   RFC3339_Z_RE = new RegExp(String.raw`^${DATE_PART}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`);
   DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
+  DELIVERY_COMMIT_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
   WorkflowSnapshotValidationError = class WorkflowSnapshotValidationError2 extends Error {
     violations;
     constructor(message, violations) {
@@ -15369,6 +15374,7 @@ var FROZEN_ROW_FIELDS;
 var FROZEN_METADATA_FIELDS;
 var GIT_OBJECT_ID;
 var UNFINISHED_GIT_OPERATIONS;
+var GIT_READ_MAX_BUFFER;
 var PLAN_PARALLELISM_VALUES;
 var init_coordination = __esm(() => {
   init_coordination_write();
@@ -15376,9 +15382,9 @@ var init_coordination = __esm(() => {
   init_path();
   init_catalog_registration();
   init_catalog();
+  init_worktree();
   init_status();
   init_store_db();
-  init_worktree();
   init_workflow();
   init_qcreview_schema();
   PERSIST_PAYLOAD_CONTRACTS = {
@@ -15409,6 +15415,7 @@ var init_coordination = __esm(() => {
     ["rebase-merge", "rebase"],
     ["rebase-apply", "rebase"]
   ];
+  GIT_READ_MAX_BUFFER = 16 * 1024 * 1024;
   PLAN_PARALLELISM_VALUES = ["serial", "parallel"];
 });
 function parsedInstant(value) {
@@ -15567,13 +15574,13 @@ function ensureJournalForRead(dbPath) {
   const header = Buffer.alloc(DATABASE_HEADER_BYTES);
   let bytes;
   try {
-    const source = openSync(dbPath, "r");
+    const source = openSync2(dbPath, "r");
     try {
-      bytes = fstatSync(source).size;
+      bytes = fstatSync2(source).size;
       if (readSync(source, header, 0, header.length, 0) < header.length)
         return;
     } finally {
-      closeSync(source);
+      closeSync2(source);
     }
   } catch {
     return;
@@ -15582,11 +15589,11 @@ function ensureJournalForRead(dbPath) {
     return;
   let journal;
   try {
-    journal = openSync(`${dbPath}-wal`, "wx");
+    journal = openSync2(`${dbPath}-wal`, "wx");
   } catch {
     return;
   }
-  closeSync(journal);
+  closeSync2(journal);
 }
 function openConnection(dbPath, mode, DatabaseSync, timeout = DEFAULT_BUSY_TIMEOUT_MS) {
   let db;
@@ -16851,9 +16858,6 @@ init_workflow();
 init_workflow();
 init_workflow();
 init_workflow();
-init_path();
-var INPUT_ENTRIES_CAP = 1e4;
-var MAX_RETAINED_ENTRIES = INPUT_ENTRIES_CAP / 2;
 init_dispatch();
 init_worktree();
 init_path();
@@ -16903,7 +16907,7 @@ function hasHarnessRootMarkers(dir) {
 function isHarnessRootDir(dir) {
   if (hasHarnessRootMarkers(dir))
     return true;
-  const parentResolved = resolveHarnessDir(dirname14(dir));
+  const parentResolved = resolveHarnessDir(dirname13(dir));
   return parentResolved !== null && resolve17(parentResolved) === dir;
 }
 function resolveHarnessRootOf(target) {
@@ -16911,7 +16915,7 @@ function resolveHarnessRootOf(target) {
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
-    const parent = dirname14(dir);
+    const parent = dirname13(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -16921,7 +16925,7 @@ function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
   const resolved = resolve17(targetPath);
-  const name = basename12(resolved);
+  const name = basename11(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
@@ -16945,8 +16949,8 @@ function harnessDocKindOfTarget(targetPath) {
     }
     return null;
   };
-  const probeRoot = resolveHarnessRootOf(dirname14(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved));
+  const probeRoot = resolveHarnessRootOf(dirname13(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname13(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -16954,13 +16958,13 @@ function harnessDocKindOfTarget(targetPath) {
     return classified;
   if (probeRoot === null)
     return null;
-  const fallbackDir = resolveHarnessDir(dirname14(resolved));
+  const fallbackDir = resolveHarnessDir(dirname13(resolved));
   if (fallbackDir === null || fallbackDir === probeRoot)
     return null;
   return classify(fallbackDir);
 }
-function violationLine(violation10) {
-  return `[${violation10.severity}] ${violation10.code}: ${violation10.message}${violation10.fix ? ` (fix: ${violation10.fix})` : ""}`;
+function violationLine(violation9) {
+  return `[${violation9.severity}] ${violation9.code}: ${violation9.message}${violation9.fix ? ` (fix: ${violation9.fix})` : ""}`;
 }
 var MAX_STATUS_CONTENT_LENGTH = 2 * 1024 * 1024;
 function oversizedViolation(filePath) {
@@ -16968,7 +16972,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename12(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename11(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
@@ -16996,7 +17000,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename12(filePath)} content must be a JSON object`
+          message: `${basename11(filePath)} content must be a JSON object`
         }
       ];
     }
@@ -17083,32 +17087,32 @@ function landedPathOf(filePath) {
       try {
         linkTarget = readlinkSync(probe);
       } catch {
-        const parent = dirname15(probe);
+        const parent = dirname14(probe);
         if (parent === probe)
           return resolve18(filePath);
-        suffix.unshift(basename13(probe));
+        suffix.unshift(basename12(probe));
         probe = parent;
         continue;
       }
       if (symlinkHops >= MAX_SYMLINK_HOPS)
         throw new SymlinkResolutionError;
       symlinkHops++;
-      probe = resolve18(dirname15(probe), linkTarget);
+      probe = resolve18(dirname14(probe), linkTarget);
     }
   }
 }
 function isStoreAuthorityTarget(target) {
-  if (!isStoreAuthorityName(basename13(target)))
+  if (!isStoreAuthorityName(basename12(target)))
     return false;
-  return isHarnessRootDir(dirname15(target));
+  return isHarnessRootDir(dirname14(target));
 }
 function caseFoldedDocKind(candidate) {
   const target = resolve18(candidate);
-  const name = basename13(target);
+  const name = basename12(target);
   const kind = caseFoldedKindOf(name);
   if (kind === null)
     return null;
-  let dir = dirname15(target);
+  let dir = dirname14(target);
   for (;; ) {
     if (isHarnessRootDir(dir)) {
       let base = dir;
@@ -17122,7 +17126,7 @@ function caseFoldedDocKind(candidate) {
       if (CASE_FOLDED_SHAPES[kind].test(relative8(base, target)))
         return { harnessDir: dir, kind };
     }
-    const parent = dirname15(dir);
+    const parent = dirname14(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -17298,7 +17302,7 @@ function readCompassSource(spec) {
       diagnostic: `inaccessible: read refused (${code2 === "" ? "unknown" : code2}) at ${spec.relativePath}`
     };
   }
-  return { state: "ok", sha256: createHash17("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
+  return { state: "ok", sha256: createHash16("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
 }
 function sourceKeyOf2(kind, rootKind, relativePath) {
   return `${kind}:${rootKind}:${relativePath}`;
@@ -17437,7 +17441,7 @@ function deriveCompass(iterationId, content3, relativePath) {
   }
   const gate2 = validateCompassFrontmatter(frontmatter);
   if (!gate2.ok)
-    return { diagnostic: `invalid: ${gate2.violations.map((violation17) => violation17.code).join(", ")}` };
+    return { diagnostic: `invalid: ${gate2.violations.map((violation16) => violation16.code).join(", ")}` };
   const body = bodyOf(content3);
   return {
     iterationId,
@@ -17493,12 +17497,12 @@ async function captureExecutionProjectionSources(context) {
     const diagnostics = [];
     const rows = { workflows: [], plans: [], leases: [], compasses: [] };
     const recordInvalid = (sourceSpec, content3, message, readState = "ok") => {
-      const sha2564 = readState === "invalid" ? null : createHash17("sha256").update(content3, "utf8").digest("hex");
+      const sha2564 = readState === "invalid" ? null : createHash16("sha256").update(content3, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "invalid", diagnostic: message, declared: true });
       diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
     };
     const record = (sourceSpec, content3, shaText = content3) => {
-      const sha2564 = createHash17("sha256").update(shaText, "utf8").digest("hex");
+      const sha2564 = createHash16("sha256").update(shaText, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "ok", diagnostic: null, declared: sourceSpec.declared });
     };
     const spec = (kind, rel) => ({
@@ -17565,9 +17569,9 @@ async function captureExecutionProjectionSources(context) {
       }
       const projectionState = servedWorkflow.state;
       const workflowValidation = validateWorkflowSnapshot({ ...projectionState, plans: [] });
-      const workflowErrors = workflowValidation.violations.filter((violation17) => violation17.code !== LEGACY_WORKTREE_PATH_CODE);
+      const workflowErrors = workflowValidation.violations.filter((violation16) => violation16.code !== LEGACY_WORKTREE_PATH_CODE);
       if (workflowErrors.length > 0) {
-        recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation17) => violation17.code).join(", ")})`);
+        recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation16) => violation16.code).join(", ")})`);
         continue;
       }
       record(workflowSpec, item.state_json);
@@ -17717,7 +17721,7 @@ function computeSourceSetHash(catalogRevision, sources) {
   const tuples = sources.map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\x00")).sort();
   const payload = [`projection-format:${PROJECTION_FORMAT_VERSION}`, `catalog-revision:${catalogRevision}`, ...tuples].join(`
 `);
-  return createHash17("sha256").update(payload, "utf8").digest("hex");
+  return createHash16("sha256").update(payload, "utf8").digest("hex");
 }
 var PROJECTION_TABLES = [
   "projection_sources",
@@ -17864,7 +17868,7 @@ function projectionRenders(db, rowsOf) {
   });
 }
 function renderedDigest(tables) {
-  return createHash17("sha256").update(JSON.stringify(tables), "utf8").digest("hex");
+  return createHash16("sha256").update(JSON.stringify(tables), "utf8").digest("hex");
 }
 function captureRenders(db, capture) {
   return projectionRenders(db, (spec) => spec.captureRows(capture));

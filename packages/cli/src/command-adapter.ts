@@ -26,7 +26,6 @@ import {
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
 import { unionBranchSchemas } from "./schema-branches.js";
-import { captureSddEvidenceFromFile, verifySddEvidence } from "./sdd-evidence.js";
 import { detectInstalledPluginVersion } from "./plugin-version-alignment";
 import type { Scope, Target } from "./types";
 
@@ -898,8 +897,6 @@ function cliEffects(services: Array<{ close(): Promise<void> }>): CommandEffects
       });
       return pending.promise;
     },
-    captureSddEvidence: captureSddEvidenceFromFile,
-    verifySddEvidence,
     detectPluginVersion: ({ target, scope }) => detectInstalledPluginVersion(target as Target, scope as Scope),
   };
 }

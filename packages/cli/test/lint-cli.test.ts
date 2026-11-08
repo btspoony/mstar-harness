@@ -87,13 +87,23 @@ describe("mstar lint — content-type lints", () => {
     });
   });
 
-  test("task report without TDD triple → lint.sdd-tdd.missing-*, exit 1", () => {
+  test("task report prose without evidence → exit 0 (lint checks structure only)", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "task-1-report.md");
       writeFileSync(file, "Did the work. Output looked fine.\n");
       const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      expect(lintResults(result)[0]?.violations).toEqual([]);
+    });
+  });
+
+  test("task report with bare Tests: N/A → lint.sdd-evidence.bare-tests-na, exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "task-1-report.md");
+      writeFileSync(file, "Tests: N/A\nDid the work.\n");
+      const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(1);
-      expect(lintViolationCodes(result)).toEqual(expect.arrayContaining(["lint.sdd-tdd.missing-tests", "lint.sdd-tdd.missing-command", "lint.sdd-tdd.missing-output"]));
+      expect(lintViolationCodes(result)).toContain("lint.sdd-evidence.bare-tests-na");
     });
   });
 
