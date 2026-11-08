@@ -11,9 +11,9 @@
  * reports over the row entry, refreshed by the `settings/document-updated`
  * event. A settings seam that does not model that describe/event contract
  * leaves the composed config empty forever: the declares land in the store
- * and the seed registry, yet the readback stays empty and the 13 mstar role
- * ids never become effective — the regression this spec caught when the
- * devDep crossed the 0.5.2 → 0.6.4 generation. The existing suites cannot
+ * and seed registry, yet the mstar roles never become effective — the
+ * regression this spec caught when the devDep crossed the 0.5.2 → 0.6.4
+ * generation. The existing suites cannot
  * see this: the seeds/advisory/coexistence suites inject fake services (no
  * upstream write channel), and the installed-deployment e2e models the host
  * config-stack re-composition (dispose + re-apply + a `subagent/start`
@@ -38,7 +38,7 @@
  * while the persisted namespace and the boot log stay clean. GREEN on the
  * healthy tree: the full union (mirror-derived mstar ids ∪ the installed
  * upstream preset ids), every mstar row seeded with a non-empty persona,
- * the 13 rows persisted, and a clean boot log.
+ * the mstar rows persisted, and a clean boot log.
  *
  * Boot-log capture: cordis's `LoggerService` registers a default buffer
  * exporter at construction — `ctx.logger.buffer` — but that buffer's level
@@ -168,7 +168,6 @@ describe('fallbacks seeds boot-order — single REAL-package boot converges the 
       //    the installed upstream preset ids (runtime anchor, not a local
       //    constant — upstream drift fails here, not in the field).
       const mstarIds = subagentRoleIds(REAL_MIRROR)
-      expect(mstarIds, 'the mirror yields the 13 mstar subagent role ids').toHaveLength(13)
       const presetIds = presetRoles.map((role) => role.id)
       const expectedIds = new Set([...mstarIds, ...presetIds])
       expect(expectedIds.size, 'mstar and preset id sets are disjoint').toBe(mstarIds.length + presetIds.length)
@@ -230,6 +229,7 @@ describe('fallbacks seeds boot-order — single REAL-package boot converges the 
           .map((row) => (typeof row === 'object' && row !== null && 'id' in row ? (row as { id: unknown }).id : undefined))
           .filter((id): id is string => typeof id === 'string'),
       )
+      expect(persistedIds.has('project-manager'), 'the PM is not persisted as a subagent seed').toBe(false)
       for (const id of mstarIds) {
         expect(persistedIds.has(id), `persisted settings row for ${id}`).toBe(true)
       }

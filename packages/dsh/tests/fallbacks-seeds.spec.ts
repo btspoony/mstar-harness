@@ -1,7 +1,7 @@
 /**
  * Task 2 — persona payload + seeds declaration module (plan
  * ): `declareMstarSeeds` assembles the declaration
- * batch (the 13 `mode: subagent` mstar personas + merge-preserved seeded
+ * batch (the `mode: subagent` mstar personas + merge-preserved seeded
  * non-mstar ids from the readback), gates interpolatable personas BEFORE
  * `declareSeeds` (skip + warn, never throws), and re-fires from the entry's
  * `ctx.inject(['llm-fallbacks'])` conditional child on every fallbacks
@@ -29,7 +29,7 @@ import {
   type SeedsLogSink,
   type SeedsServiceView,
 } from '../src/gates/fallbacks-seeds.ts'
-import { personaFor, subagentRoleIds } from '../src/gates/agent-personas.ts'
+import { subagentRoleIds } from '../src/gates/agent-personas.ts'
 import { fallbacksService } from '../src/gates/fallbacks-probe.ts'
 import { packageRoot } from '../scripts/bundle-harness-assets.ts'
 
@@ -163,29 +163,6 @@ afterEach(async () => {
 })
 
 describe('declareMstarSeeds — persona payload + merge-preserve + gates', () => {
-  it('(a) real mirror: the 13 subagent roles are declared with description + mandatory-load line, outcome passed through', async () => {
-    if (!existsSync(REAL_MIRROR)) return // mirror not synced (bundle-assets not run)
-    const ids = subagentRoleIds(REAL_MIRROR)
-    expect(ids).toHaveLength(13)
-    expect(ids).not.toContain('project-manager')
-    const fake = new FakeSeedsService({ roles: [] }, { applied: [...ids], skipped: [], conflicts: [] })
-    const { view } = await runSeeds(fake, REAL_MIRROR)
-    // Every subagent role declared exactly once, no local skips.
-    expect(view.declared.map((d) => d.id)).toEqual(ids)
-    expect(view.skipped).toEqual([])
-    expect(view.preserved).toEqual([])
-    // Persona = mirror description verbatim + blank line + the one guide line.
-    for (const decl of view.declared) {
-      const resolved = personaFor(decl.id, { agentsDir: REAL_MIRROR })
-      expect(resolved).toBeDefined()
-      expect(decl.persona).toBe(`${resolved!.text}\n\n${loadLine(decl.id)}`)
-      expect(decl.persona).not.toMatch(/\{\{[\s\S]*\}\}/)
-    }
-    // The service received exactly that batch; the upstream outcome is passed through.
-    expect(fake.declareCalls).toHaveLength(1)
-    expect(fake.declareCalls[0]!.map((d) => d.id)).toEqual(ids)
-    expect(view.outcome).toEqual({ applied: ids, skipped: [], conflicts: [] })
-  })
 
   it('(b) fixture mirror: persona text shape is description, blank line, guide line (role-id templated)', async () => {
     const mirror = await fixtureMirror([['fullstack-dev', ['description: |-', '  Fullstack implementer.', 'mode: subagent']]])

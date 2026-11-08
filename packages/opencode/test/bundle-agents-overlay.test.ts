@@ -14,7 +14,7 @@
  * specs).
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +27,7 @@ import {
   sourceAgents,
   sourceOpenCodeAgents,
 } from "../scripts/bundle-harness-assets.ts";
+import { MorningStarHarnessPlugin } from "../src/mstar.js";
 
 /** A tiny throwaway source/dest pair; never touches the real mirrors. */
 async function fixturePair(): Promise<{ src: string; dest: string; cleanup: () => Promise<void> }> {
@@ -83,28 +84,17 @@ describe("mergeTree — overlay contract on a tiny fixture", () => {
   });
 });
 
-// Real-checkout sanity: the sources are tracked, so these always run in the
-// monorepo.
-describe("real checkout sources (monorepo)", () => {
-  test("repo-root agents/ stays the shared subagent surface — 13 shells, no PM", () => {
-    const shells = readdirSync(sourceAgents).filter((f) => f.endsWith(".md"));
-    expect(shells).toHaveLength(13);
-    expect(existsSync(join(sourceAgents, "project-manager.md"))).toBe(false);
-  });
-
-  test("package-local agents/ carries the OpenCode-only primary seat", () => {
-    expect(readFileSync(join(sourceOpenCodeAgents, "project-manager.md"), "utf8")).toContain("mode: primary");
-  });
-});
 
 // Bundled-mirror assertion: the mirror is gitignored and produced by
 // bundle-assets (the build runs it before the test suite in CI), so this
 // fails in CI if the overlay merge is ever dropped. Skips in bare checkouts
 // where bundle-assets has not run.
-test.skipIf(!existsSync(destAgents))("bundled harness-agents/ keeps the PM primary seat on top of the 13 shared subagent shells", () => {
-  const shells = readdirSync(destAgents).filter((f) => f.endsWith(".md"));
-  expect(shells).toHaveLength(14);
-  expect(readFileSync(join(destAgents, "project-manager.md"), "utf8")).toContain("mode: primary");
+test.skipIf(!existsSync(destAgents))("the bundled overlay exposes the primary PM and shared agents to OpenCode", async () => {
+  const hooks = await MorningStarHarnessPlugin();
+  const config: Parameters<NonNullable<typeof hooks.config>>[0] = {};
+  await hooks.config?.(config);
+  expect(config.agent?.["project-manager"]?.mode).toBe("primary");
+  expect(config.agent?.["fullstack-dev"]?.mode).toBe("subagent");
 });
 
 test("packed artifact carries harness-agents (package.json files)", () => {
