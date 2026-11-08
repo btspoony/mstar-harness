@@ -89,9 +89,13 @@ For the deep method behind this category — value bar, authoring gate (used bot
 
 ### Prove-or-reject before reporting DEBT (`simplify` scope)
 
+**Proof bar — every candidate carries six clauses, one each, no narrative:** current owner; the effective producer-to-consumer path that makes it live; what disappears; what remains; the capability or compatibility given up; the strongest reason to retain it. A candidate with no reachable producer or reader is not thereby removable — name the extension point or dynamic loader that could reach it, or record insufficient evidence.
+
+**Rejection grading.** (a) Removal of unreachable or unread behaviour; (b) a narrower public or product behaviour with the loss stated explicitly; (c) a protected obligation or insufficient evidence. Reject a candidate that breaks a retained obligation, merely relocates the same complexity, or has no meaningful reduction — read each rejection at the level of the proposed change, so one stale inventory does not settle every independent item.
+
 **Prove before reporting dead code.** Classify consumers first — production corpus / tests-docs-only / ambiguous (examples, scripts: inspect, don't assume). Grep the exact symbol, plus event/field/config names, both quoted and bare. Read the call sites — a grep hit is a lead, not a verdict. "Tests are the only consumer" is a finding-enabler when the pinned behavior is non-load-bearing; "an invariant/test existing only to protect an unused API" is itself the signal.
 
-**Hand-rolled vs dependency swap bar.** Name the exact surface the package covers — residual semantics count against the swap. Health-check the dependency honestly. A recorded decision (ADR/knowledge doc) beats the swap claim — re-litigating a settled tradeoff needs new evidence. Weigh net deletion: implementation + dedicated tests + docs − remaining glue. A wrapper that relocates the same complexity is not a win.
+**Hand-rolled vs dependency swap bar.** Name the exact surface the package covers — residual semantics count against the swap. Health-check the dependency honestly. A recorded decision (ADR/knowledge doc) beats the swap claim — re-litigating a settled tradeoff needs new evidence. Weigh net deletion: implementation + dedicated tests + docs − remaining glue.
 
 **Mirrored-fact test.** When several mechanisms track the same liveness/settlement fact, propose one controller — but preserve machinery protecting publication, rollback, callback containment, and first-terminal arbitration.
 
