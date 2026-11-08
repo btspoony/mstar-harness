@@ -1433,8 +1433,10 @@ export function verifyDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationRe
 function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[] {
   const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
-  // Both anchors and the merge member were just proven present by the pure
-  // consultation; the proof itself only has to name what Git could not supply.
+  // The pure consultation just proved both branch anchors present. The merge
+  // member stays OPTIONAL — it is read when recorded, never required — so the
+  // proof below reads it defensively and only has to name what Git could not
+  // supply.
   const deliveryBranch = deliveryBranchOf(branch) as string;
   const targetBranch = branch.target as string;
   const refuse = (message: string, fix: string): ValidationResult[] => [

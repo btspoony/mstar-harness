@@ -539,9 +539,10 @@ export function deliveryEvidenceMembers(kind: WorkflowDeliveryKind): readonly st
  * recorded the close-owned `delivery.proof`. A stored block is history and is
  * never rewritten, so persisted-state validation reads those retired members
  * as ABSENT instead of refusing the whole snapshot - the same read tolerance
- * the pre-rename `branch.source` spelling gets. Every WRITE path refuses them
- * (`deliveryEvidenceMembers` plus the strict shape rule), so the tolerated
- * shape can never be recorded again.
+ * the pre-rename `branch.source` spelling gets. The store's write verbs refuse
+ * them (`deliveryEvidenceMembers` plus the strict shape rule), so no engine path
+ * can CREATE one; a hand-written file that already carries one stays writable,
+ * because rewriting history is not a repair.
  */
 export function storedDeliveryEvidence(value: unknown): unknown {
   if (!isPlainObject(value)) return value;
@@ -954,9 +955,10 @@ export function assertDeliveryRegistrationCoherence(
 }
 
 /**
- * Delivery-kind evidence consultation is the shared pure rule used by ACTIVE
- * workflow completion and the read-only Phase-6 gate; neither consumer may
- * duplicate the registered-kind member map or evidence-shape checks.
+ * Delivery-kind evidence consultation is the pure rule the terminal close runs
+ * (through `verifyDeliveryEvidence`); the read-only Phase-6 gate reads the
+ * stored terminal facts and consults nothing, so this rule has one consumer and
+ * no second copy of the registered-kind member map exists.
  *
  * Only `type: plan` lifecycles consult this rule (an iteration declares no
  * delivery kind — §1). The registered kind, never inferred fields, determines

@@ -953,10 +953,13 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
       db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
     });
     const gate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
-    // The contract: the gate never publishes a delivery-evidence verdict for a
-    // completed lifecycle. (This fixture's close was refused, so its registry
-    // row legitimately still produces the unregistered-entry code.)
-    expect(gate.violations.map((entry) => entry.code).filter((code) => code.startsWith("PHASE6_DELIVERY_"))).toEqual([]);
+    // The contract has two halves, and both are asserted: the gate never
+    // publishes a delivery-evidence verdict for a completed lifecycle, and it
+    // still reads stored facts — this fixture's close was refused, so its
+    // registry row is legitimately still present.
+    const codes = gate.violations.map((entry) => entry.code);
+    expect(codes.filter((code) => code.startsWith("PHASE6_DELIVERY_"))).toEqual([]);
+    expect(codes).toContain("PHASE6_ROOT_ENTRY_PRESENT");
   });
 
   test("a squash merge is proven by its recorded commit, and refused while that commit is not in the target", async () => {

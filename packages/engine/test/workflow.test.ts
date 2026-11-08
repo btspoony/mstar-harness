@@ -560,10 +560,10 @@ describe("consultDeliveryEvidence — pure delivery rules", () => {
       delivery: { compound: { outcome: "created" }, proof: legacyProof },
       plans: [{ id: "p-1", title: "Plan", file: "plans/p-1.md", status: "Done" }],
     });
-    expect(validateWorkflowSnapshot(storedProof).violations.map((entry) => entry.code))
-      .not.toContain("workflow.snapshot.invalid-delivery-evidence");
-    expect(consultDeliveryEvidence(storedProof as never)).toEqual([]);
-    // No write path may record it again.
+    // The persisted-state read is clean, end to end: a reverted tolerance fails
+    // here, not merely on a "code absent" check.
+    expect(validateWorkflowSnapshot(storedProof).violations).toEqual([]);
+    // And the direct member rule refuses the same member on a delivery patch.
     expect(deliveryEvidenceViolations({ proof: legacyProof }, "patch").map((entry) => entry.code)).toContain(code);
   });
 
