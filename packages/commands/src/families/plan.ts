@@ -157,7 +157,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
                 : id === "plan.show"
                   ? "Select a registered workflow and plan id from the execution authority. Run mstar plan show --workflow <workflow-id> --plan <plan-id>."
                   : id === "plan.prepare"
-                    ? "Correct the configuration and retry mstar plan prepare --workflow <workflow-id> --plan <plan-id> --qa-gate pm-acceptance."
+                    ? "Correct the source checkout and branch, then retry mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch> --qa-gate pm-acceptance."
                     : id === "plan.progress"
                       ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress '<json-progress-object>'."
                       : id === "plan.issue-add"
