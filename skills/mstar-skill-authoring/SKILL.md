@@ -1,11 +1,11 @@
 ---
 name: mstar-skill-authoring
-description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门控）。在新建任意 skill、大改 SKILL.md、改写 description 触发契约、压缩过长 body、评审 skill 结构、或判断某段行为塑形文案是否值得保留时读取。适用于任何领域的 skill，不限于本仓库专题；不用于普通应用实现。
+description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门控）。在新建任意 skill、大改 SKILL.md、改写 description 触发契约、压缩过长 body、评审 skill 结构、判断某段行为塑形文案是否值得保留，或写 / 评审 skill body 之外的模型可见文本（tool 与参数定义、CLI 帮助、诊断与拒绝字符串、Assignment 字段）时读取。适用于任何领域的 skill 与模型可见文本，不限于本仓库专题；不用于普通应用功能实现。
 ---
 
 # Skill Authoring
 
-本 skill 约束如何编写、审查与验证 **任意** agent skill（`SKILL.md`）。面向 **skill 工作**，不是普通应用实现。它判 skill 是否成型——名称、`description` 触发契约、5 问 body、渐进披露；body 内的文字是否在 HEAD 可解析归 **`mstar-prose`**，本 skill 不复述其判断。
+本 skill 约束如何编写、审查与验证 **任意** agent skill（`SKILL.md`），以及 skill body 之外的模型可见文本（见「Progressive Disclosure」）。面向 **skill 工作**，不是普通应用功能实现。它判 skill 是否成型——名称、`description` 触发契约、5 问 body、渐进披露；body 内的文字是否在 HEAD 可解析归 **`mstar-prose`**，本 skill 不复述其判断。
 
 ## Load Order
 
