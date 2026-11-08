@@ -40,7 +40,7 @@
  * cannot drift out of five-question alignment without failing CI.
  * Guard numbers are per-plan locked, not positional.
  * 6. skills corpus — Engine-check callout dedup: the same normalized
- * `**Engine check (when available):**` callout body must not appear
+ * `ENGINE_CHECK_MARKER` (`**Engine check:**`) callout body must not appear
  * in more than one file (bilingual variant `或 import` → `or import`
  * counts as identical), so a re-vendored canonical callout fails CI
  * before it drifts.
@@ -124,6 +124,10 @@ import {
 } from "../packages/engine/src/index.ts";
 export const AUDIT_CATEGORY_DOC = "skills/mstar-use-cli/references/checks-and-lints.md";
 export const USE_CLI_SKILL_DIR = "skills/mstar-use-cli";
+/** The one literal that makes a blockquote an engine-check callout. Both
+ * callout guards key off it, so a form change moves here once instead of
+ * leaving a renamed marker silently unscanned (`0 callouts` still exits 0). */
+export const ENGINE_CHECK_MARKER = "**Engine check:**";
 const root = process.cwd();
 const failures: string[] = [];
 let calloutsChecked = 0;
@@ -676,15 +680,16 @@ export function readDeclaredBins(
 }
 
 /**
- * Guard 1 forward half — every `**Engine check (when available):**`
- * blockquote run in a skill file. Backticked CLI citations
+ * Guard 1 forward half — every `ENGINE_CHECK_MARKER` blockquote run in a
+ * skill file. Backticked CLI citations
  * (`mstar status validate`, `mstar-harness dispatch validate`, …) must
  * reference a **declared CLI bin** (the caller passes the `bin` names read
  * from packages/cli/package.json — the manifest is SSOT, never hardcoded)
- * and a real `.command()` path from the CLI inventory; engine imports in
- * the same callout must reference real engine exports. One failure row per
- * violation. Load-bearing: an undeclared binary prefix (e.g. `mstarr`)
- * fails drift-lint (regression-pinned by scripts/drift-lint.test.ts).
+ * and a real `.command()` path from the CLI inventory; engine imports —
+ * or, on a collapsed one-line callout, the named engine symbol — must
+ * reference real engine exports. One failure row per violation.
+ * Load-bearing: an undeclared binary prefix (e.g. `mstarr`) fails
+ * drift-lint (regression-pinned by scripts/drift-lint.test.ts).
  */
 export function checkEngineCallouts(
   files: Array<{ rel: string; text: string }>,
@@ -710,7 +715,7 @@ export function checkEngineCallouts(
     }
 
     for (const run of runs) {
-      if (!run.text.includes("**Engine check (when available):**")) continue;
+      if (!run.text.includes(ENGINE_CHECK_MARKER)) continue;
       calloutsChecked++;
 
       const cited = checkCliCitationsInText(rel, run.text, {
@@ -733,6 +738,17 @@ export function checkEngineCallouts(
           }
         }
       }
+
+ // Collapsed callouts name the engine symbol instead of re-writing the
+ // import (`(engine `a`, `b`)` / `engine `a` —`); those names are exports
+ // too, so they get the same check as a spelled-out import.
+      for (const named of run.text.matchAll(/\bengine ((?:`[A-Za-z_$][\w$]*`(?:, | \/ )?)+)/g)) {
+        for (const name of named[1].matchAll(/`([^`]+)`/g)) {
+          if (!opts.engineExports.has(name[1])) {
+            failures.push(`${rel}:${run.start + 1} callout names unknown engine export "${name[1]}"`);
+          }
+        }
+      }
     }
   }
 
@@ -740,7 +756,7 @@ export function checkEngineCallouts(
 }
 
 /**
- * Guard 6 — Engine-check callout dedup ( * each contract's `**Engine check (when available):**` callout must
+ * Guard 6 — Engine-check callout dedup ( * each contract's `ENGINE_CHECK_MARKER` callout must
  * live in exactly one skill file. A normalized body appearing in >1 file is
  * a violation (one failure row naming every site) — the drift this guard
  * exists to catch is a copy of a canonical callout landing at a second site
@@ -750,8 +766,8 @@ export function checkEngineCallouts(
  * whitespace, and map the bilingual variant `或 import` → `or import`. The
  * trailing "On `fail` -> do not proceed" clause is part of the body, so a
  * pointer that re-runs the canonical sentence with a different tail still
- * fails; one-line pointers that carry no `**Engine check (when available):**`
- * marker are naturally exempt (they are not callouts at all).
+ * fails; blockquote runs that carry no `ENGINE_CHECK_MARKER` are naturally
+ * exempt (they are not callouts at all).
  */
 export function checkCalloutDuplication(
   files: Array<{ rel: string; text: string }>,
@@ -781,7 +797,7 @@ export function checkCalloutDuplication(
         const runText = lines.slice(runStart, i).join("\n");
         const line = runStart + 1;
         runStart = -1;
-        if (!runText.includes("**Engine check (when available):**")) continue;
+        if (!runText.includes(ENGINE_CHECK_MARKER)) continue;
         const body = normalize(runText);
         if (!bodies.has(body)) bodies.set(body, []);
         bodies.get(body)!.push({ rel, line });

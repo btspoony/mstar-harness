@@ -56,7 +56,7 @@ mstar status workflow-close --workflow <id> --session-ref <wire> --expect <full-
 
 Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease + root 条目已注销 + `type: plan` 交付证据，§6.1），**不**验证远端 merged 证据，**不**检查物理清理是否完成。
 
-> **Engine check (when available):** run `mstar iteration gate --phase 6 --workflow <id>` (or `import { evaluatePostMergeCloseFromExecutionAuthority } from "@mstar-harness/engine"` in a host hook) to gate the local post-merge close state（valid terminal shape + 无 dangling lease + root 条目已注销；稳定码 `PHASE6_*`；invalid/unreadable root 不是条目已注销的证明）. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar iteration gate --phase 6 --workflow <id>` (engine `evaluatePostMergeCloseFromExecutionAuthority`) to gate the local post-merge close state（valid terminal shape + 无 dangling lease + root 条目已注销；稳定码 `PHASE6_*`；invalid/unreadable root 不是条目已注销的证明）. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## Standalone plans & abandonment
 

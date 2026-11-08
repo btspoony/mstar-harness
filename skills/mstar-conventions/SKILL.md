@@ -35,7 +35,7 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 | `{REVIEW_DIR}` | `{HARNESS_DIR}/reviews/`（默认；`.mstarc` `review_dir` 声明时用声明值）——review 运行目录树（codebase audit / PR / branch / diff review 的 report 与 evidence；`mstar audit scaffold` 写入，`mstar pr-review report-path` 解析；gitignored） |
 | `{HARNESS_DIR}/store.db` | 进程/control harness 根下的 issue/catalog/roadmap/milestone 与 **execution_* 执行权威** SQLite（`resolveProcessHarnessDir` 后 `<resolved root>/store.db`；尊重 `.mstarc`）。功能/集成 worktree **不**在 cwd 建库；roadmap 规则 → `mstar-project-governance`。 |
 
-> **Engine check (when available):** import `resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveAdrDir` / `resolveWorkflowDir` / `resolveProjectDir` / `resolveReviewDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve [path]`, whose JSON envelope prints the resolved dirs (including `specsDir`, `knowledgeDir`, `adrDir`) — to confirm the resolution below. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** engine `resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveAdrDir` / `resolveWorkflowDir` / `resolveProjectDir` / `resolveReviewDir` — or run `mstar path resolve [path]`, whose JSON envelope prints the resolved dirs (including `specsDir`, `knowledgeDir`, `adrDir`) — to confirm the resolution below. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ### `{HARNESS_DIR}` 解析顺序（找到即停；探测**永不越过工作区根**——CLI=start 的 git top-level（非 git→start 自身）；dsh=会话工作区）
 
@@ -97,7 +97,7 @@ enforcement=hard
 - `{KNOWLEDGE_DIR}`：`.mstarc` `knowledge_dir`（权威）→ `{HARNESS_DIR}/knowledge/` → `<repo-root>/.agents/knowledge/`（空目录视为不存在）→ 回退 `{HARNESS_DIR}/knowledge/`，需创建时创建（`resolveKnowledgeDir` 默认创建，`{ create: false }` 关闭）。
 - `{ADR_DIR}`：`.mstarc` `adr_dir`（权威）→ `{HARNESS_DIR}/adr/` → `<repo-root>/.agents/adr/` → `<repo-root>/docs/adr/`（均按空目录规则）→ 回退 `{HARNESS_DIR}/adr/`，创建规则同上（`resolveAdrDir`）。
 
-> **Engine check (when available):** import `resolveSpecsDir` / `resolveKnowledgeDir` / `resolveAdrDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve` (prints all three) — to confirm the candidate order (empty-dir-as-absent included). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** engine `resolveSpecsDir` / `resolveKnowledgeDir` / `resolveAdrDir` — or run `mstar path resolve` (prints all three) — to confirm the candidate order (empty-dir-as-absent included). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 部分 spoke 仓库 opt-in 跟踪的 `{HARNESS_DIR}/roadmap.md` 仅是既有 Markdown 文件/可审导入候选，非项目内容权威；读写规则 → `mstar-project-governance`。
 
@@ -223,7 +223,7 @@ Legacy `.agents/` 等价：
 !.agents/adr/**
 ```
 
-> **Engine check (when available):** import `emitGitignoreSnippet` / `validateGitignore` from `@mstar-harness/engine` in a host hook to emit or validate the canonical snippet above — a declared file validates as author-owned (`gitignore.author-declared`) with no rewrite, while a missing file still fails as `gitignore.missing`. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** engine `emitGitignoreSnippet` / `validateGitignore` to emit or validate the canonical snippet above — a declared file validates as author-owned (`gitignore.author-declared`) with no rewrite, while a missing file still fails as `gitignore.missing`. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## Spec 驱动的分支模型（多 Plan · 同一 Spec）
 
@@ -241,7 +241,7 @@ Legacy `.agents/` 等价：
 
 Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. Do not introduce external default plan directories.
 
-> **Engine check (when available):** import `assertPlanWritingPath` from `@mstar-harness/engine` in a host hook to enforce the gate above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** engine `assertPlanWritingPath` to enforce the gate above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## 状态与权限（摘要）
 

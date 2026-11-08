@@ -103,7 +103,7 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 
 ## Engine checks
 
-> **Engine check (when available):** run `mstar skill lint <skill-dir>` to lint the frontmatter contract and the five-question body contract; in a host hook, `import { lintFrontmatter, lintFiveQuestion, resolveAssetPath } from "@mstar-harness/engine"` resolves the same contracts plus the skill-relative asset paths above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar skill lint <skill-dir>` to lint the frontmatter contract and the five-question body contract; engine `lintFrontmatter`, `lintFiveQuestion`, `resolveAssetPath` resolves the same contracts plus the skill-relative asset paths above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## 验证门控（Evidence，原则 4 + 6）
 

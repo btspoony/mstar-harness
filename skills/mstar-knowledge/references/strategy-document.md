@@ -24,7 +24,7 @@ A good strategy document is opinionated and concise — it fits in one screen of
 
 ## Validation
 
-> **Engine check (when available):** run `mstar lint <STRATEGY.md>` (or `import { lintStrategySections } from "@mstar-harness/engine"` in a host hook) to check the six required sections in § Shape. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar lint <STRATEGY.md>` (engine `lintStrategySections`) to check the six required sections in § Shape. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 A document missing any required section is not a finished Phase 2 — fix it before the bootstrap reports its result.
 

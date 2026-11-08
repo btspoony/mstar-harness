@@ -50,6 +50,7 @@ import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
 import { checkAdrTree, summarizeAdrCheck } from "./adr-check.ts";
 import {
   AUDIT_CATEGORY_DOC,
+  ENGINE_CHECK_MARKER,
   buildCanonicalCommandInventory,
   checkBilingualContentParity,
   checkBilingualPairing,
@@ -220,9 +221,10 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     return Object.keys(manifest.bin ?? {});
   };
 
- /** One Engine-check callout blockquote with `body` as its content. */
+ /** One Engine-check callout blockquote with `body` as its content —
+ * the collapsed one-line form the runtime skills now carry. */
   const callout = (body: string) =>
-    `> **Engine check (when available):** ${body}\n> On \`fail\` -> do not proceed.`;
+    `> ${ENGINE_CHECK_MARKER} ${body}`;
 
   test("both declared bin names pass — `mstar …` and `mstar-harness …` citations (load-bearing)", () => {
     const binNames = declaredBins();
@@ -279,6 +281,49 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     );
     expect(calloutsChecked).toBe(0);
     expect(failures).toEqual([]);
+  });
+
+  test("the collapsed marker is what Guard 1 scans (marker pin)", () => {
+    const body = "run `mstar status validate <path>`";
+    const collapsed = checkEngineCallouts(
+      [{ rel: "skills/mstar-foo/SKILL.md", text: callout(body) }],
+      { cliCommands: new Set(["status validate"]), engineExports: new Set(), binNames: declaredBins() },
+    );
+    expect(collapsed.calloutsChecked).toBe(1);
+    expect(collapsed.cliCitationsChecked).toBe(1);
+
+    const legacy = checkEngineCallouts(
+      [
+        {
+          rel: "skills/mstar-foo/SKILL.md",
+          text: `> **Engine check (when available):** ${body}\n> On \`fail\` -> do not proceed.`,
+        },
+      ],
+      { cliCommands: new Set(["status validate"]), engineExports: new Set(), binNames: declaredBins() },
+    );
+    expect(legacy.calloutsChecked).toBe(0);
+    expect(ENGINE_CHECK_MARKER).toBe("**Engine check:**");
+  });
+
+  test("named engine symbols in a collapsed callout are checked like imports", () => {
+    const opts = {
+      cliCommands: new Set(["status validate"]),
+      engineExports: new Set(["assertQcAlignment", "singleReviewSnapshot"]),
+      binNames: declaredBins(),
+    };
+    const known = checkEngineCallouts(
+      [{ rel: "skills/mstar-foo/SKILL.md", text: callout("run `mstar status validate` (engine `assertQcAlignment`, `singleReviewSnapshot`)") }],
+      opts,
+    );
+    expect(known.failures).toEqual([]);
+
+    const unknown = checkEngineCallouts(
+      [{ rel: "skills/mstar-foo/SKILL.md", text: callout("run `mstar status validate` (engine `assertQcAlignmnt`)") }],
+      opts,
+    );
+    expect(unknown.failures).toEqual([
+      'skills/mstar-foo/SKILL.md:1 callout names unknown engine export "assertQcAlignmnt"',
+    ]);
   });
 });
 
@@ -528,9 +573,9 @@ describe("drift-lint executable — use-cli scan wiring (Task 3 fix round)", () 
 
 
 describe("checkCalloutDuplication — Guard 6 Engine-check callout dedup", () => {
- /** One Engine-check callout blockquote with `body` as its content. */
-  const callout = (body: string) =>
-    `> **Engine check (when available):** ${body}\n> On \`fail\` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.`;
+ /** One Engine-check callout blockquote with `body` as its content —
+ * the collapsed one-line form the runtime skills now carry. */
+  const callout = (body: string) => `> ${ENGINE_CHECK_MARKER} ${body}`;
 
   test("identical callout bodies in >1 file fail (load-bearing)", () => {
     const body = "run `mstar lease verify --workflow <id>`";
@@ -589,6 +634,25 @@ describe("checkCalloutDuplication — Guard 6 Engine-check callout dedup", () =>
       { rel: "skills/mstar-b/SKILL.md", text: callout("run `mstar lease verify` to validate the other leases") },
     ]);
     expect(failures).toEqual([]);
+  });
+
+  test("the collapsed marker is what Guard 6 matches (marker pin)", () => {
+    const body = "run `mstar lease validate`";
+    expect(ENGINE_CHECK_MARKER).toBe("**Engine check:**");
+    expect(
+      checkCalloutDuplication([
+        { rel: "skills/mstar-a/SKILL.md", text: callout(body) },
+        { rel: "skills/mstar-b/SKILL.md", text: callout(body) },
+      ]).failures.length,
+    ).toBe(1);
+
+    const legacy = `> **Engine check (when available):** ${body}\n> On \`fail\` -> do not proceed; fix and re-run.`;
+    expect(
+      checkCalloutDuplication([
+        { rel: "skills/mstar-a/SKILL.md", text: legacy },
+        { rel: "skills/mstar-b/SKILL.md", text: legacy },
+      ]).failures,
+    ).toEqual([]);
   });
 });
 

@@ -6,6 +6,12 @@ Behavior that the check's own contract does not cover is owned elsewhere: field 
 
 Payload discovery is read-only: mstar-harness schema <type> describes supported runtime inputs such as CaptureInput, OccurrenceInput, IssueTriage, ClosureEvidence, IssueLink and PlanProgress; current command help owns flags and completion payload lookup. Schema output never validates the operator's evidence/authority. Historical `judgment submit` is retired; no command route is registered.
 
+## Engine check callouts
+
+A callout is live when an engine is reachable — the built `mstar` CLI on PATH, or the engine import in a host hook; without one, the owning skill's text stays authoritative and the callout adds nothing it does not already say.
+It names its exact command and, where one exists, the engine export behind it — then only the semantics unique to that site.
+`fail` means do not proceed: fix the cause and re-run. No callout restates this contract or re-adds a fallback sentence.
+
 ## Reading a result
 
 | Code | Meaning |

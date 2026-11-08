@@ -71,7 +71,7 @@ A finding is a finding only with non-empty `title` and `description` and valid e
 
 ### Deterministic gates the engine runs
 
-> **Engine check (when available):** if the harness engine runtime is present, `validateAuditFindingGates(findings)` runs inside `scaffoldAuditReport` before any file is written, so invalid findings exit 2 with no partial output. Skill text below remains authoritative when the runtime is absent. The gate checks, deterministically and only these:
+> **Engine check:** if the harness engine runtime is present, `validateAuditFindingGates(findings)` runs inside `scaffoldAuditReport` before any file is written, so invalid findings exit 2 with no partial output. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts. The gate checks, deterministically and only these:
 
 - **Fingerprint** (when supplied): grammar `^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$`, credential rejection (a value redaction would alter is rejected, never rewritten into a different identity), exact case-sensitive uniqueness in the batch, and strict ASCII ordering of the supplied subsequence. Absent fingerprints are skipped; out-of-order input is rejected, never sorted — positions control the rendered finding order. Mixed legacy/enriched batches are accepted. Choosing a stable root-cause identity, grouping one cause, and cross-run matching remain reviewer duties.
 - **Severity**: every rank must be a valid enum value, and `severity.overall` must not exceed `severity.impact`. Nothing else is computed — the gate never infers severity and never proves the claimed impact.
