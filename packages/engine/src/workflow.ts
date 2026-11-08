@@ -539,10 +539,11 @@ export function deliveryEvidenceMembers(kind: WorkflowDeliveryKind): readonly st
  * recorded the close-owned `delivery.proof`. A stored block is history and is
  * never rewritten, so persisted-state validation reads those retired members
  * as ABSENT instead of refusing the whole snapshot - the same read tolerance
- * the pre-rename `branch.source` spelling gets. The store's write verbs refuse
- * them (`deliveryEvidenceMembers` plus the strict shape rule), so no engine path
- * can CREATE one; a hand-written file that already carries one stays writable,
- * because rewriting history is not a repair.
+ * the pre-rename `branch.source` spelling gets. The delivery-patch write
+ * (`deliveryEvidenceMembers` plus the strict shape rule) refuses them, so no
+ * verb records one; a whole-document path - a hand-written file, or a legacy
+ * import that carries the header verbatim - may still deliver one, and reading
+ * it back is history preservation rather than a repair.
  */
 export function storedDeliveryEvidence(value: unknown): unknown {
   if (!isPlainObject(value)) return value;

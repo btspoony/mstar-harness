@@ -1678,12 +1678,11 @@ function applyLifecycleTransition(input: {
         "The workflow cannot complete; inspect the workflow with mstar status validate.",
         {
           violations: violations.map((entry) => entry.message),
-          // The recovery each violation names, in the same order, so a caller
-          // reaches the instruction the read-only Phase-6 gate publishes in its
-          // own `fix` channel.
+          // The recovery each violation named, in the same order, so a caller
+          // reads the instruction beside the cause it belongs to.
           recovery: violations.flatMap((entry) => (entry.fix === undefined ? [] : [entry.fix])),
-          // The FIRST violation's machine code, so a caller reaches the same
-          // code the read-only Phase-6 gate publishes for the same state.
+          // The FIRST violation's machine code. The close is the only consumer
+          // of the delivery proof, so this code originates here.
           code: violations[0]?.code,
           workflow_id: workflowId,
         },

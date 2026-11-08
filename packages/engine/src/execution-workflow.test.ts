@@ -1194,6 +1194,32 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     expect(gate.violations).toEqual([]);
   });
 
+  test("a store holding the retired delivery.proof validates and gates clean", async () => {
+    const fixture = await workflowFixture("merge-legacy-proof-store");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-proof-store-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    await workflowMutation(fixture, "op-proof-store-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the merge was proven",
+    });
+
+    // The intermediate revision persisted this member, so a store written then
+    // carries it. The gate validates the stored snapshot before reading facts:
+    // an unreadable state is exactly the PHASE6_INVALID_SNAPSHOT this must not be.
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      const delivery = state.delivery !== null && typeof state.delivery === "object" ? (state.delivery as Record<string, unknown>) : {};
+      state.delivery = { ...delivery, proof: { target: "main", tip: "a".repeat(40), at: TS } };
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+    });
+
+    const gate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
+    expect(gate.violations.map((entry) => entry.code)).not.toContain("PHASE6_INVALID_SNAPSHOT");
+    expect(gate.ok).toBe(true);
+  });
+
   test("a delivery whose diff exceeds the old 1 MiB buffer still proves itself", async () => {
     const fixture = await workflowFixture("merge-large-diff");
     setRowStatus(fixture.context, PLAN_ID, "Done");
