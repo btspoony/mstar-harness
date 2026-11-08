@@ -197,7 +197,7 @@ Hard block when:
 - The parallelism decision is not explicit, or contradicts the branch/worktree policy (**`mstar-branch-worktree`**)
 - QC alignment fields are not text-identical across seats and the Assignment (`Execution mode` / `QC mode` per seat mapping → **`mstar-review-qc`**)
 - In invoke-based hosts, the matching invokes were not actually issued (→ **`mstar-host`**)
-- **>=2 independent** backend/fullstack units on the task board but `single_stream_justified: yes` carries no real reason and no spread across `fullstack-dev` / `fullstack-dev-2`
+- **>=2 independent** backend/fullstack units on the task board with neither spread across `fullstack-dev` / `fullstack-dev-2` nor a documented single-id override (`single_stream_justified: yes` with a real reason)
 
 ---
 
