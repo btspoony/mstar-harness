@@ -266,13 +266,13 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 **两条时序车道（唯一合法时机）**：
 
 1. **Phase-2 同轮**（per-plan）：integration merge 成功的**同一轮**回收该 Done plan/track 的 feature worktree + 已合并分支（call site → `mstar-iteration` `references/phase-2-worktree-lease.md`「Same-round plan cleanup」）。
-2. **Phase-6 收尾**（integration 面）：只在 valid terminal close（§6.1–§6.3 完成）+ PR **verified merged** 之后回收 integration worktree / 分支 / 远端残留（call site → `mstar-iteration` `references/phase-6-post-merge-close.md` §6.4）。Phase-6 gate 只查本地 state，**不**验证 merged、**不**检查物理清理是否完成。
+2. **Phase-6 收尾**（integration 面）：只在 valid terminal close（§6.1–§6.3 完成）+ PR **proved merge** 之后回收 integration worktree / 分支 / 远端残留（call site → `mstar-iteration` `references/phase-6-post-merge-close.md` §6.4）。Phase-6 gate 只查本地 state，**不**验证 merged、**不**检查物理清理是否完成。
 
 > **Engine check:** dry-run 即机器检查 —— `mstar worktree cleanup --workflow <id>`（engine `planWorktreeCleanup`）对当前 facts 输出 remove/keep/refuse 计划，每行带稳定 `cleanup.*` 码。若已知受保护目标（active lease / 非 Done / 非终结 owner）出现 `remove` → STOP：守卫有错，**任何 `--apply` 前先修**。On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## Workflow
 
-PM selects branches → isolated source tasks → all reviewed commits converge on one Working branch HEAD → aligned QC tri/QA → explicit serial Git merge in the integration checkout → direct complete verifies its actual base/result and QC/QA. Standalone development instead verifies its registered source checkout; report-only uses its declared completion policy without fabricated Git. Main remains on its recorded branch. L1/L2 isolation precedes dispatch; transaction/CAS protects state.
+PM selects branches → isolated source tasks → all reviewed commits converge on one Working branch HEAD → aligned QC tri/QA → explicit serial Git merge in the integration checkout → direct complete verifies its actual base/result and QC/QA. Standalone development instead verifies its registered source checkout; report-only uses declared fulfilment without fabricated Git. Main remains on its recorded branch. L1/L2 isolation precedes dispatch; transaction/CAS protects state.
 
 ## References
 

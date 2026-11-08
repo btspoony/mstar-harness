@@ -40,20 +40,21 @@ Supply one complete evidence document:
 
 ```json
 {
+  "source_sha": "<actual source SHA>",
+  "review_base": "<actual review base SHA>",
+  "review_head": "<actual reviewed head SHA>",
   "qc": {"decision": "Approve", "reports": ["<absolute report path>"], "consolidated": "<absolute summary path>"},
   "qa": {"gate": "mandatory", "decision": "pass", "report": "<absolute report path>"}
 }
 ```
 
-Use actual reports, not placeholders. The three commit fields are optional and derived from the recorded source checkout: `source_sha` and `review_head` are its clean `HEAD` (one fact — the reviewed tree is the checked-out commit), and `review_base` stays `null` unless supplied. Supply a commit only to assert it: the engine verifies a supplied `source_sha`/`review_head` equals the checkout HEAD, a supplied `review_base` is a commit of that checkout and an ancestor of the head, and refuses a disagreement. The integration CLI pair must be supplied together, or the document may carry `integration: {base_sha,result_sha}`. Evidence paths are existing absolute files; hashes are informational provenance, not resealing requirements.
+Use actual reports/source facts, not placeholders. The integration CLI pair must be supplied together, or the document may carry `integration: {base_sha,result_sha}`. Evidence paths are existing absolute files; hashes are informational provenance, not resealing requirements.
 
 | Engine-selected route | Proof before direct complete | After row Done |
 |---|---|---|
 | Iteration/non-standalone | QC/QA and source/review ancestry plus already-performed serial two-parent merge in the clean recorded integration checkout on its target branch. Supply real base/result. The engine re-witnesses Git at commit. | Parent still owes compound/PR/verified merge/terminal close; no child PR. |
-| Standalone development, exactly one row | QC/QA and clean registered source checkout/ref/commit; integration input refuses. | Own compound/PR/verified merge/terminal close; workflow stays running. |
-| Standalone verification/report-only, exactly one row | QC/QA under the completion_policy declared at registration; no fulfilment payload is recorded. Git fields are provenance only, not an invented source/integration requirement. Integration input refuses. | Terminal close on every row `Done` plus QC/QA and the registered policy; no invented compound-before-PR, PR or merge. |
-
-A report-only workflow records no delivery evidence: `mstar workflow evidence` refuses `completion` (and every other member) as unused, because the registered policy is a declaration of what the deliverable is. A QA pass alone does not create fulfilment, and `completed` means every row `Done` plus QC/QA.
+| Standalone development, exactly one row | QC/QA and clean registered source checkout/ref/commit; integration input refuses. | Own compound/PR/proved merge/terminal close; workflow stays running. |
+| Standalone verification/report-only, exactly one row | QC/QA under the registered completion_policy, a declaration and no payload. Git fields are provenance only, not an invented source/integration requirement. Integration input refuses. | Evidence-backed terminal close; no invented compound-before-PR, PR or merge. |
 
 Complete may atomically entail InProgress → InReview → Done with sufficient reviewed evidence. It retains source ownership metadata and completion evidence, releases only applicable workflow merge exclusion and preserves completed_at on exact replay. Per-plan execution leases are removed. Completion never runs Git merge: the coordinator explicitly performs it once in the recorded integration checkout, then submits actual SHAs. If merge output/state response is lost, retry complete against the real result, never merge again. Resolve or explicitly abort a real conflict in Git; never force state to Done.
 

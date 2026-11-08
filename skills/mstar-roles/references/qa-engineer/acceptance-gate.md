@@ -4,6 +4,8 @@ Extension of `references/qa-engineer.md`. Read when PM dispatches you with **`QA
 
 Layer **L4** runs after the QC gate. **`QA gate: pm-acceptance`** is PM-only — see **`references/project-manager/qa-trigger-matrix.md`**.
 
+**Do not collapse L4 into L3.** QC reviewers do not close residuals or mark plan `Done`.
+
 ## Scope (L4 vs L3)
 
 | L3 Plan QC (`qc-specialist*`) | L4 QA (`qa-engineer`) |
@@ -30,19 +32,16 @@ When **`QA mode: acceptance-only`**:
 2. If **L1** (or prior QA/CI) already provides reproducible relevant evidence → **verify mapping** to plan Acceptance Criteria; do not re-execute covered checks. Non-executable docs/policy may supply `scoped-check` evidence (`mstar-sdd/references/file-handoffs.md`), not a fabricated test log.
 3. Document in Completion Report **Validation**: which ACs are covered by reused evidence vs newly executed checks.
 
-### Retained check output mapping
+### Retained log mapping
 
-Retained check logs are consumed read-only when the task report cites one: QA reads the `{SDD_DIR}/evidence/<task-id>.log` and maps it to ACs — it never re-runs the cited command (route and citation rule → `mstar-sdd/references/file-handoffs.md` § Optional retained output). With no cited log, the report's command + observed result and CI evidence are the mapping input. Map every AC with all columns of the report's AC table (**`references/qa-engineer.md`** § QA Report Landing and Template); for a retained log each column carries:
+A cited `{SDD_DIR}/evidence/<task-id>.log` is consumed read-only: QA reads it and never re-runs the cited command (route → `mstar-sdd/references/file-handoffs.md` § Optional retained output). Map every AC with all columns of the report's AC table (**`references/qa-engineer.md`** § QA Report Landing and Template); for a retained log each column carries:
 
-- **Run/manual reference**: the cited `{SDD_DIR}/evidence/<task-id>.log` path with its verification-round heading; when no log is retained, the task report's command + observed result; manual evidence takes the manual report/CI citation with provenance.
+- **Run/manual reference**: the cited log path with its verification-round heading — or the manual report/CI citation with provenance.
 - **Original input identity**: the command the report records for this evidence — the basis any reuse comparison uses.
-- **Integrity**: the reviewer confirms the log belongs to the cited command, task and range; a clean exit line or unchanged bytes never proves it.
-- **Outcome**: the exit code/result the report states with the evidence; a redirect records no exit status.
-- **Target applicability and reason**: whether the cited run's inputs still match the current `Review range`, and why; `n/a` when no reuse comparison applies.
-- **Coverage judgment** is reviewer reasoning from the evidence and code: the log supplies no pass/fail counts and no automatic coverage inference; skips and behavior coverage need raw evidence/code review when material.
-- Evaluate candidate assumptions, never inherit them: a stated environment allowlist or a lockfile-only dependency rationale is the caller's assumption, not automatic completeness — name the unverified scope as the targeted gap when material.
+- **Coverage judgment** is reviewer reasoning: the log supplies no pass/fail counts and no automatic coverage inference; skips and behavior coverage need raw-log/code review when material.
+- Evaluate candidate assumptions, never inherit them: an empty environment allowlist or a lockfile-only dependency rationale is the caller's assumption, not automatic completeness — name the unverified scope as the targeted gap when material.
 - Reuse outcomes: tested bytes equal after a later commit → reuse, no rerun; docs-only change → reuse; a changed shared runtime/config/fixture/dependency input → name the affected gap instead of rerunning everything; failed/incomplete or unknown-scope evidence stays unverified.
-- A pre-fix failing run keeps its observed failure and is never relabeled a pre-feature baseline; the fix needs its own passing evidence for the affected AC.
+- A pre-fix failing run keeps outcome `failed` and is never relabeled a pre-feature baseline; the fix needs its own passing evidence for the affected AC.
 - Manual historical evidence is unverified/manual — cite it with provenance and reviewer reasoning, never as a retained log.
 
 ## Fill only the affected gap

@@ -15,7 +15,7 @@ You are dispatched by `project-manager`, owning execution safety, observability,
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
 
 - Anti-recursion red lines → **`references/_shared/leaf-executor-core.md`** § Shared anti-recursion NEVER.
-- **NEVER** delegate deploy/config changes, verification runs, or evidence gathering to `explore`.
+- **NEVER** delegate deploy/config changes, verification runs, or evidence capture to `explore`.
 
 ## Responsibilities
 
