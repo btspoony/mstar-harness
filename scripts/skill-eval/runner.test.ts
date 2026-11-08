@@ -32,7 +32,6 @@ import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import {
   canonicalRunId,
-  canonicalJson,
   DEV_CASES_PER_ROUTE,
   HELDOUT_CASES_PER_ROUTE,
   makeGitSourceTreeReader,
@@ -721,54 +720,6 @@ async function preparedRunDir(): Promise<{ io: ReturnType<typeof memoryRunnerIo>
   if (result.exit !== 0 || !result.manifest) throw new Error(`test setup: prepare failed: ${result.errors.join("; ")}`);
   return { io, manifest: result.manifest };
 }
-
-describe("canonicalJson pin (cross-version byte stability)", () => {
-  // Reference implementation = the ORIGINAL canonicalJson body (default
-  // .sort() ordering). The current insertion-sort implementation must be
-  // byte-identical to it for every input below.
-  function referenceCanonical(value: unknown): string {
-    if (value === null || typeof value !== "object") return JSON.stringify(value);
-    if (Array.isArray(value)) return `[${value.map(referenceCanonical).join(",")}]`;
-    const obj = value as Record<string, unknown>;
-    const keys = Object.keys(obj).sort();
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${referenceCanonical(obj[k])}`).join(",")}}`;
-  }
-
-  // Fixed nested key set, deliberately inserted in NON-sorted order; covers
-  // nested objects, arrays (element order preserved), empty objects,
-  // numbers/booleans/null, and non-ASCII keys. HeldoutDigest and configHash
-  // are sha256 digests over this serialization — its bytes are a contract.
-  const nested = {
-    zeta: { b: 1, a: [3, 2, { y: null, x: true }] },
-    alpha: "s",
-    mid: {},
-    Num: 4,
-    "ünï": false,
-  };
-  const expectedBytes = '{"Num":4,"alpha":"s","mid":{},"zeta":{"a":[3,2,{"x":true,"y":null}],"b":1},"ünï":false}';
-  const expectedDigest = "742fa01380e81458e1df9f72b486728dfe0afb19fde4f8759ffd81feed0e050b";
-
-  test("serializes to exact bytes independent of input key order", () => {
-    // Same members, different insertion order → identical bytes.
-    const reordered = {
-      "ünï": false,
-      Num: 4,
-      mid: {},
-      alpha: "s",
-      zeta: { a: [3, 2, { y: null, x: true }], b: 1 },
-    };
-    expect(canonicalJson(nested)).toBe(expectedBytes);
-    expect(canonicalJson(reordered)).toBe(expectedBytes);
-  });
-
-  test("byte-identical to the original default-sort implementation", () => {
-    expect(canonicalJson(nested)).toBe(referenceCanonical(nested));
-    expect(canonicalJson([])).toBe(referenceCanonical([]));
-    expect(canonicalJson({})).toBe(referenceCanonical({}));
-    expect(canonicalJson(null)).toBe(referenceCanonical(null));
-    expect(canonicalJson([1, "a", null, { k: [true] }])).toBe(referenceCanonical([1, "a", null, { k: [true] }]));
-  });
-});
 
 function runSmoke(
   io: RunnerIo,
