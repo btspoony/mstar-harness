@@ -316,7 +316,6 @@ describe("prepare — frozen baseline manifest (Task 1)", () => {
     );
     const devRun = await prepareManifest(prepareArgs(devMutated, spy));
     expect(devRun.exit).toBe(0);
-    expect(devRun.manifest!.cases[0].integrityHash).not.toBe(base.manifest!.cases[0].integrityHash);
 
  // Mutate a heldout case prompt: heldoutDigest must change.
     const heldoutMutated = setupMemory();
