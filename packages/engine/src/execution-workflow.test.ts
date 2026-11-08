@@ -1046,8 +1046,8 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     // The target received patch-equivalent A' and C' and nothing else: Z, which
     // only M introduced, is absent and M is not an ancestor of `main`.
     runGit(["checkout", "-q", "main"], fixture.repoRoot);
-    runGit(["cherry-pick", a], fixture.repoRoot);
-    runGit(["cherry-pick", c], fixture.repoRoot);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "cherry-pick", a], fixture.repoRoot);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "cherry-pick", c], fixture.repoRoot);
     const cherry = execFileSync("git", ["cherry", "main", SOURCE_BRANCH], { cwd: fixture.repoRoot, encoding: "utf8" }).trim();
     expect(cherry.split("\n").every((line) => line.startsWith("-"))).toBe(true);
     expect(execFileSync("git", ["rev-list", "--merges", `main..${SOURCE_BRANCH}`], { cwd: fixture.repoRoot, encoding: "utf8" }).trim()).not.toBe("");
