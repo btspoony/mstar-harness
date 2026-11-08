@@ -14,9 +14,7 @@ Do not serialize an entire suite because one fixture lacks isolation. Narrow the
 
 Use the resource owner's allocator instead of checking availability and claiming it later. Bind a loopback listener to port zero and read the assigned address only after the server reports that it is listening; never scan for a free port and bind it afterwards. Create a private root per test with a fresh temporary directory rather than acquiring a predictable shared path. Give shared databases, sockets, sessions and output locations a unique per-test namespace, and use exclusive creation where a path must not already exist.
 
-Keep stable recorded identifiers separate from ephemeral transport addresses: translate inside the fixture instead of forcing the live resource onto the recorded value.
-
-A literal path or URL used only as parser input or as an expected value is not an acquired resource and needs no uniqueness.
+Keep stable recorded identifiers separate from ephemeral transport addresses: translate inside the fixture instead of forcing the live resource onto the recorded value. A literal path or URL used only as parser input or as an expected value is not an acquired resource and needs no uniqueness.
 
 ## Contain process-global state
 
@@ -62,17 +60,19 @@ Retries stay legitimate for a documented transient external provider under that 
 
 ## What is not a violation
 
-- A literal path or URL used only as parser input or as an expected value.
-- Restoring a timestamp whose round trip the assertion tolerates; where the assertion depends on the restoration, the expected value comes from a fresh read.
-- A timeout set to the lane budget with the awaited state named.
-- A narrow sequential scope for a resource whose owner really is exclusive.
+- A literal path or URL used only as parser input or as an expected value; restoring a timestamp whose round trip the assertion tolerates, taking the expected value from a fresh read where the restoration matters.
+- A timeout set to the lane budget with the awaited state named; a narrow sequential scope for a resource whose owner really is exclusive.
 
 ## Keep the test out of the producer's job
 
-Call the owner's check instead of re-implementing its rule in the test. A second implementation of a producer's validation, digest walk or lifecycle can disagree with the real one, and once it does neither is authoritative; where the producer owns the assertion, the test's job is to invoke it and report its failure.
+Call the owner's check instead of re-implementing its rule in the test. A second implementation of a producer's validation, freshness or lifecycle rule can disagree with the real one, and once it does neither is authoritative; where the producer owns the assertion, the test's job is to invoke it and report its failure.
 
 Construct invalid states in the domain's own terms — remove a required table, truncate through an open descriptor — rather than by raw bytes or a filesystem side effect, which smuggle platform behavior into the assertion and fail only where that behavior differs.
 
-Make a failure name the offending entry. Two digests, or a bare boolean, are not actionable; the evidence belongs in the single implementation that owns the check, not in a test-side copy of it.
+Make a failure name the offending entry — the path, row or field that disagrees — rather than printing two opaque values; the detailed evidence belongs in the single implementation that owns the check, not in a test-side copy of it.
 
-Pin a value as a cross-environment invariant only when it is a pure function of its declared inputs. For an artifact whose bytes belong to its producer, prove provenance by re-deriving it under stated conditions instead of recording the bytes.
+## Assert the semantic, not the bytes
+
+Never use bytes, a digest or a hard-coded document text as the expected value. Such an assertion is volatile — database sidecars, write-ahead residency, build drift, whitespace and version bumps all move it — and it hides what the test means.
+
+Assert the observable semantic instead: the rows a write created, the field a caller reads, the refusal a command emits, the relation between a computed value and its input. A requirement that genuinely needs a byte, digest or pinned-version comparison is an open question to confirm, not a test to write.
