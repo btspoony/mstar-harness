@@ -12,12 +12,13 @@
  * `coordination-envelope.ts` for the migration side, and the coordinator
  * binding is written by `execution-session.ts`.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { readJson } from "./core.js";
+import { readJson, type ValidationResult } from "./core.js";
 import {
   COORDINATION_ERROR_CODES,
   CoordinationError,
@@ -92,7 +93,7 @@ import { findingsCleanupGate, _DEFAULT_PROJECT } from "./project.js";
 import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
 import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
-import { parseCompassFrontmatterText } from "./iteration.js";
+import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
 import { findRegisteredWorkflow, rowPlanIds, validatePlanRow, type PlanRow } from "./status.js";
 import {
   StoreError,
@@ -112,7 +113,6 @@ import {
   type ClosureEvidence,
   type TerminalDisposition,
 } from "./issue.js";
-import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
 import {
   DERIVED_PHASE_CODE,
   deriveLifecyclePhase,
@@ -121,6 +121,7 @@ import {
   isTerminalSnapshot,
   rowValidationRoute,
   consultDeliveryEvidence,
+  deliveryBranchOf,
   readWorkflowSnapshot,
   stableJson,
   PREPARE_PHASE,
@@ -1066,6 +1067,12 @@ export type GitCheckout = { head: string; clean: boolean; operation: string | un
  * give up well short of it rather than hold the row for the whole budget.
  */
 const GIT_READ_TIMEOUT_MS = 10_000;
+/**
+ * Small git reads (refs, cherry lists, status) fit comfortably below this; the
+ * one unbounded read — a delivery range's diff — streams through a temp file in
+ * `gitPatchId` instead, so no buffer size can turn into a hard refusal.
+ */
+const GIT_READ_MAX_BUFFER = 16 * 1024 * 1024;
 
 
 /**
@@ -1102,6 +1109,22 @@ function gitUnavailable(cwd: string, args: readonly string[], error: unknown): C
   );
 }
 
+/** The raw read; `gitRead` is its trimmed form, `stdin` is how a diff reaches `patch-id`. */
+function gitPipe(cwd: string, args: readonly string[], stdin?: string): string | undefined {
+  try {
+    return execFileSync("git", ["-C", cwd, ...args], {
+      stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      input: stdin,
+      encoding: "utf8",
+      timeout: GIT_READ_TIMEOUT_MS,
+      maxBuffer: GIT_READ_MAX_BUFFER,
+    });
+  } catch (error) {
+    if (typeof propertyOf(error, "status") === "number") return undefined;
+    throw gitUnavailable(cwd, args, error);
+  }
+}
+
 /**
  * One read-only `git` read. Every argument is a separate argv entry, so branch
  * names, worktree paths and revisions never reach a shell.
@@ -1116,24 +1139,74 @@ function gitUnavailable(cwd: string, args: readonly string[], error: unknown): C
  * file-byte witnesses; they never await or take a harness lock.
  */
 export function gitRead(cwd: string, args: readonly string[]): string | undefined {
-  try {
-    return execFileSync("git", ["-C", cwd, ...args], {
-      stdio: ["ignore", "pipe", "pipe"],
-      encoding: "utf8",
-      timeout: GIT_READ_TIMEOUT_MS,
-    }).trim();
-  } catch (error) {
-    if (typeof propertyOf(error, "status") === "number") return undefined;
-    throw gitUnavailable(cwd, args, error);
-  }
+  return gitPipe(cwd, args)?.trim();
 }
 
 export function gitObjectExists(cwd: string, sha: string): boolean {
   return gitRead(cwd, ["cat-file", "-e", `${sha}^{commit}`]) !== undefined;
 }
 
-function gitIsAncestor(cwd: string, ancestor: string, descendant: string): boolean {
+/** `git merge-base --is-ancestor`: the repository's own answer, never a heuristic. */
+export function gitIsAncestor(cwd: string, ancestor: string, descendant: string): boolean {
   return gitRead(cwd, ["merge-base", "--is-ancestor", ancestor, descendant]) !== undefined;
+}
+
+/**
+ * `git patch-id --stable` over one diff range: the content hash a cherry-pick,
+ * rebase or squash keeps even though its commit id changes. `undefined` when the
+ * range has no diff or Git cannot read it. The diff reaches `patch-id` on stdin,
+ * so no revision, path or byte ever becomes part of a command line.
+ */
+function gitPatchId(cwd: string, from: string, to: string): string | undefined {
+  // The diff streams to a temp file and `patch-id` reads it back from disk: a
+  // large delivery must still prove itself, and no in-memory cap is allowed to
+  // become the reason a close refuses. Same failure shape as `gitPipe`: the
+  // repository answering with a non-zero exit is `undefined`, git never
+  // answering is `gitUnavailable`.
+  const scratch = join(tmpdir(), `mstar-patchid-${process.pid}-${randomUUID()}`);
+  let diffFd: number | undefined;
+  try {
+    diffFd = openSync(scratch, "w+");
+    const diff = spawnSync("git", ["-C", cwd, "diff", "--no-color", "--no-ext-diff", from, to], {
+      stdio: ["ignore", diffFd, "pipe"],
+      encoding: "utf8",
+      timeout: GIT_READ_TIMEOUT_MS,
+    });
+    if (diff.error !== undefined) throw gitUnavailable(cwd, ["diff", from, to], diff.error);
+    if (diff.status !== 0) return undefined;
+    if (fstatSync(diffFd).size === 0) return undefined;
+    closeSync(diffFd);
+    diffFd = undefined;
+    const patchFd = openSync(scratch, "r");
+    try {
+      const id = spawnSync("git", ["-C", cwd, "patch-id", "--stable"], {
+        stdio: [patchFd, "pipe", "pipe"],
+        encoding: "utf8",
+        timeout: GIT_READ_TIMEOUT_MS,
+      });
+      if (id.error !== undefined) throw gitUnavailable(cwd, ["patch-id", "--stable"], id.error);
+      const first = id.status === 0 ? id.stdout.trim().split(" ")[0] : undefined;
+      return isNonEmptyString(first) ? first : undefined;
+    } finally {
+      closeSync(patchFd);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "CoordinationError") throw error;
+    throw gitUnavailable(cwd, ["diff", from, to], error);
+  } finally {
+    if (diffFd !== undefined) {
+      try {
+        closeSync(diffFd);
+      } catch {
+        /* already closed */
+      }
+    }
+    try {
+      unlinkSync(scratch);
+    } catch {
+      /* best-effort scratch cleanup */
+    }
+  }
 }
 
 /** `undefined` when `path` is not a readable Git worktree. */
@@ -1255,9 +1328,11 @@ export function revalidateGitProofWitness(witness: GitProofWitness): void {
  * worktree has checked out, the worktree is clean, and no Git operation is
  * half-finished. Required at handoff, accept and integration-start. The
  * worktree is the persisted plan scope — never an evidence field — so both
- * transports hand this rule the scope their own authority records.
+ * transports hand this rule the scope their own authority records. A null pin
+ * means the caller derives the source commit FROM this checkout and skips the
+ * comparison; the returned checkout is that observation either way.
  */
-export function assertFeatureCheckout(worktreePath: string, sourceSha: string, what: string, planId: string): void {
+export function assertFeatureCheckout(worktreePath: string, sourceSha: string | null, what: string, planId: string): GitCheckout {
   const checkout = gitCheckout(worktreePath);
   if (checkout === undefined) {
     throw new CoordinationError(
@@ -1278,12 +1353,196 @@ export function assertFeatureCheckout(worktreePath: string, sourceSha: string, w
       head: checkout.head,
     });
   }
-  if (checkout.head !== sourceSha) {
+  if (sourceSha !== null && checkout.head !== sourceSha) {
     throw gitProof(
       "The plan worktree HEAD does not match the pinned source. Restore the pinned commit before retrying.",
       { plan_id: planId, expected: sourceSha, actual: checkout.head },
     );
   }
+  return checkout;
+}
+
+/* ------------------------------------------------------------------------ *
+ * §4f the delivery merge proof — ONE rule for the close and the Phase-6 gate
+ * ------------------------------------------------------------------------ */
+
+/**
+ * The commit a branch names in one checkout. The TARGET side is resolved
+ * remote-first: a provider merge lands in the remote, and `git fetch` advances
+ * `refs/remotes/origin/<branch>` without touching a stale local head, so a
+ * local-first order would keep refusing after the very recovery the refusal
+ * names. The DELIVERY branch stays local-first: its tip is what the plan's own
+ * checkout works on. A branch with neither ref is unresolved — a delivery
+ * branch deleted at merge time is exactly the case the recorded provider
+ * commit exists for.
+ */
+function deliveryRef(cwd: string, branch: string, remoteFirst: boolean): string | undefined {
+  const local = `refs/heads/${branch}`;
+  const remote = `refs/remotes/origin/${branch}`;
+  for (const ref of remoteFirst ? [remote, local] : [local, remote]) {
+    const sha = gitRead(cwd, ["rev-parse", "--verify", "--quiet", ref]);
+    if (sha !== undefined && sha !== "") return sha;
+  }
+  return undefined;
+}
+
+/**
+ * §4f the completion evidence rule both consumers run: the pure consultation
+ * (`consultDeliveryEvidence`) plus, for a `development` delivery, the merge
+ * proof read from local Git. The ACTIVE close and the read-only Phase-6 gate
+ * call THIS function and nothing else, so they cannot disagree about the same
+ * stored state.
+ *
+ * The proof runs only after the pure rule accepted the evidence, and it reads
+ * the repository one of the plan rows' own recorded checkouts belongs to:
+ *
+ * 1. the target anchor is the fetched `refs/remotes/origin/<branch.target>`,
+ *    else the local `refs/heads/<branch.target>` — remote-first, because a
+ *    provider merge lands there and `git fetch` advances it while a local head
+ *    may stay stale;
+ * 2. an ancestor delivery branch tip (`branch.work`, local ref first) proves a
+ *    merge commit or fast-forward;
+ * 3. otherwise every commit in `fork..tip` patch-equivalent upstream
+ *    (`git cherry <target> <tip>` all `-`) proves a rebase, or a squash of one
+ *    delivery commit, with no recorded value — but only while `<target>..<tip>`
+ *    holds no merge commit, which `git cherry` never reports;
+ * 4. otherwise a recorded `delivery.merge.commit` proves a squash when it exists
+ *    as a commit, is an ancestor of the target, AND carries the delivery's own
+ *    diff: `git patch-id --stable` of `<commit>^..<commit>` equals that of
+ *    `fork..tip` (`fork` = `git merge-base <target> <tip>`).
+ *
+ * Reachability alone is NOT proof. The fork point of an unmerged delivery is an
+ * ancestor of the target too, so "some ancestor was recorded" is exactly the
+ * unverifiable attestation this rule replaced.
+ *
+ * Anything else is refused with the cause and a recovery; the engine never
+ * queries a provider. A checkout with neither target ref, a delivery branch with
+ * no surviving ref, or a squash commit that was never fetched is therefore a
+ * refusal, never a pass — while a stale LOCAL target head is not, because the
+ * fetched remote ref is read first.
+ */
+export function verifyDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationResult[] {
+  const violations = consultDeliveryEvidence(snapshot);
+  if (violations.length > 0) return violations;
+  if (snapshot.type !== "plan" || snapshot.delivery_kind !== "development") return [];
+  return deliveryMergeViolations(snapshot);
+}
+
+
+function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[] {
+  const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
+  const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
+  // Both anchors and the merge member were just proven present by the pure
+  // consultation; the proof itself only has to name what Git could not supply.
+  const deliveryBranch = deliveryBranchOf(branch) as string;
+  const targetBranch = branch.target as string;
+  const refuse = (message: string, fix: string): ValidationResult[] => [
+    { ok: false, severity: "high", code: "PHASE6_DELIVERY_MERGE_UNPROVEN", message, fix },
+  ];
+  const record = `record the provider merge/squash commit with 'mstar workflow evidence --workflow ${workflowId} --file <absolute-json>' using {"merge":{"commit":"<full commit id>"}}`
+
+  const recorded = (snapshot.plans ?? [])
+    .map((row) => (isPlainObject(row.metadata) ? row.metadata.worktree_path : undefined))
+    .filter((path): path is string => isNonEmptyString(path));
+  const readable = recorded.filter((path) => isAbsolute(path) && existsSync(path));
+  if (readable.length === 0) {
+    return refuse(
+      recorded.length === 0
+        ? `Workflow '${workflowId}' records no plan worktree, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in the plan's own checkout`
+        : `Workflow '${workflowId}' records plan worktree(s) ${recorded.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`,
+      `Rebuild the recorded checkout with 'git worktree add ${recorded[0]} ${deliveryBranch}', then re-run this gate \u2014 the re-proof is read-only and needs no reopen. To make the proof durable again, reopen with 'mstar workflow reopen --workflow ${workflowId} --reason <text>' and close once more; if the merge was a squash or rebase, ${record}.`,
+    );
+  }
+  const checkouts = readable.filter((path) => gitRead(path, ["rev-parse", "--show-toplevel"]) !== undefined);
+  if (checkouts.length === 0) {
+    return refuse(
+      `Workflow '${workflowId}' cannot prove its delivery merge: ${readable[0]} is not a readable Git checkout`,
+      `Rebuild or repair the recorded checkout so it is a readable Git worktree, then retry the close; if the merge was a squash or rebase, ${record}.`,
+    );
+  }
+  // A recorded checkout can be repointed at a different clone, where neither ref
+  // exists; the first one that resolves the target ref is the authority and the
+  // first readable one is only the fallback that names the refusal.
+  const resolving = checkouts
+    .map((path) => ({ path, target: deliveryRef(path, targetBranch, true) }))
+    .find((candidate) => candidate.target !== undefined);
+  const checkout = resolving?.path ?? checkouts[0]!;
+  const target = resolving?.target;
+  if (target === undefined) {
+    return refuse(
+      `Workflow '${workflowId}' cannot prove its delivery merge: the plan checkout ${checkout} has neither refs/remotes/origin/${targetBranch} nor refs/heads/${targetBranch}, so ${deliveryBranch} has no ref to be an ancestor of`,
+      `Fetch the target branch into the plan checkout, then retry the close; a recorded merge commit cannot substitute for the missing target ref.`,
+    );
+  }
+  // A merge commit or fast-forward: the delivery tip is itself upstream.
+  const tip = deliveryRef(checkout, deliveryBranch, false);
+  if (tip !== undefined && gitIsAncestor(checkout, tip, target)) return [];
+
+  const recordedCommit = isPlainObject(snapshot.delivery) && isPlainObject(snapshot.delivery.merge)
+    ? snapshot.delivery.merge.commit
+    : undefined;
+  const mergeCommit = isNonEmptyString(recordedCommit) ? recordedCommit : undefined;
+  // The delivery's own diff is what any association is measured against, so a
+  // delivery branch with no surviving ref leaves nothing to associate.
+  const fork = tip === undefined ? undefined : gitRead(checkout, ["merge-base", target, tip]);
+  const deliveryPatch = tip === undefined || fork === undefined ? undefined : gitPatchId(checkout, fork, tip);
+  const unproven: string[] = [];
+
+  // A merge-free rebase (or a squash of one delivery commit) needs no recorded
+  // value: every delivery commit keeps its patch id, so `git cherry` marks each
+  // one `-`.
+  if (tip === undefined) {
+    unproven.push(`${deliveryBranch} has no ref in ${checkout}, so its commits cannot be associated with ${targetBranch}`);
+  } else if (fork === undefined || deliveryPatch === undefined) {
+    unproven.push(`${deliveryBranch} tip ${tip} shares no readable diff with ${targetBranch} (${target})`);
+  } else {
+    const cherry = gitRead(checkout, ["cherry", target, tip]);
+    if (cherry !== undefined && cherry !== "" && cherry.split("\n").every((line) => line.startsWith("-"))) {
+      // `git cherry` omits merge commits, so an all-`-` result only proves a
+      // merge-free delivery history: content that exists only in a merge would
+      // not be reported. A merge-bearing history falls through to the recorded
+      // commit proof or the refusal below.
+      const merges = gitRead(checkout, ["rev-list", "--merges", `${target}..${tip}`]);
+      if (merges === "") return [];
+      unproven.push(
+        merges === undefined
+          ? `${target}..${tip} could not be read in ${checkout}, so the all-equivalent 'git cherry' result cannot be trusted as a merge-free proof`
+          : `${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and its history carries merge commits in ${target}..${tip} that 'git cherry' does not report`,
+      );
+    } else {
+      unproven.push(
+        cherry === undefined || cherry === ""
+          ? `${fork}..${tip} carries no commit to associate with ${targetBranch} (${target})`
+          : `${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and ${cherry.split("\n").filter((line) => !line.startsWith("-")).length} of ${fork}..${tip}'s commits have no patch-equivalent commit there`,
+      );
+    }
+  }
+
+  // A recorded squash commit proves the delivery only by carrying its content.
+  if (mergeCommit === undefined) {
+    unproven.push("no delivery.merge.commit is recorded");
+  } else if (!gitObjectExists(checkout, mergeCommit)) {
+    unproven.push(`the workflow records delivery.merge.commit ${mergeCommit}, which is not a commit in the plan checkout ${checkout}`);
+  } else if (!gitIsAncestor(checkout, mergeCommit, target)) {
+    unproven.push(`the recorded delivery.merge.commit ${mergeCommit} is not contained in ${targetBranch} (${target})`);
+  } else if (tip === undefined || fork === undefined || deliveryPatch === undefined) {
+    unproven.push(
+      `the recorded delivery.merge.commit ${mergeCommit} cannot be associated: ${deliveryBranch} supplies no delivery diff in ${checkout} to compare it with`,
+    );
+  } else {
+    const mergedPatch = gitPatchId(checkout, `${mergeCommit}^`, mergeCommit);
+    if (mergedPatch !== undefined && mergedPatch === deliveryPatch) return [];
+    unproven.push(
+      mergedPatch === undefined
+        ? `the recorded delivery.merge.commit ${mergeCommit} has no readable diff in ${checkout}`
+        : `the recorded delivery.merge.commit ${mergeCommit} is an ancestor of ${targetBranch} (${target}) but carries different content (patch id ${mergedPatch}) than the delivery ${fork}..${tip} (patch id ${deliveryPatch})`,
+    );
+  }
+
+  return refuse(
+    `Workflow '${workflowId}' cannot prove its delivery merge: ${unproven.join("; ")}`,
+    `Fetch the target branch into the plan checkout and retry the close; if ${deliveryBranch} has no ref there, restore or fetch refs/heads/${deliveryBranch} first, then ${record}. A recorded commit must carry the delivery's own diff, and a squash that resolved conflicts differently has no local proof \u2014 record that outcome instead with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'.`,
+  );
 }
 
 /**

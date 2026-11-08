@@ -1108,7 +1108,7 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "report": "none", "review.seats": "none", "roadmap.export": "root",
   "roadmap.import": "root", "roadmap.replace": "root", "roadmap.show": "root",
   "roles.validate": "none", "schema": "none", "sdd.check-context": "root",
-  "sdd.evidence.capture": "root", "sdd.evidence.verify": "root", "sdd.exec": "root",
+  "sdd.exec": "root",
   "sdd.review-package": "root", "sdd.task-brief": "root", "sdd.workspace": "root",
   "session.recover": "root", "session.run": "root", "skill.lint": "none",
   "status.archive-residuals": "root", "status.backlog-close": "root", "status.backlog-register": "root",

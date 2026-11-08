@@ -175,13 +175,15 @@ export type ValidatedCompletionEvidence = {
   evidence_refs: EvidencePathRef[];
 };
 
-export function readCompletionEvidence(value: unknown, route: RowValidationRoute = "integration"): ValidatedCompletionEvidence {
+export function readCompletionEvidence(value: unknown): ValidatedCompletionEvidence {
   if (!isPlainObject(value)) throw new CoordinationError("coordination.invalid-input", "Invalid completion evidence: provide an evidence object. Inspect workflow state with mstar status validate.");
   assertExactKeys(value, ["source_sha", "review_base", "review_head", "qc", "qa", "evidence_paths"], "completion evidence");
-  const reportOnly = route === "standalone-report-only";
-  const sourceSha = reportOnly && value.source_sha === undefined ? null : assertGitObjectId(value.source_sha, "source_sha");
-  const reviewBase = reportOnly && value.review_base === undefined ? null : assertGitObjectId(value.review_base, "review_base");
-  const reviewHead = reportOnly && value.review_head === undefined ? null : assertGitObjectId(value.review_head, "review_head");
+  // The commits are provenance the engine derives from the recorded worktree;
+  // a supplied value is verified, never trusted. Every route accepts absence,
+  // and a present value still has to be a full object id.
+  const sourceSha = value.source_sha === undefined ? null : assertGitObjectId(value.source_sha, "source_sha");
+  const reviewBase = value.review_base === undefined ? null : assertGitObjectId(value.review_base, "review_base");
+  const reviewHead = value.review_head === undefined ? null : assertGitObjectId(value.review_head, "review_head");
   if (!isPlainObject(value.qc)) throw new CoordinationError("coordination.invalid-input", "Completion evidence must include QC evidence. Inspect workflow state with mstar status validate.");
   assertExactKeys(value.qc, ["decision", "reports", "consolidated"], "completion evidence qc");
   const qc = value.qc;

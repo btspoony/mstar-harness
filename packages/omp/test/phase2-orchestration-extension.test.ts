@@ -159,14 +159,10 @@ describe("phase2 extension ACTIVE authority", () => {
     const host = phase2Host(fixture.root);
     await host.call({ operation: "bind", workflowId: WORKFLOW_ID });
 
-    // The ordinary close: record the report-only fulfilment, then the same
-    // terminal transition `mstar status workflow-close` drives. The registry row
-    // is dropped while the coordinator session row survives.
-    await mutateExecutionWorkflow(domain, {
-      workflowId: WORKFLOW_ID,
-      operationId: randomUUID(),
-      operation: { kind: "delivery", delivery: { completion: { policy: "report-only", evidence: "sdd/review/qc.md" } } },
-    });
+    // The ordinary close: the report-only policy is a registration-time
+    // declaration, so the terminal transition `mstar status workflow-close`
+    // drives needs no evidence call. The registry row is dropped while the
+    // coordinator session row survives.
     await mutateExecutionWorkflow(domain, {
       workflowId: WORKFLOW_ID,
       operationId: randomUUID(),

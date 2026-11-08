@@ -52,7 +52,12 @@ import type { GateResult, Severity, ValidationResult } from "./core.js";
 import { catalogRootDir } from "./catalog.js";
 import { StoreError, openStore, type StoreContext } from "./store-db.js";
 import { validateStatusV2, type StatusV2Doc } from "./status.js";
-import { LEGACY_WORKTREE_PATH_CODE, consultDeliveryEvidence, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
+// Call-time-only cycle with coordination.ts (which this module reaches through
+// catalog.ts): the delivery merge proof is called from the Phase-6 gate body,
+// never during module evaluation, so neither side dereferences the other at
+// load. `coordination.ts` owns the one Git plumbing implementation.
+import { verifyDeliveryEvidence } from "./coordination.js";
+import { LEGACY_WORKTREE_PATH_CODE, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
 const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -736,7 +741,9 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
         }
       }
       if (shapeOk && terminal && snapshot?.type === "plan" && snapshot.status === "completed") {
-        violations.push(...consultDeliveryEvidence(snapshot));
+        // The close proved the merge before it wrote this state; the gate reads
+        // the stored lifecycle facts and never re-litigates the proof a routine
+        // cleanup can no longer reproduce.
         for (const plan of snapshot.plans ?? []) {
           if (isPlainObject(plan) && plan.status !== PLAN_STATUS_DONE) {
             violations.push(
