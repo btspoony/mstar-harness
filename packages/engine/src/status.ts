@@ -12,15 +12,15 @@
  * Spec sources (each export cites the skill/reference section it enforces):
  * - status.json schema + required fields + root-only `residual_findings`:
  * `mstar-artifacts/references/status-and-residuals.md` § General constraints
- * + `mstar-engine-legacy/references/migration-source-shapes.md` § "v2 root
+ * + `mstar-project-governance/references/migration-source-shapes.md` § "v2 root
  * `status.json`" and § "`workflows/<id>/snapshot.json`" (the retired root and
  * row shapes this validator still recognizes) + § "Plan-key compatibility"
  * (read: accept `id` or `plan_id`; write: one canonical key, prefer `id`).
  * - Severity enum + legacy `"warning"` → `low`: § "Residual findings:
  * `severity` (SSOT, machine field)" — allowed values
  * `critical|high|medium|low|nit`; `warning` is legacy and read/rolled up as
- * `low`, not an allowed new severity (legacy read mapping → the archive's
- * § "Document validation and severity history").
+ * `low`, not an allowed new severity (legacy read mapping →
+ * `migration-source-shapes.md` § "Document validation and severity history").
  * `null`/`""` → `medium` (rollup normalization).
  * - Residual required fields + lifecycle + archive shape:
  * `migration-source-shapes.md` § "`projects/<id>/residuals.json` register"
@@ -124,7 +124,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * Every plan id a `plans[]` row can be addressed by
- * (`mstar-engine-legacy/references/migration-source-shapes.md` § "Plan-key
+ * (`mstar-project-governance/references/migration-source-shapes.md` § "Plan-key
  * compatibility": read accepts `id` or the legacy `plan_id`; write prefers
  * `id`). Both non-empty keys are reported, in canonical-first order: a row
  * whose two keys disagree is ambiguous (`status.plan-row.dual-id`), and an
@@ -159,7 +159,7 @@ function violation(severity: Severity, code: string, message: string, fix?: stri
  * Normalize a residual `severity` value for reading/rolling up
  * (status-and-residuals.md § "Residual findings: `severity` (SSOT, machine
  * field)"; the legacy read mapping is archived in
- * `mstar-engine-legacy/references/migration-source-shapes.md` § "Document
+ * `mstar-project-governance/references/migration-source-shapes.md` § "Document
  * validation and severity history"): legacy `"warning"` → `"low"`;
  * `null`/`""` → `"medium"`; anything else passes
  * through unchanged (unknown values match no enum bucket, same as jq).
@@ -177,7 +177,7 @@ export { STATUS_V2_PAYLOAD_SCHEMA } from "./persist-payload-schemas.js";
 
 /**
  * jq semantics: an entry is open when `.lifecycle // "open"` equals `"open"`
- * (`mstar-engine-legacy/references/migration-source-shapes.md` § "In-place
+ * (`mstar-project-governance/references/migration-source-shapes.md` § "In-place
  * closure shape of migrated records" — `open` maps omitted/`false`/`null` to
  * open; live items stay open until an authorized issue disposition).
  * The jq alternative operator `//` yields the default for `false` AND
@@ -207,7 +207,7 @@ function validateNonEmptyString(
 
 /**
  * Validate one `plans[]` row. The retired row shape lives in
- * `mstar-engine-legacy/references/migration-source-shapes.md`
+ * `mstar-project-governance/references/migration-source-shapes.md`
  * § "`workflows/<id>/snapshot.json`"; read accepts `id` or `plan_id` and write
  * keeps one canonical key (§ "Plan-key compatibility" in the same reference).
  * Required: `id` (or legacy `plan_id`), `title`, `file`, `status` (one of
@@ -272,7 +272,7 @@ export function validatePlanRow(row: unknown): GateResult {
 }
 
 /**
- * Validate one residual entry: `mstar-engine-legacy/references/migration-source-shapes.md`
+ * Validate one residual entry: `mstar-project-governance/references/migration-source-shapes.md`
  * § "`projects/<id>/residuals.json` register" (entry fields) +
  * § "Document validation and severity history" (the nine required fields).
  * Required `id`, `title`, `severity`, `source`, `scope`, `decision`, `owner`,
@@ -343,7 +343,7 @@ export function validateResidual(entry: unknown): GateResult {
   }
 
  // closed_at format is enforced whenever the field is present, regardless of
- // lifecycle (`mstar-engine-legacy/references/migration-source-shapes.md`
+ // lifecycle (`mstar-project-governance/references/migration-source-shapes.md`
  // § "In-place closure shape of migrated records" — the close protocol sets
  // `closed_at` (YYYY-MM-DD) + `closure_note`).
   if (closed_at !== undefined && (typeof closed_at !== "string" || !DATE_RE.test(closed_at))) {
@@ -361,7 +361,7 @@ export function validateResidual(entry: unknown): GateResult {
       );
     } else if (lifecycle !== "open") {
  // Closed-lifecycle completeness
- // (`mstar-engine-legacy/references/migration-source-shapes.md`
+ // (`mstar-project-governance/references/migration-source-shapes.md`
  // § "In-place closure shape of migrated records": "Closed records add
  // `lifecycle`, `closed_at` (YYYY-MM-DD) and non-empty `closure_note`").
       if (closed_at === undefined) {

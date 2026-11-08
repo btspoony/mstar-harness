@@ -19,9 +19,9 @@
  * - Skill frontmatter contract: `mstar-skill-authoring` SKILL.md § Frontmatter
  * Contract — `name` stable lowercase-hyphen; `description` is the trigger
  * contract (not a workflow summary), third person.
- * - STRATEGY.md structure: `mstar-strategy` SKILL.md § STRATEGY.md structure —
- * six required sections (Vision, What we build, What we don't build,
- * Guiding Principles, Technology Direction, Decision Log).
+ * - STRATEGY.md structure: `mstar-knowledge/references/strategy-document.md`
+ * § Shape — six required sections (Vision, What we build, What we don't
+ * build, Guiding Principles, Technology Direction, Decision Log).
  * - Ephemeral citations: knowledge `conventions/skill-content-porting-discipline.md`
  * §3 ("No ephemeral citations in durable skill text") + session evaluation
  * 2026-08-16 discrimination contract — placeholder artifact refs
@@ -278,8 +278,8 @@ description: ${Array.from({ length: 121 }, (_, i) => `word${i}`).join(" ")}
 
 /** Real corpus regression — current skill frontmatter must pass the lints
  * (no false-positive storms on the 20-skill corpus, 2026-08-08). */
-const FRONTMATTER_REAL_STRATEGY = `---
-name: mstar-strategy
+const FRONTMATTER_REAL_ZH_DESCRIPTION = `---
+name: real-zh-description-sample
 description: Morning Star 全局战略方向 —— 创建并维护 \`STRATEGY.md\`（项目级战略文档），作为 brainstorm/plan 的上游锚点。定义产品愿景、技术方向、不做事项、决策原则。触发：项目初始化、方向性决策变更、或 PM 要求战略对齐时。
 ---`;
 
@@ -298,8 +298,8 @@ name: example-skill
 description: Use when handling I/O errors in file readers.
 ---`;
 
-/** STRATEGY.md with all six required sections (mstar-strategy § STRATEGY.md
- * structure). */
+/** STRATEGY.md with all six required sections (mstar-knowledge/references/
+ * strategy-document.md § Shape). */
 const STRATEGY_COMPLETE = `# Strategy
 ## Vision
 Become the default harness.
@@ -830,8 +830,8 @@ describe("lintSkillFrontmatter", () => {
     expect(result.violations.map((v) => v.code)).toEqual(["lint.frontmatter.description.workflow"]);
   });
 
-  test("current corpus regression: real mstar-strategy and mstar-design-md frontmatter pass", () => {
-    expect(lintSkillFrontmatter(FRONTMATTER_REAL_STRATEGY).ok).toBe(true);
+  test("current corpus regression: real-corpus Chinese description and mstar-design-md frontmatter pass", () => {
+    expect(lintSkillFrontmatter(FRONTMATTER_REAL_ZH_DESCRIPTION).ok).toBe(true);
     expect(lintSkillFrontmatter(FRONTMATTER_REAL_DESIGN_MD).ok).toBe(true);
   });
 
@@ -864,7 +864,7 @@ describe("lintSkillFrontmatter", () => {
 });
 
 // ---------------------------------------------------------------------------
-// lintStrategySections — mstar-strategy § STRATEGY.md structure
+// lintStrategySections — mstar-knowledge/references/strategy-document.md § Shape
 // ---------------------------------------------------------------------------
 
 describe("lintStrategySections", () => {

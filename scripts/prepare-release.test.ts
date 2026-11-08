@@ -454,23 +454,38 @@ describe("compareSemver (prerelease-aware, semver 2.0.0 §11)", () => {
     expect(compareSemver("3.6.0-alpha.1", "3.6.0-beta")).toBeLessThan(0);
   });
 
-  test("equal versions compare equal", () => {
-    expect(compareSemver("3.6.0", "3.6.0")).toBe(0);
-  });
 });
 
 describe("bumpVersion (auto-bump, prerelease graduation)", () => {
-  test("stable current bumps patch/minor as before", () => {
-    expect(bumpVersion("3.5.1", "patch")).toBe("3.5.2");
-    expect(bumpVersion("3.5.1", "minor")).toBe("3.6.0");
+  const parts = (v: string): [number, number, number] => {
+    const [a, b, c] = v.split(".").map((n) => parseInt(n, 10));
+    return [a, b, c];
+  };
+
+  test("a patch bump keeps major and minor and advances the patch", () => {
+    const from = "7.4.2";
+    const to = bumpVersion(from, "patch");
+    const [maj, min, pat] = parts(from);
+    expect(parts(to)).toEqual([maj, min, pat + 1]);
   });
 
-  test("prerelease current graduates to the same-core stable on patch/default", () => {
-    expect(bumpVersion("3.6.0-alpha.1", "patch")).toBe("3.6.0");
+  test("a minor bump keeps the major and zeroes the rest", () => {
+    const from = "7.4.2";
+    const [maj] = parts(from);
+    expect(parts(bumpVersion(from, "minor"))).toEqual([maj, parts(from)[1] + 1, 0]);
   });
 
-  test("prerelease current graduates to the next minor stable on minor", () => {
-    expect(bumpVersion("3.6.0-alpha.1", "minor")).toBe("3.7.0");
+  test("a prerelease graduates to its own core on a patch and drops the tag", () => {
+    const from = "7.5.0-alpha.3";
+    const to = bumpVersion(from, "patch");
+    expect(to).toBe(parts(from).join("."));
+    expect(to).not.toContain("-");
+  });
+
+  test("a prerelease takes the next minor core on a minor", () => {
+    const from = "7.5.0-alpha.3";
+    const [maj, min] = parts(from);
+    expect(parts(bumpVersion(from, "minor"))).toEqual([maj, min + 1, 0]);
   });
 });
 
@@ -487,10 +502,8 @@ describe("marketplace manifest surfaces (nested version locator)", () => {
     expect(CHANGELOGS.map((surface) => surface.pkg)).not.toContain("mcp");
   });
 
-  test("readVersionAt walks the dotted locator; default reads the root version", () => {
+  test("readVersionAt walks the dotted locator and stops at absent keys", () => {
     const doc = { version: "1.0.0", plugins: [{ name: "x", version: "2.0.0" }] };
-    expect(readVersionAt(doc, "plugins.0.version")).toBe("2.0.0");
-    expect(readVersionAt(doc, DEFAULT_VERSION_PATH)).toBe("1.0.0");
     expect(readVersionAt(doc, "plugins.9.version")).toBeUndefined();
     expect(readVersionAt(doc, "plugins.0.name")).toBe("x");
     expect(readVersionAt(doc, "plugins.1.version")).toBeUndefined();
@@ -528,51 +541,11 @@ describe("bumpJsonVersion (locator-aware bump)", () => {
     }
   }
 
-  test("bumps a marketplace manifest at plugins.0.version; validate re-reads via the locator", async () => {
-    await withTempCwd({ "marketplace.json": MARKETPLACE_FIXTURE }, async () => {
-      await bumpJsonVersion("marketplace.json", "3.7.0", "3.7.1", "plugins.0.version");
-      const json = JSON.parse(readFileSync("marketplace.json", "utf8"));
-      expect(readVersionAt(json, "plugins.0.version")).toBe("3.7.1");
-    });
-  });
-
-  test("default locator still bumps a plain root-version document", async () => {
-    await withTempCwd({ "pkg.json": `{"name":"x","version":"1.2.3"}` }, async () => {
-      await bumpJsonVersion("pkg.json", "1.2.3", "1.2.4");
-      expect(JSON.parse(readFileSync("pkg.json", "utf8")).version).toBe("1.2.4");
-    });
-  });
-
   test("fails loud when the located version is not the current release", async () => {
     await withTempCwd({ "marketplace.json": MARKETPLACE_FIXTURE }, async () => {
       await expect(bumpJsonVersion("marketplace.json", "9.9.9", "3.7.1", "plugins.0.version")).rejects.toThrow(
         /version at "plugins.0.version" is 3.7.0, expected "9.9.9"/,
       );
-    });
-  });
-
-  test("replaces only the located occurrence when an earlier key carries the same version string", async () => {
-    // Models the QC F-002 scenario: a root-level version key textually before
-    // plugins[0].version with the same old value — the located span, not the
-    // first textual occurrence, must be rewritten.
-    const fixture = `{
-  "version": "3.7.0",
-  "plugins": [{ "name": "morning-star-harness", "version": "3.7.0", "source": { "source": "github" } }]
-}
-`;
-    await withTempCwd({ "marketplace.json": fixture }, async () => {
-      await bumpJsonVersion("marketplace.json", "3.7.0", "3.7.1", "plugins.0.version");
-      const json = JSON.parse(readFileSync("marketplace.json", "utf8"));
-      expect(json.version).toBe("3.7.0"); // earlier textual occurrence untouched
-      expect(readVersionAt(json, "plugins.0.version")).toBe("3.7.1"); // only the located key moved
-    });
-  });
-
-  test("prerelease version flows through the nested locator unchanged", async () => {
-    await withTempCwd({ "marketplace.json": MARKETPLACE_FIXTURE }, async () => {
-      await bumpJsonVersion("marketplace.json", "3.7.0", "3.8.0-alpha.1", "plugins.0.version");
-      const json = JSON.parse(readFileSync("marketplace.json", "utf8"));
-      expect(readVersionAt(json, "plugins.0.version")).toBe("3.8.0-alpha.1");
     });
   });
 

@@ -23,7 +23,7 @@ If you were dispatched as an SDD implementer or task reviewer, skip PM orchestra
 
 **Optional:** **`SDD implementer session: sticky`** — same implementer subagent across sequential tasks on one plan/branch; **task reviewers stay fresh per task**. SSOT → **`references/sticky-implementer-session.md`**.
 
-> **Engine check (when available):** import `implementerSessionStickyRules` from `@mstar-harness/engine` in a host hook to validate the sticky resume decision above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** engine `implementerSessionStickyRules` to validate the sticky resume decision above (no CLI form yet). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 **Narration:** at most one short line between tool calls — ledger and file paths carry the record.
 
@@ -68,7 +68,7 @@ Serial integration merge commits use the already-configured identity; missing/fa
 
 Detail: **`references/file-handoffs.md`**.
 
-> **Engine check (when available):** run `mstar sdd workspace <plan-id>` / `mstar sdd task-brief <plan-file> <task-number>` / `mstar sdd review-package <base> <head>` (or `import { assertBaseSha, sddWorkspace, taskBrief, reviewPackage } from "@mstar-harness/engine"` in a host hook) to drive the loop steps above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar sdd workspace <plan-id>` / `mstar sdd task-brief <plan-file> <task-number>` / `mstar sdd review-package <base> <head>` (engine `assertBaseSha`, `sddWorkspace`, `taskBrief`, `reviewPackage`) to drive the loop steps above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 > **On dsh:** implementer, reviewer and plan-QC-tri dispatches follow the mounted delegation channel — **Agent Teams** is the default whenever `spawn_teammate` is mounted (one durable teammate per writable track, reused across that track's tasks; reviewers and the tri take no roster seat and run as fresh-context `workflow` read-only children — template **`mstar-host`** → `references/dsh-workflow-scripts.md`), **`subagent`** is the fallback (where continuation resume still applies: `implementer-session.json` + `references/implementer-continuation-prompt.md`, host row → `references/sticky-implementer-session.md` § Host mapping), and **`workflow`** carries read-only fan-out only. Board protocol, seat budget and wake discipline are not restated here → **`mstar-host`** → `references/dsh.md` § Delegation channels + `references/dsh-agent-teams.md`.
 
@@ -88,7 +88,7 @@ Detail: **`references/file-handoffs.md`**.
 ## After all tasks
 
 1. `mstar sdd review-package MERGE_BASE HEAD` → branch diff in `{SDD_DIR}/review/`
-2. PM dispatches **plan QC tri-review (L3)** — **`QC mode: full tri-review`**, **N=3** — with branch review-package path and report paths under `{SDD_DIR}/review/` → **`mstar-review-qc`** · **`mstar-dispatch-gates`**. Layer SSOT → **`mstar-review-qc/references/review-responsibility-boundaries.md`**. PM writes `{SDD_DIR}/review/qc-consolidated.md` and durable main-plan gate summary. **Mandatory whenever `Execution mode: sdd`** (single-plan or iteration).
+2. PM dispatches **plan QC tri-review (L3)** — **`QC mode: full tri-review`**, mandatory whenever `Execution mode: sdd` (single-plan or iteration) — with branch review-package path and report paths under `{SDD_DIR}/review/`; seat count → **`mstar-review-qc`** § 分派时机. Layer SSOT → **`mstar-review-qc/references/review-responsibility-boundaries.md`**. PM writes `{SDD_DIR}/review/qc-consolidated.md` and durable main-plan gate summary.
 3. Critical/Important QC findings → fix assignments partitioned by ownership/dependency, then targeted re-review. Independent fixes run concurrently; PM retains the complete findings ledger. Fix rounds run on four mechanics — the per-task fix loop applies the same (`references/file-handoffs.md`):
     - **Unverified rounds count**: a fix round without verification evidence (reviewer not confirmed / report not on disk) is **not clean** — re-check and count the round; never enter the convergence branch.
     - **Complete ledger, scoped dispatch**: PM retains every open finding, including unverified items; each fix assignment carries only its owned findings and relevant fix delta. Unrelated findings do not expand a leaf task.
@@ -104,7 +104,7 @@ PM appends on clean review: `Task N: complete (<base>..<head>, review clean, rev
 
 Minor findings → `## Minor (for plan QC)` section in same file.
 
-> **Engine check (when available):** import `readProgressLedger` from `@mstar-harness/engine` in a host hook to read the ledger above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** engine `readProgressLedger` to read the ledger above (no CLI form yet). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## Red flags (NEVER)
 

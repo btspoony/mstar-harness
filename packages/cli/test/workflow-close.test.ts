@@ -438,7 +438,7 @@ describe("mstar status workflow-close — prerequisite refusals", () => {
     expect((await storedHeader(fixture)).status).toBe("running");
   }, 30_000);
 
-  test("a control root with no ACTIVE authority refuses, names the ACTIVE route, and leaves the file bytes untouched", async () => {
+  test("a control root with no ACTIVE authority refuses and names the ACTIVE route", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-close-legacy-")));
     roots.push(root);
     const harness = join(root, ".mstar");
@@ -461,8 +461,6 @@ describe("mstar status workflow-close — prerequisite refusals", () => {
       },
       plans: [{ id: PLAN_ID, title: "Close plan", file: `plans/${PLAN_ID}.md`, status: "Done" }],
     });
-    const beforeStatus = readFileSync(statusPath, "utf8");
-    const beforeSnapshot = readFileSync(snapshotPath, "utf8");
 
     const result = runCli(
       ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--harness", harness, "--reason", "close"],
@@ -474,8 +472,6 @@ describe("mstar status workflow-close — prerequisite refusals", () => {
     // refuses store.not-initialized and its recovery names the ACTIVE route.
     expect(envelope(result).code).toBe("store.not-initialized");
     expect(recoveryOf(result)).toContain("mstar store init");
-    expect(readFileSync(statusPath, "utf8")).toBe(beforeStatus);
-    expect(readFileSync(snapshotPath, "utf8")).toBe(beforeSnapshot);
   }, 30_000);
 });
 

@@ -20,7 +20,8 @@
  * fixture and asserts the exit code + reported violation codes.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
@@ -52,9 +53,9 @@ interface RunResult {
 }
 
 /** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
-function runCli(args: string[], opts: { env?: Record<string, string> } = {}): RunResult {
+function runCli(args: string[], opts: { env?: Record<string, string>; cwd?: string } = {}): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: CLI_ROOT,
+    cwd: opts.cwd ?? CLI_ROOT,
     env: { ...cliEnv(), ...opts.env },
     stdout: "pipe",
     stderr: "pipe",
@@ -384,5 +385,143 @@ describe("mstar dispatch validate — Assignment field + default-branch gate", (
     const result = runCli(["dispatch", "validate", "/no/such/assignment.md"]);
     expect(result.exitCode).toBe(1);
     expectEnvelope(result, "refused", "dispatch.validate.refused");
+  });
+});
+
+describe("mstar dispatch validate — control writes", () => {
+  function fixture(fn: (control: string, linked: string, file: string) => void, canonical = false): void {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-control-dispatch-")));
+    const control = join(root, "control");
+    const linked = join(root, "linked");
+    mkdirSync(control);
+    const git = (...args: string[]) => execFileSync("git", ["-C", control, ...args], {
+      stdio: "pipe",
+      env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.test", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" },
+    });
+    try {
+      git("init", "-b", "main");
+      mkdirSync(join(control, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(control, ".gitignore"), canonical
+        ? ".mstar/**\n!.mstar/AGENTS.md\n!.mstar/knowledge/\n!.mstar/knowledge/**\n!.mstar/specs/\n!.mstar/specs/**\n!.mstar/adr/\n!.mstar/adr/**\n"
+        : ".mstar/plans/\n");
+      if (canonical) writeFileSync(join(control, ".mstar", "specs", "spec.md"), "fixture\n");
+      git("add", ".");
+      git("commit", "-m", "fixture");
+      git("worktree", "add", "-b", "feature/fixture", linked);
+      const file = join(control, "assignment.md");
+      fn(control, linked, file);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  test("validates the control checkout from a linked worktree and refuses mismatches", () => {
+    fixture((control, linked, file) => {
+      const run = (overrides: Record<string, string>) => {
+        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": ".", "Working branch": "main", "Control write paths": ".mstar/plans/run.md", ...overrides }));
+        return runCli(["dispatch", "validate", file], { cwd: linked });
+      };
+      const clean = run({});
+      expect(clean.exitCode).toBe(0);
+      expectEnvelope(clean, "ok", "dispatch.validate.ok");
+      const wrongPath = run({ "Worktree path": linked });
+      expect(wrongPath.exitCode).toBe(1);
+      expect(violationCodes(wrongPath)).toContain("dispatch.control-write.worktree-not-control");
+      const wrongBranch = run({ "Working branch": "feature/fixture" });
+      expect(wrongBranch.exitCode).toBe(1);
+      expect(violationCodes(wrongBranch)).toContain("dispatch.control-write.branch-mismatch");
+      const product = run({ "Write domain": "work" });
+      expect(product.exitCode).toBe(1);
+      expect(violationCodes(product)).toContain("dispatch.default-branch.protected");
+      const readOnly = run({ "Execute as": "scout", "Worktree path": linked });
+      expect(readOnly.exitCode).toBe(0);
+    });
+  });
+  test("accepts direct-on control branch and refuses a different branch", () => {
+    fixture((control, linked, file) => {
+      const run = (branch: string) => {
+        const text = assignment({ "Write domain": "control", "Worktree path": ".", "Control write paths": ".mstar/plans/run.md", "Branch policy": `direct on ${branch} \u2014 maintenance` })
+          .replace(/^\*\*Working branch\*\*:.*\n/m, "");
+        writeFileSync(file, text);
+        return runCli(["dispatch", "validate", file], { cwd: linked });
+      };
+      expect(run("main").exitCode).toBe(0);
+      expect(violationCodes(run("feature/fixture"))).toContain("dispatch.control-write.branch-mismatch");
+    });
+  });
+
+
+  test("probes the declared absent file rather than a synthetic child", () => {
+    fixture((control, linked, file) => {
+      writeFileSync(join(control, ".gitignore"), "*.md\n");
+      const run = (target: string) => {
+        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": target }));
+        return runCli(["dispatch", "validate", file], { cwd: linked });
+      };
+      expect(() => execFileSync("git", ["-C", control, "check-ignore", "-q", "--", "notes/run.md/"])).not.toThrow();
+      const ignored = run("notes/run.md");
+      expect(ignored.exitCode).toBe(0);
+      expectEnvelope(ignored, "ok", "dispatch.validate.ok");
+      const committable = run("notes/run.txt");
+      expect(committable.exitCode).toBe(1);
+      expect(violationCodes(committable)).toContain("dispatch.control-write.target-committable");
+    });
+  });
+
+  test("probes an absent slash-less target under both ignore rules", () => {
+    fixture((control, _linked, file) => {
+      writeFileSync(join(control, ".gitignore"), ".mstar/**\n");
+      const run = (target: string) => {
+        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": target }));
+        return runCli(["dispatch", "validate", file], { cwd: control });
+      };
+      const fileTarget = run(".mstar/notes");
+      expect(fileTarget.exitCode).toBe(0);
+      expectEnvelope(fileTarget, "ok", "dispatch.validate.ok");
+    });
+  });
+
+  test("refuses slash-less committable directories while accepting ignored targets", () => {
+    fixture((control, linked, file) => {
+      writeFileSync(join(control, ".gitignore"), ".mstar/**\n!.mstar/notes/\n!.mstar/notes/**\n");
+      const run = (target: string) => {
+        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": target }));
+        return runCli(["dispatch", "validate", file], { cwd: linked });
+      };
+      const unsafe = run(".mstar/notes");
+      expect(unsafe.exitCode).toBe(1);
+      expect(violationCodes(unsafe)).toContain("dispatch.control-write.target-committable");
+      expect(run(".mstar/plans/run.md").exitCode).toBe(0);
+    });
+  });
+
+  test("checks a declared absent directory using directory ignore rules", () => {
+    fixture((control, linked, file) => {
+      writeFileSync(join(control, ".gitignore"), ".mstar/**\n!.mstar/notes/\n!.mstar/notes/**\n");
+      writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": ".mstar/notes/" }));
+      const result = runCli(["dispatch", "validate", file], { cwd: linked });
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("dispatch.control-write.target-committable");
+    });
+  });
+
+  test("checks each concrete target against the canonical ignore layout", () => {
+    fixture((control, linked, file) => {
+      const run = (targets: string) => {
+        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": targets }));
+        return runCli(["dispatch", "validate", file], { cwd: linked });
+      };
+      expect(run(".mstar/sdd/plan-x/report.md").exitCode).toBe(0);
+      const tracked = run(".mstar/specs/spec.md");
+      expect(tracked.exitCode).toBe(1);
+      expect(violationCodes(tracked)).toContain("dispatch.control-write.target-committable");
+      const outside = run(join(linked, ".mstar", "sdd", "report.md"));
+      expect(outside.exitCode).toBe(1);
+      expect(violationCodes(outside)).toContain("dispatch.control-write.target-outside-control");
+      const missing = run("");
+      expect(violationCodes(missing)).toContain("assignment.field.control-write-paths-missing");
+      const multiple = run(".mstar/sdd/plan-x/report.md, .mstar/specs/spec.md");
+      expect(violationCodes(multiple)).toContain("dispatch.control-write.target-committable");
+    }, true);
   });
 });

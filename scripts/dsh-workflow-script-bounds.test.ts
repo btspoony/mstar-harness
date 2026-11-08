@@ -1,8 +1,9 @@
 /**
  * The dsh workflow-script pool bound is pinned by a BEHAVIOUR check
- * independent of the host core count: the `mstar-audit-fanout` script in
- * `dsh-workflow-scripts.md` (§ mstar-audit-fanout) is extracted from the
- * published Markdown and EXECUTED in a sandbox that doubles its globals:
+ * independent of the host core count: the shipped `mstar-audit-fanout` script
+ * (`packages/dsh/workflows/mstar-audit-fanout.js`, documented in
+ * `dsh-workflow-scripts.md` § 2) is EXECUTED in a sandbox that doubles its
+ * globals:
  * `agent` records the in-flight child depth while awaiting one macrotask tick,
  * and `parallel` reproduces the real tool's semantics (all thunks concurrent
  * behind one barrier; a throwing thunk resolves to null instead of rejecting
@@ -21,14 +22,9 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { join } from "node:path";
 
-const DOC = join(import.meta.dir, "..", "skills", "mstar-host", "references", "dsh-workflow-scripts.md");
+const SCRIPT = join(import.meta.dir, "..", "packages", "dsh", "workflows", "mstar-audit-fanout.js");
 
-/** The ```js fenced blocks of the document, in document order. */
-function jsBlocks(markdown: string): string[] {
-  return [...markdown.matchAll(/```js\n([\s\S]*?)```/g)].map((match) => match[1]!);
-}
-
-const script = jsBlocks(readFileSync(DOC, "utf8")).find((block) => block.includes("CHUNK"));
+const script = readFileSync(SCRIPT, "utf8");
 
 /** The nine `mstar-audit` categories, exactly as the script's `ALL` declares. */
 const ALL_CATEGORIES = ["bug", "security", "perf", "tests", "tech-debt", "migration", "dx", "docs", "direction"];
@@ -111,9 +107,6 @@ const DEFAULT_ARGS = {
 
 describe("dsh-workflow-scripts fan-out pool bound (behaviour, host-core-count-independent)", () => {
   it("the default all-nine fan-out completes every category with the in-flight depth <= the 8-seat pool", async () => {
-    expect(script, "the §2 script block declaring CHUNK must exist in dsh-workflow-scripts.md").toBeDefined();
-    if (!script) return;
-
     const { seats, depth, launched } = await runFanoutScript(script, DEFAULT_ARGS);
 
     // All nine default categories complete; a null entry would be a failed seat.

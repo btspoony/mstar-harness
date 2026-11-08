@@ -46,7 +46,6 @@ import { executionBindingOf } from "../coordinator-identity";
 import {
   buildExecutionHostInventory,
   exportExecutionHostInventory,
-  inventoryDigest,
   type ExecutionHostInventory,
 } from "../execution-host-inventory";
 import { PHASE2_NOTICE_CUSTOM_TYPE, fallbackNotice, formatNotice, statusNotice } from "../notices";
@@ -930,8 +929,6 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
       code: "exported",
       workflowId: inventory.workflowId,
       hostSessionId: inventory.hostSessionId,
-      exportSha256: inventory.export.sha256,
-      evidenceSha256: inventoryDigest(inventory),
       records: inventory.export.document.records.length,
       diagnostics: inventory.export.document.diagnostics.length,
     });

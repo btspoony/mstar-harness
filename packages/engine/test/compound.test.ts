@@ -1,14 +1,16 @@
 /**
  * Engine compound module — knowledge-doc frontmatter schema validation,
  * reference existence checks, knowledge catalog completeness, and
- * compound-refresh scope guarding.
+ * Maintain scope guarding.
  *
- * Spec sources (cited per test): mstar-compound/references/schema.yaml
- * (required/optional fields, track rules), mstar-compound/references/
+ * Spec sources (cited per test): mstar-knowledge/references/schema.yaml
+ * (required/optional fields, track rules), mstar-knowledge/references/
  * category-mapping.md (problem_type → category directory),
- * mstar-compound SKILL.md Phase 6 (the knowledge index duty is now the
+ * mstar-knowledge SKILL.md (`## Workflow — Capture`) Phase 6 (the knowledge
+ * index duty is now the
  * catalog-completeness query, state-projection contract §4), and
- * mstar-compound-refresh SKILL.md (scope SSOT: knowledge/**,
+ * mstar-knowledge SKILL.md (`## Workflow — Maintain`) (scope SSOT:
+ * knowledge/**,
  * knowledge/README.md, and CONCEPTS.md).
  */
 import * as fs from "node:fs";
@@ -148,7 +150,7 @@ Body only.
 `;
 
 // ---------------------------------------------------------------------------
-// validateSchemaYaml — mstar-compound/references/schema.yaml
+// validateSchemaYaml — mstar-knowledge/references/schema.yaml
 // ---------------------------------------------------------------------------
 
 describe("validateSchemaYaml", () => {
@@ -244,7 +246,7 @@ resolution_type: code_fix
 });
 
 // ---------------------------------------------------------------------------
-// referenceExists — compound-refresh Phase 2 (referenced code still exists?)
+// referenceExists — Maintain Phase 2 (referenced code still exists?)
 // ---------------------------------------------------------------------------
 
 describe("referenceExists", () => {
@@ -397,7 +399,7 @@ describe("knowledge catalog completeness — the DB query that replaced the READ
 });
 
 // ---------------------------------------------------------------------------
-// scopeGuard / compoundRefreshScope — mstar-compound-refresh scope SSOT
+// scopeGuard / compoundRefreshScope — mstar-knowledge Maintain scope SSOT
 // ---------------------------------------------------------------------------
 
 describe("scopeGuard", () => {

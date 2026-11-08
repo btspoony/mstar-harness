@@ -39,7 +39,7 @@ One round is a review and its tally-derived transition, followed by a qualifying
 3. Synthesize the current tally and verdict through § Verdict synthesis. Post a new `COMMENT` review, run the thread lifecycle (resolve `fixed` threads, fold superseded review bodies — `mstar-audit` → `references/pr-review.md` § Comment posting — Thread lifecycle), and save the report under § Comment posting / § Local report archive; inline comments of still-open findings are never edited. Posting failure retains the local report and error, not a success claim.
 4. Apply the verdict transition table. For dispatchable findings, the PM issues bounded implementer Assignments through `mstar-dispatch-gates`, naming the finding, fix sketch, authorized branch, absolute fix-worktree path and scoped verification. Implementers commit locally at the fix site below; the PM performs any iteration integration merge serially. After the push gate is idle, batch the local fixes into one push, wait for the new head's waves, and begin the next review round.
 
-> **Engine check (when available):** use `mstar pr-review report-path`, `mstar pr-review tally`, `mstar pr-review validate-report`, `mstar pr-review worktree-setup`, `mstar pr-review seat-prompt`, `mstar pr-review post`, `mstar pr-review budget`, and `mstar iteration push-cadence` for the corresponding existing review and push checks. Read current verb help for arguments; a failed check requires repairing its cause and rerunning it, not bypassing the contract. Skill text below remains authoritative when the runtime is absent
+> **Engine check:** use `mstar pr-review report-path`, `mstar pr-review tally`, `mstar pr-review validate-report`, `mstar pr-review worktree-setup`, `mstar pr-review seat-prompt`, `mstar pr-review post`, `mstar pr-review budget`, and `mstar iteration push-cadence` for the corresponding existing review and push checks. Read current verb help for arguments; a failed check requires repairing its cause and rerunning it, not bypassing the contract. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## Decision Rules
 
@@ -74,7 +74,7 @@ The iteration merge ritual is not generalized to standalone plans.
 
 - Dispatch only findings with `file:line`, a fix sketch and merge class `must-fix` or `should-fix`; do not dispatch `may-fix` or `nit` by default. Missing evidence returns to review triage, not speculative implementation. Findings requiring product, permission or external decisions stop and report the decision needed.
 - Fix commits stay local in the fix worktree until CI and AI-review waves are idle (§5.1a); then push one batch. Do not rebase or force-push inside the loop: rewritten history degrades the next round to a full review (§ Re-review).
-- Keep product edits out of the primary checkout; review worktrees stay read-only. Report/evidence placement follows the review archive contract and `mstar-branch-worktree`'s three-domain table, not the fix-worktree location.
+- Keep product edits out of the primary checkout; review worktrees stay read-only. Report/evidence placement follows the review archive contract and `mstar-branch-worktree`'s three-domain statement, not the fix-worktree location.
 
 ### Stop and recovery
 

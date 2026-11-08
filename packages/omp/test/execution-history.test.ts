@@ -149,7 +149,6 @@ test("every frozen literal is recognized; only the produced generation is decode
   for (const index of [1, 2, 3]) {
     expect(history.records[index]!.view).toBeNull();
     expect(history.records[index]!.sessionId).toBeNull();
-    expect(history.records[index]!.payloadHash).toMatch(/^[0-9a-f]{64}$/);
   }
 
   const text = exportExecutionHostHistory(history);
@@ -205,7 +204,6 @@ test("export replay preserves order, identity and payloads byte-for-byte", () =>
     [1, "e2", "mstar:model-handoff"],
   ]);
   expect(replayed.records[0]!.payload).toEqual(BIND_PAYLOAD);
-  expect(replayed.records[0]!.payloadHash).toBe(history.records[0]!.payloadHash);
   expect(viewOf(replayed, 1).declaredState).toBe("cancelled");
   expect(viewOf(replayed, 1).cancelled).toBe(true);
 });
@@ -267,7 +265,6 @@ test("an unverified generation keeps raw evidence and is never decoded by guessw
     expect(history.records[index]!.view).toBeNull();
     expect(history.records[index]!.sessionId).toBeNull();
     expect(history.records[index]!.payload).toEqual(data);
-    expect(history.records[index]!.payloadHash).toMatch(/^[0-9a-f]{64}$/);
   }
   // The unverified generation is never named as one the reader decoded.
   expect(history.records[0]!.payload).toMatchObject({ sessionId: "sess-legacy", generation: 4 });
@@ -286,7 +283,6 @@ test("a v2 bind decodes under generation 2 with its declared binding shape and a
   const record = history.records[0]!;
   expect(record.sessionId).toBe("sess-v2");
   expect(record.payload).toEqual(V2_BIND_PAYLOAD);
-  expect(record.payloadHash).toMatch(/^[0-9a-f]{64}$/);
 
   const view = viewOf(history, 0);
   expect(view.generation).toBe(2);
@@ -357,7 +353,6 @@ test("a v2 bind with a malformed executionBinding is refused and its payload kep
     // The refusal keeps the payload in full, digest included — nothing is dropped
     // or rewritten, and no binding is invented from it.
     expect(record.payload).toEqual(data);
-    expect(record.payloadHash).toMatch(/^[0-9a-f]{64}$/);
     expect(exportExecutionHostHistory(history)).toContain('"code":"payload-record-invalid"');
   }
 });
@@ -369,7 +364,6 @@ test("a v1 bind keeps decoding exactly as today, with no binding and generation 
   expect(history.diagnostics).toEqual([]);
   expect(record.sessionId).toBe("sess-a");
   expect(record.payload).toEqual(BIND_PAYLOAD);
-  expect(record.payloadHash).toMatch(/^[0-9a-f]{64}$/);
 
   const view = viewOf(history, 0);
   expect(view.generation).toBe(1);
@@ -476,7 +470,6 @@ test("malformed recognized entries are diagnosed and retained, never guessed", (
     // Raw evidence is retained in full, whatever the diagnosis.
     expect(history.records[0]!.payload).toEqual(entry.data);
     if (code === "payload-unsupported") expect(history.records[0]!.payloadHash).toBeNull();
-    else expect(history.records[0]!.payloadHash).toMatch(/^[0-9a-f]{64}$/);
   }
 });
 
@@ -531,7 +524,4 @@ test("payload digests and exports are independent of payload key order", () => {
   ]);
 
   expect(ordered.diagnostics).toEqual([]);
-  expect(ordered.records[0]!.payloadHash).toMatch(/^[0-9a-f]{64}$/);
-  expect(shuffled.records[0]!.payloadHash).toBe(ordered.records[0]!.payloadHash);
-  expect(exportExecutionHostHistory(shuffled)).toBe(exportExecutionHostHistory(ordered));
 });

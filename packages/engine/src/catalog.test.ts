@@ -6,7 +6,7 @@
  * and the real `node:sqlite` driver in per-test temporary harness roots. No
  * mock database exists anywhere in this proof.
  */
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
@@ -96,6 +96,16 @@ function doc(id: string, overrides: Partial<CatalogEntityInput> = {}): CatalogEn
 function plan(id: string, relativePath: string, title = `Plan ${id}`): CatalogEntityInput {
   return { kind: "plan", id, title, rootKind: "plans", relativePath };
 }
+
+test("catalog list and show do not create the knowledge directory", async () => {
+  const context = await initialized("read-only-");
+  await registerCatalogEntity(context, doc("read-only"), op("read-only"));
+  const knowledge = join(context.harnessDir!, "knowledge");
+  expect(existsSync(knowledge)).toBe(false);
+  await listCatalog(context);
+  await getCatalog(context, { kind: "document", id: "read-only" });
+  expect(existsSync(knowledge)).toBe(false);
+});
 
 describe("catalog registration identity", () => {
   test("the composite (kind,id) stays stable across updates and identical replays are no-ops", async () => {

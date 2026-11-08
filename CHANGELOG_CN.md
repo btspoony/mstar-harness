@@ -6,6 +6,93 @@
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-11-08
+
+### Harness
+
+- 在 `bun run validation:drift` 中新增 **Guard 12**：遍历 `docs/adr/`，执行 ADR 记录契约——`{bucket}/{class}/yyyy-mm-dd-topic.md` 归属、`Status: <bucket> — <why>` 行与所在 bucket 一致、各生命周期的必需与禁用小节，以及禁止 `INDEX.md`。被批准的非记录文件（`README.md`、`{bucket}/TEMPLATE.md`、`.gitkeep`）忽略。
+- 每条拒绝都携带八个契约码之一（`adr.bucket-unknown`、`adr.class-unknown`、`adr.status-mismatch`、`adr.section-missing`、`adr.section-banned`、`adr.index-forbidden`、`adr.name-shape`、`adr.fence-unclosed`），点明出错文件，并附 `recovery` 字符串指明确切修法——三个合法 bucket、六个合法 class、`yyyy-mm-dd-topic.md` 与合法示例、缺失的小节标题、被禁小节的折叠/删除、bucket 移动或索引删除。
+- 未闭合的代码围栏以 `adr.fence-unclosed` 判该记录失败，而不是隐去其尾部：检查通过共享的 CommonMark 围栏扫描器读取标题，遇到不配对的围栏即停止，因此被禁小节不会逃逸，必需小节也不会被误报缺失。
+- 该守卫在 drift 页脚输出 `Guard 12 ADR format N records, M failures`。在目录树建立之前它报告零条记录——这是空语料的正确读数，不是关闭守卫的理由。
+- `scripts/adr-check.test.ts` 覆盖全部错误码加一个格式正确的正例，并已列入 CI `Test scripts` 文件集，语义不会静默停止运行。
+- 新增 **ADR 常驻规则**：`AGENTS.md` 增加一行 `Where to edit` 表项与一条 working rule，明确 `docs/adr/` 是「必须比 plan 更长寿的决策理由」的唯一归属地；`mstar-artifacts` 的 durable-summaries 参考与 `mstar-knowledge` 的归档/删除判定，各以一句指针指向同一棵树，而不是把理由留在自己身上。
+- 三处新增均为指针：记录契约、骨架与生命周期仍只在 `docs/adr/README.md` 中陈述。
+- 新增 **`docs/adr/` 决策记录树**：三个 bucket（`proposed`、`implemented`、`rejected`）× 六个 class（`feature`、`bug-fix`、`simplification`、`architecture`、`process`、`testing`）；`docs/adr/README.md` 写明持久决策三问、三类豁免、目录形状、生命周期迁移与被明确排除的结构（`archived/`、`INDEX.md`、双语副本）。
+- 新增两套骨架：`proposed/TEMPLATE.md`（`Problem` → `Proposal` → `Alternatives considered` → `Acceptance criteria` → `Risks`）与 `implemented/TEMPLATE.md`（`Problem` → `Decision` → `Alternatives considered` → `Consequences`）。`rejected/` 不设第三套模板——它复用 proposed 骨架并冻结正文，因此否决理由落在 status 行而不是新增小节。
+- 迁移唯一一条既有记录至 `docs/adr/implemented/architecture/2026-10-19-dsh-native-identity-channels.md`：`Context` 改为 `Problem`，`Superseded rationale: /mstar-execution` 改为 `Alternatives considered`，并以现在时 `Decision` 陈述正文早已确立的原生身份设计。其状态改为裸 `Status: implemented — …` 行，自述路径指向新位置。
+- 同步旧路径的全部入站引用——dsh 包 README 双语对及其 i18n 记录、leaf-seat 门禁注释，以及引用旧小节名的 dsh reference-extraction 片段。
+- **移除测试套件中所有的字节快照、digest 相等与硬编码内容断言。** 这类断言在构造上就不稳定 —— 只读打开 SQLite 会在库旁留下 `-wal`/`-shm`，未落盘的写入可能只存在于 WAL，构建产物随 bun 版本不同，空白与键序会变 —— 而且它们描述的是实现字节，不是被测行为。`AGENTS.md` 现以同样措辞写明该禁令，包括：hash 仍可作为**输入**计算，但绝不能是断言比较的对象。
+- `MCP control-root admission class > an absolute harness B from a host launched in A touches only B`（I-001050）改为断言 store 的 `issues` 与 `store_operations` 行数，不再做目录快照。已做红验证：把 capture 指向 `A` 时报 `issues: 1`。
+- `prreview-execution-cli`、`sdd-evidence`、`migrate`、`projection`、`execution-ledgers`、`store-upgrade-minimal`、`execution-consumers`、`evaluation-integrity`、`review-advice`、`runtime`、`execution-host-inventory`、`prepare-release`、`core` 及 skill-eval 套件去掉了 digest 与写死版本断言；每个测试保留其行为断言。
+- 新增一个伴随测试锁定新行数断言所依赖的契约：只读打开 store 不会改变这些行数。
+- `@mstar-harness/omp` 不再计算或返回 inventory 摘要：`historyExportBodyDigest`、`historyExportDigest` 与 `inventoryDigest` 已移除，`export` 只带文档本身。仓库内没有任何代码读取或比较它们，而它们唯一的测试表达形式就是摘要比较。
+- 删除 `skills/mstar-design-md/references/vercel-example.md`：那份带注释的 Geist `DESIGN.md` 复述了模板已经承载的骨架，而它所参照的外部项目本身可链接。`SKILL.md` 的两处引用与其 Guard 9 预算条目一并移除。
+- 将 `references/design-md-spec.md` 从 508 行压缩到 176 行，只保留规范条款。引擎强制的每条规则都保留：必需的 frontmatter 分组及其 map 形态、颜色取值格式、五属性 typography 对象（`fontFamily`/`fontSize` 非空）、`spacing.base` 加数字倍数键与 px 值、px 的 `rounded` 值、必须能在 `colors`/`typography`/`rounded` 内解析的 `{path}` 引用、`"[...]"` 占位规则，以及 light/dark 双向 parity 要求；十步色阶语义、各节约定与实现映射表同样保留。删除的是模板已提供的示例块与各节的层级提示。
+- 完整性层级现在只有一个家：`design-md-spec.md` 新增 §7，定义 Level 1–3、逐级累计的通过规则、`BELOW_MVP`/`MVP`/`Standard`/`Production` 判定词表、仅凭 frontmatter 的审计最高只到 Standard 的正文确认上限，以及占位标记的升级路径。`references/completeness-checklist.md` 保留其可勾选项，改为引用 §7，不再复述各层级的目的、判定与能力清单；`SKILL.md` 的 Evidence 节同样收敛为指针。
+- `SKILL.md` 明确本 skill 内部文件冲突时的裁决：规则以 spec 为准，形态以 template 为准；与已述规则冲突的模板即缺陷。
+- **`mstar-host` → `references/dsh.md` 现在只保留编排者实际要行动的内容**：识别 token、委派通道选择、派发形态、`roleGate` / `dispatchBinding`、QC 与 SDD 派发默认值、以及 gotchas。所有插件内部事实改为指向 `packages/dsh/README.md`，每个迁出块留一行指针——`§ Web client plugin (workflow panel)`、`§ Gates`、`§ Native command surface`、`§ Agent-flow ledger`。1034 → 573 行。
+- README 只收其既有节缺失的增量，绝不整段搬运：面板的 settle-派发配对、无 compass 时的迭代推断与当前面板 QA 范围；受门禁的载体清单、`.mstarc` enforcement 来源、store 权威拒绝类、register 类型分类，以及新增的 **`§ Execution read route`**（engine 解析器、DB 权威、五梯级生命周期顺序与 `unbound-multi-active`）；MCP 参数拒绝的聚合；账本的单记录路径、结算分支、子身份关联边界、立即缓存失效、逐事件边界的目标准校验与维护者视角。`README.zh.md` 逐项镜像，`README.i18n.yaml` 重录两侧 blob 哈希。
+- 直接删除、不迁移：十二个已移除的 `mstar_<family>_<action>` 镜像与已退役的 `mstar/engineStatus` 叙述。其理由已记录于 `docs/adr/implemented/architecture/2026-10-19-dsh-native-identity-channels.md` § Alternatives considered，HEAD 上的读者不再面对一份不存在的工具清单。
+- `dsh.md` 仍高于 plan 的 300 行目标，实测 **573 行**：存活章节均为编排文本（委派通道、PM dispatch、只读扇出、harness 目录 / `dispatchBinding`），抽取过程不得裁剪。
+- **dsh 四个只读扇出脚本现在是真实文件。** `mstar-qc-tri`、`mstar-audit-fanout`、`mstar-pr-seats` 与 `mstar-review-single` 从 `dsh-workflow-scripts.md` 的围栏块**逐字节**迁入 `packages/dsh/workflows/*.js`（创建文件前先记录每个正文的 SHA-256）。内联在 skill 里时，这份已发布产物既不能被当作脚本读取或 diff，也能在无审查的情况下被改写。
+- **参考文档变为调用契约。** `skills/mstar-host/references/dsh-workflow-scripts.md` 由 626 行降至 115 行：每个脚本保留何时使用、`meta` 身份、必需 `args` 及其守卫、只读保证、席位数路由摘要——包括不得占用 roster 席位的单席 SDD task 审查——以及失败面。编排指令一条未删。
+- **`reportsDir` 不再是必填参数。** `mstar-pr-seats` 从未读取它——席位是只读的，findings 由结果返回，review run 目录归调用方所有。守卫不再因调用缺省该参数而拒绝。
+- **交付面由源派生，而非钉死。** `scripts/dsh-workflow-files-contract.test.ts` 从 `packages/dsh/workflows/` 读取已发布集合，断言每个正文可解析、`package.json` 会发布该目录、且 skill 的 `meta` 身份与 `**File**` 锚点正好指向这些文件——重命名、新增脚本或目录未发布都会失败，无需改测试。`scripts/dsh-workflow-script-bounds.test.ts` 改为执行已发布的 `mstar-audit-fanout.js`，不再从 Markdown 抽取文本，因此池深行为测量的是真正运行的那份文件。
+- `packages/dsh/README.md` 新增 `§ Workflow scripts`——文件、用途与必需 `args`——中文侧同步镜像，`README.i18n.yaml` 已重录。该包 `files` 现包含 `workflows`，因此发布的 tarball 会带上这四个脚本（`npm pack --dry-run` 四个全列），`scripts/packaging-manifests/{manifest,dsh}.json` 中记录的包摘要同步该清单改动。
+- **`mstar-engine-legacy` 现在是一份 39 行的执行状态边界，不再是散文档案。** 四份逐字重述的文件已删除，规则保留在其活着的 owner 上：`qc-seat-n-restatements.md`（`mstar-review-qc/SKILL.md` + `mstar-dispatch-gates`）、`anti-recursion-checklists.md`（`mstar-roles/references/_shared/leaf-executor-core.md` + `mstar-dispatch-gates`）、`lease-protocol.md`（`mstar-branch-worktree` + `mstar-harness-core` § 定向执行与验证边界），以及没有任何消费方的 `engine-check-boilerplate.md`。加载条件收紧到唯一剩下的那件事：engine-absent 宿主上执行状态即对话追踪（no-plan mode），不重建任何文件执行路径。
+- **`migration-source-shapes.md` 并入 `status-field-history.md` 后迁至 `skills/mstar-project-governance/references/`**（185 行）。迁移跟随读者：唯一消费方是 `mstar store upgrade` 操作者，按构造必然 engine-present，而归档的加载门禁恰好排除该宿主。v1 root / `plans[]` / `plans[].metadata` / root-`metadata` 字段表、v1 archive 形状与 v1→v2 目的地映射逐字搬入；residual 条目契约、severity/lifecycle 表、jq 示例、plan-key 与 v2 root 的重复段不再搬运，因为 shapes 文档已自带。归档不点名目的地——其 inbound-only 规则禁止指向其它专题 skill。
+- **所有指针跟随文件迁移**：七个 skill 文件、`status.ts` / `workflow.ts` / `iteration.ts` 的十二条 spec 注释行，以及 `drift-lint` 的 archive 引用红探针（现以 `SKILL.md` 为 fixture）。`scripts/skill-budgets.manifest.json` 删除五个条目并为新位置声明 190 行上限，Guard 9 的双向漂移检查因此仍然诚实。
+- **Guard 10 失去最后一个 engine-legacy 例外**：删除 `anti-recursion-checklists.md` 后，`Blocked — recursive dispatch refused` 组（`cd86ebe41f51`）的两处位点只剩一处；Guard 10 没有陈旧检测，因此白名单条目在同一提交中移除。`validation:drift` 报告 0 个重复组，仅余 1 条白名单条目。
+- 合并 `mstar-compound`（结晶）与 `mstar-compound-refresh`（维护）为一个 **`mstar-knowledge`** skill：两者拥有同一族产物（`{KNOWLEDGE_DIR}` 文档 + `CONCEPTS.md`）、同一张字段表（`references/schema.yaml`）与相邻的触发条件，因此结晶与维护改为同一 skill 的两个 workflow 节，不再需要跨 skill 解析引用路径。正文按五问顺序组织：`Load order` → `Purpose` → `When to use / Skip` → `Workflow — Capture` → `Workflow — Maintain` → `Decision Rules` → `Evidence` → `References`。
+- 这是**结构性**合并而非改写：两个输入的行为规则一条不少。完整搬入的有 Q1–Q8 自检与决策矩阵、「Iteration package promotion」锚点及其五步表、HARD 调用方/执行方接口边界、五种维护结论与「拒绝方案」护栏和校准注记、Core rules 1–7（含 iteration-start §1.6 归档门禁例外与「Not adopted」注记）、维护写面与禁止目录、维护六阶段，以及两处 engine-check。消失的只有身份面、重复的 `Load order`、`## Support files` 标题与跨 skill 路径解析块，其内容均已重新落位。
+- 字段表只有一个家：`references/schema.yaml` 仍是唯一的字段枚举。Phase 3.2 的 frontmatter 块改为指向该 schema 的一行一字段速查表，`assets/resolution-template.md` 的两处 frontmatter 块改为指针；正文骨架结构不变。
+- Capture Phase 7 的 flag、中度重叠的 consolidation flag 与 Phase 5 的全仓 bootstrap 指针，现指向本 skill 的 `## Workflow — Maintain`，不再指向第二个 skill。`## When to use / Skip` 明确了触发边界：per-plan `Done` 不触发任何一条 workflow；迭代中途的读者只能更新单篇重叠文档（加 `last_updated`），不得发起维护巡检。
+- 引用文件名保持不变（`references/compound-workflow.md`、`references/project-knowledge-bootstrap.md`），因此所有指向工作流细节与 bootstrap 流程的既有路径在合并后的目录下仍然成立。「compound disposition」交付尾段阶段名、`mstar compound validate` CLI 家族、`mstar_compound` MCP 工具与引擎 `compound.*` 违规码均未改动 —— 它们命名的是生命周期/引擎/API 表面，不是被删除的两个 skill。
+- 修复了整份语料中对两个被删 skill 的全部引用：`mstar-harness-core` 的加载矩阵与专题索引（两行并为一行，26 → 25 个 skill）、`mstar-roles` 的 PM preset、`mstar-artifacts`、`mstar-conventions`（skill 正文与 artifact-storage-paths 的写入方列）、`mstar-iteration`（skill 正文、Phase 1/3 细则、产物边界、语料卫生、compass 模板、command 不变量）、`mstar-phase-gates`、`mstar-dispatch-gates`、`mstar-host/references/dsh.md`、`mstar-use-cli/references/checks-and-lints.md`、`mstar-skill-authoring/references/skillsbench-authoring.md`、`mstar-roles/references/{code-reviewer,writing-specialist,project-manager/plan-management}.md`、`INSTALL.md`、`docs/runtime-reference.md`、`compound` CLI 家族的 owning-skill 映射、引擎 `compound` 模块的注释与违规文本，以及一个 skill-eval fixture。
+- `mstar-artifacts/references/plan-workflow-lifecycle-contract.md` 由 161 行 append-only 改写为 59 行全 live 条文：三条带日期的 amendment 内联进各自统辖的章节；被 amendment 自身宣布冻结/历史化的条款（§3 文件证据与顺序、§4(a) 文件注册原语、§4(g) 文件关闭顺序、§6 文件路线 seam 成员、§7 答案已在正文复述的决策表）删除；所有 `packages/engine/src/*:<lines>` 锚点改为符号名——文件自己的头部就声明这些区间仅为导览。
+- 已退役的文件执行路线保留为一行历史陈述（存在至 2026-10），而非约 80 行冻结描述；ACTIVE store 路线、delivery-kind 声明、§3 路由表、§4a–g 证据契约、§5 失败语义与 §6 seam S1–S3 全部保留且章节编号不变，语料中既有的 `§1`/`§4a`/`§5` 指针继续可解析。
+- `mstar migrate` 矛盾按源码裁定：2026-10-10 的「保留迁移工具经 `mstar migrate` 写 staging」条款与 2026-10-12 amendment 及 `status-and-residuals.md` 相互矛盾。实测行为（2026-11-08 运行 CLI）：`mstar migrate` 以 `migrate.verb-retired` 拒绝（exit 1）并指名 `mstar store upgrade --operator <name> --harness <control-root>` 恢复路径；契约现在如实陈述，与 `status-and-residuals.md` 一致。
+- 依赖方改指存活章节：`SKILL.md`（4 处指针，删除 "closing amendment File-route retirement" 措辞）、`status-and-residuals.md`（root-register close → §4g；删除 "structural-amendment writer" 措辞）、`plan-quality-bar.md` §8（→ §3 路由 / §4 证据契约）、`templates/plan.main.md`（→ §3–§5）。
+- 在 `bun run validation:drift` 中新增 **Guard 11**：报告所有位置跨多个物理行的 GFM `paragraph` 节点，并给出 `file:startLine-endLine`，让被折行的段落始终在 diff 中可见、可数。只判定 `paragraph` 节点——列表、表格、围栏代码块与 YAML frontmatter 永不报告——也不判定行宽，因此单行再长也通过。硬换行（`\` 或行尾两个空格）属于内容而非段落边界，带硬换行的段落仍按多行报告。
+- 本次发布中 Guard 11 为**建议级**：它打印实测数量及 `file:startLine-endLine` 样例，但不让 `validation:drift` 失败。当前语料共有 **142 个多行段落，分布在 127 个 `skills/**` 文件中的 45 个**。规则立即约束**新增与修改**的段落——必须单行；存量段落在其所在文件下次被编辑时顺势重排，因此计数随文件被触碰而递减，无需一次全仓重排提交。
+- `scripts/markdown-wrap.test.ts` 已加入 CI `Test scripts` 文件集，该守卫的语义不会静默停止运行。
+- 新增 **`mstar-prose`**（散文可解性 skill）：一条测试（HEAD 上的读者，在没有会话记录、PR 讨论串与未提交草稿的前提下，能否解析每个引用并验证每个声明？）、八类泄漏、九条 keep 规则，以及把存活理由送去 `docs/adr/`、把存活待办送去 issue 的路由规则——而不是把它们留成关于会话的散文。适用范围是**任意表面**——Markdown、代码注释、JSDoc、prompt、描述、诊断、CLI 与 UI 文案、agent 指令——因为此前承载该判断的两处只约束 knowledge / plan / README 正文，`skills/**` 因此无人看管。
+- 注册方式**仅按需**：`mstar-harness-core` 增加一行专题索引，`mstar-roles` 为 `writing-specialist` 与「判断散文的 PM 轮次」各加一处按需成员。任何默认加载路径都不选它，与 `mstar-design-system` 的 opt-in 形态一致。
+- `scripts/skill-budgets.manifest.json` 增加该文件上限（100 行；文件实际 94 行），因此 Guard 9 从第一次提交起即覆盖。
+- **`mstar-host` → `references/_shared/host-runtime-contract.md` 是所有无宿主原生席位的主机逐字相同内容的唯一归属**：Node 地板（`>=24.18.0` + 原生 `node:sqlite`、已安装二进制自身的 entrypoint、无 transport / JSON 回退）、MCP 交付（`npx @mstar-harness/cli mcp`、需要已发布的 CLI 版本、上下文边界，以及 `doctor` 能证明什么）、协作传输（共享 CLI、独立取得的执行身份、`--session-ref` + `--expect` + `--operation`、引用是查询而非凭据、重启不等于重新签发、恢复动词），以及升级前的就绪动作。`cursor.md`、`codex.md`、`kimi.md`、`zcode.md`、`omp.md`、`opencode.md` 各自只留一行指针加属于自身的事实——配置文件、安装命令、挂载形态、`--target <id>`、运行时形态、升级机制。没有任何字段名、拒绝码、入口命令或 resume 句柄被搬走。
+- **`references/omp.md` 由 409 行降至 200 行**，且每条规则只陈述一次。Assignment 模板块已删除（模板归 `mstar-roles/references/project-manager/dispatch-and-assignment.md`，仅留一行指针）；C5/C5b 角色绑定规则收敛为一份正文——`tasks[]` 条目上的 `agent`、选择顺序、回退清单与必需的提示词绑定——`task` 形态与 PM 派发两节改为指向它，不再复述。四个 host hook 锚点小节去掉了重复的 `When` 条目：时机由锚点表承载，逐锚点条目只保留参数、前置条件、拒绝码与成功码。
+- `scripts/skill-budgets.manifest.json` 记录新文件的行数上限，并将 `omp.md` 冻结在新尺寸上，两条收缩护栏因此成立：`bun run validation:drift` 报告 0 个文件超限、0 组重复 HARD 规则。
+- 语料探针 `rg -n "\bno longer\b|\bused to\b|\bformerly\b|\bretired\b|\bis gone\b|\bthe former\b" skills/` 从 67 行降到 57 行，剩余每一行都在 `{ITERATION_DIR}/<iteration-id>/guides/prose-sweep.md` 中登记为 edited / already-clear / kept-with-reason。
+- 八个文件共十四个段落去掉了变更叙述而保留全部命题：`mstar-audit/references/pr-review.md`（review `body` 遵循报告模板；单 PR 并发模型自足；posting 归 Stage 3 且三处规则一致；backlog 动词直接拒绝）、`mstar-host/references/omp.md`（shell 路由拒绝与 terminal workflow 通知改为现在时，删去 per-call env revision 与跨宿主旁注）、`mstar-artifacts/SKILL.md`（迁移条目收敛为只读契约 + 指针，不再复述 shapes 参考），以及 `plan-workflow-lifecycle-contract.md`、`opencode.md`、`mstar-knowledge/SKILL.md`、`checks-and-lints.md`、`status-and-registers.md`。
+- 计划点名的六处中有三处已被宿主参考抽取清除：`dsh.md` 的十二工具考古（`d0838b65`）、其 `engineStatus` 读方法叙述（`ac20583f`）、以及 `mstar-engine-legacy/references/status-field-history.md`（`b008fdea`，已并入 `mstar-project-governance/references/migration-source-shapes.md`）。这些以证据登记为 already-clear，而非重做一遍。
+- 此处的 `kept` 是正常终态而非遗留：引擎拒绝码（`migrate.verb-retired`、`persist.kind-retired`、`compound.index.retired`）、迁移面生命周期标签、绑定在运行期报告的状态、以及审计类别都应保留，删掉它们等于丢掉读者在 HEAD 依赖的保证。
+- 新增 **`mstar-prose` → `references/calibrated-examples.md`**：四组合成的 `over-trimmed / over-detailed / balanced` 三元示例（变更叙述、面向评审者的自我论证、带对冲的规划残留、必须保留的抑制理由），外加两组带词数的删除/保留对照。每组三元示例都写明 balanced 形式仍然承载的命题，读者由此校准判断，而不是照抄措辞。
+- 采用三元而非 bad/better 二元，是因为二元对比防不住**过度压缩**——压缩轮次真正会产生的失效模式：规则丢掉否定性保证或条件，句子变短，diff 看上去像改进。带词数的对照给出两个方向：38 词被保留而 24 词被删除，10 词被保留而 40 词被删除。
+- `scripts/skill-budgets.manifest.json` 增加该文件上限（150 行；文件实际 145 行），因此 Guard 9 从第一次提交起即覆盖。
+- 在 `bun run validation:drift` 中新增 **Guard 10**：跨文件 HARD 规则指纹。它把两个及以上 `skills/**` 文件共享的规则文本归为一组并整组报告，让被重复搬运的规则句在副本彼此漂移之前就暴露出来。判定条件为：连续 ≥3 行的紧凑块携带规则信号，或单行 ≥8 词且包含 `NEVER` / `MUST` / `MUST NOT` / `HARD`（或整行仅由大写单词构成）。归一化会去掉列表标记、引用标记、多余空白与行内代码反引号，但保留规则文本的大小写。指针标注（``→ `<skill>` § <小节>``）在计算指纹前会被剥离：保留规则句并在其后追加指针的行仍然是重复位点，只有剥离后不剩任何自身措辞的行才算指针；行首 BOM 也不再影响第 1 行的指纹。
+- Guard 10 现在**阻断** `validation:drift`：两个及以上 `skills/**` 文件共享同一句规则措辞时，每个重复组各产生一行失败，给出该组指纹与全部位点；规则只写一处，其余文件指向其 owner（``→ `<skill>` § <小节>``）。`scripts/rule-duplication.allowlist.json` 以 `{ file, normalizedHash, reason }` 记录已接受的例外（`reason` 必须点明所覆盖的文件，否则该条目本身失败），白名单组只报告、不失败。现存两处例外均点明 owner：三个角色文件各自保留的 `Repo-write Git discipline` 指针行（归属 `skills/mstar-roles/references/_shared/leaf-executor-core.md`），以及 `Blocked — recursive dispatch refused` 自检行——归属 `skills/mstar-dispatch-gates/SKILL.md`，`skills/mstar-engine-legacy/references/anti-recursion-checklists.md` 在该归档文件删除前保留同一句。
+- Guard 9 的行数上限按逻辑行计数：无尾换行的文件比 `wc -l` 多算一行。现存两个不合规的 skill 文件现已补齐恰好一个尾换行。
+- `docs/runtime-reference.md` 的主题技能表补上 `mstar-prose`。引入该技能的那一轮迭代已把它登记进 harness 索引与两个角色 preset，但漏了这张面向读者的技能清单，导致表中 22 个主题技能与实际 23 个不符。
+- 该表现在与 `skills/mstar-*-/` 一一对应：harness 会加载的每个主题技能都有一行说明它拥有什么。
+- **`mstar-skill-authoring` 去重**：六条原则与 5 问 body 契约只有一处（`SKILL.md`）；`references/skillsbench-authoring.md` 只保留 writer 流程、撰写装置与反模式——重复处改为指向父文件，不再复述原则或 body 骨架。
+- 13 行的运行时别名表压缩为一句，指明引擎的 `lintFiveQuestion(body, "runtime")` 才是归属，`skills/` 下不再有引擎常量的副本；ship-note 契约、body heading 顺序与 review 模板各有一处归属，模板压到三行且保留 `Unconfirmed` verdict。
+- `## Workflow` 由一条 5 阶段、4 箭头长句改为三条 bullet，`## 默认 Body 结构` 代码块改为一行 heading 顺序，两个 engine-check 块合并为一个 `## Engine checks` 章节。该 skill 由 189 行降至 137 行，参考文件由 154 行降至 75 行。
+- `skills/mstar-roles/references/writing-specialist.md` 的 preset 成员补上 `mstar-prose` 与 `mstar-skill-authoring`，与 `mstar-roles` hub 中已有的 writer 行一致。
+- `mstar-skill-authoring` 现在改用 `skills/**` 语料门禁取代原先不可执行的"过长 body 几乎无提升"一句：`scripts/skill-budgets.manifest.json` 中的逐文件行数上限（Guard 9）、跨文件重复 HARD 规则（Guard 10）与段落锚定（Guard 11），全部由 `bun run validation:drift` 执行。**Guard 9 为阻断级**：文件超过自身上限、manifest 条目过期、或随包 skill 文件没有条目都会失败；**Guard 10 为阻断级**：重复的 HARD 规则组即失败；**Guard 11 今天为建议级**，打印实测数量及违规位置。
+- 上限政策以可执行规则而非历史叙述写就：上限是护栏而非缩减目标，处于或低于上限的文件永不要求缩短；对上限的唯一合法响应是 **迁移 → 压缩 → 提高上限**，且提高上限须在同一 PR 内说明理由。**Guard 10 的阻断规则**即刻约束新增与修改的文字——重复的 HARD 规则句必须改写为指向规范处的指针；**Guard 11 仍为建议级**：新增或修改的段落写成单个物理行。
+- `AGENTS.md` 指明 `bun run validation:drift` 是 `skills/**` 的执行面，并指向 manifest 查看上限、指向 `mstar-skill-authoring` 查看规则本身。
+- 在 `bun run validation:drift` 中新增 **Guard 9**：每个随包发布的 `skills/**` Markdown 文件由 `scripts/skill-budgets.manifest.json` 设定行数上限，上限取文件引入时的体积（向上取整到 10 的倍数，下限 20）。超过上限的文件失败；manifest 双向漂移同样失败——过期条目（`manifest-stale`）或未登记上限的发布文件（`budget-missing`）。行数按逻辑行统计：LF、CRLF 与单独的 CR 都会结束一行，因此仅用 CR 换行的文件不会被当成单行通过。
+- 上限是冻结在当下体积的护栏，不是缩减目标：处于或低于上限的文件永远不需要缩短；只要 PR 说明了新增文字的理由，"迁移 → 压缩 → 提高上限"中的提高上限就是允许的。
+- 删除 `mstar-strategy`，其产物归属 `mstar-knowledge`：该 skill 与 `references/project-knowledge-bootstrap.md` 互相委派 —— skill 把读者送去「bootstrap Phase 2」，bootstrap 又送回该 skill，且 bootstrap 引用了从不存在的 `mstar-strategy § Phase 2`。现在由 bootstrap 单向拥有创建流程。
+- 新增 `mstar-knowledge/references/strategy-document.md` 承载 `STRATEGY.md` 产物契约：六个必需节 + 三个可选节及各节必含内容、`mstar lint` 六节校验、五问创建访谈、维护触发与更新规则、`Not to do` 清单，以及 `STRATEGY.md` 与 `AGENTS.md`/`CONCEPTS.md`/plan 的边界表。行为规则一条未丢。
+- bootstrap Phase 2 获得四个具名小节（`STRATEGY.md shape`、`Six-section validation`、`Creation interview`、`Maintenance triggers`），absent/stale/current 处理保留为一段。文件在 170 行上限不变的前提下停在 167 行：细节移入独立 reference，而不是抬高上限。
+- 修复全部活跃引用：`mstar-harness-core` 的 PM preset 与专题索引（25 → 24 个 skill）、`mstar-roles` 的 PM/architect/product-manager preset、`mstar-conventions`（skill 正文与 `artifact-storage-paths.md` 两处写入方）、`mstar-iteration` 的 Phase 1 上下文步骤、`mstar-use-cli` 的 `mstar lint` 归属列、`docs/runtime-reference.md`、`scripts/skill-budgets.manifest.json`，以及引擎 `lintStrategySections` 注释与 `lint.strategy.missing-section` 消息（drift 护栏会把引擎 spec 引用解析到 `skills/<skill>/SKILL.md`，故该引用必须随节迁移）。
+- 折入 T2 评审修复 F1：`mstar-knowledge` 的 `### Never` 清单恢复 `Do not "archive" — delete instead` —— 该规范以 Core rule 6 存活，但合并契约 §6 仅允许对逐字节相同的文本去重，故恢复该条。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.3.0**。
+
 ## [4.2.3] - 2026-11-06
 
 ### Harness

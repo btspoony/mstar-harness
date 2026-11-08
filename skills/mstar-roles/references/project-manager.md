@@ -83,7 +83,7 @@ Pick one `Primary` route per Assignment; attach additional gates as needed.
 Detailed conflict priority and dev allocation:
 `references/project-manager/routing-and-dev-allocation.md`.
 
-**Dev spread default:** when the task board has **>=2 independent** backend/fullstack units, prefer **`fullstack-dev` + `fullstack-dev-2`** (parallel with boundaries) or **round-robin** owners across sequential batches. Using a single backend-capable dev id for multiple independent units requires documented justification (`single_stream_justified` in Pre-Implement Gate Check).
+**Dev spread default:** when the task board has **>=2 independent** backend/fullstack units, prefer **`fullstack-dev` + `fullstack-dev-2`** (parallel with boundaries) or **round-robin** owners across sequential batches. Using a single backend-capable dev id for multiple independent units requires the documented single-id override defined in § Dispatch preconditions (hard block).
 
 ---
 
@@ -101,20 +101,12 @@ Detailed conflict priority and dev allocation:
 
 ## Host Dispatch Rule (Critical)
 
-In invoke-based hosts (any host whose active reference exposes a callable invoke / delegation tool):
-
-- Assignment markdown alone is not dispatch.
-- Each independent Assignment needs one matching invoke.
-- For parallel `N >= 2`, emit all `N` invokes in one dispatch turn when host supports it.
-- Do not claim dispatch completion without matching invokes.
-
-Host invoke/dispatch details: `mstar-host` → active host reference and `references/parallel-dispatch.md`.
+In invoke-based hosts (any host whose active reference exposes a callable invoke / delegation tool), an Assignment Markdown block alone is not dispatch and a dispatch turn is not complete without its matching invokes: the counting rule, dispatch-turn ordering, batch-readiness and the paste-only failure → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules.
 
 > **On dsh:** the mounted layer decides the channel, not the shape of one task — **Agent Teams** is the default whenever `spawn_teammate` is mounted (one teammate per writable track, each handed its own absolute checkout path in the prompt; which scope the board may carry → `references/dsh-agent-teams.md` § Worktree hand-off and write isolation), **`subagent`** is the fallback when it is absent, and **`workflow`** carries read-only fan-out only. Board protocol, seat budget and wake discipline are not restated here → **`mstar-host`** → `references/dsh.md` § Delegation channels + `references/dsh-agent-teams.md`.
 
 **Native-workflow hosts:** when the active host reference declares a native workflow driver instead of a goal loop, iteration progress is that workflow (workflow snapshot phases + dispatch gates + child **settle notifications**), never a goal-round loop. Phase 2 progression is then the **`Rescheduling checkpoint`** (a child settle is a `result-settled` one): dispatch the ready independent work before any wait; waiting is right when a dispatched child already owns that work — **never** a duplicate unit of work against the same worktree. Procedure → `mstar-iteration` `references/phase-2-worktree-lease.md` §2.4; host declaration and its per-step rules → the active `mstar-host` reference.
-Dispatch mechanics and templates:
-`references/project-manager/dispatch-and-assignment.md`.
+Dispatch mechanics and templates → `references/project-manager/dispatch-and-assignment.md`.
 
 ---
 
@@ -144,8 +136,8 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** steal an active workflow's actual write/merge exclusion by age, idle status or labels (no TTL, age, or inactivity authority). Explicit current-turn user-directed recovery still uses the selected authority's supported public recovery path and append-only `notes.jsonl` audit; user instruction and audit alone never bypass ACTIVE foreign-exclusion, transaction/token guards or the cross-plan safety gate below. Ordinary coordinator operations manage exclusion inside their transaction; no leaf claim, per-plan bind or transfer is required.
 - **NEVER** writable-dispatch without validating actual source metadata/checkouts and L1/L2 isolation (distinct feature worktree per writable track).
 - **NEVER** run or dispatch parallel integration merges into `spec_integration_branch`; the workflow's `integration_merge_lease` serializes the recorded integration checkout, and direct complete verifies the actual result (`mstar-iteration` §2.6 · `mstar-branch-worktree` L1).
-- **NEVER** bypass atomic coordination safety for cross-plan writes. ACTIVE requires shared control-store transaction and execution-token CAS arbitration; when that arbitration is unavailable, use **`Plan parallelism: serial`** or **Blocked** if Assignment still claims parallel. **`Worktree mode: waived`** changes neither gate, and serial policy does not waive checkout isolation.
-- **NEVER** set `Worktree mode: waived` because default-gitignored `plans/` are missing under a feature worktree — keep feature worktrees; put absolute control **`Plan Path`** / **`SDD dir`** / **`Control harness root`** on Assignments (`mstar-branch-worktree` 「Harness path SSOT under default gitignore」). Missing shared coordination authority defaults to serial scheduling, not worktree waiver; the control store's transaction/CAS is the arbitration.
+- **NEVER** bypass atomic coordination safety for cross-plan writes. ACTIVE requires shared control-store transaction and execution-token CAS arbitration; when that arbitration is unavailable, use **`Plan parallelism: serial`** or **Blocked** if Assignment still claims parallel. **`Worktree mode: waived`** changes neither gate → **`mstar-branch-worktree`** § Worktree mode: waived.
+- **NEVER** set `Worktree mode: waived` because default-gitignored `plans/` are missing under a feature worktree → **`mstar-branch-worktree`** § Worktree mode: waived; missing shared coordination authority defaults to serial scheduling, not waiver.
 
 ---
 
@@ -181,7 +173,7 @@ Use short go/no-go checks before moving phases:
 | --- | --- |
 | Enter `clarify` / lock `specify` | Primary route selected; if product-specify body is needed, delegated output exists or waiver is recorded. |
 | Lock `plan` / register `tasks` | If architecture/contracts are in scope, delegated architect output exists or justified exception is recorded; intention gate is explicit. |
-| First `implement` | Pre-implement gate check passes; owner matches route/task board; invoke exists in invoke-based hosts. |
+| First `implement` | `Dispatch preconditions (hard block)` hold; owner matches route/task board; invoke exists in invoke-based hosts. |
 | QC dispatch | Tri-review invoke and alignment fields pass hard checks. |
 | QA dispatch / PM acceptance | `QA gate` set per `qa-trigger-matrix.md`; if `mandatory`, QA scope aligns with QC scope; if `pm-acceptance`, checklist complete before `Done`. |
 
@@ -192,72 +184,29 @@ Anti-patterns:
 
 ---
 
-## PM Self-Check Before Dispatch
+## Dispatch preconditions (hard block)
 
-- Q1: Is this implementation/test/review/deploy/research delivery? If yes, delegate.
-- Q2: Is specialist role explicit in `Execute as`?
-- Q3: Is this only PM coordination/indexing? If artifact body is PRD/story/acceptance/architecture/contract and route points to specialist role, delegation is mandatory.
-- Q4: Is Assignment complete (role-fit, acceptance, evidence)?
-- Q5: Is parallelism decision explicit and aligned with branch/worktree policy?
-- Q6: Is `Task category` aligned with route?
-- Q7: Is `quick` being misused to bypass prepare?
-- Q8: Is intention gate explicit before implement?
-- Q9: For QC (single or tri), are alignment fields text-identical across reviewers and Assignment? SDD / tri: `Execution mode: sdd` or explicit `QC mode: full tri-review`; inline: `QC mode: single` or skip reason.
-- Q10: Is `Delegation` consistent with dispatch and worktree usage?
-- Q11: For non-trivial plan, is PM Task Board published with coverage?
-- Q12: In invoke-based hosts, were matching invokes actually issued?
-- Q13: With **>=2 independent** backend/fullstack units, are owners spread across `fullstack-dev` and `fullstack-dev-2` (parallel or rotated), or is `single_stream_justified: yes` recorded with a real reason?
-- Q14: If this is partial/staged/temporary, is the roadmap/tracking location written in the plan/status artifacts rather than only in prose?
-
----
-
-## Pre-Implement Gate Check (Required Output)
-
-Emit before first implement dispatch:
-
-```markdown
-Pre-implement Gate Check:
-- plan_id: <id>
-- non_hotfix: yes|no
-- harness_active: yes|no
-- plan_path: <path or N/A>
-- plan_file_on_disk: yes|no|n/a
-- status_json_has_plan_id: yes|no|n/a
-- non_trivial_plan: yes|no
-- PM_Task_Board_published: yes|no
-- batch_strategy_defined: yes|no
-- roadmap_written: yes|no|n/a
-- roadmap_location: <Plan section / PM Task Board / workflow snapshot / issue id / n/a>
-- assignment_batch_index: <e.g. 1/3>
-- coverage_ids: <e.g. T1,T2>
-- reason_if_single_assignment: <required when only one batch>
-- per_task_comment_gate: yes|no
-- single_stream_justified: yes|no|n/a
-Decision:
-- GO | BLOCKED
-```
+Before the first implement dispatch of a non-trivial plan, these conditions must hold; one unmet condition means `Blocked`, not a narrative caveat. There is no printable pre-implement receipt — the plan row and the status carry the evidence.
 
 Hard block when:
 
-- Non-trivial plan has required field = `no`
-- Harness-active non-hotfix flow lacks on-disk main plan or status registration
-- `assignment_batch_index` is not `1/1` but `roadmap_written` is not `yes`
-- Any temporary workaround or deferred scope lacks a durable tracking location
-- `Task category: quick` is used on non-trivial work
-- **>=2 independent** backend/fullstack units on the task board but `single_stream_justified: no` with no spread across `fullstack-dev` / `fullstack-dev-2` and no documented single-id override
+- Harness-active non-hotfix flow lacks the on-disk main plan or its status registration
+- Dispatch spans more than one batch, or carries deferred/temporary scope, with no durable tracking location (`mstar-harness-core` § Durable Roadmap Gate)
+- `Task category: quick` is used on non-trivial work, or `Task category` contradicts the selected route
+- `Execute as` does not name the specialist role the route assigns
+- The parallelism decision is not explicit, or contradicts the branch/worktree policy (**`mstar-branch-worktree`**)
+- QC alignment fields are not text-identical across seats and the Assignment (`Execution mode` / `QC mode` per seat mapping → **`mstar-review-qc`**)
+- In invoke-based hosts, the matching invokes were not actually issued (→ **`mstar-host`**)
+- **>=2 independent** backend/fullstack units on the task board with neither spread across `fullstack-dev` / `fullstack-dev-2` nor a documented single-id override (`Dev owner tie-break: single id — <reason>` plus `single_stream_justified: yes`, both on the Assignment)
 
 ---
 
 ## PM Task Board Contract (Non-Trivial Plan)
 
-Before first implement dispatch:
-
-- Publish PM Task Board with ID/owner/deps/parallel/coverage mapping
-- If delivery spans batches, include the full roadmap: batch order, deferred scope, dependencies, owner/trigger, and final Done definition
-- Every implement Assignment declares `PM Task Board coverage`
-- Default batch size 1-2 IDs; `>=3` requires `Why batching is safe`
-- Completion rhythm: commit -> Completion Report -> PM Status Update -> next dispatch
+- Board tasks map ID/owner/deps to their Assignment; every implement Assignment declares `PM Task Board coverage`.
 - The plan row stays the delivery authority and the board a coordination projection — mirror one board task per Assignment and keep both records in step (dsh Agent Teams board protocol → **`mstar-host`** → `references/dsh-agent-teams.md`).
+- Recovery from board/row drift: a board task with no plan row, or a row with no board task, is reconciled in the same coordination round with the row as authority; never dispatch from the board alone.
+- Default batch size is 1–2 coverage IDs per dispatch; `>= 3` requires the Assignment's `Why batching is safe` field, and a single-batch dispatch states why the whole plan fits one batch.
 
 ---
 

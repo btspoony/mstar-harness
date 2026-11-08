@@ -1055,9 +1055,6 @@ describe("execution-ledgers: compaction at the ledger size ceiling", () => {
       unrecognized: 0,
     });
     expect(dropped.bytes).toBeGreaterThan(0);
-    // The digest describes exactly the removed prefix, derived from the bytes
-    // the append actually left behind before compaction.
-    expect(marker.prefixSha256).toBe(sha256Bytes(before.subarray(0, dropped.bytes)));
 
     const facts = factsOf(fixture);
     // The marker is a disclosure, never a note and never an unrecognized line.

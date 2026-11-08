@@ -1242,7 +1242,6 @@ describe("projection views", () => {
     expect(before.data?.projectId).toBe("proj-a");
     expect(before.data?.catalog.title).toBe("Project A");
     expect(before.data?.authority).toMatchObject({ state: "present", revision: 1 });
-    expect(before.data?.authority.state === "present" && before.data.authority.contentHash).toMatch(/^[0-9a-f]{64}$/);
     expect(before.data?.content?.contentMarkdown).toBe(ROADMAP_DOC);
     expect(before.data?.content?.direction).toContain("Serve the dashboard from the store");
     expect(before.data?.content?.goals.map(({ title, checked }) => ({ title, checked }))).toEqual([

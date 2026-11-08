@@ -40,7 +40,7 @@
  * cannot drift out of five-question alignment without failing CI.
  * Guard numbers are per-plan locked, not positional.
  * 6. skills corpus — Engine-check callout dedup: the same normalized
- * `**Engine check (when available):**` callout body must not appear
+ * `ENGINE_CHECK_MARKER` (`**Engine check:**`) callout body must not appear
  * in more than one file (bilingual variant `或 import` → `or import`
  * counts as identical), so a re-vendored canonical callout fails CI
  * before it drifts.
@@ -61,6 +61,18 @@
  * 8. tracked Markdown links and anchors resolve within the checkout using
  * the canonical tracked-file set; each real diagnostic is reported as a
  * drift row.
+ * 9. skills corpus — per-file size ceilings: every shipped skill Markdown
+ * file is compared against `scripts/skill-budgets.manifest.json` (ceiling =
+ * the size at introduction, rounded up to a multiple of 10, floor 20). A
+ * file over its ceiling fails, and so does manifest drift in either
+ * direction (`manifest-stale` for a ceiling whose file is gone,
+ * `budget-missing` for a shipped file with no ceiling).
+ * 10. skills corpus — duplicate HARD rules: the same rule wording may live in
+ * one file only; a second file points at it (arrow -> backticked skill ->
+ * section marker) instead of re-vendoring it. A group that still duplicates
+ * fails the run; genuine exceptions live in
+ * `scripts/rule-duplication.allowlist.json` with a reason naming the file each
+ * entry covers, and allowlisted groups are reported without failing.
  *
  * The forward callout citation check also validates the **binary prefix**
  * of every backticked CLI
@@ -82,8 +94,23 @@ import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join, relative } from "node:path";
 import { getCommandDefinitions } from "../packages/commands/src/definitions.ts";
+import { checkAdrTree, summarizeAdrCheck, type AdrCheckResult } from "./adr-check.ts";
 import { commentMask } from "./ascii-literal-utils.ts";
 import { checkMarkdownLinks } from "./markdown-links.ts";
+import { checkParagraphAnchoring, type ParagraphAnchoringResult } from "./markdown-wrap.ts";
+import {
+  RULE_DUPLICATION_ALLOWLIST,
+  checkRuleDuplication,
+  ruleFingerprintHash,
+  type RuleDuplicationResult,
+} from "./rule-duplication.ts";
+import { ENGINE_CHECK_MARKER, blockquoteRuns } from "./skill-callout-contract.ts";
+import {
+  SKILL_BUDGETS_MANIFEST,
+  checkSkillBudgets,
+  readSkillBudgets,
+  type SkillBudgetResult,
+} from "./skill-budgets.ts";
 import {
   AUDIT_CATEGORIES,
   LEGACY_ARCHIVE_SKILL,
@@ -98,6 +125,14 @@ import {
 } from "../packages/engine/src/index.ts";
 export const AUDIT_CATEGORY_DOC = "skills/mstar-use-cli/references/checks-and-lints.md";
 export const USE_CLI_SKILL_DIR = "skills/mstar-use-cli";
+/* The callout marker and the contract pointer live in
+ * `scripts/skill-callout-contract.ts` (dependency-free, so the standalone
+ * smoke job can import them without the engine installed) and are re-exported
+ * here for the guard tests. */
+export {
+  ENGINE_CHECK_CONTRACT_POINTER,
+  ENGINE_CHECK_MARKER,
+} from "./skill-callout-contract.ts";
 const root = process.cwd();
 const failures: string[] = [];
 let calloutsChecked = 0;
@@ -115,7 +150,9 @@ function collectFiles(dir: string, ext: string): string[] {
     const full = join(root, dir, entry.name);
     if (entry.isDirectory()) {
       out.push(...collectFiles(join(dir, entry.name), ext));
-    } else if (entry.name.endsWith(ext)) {
+    } else if (entry.isFile() && entry.name.endsWith(ext)) {
+      // A symlink is not a shipped skill file: skipping non-regular entries
+      // keeps tree-external content out of every guard reading this corpus.
       out.push(full);
     }
   }
@@ -648,15 +685,16 @@ export function readDeclaredBins(
 }
 
 /**
- * Guard 1 forward half — every `**Engine check (when available):**`
- * blockquote run in a skill file. Backticked CLI citations
+ * Guard 1 forward half — every `ENGINE_CHECK_MARKER` blockquote run in a
+ * skill file. Backticked CLI citations
  * (`mstar status validate`, `mstar-harness dispatch validate`, …) must
  * reference a **declared CLI bin** (the caller passes the `bin` names read
  * from packages/cli/package.json — the manifest is SSOT, never hardcoded)
- * and a real `.command()` path from the CLI inventory; engine imports in
- * the same callout must reference real engine exports. One failure row per
- * violation. Load-bearing: an undeclared binary prefix (e.g. `mstarr`)
- * fails drift-lint (regression-pinned by scripts/drift-lint.test.ts).
+ * and a real `.command()` path from the CLI inventory; engine imports —
+ * or, on a collapsed one-line callout, the named engine symbol — must
+ * reference real engine exports. One failure row per violation.
+ * Load-bearing: an undeclared binary prefix (e.g. `mstarr`) fails
+ * drift-lint (regression-pinned by scripts/drift-lint.test.ts).
  */
 export function checkEngineCallouts(
   files: Array<{ rel: string; text: string }>,
@@ -668,21 +706,10 @@ export function checkEngineCallouts(
 
   for (const { rel, text } of files) {
     const lines = text.split(/\r?\n/);
-
- // Blockquote runs: consecutive lines starting with `>`.
-    const runs: Array<{ start: number; end: number; text: string }> = [];
-    let runStart = -1;
-    for (let i = 0; i <= lines.length; i++) {
-      const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
-      if (isQuote && runStart === -1) runStart = i;
-      if (!isQuote && runStart !== -1) {
-        runs.push({ start: runStart, end: i - 1, text: lines.slice(runStart, i).join("\n") });
-        runStart = -1;
-      }
-    }
+    const runs = blockquoteRuns(lines);
 
     for (const run of runs) {
-      if (!run.text.includes("**Engine check (when available):**")) continue;
+      if (!run.text.includes(ENGINE_CHECK_MARKER)) continue;
       calloutsChecked++;
 
       const cited = checkCliCitationsInText(rel, run.text, {
@@ -705,6 +732,17 @@ export function checkEngineCallouts(
           }
         }
       }
+
+ // Collapsed callouts name the engine symbol instead of re-writing the
+ // import (`(engine `a`, `b`)` / `engine `a` —`); those names are exports
+ // too, so they get the same check as a spelled-out import.
+      for (const named of run.text.matchAll(/\bengine ((?:`[A-Za-z_$][\w$]*`(?:, | \/ )?)+)/g)) {
+        for (const name of named[1].matchAll(/`([^`]+)`/g)) {
+          if (!opts.engineExports.has(name[1])) {
+            failures.push(`${rel}:${run.start + 1} callout names unknown engine export "${name[1]}"`);
+          }
+        }
+      }
     }
   }
 
@@ -712,7 +750,7 @@ export function checkEngineCallouts(
 }
 
 /**
- * Guard 6 — Engine-check callout dedup ( * each contract's `**Engine check (when available):**` callout must
+ * Guard 6 — Engine-check callout dedup ( * each contract's `ENGINE_CHECK_MARKER` callout must
  * live in exactly one skill file. A normalized body appearing in >1 file is
  * a violation (one failure row naming every site) — the drift this guard
  * exists to catch is a copy of a canonical callout landing at a second site
@@ -722,8 +760,8 @@ export function checkEngineCallouts(
  * whitespace, and map the bilingual variant `或 import` → `or import`. The
  * trailing "On `fail` -> do not proceed" clause is part of the body, so a
  * pointer that re-runs the canonical sentence with a different tail still
- * fails; one-line pointers that carry no `**Engine check (when available):**`
- * marker are naturally exempt (they are not callouts at all).
+ * fails; blockquote runs that carry no `ENGINE_CHECK_MARKER` are naturally
+ * exempt (they are not callouts at all).
  */
 export function checkCalloutDuplication(
   files: Array<{ rel: string; text: string }>,
@@ -743,21 +781,11 @@ export function checkCalloutDuplication(
   for (const { rel, text } of files) {
     const lines = text.split(/\r?\n/);
 
- // Blockquote runs: consecutive lines starting with `>` (same run
- // splitter as checkEngineCallouts).
-    let runStart = -1;
-    for (let i = 0; i <= lines.length; i++) {
-      const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
-      if (isQuote && runStart === -1) runStart = i;
-      if (!isQuote && runStart !== -1) {
-        const runText = lines.slice(runStart, i).join("\n");
-        const line = runStart + 1;
-        runStart = -1;
-        if (!runText.includes("**Engine check (when available):**")) continue;
-        const body = normalize(runText);
-        if (!bodies.has(body)) bodies.set(body, []);
-        bodies.get(body)!.push({ rel, line });
-      }
+    for (const run of blockquoteRuns(lines)) {
+      if (!run.text.includes(ENGINE_CHECK_MARKER)) continue;
+      const body = normalize(run.text);
+      if (!bodies.has(body)) bodies.set(body, []);
+      bodies.get(body)!.push({ rel, line: run.start + 1 });
     }
   }
 
@@ -1015,6 +1043,48 @@ export function findOversizedTestFiles(repoRoot: string): Array<{ file: string; 
 function reportOversizedTests(): void {
   for (const { file, lines } of findOversizedTestFiles(root)) {
     console.warn(`advisory: oversized test file ${file} (${lines} lines; threshold 2000)`);
+  }
+}
+
+/**
+ * Report Guard 10 allowlisted groups. A duplicate group is a failure row (the
+ * guard is blocking); this prints only the accepted exceptions, each with its
+ * fingerprint so the matching allowlist entry is findable.
+ */
+function reportRuleDuplication(result: RuleDuplicationResult): void {
+  if (result.exemptGroups.length === 0) return;
+  const exemptSites = result.exemptGroups.reduce((sum, group) => sum + group.exempt.length, 0);
+  console.warn(
+    `allowlisted: Guard 10 duplicate HARD rules ${result.exemptGroups.length} groups (${exemptSites} exempt sites) - accepted exceptions from ${RULE_DUPLICATION_ALLOWLIST}`,
+  );
+  for (const group of result.exemptGroups) {
+    const sites = [...group.hits, ...group.exempt].map((hit) => `${hit.file}:${hit.line}`).join(", ");
+    console.warn(
+      `allowlisted:   [${ruleFingerprintHash(group.normalized)}] ${group.hits.length} active, ${group.exempt.length} exempt - ${sites}`,
+    );
+  }
+}
+
+/** Advisory rows printed for Guard 11 before the tail line takes over. */
+const PARAGRAPH_ADVISORY_SAMPLES = 20;
+
+/**
+ * Advisory inventory of Guard 11 multi-line paragraphs. Report-only: the rule
+ * binds new and modified paragraphs now, and existing wrapped paragraphs are
+ * reflowed when their file is next edited, so the count shrinks without a
+ * whole-corpus reformat commit.
+ */
+function reportParagraphAnchoring(result: ParagraphAnchoringResult): void {
+  if (result.violations.length === 0) return;
+  const files = new Set(result.violations.map((violation) => violation.file)).size;
+  console.warn(
+    `advisory: Guard 11 paragraph anchoring ${result.violations.length} multi-line paragraphs across ${files} of ${result.filesChecked} skill files - new and modified paragraphs must be single-line; existing paragraphs are reflowed when their file is next edited`,
+  );
+  for (const violation of result.violations.slice(0, PARAGRAPH_ADVISORY_SAMPLES)) {
+    console.warn(`advisory:   ${violation.file}:${violation.startLine}-${violation.endLine}`);
+  }
+  if (result.violations.length > PARAGRAPH_ADVISORY_SAMPLES) {
+    console.warn(`advisory:   ... ${result.violations.length - PARAGRAPH_ADVISORY_SAMPLES} more`);
   }
 }
 
@@ -1339,7 +1409,96 @@ if (import.meta.main) {
     );
   }
 
- /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Guard 9: skills corpus — per-file size ceilings */
+/* ------------------------------------------------------------------ */
+
+  let skillBudgets: SkillBudgetResult = { filesChecked: 0, failures: [] };
+  try {
+    skillBudgets = checkSkillBudgets(root, readSkillBudgets(root));
+  } catch (error) {
+    fail(`Guard 9 skill budgets: ${(error as Error).message}`);
+  }
+  for (const failure of skillBudgets.failures) {
+    if (failure.kind === "over-budget") {
+      fail(
+        `${failure.file}: ${failure.lines} lines exceeds its ${failure.maxLines}-line ceiling in ${SKILL_BUDGETS_MANIFEST} (relocate -> condense -> raise the ceiling in the PR)`,
+      );
+    } else if (failure.kind === "manifest-stale") {
+      fail(
+        `${SKILL_BUDGETS_MANIFEST}: ${failure.file} has a ${failure.maxLines}-line ceiling but the file no longer exists - drop the entry`,
+      );
+    } else {
+      fail(
+        `${failure.file}: no line ceiling in ${SKILL_BUDGETS_MANIFEST} (${failure.lines} lines) - add one`,
+      );
+    }
+  }
+
+/* ------------------------------------------------------------------ */
+/* Guard 10: skills corpus — duplicate HARD rules (blocking) */
+/* ------------------------------------------------------------------ */
+
+  let ruleDuplication: RuleDuplicationResult = {
+    filesChecked: 0,
+    duplicates: [],
+    exemptGroups: [],
+    allowlistFailures: [],
+  };
+  try {
+    ruleDuplication = checkRuleDuplication(
+      root,
+      skillFiles.map((file) => relative(root, file)),
+    );
+  } catch (error) {
+    fail(`Guard 10 rule duplication: ${(error as Error).message}`);
+  }
+  for (const row of ruleDuplication.allowlistFailures) fail(row);
+  for (const group of ruleDuplication.duplicates) {
+    // A partially allowlisted group fails on its active sites only; name the
+    // exempt ones too, or the row reads as if nothing were exempt.
+    const exempt =
+      group.exempt.length === 0
+        ? ""
+        : `; ${group.exempt.length} exempt: ${group.exempt
+            .map((hit) => `${hit.file}:${hit.line}`)
+            .join(", ")}`;
+    fail(
+      `Guard 10 duplicate HARD rules [${ruleFingerprintHash(group.normalized)}] ${group.hits
+        .map((hit) => `${hit.file}:${hit.line}`)
+        .join(", ")}${exempt} - state the rule in one file and point at that owner (→ <skill> § <Section>); a genuine exception goes in ${RULE_DUPLICATION_ALLOWLIST} with a reason naming the file it covers`,
+    );
+  }
+
+/* ------------------------------------------------------------------ */
+/* Guard 11: skills corpus — paragraph anchoring (advisory) */
+/* ------------------------------------------------------------------ */
+
+  let paragraphAnchoring: ParagraphAnchoringResult = { filesChecked: 0, violations: [] };
+  try {
+    paragraphAnchoring = checkParagraphAnchoring(
+      root,
+      skillFiles.map((file) => relative(root, file)),
+    );
+  } catch (error) {
+    fail(`Guard 11 paragraph anchoring: ${(error as Error).message}`);
+  }
+
+/* ------------------------------------------------------------------ */
+/* Guard 12: ADR tree format (docs/adr/ contract) */
+/* ------------------------------------------------------------------ */
+
+  let adr: AdrCheckResult = { records: 0, failures: [] };
+  try {
+    adr = checkAdrTree(root);
+  } catch (error) {
+    fail(`Guard 12 ADR format: ${(error as Error).message}`);
+  }
+  for (const failure of adr.failures) {
+    fail(`Guard 12 ${failure.code} ${failure.file}: ${failure.message} - ${failure.recovery}`);
+  }
+
+/* ------------------------------------------------------------------ */
 
  // Guard 4 footer fragment: report each check's own verdict + count so a
  // load-order-only failure is never misstated as a combined/OK status.
@@ -1353,17 +1512,31 @@ if (import.meta.main) {
 
   const markdownLinksSummary = `Guard 8 Markdown links ${markdownLinks.filesScanned} files scanned, ${markdownLinks.linksChecked} links resolved, ${markdownLinks.anchorsChecked} anchors checked, ${markdownLinks.diagnostics.length} diagnostics`;
 
+  const skillBudgetsSummary = `Guard 9 skill budgets ${skillBudgets.filesChecked} files checked, ${
+    skillBudgets.failures.filter((failure) => failure.kind === "over-budget").length
+  } over budget`;
+
+  const ruleDuplicationSummary = `Guard 10 duplicate HARD rules ${ruleDuplication.duplicates.length} groups (${
+    ruleDuplication.exemptGroups.length
+  } allowlisted)`;
+
+  const paragraphAnchoringSummary = `Guard 11 paragraph anchoring ${paragraphAnchoring.filesChecked} files checked, ${paragraphAnchoring.violations.length} multi-line paragraphs (advisory; new and modified paragraphs must be single-line)`;
+
+  const adrSummary = summarizeAdrCheck(adr);
+
   reportOversizedTests();
+  reportRuleDuplication(ruleDuplication);
+  reportParagraphAnchoring(paragraphAnchoring);
   if (failures.length > 0) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}`,
   );
 }

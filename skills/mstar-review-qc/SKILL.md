@@ -27,7 +27,7 @@ description: "QC orchestration: SDD mandatory plan QC tri-review (`qc1`…`qc3` 
 
 > **On dsh:** the tri seats are read-only and settle in one round, so they run as fresh-context delegated children on that host's read-only fan-out channel; when the Assignment gives seats a report file (`QC report path`), the host routes them through a writable channel instead — channel mechanics are owned by `mstar-host` → `references/dsh.md` § QC default (with the tool unmounted the one-`subagent`-per-seat fallback is unchanged). Seat budget and wake discipline are not restated here → **`mstar-host`** → `references/dsh.md` § Delegation channels + `references/dsh-agent-teams.md`.
 
-> **Engine check (when available):** run `mstar review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]` (or `import { executionModeToN, assertTriIdentity } from "@mstar-harness/engine"` in a host hook) to map `Execution mode` to its QC seat count N above and assert tri identity. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]` (engine `executionModeToN`, `assertTriIdentity`) to map `Execution mode` to its QC seat count N above and assert tri identity. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## 三审身份与模型独立性门禁（PM 强制）
 
@@ -69,7 +69,7 @@ Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-
 - **截断报告保留 verdict。** 席位因触达预算而声明 `Truncated coverage:` 时，其 verdict 有效，PM **不得**因此升级为 `Unconfirmed`——`Unconfirmed` 仍是证据通道失败态（见上条传导规则）。
 - **未覆盖范围不改写门禁。** 席位 verdict 只涵盖其已审范围：当 Assignment 范围未被完整覆盖时，**gate decision 不得为 `Approve`**。PM 二选一——把未覆盖范围按 targeted re-review 重新派发（席位在预算内补完），或显式收窄 `Review range` 并把收窄依据记入 `qc-consolidated.md` 后再收敛。截断范围仍按「未提及 = 未审查」在 `qc-consolidated.md` 中如实标注 `unreviewed`，PM 不重审无关内容来补全它。
 
-> **Engine check (when available):** run `mstar qc validate-report <report.md>` on each seat report (and `mstar dispatch validate <assignment-file>` for the Assignment-side round-bounding gate — `Budget` + `Return shape` on review / audit rounds, plus the canonical **`Task budget (implement / ops rounds)`** capacity field on non-review / non-audit rounds; field guidance → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; the review caps above are unchanged; or `import { validateQcReport } from "@mstar-harness/engine"` in a host hook). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar qc validate-report <report.md>` on each seat report (and `mstar dispatch validate <assignment-file>` for the Assignment-side round-bounding gate — `Budget` + `Return shape` on review / audit rounds, plus the canonical **`Task budget (implement / ops rounds)`** capacity field on non-review / non-audit rounds; field guidance → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; the review caps above are unchanged; engine `validateQcReport`). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## 证据规则（PM · consolidated 输入）
 

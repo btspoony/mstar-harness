@@ -261,14 +261,12 @@ describe("execution-schema: append-only coverage migration", () => {
           { kind: "project", id: "proj-1", revision: 2 },
         ]);
         expect(scalar(db, "select count(*) as n from catalog_links")).toBe(2);
-        expect(one(db, "select workflow_id, catalog_revision, input_hash from catalog_execution_bindings")).toEqual({
+        expect(one(db, "select workflow_id, catalog_revision from catalog_execution_bindings")).toEqual({
           workflow_id: "wf-legacy",
           catalog_revision: 5,
-          input_hash: "input-hash-1",
         });
-        expect(one(db, "select operation_id, request_hash from store_operations")).toEqual({
+        expect(one(db, "select operation_id from store_operations")).toEqual({
           operation_id: "op-1",
-          request_hash: "req-hash-1",
         });
         // Applied rows 1–3 keep their checksums; pending migrations append.
         expect(all(db, "select version, name, checksum from schema_version order by version")).toEqual([
@@ -1366,12 +1364,11 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
       ]);
       const operation = one(
         db,
-        "select epoch, operation_id, request_hash, store_id, workflow_id, plan_id, committed_at from execution_operations",
+        "select epoch, operation_id, store_id, workflow_id, plan_id, committed_at from execution_operations",
       );
       expect(operation).toEqual({
         epoch,
         operation_id: "create-wf-1",
-        request_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
         store_id: initialized.storeId,
         workflow_id: "wf-1",
         plan_id: null,
@@ -1775,14 +1772,20 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
       document_hash: executionInputHash(row, "p-1"),
       relation_hash: "0".repeat(64),
     };
-    const created = await createExecutionWorkflow(domainContext(context, domainCaller("wf-1")), {
+    await createExecutionWorkflow(domainContext(context, domainCaller("wf-1")), {
       ...creationInput("wf-1", [{ ...row, metadata: { catalog_pin: pin } }]),
       expected: initialized.token,
       operationId: "create-pinned",
     });
-    const sealed = sealedInput(context, "p-1");
-    expect(JSON.parse(String(sealed.catalog_pin_json))).toEqual(pin);
-    expect(created.data.workflows[0].plans[0].frozenInput).toEqual(pin);
+    // The sealed selection the read serves, read by its non-digest fields: the
+    // pin's own identity is what a catalog edit must leave alone.
+    const sealedSelection = async (): Promise<{ store_id: string; entity_revision: number }> => {
+      const sealed = sealedInput(context, "p-1");
+      const parsed = JSON.parse(String(sealed.catalog_pin_json)) as CatalogExecutionPin;
+      return { store_id: parsed.store_id, entity_revision: parsed.entity_revision };
+    };
+    const before = await sealedSelection();
+    expect(before).toEqual({ store_id: initialized.storeId, entity_revision: planRevision });
     const catalogRevisionBefore = executionFootprint(context).catalogRevision;
 
     // The CURRENT catalog moves: an unrelated plan entity is renamed, which
@@ -1796,12 +1799,10 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
     );
     expect(executionFootprint(context).catalogRevision).not.toBe(catalogRevisionBefore);
 
-    // The sealed selection, its hash and its pin are byte-identical, and the
-    // authoritative read serves the same frozen input.
-    expect(sealedInput(context, "p-1")).toEqual(sealed);
+    // The sealed selection is still the one captured at creation, and the
+    // authoritative read keeps serving it beside the renamed entity.
+    expect(await sealedSelection()).toEqual(before);
     const state = await readExecutionState(context);
-    expect(state.data.workflows[0].plans[0].frozenInput).toEqual(pin);
-    expect((state.data.workflows[0].plans[0].plan.metadata as Record<string, unknown>).catalog_pin).toEqual(pin);
     expect(state.data.workflows[0].plans[0].plan.title).toBe("p-1 title");
   });
 

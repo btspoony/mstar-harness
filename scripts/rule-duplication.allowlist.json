@@ -1,0 +1,17 @@
+[
+  {
+    "file": "skills/mstar-roles/references/fullstack-dev-shared.md",
+    "normalizedHash": "d544a8489336",
+    "reason": "skills/mstar-roles/references/fullstack-dev-shared.md carries its own visible Repo-write Git discipline line because each role file stands alone for its reader, while skills/mstar-roles/references/_shared/leaf-executor-core.md owns that body (Git NEVER + Plan & Documentation Rules); the exemption ends when skills/mstar-roles/references/fullstack-dev-shared.md, skills/mstar-roles/references/frontend-dev.md and skills/mstar-roles/references/ops-engineer.md no longer each carry that line and point at the one owner instead — drop all three entries in that round's commit."
+  },
+  {
+    "file": "skills/mstar-roles/references/frontend-dev.md",
+    "normalizedHash": "d544a8489336",
+    "reason": "skills/mstar-roles/references/frontend-dev.md carries its own visible Repo-write Git discipline line because each role file stands alone for its reader, while skills/mstar-roles/references/_shared/leaf-executor-core.md owns that body (Git NEVER + Plan & Documentation Rules); the exemption ends when skills/mstar-roles/references/frontend-dev.md, skills/mstar-roles/references/fullstack-dev-shared.md and skills/mstar-roles/references/ops-engineer.md no longer each carry that line and point at the one owner instead — drop all three entries in that round's commit."
+  },
+  {
+    "file": "skills/mstar-roles/references/ops-engineer.md",
+    "normalizedHash": "d544a8489336",
+    "reason": "skills/mstar-roles/references/ops-engineer.md carries its own visible Repo-write Git discipline line because each role file stands alone for its reader, while skills/mstar-roles/references/_shared/leaf-executor-core.md owns that body (Git NEVER + Plan & Documentation Rules); the exemption ends when skills/mstar-roles/references/ops-engineer.md, skills/mstar-roles/references/fullstack-dev-shared.md and skills/mstar-roles/references/frontend-dev.md no longer each carry that line and point at the one owner instead — drop all three entries in that round's commit."
+  }
+]

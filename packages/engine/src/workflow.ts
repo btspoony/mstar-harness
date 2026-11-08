@@ -265,7 +265,7 @@ export type IntegrationMergeLease = {
 
 /**
  * Validate one snapshot top-level `integration_merge_lease` object
- * (`mstar-engine-legacy/references/migration-source-shapes.md`
+ * (`mstar-project-governance/references/migration-source-shapes.md`
  * § "Migration-source top-level fields" — the retired snapshot top-level
  * shape): required `holder` / `claimed_at` / `plan_id` / `source_branch` /
  * `target_branch`; optional `session_label`. Absent = unclaimed; `null` and

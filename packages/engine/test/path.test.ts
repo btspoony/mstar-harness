@@ -35,6 +35,7 @@ import {
   canonicalizeNearestExisting,
   emitGitignoreSnippet,
   hasHarnessRootDeclaration,
+  resolveAdrDir,
   resolveHarnessDir,
   resolveIterationDir,
   resolveKnowledgeDir,
@@ -74,6 +75,8 @@ const CANONICAL_SNIPPET = `# Morning Star harness (.mstar/)
 !.mstar/knowledge/**
 !.mstar/specs/
 !.mstar/specs/**
+!.mstar/adr/
+!.mstar/adr/**
 # .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
 .mstarc
 `;
@@ -87,6 +90,8 @@ const CANONICAL_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
 !.agents/knowledge/**
 !.agents/specs/
 !.agents/specs/**
+!.agents/adr/
+!.agents/adr/**
 `;
 
 function tmpRoot(prefix: string): string {
@@ -927,6 +932,167 @@ describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
   });
 });
 
+describe("resolveSpecsDir — tracked `.agents/specs` rung", () => {
+  test("empty {HARNESS_DIR}/specs falls through to <repoRoot>/.agents/specs", () => {
+    const root = tmpRoot("path-specs-agents-");
+    try {
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      mkdirSync(join(root, ".agents", "specs"), { recursive: true });
+      writeFileSync(join(root, ".agents", "specs", "spec.md"), "# spec\n");
+      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, ".agents", "specs"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("non-empty {HARNESS_DIR}/specs still wins over the `.agents` rung", () => {
+    const root = tmpRoot("path-specs-agents-precedence-");
+    try {
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
+      mkdirSync(join(root, ".agents", "specs"), { recursive: true });
+      writeFileSync(join(root, ".agents", "specs", "other.md"), "# other\n");
+      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "specs"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a `.agents` harness reaches its own specs dir by the empty-dir rule (candidate dedupe)", () => {
+    const root = tmpRoot("path-specs-agents-harness-");
+    try {
+      // `<repo>/.agents/specs` and `{HARNESS_DIR}/specs` are the same directory
+      // here; an empty one must still fall through, not be returned twice.
+      mkdirSync(join(root, ".agents", "specs"), { recursive: true });
+      mkdirSync(join(root, "docs", "specs"), { recursive: true });
+      writeFileSync(join(root, "docs", "specs", "spec.md"), "# spec\n");
+      expect(resolveSpecsDir(join(root, ".agents"))).toBe(join(root, "docs", "specs"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveKnowledgeDir (plan-conventions § 路径符号 / tracked-results chain)", () => {
+  test("non-empty {HARNESS_DIR}/knowledge wins", () => {
+    const root = tmpRoot("path-knowledge-first-");
+    try {
+      mkdirSync(join(root, ".mstar", "knowledge"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "knowledge", "kb.md"), "# kb\n");
+      mkdirSync(join(root, ".agents", "knowledge"), { recursive: true });
+      writeFileSync(join(root, ".agents", "knowledge", "tracked.md"), "# tracked\n");
+      expect(resolveKnowledgeDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "knowledge"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("empty {HARNESS_DIR}/knowledge falls through to <repoRoot>/.agents/knowledge", () => {
+    const root = tmpRoot("path-knowledge-agents-");
+    try {
+      mkdirSync(join(root, ".mstar", "knowledge"), { recursive: true });
+      mkdirSync(join(root, ".agents", "knowledge"), { recursive: true });
+      writeFileSync(join(root, ".agents", "knowledge", "tracked.md"), "# tracked\n");
+      expect(resolveKnowledgeDir(join(root, ".mstar"))).toBe(join(root, ".agents", "knowledge"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("all candidates absent → creates the {HARNESS_DIR}/knowledge fallback", () => {
+    const root = tmpRoot("path-knowledge-fallback-");
+    try {
+      const dir = resolveKnowledgeDir(join(root, ".mstar"));
+      expect(dir).toBe(join(root, ".mstar", "knowledge"));
+      expect(existsSync(dir)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("create: false keeps the resolver read-only", () => {
+    const root = tmpRoot("path-knowledge-nocreate-");
+    try {
+      const dir = resolveKnowledgeDir(join(root, ".mstar"), { create: false });
+      expect(dir).toBe(join(root, ".mstar", "knowledge"));
+      expect(existsSync(dir)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("`.mstarc knowledge_dir` stays authoritative over a non-empty `.agents/knowledge`", () => {
+    const root = tmpRoot("path-knowledge-declared-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nknowledge_dir=docs/knowledge\n");
+      mkdirSync(join(root, ".agents", "knowledge"), { recursive: true });
+      writeFileSync(join(root, ".agents", "knowledge", "tracked.md"), "# tracked\n");
+      expect(resolveKnowledgeDir(join(root, ".mstar"), { create: false })).toBe(join(root, "docs", "knowledge"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveAdrDir (tracked-results chain)", () => {
+  test("candidate order: {HARNESS_DIR}/adr → .agents/adr → docs/adr", () => {
+    const root = tmpRoot("path-adr-chain-");
+    try {
+      const harness = join(root, ".mstar");
+      mkdirSync(join(root, "docs", "adr"), { recursive: true });
+      writeFileSync(join(root, "docs", "adr", "0001.md"), "# adr\n");
+      expect(resolveAdrDir(harness, { create: false })).toBe(join(root, "docs", "adr"));
+
+      mkdirSync(join(root, ".agents", "adr"), { recursive: true });
+      writeFileSync(join(root, ".agents", "adr", "0002.md"), "# adr\n");
+      expect(resolveAdrDir(harness, { create: false })).toBe(join(root, ".agents", "adr"));
+
+      mkdirSync(join(harness, "adr"), { recursive: true });
+      writeFileSync(join(harness, "adr", "0003.md"), "# adr\n");
+      expect(resolveAdrDir(harness, { create: false })).toBe(join(harness, "adr"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty candidate counts as absent (empty-dir rule)", () => {
+    const root = tmpRoot("path-adr-empty-");
+    try {
+      const harness = join(root, ".mstar");
+      mkdirSync(join(harness, "adr", "empty-sub"), { recursive: true });
+      mkdirSync(join(root, "docs", "adr"), { recursive: true });
+      writeFileSync(join(root, "docs", "adr", "0001.md"), "# adr\n");
+      expect(resolveAdrDir(harness, { create: false })).toBe(join(root, "docs", "adr"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("all candidates absent → creates the {HARNESS_DIR}/adr fallback", () => {
+    const root = tmpRoot("path-adr-fallback-");
+    try {
+      const dir = resolveAdrDir(join(root, ".mstar"));
+      expect(dir).toBe(join(root, ".mstar", "adr"));
+      expect(existsSync(dir)).toBe(true);
+      expect(resolveAdrDir(join(root, ".mstar"), { create: false })).toBe(dir);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("`.mstarc adr_dir` is authoritative", () => {
+    const root = tmpRoot("path-adr-declared-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nadr_dir=docs/decisions\n");
+      mkdirSync(join(root, "docs", "adr"), { recursive: true });
+      writeFileSync(join(root, "docs", "adr", "0001.md"), "# adr\n");
+      expect(resolveAdrDir(join(root, ".mstar"), { create: false })).toBe(join(root, "docs", "decisions"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("scaffoldHarness", () => {
   test("creates harness directories without writing status.json", async () => {
     const root = tmpRoot("path-scaffold-");
@@ -1170,10 +1336,12 @@ describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟�
       expect(result.ok).toBe(false);
       expect(result.code).toBe("gitignore.missing-entries");
       expect(result.severity).toBe("medium");
-      // Unknown kind — the diagnostic reports the default .mstar/ set.
+      // Unknown kind — the diagnostic reports the default .mstar/ set,
+      // including the tracked-result re-includes (specs / knowledge / adr).
       expect(result.message).toContain(".mstar/**");
       expect(result.message).toContain("!.mstar/knowledge/");
       expect(result.message).toContain("!.mstar/specs/**");
+      expect(result.message).toContain("!.mstar/adr/**");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

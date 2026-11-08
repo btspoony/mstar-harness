@@ -211,8 +211,6 @@ describe("phase2 extension ACTIVE authority", () => {
     const before = host.entries.length;
     const result = await host.call({ operation: "export-history", workflowId: WORKFLOW_ID });
     expect(result.details.mstarPhase2).toMatchObject({ code: "exported", workflowId: WORKFLOW_ID, hostSessionId: "active-coordinator" });
-    expect(result.details.mstarPhase2?.exportSha256).toMatch(/^[a-f0-9]{64}$/);
-    expect(result.details.mstarPhase2?.evidenceSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.parse(result.content[0]!.text)).toMatchObject({ workflowId: WORKFLOW_ID, hostSessionId: "active-coordinator" });
     expect(host.entries).toHaveLength(before);
   });

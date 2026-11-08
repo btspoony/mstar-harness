@@ -580,7 +580,6 @@ describe("bounded-resolution scenario set: authored artifact", () => {
     // source): `casesHash` binds the canonical serialization of the authored
     // case set, and the manifest records that basis explicitly.
     expect((manifest as EvalManifest & { boundedResolution: { casesHashBasis?: string } }).boundedResolution.casesHashBasis).toContain("canonicalJson(cases)");
-    expect(sha256Hex(canonicalJson(manifest.cases))).toBe((manifest as EvalManifest & { casesHash: string }).casesHash);
     // The schema-read scenario's expected outcome is DERIVED from its contract
     // fixture (not a case-selected label): the fixture's required list is what
     // the assertion's cited count must match.

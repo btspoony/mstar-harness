@@ -28,6 +28,12 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 - 不得在**默认保护分支**（常见名：`main`、`master`；以项目约定为准）上直接实现功能改动，除非 Assignment 含显式例外。
 - 例外须在 Assignment 中写明一行：**`Branch policy: direct on <branch> — <reason>`**（典型：团队约定的热修直接打默认分支）。
 
+### 控制域写入（`Write domain: control`）
+
+仅当 Assignment **只写控制根的 gitignored 过程目标**（plans、assignments、sdd、iterations、workflows、projects、reviews、`store.db`）时声明 **`Write domain: control`**（取值 `control` | `work`；缺省 = `work`），并用 **`Control write paths: <path>[, <path>…]`** 列出实际要写的目标（绝对路径，或相对 `Worktree path` 解析；结尾的 `/` **显式声明目录**，适用 Git 目录规则如 `!.mstar/notes/`；不带 `/` 的条目**同时**按文件与目录两条规则核验，**两种形状都必须被忽略**——任一形状会被提交即拒绝（`dispatch.control-write.target-committable`）。例：`.mstar/**` 下 `.mstar/plans/run.md` 两种形状都被忽略因而通过；`.mstar/**` + `!.mstar/notes/` + `!.mstar/notes/**` 下 `.mstar/notes` 的文件路径被忽略、目录内容却仍会提交，因此被拒）。这类单子可写 **`Worktree path`** = 控制根、**`Working branch`** = 控制检出**当前检出**的分支（默认 `main` 的仓库即 `main`；`main` 只是示例，不是字面指令），**豁免**默认保护分支门禁；三种分支写法仍全部有效（`Working branch: <existing>` | `create <new> from <base>` | `Branch policy: direct on <branch> — <reason>`），声明值须与控制检出实际检出的分支一致。
+
+引擎核验（`mstar dispatch validate`；同一个控制域写入 validator 也被宿主 dispatch 门禁复用）：`Worktree path`（按 Assignment 所在目录解析后 realpath）等于控制根、声明的分支（三种写法任一，含 `Branch policy: direct on <branch> — <reason>`）等于控制根当前检出分支，且**逐个探测声明的目标**——结尾带 `/` 的目标只按目录核验，其余目标须在文件**与**目录两种形状下都被 Git 忽略（任一形状会被提交即拒），全部目标还须位于控制根内。核验的是真实声明目标而非整个 harness：仓库只忽略 `.mstar/plans/` 时，声明 `plans/` 下的目标即通过；声明被跟踪的目标（如 `.mstar/specs/…`）被拒。拒绝码：`dispatch.control-write.control-root-unresolved`（从本仓库的检出运行）、`dispatch.control-write.worktree-not-control`、`dispatch.control-write.branch-mismatch`、`dispatch.control-write.target-committable`（该目标会被提交 ⇒ 改用工作分支/PR）、`dispatch.control-write.target-outside-control`、`dispatch.control-write.target-unverifiable`。字段层另有 `assignment.field.write-domain-unknown`、`assignment.field.control-write-missing-worktree`、`assignment.field.control-write-missing-branch`、`assignment.field.control-write-paths-missing`（`control` 域必须写 `Worktree path`、`Working branch` 与 `Control write paths`）。同一个控制域写入 validator 也在共享宿主 dispatch 门禁（`composeDispatchGate`，OpenCode v2 / dsh / omp 的 hard enforcement）内运行：控制域文本只在控制根可解析且 worktree、分支、逐目标全部通过时放行——宿主无法靠声明该字段绕过硬门禁；控制根不可核验（无控制根、git 探测失败）一律保持拒绝并附修复路径，绝不静默放行。
+
 ### `<base>` 与叠分支（stacked branches）
 
 - 门禁的目标是**不在未授权的默认分支上直接提交**，不是「只能从 `main` 开新分支」。
@@ -85,6 +91,8 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 
 若是新开分支但缺少 `<base>`，必须暂停并向用户澄清，不能猜测。
 
+控制域写入（只写控制根 gitignored harness）另须声明 `Write domain: control`，见「控制域写入」。
+
 ### 可写角色执行规则
 
 在首次写仓库或 `commit` 之前：
@@ -128,15 +136,11 @@ The integration checkout is established at Phase 2 entry; the bounded Phase 1 un
 | **Integration worktree** | Resolved `spec_integration_branch` (same across active plans) | `integration_worktree_path` (ACTIVE store-backed workflow view) — canonical **repository root** (not `{HARNESS_DIR}`) | Sole merge cwd for serial integration merges (`integration_merge_lease`) + tracked-result close commits (Phase 3 compound); **no product-source edits** — Phase-5 fixes use a feature worktree |
 | **Feature worktree** (per plan) | Plan's Working branch | Row `metadata.worktree_path` (ACTIVE plan view) | **Required cwd** for product/source edits |
 
-### Harness path SSOT under default gitignore (L1) — the three-domain table
+### Harness path SSOT under default gitignore (L1) — three write domains
 
-Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪策略」); `git worktree add` does **not** copy them into a new checkout. A worktree's `.mstar/` is **not categorically non-writable** — writability is decided per domain. This is the **sole** three-domain table in the skill corpus; other skills point here instead of restating it.
+Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪策略」); `git worktree add` does **not** copy them into a new checkout. A worktree's `.mstar/` is **not** categorically non-writable — writability is decided per domain. This is the **sole** three-domain statement in the skill corpus; other skills point here instead of restating it.
 
-| Domain | Contents | Home | Writable from a worktree? |
-|---|---|---|---|
-| **Process SSOT** (gitignored) | `store.db`, retained `workflows/` bodies, `projects/`, authored `plans/`, `sdd/`, `iterations/`, `archived/` (`status.json` / workflow snapshots / legacy session JSON: read-only import/history only) | control root = the **primary checkout** (main worktree) | **No.** Always addressed via absolute control-root paths; a second process-SSOT copy must never be bootstrapped under any worktree. |
-| **Tracked results** (Git-following) | `{KNOWLEDGE_DIR}`, `{SPECS_DIR}`, `{HARNESS_DIR}/AGENTS.md`, `CONCEPTS.md` | whichever checkout holds the target branch | **Yes.** Readable from any worktree; written where the target branch is checked out (iteration Phase 3 compound → the integration worktree), then committed on that branch. |
-| **Product source** | repository code | feature worktree on `Working branch` | feature worktree only. |
+**Process SSOT** (gitignored: `store.db`, retained `workflows/` bodies, `projects/`, authored `plans/`, `sdd/`, `iterations/`, `archived/`; `status.json` / workflow snapshots / legacy session JSON are read-only import/history) lives at the control root = the **primary checkout** (main worktree) and is **never** writable from a worktree: address it only through absolute control-root paths, and never bootstrap a second process-SSOT copy under any worktree. **Tracked results** (Git-following: `{KNOWLEDGE_DIR}`, `{SPECS_DIR}`, `{HARNESS_DIR}/AGENTS.md`, `CONCEPTS.md`) are readable from any worktree and written where the target branch is checked out (iteration Phase 3 compound → the integration worktree), then committed on that branch. **Product source** (repository code) is writable in the feature worktree on `Working branch` only.
 
 **Control harness root** = `<main-repo-root>/{HARNESS_DIR}/` — resolved from Git (the main worktree), never from a recorded state field. Discover it instead of guessing: `mstar path resolve` reports `controlRoot` / `controlHarnessDir` / `linkedWorktree` (resolution order → **`mstar-conventions`**「`{HARNESS_DIR}` 解析顺序」). A linked checkout without `.mstar/` is **not** an uninitialized harness.
 
@@ -149,7 +153,7 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 - Plan Path and SDD dir are absolute control-root paths; do not resolve a feature checkout's ignored harness as process SSOT.
 - Validate the actual source checkout/branch and atomic coordination authority, not a per-plan session/holder or ceremonial prepare record.
 
-**Anti-pattern (forbidden)**
+#### Worktree mode: waived — anti-pattern (forbidden)
 
 - Inferring `Worktree mode: waived` because “feature worktree has no plans” under default gitignore. Correct response: keep feature worktrees; route harness I/O through control absolute paths. Missing shared safe coordination authority → **`Plan parallelism: serial`** only — that is a **separate** gate and does **not** waive worktree isolation.
 
@@ -160,7 +164,7 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 3. **Feature worktree (per plan)** — one distinct subdirectory under the sibling root **`../<repo>.worktrees/`**, outside the checkout, per active `plan_id` (e.g. `../<repo>.worktrees/<plan-id>-<slug>`). The root is `<parent-of-repo-root>/{repo-basename}.worktrees/`, where repo root is the realpath of the Git top-level. From that repo root, create with `mkdir -p ../<repo>.worktrees && git worktree add ../<repo>.worktrees/<plan-id>-<slug> -b <branch>`. This keeps linked checkouts out of the repository scan/edit surface. In-repo `.worktrees/` remains a legal explicit override; registered absolute source and cleanup paths are location-agnostic. Assignment `Worktree path` / `Working branch` must match row `metadata.worktree_path` / `metadata.working_branch` and actual checkout facts; missing/corrected source scope uses ordinary prepare, never a holder or claim.
 4. **L2 track worktrees (within-plan)** — additional distinct directories per parallel implement track under the **same** plan (see **`references/parallel-writable-pre-dispatch.md`**), each with its own PM-approved **`Working branch`**.
 
-> **Engine check:** `mstar worktree check` owns the engine-enforced checkout facts — workflow entry (`--workflow <id> --entry`: branch metadata, main residency, recorded integration checkout exists on its branch and clean, merge-lease state), per-plan L1 (`--workflow <id> --plan <plan-id>`: main residency; main/control, source-metadata and integration checkouts pairwise distinct; actual branch alignment; plus the workflow's merge-lease fact) and L2 (`--l2 --tracks <json>`: parallel writable tracks). These are factual isolation checks scoped to that engine-enforced subset, not per-row session/lease/seal admission, and not clearance of the full pre-dispatch checklist. Workflow-wide integration exclusion and serial real merge proof remain distinct requirements.
+> **Engine check:** `mstar worktree check` owns the engine-enforced checkout facts — workflow entry (`--workflow <id> --entry`: branch metadata, main residency, recorded integration checkout exists on its branch and clean, merge-lease state), per-plan L1 (`--workflow <id> --plan <plan-id>`: main residency; main/control, source-metadata and integration checkouts pairwise distinct; actual branch alignment; plus the workflow's merge-lease fact) and L2 (`--l2 --tracks <json>`: parallel writable tracks). These are factual isolation checks scoped to that engine-enforced subset, not per-row session/lease/seal admission, and not clearance of the full pre-dispatch checklist. Workflow-wide integration exclusion and serial real merge proof remain distinct requirements. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## 同仓并发写入与 Git worktree（强制）
 
@@ -196,7 +200,7 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 - **逐字对齐（强制）**：三份 QC Assignment 与 QA Assignment 间 **`plan_id`** 与 **`Review range` / `Diff basis`**（连同 `Review cwd` / `Working branch`）**必须完全相同**；**`qa-engineer`** 验证同一 feature 时**复用同一组字段**。**热修 / QC 单审**路径也须含**同一组字段**，仅承接方份数为 1。
 - 三审并行时三名 reviewer **共用同一组**字段（对业务仓**只读 diff 审查**）；一般不必为每位 reviewer 各开 worktree，除非宿主/环境要求进程级隔离。
 
-> **Engine check (when available):** run `mstar worktree qc-alignment <assignment-file>...`（或 import `assertQcAlignment` / `singleReviewSnapshot` from `@mstar-harness/engine` in a host hook）以断言上述 QC/QA 对齐字段（tri + QA 间 `plan_id` 与 `Review range` / `Diff basis` 逐字相同；派发前 single review snapshot）。On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar worktree qc-alignment <assignment-file>...`（engine `assertQcAlignment`, `singleReviewSnapshot`）以断言上述 QC/QA 对齐字段（tri + QA 间 `plan_id` 与 `Review range` / `Diff basis` 逐字相同；派发前 single review snapshot）。On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ### 多 worktree 并行 → 单一待审快照（派 QC 前置）
 
@@ -264,7 +268,7 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 1. **Phase-2 同轮**（per-plan）：integration merge 成功的**同一轮**回收该 Done plan/track 的 feature worktree + 已合并分支（call site → `mstar-iteration` `references/phase-2-worktree-lease.md`「Same-round plan cleanup」）。
 2. **Phase-6 收尾**（integration 面）：只在 valid terminal close（§6.1–§6.3 完成）+ PR **verified merged** 之后回收 integration worktree / 分支 / 远端残留（call site → `mstar-iteration` `references/phase-6-post-merge-close.md` §6.4）。Phase-6 gate 只查本地 state，**不**验证 merged、**不**检查物理清理是否完成。
 
-> **Engine check (when available):** dry-run 即机器检查 —— `mstar worktree cleanup --workflow <id>`（或 import `planWorktreeCleanup` from `@mstar-harness/engine`）对当前 facts 输出 remove/keep/refuse 计划，每行带稳定 `cleanup.*` 码。若已知受保护目标（active lease / 非 Done / 非终结 owner）出现 `remove` → STOP：守卫有错，**任何 `--apply` 前先修**。Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** dry-run 即机器检查 —— `mstar worktree cleanup --workflow <id>`（engine `planWorktreeCleanup`）对当前 facts 输出 remove/keep/refuse 计划，每行带稳定 `cleanup.*` 码。若已知受保护目标（active lease / 非 Done / 非终结 owner）出现 `remove` → STOP：守卫有错，**任何 `--apply` 前先修**。On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## Workflow
 

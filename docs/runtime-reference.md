@@ -66,9 +66,9 @@ Topic skills, grouped by what they own:
 | `mstar-coding-behavior` | Implementation discipline, diagnosis, review practice |
 | `mstar-design-md` | DESIGN.md design tokens and the UI plan gate |
 | `mstar-design-system` | Baseline-driven parity: baseline kinds, machine fixtures, layer parity, difference triage |
-| `mstar-compound` / `mstar-compound-refresh` | Knowledge crystallisation and maintenance |
-| `mstar-strategy` | `STRATEGY.md` direction |
+| `mstar-knowledge` | Knowledge capture and maintenance for `{KNOWLEDGE_DIR}`, plus the project-knowledge bootstrap and the `STRATEGY.md` contract |
 | `mstar-skill-authoring` | Skill authoring gate |
+| `mstar-prose` | Prose judged against HEAD: leaked-session narration, keep rules, and where durable rationale goes instead |
 | `mstar-audit` | Read-only audit variants: codebase, tests, PR review |
 | `mstar-pr-loop` | Opt-in PR review → fix loop until `ship it`; also the local iteration Phase 5 review path under a recorded `reviewed-auto` (never under `reviewed-bot`) |
 | `mstar-e2e` | Explicit E2E, browser, device, and installed-deployment verification |
@@ -78,14 +78,14 @@ Topic skills, grouped by what they own:
 
 ## Storage and persistence
 
-Consumer repositories keep harness state under `{HARNESS_DIR}`, which defaults to `.mstar/` and can be relocated through a repo-local `.mstarc` file. Directory symbols and discovery order are owned by `mstar-conventions`; the defaults are `{PLAN_DIR}` = `plans/`, `{SDD_DIR}` = `sdd/<plan-id>/`, `{ITERATION_DIR}` = `iterations/`, `{WORKFLOW_DIR}` = `workflows/`, `{PROJECT_DIR}` = `projects/`, `{REVIEW_DIR}` = `reviews/`, and `{KNOWLEDGE_DIR}` = `knowledge/`. `{SPECS_DIR}` resolves to the first non-empty of `.mstar/specs/`, `docs/specs/`, or repository-root `specs/`, and defaults to `{HARNESS_DIR}/specs/` when all candidates are absent.
+Consumer repositories keep harness state under `{HARNESS_DIR}`, which defaults to `.mstar/` and can be relocated through a repo-local `.mstarc` file. Directory symbols and discovery order are owned by `mstar-conventions`; the defaults are `{PLAN_DIR}` = `plans/`, `{SDD_DIR}` = `sdd/<plan-id>/`, `{ITERATION_DIR}` = `iterations/`, `{WORKFLOW_DIR}` = `workflows/`, `{PROJECT_DIR}` = `projects/`, `{REVIEW_DIR}` = `reviews/`, and `{KNOWLEDGE_DIR}` = `knowledge/`. `{SPECS_DIR}` resolves to the first non-empty of `{HARNESS_DIR}/specs/`, `.agents/specs/`, `docs/specs/`, repository-root `specs/`, then the legacy `designs/` trees (a `.mstarc` `specs_dir` is authoritative), defaulting to `{HARNESS_DIR}/specs/` when all candidates are absent; `{ADR_DIR}` resolves the same way through `.mstarc` `adr_dir`, `{HARNESS_DIR}/adr/`, `.agents/adr/`, and `docs/adr/`, defaulting to `{HARNESS_DIR}/adr/`, while `{KNOWLEDGE_DIR}` falls back to `.agents/knowledge/` when the harness tree is gitignored wholesale. `mstar path check` reads that policy from Git state rather than directory names: ignored harness files must sit in the control checkout and committable ones in the caller's own checkout, while an ignored tracked-result dir is only a warning that its content can never be shared.
 
 Two persistence domains back that layout:
 
 - **Ordinary file bodies.** `ArtifactStore` persists review envelopes and unrelated JSON; authored docs and plain append-only notes stay files, not execution authority. Root status, workflow snapshots and legacy session files are read-only one-time import/history. `mstar store upgrade` imports recognized v1/v2 execution sources directly while retaining original bytes; no pre-activation file writer or runtime fallback remains. Without ACTIVE authority, use supported init/upgrade recovery or conversation tracking.
 - **Native authority.** ACTIVE control-root `{HARNESS_DIR}/store.db` owns issue, catalog, roadmap, workflow/plan execution and host machine state. Domain authorization, SQLite transactions/CAS and genuine business integration exclusion remain; application file/directory mutexes do not. Ordinary docs/notes are not frozen by backup or rolled back by restore. The store is not a JSON mirror.
 
-Git policy: the canonical `.gitignore` snippet — emitted by `mstar-harness harness scaffold`, never by the installer — ignores the harness directory wholesale and re-includes tracked results — `AGENTS.md`, `knowledge/**` and `specs/**`; `.mstarc` is local. Process artifacts stay in the control checkout while knowledge/specs follow Git branches. `mstar-harness harness scaffold` creates authored directories, the default project and missing canonical ignore/`AGENTS.md` files, not an initial status file or execution authority; follow it with `mstar store init` for a fresh store or `mstar store upgrade` for historical execution sources.
+Git policy: the canonical `.gitignore` snippet — emitted by `mstar-harness harness scaffold`, never by the installer — ignores the harness directory wholesale and re-includes tracked results — `AGENTS.md`, `knowledge/**`, `specs/**` and `adr/**`; `.mstarc` is local. Process artifacts stay in the control checkout while knowledge/specs/adr follow Git branches. `mstar-harness harness scaffold` creates authored directories, the default project and missing canonical ignore/`AGENTS.md` files, not an initial status file or execution authority; follow it with `mstar store init` for a fresh store or `mstar store upgrade` for historical execution sources.
 
 For administration of an existing store — verified backup before an upgrade, the single default `mstar store upgrade` path for importing legacy state, and restore/export commands — see the store section of [`docs/commands.md`](commands.md) and the `mstar-use-cli` skill.
 

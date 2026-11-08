@@ -1,6 +1,6 @@
 {
   "name": "@mstar-harness/cli",
-  "version": "4.2.3",
+  "version": "4.3.0",
   "description": "Morning Star harness CLI \u2014 installer bootstrap, canonical command adapter, and stdio MCP server.",
   "repository": {
     "type": "git",
@@ -27,10 +27,10 @@
     "node": ">=24.18.0"
   },
   "mstar": {
-    "dshLlmFallbacks": "0.6.13"
+    "dshLlmFallbacks": "0.7.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.1.0",
+    "@modelcontextprotocol/server": "2.4.0",
     "commander": "^15.0.0",
     "picocolors": "^1.1.1",
     "zod": "^4.2.0"

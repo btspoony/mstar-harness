@@ -55,7 +55,6 @@ describe("shadow baseline and work receipts", () => {
     const rows = [receipt("completed"), receipt("blocked", "unit-2"), receipt("cancelled", "unit-3")];
     expect(rows.map((row) => row.disposition)).toEqual(["completed", "blocked", "cancelled"]);
     expect(rows.every((row) => row.owner === "original" && row.jevWorkCredit === 0)).toBe(true);
-    expect(rows[0]?.originalConsumptionSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(rows[0]?.attemptId).toBe("attempt-1");
   });
 

@@ -635,7 +635,6 @@ describe("recordRefusal records the error and moves nothing", () => {
     // Everything that makes the row an ambiguity survives: a `failed` row would
     // be invisible to the marker scan.
     expect(after.pendingTarget).toBe(before.pendingTarget);
-    expect(after.lastRequestHash).toBe(before.lastRequestHash);
     expect(after.lastKindLabels).toEqual(before.lastKindLabels);
     expect(after.revision).toBe(before.revision + 1);
     const stillPending = db

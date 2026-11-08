@@ -59,6 +59,7 @@ const NULL_ROOT_BOOTSTRAP_COMMANDS = new Set(["harness.scaffold"]);
 const ROOT_FREE_COMMANDS: ReadonlySet<string> = new Set([
   "schema",
   "path.resolve",
+  "path.check",
   "host.detect",
   "host.skill-root",
   "doctor",

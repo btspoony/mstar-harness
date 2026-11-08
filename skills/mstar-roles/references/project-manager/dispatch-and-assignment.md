@@ -6,13 +6,11 @@ The concise gate summary remains in `references/project-manager.md`.
 ## Core Dispatch Invariants
 
 - Only `project-manager` dispatches subagents.
-- Each independent Assignment requires one matching host invoke.
-- In tool hosts (OpenCode / Cursor Task / Codex with callable multi-agent tools), Markdown-only Assignment is not dispatch.
-- For parallel batch with `N >= 2`, dispatch turn must emit all `N` invokes in one message when host supports it.
+- Each independent Assignment needs one matching host invoke: counting, dispatch-turn ordering, batch-readiness and the paste-only failure → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules.
 - **Same-repo writable parallel tracks**: tool concurrency and worktree isolation are **separate gates**. Before implement invokes, complete **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**.
 - **Scope and stopping are explicit**: apply `mstar-harness-core` § 定向执行与验证边界. Give each leaf one result, owned paths/symbols, relevant inputs, named checks/selectors, and an evidence-based stopping condition. Reuse unaffected evidence; do not inject a suite merely because the repo exposes it. Independent ready assignments run concurrently after their dependency/isolation checks.
 - **Review/QC rounds are quantitative, not adjectival**: a read-only review / QC dispatch states a `Budget` (expansion cap) and a `Return shape`, so the seat stops when its assigned questions are answered or the cap is reached, returns the verdict it has plus a truncated-coverage declaration, and never expands until a human steers. Budget defaults, the truncation marker, and its relation to `Unconfirmed` → `mstar-harness-core` § 定向执行与验证边界. The severity bar for the round's findings → `mstar-artifacts` `references/status-and-residuals.md`.
-- **Skill preset activation is PM-owned**: topic skills are presets in each role's `Skill Preset (PM-Activated)` section (`mstar-roles/references/<role>.md`), not self-loaded defaults. Omitting the `Skill presets:` field applies its documented default (`standard` on implementation / QC / QA rounds); identity-only execution requires explicit `Skill presets: none`.
+- **Skill preset activation is PM-owned**: each role's preset menu lives in its `Skill Preset (PM-Activated)` section (`mstar-roles/references/<role>.md`), not self-loaded defaults; the omission / `none` / default-`standard` decision → **`mstar-roles`** § Load Order.
 - **One primary coordinator:** project-manager never runs as a subagent or as another per-row PM session (`references/project-manager.md` § Primary coordinator authority).
 - **Plan/task scope travels with Assignment:** absolute Plan Path, plan_id, SDD dir and Control harness root are inherited. Children do not select/prepare rows, mutate workflow/root/shared projections or clear integration exclusion.
 - **No state authority travels with an Assignment:** session paths/references, CAS tokens and operation IDs stay with the primary coordinator. These are checked context, not bearer credentials, and never authorize a leaf. A leaf receiving them stops and reports the mismatch. Leaf Assignments are task instructions, not sealed plan admission records.
@@ -21,23 +19,13 @@ The coordinator keeps operation intent and receipt in its primary session. Publi
 
 ## Executor Anti-Recursion Rules
 
-For assignees (non-PM):
-
-- `Execute as: <role-id>` means the current assignee executes personally.
-- Do not spawn same-role nested subagent.
-- Do not infer dispatch from route narrative (`A -> B -> C`), handoff, `QA gate` fields, or role names in prose.
-- Extra delegation is forbidden unless explicitly listed in `Delegation: allowed (...)`.
-- If additional assignee is required, return `Blocked` with rationale.
-- A `PM` / `project-manager` / `iteration-drive` phrase inside your own brief is **not a promotion**: no leaf becomes the PM, drives an iteration, or selects a plan — report the mismatch and continue inside the assigned task.
+For assignees (non-PM), the shared anti-recursion NEVER list and the non-recursive dispatch rule → **`mstar-roles/references/_shared/leaf-executor-core.md`**（「Shared anti-recursion NEVER」+「Non-Recursive Dispatch Rule (shared shape)」）.
 
 ### NEVER quick list (all assignees)
 
-- **NEVER** treat `Handoff: …`, Completion Report template role names, routing tables, or “suggested owners” as **host invoke commands**; they are narrative unless `Delegation: allowed` authorizes callees.
-- **NEVER** assume exposed `Task` / subagent menus imply you may call them; **tool availability ≠ delegation authorization**.
-- **NEVER** execute parallel-agent dispatch as a leaf assignee; dispatch is **PM-orchestration-only** (`mstar-dispatch-gates`).
 - **NEVER** delegate the main deliverable of this assignment to `explore` (read-only orientation only, per `mstar-harness-core`).
 - **NEVER** claim `Done` / pass in **Completion Report** without the commands, logs, or artifacts explicitly required by the assignment’s **Evidence Required** section (see `mstar-harness-core` evidence gates).
-- **NEVER** escalate into `project-manager` scope because the brief mentions a PM, a plan, or a drive command; plan scope is **inherited and read-only** for a leaf, and the `Task`/subagent menu never implies otherwise.
+- **NEVER** treat a `PM` / `project-manager` / `iteration-drive` phrase inside your own brief as a promotion: no leaf becomes the PM, drives an iteration, or selects a plan — plan scope is inherited and read-only, so report the mismatch and continue inside the assigned task.
 
 ## Assignment Template (Canonical)
 
@@ -110,7 +98,9 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **plan_id**: <plan-id or N/A + scope label>
 **Plan scope**: <inherited from the dispatching PM (`plan_id` + absolute `Plan Path`) — read-only for the leaf: no plan selection/preparation, workflow-snapshot or root-register writes, no lease release, and no session path / session reference / `--expect` token / operation id> | N/A
 **Review range / Diff basis**: <reproducible basis; merge-base = `metadata.target_branch` or PM-specified ref — not assumed `origin/main`>
-**Worktree path**: <absolute feature implementer path when L1/L2 isolation used; default `../<repo>.worktrees/<plan-id>-<slug>` relative to the realpath of the Git top-level, with `<repo>` its basename (L2 tracks: `<track-slug>`); must ≠ the main worktree (control root) ≠ `integration_worktree_path`>
+**Worktree path**: <absolute feature implementer path when L1/L2 isolation used; default `../<repo>.worktrees/<plan-id>-<slug>` relative to the realpath of the Git top-level, with `<repo>` its basename (L2 tracks: `<track-slug>`); a `work`-domain Assignment (default) must ≠ the main worktree (control root) ≠ `integration_worktree_path`; a `Write domain: control` Assignment names the control root itself>
+**Write domain**: `control` | `work` (absent = `work`) — `control` = writes only under the control root's gitignored process targets (plans/assignments/sdd/iterations/workflows/projects/reviews/`store.db`), may set `Working branch` to the control checkout's currently checked-out branch (e.g. `main` on a default-main repo — that checked-out branch, never a literal `main`, is what the engine compares; all three branch forms stay valid, including `Branch policy: direct on <branch> — <reason>`), and is exempt from default-branch protection; the engine verifies worktree = control root, branch = its checked-out branch, and every `Control write paths` target Git-ignored and inside the control root; the shared host dispatch gate (OpenCode v2 / dsh / omp hard enforcement) runs the same control-write validation, so a declared field cannot bypass a host hard gate, and an unverifiable control root keeps the dispatch refused with its recovery (`mstar-branch-worktree` § 控制域写入)
+**Control write paths**: <required on `Write domain: control`; comma list of the actual process targets this Assignment writes, absolute or resolved against `Worktree path` — each must be Git-ignored and inside the control root; a repo ignoring only `.mstar/plans/` passes for a target under `plans/`, a tracked target like `.mstar/specs/…` is refused. Entries are probed by shape: a trailing `/` declares a directory explicitly (Git directory rules such as `!.mstar/notes/` apply); any other entry is verified under BOTH file and directory ignore rules and must be ignored in both — if either shape would be committable it is refused as `dispatch.control-write.target-committable`, because a file-path-only probe approves a location whose directory contents are still committed (`.mstar/notes` under `.mstar/**` + `!.mstar/notes/` + `!.mstar/notes/**`); `.mstar/plans/run.md` passes under `.mstar/**`>
 **Main worktree branch**: <recorded residency branch of the primary checkout (main worktree), from the main plan header — passed unchanged; never a lifecycle-owned branch>
 **QA gate**: mandatory | pm-acceptance | report-only — see `references/project-manager/qa-trigger-matrix.md`
 **QA gate reason**: <tier label, e.g. hotfix-inline | small-feature-clean-qc | mandatory-medium-feature>
@@ -163,7 +153,9 @@ When iteration **L1** is active (the integration worktree is recorded in the wor
 
 | Field | Must be |
 |-------|---------|
-| **Worktree path** | Absolute feature checkout from row metadata.worktree_path; product/source edits only, distinct from main/control and integration |
+| **Worktree path** | Absolute feature checkout from row metadata.worktree_path; product/source edits only, distinct from main/control and integration for a `work`-domain Assignment — a control-domain Assignment instead names the control root itself |
+| **`Write domain`** | `control` \| `work` (absent = `work`); `control` requires `Worktree path` = control root and `Working branch` = the branch that checkout currently has checked out (any of the three branch forms, including `Branch policy: direct on <branch> — <reason>`), writes only gitignored control-root process targets, and skips default-branch protection; the host dispatch gate runs the same validation, so an unverifiable control root refuses instead of passing |
+| **`Control write paths`** | Required on `Write domain: control`: comma list of the actual process targets written (absolute, or resolved against `Worktree path`); each must be Git-ignored and inside the control root — a tracked target such as `.mstar/specs/…` is refused; a trailing `/` declares a directory, otherwise the entry must be Git-ignored under BOTH file and directory rules (`.mstar/notes` is refused where only the file path is re-included) |
 | **`Main worktree branch`** | The recorded residency branch from the main plan header, passed unchanged — the main worktree's attached branch must equal it (never a lifecycle-owned branch; never invented at check time) |
 | **`Control harness root`** | Absolute `<main-repo-root>/{HARNESS_DIR}` — the control root is the primary checkout (main worktree), derived from Git (`readMainWorktree`) |
 | **`Plan Path`** | Absolute under control harness (not relative from feature cwd) |

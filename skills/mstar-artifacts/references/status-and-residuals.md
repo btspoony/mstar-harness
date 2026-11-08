@@ -4,18 +4,16 @@
 
 Execution authority is the ACTIVE DB domain in `{HARNESS_DIR}/store.db`. There is no file execution route. Root `status.json` and `{WORKFLOW_DIR}/<id>/snapshot.json` are **migration sources / retained history**, not authority.
 
-`mstar store upgrade` directly imports recognized v1/v2 execution sources, preserving original bytes; standalone `mstar migrate` staging is retired. Historical shapes → **`mstar-engine-legacy`** `references/migration-source-shapes.md` (archive, no execution route or live writer).
+`mstar store upgrade` directly imports recognized v1/v2 execution sources, preserving original bytes; standalone `mstar migrate` staging is retired. Historical shapes → **`mstar-project-governance`** `references/migration-source-shapes.md` (archive, no execution route or live writer).
 
 > **Authority:** ACTIVE execution state is the DB domain. Ordinary coordinator operations are store transactions with CAS receipts. Surviving `status.json` / snapshot files are migration sources / retained history, not live state. A harness with no ACTIVE store has no execution authority.
 
-- **ACTIVE root register** — `{HARNESS_DIR}/store.db` (`execution_registry` + `execution_meta.root_updated_at`), read through `mstar status validate` (no path). PM close caller: `mstar status workflow-close --workflow <id>` — one store transaction writes the terminal workflow state and unregisters the workflow (procedure → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2; route → lifecycle contract amendment **File-route retirement**).
+- **ACTIVE root register** — `{HARNESS_DIR}/store.db` (`execution_registry` + `execution_meta.root_updated_at`), read through `mstar status validate` (no path). PM close caller: `mstar status workflow-close --workflow <id>` — one store transaction writes the terminal workflow state and unregisters the workflow (procedure → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2; route → lifecycle contract §4g).
 - **ACTIVE workflow / plan state** — store `execution_*` tables, read through `mstar plan show` / `mstar status validate`. Rows hold source metadata, configuration, progress and completion. Workflow-wide integration merge exclusion is `execution_integration_leases`. Per-row execution leases are removed. `<id>` is the plan or iteration workflow id.
 - **Persist surface** — user-facing `mstar persist` and engine `ArtifactKind` accept `review` and `json` only. No internal status/snapshot writer remains. `mstar harness scaffold` does not write `status.json`.
 - **Project files** — roadmap Markdown is reviewed import/export transport/history; content authority and rules → `mstar-project-governance`. Residual registers are migration history; open items live in store issues, with project-less flows assigned to `_default`.
 
-**Migration sources:** root `status.json` and the workflow snapshot are retained history. The DB execution domain is the SSOT. **open item 的 SSOT 是 `{HARNESS_DIR}/store.db` 的 issue**（→ § Issue capture below）；project register 是**迁移历史**。
-Canonical residual definitions → **`mstar-artifacts` SKILL.md** ("Execution authority, migration sources, and open residual (summary)"); this reference covers **ACTIVE fields, severity, issue lifecycle and engine-check commands**.
-Historical register/closure shapes → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
+**Migration sources:** root `status.json` and the workflow snapshot are retained history. The DB execution domain is the SSOT. **open item 的 SSOT 是 `{HARNESS_DIR}/store.db` 的 issue**（→ § Issue capture below）；project register 是**迁移历史**。Canonical residual definitions → **`mstar-artifacts` SKILL.md** ("Execution authority, migration sources, and open residual (summary)"); this reference covers **ACTIVE fields, severity, issue lifecycle and engine-check commands**.
 
 **Why this matters:** Within a working copy, the **local session SSOT** for risk and decisions is the issue store. Non-blocking conclusions that stay only in chat or a gitignored review bundle **without local SSOT update** cannot be inherited reliably in that session; `Done` drifts from visible known debt. **`@project-manager`** should capture trackable open items as issues soon after review closure; close after verification per **`QA gate`** (`qa-engineer` when `mandatory`, else PM acceptance checklist) — capture and closure per **`mstar-project-governance`「Issue capture」**.
 
@@ -30,8 +28,6 @@ Historical register/closure shapes → **`mstar-engine-legacy`** `references/mig
 - **close 侧映射**：residual 关闭（`resolved` / `waived` / `duplicate` / `superseded`）→ issue 终态处置，由契约 §4 的关闭权威执行；`findings cleanup` 的 open 项是该 plan 的 **linked open issues**（`mstar status findings-cleanup <plan-id>`）。
 - **激活边界**：store 接受普通捕获/查询、并作为唯一权威，以 issue-store contract §7 的 activation 完成为准（staged 时 `store.not-active`）；live 切换归 cutover plan 的授权 ops 任务。register 是迁移历史，不再作为写入目标。
 
-Historical root/snapshot shapes and their fields → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
-
 ## Workflow close and delivery
 
 - **Completed close (Phase 6)** runs `mstar status workflow-close --workflow <id> [--session-ref <wire>] [--expect <full-execution-token>] [--operation <id>] [--reason <text>] [--harness <absolute-path>] [--json]`. It is one ACTIVE store transaction: terminal workflow state and root unregister together. It refuses a dangling integration exclusion or a non-`Done` row (fail-loud, store unchanged). An already-terminal `failed` / `stopped` workflow keeps its actual status (close never fabricates `completed`). The caller does not supply a terminal timestamp or a session path.
@@ -39,18 +35,14 @@ Historical root/snapshot shapes and their fields → **`mstar-engine-legacy`** `
 - **Delivery-evidence consultation before the close (seam S3):** the registered delivery kind decides what a `completed` close requires (`failed`/`stopped` closes never demand delivery evidence, §5). `development` requires the compound disposition (§4c) — `delivery.merge` is optional and carries only a provider squash commit, which the proof must associate with the delivery's own diff; `verification/report-only` requires only its registered completion policy (§1) — a registration-time declaration; no fulfilment payload exists to record, and its `completed` means every row `Done` plus QC/QA. An incomplete or unproven delivery refuses with the `PHASE6_DELIVERY_*` codes and leaves the workflow registered and resumable: `PHASE6_DELIVERY_EVIDENCE_INCOMPLETE` for a missing member, and `PHASE6_DELIVERY_MERGE_UNPROVEN` when local Git cannot show the delivery contained in the target. The merge is PROVEN, never asserted: the close resolves the fetched `refs/remotes/origin/<branch.target>` (else the local `refs/heads/<branch.target>`) inside the plan row's recorded `metadata.worktree_path` and accepts an ancestor `branch.work` tip, every delivery commit patch-equivalent upstream (`git cherry`), or a recorded `delivery.merge.commit` (one optional full lowercase 40/64-hex id) that is contained in the target AND carries the delivery's own diff (equal `git patch-id --stable`); reachability alone is refused. The PR identity is derived from `branch.work`/`branch.target`, so `delivery.pr` is refused as an unused member and a repaired anchor can never strand a frozen copy. Record the missing evidence with `mstar workflow evidence --workflow <id> --file <absolute-json>` under an acquired coordinator identity (`--session-ref` / `--expect` / `--operation` are optional checked constraints when identity is unambiguous). It is idempotent (identical evidence rewrites nothing), refuses an already-terminal lifecycle, and keeps the compound disposition and the merge record updatable. A multi-commit squash is not provable from patch equivalence alone — record its provider commit; a squash that resolved conflicts differently has no local proof and closes as `stopped`/`failed` with a reason; a target ref that is neither local nor fetched, or a delivery branch with no surviving ref, is a refusal, so fetch the target and restore the delivery ref in the plan checkout and retry. The read-only `mstar iteration gate --phase 6` runs the same function, so gate and close never disagree.
 - **Delivery kind is declared by live registration producers** (§1/§4a): `mstar workflow register` declares it explicitly, never infer or default it. The shared rule pairs `development` with `--branch-work`/`--branch-target` and `verification/report-only` with `--completion-policy`. Direct legacy import uses `mstar store upgrade`, not the retired standalone `migrate` producer; unresolved legacy delivery facts are reported through that upgrade's supported recovery.
 - **Physical cleanup:** separate guarded worktree cleanup, after verified row integration or terminal merged delivery. Cleanup/close never clear merge exclusion to force eligibility; direct complete releases applicable exclusion in its verified transaction. Ownership comes from retained source metadata and actual merge evidence.
-Historical execution-policy, note-array and register shapes → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
 
 **`projects/<id>/roadmap.md`（legacy Markdown transport）** — frontmatter、`milestones` 与 body 的内容校验以及 store-authoritative 读写规则只见 **`mstar-project-governance`**「Roadmap 内容权威与编写约定」。本文件不另立文件读写/schema 家。
-
-
-Historical closed-entry and optional detail-document fields → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
 
 ## Fail-loud handoff contract
 
 Findings must pass engine validation **before** they are captured: the capture path (`mstar issue add` / `mstar plan issue-add`) validates the capture input at the domain boundary and refuses a malformed submission (exit 1, nothing written) — a capture never degrades into a silent partial write.
 
-Historical migration-document validators and required fields → **`mstar-engine-legacy`** `references/migration-source-shapes.md`; register files remain replacement-retired writer targets (`coordination.store`).
+Register files remain replacement-retired writer targets (`coordination.store`).
 
 dsh-derived findings map their keys per the engine-residual validation verification spec §5; dsh keys never enter the schema.
 
@@ -115,8 +107,6 @@ The blocking judgement is decided **once**, on the §3 axis. Each chain's label 
 
 **A cross-chain translation never changes the judgement** — a label is a projection of the axis, so moving a finding between chains must not promote or demote it; the PR-review `may-fix` surface cap is a projection rule, not a demotion.
 
-Legacy severity read mapping → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
-
 ---
 
 ## Findings cleanup modes
@@ -155,13 +145,13 @@ Non-blocking open issues — `severity` below `critical` on the §3 axis — may
 3. **Critical still blocks**: an unresolved `critical` blocks `Approve`; `medium` / `low` / `nit` may be captured and carried (fix-now remains preferred when cheap).
 4. **Close-time disclosure**: close-time artifacts carry the same open-item list with `id` + `severity` + tracking location + blocker-defer flag — each plan's durable `## Review Gate Summary` (main plan), the iteration compass `## Quality Gate Summary`, and the PR delivery body (`N/A — none open` when empty). A close without these disclosures is not a close. Disclosure does not override critical-blocking, explicit `zero-residual` requirements, or the §4 closure authority: terminalizing a workflow never silently closes its open findings. `mstar status tech-debt` remains the cross-iteration visibility rollup.
 
-> **Engine check (when available):** run `mstar status findings-cleanup <plan-id> [--mode zero-residual|allow-residual]` (or import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook) to enforce the mode above against the **open issues linked to the plan** in `{HARNESS_DIR}/store.db`. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar status findings-cleanup <plan-id> [--mode zero-residual|allow-residual]` (engine `findingsCleanupGate`) to enforce the mode above against the **open issues linked to the plan** in `{HARNESS_DIR}/store.db`. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ---
 
 ## Execution plan-row fields
 
-ACTIVE plan rows and registered inputs live in store `execution_*` tables; read through `mstar plan show` and mutate through public plan/workflow verbs. Historical snapshot/plan shapes → **`mstar-engine-legacy`** `references/migration-source-shapes.md` and `references/status-field-history.md`.
+ACTIVE plan rows and registered inputs live in store `execution_*` tables; read through `mstar plan show` and mutate through public plan/workflow verbs.
 
 `id/title/file` 与规格/迭代 metadata 是 prepare 冻结输入，不是 catalog 编辑面；catalog 变更不静默刷新在途执行。知识关联载体是 catalog relations（`mstar catalog link`）；`plans[].metadata.knowledge_refs` 仅为 legacy 只读字段，不再写入 snapshot。SDD review bundle 与 durable gate summary 仍是文件产物（→ `references/plan-files-and-reports.md`）。
 
@@ -170,9 +160,6 @@ ACTIVE plan rows and registered inputs live in store `execution_*` tables; read 
 Row `metadata.worktree_path` and `metadata.working_branch` record the source checkout/branch. Ordinary prepare supplies missing facts or revises a mistaken configuration; dispatch and direct completion validate the actual checkout. No per-plan identity or holder qualification is required.
 
 Any retained execution exclusion is engine-managed bookkeeping inside ordinary coordinator actions, not a manual claim/release/transfer API. Completion releases applicable exclusion in its own transaction and retains source metadata/track Assignments for guarded cleanup. CAS, atomic transactions and operation receipts remain authoritative; age, labels and TTL never grant takeover.
-
-
-Historical snapshot top-level fields and note-array migration → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
 
 ---
 
@@ -251,7 +238,7 @@ Register files are migration history and have no live replacement writer; issue 
 
 ### Prepare configuration and coordinator recovery
 
-Prepare configuration revisions use `mstar plan prepare` on the ACTIVE route. Integration checkout and execution policy use `mstar workflow integration-worktree` and `mstar workflow execution-policy`. Coordinator recovery uses `mstar session recover`. There is no file-envelope writer and no snapshot structural-amendment writer.
+Prepare configuration revisions use `mstar plan prepare` on the ACTIVE route. Integration checkout and execution policy use `mstar workflow integration-worktree` and `mstar workflow execution-policy`. Coordinator recovery uses `mstar session recover`. There is no file-envelope writer and no snapshot writer.
 
 ---
 
@@ -260,13 +247,13 @@ Prepare configuration revisions use `mstar plan prepare` on the ACTIVE route. In
 - ACTIVE plan 行可含 optional **`metadata`**（prepare 冻结输入）。迁移源 snapshot 的 `plans[]` 不是第二份可编辑 catalog。
 - root register 仅登记 active（`running` | `paused`）；ACTIVE close 在同一 store 事务里写终态并 unregister。
 - Plan ids align with `execution_plans`, linked issues and the `{SDD_DIR}` plan-id segment.
-- Historical register-key, empty-key and summary rules → **`mstar-engine-legacy`** `references/migration-source-shapes.md`; no file update/delete duty exists.
+- No file update/delete duty exists for historical register keys.
 
 ---
 
 ## Residual findings lifecycle (issue dispositions)
 
-Issues remain open until authorized disposition to `resolved`, `waived`, `superseded` or `duplicate`; closure evidence follows the issue-store contract §4. Historical register lifecycle/closure fields → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
+Issues remain open until authorized disposition to `resolved`, `waived`, `superseded` or `duplicate`; closure evidence follows the issue-store contract §4.
 
 ### Who updates when
 
@@ -280,7 +267,7 @@ Do not claim an issue “fixed” in chat/plan only without the store update.
 
 PM should capture open items as issues after **`Approve with residuals`**; QA should state each related issue id (open / resolved this round / needs waiver).
 
-Historical in-place register closure and deletion semantics → **`mstar-engine-legacy`** `references/migration-source-shapes.md`; live items use authorized issue verbs only.
+Live items use authorized issue verbs only.
 
 ### Query open and closed (examples)
 
@@ -291,8 +278,6 @@ mstar status validate                         # ACTIVE authority + CAS tokens; a
 mstar status tech-debt                        # open-issue rollup
 mstar status findings-cleanup <plan-id>       # mode gate over the plan's linked open issues
 ```
-
-Historical v1 read paths and jq examples → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
 
 ---
 
@@ -305,7 +290,7 @@ Plain append-only JSON-lines notes for merge closure, batch close and correction
 ```
 
 - **`@project-manager`** maintains; do not rewrite past lines — add a correction as a new line.
-- New notes append here only; historical row-array migration → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
+- New notes append here only.
 - Repeated note IDs and repeated submissions append repeated records. A successful receipt returns `{id}` only; it promises neither deduplication nor accepted-operation replay.
 - Each append uses one complete, LF-framed `O_APPEND` write and fsync. Short writes report failure and leave the landed bytes untouched; they never truncate, repair or rewrite peers.
 - Readers tolerate blank, malformed, unrecognized and partial records and continue to later valid records. A partial tail does not prevent a later framed append.
@@ -324,7 +309,7 @@ Plain append-only JSON-lines notes for merge closure, batch close and correction
 mstar status tech-debt
 ```
 
-- Current rollup uses `readIssueRollup`: `total_open` / `by_severity` / `by_project`; retired register-walking and stored-summary history → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
+- Current rollup uses `readIssueRollup`: `total_open` / `by_severity` / `by_project`.
 - The rollup **does not write** anything.
 
 ---
@@ -339,8 +324,6 @@ Before merge/PR, **`@project-manager`** (or delegate) should verify: plan status
 - Finding only in notes or chat, not captured as an issue.
 - Major milestone with no `notes.jsonl` entry when team uses the workflow ledger.
 
-Historical plan-key (`id` / `plan_id`) compatibility → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
-
 ## Common queries
 
 ```bash
@@ -349,4 +332,9 @@ mstar status validate                                     # ACTIVE authority + C
 mstar plan show <plan-id>                                 # ACTIVE plan row; scope/options from help
 mstar status tech-debt                                    # open-issue rollup
 ```
+
+## Migration sources
+
 Import recognized v1/v2 execution sources directly with `mstar store upgrade --operator <name> [--harness <path>]`. Preserve original source bytes; standalone `mstar migrate` staging is retired.
+
+Historical execution/register file shapes, field history and retired validators → **`mstar-project-governance`** `references/migration-source-shapes.md` (no execution route or live writer).

@@ -2,19 +2,20 @@
 
 > **Load order（与其它 `mstar-*` skill 一致）**：依赖本 reference 维护知识库 / 迭代 compass / 规格挂接前，须已 Read **`mstar-harness-core`** skill（SKILL.md；仓库写操作与分支门禁见 **`mstar-branch-worktree`**）。冲突以 **`mstar-harness-core`** 为准。
 
-**路径符号（默认）**：`**{KNOWLEDGE_DIR}** = **{HARNESS_DIR}/knowledge/**`；`**{ITERATION_DIR}** = **{HARNESS_DIR}/iterations/**`。完整符号表见 `mstar-conventions` SKILL.md「Harness 与 Plan 目录发现」。
+**路径符号（默认）**：`**{KNOWLEDGE_DIR}** = **{HARNESS_DIR}/knowledge/**`（`.mstarc` `knowledge_dir` 或 `.agents/knowledge/` 候选见 `mstar-conventions`）；`**{ITERATION_DIR}** = **{HARNESS_DIR}/iterations/**`。完整符号表见 `mstar-conventions` SKILL.md「路径符号」。
 
 本节将「用户文档」与「agent / 实施用知识」分开，**与具体业务仓库无关**；项目可在根目录 `AGENTS.md` 用一小段指向本 reference 或复述分界关键词，避免重复维护长文。
 
 ## 与公开文档目录的分工（典型为 `docs/`）
 
+**本表是产物边界表的唯一权威**（哪个区域放什么、受众与权威）；三写域（process SSOT / tracked results / product source）的可写性 → **`mstar-branch-worktree`** § Harness path SSOT under default gitignore。
 
 | 区域 | 典型内容 | 受众 / 权威 |
 |------|----------|-------------|
 | **`docs/`**（或项目约定的用户文档根） | 安装/quickstart、稳定架构概览、贡献指南、对外 API 说明 | 人类贡献者与终端用户；clone 后应可读 |
-| **`{SPECS_DIR}`**（可选） | 冻结 v1-spec、ADR、program roadmap — **跨迭代长期权威** | 产品/API 规范性最高权威；**iteration-start** 由 product/architect 主写 |
+| **`{SPECS_DIR}`**（可选） | 冻结 v1-spec、program roadmap、既有 ADR（新记录落 **`{ADR_DIR}`**） — **跨迭代长期权威** | 产品/API 规范性最高权威；**仅**在 Phase 3 iteration-close 提升时写入（Phase 1 的规格留在 `<iteration-id>/specs/`） |
 | **`{ITERATION_DIR}`**（可选） | **`<iteration-id>/` package**（`delivery-compass.md` + `guides/`、`specs/`） | Agent handoff；迭代级草稿；close 时 compound **提升** → knowledge |
-| **`{KNOWLEDGE_DIR}`**（可选） | 实现细节 SSOT、架构细则、契约说明、跨版本 tracker — **经 `mstar-compound` 结晶** | Agent handoff；**不**在 iteration-start 由 product/architect 新增 |
+| **`{KNOWLEDGE_DIR}`**（可选） | 实现细节 SSOT、架构细则、契约说明、跨版本 tracker — **经 `mstar-knowledge` 结晶** | Agent handoff；**不**在 iteration-start 由 product/architect 新增 |
 | **`{PROJECT_DIR}/<id>/references/`**（可选） | 主题化研究：surveys、epic roadmaps、第三方 notes — **与项目绑定**，非跨迭代 corpora | 项目所有者 / operator；engine 只列文件名，**无 markdown schema** |
 | **`{PLAN_DIR}/`** | 单 plan 主文件、durable gate summary、可选 `residuals/` | 计划执行与长期决策留档 |
 
@@ -27,19 +28,19 @@
 - **放什么**：**`<iteration-id>/` package** — `delivery-compass.md`（authored 迭代范围输入，非运行状态权威）；`guides/`（探索、过程）；`specs/`（迭代级规格草案）；可选 package `README.md`；遗留规划快照。ACTIVE 运行状态在 store execution_* 行。
 - **不放什么**：已锁定的仓库级规范（→ **`{SPECS_DIR}/`**）；已提升的跨迭代实施 SSOT（→ **`{KNOWLEDGE_DIR}/`**，经 compound）；单 plan QC/QA 原始报告（→ `{SDD_DIR}/review/`）。
 - **登记（DB 权威）**：迭代 identity、compass 位置、description、project 归属，以及 package 内文档的 `documents` 关系，都是 `{HARNESS_DIR}/store.db` 的 catalog 行（contract §1/§4）；查询用 `mstar catalog show` / `mstar catalog list`，登记走 reviewed `mstar catalog discover` + `mstar catalog import` 或 `mstar catalog register` / `mstar catalog link`。根 `{ITERATION_DIR}/README.md` 与 package `README.md` 保留为**散文**，**不再**维护「一行 = 一次迭代」的登记行或 Documents 登记表。
-- **维护**：`@product-manager` / `@architect` 起草 package；**`@project-manager`** 维护 catalog 登记（经域边界写入）与 metadata；**iteration-close** 时 **`mstar-compound`** 盘点 package 并**提升**至 `{KNOWLEDGE_DIR}/`。
+- **维护**：`@product-manager` / `@architect` 起草 package；**`@project-manager`** 维护 catalog 登记（经域边界写入）与 metadata；**iteration-close** 时 **`mstar-knowledge`** 盘点 package 并**提升**至 `{KNOWLEDGE_DIR}/`。
 - **Compass 路径**：canonical `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`（authored 输入）；legacy flat `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 仅兼容读。
 
 ## `{SPECS_DIR}`（可选·长期规格）
 
-- `{SPECS_DIR}` 解析（非空即停）：`{HARNESS_DIR}/specs/` → `docs/specs/` → 仓库根 `specs/`；皆无或皆空则 init 创建 `{HARNESS_DIR}/specs/`。Legacy 只读：`{HARNESS_DIR}/designs/` 或根 `designs/` 非空时可用。细则 → `mstar-conventions` SKILL.md「`{SPECS_DIR}` 解析」。
-- **放什么**：跨迭代有效、已锁定或待锁定的产品/API 规范、ADR、契约 — **iteration-start 主产出**（product/architect）。
+- `{SPECS_DIR}` 解析（非空即停）：`.mstarc` `specs_dir` → `{HARNESS_DIR}/specs/` → `.agents/specs/` → `docs/specs/` → 仓库根 `specs/` → legacy `{HARNESS_DIR}/designs/`、根 `designs/`（仅非空可用）；皆无或皆空则 init 创建 `{HARNESS_DIR}/specs/`。ADR 走各自的 `{ADR_DIR}` 链（`.mstarc` `adr_dir` → `{HARNESS_DIR}/adr/` → `.agents/adr/` → `docs/adr/`）。细则 → `mstar-conventions` SKILL.md「`{SPECS_DIR}` 解析」「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」。
+- **放什么**：跨迭代有效、已锁定或待锁定的产品/API 规范、契约、既有 ADR — **Phase 3 iteration-close 提升时写入**（Phase 1 的规格留在 `<iteration-id>/specs/`；新 ADR 记录落 `{ADR_DIR}/`）。
 - **不放什么**：本迭代-only 探索（→ `<iteration-id>/guides/`）；迭代级 spec 草案（→ `<iteration-id>/specs/`）；实施踩坑原文（→ package 或 plan 素材，**close 时 compound 提升**）。
 - **登记**：spec 文档的 identity / path / kind 与 provenance 关系是 `{HARNESS_DIR}/store.db` 的 catalog 行（查询 `mstar catalog list`；登记走 reviewed `mstar catalog discover` + `mstar catalog import` 或 `mstar catalog register` / `mstar catalog link`）。`{SPECS_DIR}/README.md`（若有）只是散文导览，**不**作为登记表。plan **`primary_spec` / `spec_refs`** 主要指向此处。
 
 ## `{KNOWLEDGE_DIR}`（可选·实施知识库）
 
-- **新增 SSOT 默认路径**：**iteration-close** 时经 **`mstar-compound`** 写入；**iteration-start §1.6 禁止** product/architect 新增（见 **`mstar-iteration/references/iteration-artifact-boundaries.md`**）。
+- **新增 SSOT 默认路径**：**iteration-close** 时经 **`mstar-knowledge`**（`## Workflow — Capture`）写入；**iteration-start §1.6 禁止** product/architect 新增（见 **`mstar-iteration/references/iteration-artifact-boundaries.md`**）。
 - **权威**：knowledge 文档的 identity / path / kind / description、provenance 关系与 catalog 生命周期（`active` / `archived` / `superseded`）是 `{HARNESS_DIR}/store.db` 的 catalog 行（contract §1/§4）。**不再**要求维护 `{KNOWLEDGE_DIR}/README.md` 的目录索引行 —— README 可留作散文导览，其表格不构成登记。
 - **查询与登记**：`mstar catalog list`（按 kind / document kind / lifecycle 过滤；见 help）、`mstar catalog show`；登记走 `mstar catalog register` / `mstar catalog link`，或 reviewed `mstar catalog discover` + `mstar catalog import`。store 未初始化/未激活时查询**拒绝**（`store.not-initialized` / `store.not-active`），**不**读作「无 knowledge」。
 - 可选：目录级 `**{KNOWLEDGE_DIR}/AGENTS.md**` 承载命名、维护节奏、与 `{SPECS_DIR}` 的权威边界（Nexus 模式）；harness 宽规则仍以 `mstar-conventions` 与本 reference 为准。
@@ -69,13 +70,13 @@
 1. **新增**：
    - **Specs（长期）**：文件落 `{SPECS_DIR}/` → **登记** catalog document 行（`mstar catalog register` / `mstar catalog link`，或 reviewed `discover`+`import`）→ `plans[].metadata` 的 `primary_spec` / `spec_refs`
    - **迭代 package**：文件落 `{ITERATION_DIR}/<iteration-id>/guides|specs/` → **登记** catalog document 行 + `belongs-to`/`documents` 关系 → `iteration_refs`（**不再**写 `{ITERATION_DIR}/README.md` 目录行或 package Documents 表）
-   - **Knowledge**：**`mstar-compound`** @ iteration-close（含 package **提升**）→ 落 `{KNOWLEDGE_DIR}/<category>/` + **登记** catalog document 行（写入位置与 SSOT：**`mstar-conventions/references/artifact-storage-paths.md`**）
+   - **Knowledge**：**`mstar-knowledge`** @ iteration-close（含 package **提升**）→ 落 `{KNOWLEDGE_DIR}/<category>/` + **登记** catalog document 行（写入位置与 SSOT：**`mstar-conventions/references/artifact-storage-paths.md`**）
 2. **阅读**：开发类 agent 编码前，先按 **catalog** 查询当轮相关 `active` knowledge/document 行；读取 catalog relations 与当前冻结输入指向的文档，PM 可在 Assignment 点名路径。snapshot `knowledge_refs` 仅 legacy 只读，不是知识关联写入面。
 3. **修订**：评审或规格变更若改动了 knowledge 文件，同步更新其 catalog 行（`mstar catalog update`；identity 不可改，可改字段与 revision 守卫见 help）；版本迭代优先新文件名 `v<N+1>`，旧版改 catalog 生命周期为 `superseded`。
 4. **归档**：
    - **iteration-start（强制）**：`writing-specialist` §1.6 以 **`{SPECS_DIR}/` 全库卫生为主**；对**既有** `{KNOWLEDGE_DIR}/` 仅归档/错放纠正，**不**新增 knowledge。细则 → **`mstar-iteration/references/iteration-corpus-hygiene.md`**。
    - **其它时机**：当文档内容已完全反映到已合并代码中、且非 iteration-start 扫库时：将该文档的 catalog 生命周期设为 `superseded` / `archived`（`mstar catalog update`）；文件可保留原位或迁入 `archived/knowledge/`（迁位与 catalog 行同批更新）。
-5. **结晶（Compound）**：PM 在 **iteration-close** 触发 **`mstar-compound`**：plan 素材 + **`{ITERATION_DIR}/<iteration-id>/` package 提升** → `{KNOWLEDGE_DIR}/`。不在 per-plan Done 后单独执行。维护 → **`mstar-compound-refresh`**。
+5. **结晶（Compound）**：PM 在 **iteration-close** 触发 **`mstar-knowledge`**（`## Workflow — Capture`）：plan 素材 + **`{ITERATION_DIR}/<iteration-id>/` package 提升** → `{KNOWLEDGE_DIR}/`。不在 per-plan Done 后单独执行。维护 → 本 skill `## Workflow — Maintain`。
 
 ## 与 review bundle、`{PLAN_DIR}/residuals/` 的区分
 

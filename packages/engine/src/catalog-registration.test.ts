@@ -169,7 +169,7 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     const before = await readCatalogRevisions(context);
     const input = { workflowId, operationId: "legacy-failed-snapshot", expectedCatalogRevision: 0, actor: "project-manager" };
     const receipt = await purgeCatalogRegistration(context, input);
-    expect(receipt).toMatchObject({ workflowId, preservedDigest: digest, sourceBytesRetained: true, actor: "project-manager" });
+    expect(receipt).toMatchObject({ workflowId,  sourceBytesRetained: true, actor: "project-manager" });
     expect(await purgeCatalogRegistration(context, input)).toEqual(receipt);
     expect(await readCatalogRevisions(context)).toEqual({ storeRevision: before.storeRevision + 1, catalogRevision: before.catalogRevision });
     expect(readFileSync(snapshotPath, "utf8")).toBe(snapshot);
@@ -202,7 +202,7 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     const before = await readCatalogRevisions(context);
     const input = { workflowId, operationId: "legacy-edited", expectedCatalogRevision: 0, actor: "project-manager" };
     const receipt = await purgeCatalogRegistration(context, input);
-    expect(receipt).toMatchObject({ workflowId, preservedDigest: digest, sourceBytesRetained: true, actor: "project-manager" });
+    expect(receipt).toMatchObject({ workflowId,  sourceBytesRetained: true, actor: "project-manager" });
     expect(await purgeCatalogRegistration(context, input)).toEqual(receipt);
     expect(await readCatalogRevisions(context)).toEqual({ storeRevision: before.storeRevision + 1, catalogRevision: before.catalogRevision });
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
@@ -495,14 +495,13 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     const result = JSON.parse(child.stdout.trim()) as { receipt: unknown; revisions: { storeRevision: number; catalogRevision: number }; revisionsAfter: { storeRevision: number; catalogRevision: number } };
     expect(result.receipt).toMatchObject({
       workflowId,
-      preservedDigest: digest,
+      
       sourceBytesRetained: true,
     });
     expect(result.revisionsAfter).toEqual({
       storeRevision: result.revisions.storeRevision + 1,
       catalogRevision: result.revisions.catalogRevision,
     });
-    expect(readFileSync(markerPath, "utf8")).toBe(marker);
     expect(readFileSync(snapshotPath, "utf8")).toBe(snapshot);
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
   });

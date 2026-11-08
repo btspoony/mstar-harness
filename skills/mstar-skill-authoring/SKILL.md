@@ -1,25 +1,23 @@
 ---
 name: mstar-skill-authoring
-description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门控）。在新建任意 skill、大改 SKILL.md、改写 description 触发契约、压缩过长 body、评审 skill 结构、或判断某段行为塑形文案是否值得保留时读取。适用于任何领域的 skill，不限于本仓库专题；不用于普通应用实现。
+description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门控）。在新建任意 skill、大改 SKILL.md、改写 description 触发契约、压缩过长 body、评审 skill 结构、判断某段行为塑形文案是否值得保留，或写 / 评审 skill body 之外的模型可见文本（tool 与参数定义、CLI 帮助、诊断与拒绝字符串、Assignment 字段）时读取。适用于任何领域的 skill 与模型可见文本，不限于本仓库专题；不用于普通应用功能实现。
 ---
 
 # Skill Authoring
 
-本 skill 约束如何编写、审查与验证 **任意** agent skill（`SKILL.md`）。面向 **skill 工作**，不是普通应用实现。
+本 skill 约束如何编写、审查与验证 **任意** agent skill（`SKILL.md`），以及 skill body 之外的模型可见文本（见「Progressive Disclosure」）。面向 **skill 工作**，不是普通应用功能实现。它判 skill 是否成型——名称、`description` 触发契约、5 问 body、渐进披露；body 内的文字是否在 HEAD 可解析归 **`mstar-prose`**，本 skill 不复述其判断。
 
 ## Load Order
 
-在本 harness 仓库内工作时：先 Read **`mstar-harness-core`**（加载 / 冲突裁决）；仓库维护另遵根目录 `AGENTS.md`。
-
-在其它仓库 / 宿主上使用本 skill 时：按当地入口文档加载；本文件的原则与门控仍然适用。
+在本 harness 仓库内工作时：先 Read **`mstar-harness-core`**（加载 / 冲突裁决），仓库维护另遵根目录 `AGENTS.md`；在其它仓库 / 宿主上按当地入口文档加载，本文件的原则与门控仍然适用。
 
 改现有 skill 时：读完被改 skill 及其 SSOT 引用；禁止仅为文风重写相邻 skill。
 
-详细 writer 流程与输出模板 → `references/skillsbench-authoring.md`（需要完整循环时再读）。
-
 ## Workflow
 
-主链：按「Frontmatter Contract」先定触发契约（原则 3）→ 按「Body 必须回答的 5 问」写默认紧凑 body（原则 2）→ 变体细节按「Progressive Disclosure」进 `references/` / `templates/` / `scripts/` → 行为塑形改动按「验证门控（Evidence，原则 4 + 6）」留 paired 证据 → 按「Review Template」自审并完成「完成时主动说明」三问。
+1. 定触发契约：按「Frontmatter Contract」写 `description`（原则 3），再按「Body 必须回答的 5 问」写紧凑 body（原则 2）。
+2. 铺开变体：变体细节进 `references/` / `templates/` / `scripts/`，按需加载（「Progressive Disclosure」）。
+3. 取证与收尾：行为塑形改动按「验证门控」留 paired 证据（原则 4 + 6），再按「Review Template」自审并回答「完成时主动说明」三问。
 
 ## 6 条作者原则（Decision Rules，必须遵守）
 
@@ -28,11 +26,18 @@ description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门�
 | # | 原则 | 强制动作 |
 |---|------|----------|
 | 1 | **专家流程优先** | 先提取真实操作步骤、决策标准、约束、API 坑与失败恢复；模型只做编辑器。禁止把一键生成稿当最终版。 |
-| 2 | **紧凑程序性** | body 只答 5 问（见下）；详例 / 长文档进 `references/`，按需加载。过长 body 几乎无提升甚至负提升。 |
+| 2 | **紧凑程序性** | body 只答 5 问（见下）；详例 / 长文档按「Progressive Disclosure」下沉。体量上限见「Skill 语料门禁」。 |
 | 3 | **路由最小化** | 任务真正需要时才加载；目标 **1–3** 个 skill。description 必须具体到可精准匹配，避免无关激活。 |
 | 4 | **按 model+harness 实测** | 文件可移植 ≠ 行为可移植。在实际使用的模型与宿主（omp / Cursor / Codex / Claude Code 等）分别验证触发、执行、token、回归。 |
 | 5 | **只补模型缺口** | 编码内部约定、受监管流程、脆弱 API、专业判断、反复失败模式。不写模型已会的通用知识。 |
 | 6 | **每次改动=受控实验** | 必须有 paired 证据（with vs without，或 before/after + 可观察标准）。held-out / 压力场景未提升则拒绝合入。禁止“感觉更好”。 |
+
+## Skill 语料门禁（Guard 9–11）
+
+- `bun run validation:drift` 对 `skills/**` 施加三条门禁；逐文件行数上限存放在 `scripts/skill-budgets.manifest.json`，Guard 9 在超出上限、上限条目过期、或随包文件没有条目时失败。
+- 上限是护栏而非缩减目标：处于或低于上限的文件永不要求缩短；触碰上限的唯一合法顺序是 **迁移 → 压缩 → 提高上限** —— 先搬进 `references/`，再压缩，最后才在同一 PR 内提高该条目并说明新增文字的理由。
+- Guard 10（跨文件重复 HARD 规则）失败即退出非零：同一句 HARD 规则只写在一处，第二个文件改写成指针 → `<skill>` § 小节，例外只进 `scripts/rule-duplication.allowlist.json` 并注明其覆盖文件。
+- Guard 11（段落锚定）今天只报告、不失败，但新增与修改的段落立即受其约束：一个段落必须是一个物理行（宽度不限），存量折行段落在其文件下次被编辑时顺势合并，不做整仓重排。
 
 ## Body 必须回答的 5 问
 
@@ -46,19 +51,7 @@ description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门�
 
 答不进这 5 问的内容 → 删或移到 `references/`。
 
-### 运行时别名（runtime alias map）
-
-已发布的 `mstar-*` 专题 skill 允许**运行时模式**（`lintFiveQuestion(body, "runtime")`）用**锁定别名表**回答同一问题（引擎常量 `RUNTIME_HEADING_ALIASES`）：
-
-| 问题 | 运行时别名（标题子串，大小写不敏感） |
-|------|------|
-| Workflow | `process`、`playbook` |
-| Decision Rules | `hard rules`、`core rules`、`rule`、`gate`、`not to do`、`red flags`、`反模式`、`红线`、`规则`、`门禁` |
-| Evidence | `output format`、`证据` |
-| References | `dependencies`、`关系` |
-
-- 别名表是**锁定表**：改表必须同步引擎回归测试与 corpus。
-- **新写 / greenfield skill（authoring / strict）仍要求 canonical 标题**；运行时别名只豁免已发布专题 skill 的机械 lint，**不豁免语义**——别名标题必须真实回答对应问题，正文不得因别名而缩水。
+已发布的 `mstar-*` 专题 skill 的运行时别名表由引擎的 `lintFiveQuestion(body, "runtime")` 拥有（`packages/engine/src/skill-authoring.ts`），本文件不复制别名；改表须同步引擎回归测试与 corpus。新写 / greenfield skill 走 `authoring` 模式，仍要求 canonical 标题；别名只豁免已发布专题 skill 的机械 lint，**不豁免语义**——别名标题必须真实回答对应问题，正文不得因别名而缩水。
 
 ## Skill Purpose Test
 
@@ -88,22 +81,9 @@ description: Use when...
 Bad：`Explains how to write plans with steps, tests, commits, and review gates.`  
 Better：`Use when a non-trivial task has a spec or requirements and needs a written implementation plan before code changes.`
 
-> **Engine check (when available):** run `mstar skill lint <skill-dir>` (or `import { lintFrontmatter, lintFiveQuestion } from "@mstar-harness/engine"` in a host hook) to lint the frontmatter contract and the five-question body contract above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
-
 ## 默认 Body 结构
 
-```markdown
-# Skill Title
-
-## Load Order
-## Scope
-## Workflow
-## Decision Rules
-## Evidence
-## References
-```
-
-Keep `SKILL.md` focused on the main execution path. Move long examples, templates, schemas, and detailed variants into `references/`, `templates/`, or `scripts/`.
+标题顺序 `# 标题` → `Load Order` → `Scope`（可省）→ `Workflow` → `Decision Rules` → `Evidence` → `References`，每个 heading 就是对应 5 问的答案位置。
 
 ## Skill-relative script and asset paths
 
@@ -117,15 +97,17 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 
 在本 harness：解析方式见 **`mstar-host`** § Resolve loaded skill root（omp `skill://`、各宿主插件挂载等）。其它环境按当地 skill 安装约定解析。
 
-> **Engine check (when available):** import `resolveAssetPath` from `@mstar-harness/engine` in a host hook to resolve a skill-relative asset per the convention above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
-
 ## Progressive Disclosure
 
-1. Frontmatter：仅触发  
-2. `SKILL.md`：主执行路径  
-3. `references/` / `templates/` / `scripts/`：变体细节，按需加载  
+三层分工：frontmatter 只写触发，`SKILL.md` 只写主执行路径，`references/` / `templates/` / `scripts/` 放变体细节、长示例与 schema 并按需加载；每份额外资源都要在 body 写明「何时打开哪一份」。
 
-多宿主 / 多域细节按文件拆分，并在 body 写明「何时打开哪份」。
+写 / 评审 skill body **以外**的模型可见文本——tool 与参数定义、Assignment 字段、拒绝与诊断字符串、CLI 帮助——时加载 `references/context-economy.md`（六条原则、三条 tool 定义规则、测量规则）。
+
+skill body 自身的经济性归本 skill 判断；其散文是否在 HEAD 可解析归 **`mstar-prose`**。
+
+## Engine checks
+
+> **Engine check:** run `mstar skill lint <skill-dir>` to lint the frontmatter contract and the five-question body contract; engine `lintFrontmatter`, `lintFiveQuestion`, `resolveAssetPath` resolves the same contracts plus the skill-relative asset paths above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## 验证门控（Evidence，原则 4 + 6）
 
@@ -135,21 +117,7 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 - before/after 期望 + 触发短语 + 一次具体校验（检索、链接、dry-run）
 - 记录失败原因、token / 延迟回归；未提升则回滚文案
 
-压力场景骨架：
-
-```json
-{
-  "skill_name": "example-skill",
-  "evals": [
-    {
-      "id": 1,
-      "prompt": "会诱使 agent 违反目标规则的真实任务",
-      "expected_output": "合规行为长什么样",
-      "files": []
-    }
-  ]
-}
-```
+压力场景的 eval JSON 骨架 → `references/skillsbench-authoring.md` § Pressure / paired check。
 
 ## 完成时主动说明
 
@@ -161,22 +129,14 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 
 ## Review Template
 
-```markdown
-## Skill Review
-- Trigger contract:
-- 5 questions covered:
-- Principles 2/5 compactness:
-- SSOT alignment:
-- Progressive disclosure:
-- Evidence for behavior change (P6):
-- Stale references checked:
-- Verdict: Approve | Request Changes | Needs Discussion | Unconfirmed
-- Unconfirmed: paired evidence (P6) cannot be established or verified
-```
+逐项一行：trigger contract（原则 3）、5 问覆盖（原则 2）、模型缺口（原则 5）、SSOT 对齐、progressive disclosure、paired 证据（原则 6）、stale references。
+
+Verdict：`Approve` | `Request Changes` | `Needs Discussion` | `Unconfirmed`——`Unconfirmed` 表示 paired 证据（原则 6）无法建立或核验。
 
 ## References
 
 | 何时 | 打开 |
 |------|------|
-| 需要完整 skill-writer 流程、原则细则、输出模板 | `references/skillsbench-authoring.md` |
+| 需要完整 skill-writer 循环（writer workflow、authoring devices、压力场景骨架、anti-patterns） | `references/skillsbench-authoring.md` |
 | 需要把「真实产物」固化为可重跑断言（P6 重武器选项） | `references/regression-fixation.md` |
+| 写 / 评审 tool 定义、Assignment 字段、拒绝与诊断字符串等非 skill body 的模型可见文本 | `references/context-economy.md` |

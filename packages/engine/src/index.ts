@@ -16,7 +16,7 @@
  * supply-chain checks and writes the codebase-audit review report into its
  * `{REVIEW_DIR}` run directory, and `compound` validates
  * knowledge-doc schema, reference existence, index rows and the
- * compound-refresh scope. `roles` validates the role reference mapping +
+ * Maintain scope. `roles` validates the role reference mapping +
  * parameter tables and the load-order contract, `prreview` implements the
  * PR-review tally/score/verdict arithmetic and the merge-class/verdict
  * constants (mstar-audit pr-review.md § Tally and derived score), `qcreview`
@@ -61,6 +61,7 @@ export type {
   HarnessKind,
   ResolveHarnessDirOptions,
   ResolveSpecsDirOptions,
+  ResolveTrackedDirOptions,
   ReviewRunLevel,
   ReviewRunRequest,
   ReviewRunSpec,
@@ -92,6 +93,7 @@ export {
   detectHarnessKind,
   emitGitignoreSnippet,
   hasHarnessRootDeclaration,
+  resolveAdrDir,
   resolveHarnessDir,
   resolveIterationDir,
   resolveKnowledgeDir,
@@ -107,6 +109,18 @@ export {
   scaffoldHarness,
   validateGitignore,
 } from "./path.js";
+// Path ownership: the Git-backed probe decides whether a harness path is owned
+// as expected — process state inside the control checkout, tracked results
+// committable at all. `mstar path check` is its only consumer.
+export type {
+  PathOwnershipCheck,
+  PathOwnershipCode,
+  PathOwnershipFinding,
+  PathOwnershipProbe,
+  PathOwnershipTarget,
+  PathOwnershipWarning,
+} from "./path-check.js";
+export { checkPathOwnership, isResultPath, nearestExistingDir, pathOwnershipWarning, probePathOwnership } from "./path-check.js";
 // The one registered-plan path contract (prerequisite contract §4): iteration
 // registration, the catalog registration preflight, the Prepare append and the
 // readiness readers import THIS resolver instead of restating the
@@ -211,6 +225,7 @@ export {
   parseBranchPolicyDirectOnBranch,
   parseEnforcementFlag,
   validateAssignmentFields,
+  validateControlWriteAssignment,
 } from "./dispatch.js";
 export type {
   BranchProbeOptions,

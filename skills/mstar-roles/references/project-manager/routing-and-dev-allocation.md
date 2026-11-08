@@ -46,7 +46,7 @@ When **>=2 independent** backend/fullstack units exist (on the task board or acr
 
 **Independence gate:** do **not** split genuinely dependent or sequential work across two dev IDs just to use both tracks.
 
-**Single-id path needs justification:** collapsing >=2 independent units onto one backend-capable dev id requires `Dev owner tie-break: single id — <reason>` and Pre-Implement `single_stream_justified: yes` with that reason.
+**Single-id path needs justification:** collapsing >=2 independent units onto one backend-capable dev id requires `Dev owner tie-break: single id — <reason>` and `single_stream_justified: yes` with that reason (`project-manager.md` § Dispatch preconditions (hard block)).
 
 ### When `frontend-dev` is required
 
@@ -80,7 +80,7 @@ Document override as `Dev owner tie-break: single id — <reason>`.
 - `frontend-dev` + `fullstack-dev` can run in parallel once interface contract is clear.
 - `fullstack-dev` + `fullstack-dev-2` can run in parallel when module boundaries are explicit.
 - Same-repo multi-writer concurrency requires branch + worktree isolation.
-- **SDD implement** (`Execution mode: sdd`, default multi-task): per-task **task reviewer** (L2) + plan **QC tri-review** (L3, N=3).
+- **SDD implement** (`Execution mode: sdd`, default multi-task): per-task **task reviewer** (L2) + plan **QC tri-review** (L3; seat count → **`mstar-review-qc`** § 分派时机).
 - **Inline / hotfix**: single-seat QC; default **`QA gate: pm-acceptance`** after QC — tier table in `references/project-manager/qa-trigger-matrix.md`.
 
 ## Routing / allocation NEVER (PM)

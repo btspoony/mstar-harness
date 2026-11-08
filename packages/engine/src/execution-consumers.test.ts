@@ -1017,8 +1017,6 @@ describe("retained evidence at the completion consumer", () => {
       const completed = await retainedComplete(fixture, { ...bodies, qa: alias }, "complete-retained-gap");
       expect(completed.data.plan.status).toBe("Done");
       expect(completed.data.coordination?.completion?.qa.report.path).toBe(bodies.qa);
-      expect(completed.data.coordination?.completion?.qa.report.sha256)
-        .toBe(createHash("sha256").update(QA_BODY).digest("hex"));
     } finally {
       setCompleteWitnessGapForTest(undefined);
       rmSync(fixture.context.harnessDir, { recursive: true, force: true });

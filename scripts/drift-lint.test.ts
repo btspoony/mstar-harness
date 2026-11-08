@@ -37,6 +37,9 @@
  * - readDeclaredBins (F-S2) — Guard 1's manifest read is guard-or-clear:
  * missing / corrupt / bin-less manifests each return one explicit
  * failure row (never a silent skip that would flood every citation).
+ * - Guard 12 (`scripts/adr-check.ts`) footer fragment — a real walk of a temp
+ * ADR tree yields the exact `Guard 12 ADR format N records, M failures` line;
+ * the per-code semantics are pinned in `scripts/adr-check.test.ts`.
  */
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -44,8 +47,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
+import { checkAdrTree, summarizeAdrCheck } from "./adr-check.ts";
 import {
   AUDIT_CATEGORY_DOC,
+  ENGINE_CHECK_MARKER,
   buildCanonicalCommandInventory,
   checkBilingualContentParity,
   checkBilingualPairing,
@@ -67,6 +72,11 @@ import {
   readUseCliSkillMarkdown,
   findOversizedTestFiles,
 } from "./drift-lint.ts";
+
+/** The retired `(when available)` marker, derived from the live one so this
+ * file carries no copy of it: both guards must ignore that form (the rename
+ * pinned by the marker cases below). */
+const RETIRED_CALLOUT_MARKER = ENGINE_CHECK_MARKER.replace(" check:", " check (when available):");
 
 describe("checkBilingualPairing — README pairing logic (guard 2)", () => {
   test("both READMEs changed passes", () => {
@@ -216,9 +226,10 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     return Object.keys(manifest.bin ?? {});
   };
 
- /** One Engine-check callout blockquote with `body` as its content. */
+ /** One Engine-check callout blockquote with `body` as its content —
+ * the collapsed one-line form the runtime skills now carry. */
   const callout = (body: string) =>
-    `> **Engine check (when available):** ${body}\n> On \`fail\` -> do not proceed.`;
+    `> ${ENGINE_CHECK_MARKER} ${body}`;
 
   test("both declared bin names pass — `mstar …` and `mstar-harness …` citations (load-bearing)", () => {
     const binNames = declaredBins();
@@ -275,6 +286,48 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
     );
     expect(calloutsChecked).toBe(0);
     expect(failures).toEqual([]);
+  });
+
+  test("the collapsed marker is what Guard 1 scans (marker pin)", () => {
+    const body = "run `mstar status validate <path>`";
+    const collapsed = checkEngineCallouts(
+      [{ rel: "skills/mstar-foo/SKILL.md", text: callout(body) }],
+      { cliCommands: new Set(["status validate"]), engineExports: new Set(), binNames: declaredBins() },
+    );
+    expect(collapsed.calloutsChecked).toBe(1);
+    expect(collapsed.cliCitationsChecked).toBe(1);
+
+    const legacy = checkEngineCallouts(
+      [
+        {
+          rel: "skills/mstar-foo/SKILL.md",
+          text: `> ${RETIRED_CALLOUT_MARKER} ${body}\n> On \`fail\` -> do not proceed.`,
+        },
+      ],
+      { cliCommands: new Set(["status validate"]), engineExports: new Set(), binNames: declaredBins() },
+    );
+    expect(legacy.calloutsChecked).toBe(0);
+  });
+
+  test("named engine symbols in a collapsed callout are checked like imports", () => {
+    const opts = {
+      cliCommands: new Set(["status validate"]),
+      engineExports: new Set(["assertQcAlignment", "singleReviewSnapshot"]),
+      binNames: declaredBins(),
+    };
+    const known = checkEngineCallouts(
+      [{ rel: "skills/mstar-foo/SKILL.md", text: callout("run `mstar status validate` (engine `assertQcAlignment`, `singleReviewSnapshot`)") }],
+      opts,
+    );
+    expect(known.failures).toEqual([]);
+
+    const unknown = checkEngineCallouts(
+      [{ rel: "skills/mstar-foo/SKILL.md", text: callout("run `mstar status validate` (engine `assertQcAlignmnt`)") }],
+      opts,
+    );
+    expect(unknown.failures).toEqual([
+      'skills/mstar-foo/SKILL.md:1 callout names unknown engine export "assertQcAlignmnt"',
+    ]);
   });
 });
 
@@ -433,6 +486,7 @@ describe("drift-lint executable — use-cli scan wiring (Task 3 fix round)", () 
         cwd: REPO_ROOT,
         encoding: "utf8",
         stdio: ["pipe", "pipe", "pipe"],
+        timeout: 60_000,
       });
     } catch (error) {
       const err = error as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer };
@@ -462,7 +516,7 @@ describe("drift-lint executable — use-cli scan wiring (Task 3 fix round)", () 
     }
     expect(violations).toEqual([README_BILINGUAL_ENV_VIOLATION]);
     expect(status).toBe(1);
-  });
+  }, 120_000);
 
   test("running outside repo root does not exit 0 silently (D1/D2 executable)", () => {
     const outer = mkdtempSync(join(tmpdir(), "drift-use-cli-exec-"));
@@ -524,9 +578,9 @@ describe("drift-lint executable — use-cli scan wiring (Task 3 fix round)", () 
 
 
 describe("checkCalloutDuplication — Guard 6 Engine-check callout dedup", () => {
- /** One Engine-check callout blockquote with `body` as its content. */
-  const callout = (body: string) =>
-    `> **Engine check (when available):** ${body}\n> On \`fail\` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.`;
+ /** One Engine-check callout blockquote with `body` as its content —
+ * the collapsed one-line form the runtime skills now carry. */
+  const callout = (body: string) => `> ${ENGINE_CHECK_MARKER} ${body}`;
 
   test("identical callout bodies in >1 file fail (load-bearing)", () => {
     const body = "run `mstar lease verify --workflow <id>`";
@@ -570,7 +624,7 @@ describe("checkCalloutDuplication — Guard 6 Engine-check callout dedup", () =>
     const text = [
       "> A plain blockquote, no Engine-check marker.",
       "run `mstar lease validate` in prose",
-      "> **Engine check (when available):** run `mstar lease validate`",
+      "> " + RETIRED_CALLOUT_MARKER + " run `mstar lease validate`",
     ].join("\n");
     const { failures } = checkCalloutDuplication([
       { rel: "skills/mstar-a/SKILL.md", text },
@@ -585,6 +639,24 @@ describe("checkCalloutDuplication — Guard 6 Engine-check callout dedup", () =>
       { rel: "skills/mstar-b/SKILL.md", text: callout("run `mstar lease verify` to validate the other leases") },
     ]);
     expect(failures).toEqual([]);
+  });
+
+  test("the collapsed marker is what Guard 6 matches (marker pin)", () => {
+    const body = "run `mstar lease validate`";
+    expect(
+      checkCalloutDuplication([
+        { rel: "skills/mstar-a/SKILL.md", text: callout(body) },
+        { rel: "skills/mstar-b/SKILL.md", text: callout(body) },
+      ]).failures.length,
+    ).toBe(1);
+
+    const legacy = `> ${RETIRED_CALLOUT_MARKER} ${body}\n> On \`fail\` -> do not proceed; fix and re-run.`;
+    expect(
+      checkCalloutDuplication([
+        { rel: "skills/mstar-a/SKILL.md", text: legacy },
+        { rel: "skills/mstar-b/SKILL.md", text: legacy },
+      ]).failures,
+    ).toEqual([]);
   });
 });
 
@@ -969,8 +1041,8 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
     ).toBe(true);
   });
 
-  test("red probe: a cross-reference inside an archive reference file fails (roles.loadorder.legacy.archive.reference)", () => {
-    const rel = "skills/mstar-engine-legacy/references/status-field-history.md";
+  test("red probe: a cross-reference inside the archive skill text fails (roles.loadorder.legacy.archive.reference)", () => {
+    const rel = "skills/mstar-engine-legacy/SKILL.md";
     const corpus = realCorpus();
     expect(corpus.find((entry) => entry.rel === rel)).toBeDefined();
     const gapped = corpus.map((entry) =>
@@ -985,7 +1057,7 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
         (row) => row.includes("roles.loadorder.legacy.archive.reference") && row.includes("mstar-artifacts"),
       ),
     ).toBe(true);
- // Restore: the shipped reference files are green through the same seam.
+ // Restore: the shipped archive text is green through the same seam.
     expect(checkRolesCorpus(corpus, ROLES_DIR).loadOrderViolations).toBe(0);
   });
 
@@ -1315,6 +1387,43 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
         { file: "packages/sample/test/over.test.ts", lines: 2001 },
         { file: "packages/dsh/tests/over.spec.tsx", lines: 2001 },
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Guard 12 — ADR format footer summary", () => {
+  test("a real walk of a temp ADR tree yields the exact footer fragment", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-adr-"));
+    try {
+      mkdirSync(join(dir, "docs/adr/implemented/architecture"), { recursive: true });
+      writeFileSync(
+        join(dir, "docs/adr/implemented/architecture/2026-01-01-example.md"),
+        [
+          "# ADR: Example record",
+          "",
+          "Status: implemented — accepted for the sample",
+          "",
+          "## Problem",
+          "",
+          "p",
+          "",
+          "## Decision",
+          "",
+          "d",
+          "",
+          "## Alternatives considered",
+          "",
+          "a",
+          "",
+          "## Consequences",
+          "",
+          "c",
+          "",
+        ].join("\n"),
+      );
+      expect(summarizeAdrCheck(checkAdrTree(dir))).toBe("Guard 12 ADR format 1 records, 0 failures");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

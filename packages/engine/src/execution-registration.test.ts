@@ -400,7 +400,6 @@ describe("execution-registration", () => {
     const sealed = await sealedInput(fixture.context, PLAN_ID);
     expect(sealed?.revision).toBe(1);
     expect(sealed?.catalog_pin_json).toBeNull();
-    expect(sealed?.input_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(
       await one<{ n: number }>(fixture.context, "select count(*) as n from execution_operations where operation_id = ?", "op-register-1"),
     ).toEqual({ n: 1 });
@@ -1273,7 +1272,6 @@ describe("execution-registration \u2014 frozen input remains authoritative after
     const receipt = await registerPlanWorkflow(fixture, "op-frozen-source");
     const frozenBefore = await sealedInput(fixture.context, PLAN_ID);
     const bindingBefore = await bindingOf(fixture.context, WORKFLOW_ID);
-    expect(frozenBefore?.input_hash).toMatch(/^[0-9a-f]{64}$/);
 
     await updateCatalogEntity(
       fixture.context,

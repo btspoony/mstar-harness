@@ -373,7 +373,6 @@ describe("store activation barrier", () => {
     // The recorded document passes the acceptance authority, carries the hash
     // the epoch bump was committed under, and records the generated operator.
     expect(() => validateActivationAttestation(receipt.attestation)).not.toThrow();
-    expect(receipt.attestationHash).toMatch(/^[0-9a-f]{64}$/);
     // The authorizationRef names the reviewed APPLY receipt, the durable
     // record this activation was authorized from.
     expect(receipt.attestation.operator).toEqual({

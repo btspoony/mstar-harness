@@ -1,18 +1,19 @@
 /**
  * Engine compound module — knowledge-doc frontmatter schema validation,
  * reference existence checks, catalog completeness for the knowledge family,
- * and compound-refresh scope guarding.
+ * and Maintain scope guarding.
  *
  * Spec sources (all embedded as constants — no runtime skill-file reads):
- * - mstar-compound/references/schema.yaml: required/optional frontmatter
+ * - mstar-knowledge/references/schema.yaml: required/optional frontmatter
  *   fields, problem_type enum, severity enum, track rules (bug vs
  *   knowledge), resolution_type enum, tags max 8.
- * - mstar-compound/references/category-mapping.md: problem_type → category
+ * - mstar-knowledge/references/category-mapping.md: problem_type → category
  *   directory mapping (rule 1: category must match the directory name).
- * - mstar-compound SKILL.md Phase 6: the knowledge index duty is now a
- *   catalog-completeness query over `store.db`
+ * - mstar-knowledge SKILL.md (`## Workflow — Capture`) Phase 6: the knowledge
+ *   index duty is now a catalog-completeness query over `store.db`
  *   (state-projection contract §4); the README table is not a register.
- * - mstar-compound-refresh SKILL.md § 产物与操作路径 (scope SSOT): only
+ * - mstar-knowledge SKILL.md (`## Workflow — Maintain`) § 产物与操作路径
+ *   (scope SSOT): only
  *   `{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, and
  *   `<repo-root>/CONCEPTS.md`.
  */
@@ -259,7 +260,7 @@ export function validateSchemaYaml(frontmatterText: string): GateResult {
       violation(
         "medium",
         "compound.schema.missing-frontmatter",
-        "no `---` YAML frontmatter block found \u2014 knowledge docs must open with the schema.yaml contract (mstar-compound/references/schema.yaml)",
+        "no `---` YAML frontmatter block found \u2014 knowledge docs must open with the schema.yaml contract (mstar-knowledge/references/schema.yaml)",
         "add the fenced frontmatter with module, date, problem_type, category, severity",
       ),
     );
@@ -388,7 +389,7 @@ export function validateSchemaYaml(frontmatterText: string): GateResult {
 }
 
 // ---------------------------------------------------------------------------
-// referenceExists — compound-refresh Phase 2
+// referenceExists — Maintain Phase 2
 // ---------------------------------------------------------------------------
 
 /** Result of `referenceExists`: gate verdict + number of refs verified. */
@@ -414,7 +415,7 @@ const MAX_WALK_FILES = 5000;
 
 /**
  * Check that paths/functions referenced in a knowledge doc exist on disk
- * (compound-refresh Phase 2 item 1: "Referenced code still exists?").
+ * (Maintain Phase 2 item 1: "Referenced code still exists?").
  *
  * Backticked refs are classified conservatively:
  * - path-like refs (contain `/` or end in a known file extension) are
@@ -498,7 +499,7 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
           violation(
             "medium",
             "compound.reference.missing-file",
-            `referenced path \`${ref}\` does not exist under ${repoRoot} (compound-refresh Phase 2: referenced code still exists?)`,
+            `referenced path \`${ref}\` does not exist under ${repoRoot} (Maintain Phase 2: referenced code still exists?)`,
             "update the doc to reference an existing path, or delete the stale reference",
           ),
         );
@@ -510,7 +511,7 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
         violation(
           "low",
           "compound.reference.module-missing",
-          `symbol ref \`${ref}\` \u2014 heuristic: no ${module}.ts|tsx|js|jsx|mjs|cjs module file found under ${repoRoot} (compound-refresh Phase 2)`,
+          `symbol ref \`${ref}\` \u2014 heuristic: no ${module}.ts|tsx|js|jsx|mjs|cjs module file found under ${repoRoot} (Maintain Phase 2)`,
           "verify the module file exists, or update the reference",
         ),
       );
@@ -533,7 +534,7 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
  * `assertKnowledgeCatalogCompleteness`. The export stays published for an
  * external host hook that still calls it by name.
  *
- * No compound surface carries a reference-existence check: that compound-refresh
+ * No compound surface carries a reference-existence check: that Maintain-phase
  * duty is `referenceExists` in this module, and its only caller outside this
  * package is the dsh seam gate `validateCompoundDoc`
  * (`packages/dsh/src/gates/seams.ts`).
@@ -563,11 +564,11 @@ export async function assertKnowledgeCatalogCompleteness(context: StoreContext):
 }
 
 // ---------------------------------------------------------------------------
-// scopeGuard — mstar-compound-refresh scope SSOT
+// scopeGuard — mstar-knowledge Maintain scope SSOT
 // ---------------------------------------------------------------------------
 
 /**
- * The compound-refresh scope (mstar-compound-refresh SKILL.md §
+ * The Maintain scope (mstar-knowledge SKILL.md `## Workflow — Maintain` §
  * 产物与操作路径): `{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`,
  * and `<repo-root>/CONCEPTS.md`.
  */
@@ -586,8 +587,8 @@ function isFileLikeRoot(root: string): boolean {
 }
 
 /**
- * Guard an operation path against the allowed root set (compound-refresh
- * scope SSOT: only knowledge/**, knowledge/README.md, and CONCEPTS.md may be
+ * Guard an operation path against the allowed root set (Maintain scope SSOT:
+ * only knowledge/**, knowledge/README.md, and CONCEPTS.md may be
  * written). File-like roots require an exact match; `..` traversal out of an
  * allowed root is rejected after `resolve()` normalization.
  *
@@ -613,7 +614,7 @@ export function scopeGuard(path: string, allowedRoots: readonly string[]): GateR
       violation(
         "medium",
         "compound.scope.outside",
-        `path "${path}" is outside the compound-refresh scope (allowed roots: ${allowedRoots.join(", ")}) after resolve() normalization`,
+        `path "${path}" is outside the knowledge Maintain scope (allowed roots: ${allowedRoots.join(", ")}) after resolve() normalization`,
         "point the operation at one of the allowed paths",
       ),
     ],

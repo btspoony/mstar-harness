@@ -7,32 +7,12 @@ description: "Dispatch gates: PM-only leaf dispatch, executor/delegation identit
 
 **首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** 同仓 worktree、QC/QA 检出字段 → **`mstar-branch-worktree`**。冲突时 **以 `mstar-harness-core` 为准**。
 
-## 🚨 承接方：如果你是 leaf executor，先读本节！（你的 Assignment 开头 IDENTITY 块已告诉你身份）
+## 🚨 承接方：如果你是 leaf executor，先读本节！（身份锁 + 反递归红线）
 
-> **如果你此刻的 Assignment 中 `Delegation: forbidden`（或未写 `Delegation: allowed`），则你属于 leaf executor。本节是你的行为边界，必须在你做任何决定之前读完。**
->
-> **先回到你 Assignment 最顶部的 `**IDENTITY**` 块重读一遍** —— 那里已经告诉你：你是谁、你不是谁、Task 工具不属于你。本节是那个身份断言的加固版。
-
-你是 `Execute as` 写的那个角色，不是 PM / 调度者；所有工作由你**本人**在当前会话内完成（Read / Write / Edit / Shell / Grep / Glob）；超出能力范围 → 写 `## Blocked` 回报 PM，**不是**尝试 dispatch。
-
-## 承接方反递归红线（NEVER / DO NOT；leaf executor 必读）
-
-下列行为易触发递归误派；`project-manager` 之外的角色一旦命中，须立即停止并改为本会话内可交付物，或 **`Blocked`** 回报 PM。**禁止**以「更高效」「Assignment 像 PM 编排」等理由绕开。
-
-**共享红线**（doc-level 并行拆分 ≠ N 个 subagent；Handoff / 路由措辞 / 角色提及 ≠ invoke；工具可用 ≠ 授权；仅 PM 可分派；非 `Delegation: allowed` 不得调用同角色 / 兄弟角色）以 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」+「Non-Recursive Dispatch Rule (shared shape)」为唯一权威清单（standard preset 下已随角色 ref 在上下文中；explicit `none` 下该 leaf 边界仍可达）。本节保留 dispatch 专属条目：
-
-- **NEVER** 在本会话内调用 Task / subagent，且其角色绑定字段**等于**你当前的 **`Execute as`** 角色 id（同角色递归）。
-- **DO NOT** 在 Assignment 缺少 `Execute as` / `Delegation` / `Who runs this turn` 时自行「补齐」为 PM；缺字段时按 **leaf executor** 解释：亲自完成或 **`Blocked`**。
-- **DO NOT** 用「Assignment 太长 / 像编排稿」当作分派依据；先交付本会话任务再回报，分派由 PM 下一轮决定。
-
-**自检（动手前）**：
-
-1. 我此刻的 **`Execute as`** 是什么？
-2. Assignment 是否写了 **`Delegation: allowed (...)`**？没有 → **禁止**任何 Task / subagent。
-3. 下一动作是不是「发起一次带角色绑定字段的 invoke」？是 → 停手，改为 Read / Write / Shell / Edit，或 **`Blocked`**。
-4. 命中任一 NEVER → 写 `## Blocked — recursive dispatch refused (<which NEVER>)` 回报 PM，**不**继续 invoke。
-
-**Assignment 顶部反模式块**：每个 PM Assignment 开头均有 **`**You are a leaf executor. You MUST NOT:**`** 块（含 IDENTITY + CAPABILITY BOUNDARY + prohibitions），PM 按此 Assignment 的角色+上下文定制反模式清单。leaf executor 收到 Assignment 后须 **首先** 阅读该块；命中任一条 → **停止**（亲自完成或 `Blocked`）。详见 **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**。
+- **`Delegation: forbidden`（或未写 `Delegation: allowed`）→ 你是 leaf executor**：`Execute as` 是身份锁，不是编排许可，工作由你在本会话内亲自完成（Read / Write / Edit / Shell / Grep / Glob）。
+- **`Delegation: allowed (...)`** 是唯一授权来源：工具可用 ≠ 授权，`Task` / subagent 出现在工具列表里不构成派发权；超出能力范围 → 写 `## Blocked` 回报 PM。
+- 收到 Assignment 先读其顶部 **`**You are a leaf executor. You MUST NOT:**`** 块（IDENTITY + CAPABILITY BOUNDARY + prohibitions，见 **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**）；命中任一条 → 停止并亲自完成或 `## Blocked`。
+- 完整红线清单（doc-level 并行拆分 ≠ N 个 subagent、Handoff / 路由措辞 ≠ invoke、同角色 / 兄弟角色、仅 PM 可分派）→ **`mstar-roles/references/_shared/leaf-executor-core.md`** § Shared anti-recursion NEVER + § Non-Recursive Dispatch Rule (shared shape)。
 
 > **Engine 执行范围（caller-scoped，#156）**：engine `antiRecursionPrecheck` 比较的是**派发方自身角色**（caller）与新 Assignment 的 `Execute as`（target）。能否在 engine 层做这个判定取决于宿主是否向 engine 提供派发方身份（dispatcher binding）：**提供方**在 hard enforcement 下真正硬执行（含 caller 空绑定 fail-closed）；**不提供方**的角色绑定字段携带的是**派发目标**——目标 == `Execute as` 正是 C5 合规派发模式——这些宿主上红线保持 prompt 级约束（本节），engine 不做判定。当前宿主属于哪一类、字段名与 fail-closed 细节 → 当前宿主的 **`mstar-host` reference**（角色绑定字段 / engine 判定范围两行）。
 
@@ -56,26 +36,17 @@ description: "Dispatch gates: PM-only leaf dispatch, executor/delegation identit
 
 ## 并发分派完整性门禁（PM 强制 · Evidence）
 
-当 PM 声明「并发分派」时，须同时满足**文案并发**与**工具并发**：
+当 PM 声明「并发分派」时，须同时满足**文案并发**与**工具并发**；宿主封装限制不构成串行理由，无法真实并发时如实报告限制。批调用与逐次异步启动的差异、count 自检、角色绑定字段自检、准备回合与派发回合分离、未齐不发 → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules / § Self-check before send / § Prerequisite vs dispatch turn。
 
-同消息批调用在宿主支持时使用；仅支持逐次异步启动的宿主，连续启动所有 ready calls，全部启动前不等待任何结果。不得将工具封装限制误作任务必须串行；无法真实并发时如实报告限制。
-
-- **工具并发**：同一调度轮次内，多个 subagent 调用须在**同一条 assistant 消息**里一次性发出（宿主允许时）。
-- **QC tri-review（SDD 强制）**：`Execution mode: sdd` 且全部 task 完成后 → `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 同条消息 **N=3**（写 `{SDD_DIR}/review/qc1.md`…`qc3.md`；PM 汇总 `qc-consolidated.md` + durable plan summary）。Assignment 须含 branch **review-package** 路径与 report paths。适用于**单 plan 与 iteration**。
-- **QC 单席（例外）**：`Execution mode: inline`（hotfix 等），或 Assignment 显式 `QC mode: single` / `QC mode: single — override: <reason>` → `qc-specialist` ×1，`N=1`，写 `{SDD_DIR}/review/qc.md`。
-- **QC targeted re-review**：Assignment 含 **`QC re-review: targeted — reviewers: …`** 时，**N** = 所列席位数（1–3），同条消息发满 **N**。
-- **先自检再发送**：发送前核对「Assignment 条数 = 本条消息中的实际 **派发** 调用条数」。
-- **先自检字段再发送（与 count 同级门禁）**：核对**每条** invoke 都携带与 **`Execute as`** 匹配的角色绑定字段——**字段名以当前宿主的 `mstar-host` reference 为准**（共享文本不假定任何宿主的字段名）；宿主判定以 **`mstar-host`** §Detect active host 的 tool-shape 检测为准（禁以 config 路径/仓库内容判定）。**漏写或取默认通用值**（部分宿主会**静默回退 generic worker**、无报错）= **派发未完成**，与 paste-only（零 invoke）**同等级**：当场补齐重发，不得进入下一 gate。**N=1 顺序链（Review & Edit）不豁免**——count 门在 N=1 恒过，**字段门是唯一保护**。
-- **前置步骤与派发回合分离（防串行 rollout）**：为派发准备的 **`bash` / `read` / `glob` / `grep`**（如 `merge-base`、`Review range`、`git rev-parse`）**不计入** `N` 次派发；可在上一条仅含准备的消息完成。准备完成后，**下一条派发消息**须**一次性**含 **`N` 次** Task / subagent invoke。**禁止**先发 `1` 次、等返回再补发其余 `N-1` 次。
-- **未齐不发（emit zero until batch-ready）**：宿主支持批调用且需并发 `N≥2` 而当前 payload 只齐 `1` 条时，本条应发 **`0` 条派发 invoke`**（可继续 read/bash 补齐），**禁止**「先发一个顶一下」；`N` 份 payload 就绪后**单次消息发满 `N`**。见 **`mstar-host`** → `references/parallel-dispatch.md`（具备 invoke / Task / subagent 工具的宿主共用）。
+- **QC 席位（分派侧）**：`Execution mode: sdd` 且全部 task 完成后 → `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 三席**同一条消息**发出，写 `{SDD_DIR}/review/qc1.md`…`qc3.md`；`inline`（hotfix 等）或 Assignment 显式 `QC mode: single` / `QC mode: single — override: <reason>` → `qc-specialist` ×1 写 `{SDD_DIR}/review/qc.md`；`QC re-review: targeted — reviewers: …` → 同条消息发满所列席位数（1–3）。席位计数与模式映射 → **`mstar-review-qc`** § 分派时机。Assignment 须含 branch **review-package** 路径与 report paths；PM 汇总 `qc-consolidated.md` + durable plan summary。
 
 ### 具名 subagent 宿主：文案分派 ≠ 调度完成
 
-在支持具名角色 / Task 的宿主上，`## Assignment` **正文不会**拉起子会话。PM 须在**同一条 assistant 消息**（或宿主等价机制）发出与 Assignment **条数一致**的 invoke / Task；仅打印 Markdown = **分派未完成**。**几条 Assignment ⇒ 几次 tool 调用**（默认同消息并行）。
+在支持具名角色 / Task 的宿主上，`## Assignment` **正文不会**拉起子会话；派发回合的条数、顺序、角色绑定字段与「未齐不发」规则 → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules。
 
 > **On dsh:** the mounted layer decides the channel, not the shape of one task — **Agent Teams** is the default whenever `spawn_teammate` is mounted (one teammate per writable track, each handed its own absolute checkout path in the prompt; which scope the board may carry → `references/dsh-agent-teams.md` § Worktree hand-off and write isolation), **`subagent`** is the fallback when it is absent, and **`workflow`** carries read-only fan-out only. A board-task dispatch counts as a delegation, so the invariant stays **1 Assignment ⇒ 1 delegation** on every channel; board protocol, seat budget and wake discipline are not restated here → **`mstar-host`** → `references/dsh.md` § Delegation channels + `references/dsh-agent-teams.md`.
 
-> **Engine check (when available):** run `mstar dispatch validate <assignment-file> [--branch <branch>]` (or `import { validateAssignmentFields, assertDefaultBranchProtected } from "@mstar-harness/engine"` in a host hook) to validate the Assignment field contract — including the canonical **`Task budget (implement / ops rounds)`** header field on non-review / non-audit rounds: presence-only in the header region, absent / empty / `N/A` → validation fail (field guidance → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; capacity criterion → `mstar-artifacts/references/plan-quality-bar.md` item 7) — and the default-branch gate (normative default-branch prose: **`mstar-branch-worktree`** SKILL.md § "Git 功能分支门禁（业务仓库）" — this skill covers dispatch mechanics only). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar dispatch validate <assignment-file> [--branch <branch>]` (engine `validateAssignmentFields`, `assertDefaultBranchProtected`) to validate the Assignment field contract — including the **`Task budget (implement / ops rounds)`** header field on non-review / non-audit rounds: presence-only in the header region, absent / empty / `N/A` → validation fail (field contract → `mstar-roles/references/project-manager/dispatch-and-assignment.md`) — and the default-branch gate (normative default-branch prose: **`mstar-branch-worktree`** SKILL.md § "Git 功能分支门禁（业务仓库）" — this skill covers dispatch mechanics only). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## SDD implement 波次（PM only）
 
@@ -86,7 +57,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - File handoffs only — no pasted plan/diff/history in dispatch prompts.
 - **scope 与凭据边界**：`{SDD_DIR}/task-N-brief.md` 携带继承的 plan 作用域（plan id + 绝对路径）；**不下发** session JSON、`--expect <revision>` 等写凭据，也不得让 implementer/reviewer 自选 plan（见 § Plan 作用域与 credential 不下发）。leaf 不持有行级执行 lease；integration merge lease 由 coordinator 持有。
 - Record per-task BASE SHA; use `review-package` for diffs — **never `HEAD~1`**.
-- After all tasks: branch `review-package` in `{SDD_DIR}/review/` → **mandatory tri-review N=3** when `Execution mode: sdd`; **N=1** only for `inline` / explicit single override.
+- After all tasks: branch `review-package` in `{SDD_DIR}/review/` → plan QC tri (seat count per `Execution mode` → **`mstar-review-qc`** § 分派时机).
 
 > **QC seats Engine-check 唯一规范体：** `mstar-review-qc` `SKILL.md`（Engine-check seats 行）。
 
@@ -102,12 +73,13 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - 独立模块可并行 **implement 轨道**（不同 dev Assignment）；**同仓 ≥2 可写并发** → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**（先于 invoke；同 plan 多轨 = L2）。
 - **SDD 单 plan 内**：独立 ready tasks 默认并行；每轨先完成 L2 隔离，fresh session 与独立产物路径，PM 唯一写共享 ledger。规则 → **`mstar-sdd`** § Ready-task scheduling。
 - **Cross-plan versus within-plan concurrency:** ready rows may implement in parallel through ordinary leaf dispatch with distinct recorded source checkouts and safe atomic coordination (ACTIVE: control DB transactions/CAS). Without that shared coordination safety choose serial scheduling; an unresolved unsafe parallel Assignment is blocked with that recovery. No missing plans under gitignore, serial policy or worktree waiver waives the parallel safety gate or actual checkout isolation. Procedure → `mstar-iteration` §2.0/§2.4; write-domain ownership → `mstar-branch-worktree` “Harness path SSOT under default gitignore”.
+- **`Write domain: control`**（取值 `control` | `work`，缺省 `work`）：只写控制根 gitignored 过程目标（plans/assignments/sdd/iterations/workflows/projects/reviews/`store.db`）的 Assignment 用它声明，可 `Worktree path` = 控制根 + `Working branch` = 控制检出**当前检出**的分支（默认 `main` 的仓库即 `main`；`main` 只是示例）且豁免默认分支保护，并必须用 **`Control write paths`** 列出实际目标；三种分支写法仍全部有效（含 `Branch policy: direct on <branch> — <reason>`），声明值须与控制检出实际检出的分支一致。同一核验在共享宿主 dispatch 门禁（OpenCode v2 / dsh / omp 的 hard enforcement）内运行——声明 `Write domain: control` 不能绕过宿主硬门禁，控制根不可核验时 dispatch 照旧被拒并给出修复路径；拒绝码 → **`mstar-branch-worktree`** § 控制域写入。
 - **`integration_merge_lease`**：`spec_integration_branch` 上的 merge **始终串行**（一次仅一 holder）→ **`mstar-iteration`** · **`mstar-artifacts`**。
 - **`Plan parallelism: serial`** constrains scheduling, not actual checkout isolation, atomic writers or serial integration safety.
-- **Plan QC tri** after SDD task loop（`Execution mode: sdd`）；**单席**仅 `inline` / hotfix。共用 `Review cwd` / `Working branch` / `plan_id` / `Review range`（**`mstar-branch-worktree`**）。
+- **Plan QC tri** after SDD task loop；席位与 `inline` 单席例外 → **`mstar-review-qc`** § 分派时机。共用 `Review cwd` / `Working branch` / `plan_id` / `Review range`（**`mstar-branch-worktree`**）。
 - **Tri 同消息规则**：plan QC tri（SDD 或 Assignment 显式 `QC mode: full tri-review`）时三席 **同一条消息**、**同一套** scope 字段。
 
-> **Engine check (when available):** run `mstar worktree check <plan-id> --workflow <id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (or `import { l1PreDispatchCheck, l2PreDispatchCheck } from "@mstar-harness/engine"` in a host hook) to verify the 同仓写隔离 gate above (per-track feature worktree, branch alignment) before parallel dispatch. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar worktree check --workflow <id> --plan <plan-id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (engine `l1PreDispatchCheck`, `l2PreDispatchCheck`) to verify the 同仓写隔离 gate above (per-track feature worktree, branch alignment) before parallel dispatch. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## Specialist review-and-edit dispatch
 
@@ -118,7 +90,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - **Phase 1 role selection** (§1.6): PM selects product-manager / architect by complexity and remaining product/technical gaps, recording include/skip reasons and reusing prototype contributions. The selected subset runs sequentially in product-manager → architect order, followed by **mandatory writing-specialist last**. Each selected role must actually be invoked; skipped roles get no completion receipt and leave no role-owned markers or unresolved blocking questions. Reassess selection if drafting reveals new gaps; material design changes return to prototype review.
 - **`Inputs` (Phase 1 review-and-edit Assignment)**: include approved/current prototype path and disposition, reusable prototype-stage contributions, draft and compass paths, direction decisions (or exact compass `## Decisions` pointer), owned open questions (or exact `## Open Questions` pointer), non-goal reasons and that role's owned marker list (`TODO(owner: …)`). Draft depth and marker vocabulary → **`mstar-iteration/references/phase-1-prepare.md`** §1.3; removal/reassignment counts belong in the role's Completion Report per §1.6. Do not make the recipient reconstruct PM-only context.
 - **1 Assignment ⇒ 1 invoke**。
-- **Phase 1 Review & Edit** (§1.6) edits the **`{ITERATION_DIR}/<iteration-id>/` package** and linked plans. No start-chain additions to `{KNOWLEDGE_DIR}` or global `{SPECS_DIR}`; close-time promotion remains with `mstar-compound`.
+- **Phase 1 Review & Edit** (§1.6) edits the **`{ITERATION_DIR}/<iteration-id>/` package** and linked plans. No start-chain additions to `{KNOWLEDGE_DIR}` or global `{SPECS_DIR}`; close-time promotion remains with `mstar-knowledge`.
 - 其他彼此独立、无先后依赖的文档编辑任务：可并行（同条消息发满 N），见 **`parallel-dispatch.md`**。
 - PM 线程代做全部专业编辑 = **反模式**（`mstar-iteration` §1.6、`mstar-roles/references/_shared/leaf-executor-core.md`「Shared anti-recursion NEVER」）。
 - PM merge / lock follows the final writer return and revised files. Do not create/push the integration branch before the selected chain completes; Phase 1 commits no package artifacts.
@@ -128,7 +100,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 共享反递归红线全清单见 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」；lease / worktree / Phase 相关反模式见 **`mstar-branch-worktree`** 与 **`mstar-iteration`**。本节仅列派发机制专属：
 
 - 宿主支持批调用却把 QC 三审拆成等待完成的串行轮次（tri 模式），或单席未附 review-package 路径。
-- 仅 1 次 invoke 却声称「tri-review 已并行启动」（tri 模式 N=3）。
+- 仅 1 次 invoke 却声称「tri-review 已并行启动」（tri 模式三席）。
 - SDD 并行 implementer 未隔离 worktree / ownership / session；把任务独立当作跳过 L1/L2 安全闸的理由。
 - 递归同角色 subagent；把 Handoff / 多轨编排措辞当 invoke。
 - Review-and-edit 链未完成即 commit integration 分支；PM 代做专业角色编辑而不 invoke。
@@ -139,8 +111,8 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 ## Workflow
 
-派发检查顺序：承接方先读 Assignment 顶部 **IDENTITY / 反模式块**确认 leaf 身份（反递归红线）→ PM 核对字段契约（`Execute as` / `Delegation` / 角色绑定字段；**先自检字段再发送**）→ 同一条消息**一次性发满 N 次** invoke（工具并发；N 按 `Execution mode` 映射）→ 派发前完成同仓写隔离（L1/L2 worktree）→ SDD 按 ready-task 依赖并行 implement + fresh reviewer → task 全完成后 `{SDD_DIR}/review/` review-package → **强制 tri-review N=3**（或 inline 单席 N=1）。准备用 read/bash 不计入 N，且与派发回合分离（**未齐不发**）。
+派发检查顺序：承接方先读 Assignment 顶部 **IDENTITY / 反模式块**确认 leaf 身份（反递归红线）→ PM 核对字段契约（`Execute as` / `Delegation` / 角色绑定字段；**先自检字段再发送**）→ 同一条消息**一次性发满 N 次** invoke（工具并发；N 按 `Execution mode` 映射）→ 派发前完成同仓写隔离（L1/L2 worktree）→ SDD 按 ready-task 依赖并行 implement + fresh reviewer → task 全完成后 `{SDD_DIR}/review/` review-package → **强制 tri-review**（`inline` 单席例外；席位 → **`mstar-review-qc`** § 分派时机）。准备用 read/bash 不计入 N，且与派发回合分离（**未齐不发**）。
 
 ## References
 
-- `references/leaf-executor-checklist.md` — 承接方一页自检清单。
+- 承接方反递归共享清单与自检 → **`mstar-roles/references/_shared/leaf-executor-core.md`**（「Shared anti-recursion NEVER」+「Non-Recursive Dispatch Rule (shared shape)」）；本 skill 的 dispatch 专属条目见 § 承接方反递归红线。
