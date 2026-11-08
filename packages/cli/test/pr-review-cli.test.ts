@@ -97,14 +97,14 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, JSON.stringify([{ mergeClass: "should-fix" }, { mergeClass: "nit" }, { mergeClass: "nit" }]));
-      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled, "--unverified", "1"]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled]);
       expect(result.exitCode).toBe(0);
-      // § Display contract verbatim two-liner: should-fix 12 + nit (2+1) + unverified 5 = 20 → 80.
+      // § Display contract: should-fix 12 + nit (2+1) = 15 → 85.
       const resultData = data(result);
       expect(resultData.verdict).toBe("needs fixes");
-      expect(resultData.scorePct).toBe(80);
+      expect(resultData.scorePct).toBe(85);
       expect(resultData.band).toBe("good");
-      expect(resultData.chatHeader).toBe("needs fixes · 80% (good)\nmust-fix=0 should-fix=1 may-fix=0 nit=2 unverified=1");
+      expect(resultData.chatHeader).toBe("needs fixes · 85% (good)\nmust-fix=0 should-fix=1 may-fix=0 nit=2");
     });
   });
 
@@ -128,7 +128,7 @@ describe("mstar pr-review tally", () => {
       const resultData = data(result);
       expect(resultData.verdict).toBe("blocked");
       expect(resultData.scorePct).toBe(34);
-      expect((resultData.tally as { mustFix: number; shouldFix: number; mayFix: number; nit: number; unverified: number })).toEqual({ mustFix: 1, shouldFix: 2, mayFix: 0, nit: 0, unverified: 0 });
+      expect((resultData.tally as { mustFix: number; shouldFix: number; mayFix: number; nit: number })).toEqual({ mustFix: 1, shouldFix: 2, mayFix: 0, nit: 0 });
     });
   });
 
@@ -190,9 +190,9 @@ describe("mstar pr-review tally", () => {
     withTempDir((dir) => {
       const findings = join(dir, "findings.json");
       writeFileSync(findings, "[]");
-      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled, "--unverified", raw]);
+      const result = runCli(["pr-review", "tally", "--findings", findings, ...settled, "--unmet-ac-unsafe", raw]);
       expect(result.exitCode).toBe(2);
-      expect(message(result)).toContain("--unverified must be a non-negative integer");
+      expect(message(result)).toContain("--unmet-ac-unsafe must be a non-negative integer");
     });
   });
 
@@ -301,7 +301,7 @@ describe("mstar pr-review tally", () => {
         "persist",
         "--diff-basis",
         "maybe",
-        "--unverified",
+        "--unmet-ac-unsafe",
         "x",
       ]);
       expect(result.exitCode).toBe(2);
@@ -309,7 +309,7 @@ describe("mstar pr-review tally", () => {
       const body = message(result);
       expect(body).toContain("--diff-basis must be readable or unreadable");
       expect(body).toContain("Rejected requiredDomains: expected present; received undefined");
-      expect(body).toContain("--unverified must be a non-negative integer no greater than 50");
+      expect(body).toContain("--unmet-ac-unsafe must be a non-negative integer no greater than 50");
       expect(body).toContain("findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit");
     });
   });
@@ -331,7 +331,7 @@ describe("mstar pr-review tally", () => {
         "readable",
         "--stopped",
         " ",
-        "--unverified",
+        "--unmet-ac-unsafe",
         "x",
       ]);
       expect(result.exitCode).toBe(2);
@@ -339,7 +339,7 @@ describe("mstar pr-review tally", () => {
       const body = message(result);
       expect(body).toContain("--stopped must be a single line of non-blank text");
       expect(body).toContain("--opened-domains must be a comma-separated list of single-line non-blank entries");
-      expect(body).toContain("--unverified must be a non-negative integer no greater than 50");
+      expect(body).toContain("--unmet-ac-unsafe must be a non-negative integer no greater than 50");
     });
   });
 
@@ -427,7 +427,7 @@ describe("mstar pr-review tally", () => {
         unscanned: ["persist", "security"],
       });
       expect(resultData.chatHeader).toBe(
-        "incomplete \u00b7 100% (mergeable, partial)\nmust-fix=0 should-fix=0 may-fix=0 nit=0 unverified=0\n" +
+        "incomplete \u00b7 100% (mergeable, partial)\nmust-fix=0 should-fix=0 may-fix=0 nit=0\n" +
           "cause: required domain seat(s) never opened: persist, security\nunscanned: persist, security",
       );
     });
@@ -482,7 +482,7 @@ describe("mstar pr-review tally", () => {
       const resultData = data(result);
       expect(resultData.verdict).toBe("needs fixes");
       expect(resultData.band).toBe("good");
-      expect(resultData.chatHeader).toBe("needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 may-fix=0 nit=1 unverified=0");
+      expect(resultData.chatHeader).toBe("needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 may-fix=0 nit=1");
       expect(resultData.incomplete).toBeUndefined();
     });
   });
@@ -566,16 +566,16 @@ describe("mstar pr-review tally", () => {
         "--partial-scope",
         "dashboard HTTP server",
         "   ",
-        "--unverified",
+        "--unmet-ac-unsafe",
         "x",
       ]);
       expect(result.exitCode).toBe(2);
       const body = message(result);
       expect(body).toContain("--partial-scope entries must be single lines of non-blank text");
-      expect(body).toContain("--unverified must be a non-negative integer no greater than 50");
+      expect(body).toContain("--unmet-ac-unsafe must be a non-negative integer no greater than 50");
       expect(envelope(result).details?.diagnostics).toEqual(expect.arrayContaining([
         expect.objectContaining({ path: "partialScope", code: "invalid" }),
-        expect.objectContaining({ path: "unverified", code: "invalid" }),
+        expect.objectContaining({ path: "unmetAcUnsafe", code: "invalid" }),
       ]));
     });
   });
@@ -686,7 +686,7 @@ function report(frontmatter: string): string {
 type: pr-review
 verdict: needs fixes
 score_pct: 85
-tally: { must-fix: 0, should-fix: 1, may-fix: 0, nit: 2, unverified: 0 }
+tally: { must-fix: 0, should-fix: 1, may-fix: 0, nit: 2 }
 comments: posted
 review_url: https://github.com/example/repo/pull/134#pullrequestreview-1
 generated_at: 2026-08-24
