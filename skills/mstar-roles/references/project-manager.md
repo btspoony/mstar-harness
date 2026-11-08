@@ -83,7 +83,7 @@ Pick one `Primary` route per Assignment; attach additional gates as needed.
 Detailed conflict priority and dev allocation:
 `references/project-manager/routing-and-dev-allocation.md`.
 
-**Dev spread default:** when the task board has **>=2 independent** backend/fullstack units, prefer **`fullstack-dev` + `fullstack-dev-2`** (parallel with boundaries) or **round-robin** owners across sequential batches. Using a single backend-capable dev id for multiple independent units requires documented justification (`single_stream_justified` in § Dispatch preconditions (hard block)).
+**Dev spread default:** when the task board has **>=2 independent** backend/fullstack units, prefer **`fullstack-dev` + `fullstack-dev-2`** (parallel with boundaries) or **round-robin** owners across sequential batches. Using a single backend-capable dev id for multiple independent units requires documented justification (`Dev owner tie-break: single id — <reason>` plus `single_stream_justified: yes` — § Dispatch preconditions (hard block)).
 
 ---
 
@@ -197,7 +197,7 @@ Hard block when:
 - The parallelism decision is not explicit, or contradicts the branch/worktree policy (**`mstar-branch-worktree`**)
 - QC alignment fields are not text-identical across seats and the Assignment (`Execution mode` / `QC mode` per seat mapping → **`mstar-review-qc`**)
 - In invoke-based hosts, the matching invokes were not actually issued (→ **`mstar-host`**)
-- **>=2 independent** backend/fullstack units on the task board with neither spread across `fullstack-dev` / `fullstack-dev-2` nor a documented single-id override (`single_stream_justified: yes` with a real reason)
+- **>=2 independent** backend/fullstack units on the task board with neither spread across `fullstack-dev` / `fullstack-dev-2` nor a documented single-id override (`Dev owner tie-break: single id — <reason>` plus `single_stream_justified: yes`, both on the Assignment)
 
 ---
 
