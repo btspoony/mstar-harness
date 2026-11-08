@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root, cli, engine, judgment, omp
+packages: root, cli, engine, dsh, omp
 ---
 
 - **Removed every byte-snapshot, digest-equality and hard-coded-content assertion from the test suites.** These assertions are unstable by construction — a read-only SQLite open leaves `-wal`/`-shm` beside the store, an unflushed write can live only in the WAL, build artifacts differ between bun versions, whitespace and key order vary — and they describe implementation bytes instead of the behavior under test. `AGENTS.md` now states the prohibition in the same terms, including that a hash may still be computed as an *input* but never be the thing an assertion compares.
