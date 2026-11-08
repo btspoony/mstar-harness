@@ -11,6 +11,7 @@ import {
   ENGINE_CHECK_CONTRACT_POINTER,
   ENGINE_CHECK_FALLBACK_NEEDLE,
   ENGINE_CHECK_MARKER,
+  blockquoteRuns,
   checkCalloutPresence,
   checkContractDoc,
   scanCalloutContract,
@@ -68,5 +69,36 @@ describe("standalone-smoke callout assertions", () => {
     expect(checkContractDoc(ENGINE_CHECK_CONTRACT_DOC, ENGINE_CHECK_CONTRACT_HEADING)).toEqual([
       `${ENGINE_CHECK_CONTRACT_DOC} does not state the engine-absent fallback ("${ENGINE_CHECK_FALLBACK_NEEDLE}")`,
     ]);
+  });
+
+  test("a wrapped callout reports the marker's own line, not the run's first", () => {
+    const scan = scanCalloutContract(
+      "skills/mstar-foo/SKILL.md",
+      ["> A lead-in quote line.", `> ${ENGINE_CHECK_MARKER} run \`mstar status validate\`.`].join("\n"),
+    );
+    expect(scan.callouts).toBe(1);
+    expect(scan.failures).toEqual([
+      `skills/mstar-foo/SKILL.md:2 callout lacks the shared-contract pointer ("${ENGINE_CHECK_CONTRACT_POINTER}")`,
+    ]);
+  });
+});
+
+describe("blockquoteRuns — the one run splitter", () => {
+  test("a run that ends at EOF is still emitted", () => {
+    expect(blockquoteRuns(["> a", "> b"])).toEqual([{ start: 0, end: 1, text: "> a\n> b" }]);
+  });
+
+  test("runs close at the first non-quote line", () => {
+    expect(blockquoteRuns(["> a", "", "> b", "prose", "> c"])).toEqual([
+      { start: 0, end: 0, text: "> a" },
+      { start: 2, end: 2, text: "> b" },
+      { start: 4, end: 4, text: "> c" },
+    ]);
+  });
+
+  test("indented and empty lines follow the same rules", () => {
+    expect(blockquoteRuns([])).toEqual([]);
+    expect(blockquoteRuns(["prose only"])).toEqual([]);
+    expect(blockquoteRuns(["   > indented"])).toEqual([{ start: 0, end: 0, text: "   > indented" }]);
   });
 });

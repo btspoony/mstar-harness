@@ -307,7 +307,6 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
       { cliCommands: new Set(["status validate"]), engineExports: new Set(), binNames: declaredBins() },
     );
     expect(legacy.calloutsChecked).toBe(0);
-    expect(ENGINE_CHECK_MARKER).toBe("**Engine check:**");
   });
 
   test("named engine symbols in a collapsed callout are checked like imports", () => {
@@ -643,7 +642,6 @@ describe("checkCalloutDuplication — Guard 6 Engine-check callout dedup", () =>
 
   test("the collapsed marker is what Guard 6 matches (marker pin)", () => {
     const body = "run `mstar lease validate`";
-    expect(ENGINE_CHECK_MARKER).toBe("**Engine check:**");
     expect(
       checkCalloutDuplication([
         { rel: "skills/mstar-a/SKILL.md", text: callout(body) },

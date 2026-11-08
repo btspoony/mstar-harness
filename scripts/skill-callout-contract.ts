@@ -1,9 +1,10 @@
 /**
  * skill-callout-contract.ts — the literal shape of an engine-check callout,
- * shared by the guards that police it: `drift-lint.ts` (Guard 1 forward
- * citations, Guard 6 dedup) and `standalone-smoke.ts` (contract-pointer
- * survival). One literal, so a form change cannot leave a guard scanning
- * for a marker no file carries.
+ * plus the blockquote splitter every callout scan runs, shared by the guards
+ * that police it: `drift-lint.ts` (Guard 1 forward citations, Guard 6 dedup)
+ * and `standalone-smoke.ts` (contract-pointer survival). One literal and one
+ * splitter, so a form change cannot leave a guard scanning for a marker no
+ * file carries.
  *
  * Dependency-free on purpose: the standalone smoke job runs with no
  * `node_modules` (engine + CLI uninstalled), so it must not import
@@ -28,6 +29,29 @@ export const ENGINE_CHECK_CONTRACT_POINTER =
 /** The clause that makes the contract's engine-absent fallback checkable. */
 export const ENGINE_CHECK_FALLBACK_NEEDLE = "the owning skill's text stays authoritative";
 
+/** One run of consecutive blockquote lines (`>` at the start of the trimmed
+ * line). `end` is the last line index of the run, `text` those lines joined. */
+export type BlockquoteRun = { start: number; end: number; text: string };
+
+/**
+ * Split lines into blockquote runs — the one splitter every callout scan
+ * uses. A run closes at the first non-quote line; the loop runs one past the
+ * last line so a run that ends at EOF is still emitted.
+ */
+export function blockquoteRuns(lines: string[]): BlockquoteRun[] {
+  const runs: BlockquoteRun[] = [];
+  let runStart = -1;
+  for (let i = 0; i <= lines.length; i++) {
+    const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
+    if (isQuote && runStart === -1) runStart = i;
+    if (!isQuote && runStart !== -1) {
+      runs.push({ start: runStart, end: i - 1, text: lines.slice(runStart, i).join("\n") });
+      runStart = -1;
+    }
+  }
+  return runs;
+}
+
 export type CalloutContractScan = { callouts: number; failures: string[] };
 
 /**
@@ -40,33 +64,27 @@ export type CalloutContractScan = { callouts: number; failures: string[] };
 export function scanCalloutContract(rel: string, text: string): CalloutContractScan {
   const lines = text.split(/\r?\n/);
   const failures: string[] = [];
-  let callouts = 0;
+  const runs = blockquoteRuns(lines);
 
-  // Blockquote runs: consecutive lines starting with `>`.
-  const runs: Array<{ start: number; end: number; text: string }> = [];
-  let runStart = -1;
-  for (let i = 0; i <= lines.length; i++) {
-    const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
-    if (isQuote && runStart === -1) runStart = i;
-    if (!isQuote && runStart !== -1) {
-      runs.push({ start: runStart, end: i - 1, text: lines.slice(runStart, i).join("\n") });
-      runStart = -1;
+  // A marker outside a run would make the callout a load-order instruction.
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].includes(ENGINE_CHECK_MARKER)) continue;
+    const inRun = runs.some((run) => i >= run.start && i <= run.end);
+    if (!inRun) {
+      failures.push(`${rel}:${i + 1} callout marker must be a blockquote (advisory callouts only)`);
     }
   }
 
-  for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].includes(ENGINE_CHECK_MARKER)) continue;
-    const line = i + 1;
-    if (!lines[i].trimStart().startsWith(">")) {
-      failures.push(`${rel}:${line} callout marker must be a blockquote (advisory callouts only)`);
-      continue;
-    }
-    const run = runs.find((r) => i >= r.start && i <= r.end);
-    if (!run) continue;
+  // One callout per run that carries the marker; the offset keeps the failure
+  // on the marker's own line when a callout wraps.
+  let callouts = 0;
+  for (const run of runs) {
+    const markerOffset = run.text.split("\n").findIndex((line) => line.includes(ENGINE_CHECK_MARKER));
+    if (markerOffset === -1) continue;
     callouts++;
     if (!run.text.includes(ENGINE_CHECK_CONTRACT_POINTER)) {
       failures.push(
-        `${rel}:${line} callout lacks the shared-contract pointer ("${ENGINE_CHECK_CONTRACT_POINTER}")`,
+        `${rel}:${run.start + markerOffset + 1} callout lacks the shared-contract pointer ("${ENGINE_CHECK_CONTRACT_POINTER}")`,
       );
     }
   }

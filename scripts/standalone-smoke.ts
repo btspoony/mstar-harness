@@ -32,6 +32,7 @@ import { join, relative } from "node:path";
 import {
   ENGINE_CHECK_CONTRACT_DOC,
   ENGINE_CHECK_MARKER,
+  blockquoteRuns,
   checkCalloutPresence,
   checkContractDoc,
   scanCalloutContract,
@@ -152,16 +153,7 @@ for (const file of collectMarkdown("skills")) {
   failures.push(...scan.failures);
 
   // Blockquote runs: consecutive lines starting with `>`.
-  const runs: Array<{ start: number; end: number; text: string }> = [];
-  let runStart = -1;
-  for (let i = 0; i <= lines.length; i++) {
-    const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
-    if (isQuote && runStart === -1) runStart = i;
-    if (!isQuote && runStart !== -1) {
-      runs.push({ start: runStart, end: i - 1, text: lines.slice(runStart, i).join("\n") });
-      runStart = -1;
-    }
-  }
+  const runs = blockquoteRuns(lines);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];

@@ -104,7 +104,7 @@ import {
   ruleFingerprintHash,
   type RuleDuplicationResult,
 } from "./rule-duplication.ts";
-import { ENGINE_CHECK_MARKER } from "./skill-callout-contract.ts";
+import { ENGINE_CHECK_MARKER, blockquoteRuns } from "./skill-callout-contract.ts";
 import {
   SKILL_BUDGETS_MANIFEST,
   checkSkillBudgets,
@@ -706,18 +706,7 @@ export function checkEngineCallouts(
 
   for (const { rel, text } of files) {
     const lines = text.split(/\r?\n/);
-
- // Blockquote runs: consecutive lines starting with `>`.
-    const runs: Array<{ start: number; end: number; text: string }> = [];
-    let runStart = -1;
-    for (let i = 0; i <= lines.length; i++) {
-      const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
-      if (isQuote && runStart === -1) runStart = i;
-      if (!isQuote && runStart !== -1) {
-        runs.push({ start: runStart, end: i - 1, text: lines.slice(runStart, i).join("\n") });
-        runStart = -1;
-      }
-    }
+    const runs = blockquoteRuns(lines);
 
     for (const run of runs) {
       if (!run.text.includes(ENGINE_CHECK_MARKER)) continue;
@@ -792,21 +781,11 @@ export function checkCalloutDuplication(
   for (const { rel, text } of files) {
     const lines = text.split(/\r?\n/);
 
- // Blockquote runs: consecutive lines starting with `>` (same run
- // splitter as checkEngineCallouts).
-    let runStart = -1;
-    for (let i = 0; i <= lines.length; i++) {
-      const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
-      if (isQuote && runStart === -1) runStart = i;
-      if (!isQuote && runStart !== -1) {
-        const runText = lines.slice(runStart, i).join("\n");
-        const line = runStart + 1;
-        runStart = -1;
-        if (!runText.includes(ENGINE_CHECK_MARKER)) continue;
-        const body = normalize(runText);
-        if (!bodies.has(body)) bodies.set(body, []);
-        bodies.get(body)!.push({ rel, line });
-      }
+    for (const run of blockquoteRuns(lines)) {
+      if (!run.text.includes(ENGINE_CHECK_MARKER)) continue;
+      const body = normalize(run.text);
+      if (!bodies.has(body)) bodies.set(body, []);
+      bodies.get(body)!.push({ rel, line: run.start + 1 });
     }
   }
 
