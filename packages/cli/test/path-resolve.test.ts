@@ -81,10 +81,10 @@ function runResolve(args: string[]): RunResult {
 }
 
 /** Run an arbitrary CLI verb; `cwd` is the directory the caller stands in. */
-function runCli(args: string[], cwd: string = CLI_ROOT): RunResult {
+function runCli(args: string[], cwd: string = CLI_ROOT, env: Record<string, string> = cliEnv()): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", join(CLI_ROOT, "src", "index.ts"), ...args], {
     cwd,
-    env: cliEnv(),
+    env,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -297,6 +297,20 @@ const TRACKED_RESULTS_IGNORE = [
 ].join("\n");
 
 describe("mstar path check \u2014 verdict from Git state", () => {
+  test("a control harness environment override keeps tracked results in the linked checkout", () => {
+    withRoot((root) => {
+      gitRepo(root);
+      commitIgnore(root, TRACKED_RESULTS_IGNORE);
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      const worktree = addWorktree(root, root);
+      const result = runCli(["path", "check"], worktree, { ...cliEnv(), MSTAR_HARNESS_DIR: join(root, ".mstar") });
+      expect(result.exitCode).toBe(0);
+      expect(data(result).trackedHarness).toBe(join(realpathSync(worktree), ".mstar"));
+      expect(data(result).specsDir).toBe(join(realpathSync(worktree), ".mstar", "specs"));
+      expect(data(result).knowledgeDir).toBe(join(realpathSync(worktree), ".mstar", "knowledge"));
+    });
+  });
+
   test("an ignored result dir in the control checkout exits 0 with a path.result-ignored warning", () => {
     withRoot((root) => {
       gitRepo(root);

@@ -255,7 +255,7 @@ export function catalogRootDir(context: StoreContext, rootKind: CatalogRootKind)
     case "specs":
       return resolveSpecsDir(harness, { create: false });
     case "knowledge":
-      return resolveKnowledgeDir(harness);
+      return resolveKnowledgeDir(harness, { create: false });
     case "projects":
       return resolveProjectDir(harness, { harnessDir: harness });
   }

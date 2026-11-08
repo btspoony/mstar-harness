@@ -437,6 +437,19 @@ describe("mstar dispatch validate — control writes", () => {
       expect(readOnly.exitCode).toBe(0);
     });
   });
+  test("accepts direct-on control branch and refuses a different branch", () => {
+    fixture((control, linked, file) => {
+      const run = (branch: string) => {
+        const text = assignment({ "Write domain": "control", "Worktree path": ".", "Control write paths": ".mstar/plans/run.md", "Branch policy": `direct on ${branch} \u2014 maintenance` })
+          .replace(/^\*\*Working branch\*\*:.*\n/m, "");
+        writeFileSync(file, text);
+        return runCli(["dispatch", "validate", file], { cwd: linked });
+      };
+      expect(run("main").exitCode).toBe(0);
+      expect(violationCodes(run("feature/fixture"))).toContain("dispatch.control-write.branch-mismatch");
+    });
+  });
+
 
   test("probes the declared absent file rather than a synthetic child", () => {
     fixture((control, linked, file) => {

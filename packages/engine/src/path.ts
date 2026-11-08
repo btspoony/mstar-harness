@@ -54,6 +54,8 @@ export type ResolveHarnessDirOptions = {
  * (the caller may scaffold it).
  */
   harnessDir?: string;
+  /** Ignore the process override when resolving checkout-local tracked results. */
+  ignoreEnvOverride?: boolean;
   /**
  * Workspace-root stop boundary (roadmap §7c). The upward probe keeps
  * walking only
@@ -92,7 +94,7 @@ export function resolveHarnessDir(
   opts: ResolveHarnessDirOptions = {},
 ): string | null {
   const start = resolve(startDir);
-  const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
+  const explicit = opts.harnessDir ?? (opts.ignoreEnvOverride ? undefined : process.env.MSTAR_HARNESS_DIR);
   if (explicit) return resolve(start, explicit);
   const boundary = resolve(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
   const rc = loadMstarc(start, boundary);

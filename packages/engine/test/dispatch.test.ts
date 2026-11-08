@@ -43,6 +43,10 @@
  * § "承接方反递归红线（NEVER / DO NOT；leaf executor 必读）".
  */
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   antiRecursionPrecheck,
   assertDefaultBranchProtected,
@@ -202,6 +206,33 @@ Task budget: S — one implementer round
     expect(codes).toContain("assignment.field.branch-missing");
   });
 });
+describe("control write host gate", () => {
+  test("validates the control checkout, branch forms and target ownership", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "dispatch-control-")));
+    try {
+      const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
+      git("init", "-q", "-b", "main");
+      git("config", "user.name", "Fixture");
+      git("config", "user.email", "fixture@example.invalid");
+      writeFileSync(join(root, ".gitignore"), ".mstar/\n");
+      git("add", ".gitignore");
+      git("commit", "-qm", "fixture");
+      const linked = join(root, "linked");
+      git("worktree", "add", "-q", "-b", "feature/test", linked);
+      const base = { "Write domain": "control", "Worktree path": root, "Working branch": "main", "Control write paths": ".mstar/plans/", "Task budget": "one round", Enforcement: "hard" };
+      expect(composeDispatchGate(assignment(base), { cwd: root }).ok).toBe(true);
+      expect(composeDispatchGate(assignment({ ...base, "Worktree path": linked }), { cwd: root }).violations.map((v) => v.code)).toContain("dispatch.control-write.worktree-not-control");
+      const direct = { ...base, "Working branch": undefined, "Branch policy": "direct on main \u2014 maintenance" };
+      expect(validateAssignmentFields(assignment(direct)).ok).toBe(true);
+      expect(composeDispatchGate(assignment(direct), { cwd: root }).ok).toBe(true);
+      expect(composeDispatchGate(assignment({ ...direct, "Branch policy": "direct on other \u2014 maintenance" }), { cwd: root }).violations.map((v) => v.code)).toContain("dispatch.control-write.branch-mismatch");
+      expect(composeDispatchGate(assignment(base), { cwd: join(root, "missing") }).violations.map((v) => v.code)).toContain("dispatch.control-write.control-root-unresolved");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 
 describe("control write assignment fields", () => {
   const base = {

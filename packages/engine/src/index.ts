@@ -250,6 +250,7 @@ export {
   parseBranchPolicyDirectOnBranch,
   parseEnforcementFlag,
   validateAssignmentFields,
+  validateControlWriteAssignment,
 } from "./dispatch.js";
 export type {
   BranchProbeOptions,

@@ -654,13 +654,13 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           // The anchor is the nearest existing directory — Git and the harness
           // probe both need a real path, and the target may not exist.
           const anchor = nearestExistingDir(startDir);
-          const { harnessDir, controlRoot } = controlFacts(anchor);
+          const { controlRoot } = controlFacts(anchor);
           // The caller is the invoker, not the named target: a committable path
           // checked from a linked checkout that lives in the control checkout
           // belongs to the wrong checkout. Outside Git the target's own
           // checkout is the only identity available.
           const callerCheckoutRoot = probeCheckoutRoot(context.cwd) ?? probeCheckoutRoot(anchor);
-          const trackedHarness = harnessDir ?? (callerCheckoutRoot === null ? null : path.join(callerCheckoutRoot, ".mstar"));
+          const trackedHarness = callerCheckoutRoot === null ? null : resolveHarnessDir(callerCheckoutRoot, { ignoreEnvOverride: true }) ?? path.join(callerCheckoutRoot, ".mstar");
           const resultDirs = trackedHarness === null ? [] : [
             resolveSpecsDir(trackedHarness, { create: false }),
             resolveKnowledgeDir(trackedHarness, { create: false }),
@@ -701,7 +701,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         const callerCheckoutRoot = probeCheckoutRoot(startDir);
         // Without a probed harness the caller checkout still names a result
         // base; it is only a probe base — nothing is created there.
-        const trackedHarness = harnessDir ?? (callerCheckoutRoot === null ? null : path.join(callerCheckoutRoot, ".mstar"));
+        const trackedHarness = callerCheckoutRoot === null ? null : resolveHarnessDir(callerCheckoutRoot, { ignoreEnvOverride: true }) ?? path.join(callerCheckoutRoot, ".mstar");
         const specsDir = trackedHarness === null ? null : resolveSpecsDir(trackedHarness, { create: false });
         const knowledgeDir = trackedHarness === null ? null : resolveKnowledgeDir(trackedHarness, { create: false });
         const adrDir = trackedHarness === null ? null : resolveAdrDir(trackedHarness, { create: false });
