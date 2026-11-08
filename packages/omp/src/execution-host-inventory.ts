@@ -119,9 +119,12 @@ function isNonEmpty(value: unknown): value is string {
  *
  * Exported so a consumer's recomputation and this producer's digest use one rule.
  */
+export function historyExportBody(canonical: string): string {
+  return canonical.endsWith("\n") ? canonical.slice(0, -1) : canonical;
+}
+
 export function historyExportBodyDigest(canonical: string): string {
-  const body = canonical.endsWith("\n") ? canonical.slice(0, -1) : canonical;
-  return createHash("sha256").update(body, "utf8").digest("hex");
+  return createHash("sha256").update(historyExportBody(canonical), "utf8").digest("hex");
 }
 
 /**

@@ -26,6 +26,7 @@ import {
   HOST_INVENTORY_HOST,
   HOST_INVENTORY_PROTOCOL,
   HOST_INVENTORY_VERSION,
+  historyExportBody,
   buildExecutionHostInventory,
   exportExecutionHostInventory,
 } from "../src/execution-host-inventory";
@@ -78,6 +79,17 @@ const UNRELATED = [
 
 /** A recognized hidden type whose producer this repository does not have. */
 const UNVERIFIED = { type: "custom", id: "entry-continuation", customType: "mstar:phase2-continuation", data: { version: 1, note: "no producer" } };
+
+describe("historyExportBody — the framing-LF rule, as text", () => {
+  test("removes exactly one terminal LF and keeps everything else", () => {
+    expect(historyExportBody("{}")).toBe("{}");
+    expect(historyExportBody("{}\n")).toBe("{}");          // the framing LF is not body
+    expect(historyExportBody("{}\n\n")).toBe("{}\n");    // exactly one, never a trim
+    expect(historyExportBody("{} ")).toBe("{} ");           // trailing space is content
+    expect(historyExportBody("")).toBe("");
+    expect(historyExportBody("\n")).toBe("");
+  });
+});
 
 describe("execution host inventory — one session, one workflow, one export", () => {
   test("the document binds the session and workflow to H1's own export value", () => {
