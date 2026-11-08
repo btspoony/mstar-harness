@@ -13,6 +13,7 @@ import {
   encodeExecutionSessionRef,
   executionContextFor,
   initializeStore,
+  openStore,
   readExecutionAuthority,
   type ActivationAttestation,
   type ExecutionToken,
@@ -23,6 +24,21 @@ import { actionOf, familyOf, familyToolName } from "../src/mcp/fold";
 import { registerCliCommands } from "../src/command-adapter";
 import { createMcpServer } from "../src/mcp/server";
 import { createContextResolver, resolveContext } from "../src/mcp/stdio";
+
+
+/** Committed operation rows: the evidence that a refusal reached no handler. */
+async function operationRowCount(harnessDir: string): Promise<number> {
+  const handle = await openStore({ harnessDir }, "read");
+  try {
+    const row: unknown = handle.db.prepare("select count(*) as n from store_operations").get();
+    if (row === null || typeof row !== "object" || !("n" in row) || typeof row.n !== "number") {
+      throw new Error("store_operations count returned no numeric n");
+    }
+    return row.n;
+  } finally {
+    handle.close();
+  }
+}
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -386,6 +402,8 @@ describe("MCP session identity", () => {
     expect(recovery).toContain("mstar plan progress");
     expect(recovery).toContain("No dsh native tool covers plan prepare/progress/complete yet");
     expect(JSON.stringify(refused)).not.toContain(claimed);
+    // The refusal happened before the execution ledger: no operation was committed.
+    expect(await operationRowCount(fixture.harness)).toBe(0);
   });
 
   test("the explicit opt-in is the only connection that publishes the selector", async () => {

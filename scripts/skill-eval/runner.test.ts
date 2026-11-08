@@ -31,6 +31,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import {
+  canonicalJson,
   canonicalRunId,
   DEV_CASES_PER_ROUTE,
   HELDOUT_CASES_PER_ROUTE,
@@ -719,6 +720,31 @@ async function preparedRunDir(): Promise<{ io: ReturnType<typeof memoryRunnerIo>
   if (result.exit !== 0 || !result.manifest) throw new Error(`test setup: prepare failed: ${result.errors.join("; ")}`);
   return { io, manifest: result.manifest };
 }
+
+describe("canonicalJson — deterministic member ordering", () => {
+  test("sorts object members by code unit at every level", () => {
+    const value = {
+      zeta: { b: 1, a: [3, 2, { y: null, x: true }] },
+      alpha: "s",
+      mid: {},
+      Num: 4,
+      "ünï": false,
+    };
+    const parsed = JSON.parse(canonicalJson(value)) as Record<string, unknown>;
+    const keys = Object.keys(parsed);
+    expect(keys).toEqual([...keys].sort());
+    const nestedKeys = Object.keys((parsed["zeta"] as Record<string, unknown>) ?? {});
+    expect(nestedKeys).toEqual([...nestedKeys].sort());
+  });
+
+  test("is independent of the input's own key order", () => {
+    const a = { beta: 1, alpha: 2 };
+    const b = { alpha: 2, beta: 1 };
+    expect(Object.keys(JSON.parse(canonicalJson(a)) as Record<string, unknown>)).toEqual(
+      Object.keys(JSON.parse(canonicalJson(b)) as Record<string, unknown>),
+    );
+  });
+});
 
 function runSmoke(
   io: RunnerIo,

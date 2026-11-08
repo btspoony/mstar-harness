@@ -1222,9 +1222,13 @@ describe("execution-restore", () => {
     });
 
     // §8 says a second preview mutates nothing: it reports the restored epoch
-    // rather than reconfiguring the live store.
+    // and commits no operation of its own.
+    const operations = (): number =>
+      (rawGet<{ n: number }>(world.dbPath, "select count(*) as n from execution_operations") ?? { n: -1 }).n;
+    const before = operations();
     const again = await previewExecutionRestore(world.context, point.backupPath);
     expect(again.liveEpoch).toBe(receipt.epoch);
+    expect(operations()).toBe(before);
   });
 
   test("execution-restore-preview-reads-a-quiesced-wal-store-without-reconfiguring-it", async () => {

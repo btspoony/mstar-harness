@@ -456,6 +456,39 @@ describe("compareSemver (prerelease-aware, semver 2.0.0 §11)", () => {
 
 });
 
+describe("bumpVersion (auto-bump, prerelease graduation)", () => {
+  const parts = (v: string): [number, number, number] => {
+    const [a, b, c] = v.split(".").map((n) => parseInt(n, 10));
+    return [a, b, c];
+  };
+
+  test("a patch bump keeps major and minor and advances the patch", () => {
+    const from = "7.4.2";
+    const to = bumpVersion(from, "patch");
+    const [maj, min, pat] = parts(from);
+    expect(parts(to)).toEqual([maj, min, pat + 1]);
+  });
+
+  test("a minor bump keeps the major and zeroes the rest", () => {
+    const from = "7.4.2";
+    const [maj] = parts(from);
+    expect(parts(bumpVersion(from, "minor"))).toEqual([maj, parts(from)[1] + 1, 0]);
+  });
+
+  test("a prerelease graduates to its own core on a patch and drops the tag", () => {
+    const from = "7.5.0-alpha.3";
+    const to = bumpVersion(from, "patch");
+    expect(to).toBe(parts(from).join("."));
+    expect(to).not.toContain("-");
+  });
+
+  test("a prerelease takes the next minor core on a minor", () => {
+    const from = "7.5.0-alpha.3";
+    const [maj, min] = parts(from);
+    expect(parts(bumpVersion(from, "minor"))).toEqual([maj, min + 1, 0]);
+  });
+});
+
 describe("marketplace manifest surfaces (nested version locator)", () => {
   test("both marketplace manifests are version surfaces located at plugins.0.version", () => {
     const nested = VERSION_SURFACES.filter((s) => s.versionPath !== undefined);
