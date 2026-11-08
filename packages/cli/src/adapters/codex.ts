@@ -6,7 +6,7 @@ import {
   detectCodexPluginVersion as detectCodexPluginVersionFromHealth,
   parseCodexMarketplaceNames,
 } from "@mstar-harness/commands";
-import { ensureCodexAgentFile, validateCodexAgentFile } from "./codex-agent-files";
+import { ensureCodexAgentFile, retireCodexQaAgent, validateCodexAgentFile, validateRetiredCodexQaAgent } from "./codex-agent-files";
 import type { AgentAdapter, Scope } from "../types";
 import { resolveProjectRoot } from "../utils";
 import { runCliCommand } from "../exec";
@@ -124,6 +124,7 @@ function ensureAgentFiles(scope: Scope, dryRun: boolean) {
     const filePath = scope === "global" ? globalAgentFilePath(agentName) : projectAgentFilePath(agentName);
     notes.push(...ensureCodexAgentFile(source, filePath, dryRun));
   }
+  notes.push(...retireCodexQaAgent(scope === "global" ? globalAgentFilePath("qa-engineer") : projectAgentFilePath("qa-engineer"), dryRun));
   return notes;
 }
 
@@ -134,6 +135,7 @@ function validateAgentFiles(scope: Scope) {
     const filePath = scope === "global" ? globalAgentFilePath(agentName) : projectAgentFilePath(agentName);
     errors.push(...validateCodexAgentFile(source, filePath, scope));
   }
+  errors.push(...validateRetiredCodexQaAgent(scope === "global" ? globalAgentFilePath("qa-engineer") : projectAgentFilePath("qa-engineer"), scope));
   return errors;
 }
 
