@@ -624,6 +624,24 @@ describe("legacy archive corpus helpers", () => {
     expect(Object.keys(merged)).not.toContain(LEGACY_ARCHIVE_SKILL);
   });
 
+  test("collect reads every reference file's text from the archive directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "mstar-archive-refs-"));
+    try {
+      const refs = join(root, LEGACY_ARCHIVE_SKILL, "references");
+      mkdirSync(refs, { recursive: true });
+      // Sorted by name, `.md` only: the merge consumes this order.
+      writeFileSync(join(refs, "b-second.md"), "Second reference body.\n");
+      writeFileSync(join(refs, "a-first.md"), "First reference body.\n");
+      writeFileSync(join(refs, "notes.txt"), "Not a reference file.\n");
+      expect(collectLegacyArchiveReferenceTexts(root)).toEqual([
+        "First reference body.\n",
+        "Second reference body.\n",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("collect is best-effort: missing or non-directory references path yields []", () => {
     expect(collectLegacyArchiveReferenceTexts(join(tmpdir(), "mstar-archive-missing-root"))).toEqual([]);
     const root = mkdtempSync(join(tmpdir(), "mstar-archive-"));
@@ -636,14 +654,15 @@ describe("legacy archive corpus helpers", () => {
     }
   });
 
-  test.skipIf(CORPUS === null)("collect reads every shipped archive reference file", () => {
+  test.skipIf(CORPUS === null)("the shipped corpus carries no archive reference directory", () => {
+    // A corpus assertion, not helper semantics: this checks the repository's own
+    // state (the read path is pinned by the temp-fixture case above). The archive
+    // was converged to its SKILL.md alone — its reference files were folded into
+    // `mstar-project-governance/references/migration-source-shapes.md` — so the
+    // shipped corpus must now yield nothing.
     const corpus = CORPUS as string;
-    const texts = collectLegacyArchiveReferenceTexts(corpus);
-    const shipped = readdirSync(join(corpus, LEGACY_ARCHIVE_SKILL, "references")).filter((name) =>
-      name.endsWith(".md"),
-    );
-    expect(texts).toHaveLength(shipped.length);
-    expect(texts.some((text) => text.includes("# Status v1→v2 field history"))).toBe(true);
+    expect(existsSync(join(corpus, LEGACY_ARCHIVE_SKILL, "references"))).toBe(false);
+    expect(collectLegacyArchiveReferenceTexts(corpus)).toEqual([]);
   });
 
   test.skipIf(CORPUS === null)("collect resolves nothing for a root without the archive", () => {

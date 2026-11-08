@@ -807,7 +807,7 @@
           },
           {
             "path": "iteration/state.md",
-            "content": "# Iteration resume state\n\ncompass: status active (close NOT complete)\nplans: 3/3 Done\nPhase 3 close progress:\n1. [x] Verify all plans merged\n2. [ ] Run knowledge compound (mstar-compound)\n3. [ ] Roadmap update\n4. [ ] status: completed + end_date\n5. [ ] Close exit checklist\n"
+            "content": "# Iteration resume state\n\ncompass: status active (close NOT complete)\nplans: 3/3 Done\nPhase 3 close progress:\n1. [x] Verify all plans merged\n2. [ ] Run knowledge compound (mstar-knowledge)\n3. [ ] Roadmap update\n4. [ ] status: completed + end_date\n5. [ ] Close exit checklist\n"
           }
         ]
       },

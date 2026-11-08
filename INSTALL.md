@@ -489,7 +489,7 @@ npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
    - **Resume interrupted iteration:** `/iteration-drive` (Phase 2→6 re-entry).
    - **Fast autonomous loop:** `/iteration-loop` (Phase 1→6, optional `direction` + `scale`).
 
-3. **Project knowledge** — bootstrap or refresh via the `mstar-compound-refresh` skill (`references/project-knowledge-bootstrap.md`), not a separate install step.
+3. **Project knowledge** — bootstrap or refresh via the `mstar-knowledge` skill (`references/project-knowledge-bootstrap.md`), not a separate install step.
 
 ## Upgrading from 3.x
 

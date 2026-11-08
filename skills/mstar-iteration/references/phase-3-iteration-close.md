@@ -10,7 +10,7 @@ PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree
 
 - Phase 3 是 iteration 级收口，不是任一 plan 的子任务。
 - final plan closure、plan notes、plan compaction 可作为输入，但不能替代 §3.1→§3.5。
-- 读过 `mstar-iteration` / `mstar-compound` 不等于执行 gate；必须打印 checklist 并写入产物。
+- 读过 `mstar-iteration` / `mstar-knowledge` 不等于执行 gate；必须打印 checklist 并写入产物。
 
 ## 3.0.5 Compass shape normalization（legacy 漂移修复）
 
@@ -41,10 +41,10 @@ PM **必须**在对话中打印本 checklist；不得默认同过。
 
 ## 3.2 知识结晶（Compound）—— 迭代级核心收口
 
-**Compound 在此执行，不在 per-plan Done 后独立执行。** 执行步骤 SSOT → **`mstar-compound`**（`references/compound-workflow.md`：Q1–Q8 自检 + Phase 1–7 + 产出判据；package 盘点方法见其 SKILL.md「Iteration package promotion」）。**调用面（时机 / cwd / 写入面 / 记录面）属本 Phase**，由本节声明，不在 compound 侧定义：
+**Compound 在此执行，不在 per-plan Done 后独立执行。** 执行步骤 SSOT → **`mstar-knowledge`**（`references/compound-workflow.md`：Q1–Q8 自检 + Phase 1–7 + 产出判据；package 盘点方法见其 SKILL.md `## Workflow — Capture`「Iteration package promotion」）。**调用面（时机 / cwd / 写入面 / 记录面）属本 Phase**，由本节声明，不在 compound 侧定义：
 
 - **cwd / 写入面**：在本 Phase 的 integration worktree（`integration_worktree_path`，检出 `spec_integration_branch`）直写 tracked 的 `{KNOWLEDGE_DIR}/<category>/<slug>.md`、准入后的 `{SPECS_DIR}/` 与 `CONCEPTS.md`；主 checkout（control root）只承载 gitignored 进程产物。这些写入随 §3.5 的 close commit 进入 integration 分支（**禁止**在主 checkout commit，见 §3.5）。
-- **package 盘点**：`{ITERATION_DIR}/<iteration-id>/**`（`guides/`、`specs/`、扁平 `.md`；默认排除 `delivery-compass.md`）强制盘点 → **`mstar-compound`「Iteration package promotion」**；提升同时完成 `Promoted to:` 标注、受影响 plan `primary_spec` / `spec_refs` 与 compass 引用改指提升后的权威路径，以及 catalog `derived-from` 关系。
+- **package 盘点**：`{ITERATION_DIR}/<iteration-id>/**`（`guides/`、`specs/`、扁平 `.md`；默认排除 `delivery-compass.md`）强制盘点 → **`mstar-knowledge`「Iteration package promotion」**；提升同时完成 `Promoted to:` 标注、受影响 plan `primary_spec` / `spec_refs` 与 compass 引用改指提升后的权威路径，以及 catalog `derived-from` 关系。
 - **specs 提升**：满足 `{SPECS_DIR}` 准入（已锁定、跨迭代成立、`primary_spec` / `spec_refs` 权威 —— `iteration-artifact-boundaries.md`「`{SPECS_DIR}/` 准入」）的已审 package specs，由 PM 以 compound **结构化重写**（**非**整文件复制）写入上述 integration worktree 的 tracked `{SPECS_DIR}/`；随后完成 catalog 登记（`mstar catalog register` / `mstar catalog link` —— 文档归属与 project/iteration 关系，contract §1/§4；登记指向提升后的权威路径，该文件在 close 与 PR review 期间位于 integration worktree 同路径，合并后随 integration 分支出现在各 checkout）。
 - **记录面**：§3.4 填充 compass `## Compound Round Summary`（提升篇数、保留快照、跳过及原因）；每篇新 doc 完成 catalog 登记（Phase 6，强制 gate）；README 仅散文。**若无结晶且无 package 提升，仍须写明 `无可结晶知识` / package 盘点结论及原因**，不得静默。
 
@@ -98,6 +98,6 @@ Staging 说明：`{SPECS_DIR}` 为解析后的实际 specs 目录（候选链见
 
 PR 目标使用当前权威 workflow `branch.target`；缺失时停止并按受守卫入口处理，不默认 `main`。
 
-## 3.6 可选：触发 compound-refresh
+## 3.6 可选：触发知识维护（Maintain）
 
-若本轮 compound 新增了较多知识文档，或 compass 标记了可能过时的旧知识，触发 `mstar-compound-refresh` 对有重叠的知识文档做维护。
+若本轮 compound 新增了较多知识文档，或 compass 标记了可能过时的旧知识，触发 `mstar-knowledge` `## Workflow — Maintain` 对有重叠的知识文档做维护。

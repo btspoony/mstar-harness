@@ -12,11 +12,11 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 
 **Per-task (L2):** task reviewer only — **not** `qc-specialist`. One reviewer subagent per task (spec + quality on task diff).
 
-**After all tasks (L3):** see **`mstar-review-qc/references/review-responsibility-boundaries.md`** · **`mstar-dispatch-gates`** (N=3 same message, branch review-package under `{SDD_DIR}/review/`, `qc1`…`qc3` + consolidated). PM checklist:
+**After all tasks (L3):** see **`mstar-review-qc/references/review-responsibility-boundaries.md`** · **`mstar-dispatch-gates`** (seat count → **`mstar-review-qc`** § 分派时机; branch review-package under `{SDD_DIR}/review/`, `qc1`…`qc3` + consolidated). PM checklist:
 
 0. Pre-dispatch: read `mstar-review-qc`.
 1. `review-package MERGE_BASE HEAD` → branch diff under `{SDD_DIR}/review/`.
-2. Dispatch **three** QC seats in **one** message (**N=3**); alignment fields text-identical across reports and Assignment.
+2. Dispatch the plan QC seats in **one** message; seat count → **`mstar-review-qc`** § 分派时机; alignment fields text-identical across reports and Assignment.
 3. PM writes `{SDD_DIR}/review/qc-consolidated.md` + main plan durable summary; after fixes → targeted re-review of affected findings and fix delta; three seats only when all three have affected findings (new wave files do not broaden scope).
 
 **NEVER** end an SDD plan with only a single final `qc-specialist` unless user override: `QC mode: single — override: <reason>`.
@@ -26,14 +26,14 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 **When:** `Execution mode: inline` or explicit hotfix routing.
 
 1. Branch review-package path on dispatch.
-2. **One** `qc-specialist` → `{SDD_DIR}/review/qc.md` (**N=1**).
+2. **One** `qc-specialist` → `{SDD_DIR}/review/qc.md` (**single seat**).
 3. Targeted re-review updates same `qc.md`.
 
 ## QC / Findings NEVER (PM)
 
 - **NEVER** dispatch plan QC without a **branch** review-package file path (MERGE_BASE..HEAD).
 - **NEVER** use single-seat `qc.md` after **`Execution mode: sdd`** without documented user override.
-- **NEVER** dispatch only QC#2 and QC#3 while skipping QC#1 on initial SDD tri wave — full **N=3** cross-review required (all three seats).
+- **NEVER** dispatch only QC#2 and QC#3 while skipping QC#1 on initial SDD tri wave — full cross-review required (all three seats).
 - **NEVER** consolidate tri-review into `Approve` when any QC report's alignment fields differ from Assignment (character-level).
 - **NEVER** write a non-canonical `severity` on a captured issue — the machine enum comes from `mstar-artifacts` (`references/status-and-residuals.md`).
 - **NEVER** under `Findings cleanup: zero-residual`, use `Approve with residuals` or leave an issue open for a fixable finding — fix-now + re-review; an open issue only for true blocker-defer + roadmap.

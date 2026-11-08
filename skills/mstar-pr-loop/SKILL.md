@@ -74,7 +74,7 @@ The iteration merge ritual is not generalized to standalone plans.
 
 - Dispatch only findings with `file:line`, a fix sketch and merge class `must-fix` or `should-fix`; do not dispatch `may-fix` or `nit` by default. Missing evidence returns to review triage, not speculative implementation. Findings requiring product, permission or external decisions stop and report the decision needed.
 - Fix commits stay local in the fix worktree until CI and AI-review waves are idle (§5.1a); then push one batch. Do not rebase or force-push inside the loop: rewritten history degrades the next round to a full review (§ Re-review).
-- Keep product edits out of the primary checkout; review worktrees stay read-only. Report/evidence placement follows the review archive contract and `mstar-branch-worktree`'s three-domain table, not the fix-worktree location.
+- Keep product edits out of the primary checkout; review worktrees stay read-only. Report/evidence placement follows the review archive contract and `mstar-branch-worktree`'s three-domain statement, not the fix-worktree location.
 
 ### Stop and recovery
 

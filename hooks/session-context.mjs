@@ -21920,7 +21920,7 @@ function validateSchemaYaml(frontmatterText) {
   const violations = [];
   const doc = parseYamlLite(frontmatterText);
   if (doc === null) {
-    violations.push(violation11("medium", "compound.schema.missing-frontmatter", "no `---` YAML frontmatter block found — knowledge docs must open with the schema.yaml contract (mstar-compound/references/schema.yaml)", "add the fenced frontmatter with module, date, problem_type, category, severity"));
+    violations.push(violation11("medium", "compound.schema.missing-frontmatter", "no `---` YAML frontmatter block found — knowledge docs must open with the schema.yaml contract (mstar-knowledge/references/schema.yaml)", "add the fenced frontmatter with module, date, problem_type, category, severity"));
     return { ok: false, violations };
   }
   const isStr = (v) => typeof v === "string";
@@ -22045,12 +22045,12 @@ function referenceExists(repoRoot, docText) {
       if (existsSync16(resolve17(repoRoot, candidate))) {
         checked++;
       } else {
-        violations.push(violation11("medium", "compound.reference.missing-file", `referenced path \`${ref}\` does not exist under ${repoRoot} (compound-refresh Phase 2: referenced code still exists?)`, "update the doc to reference an existing path, or delete the stale reference"));
+        violations.push(violation11("medium", "compound.reference.missing-file", `referenced path \`${ref}\` does not exist under ${repoRoot} (Maintain Phase 2: referenced code still exists?)`, "update the doc to reference an existing path, or delete the stale reference"));
       }
     } else if (foundModules.has(module)) {
       checked++;
     } else {
-      violations.push(violation11("low", "compound.reference.module-missing", `symbol ref \`${ref}\` — heuristic: no ${module}.ts|tsx|js|jsx|mjs|cjs module file found under ${repoRoot} (compound-refresh Phase 2)`, "verify the module file exists, or update the reference"));
+      violations.push(violation11("low", "compound.reference.module-missing", `symbol ref \`${ref}\` — heuristic: no ${module}.ts|tsx|js|jsx|mjs|cjs module file found under ${repoRoot} (Maintain Phase 2)`, "verify the module file exists, or update the reference"));
     }
   }
   return { ok: violations.length === 0, violations, checked };
@@ -22090,7 +22090,7 @@ function scopeGuard(path2, allowedRoots) {
   return {
     ok: false,
     violations: [
-      violation11("medium", "compound.scope.outside", `path "${path2}" is outside the compound-refresh scope (allowed roots: ${allowedRoots.join(", ")}) after resolve() normalization`, "point the operation at one of the allowed paths")
+      violation11("medium", "compound.scope.outside", `path "${path2}" is outside the knowledge Maintain scope (allowed roots: ${allowedRoots.join(", ")}) after resolve() normalization`, "point the operation at one of the allowed paths")
     ]
   };
 }
@@ -22379,7 +22379,7 @@ function lintStrategySections(docText) {
   }
   for (const required of REQUIRED_STRATEGY_SECTIONS) {
     if (!headings.has(required.toLowerCase())) {
-      violations.push(violation12("medium", "lint.strategy.missing-section", `missing required section "${required}" (mstar-strategy § STRATEGY.md structure)`, "add a `## <Section>` heading; required: Vision, What we build, What we don't build, Guiding Principles, Technology Direction, Decision Log"));
+      violations.push(violation12("medium", "lint.strategy.missing-section", `missing required section "${required}" (mstar-knowledge/references/strategy-document.md § Shape)`, "add a `## <Section>` heading; required: Vision, What we build, What we don't build, Guiding Principles, Technology Direction, Decision Log"));
     }
   }
   return { ok: violations.length === 0, violations };

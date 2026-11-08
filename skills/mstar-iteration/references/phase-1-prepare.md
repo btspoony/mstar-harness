@@ -11,7 +11,7 @@ PM 在新迭代启动时执行。
 ## 1.1 收集上下文
 
 1. 查 catalog 了解历史迭代：`mstar catalog list`（按 kind 过滤，见 help；`{ITERATION_DIR}/README.md` 若存在只是散文导览，**不**是登记表；store 未初始化/未激活时查询拒绝 —— `store.not-initialized` / `store.not-active`，**不**读作「没有迭代」）
-2. 读 `STRATEGY.md`（若存在），对齐战略方向（见 `mstar-strategy`）
+2. 读 `STRATEGY.md`（若存在），对齐战略方向（创建/维护 → `mstar-knowledge` `references/strategy-document.md`）
 3. 查 catalog 取 Research 候选：`mstar catalog list`（按 kind / document kind / lifecycle 过滤出 `active` knowledge；见 help；**不**要求阅读全部 knowledge 正文；README 表格不再是权威）
 4. 确定所选 catalog project（未归属使用 `_default`），通过 `mstar roadmap show --project <id>` 读取 `{HARNESS_DIR}/store.db` roadmap 域的未完成路线范围（含上一迭代 `next`），纳入本次迭代范围候选；另用 `mstar milestone list --project <id>` 读取结构化目标。已知项目缺少 roadmap 记录或 milestone 时明确记录 absence；legacy Markdown 仅 transport/history，绝不从项目文件、README 索引行或 catalog 路径回退读取路线内容。读写规则 → **`mstar-project-governance`**。
 
@@ -46,7 +46,7 @@ compass/plans 初稿落盘前，必须锁定**单一**迭代方向、成功标�
 **宿主 Plan UX（interactive）**：若宿主提供 Plan 会话（先写 session plan、后点 Build 才执行 todos）：
 
 - Where the host permits it, scaffold only the session-plan outline and todos, then update that same session plan from user feedback. Do not author the formal compass, guides, plans or specs before §1.2.5; an empty outline is not design approval.
-- Branch policy：在 plan 中写推荐值 + rationale（不得静默 `main`/`master`）；用户可用反馈改正；仅在用户明确结束反馈后仍缺字段时再追问。
+- Branch policy：在 plan 中写推荐值 + rationale（不得静默 `main`/`master`，门禁 → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库））；用户可用反馈改正；仅在用户明确结束反馈后仍缺字段时再追问。
 - 访谈式收敛 **仅**在反馈结束后仍有阻塞缺口时可选发起。
 - **禁止**为更新内容再开第二份 session plan。
 
@@ -54,7 +54,7 @@ The prototype checkpoint in §1.2.5 applies with or without a Plan session. Obey
 
 **禁止**：在未显式 opt-in 时自行切换到 `autonomous`（例如仅因读了本 reference 或存在 roadmap next）。
 
-**Branch policy gate（interactive — 默认路径）**：若用户、现有 roadmap、或项目约定未明确 `iteration_base_branch` / `target_branch`，PM 必须检查当前分支并向用户确认（**Plan 会话**走上方「推荐写入 plan + 反馈改正」；非 Plan 仍须确认）。**不得**因为存在 `main` / `master` 就默认从默认分支开 iteration 或向默认分支提 PR。
+**Branch policy gate（interactive — 默认路径）**：若用户、现有 roadmap、或项目约定未明确 `iteration_base_branch` / `target_branch`，PM 必须检查当前分支并向用户确认（**Plan 会话**走上方「推荐写入 plan + 反馈改正」；非 Plan 仍须确认）。**不得**因为存在 `main` / `master` 就默认从默认分支开 iteration 或向默认分支提 PR（默认分支门禁与 `Branch policy: direct on <branch>` 例外写法 → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库））。
 
 **Autonomous branch resolve**：仅 `autonomous` 模式；解析顺序与 STOP 规则见 **`references/autonomous-direction-lock.md`**（勿把该顺序套用到 interactive 以跳过向用户确认）。
 
@@ -197,15 +197,9 @@ ACTIVE 的中途增减范围先经 `mstar plan bind --execution --workflow <id> 
 
 ## 1.5.5 产物边界（specs · iterations · knowledge）
 
-Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（HARD）：
+Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（HARD）；三棵树的落点、长期价值与写者 → **`mstar-artifacts`** `references/knowledge-and-designs.md` § 与公开文档目录的分工。
 
-| 树 | Phase 1（start）主责 | 说明 |
-|----|---------------------|------|
-| **`{SPECS_DIR}/`** | **Phase 3 iteration-close** specs 提升流程 | **长期**规范性产出：锁定规格、ADR、契约；plan `primary_spec` / `spec_refs` 主要挂此处 |
-| **`{ITERATION_DIR}/`** | PM; selected product-manager / architect; mandatory writer | **`<iteration-id>/` package** (`prototypes/`, `delivery-compass.md`, iteration specs/guides) |
-| **`{KNOWLEDGE_DIR}/`** | **非** start/execute 直写；**`mstar-compound`** @ iteration-close（含 package **提升**） | 可复用实施 SSOT |
-
-**写入边界**：Phase 1（含 §1.6）的规格落在 `<iteration-id>/specs/`；全局 `{SPECS_DIR}/` 在 Phase 3 iteration-close 提升时写入；`{KNOWLEDGE_DIR}/` 由 **`mstar-compound`** @ iteration-close 写入。
+**写入边界**：Phase 1（含 §1.6）的规格落在 `<iteration-id>/specs/`；全局 `{SPECS_DIR}/` 在 Phase 3 iteration-close 提升时写入；`{KNOWLEDGE_DIR}/` 由 **`mstar-knowledge`** @ iteration-close 写入。
 
 ## 1.6 Review & Edit chain（integration 分支前强制）
 

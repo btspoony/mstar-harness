@@ -18,7 +18,7 @@ description: 项目治理：roadmap 内容在 `{HARNESS_DIR}/store.db` 的权威
 | 文件 | 内容 |
 |------|------|
 | `roadmap.md` | 遗留文件 / Markdown import、export 候选与历史；不是项目 roadmap 的实时读写权威 |
-| `residuals.json` | Migration history only; shape → **`mstar-engine-legacy`** `references/migration-source-shapes.md`. Open items are store issues (→ § Issue capture); retain the file as a contract §7 migration-mapping source. |
+| `residuals.json` | Migration history only. Open items are store issues (→ § Issue capture); retain the file as a contract §7 migration-mapping source. |
 | `references/` | 主题化研究语料（surveys / epic 备注 / 第三方 notes）。与 `{SPECS_DIR}`（冻结规格/ADR）、`{KNOWLEDGE_DIR}`（compound 结晶实现 SSOT）、`{ITERATION_DIR}`（迭代 package）**不同**；engine 只列文件名（`listProjectReferenceFiles`），**不做** markdown schema 校验 |
 
 - **`_default` 回退**：无项目流程（未指定 project id 的 plan / 单 plan / hotfix）落到 **`projects/_default/`**（engine `_DEFAULT_PROJECT`）。项目归属由 plan 的 project id 决定；未归属即 `_default`。
@@ -63,7 +63,7 @@ Payload authoring: consult `mstar-harness schema CaptureInput` for `issue add`, 
 
 ### Historical register fields and closure
 
-Register shape, required fields/enums, provenance and historical in-place closure → **`mstar-engine-legacy`** `references/migration-source-shapes.md`; this is a migration mapping, never a live writer.
+Register shape, required fields/enums, provenance and historical in-place closure → `references/migration-source-shapes.md`; this is a migration mapping, never a live writer.
 
 Live capture and closure use § Issue capture and the contract §4 closure authority; `QA gate: mandatory` requires QA verification, otherwise PM acceptance. Current severity, cleanup and issue closure → **`mstar-artifacts`** `references/status-and-residuals.md`.
 
@@ -86,7 +86,7 @@ Live capture and closure use § Issue capture and the contract §4 closure autho
 
 ## Decision Rules
 
-- **Issue store only**: new captures write issues (→ § Issue capture); historical registers remain read-only and must never be dual-written. Migration field history → **`mstar-engine-legacy`** `references/migration-source-shapes.md`.
+- **Issue store only**: new captures write issues (→ § Issue capture); historical registers remain read-only and must never be dual-written.
 - **fail-loud handoff**：捕获前必须过 engine 校验；malformed → reject + rewrite，绝不静默降级写入。
 - **severity 是机器字段**：QC 报告的 Critical / Warning / Suggestion 是**章节标题**，不得逐字抄入 JSON `severity`。
 - **`_default` 不豁免校验**：无项目流程同样走 issue store（`project_id = _default`），字段与关闭权威不变。
@@ -98,6 +98,6 @@ Live capture and closure use § Issue capture and the contract §4 closure autho
 ## References
 
 - **`mstar-artifacts`**（`references/status-and-residuals.md`）— 字段语义 SSOT：severity 含义与门禁关系、findings cleanup modes 全文、close 协议、engine-check 查询示例
-- **`mstar-engine-legacy`** `references/migration-source-shapes.md` — historical register shape, required fields/enums, provenance and closure mapping; no execution route or live writer
+- `references/migration-source-shapes.md` — historical register shape, required fields/enums, provenance and closure mapping; no execution route or live writer
 - **`mstar-conventions`** — `{PROJECT_DIR}` / `{WORKFLOW_DIR}` 路径符号、`.mstarc` 声明、gitignore 策略
 - **`mstar-review-qc`** — PM QC 编排与 findings 捕获 / QC gate（PM 同轮必读）

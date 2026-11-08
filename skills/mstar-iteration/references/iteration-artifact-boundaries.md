@@ -5,24 +5,7 @@
 
 ## 三棵树分工（HARD）
 
-| 树 | 路径 | 长期价值 | 谁写（何时） | 典型内容 |
-|----|------|----------|--------------|----------|
-| **Specs（仓库级）** | `{SPECS_DIR}/` | **是** — 跨迭代规范性权威 | **Phase 3 iteration-close** specs 提升流程 | 已锁定产品/API 规格、ADR、契约 |
-| **Iterations** | `{ITERATION_DIR}/` | Iteration-level history/design context; eligible material may be promoted | PM + selected product/architect contributors + final writer | **`<iteration-id>/` package** (prototypes + compass + specs/guides) |
-| **Knowledge** | `{KNOWLEDGE_DIR}/` | **是** — 可复用实施 SSOT | **`mstar-compound`** @ **iteration-close**（含 package 提升） | 结晶、提升后的长期实施知识 |
-
-```text
-iteration-start / execute
-  product / architect  ──►  {ITERATION_DIR}/<id>/specs/       迭代级规格（gitignored）
-                         ──►  {ITERATION_DIR}/<id>/guides/    过程指南
-                         ──►  compass + plans                 迭代过程产物（gitignored）
-                         ✗   {KNOWLEDGE_DIR}/                 不直接新增
-
-iteration-close (§3.2 + specs 提升，写入 integration worktree)
-  specs 提升流程        ──►  {SPECS_DIR}/                    已锁定的仓库级规格
-  mstar-compound       ──►  读 plan 素材 + {ITERATION_DIR}/<id>/**
-                         ──►  {KNOWLEDGE_DIR}/                提升值得保留的实施知识
-```
+三棵树（specs · iterations · knowledge）的落点、长期价值与写者 → **`mstar-artifacts`** `references/knowledge-and-designs.md` § 与公开文档目录的分工（产物边界表唯一权威）。本文件其余各节只补充 iteration package 布局、`{SPECS_DIR}/` 准入与角色编辑域。
 
 ## `{ITERATION_DIR}/<iteration-id>/` 迭代 package（目录优先）
 
@@ -76,7 +59,7 @@ iteration-close (§3.2 + specs 提升，写入 integration worktree)
 
 ## Knowledge 与 compound 提升
 
-- iteration-close 的 knowledge / specs package 盘点、准入、结构化提升与历史保留规则 → **`mstar-compound`**「Iteration package promotion」及 **`mstar-artifacts/references/knowledge-and-designs.md`**；本轨写入 integration worktree，随 close commit 交付。
+- iteration-close 的 knowledge / specs package 盘点、准入、结构化提升与历史保留规则 → **`mstar-knowledge`**「Iteration package promotion」及 **`mstar-artifacts/references/knowledge-and-designs.md`**；本轨写入 integration worktree，随 close commit 交付。
 - **iteration-start §1.6**：product / architect **不得**向 `{KNOWLEDGE_DIR}/` **新增**；误写由 writing-specialist 迁回 **package**。
 
 ## §1.6 selected-role editing scope

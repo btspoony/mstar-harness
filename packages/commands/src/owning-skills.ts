@@ -22,7 +22,7 @@ const FAMILY_OWNING_SKILL: Readonly<Record<string, string>> = {
   "pr-review": "mstar-audit",
   skill: "mstar-skill-authoring",
   roles: "mstar-roles",
-  compound: "mstar-compound",
+  compound: "mstar-knowledge",
   "design-md": "mstar-design-md",
   harness: "mstar-conventions",
   path: "mstar-conventions",

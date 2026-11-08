@@ -37,6 +37,9 @@
  * - readDeclaredBins (F-S2) — Guard 1's manifest read is guard-or-clear:
  * missing / corrupt / bin-less manifests each return one explicit
  * failure row (never a silent skip that would flood every citation).
+ * - Guard 12 (`scripts/adr-check.ts`) footer fragment — a real walk of a temp
+ * ADR tree yields the exact `Guard 12 ADR format N records, M failures` line;
+ * the per-code semantics are pinned in `scripts/adr-check.test.ts`.
  */
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -44,6 +47,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
+import { checkAdrTree, summarizeAdrCheck } from "./adr-check.ts";
 import {
   AUDIT_CATEGORY_DOC,
   buildCanonicalCommandInventory,
@@ -968,8 +972,8 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
     ).toBe(true);
   });
 
-  test("red probe: a cross-reference inside an archive reference file fails (roles.loadorder.legacy.archive.reference)", () => {
-    const rel = "skills/mstar-engine-legacy/references/status-field-history.md";
+  test("red probe: a cross-reference inside the archive skill text fails (roles.loadorder.legacy.archive.reference)", () => {
+    const rel = "skills/mstar-engine-legacy/SKILL.md";
     const corpus = realCorpus();
     expect(corpus.find((entry) => entry.rel === rel)).toBeDefined();
     const gapped = corpus.map((entry) =>
@@ -984,7 +988,7 @@ describe("checkRolesCorpus — Guard 4 roles/load-order corpus", () => {
         (row) => row.includes("roles.loadorder.legacy.archive.reference") && row.includes("mstar-artifacts"),
       ),
     ).toBe(true);
- // Restore: the shipped reference files are green through the same seam.
+ // Restore: the shipped archive text is green through the same seam.
     expect(checkRolesCorpus(corpus, ROLES_DIR).loadOrderViolations).toBe(0);
   });
 
@@ -1314,6 +1318,43 @@ describe("checkProvenanceScan — Guard 7 repo text-face provenance scan", () =>
         { file: "packages/sample/test/over.test.ts", lines: 2001 },
         { file: "packages/dsh/tests/over.spec.tsx", lines: 2001 },
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Guard 12 — ADR format footer summary", () => {
+  test("a real walk of a temp ADR tree yields the exact footer fragment", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-adr-"));
+    try {
+      mkdirSync(join(dir, "docs/adr/implemented/architecture"), { recursive: true });
+      writeFileSync(
+        join(dir, "docs/adr/implemented/architecture/2026-01-01-example.md"),
+        [
+          "# ADR: Example record",
+          "",
+          "Status: implemented — accepted for the sample",
+          "",
+          "## Problem",
+          "",
+          "p",
+          "",
+          "## Decision",
+          "",
+          "d",
+          "",
+          "## Alternatives considered",
+          "",
+          "a",
+          "",
+          "## Consequences",
+          "",
+          "c",
+          "",
+        ].join("\n"),
+      );
+      expect(summarizeAdrCheck(checkAdrTree(dir))).toBe("Guard 12 ADR format 1 records, 0 failures");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

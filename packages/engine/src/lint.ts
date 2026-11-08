@@ -23,8 +23,8 @@
  * - Skill frontmatter contract: `mstar-skill-authoring` SKILL.md § Frontmatter
  * Contract — `name` stable lowercase-hyphen; `description` is the trigger
  * contract (not a workflow summary), third person.
- * - STRATEGY.md structure: `mstar-strategy` SKILL.md § STRATEGY.md structure —
- * six required sections.
+ * - STRATEGY.md structure: `mstar-knowledge/references/strategy-document.md`
+ * § Shape — six required sections.
  * - Ephemeral citations: knowledge `conventions/skill-content-porting-discipline.md`
  * §3 ("No ephemeral citations in durable skill text") + session evaluation
  * 2026-08-16 discrimination contract — concrete task-artifact references
@@ -802,7 +802,7 @@ function parseFrontmatter(text: string): Record<string, string> | null {
   return fields;
 }
 
-/** Required STRATEGY.md sections (mstar-strategy § STRATEGY.md structure). */
+/** Required STRATEGY.md sections (mstar-knowledge/references/strategy-document.md § Shape). */
 const REQUIRED_STRATEGY_SECTIONS = [
   "Vision",
   "What we build",
@@ -814,8 +814,9 @@ const REQUIRED_STRATEGY_SECTIONS = [
 
 /**
  * Lint a STRATEGY.md document for the six required section headings
- * (mstar-strategy § STRATEGY.md structure: Vision, What we build, What we
- * don't build, Guiding Principles, Technology Direction, Decision Log).
+ * (mstar-knowledge/references/strategy-document.md § Shape: Vision, What we
+ * build, What we don't build, Guiding Principles, Technology Direction,
+ * Decision Log).
  * Optional sections (Current Focus, Risks & Mitigations, Competitive
  * Context) are not required.
  *
@@ -840,7 +841,7 @@ export function lintStrategySections(docText: string): GateResult {
         violation(
           "medium",
           "lint.strategy.missing-section",
-          `missing required section "${required}" (mstar-strategy \u00a7 STRATEGY.md structure)`,
+          `missing required section "${required}" (mstar-knowledge/references/strategy-document.md \u00a7 Shape)`,
           "add a `## <Section>` heading; required: Vision, What we build, What we don't build, Guiding Principles, Technology Direction, Decision Log",
         ),
       );

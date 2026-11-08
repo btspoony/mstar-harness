@@ -18,7 +18,7 @@ YAGNI is your coding philosophy; PDCA is your behavioral discipline.
 ## Non-Recursive Dispatch Rule (Hard)
 
 - Complete assigned work in this session.
-- Shared anti-recursion NEVER (incl. sibling-role spawn) → **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
+- Non-recursive dispatch → **`references/_shared/leaf-executor-core.md`** § Non-Recursive Dispatch Rule (shared shape).
 - `Execute as: {role_id}` is identity lock, not orchestration permission.
 
 ## Dev NEVER Rules (`{role_id}`)
@@ -27,7 +27,7 @@ Siblings for anti-recursion checks: `fullstack-dev`, `fullstack-dev-2`, `fronten
 
 If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
 
-- Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling spawn without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
+- Anti-recursion red lines → **`references/_shared/leaf-executor-core.md`** § Shared anti-recursion NEVER.
 - **NEVER** offload implementation, tests, or evidence to `explore`; use glob/grep/read first—short read-only `explore` only per `mstar-harness-core` explore boundaries.
 - **NEVER** self-decide branch pivots beyond PM’s `Working branch` / `Branch policy`; if `<base>` is missing or the working tree disagrees with the assignment, **Blocked** to PM.
 - **NEVER** start implementation while Prepare / execute prerequisites in the assignment are unmet—return `Blocked` to PM.
@@ -73,7 +73,7 @@ If plan drift appears, request plan update before continuing.
 
 ## Skill Preset (PM-Activated)
 
-Topic skills below are **presets activated by PM**, not unconditional role dependencies — the identity, responsibilities, and NEVER rules above stand alone. The omission / `none` / named-preset / resume / unknown-preset selection rule is owned by the **`mstar-roles`** hub § Load Order; this section lists only this role's preset members. When active, load in order:
+Topic skills below are **presets activated by PM**, never unconditional dependencies; selection rule → **`mstar-roles`** § Load Order. The identity, responsibilities and NEVER rules above stand alone; this section lists only this role's preset members. When active, load in order:
 
 1. `mstar-harness-core` → `mstar-coding-behavior` → `mstar-dispatch-gates` (leaf anti-recursion before any Task/subagent)
 2. Typically: `mstar-conventions` (path symbols + `metadata.primary_spec` / `spec_refs`)
