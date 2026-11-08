@@ -145,7 +145,7 @@ plans: []
 | target_branch | <PR target> |
 ```
 
-> **Engine check (when available):** import `validateCompassFrontmatter` from `@mstar-harness/engine` in a host hook to validate the compass frontmatter above (no CLI form yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** engine `validateCompassFrontmatter` to validate the compass frontmatter above (no CLI form yet). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ### Draft contract（PM 初稿的深度契约）
 
@@ -175,7 +175,7 @@ Allowed owners are `product-manager`, `architect`, `writing-specialist` or `PM` 
 - **执行注册**：ACTIVE 的 workflow / plan 行、DB 根 register 与 catalog delta 必须由**同一个 registration journal** 发布（contract §3）。pending 状态 `catalog.registration-pending` 用 `mstar catalog reconcile` 收口（只读列出与 abort 形态见 help）。
 - **限制**：`store.db` 本地且默认 gitignored —— tracked 正文（compass/README 散文）**无法**重建本地 catalog 历史；`discover` 从不假设文件名编码迭代归属或生命周期，未声明项以显式 `unknowns` 披露。
 
-> **Engine check (when available):** import `readCatalogCompleteness` / `assertCatalogCompleteness` from `@mstar-harness/engine` (or read the rows with `mstar catalog list` / `mstar catalog show`) in a host hook to read the catalog rows above (no CLI form for the completeness report yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** engine `readCatalogCompleteness` / `assertCatalogCompleteness` (or read the rows with `mstar catalog list` / `mstar catalog show`) to read the catalog rows above (no CLI form for the completeness report yet). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## 1.5 登记执行状态（formal iteration 必填）
 

@@ -29,19 +29,19 @@ description: "Plan artifacts: main plans, durable review summaries, QC/QA bundle
 - **Project registers**: migration history only; shapes/provenance → **`mstar-project-governance`** `references/migration-source-shapes.md`. **Open items are issues in `{HARNESS_DIR}/store.db`** → **`mstar-project-governance`「Issue capture」**.
 - **Canonical**: capture confirmed findings as **issues** (plan-linked `mstar plan issue-add`, unscoped `mstar issue add`; recurrence appends an occurrence); the register is not a write target. Legacy execution imports use `mstar store upgrade`; project register import uses the separate reviewed `mstar store migrate` flow. Never dual-write.
 
-> **Engine check (when available):** run `mstar status validate` (ACTIVE authority and tokens; no path argument). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar status validate` (ACTIVE authority and tokens; no path argument). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 - **Fail-loud handoff**: capture validates input at the domain boundary and refuses malformed submissions (nothing written) → **`references/status-and-residuals.md`** (“Fail-loud handoff contract”); historical document validation → **`mstar-project-governance`** `references/migration-source-shapes.md`.
 - **Lifecycle**: an issue is **open** until a §4 closure authority retires it (`resolved` / `waived` / `duplicate` / `superseded`); current machine severity and issue-disposition semantics → `references/status-and-residuals.md`; historical closure shapes → **`mstar-project-governance`** `references/migration-source-shapes.md`.
 
 - **Findings cleanup:** coordinator prepare records `zero-residual | allow-residual`, default **allow-residual**. Leaf Assignments mirror the effective mode for evidence duties, not admission sealing → `references/status-and-residuals.md`.
 
-> **Engine check (when available):** run `mstar status findings-cleanup <plan-id> [--mode zero-residual|allow-residual]` (or import `findingsCleanupGate` from `@mstar-harness/engine` in a host hook) to enforce the Findings cleanup mode above against the **open issues linked to the plan** in `{HARNESS_DIR}/store.db`. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar status findings-cleanup <plan-id> [--mode zero-residual|allow-residual]` (engine `findingsCleanupGate`) to enforce the Findings cleanup mode above against the **open issues linked to the plan** in `{HARNESS_DIR}/store.db`. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 - **`{WORKFLOW_DIR}/<id>/notes.jsonl`**: plain append-only runtime notes, not accepted-operation authority; duplicate IDs/submissions append again. Historical plan-row arrays stay read-only. Append/read semantics → **`references/status-and-residuals.md`**; `mstar status tech-debt` reads open issues in the store.
 - **Iteration safety:** source metadata supplies checkout scope; atomic coordinator transactions/CAS protect state, while workflow-wide integration merge exclusion protects real serial merges (`execution_integration_leases`). Fields → `references/status-and-residuals.md`; procedure → `mstar-iteration/references/phase-2-worktree-lease.md`.
 
-> **Engine check:** `mstar worktree check` is the one engine-enforced checkout command (per-plan L1, workflow `--entry`, and L2), including integration merge-lease state. It is an engine-enforced subset, not a mutation substitute, a per-row admission ceremony, or clearance of the full pre-dispatch checklist.
+> **Engine check:** `mstar worktree check` is the one engine-enforced checkout command (per-plan L1, workflow `--entry`, and L2), including integration merge-lease state. It is an engine-enforced subset, not a mutation substitute, a per-row admission ceremony, or clearance of the full pre-dispatch checklist. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 Current field semantics, severity mapping, findings cleanup and issue closure → **`references/status-and-residuals.md`**; migration-source shapes → **`mstar-project-governance`** `references/migration-source-shapes.md`.
 

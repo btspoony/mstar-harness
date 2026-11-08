@@ -1,11 +1,11 @@
 ---
 name: mstar-skill-authoring
-description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门控）。在新建任意 skill、大改 SKILL.md、改写 description 触发契约、压缩过长 body、评审 skill 结构、或判断某段行为塑形文案是否值得保留时读取。适用于任何领域的 skill，不限于本仓库专题；不用于普通应用实现。
+description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门控）。在新建任意 skill、大改 SKILL.md、改写 description 触发契约、压缩过长 body、评审 skill 结构、判断某段行为塑形文案是否值得保留，或写 / 评审 skill body 之外的模型可见文本（tool 与参数定义、CLI 帮助、诊断与拒绝字符串、Assignment 字段）时读取。适用于任何领域的 skill 与模型可见文本，不限于本仓库专题；不用于普通应用功能实现。
 ---
 
 # Skill Authoring
 
-本 skill 约束如何编写、审查与验证 **任意** agent skill（`SKILL.md`）。面向 **skill 工作**，不是普通应用实现。它判 skill 是否成型——名称、`description` 触发契约、5 问 body、渐进披露；body 内的文字是否在 HEAD 可解析归 **`mstar-prose`**，本 skill 不复述其判断。
+本 skill 约束如何编写、审查与验证 **任意** agent skill（`SKILL.md`），以及 skill body 之外的模型可见文本（见「Progressive Disclosure」）。面向 **skill 工作**，不是普通应用功能实现。它判 skill 是否成型——名称、`description` 触发契约、5 问 body、渐进披露；body 内的文字是否在 HEAD 可解析归 **`mstar-prose`**，本 skill 不复述其判断。
 
 ## Load Order
 
@@ -101,9 +101,13 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 
 三层分工：frontmatter 只写触发，`SKILL.md` 只写主执行路径，`references/` / `templates/` / `scripts/` 放变体细节、长示例与 schema 并按需加载；每份额外资源都要在 body 写明「何时打开哪一份」。
 
+写 / 评审 skill body **以外**的模型可见文本——tool 与参数定义、Assignment 字段、拒绝与诊断字符串、CLI 帮助——时加载 `references/context-economy.md`（六条原则、三条 tool 定义规则、测量规则）。
+
+skill body 自身的经济性归本 skill 判断；其散文是否在 HEAD 可解析归 **`mstar-prose`**。
+
 ## Engine checks
 
-> **Engine check (when available):** run `mstar skill lint <skill-dir>` to lint the frontmatter contract and the five-question body contract; in a host hook, `import { lintFrontmatter, lintFiveQuestion, resolveAssetPath } from "@mstar-harness/engine"` resolves the same contracts plus the skill-relative asset paths above. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar skill lint <skill-dir>` to lint the frontmatter contract and the five-question body contract; engine `lintFrontmatter`, `lintFiveQuestion`, `resolveAssetPath` resolves the same contracts plus the skill-relative asset paths above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## 验证门控（Evidence，原则 4 + 6）
 
@@ -135,3 +139,4 @@ Verdict：`Approve` | `Request Changes` | `Needs Discussion` | `Unconfirmed`—�
 |------|------|
 | 需要完整 skill-writer 循环（writer workflow、authoring devices、压力场景骨架、anti-patterns） | `references/skillsbench-authoring.md` |
 | 需要把「真实产物」固化为可重跑断言（P6 重武器选项） | `references/regression-fixation.md` |
+| 写 / 评审 tool 定义、Assignment 字段、拒绝与诊断字符串等非 skill body 的模型可见文本 | `references/context-economy.md` |

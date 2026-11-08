@@ -13,26 +13,34 @@
  *      bundled skills (e.g. `grill-me`) are load-checked too but reported
  *      separately from the harness set.
  *   2. No skill markdown references `@mstar-harness/engine` or
- *      `@mstar-harness/cli` outside an advisory `**Engine check (when
- *      available):**` blockquote. Fenced code blocks are allowed only when
- *      the block is labeled "Engine check" (advisory examples, e.g.
- *      mstar-artifacts references).
- *   3. Every `**Engine check (when available):**` callout is a blockquote
- *      and carries the standalone guarantee ("Skill text below remains
- *      authoritative when the runtime is absent"), so the skill body still
- *      states its rule in prose.
+ *      `@mstar-harness/cli` outside an advisory `**Engine check:**`
+ *      blockquote. Fenced code blocks are allowed only when the block is
+ *      labeled "Engine check" (advisory examples, e.g. mstar-artifacts
+ *      references).
+ *   3. Every `**Engine check:**` callout is a blockquote that carries the
+ *      shared-contract pointer, and the contract it points at states the
+ *      engine-absent fallback — so the callout never becomes the only place
+ *      the standalone rule is written. A corpus with zero callouts fails:
+ *      the marker or the scan broke, and a check that passes on zero hits is
+ *      not a check.
  *
  * Usage: bun run scripts/standalone-smoke.ts
  * Exit 0 = standalone rule holds; exit 1 = violations found.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import {
+  ENGINE_CHECK_CONTRACT_DOC,
+  ENGINE_CHECK_MARKER,
+  blockquoteRuns,
+  checkCalloutPresence,
+  checkContractDoc,
+  scanCalloutContract,
+} from "./skill-callout-contract.ts";
 
 const root = process.cwd();
 const failures: string[] = [];
 const ENGINE_REF = /@mstar-harness\/(?:engine|cli)/;
-const CALLOUT_MARKER = "**Engine check (when available):**";
-const STANDALONE_GUARANTEE = "Skill text below remains authoritative when the runtime is absent";
 
 /**
  * Harness skills that must load standalone BEYOND the `mstar-*` corpus.
@@ -131,48 +139,25 @@ for (const expected of expectedDirs) {
 const mstarSkillCount = expectedDirs.filter((dir) => dir.startsWith("mstar-")).length;
 
 
-/* 2 + 3. Engine references must be advisory-only; callouts blockquoted. */
+/* 2 + 3. Engine references must be advisory-only; callouts blockquoted and
+ * carrying the shared-contract pointer. */
 let callouts = 0;
-let guaranteeMissing = 0;
 for (const file of collectMarkdown("skills")) {
   const rel = relative(root, file);
   const text = readFileSync(file, "utf8");
   const lines = text.split(/\r?\n/);
   const fences = fencesOf(lines);
 
+  const scan = scanCalloutContract(rel, text);
+  callouts += scan.callouts;
+  failures.push(...scan.failures);
+
   // Blockquote runs: consecutive lines starting with `>`.
-  const runs: Array<{ start: number; end: number; text: string; isCallout: boolean }> = [];
-  let runStart = -1;
-  for (let i = 0; i <= lines.length; i++) {
-    const isQuote = i < lines.length && lines[i].trimStart().startsWith(">");
-    if (isQuote && runStart === -1) runStart = i;
-    if (!isQuote && runStart !== -1) {
-      const runText = lines.slice(runStart, i).join("\n");
-      runs.push({ start: runStart, end: i - 1, text: runText, isCallout: runText.includes(CALLOUT_MARKER) });
-      runStart = -1;
-    }
-  }
+  const runs = blockquoteRuns(lines);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const hasRef = ENGINE_REF.test(line);
-    const hasMarker = line.includes(CALLOUT_MARKER);
-
-    if (hasMarker && !line.trimStart().startsWith(">")) {
-      failures.push(`${rel}:${i + 1} callout marker must be a blockquote (advisory callouts only)`);
-    }
-    if (hasMarker) {
-      const run = runs.find((r) => i >= r.start && i <= r.end);
-      if (run) {
-        callouts++;
-        if (!run.text.includes(STANDALONE_GUARANTEE)) {
-          guaranteeMissing++;
-          failures.push(`${rel}:${i + 1} callout lacks the standalone guarantee ("${STANDALONE_GUARANTEE}")`);
-        }
-      }
-    }
-
-    if (!hasRef) continue;
+    if (!ENGINE_REF.test(line)) continue;
     const fence = inFence(i, fences);
     if (fence) {
       if (!fence.text.includes("Engine")) {
@@ -182,7 +167,7 @@ for (const file of collectMarkdown("skills")) {
     }
     if (line.trimStart().startsWith(">")) {
       const run = runs.find((r) => i >= r.start && i <= r.end);
-      if (run && run.isCallout) continue;
+      if (run && run.text.includes(ENGINE_CHECK_MARKER)) continue;
       failures.push(`${rel}:${i + 1} engine reference in a blockquote that is not an "Engine check" callout`);
       continue;
     }
@@ -199,10 +184,17 @@ for (const file of collectMarkdown("skills")) {
   }
 }
 
+failures.push(...checkCalloutPresence(callouts));
+try {
+  failures.push(...checkContractDoc(ENGINE_CHECK_CONTRACT_DOC, readFileSync(join(root, ENGINE_CHECK_CONTRACT_DOC), "utf8")));
+} catch (error) {
+  failures.push(`${ENGINE_CHECK_CONTRACT_DOC} is unreadable (${(error as Error).message})`);
+}
+
 if (failures.length > 0) {
   console.error(`standalone-smoke: ${failures.length} violation(s) found\n`);
   for (const f of failures) console.error(`  ✗ ${f}`);
-  console.error(`\nloaded ${loaded} skill(s); ${callouts} Engine-check callouts (${guaranteeMissing} missing the standalone guarantee)`);
+  console.error(`\nloaded ${loaded} skill(s); ${callouts} Engine-check callouts scanned`);
   process.exit(1);
 }
 
@@ -212,5 +204,5 @@ console.log(
       ? `; ${optionalNames.length} optional bundled skill${optionalNames.length === 1 ? "" : "s"} (${optionalNames.join(", ")})`
       : ""),
 );
-console.log(`standalone-smoke: OK — ${callouts} Engine-check callouts are advisory blockquotes with the standalone guarantee`);
+console.log(`standalone-smoke: OK — ${callouts} Engine-check callouts are advisory blockquotes that carry the shared-contract pointer`);
 console.log(`standalone-smoke: OK — no @mstar-harness/engine or @mstar-harness/cli reference in any skill load order (engine + cli uninstalled simulation)`);

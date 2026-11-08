@@ -97,7 +97,7 @@ Full mode dispatches research subagents through the host's task tool. PM selects
 6. **Catalog** — 新文档在 `{HARNESS_DIR}/store.db` 的 catalog 中登记为 `kind=document`（`document_kind=knowledge`）：单行 `mstar catalog register`，或 reviewed `mstar catalog discover` + `mstar catalog import`；provenance/supersession 用 `mstar catalog link`（`derived-from` / `supersedes` 关系）；生命周期变更用 `mstar catalog update`（`active` / `archived` / `superseded`；revision 守卫见 help）。**不再**要求 `{KNOWLEDGE_DIR}/README.md` 索引行（README 是散文，不是登记表）。知识关联载体是 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 仅 legacy 只读，不是写入面。每篇新 doc 必须完成本 Phase
 7. **Refresh trigger** — 新知识暗示旧 doc 过时 → 推荐本 skill 的 `## Workflow — Maintain`（经 `/pm` 并指明 scope；不自动跑，仅 flag）
 
-> **Engine check (when available):** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (or `import { validateSchemaYaml, assertKnowledgeCatalogCompleteness } from "@mstar-harness/engine"` in a host hook) to validate the frontmatter against `references/schema.yaml` (Phase 3 Write) and assert that every knowledge body under `{KNOWLEDGE_DIR}` has a catalog row (Phase 6 Catalog, contract §4). The `assertIndexRows` export refuses actionably (`compound.index.retired`) instead of passing, and the `mstar compound validate --knowledge-dir` index-row check fails for the same reason. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (engine `validateSchemaYaml`, `assertKnowledgeCatalogCompleteness`) to validate the frontmatter against `references/schema.yaml` (Phase 3 Write) and assert that every knowledge body under `{KNOWLEDGE_DIR}` has a catalog row (Phase 6 Catalog, contract §4). The `assertIndexRows` export refuses actionably (`compound.index.retired`) instead of passing, and the `mstar compound validate --knowledge-dir` index-row check fails for the same reason. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## Workflow — Maintain
 
@@ -107,7 +107,7 @@ Full mode dispatches research subagents through the host's task tool. PM selects
 
 **SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md`（**散文**，见 Phase 4）+ `<repo-root>/CONCEPTS.md`；知识关联经 `mstar catalog link`，不写 status/snapshot metadata。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
 
-> **Engine check (when available):** run `mstar compound validate <doc-path> --knowledge-dir <dir>` (or `import { scopeGuard, compoundRefreshScope } from "@mstar-harness/engine"` in a host hook) to resolve the allowed scope above (`{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, `<repo-root>/CONCEPTS.md`) and guard every write against it; this scope never authorizes ACTIVE status/snapshot writes. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar compound validate <doc-path> --knowledge-dir <dir>` (engine `scopeGuard`, `compoundRefreshScope`) to resolve the allowed scope above (`{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, `<repo-root>/CONCEPTS.md`) and guard every write against it; this scope never authorizes ACTIVE status/snapshot writes. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ### Bootstrap vs refresh
 
@@ -130,8 +130,9 @@ For each candidate document, classify into one of five outcomes:
 | **Replace** | Old doc is misleading; known better replacement exists | Create trustworthy successor, then delete old |
 | **Delete** | No longer useful, applicable, or distinct | Delete — git history preserves it |
 
-> **Guardrail — rejected approaches:** a captured rejected approach stays only while the losing idea remains a tempting, meaningful mistake; delete it once obsolete or no longer plausible.
-> **Calibration:** first real run of this axis — 9 size-divergent knowledge docs (36–78 lines) under `{KNOWLEDGE_DIR}/architecture-patterns/` classified at fold time, all kept by future value (evidence: the knowledge-prose-folds plan `## Review Gate Summary` → Task evidence); length proved not to be a criterion.
+**Future-decision-value criterion** — judge a document by the decision it still constrains, never by length or age: **delete** when that decision is closed and nothing in the body would guide a future change (git history preserves it, Core rule 6); **keep** when its rationale, negative guarantee or ownership boundary still constrains work, however long it is; **archive** only when the historical rationale warrants preservation, and only through the iteration-start §1.6 gate's existing archive tree. **Never archive a live proposal**; keep a rejected approach only while the losing idea remains a tempting mistake.
+
+**Calibration:** 9 size-divergent docs (36–78 lines) under `{KNOWLEDGE_DIR}/architecture-patterns/` were all kept by future value; length proved not to be a criterion.
 
 ### Scope selection
 
@@ -165,7 +166,7 @@ For each doc, check:
 2. **Referenced conventions still match?** — check against current `AGENTS.md`, `CONCEPTS.md`, lint configs.
 3. **Solution still the recommended approach?** — has a newer pattern superseded it?
 4. **Overlap with other docs?** — search for same module/tags to find duplicates.
-5. **Future decision value?** — rationale / alternatives considered / negative guarantees / reintroduction conditions that would still guide a future change → **Keep, regardless of length**. A completed decision whose body has no future leverage left (one-off fix detail, superseded mechanics) enters the Delete candidate pool. Word count and age remain discovery aids, never criteria.
+5. **Future decision value?** — the Maintain criterion above decides Keep versus the Delete candidate pool; apply it to the decision in the body, not to age or word count.
 
 #### Phase 3: Classify and act
 

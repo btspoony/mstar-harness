@@ -7,32 +7,12 @@ description: "Dispatch gates: PM-only leaf dispatch, executor/delegation identit
 
 **首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** 同仓 worktree、QC/QA 检出字段 → **`mstar-branch-worktree`**。冲突时 **以 `mstar-harness-core` 为准**。
 
-## 🚨 承接方：如果你是 leaf executor，先读本节！（你的 Assignment 开头 IDENTITY 块已告诉你身份）
+## 🚨 承接方：如果你是 leaf executor，先读本节！（身份锁 + 反递归红线）
 
-> **如果你此刻的 Assignment 中 `Delegation: forbidden`（或未写 `Delegation: allowed`），则你属于 leaf executor。本节是你的行为边界，必须在你做任何决定之前读完。**
->
-> **先回到你 Assignment 最顶部的 `**IDENTITY**` 块重读一遍** —— 那里已经告诉你：你是谁、你不是谁、Task 工具不属于你。本节是那个身份断言的加固版。
-
-你是 `Execute as` 写的那个角色，不是 PM / 调度者；所有工作由你**本人**在当前会话内完成（Read / Write / Edit / Shell / Grep / Glob）；超出能力范围 → 写 `## Blocked` 回报 PM，**不是**尝试 dispatch。
-
-## 承接方反递归红线（NEVER / DO NOT；leaf executor 必读）
-
-下列行为易触发递归误派；`project-manager` 之外的角色一旦命中，须立即停止并改为本会话内可交付物，或 **`Blocked`** 回报 PM。**禁止**以「更高效」「Assignment 像 PM 编排」等理由绕开。
-
-**共享红线**（doc-level 并行拆分 ≠ N 个 subagent；Handoff / 路由措辞 / 角色提及 ≠ invoke；工具可用 ≠ 授权；仅 PM 可分派；非 `Delegation: allowed` 不得调用同角色 / 兄弟角色）以 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」+「Non-Recursive Dispatch Rule (shared shape)」为唯一权威清单（standard preset 下已随角色 ref 在上下文中；explicit `none` 下该 leaf 边界仍可达）。本节保留 dispatch 专属条目：
-
-- **NEVER** 在本会话内调用 Task / subagent，且其角色绑定字段**等于**你当前的 **`Execute as`** 角色 id（同角色递归）。
-- **DO NOT** 在 Assignment 缺少 `Execute as` / `Delegation` / `Who runs this turn` 时自行「补齐」为 PM；缺字段时按 **leaf executor** 解释：亲自完成或 **`Blocked`**。
-- **DO NOT** 用「Assignment 太长 / 像编排稿」当作分派依据；先交付本会话任务再回报，分派由 PM 下一轮决定。
-
-**自检（动手前）**：
-
-1. 我此刻的 **`Execute as`** 是什么？
-2. Assignment 是否写了 **`Delegation: allowed (...)`**？没有 → **禁止**任何 Task / subagent。
-3. 下一动作是不是「发起一次带角色绑定字段的 invoke」？是 → 停手，改为 Read / Write / Shell / Edit，或 **`Blocked`**。
-4. 命中任一 NEVER → 写 `## Blocked — recursive dispatch refused (<which NEVER>)` 回报 PM，**不**继续 invoke。
-
-**Assignment 顶部反模式块**：每个 PM Assignment 开头均有 **`**You are a leaf executor. You MUST NOT:**`** 块（含 IDENTITY + CAPABILITY BOUNDARY + prohibitions），PM 按此 Assignment 的角色+上下文定制反模式清单。leaf executor 收到 Assignment 后须 **首先** 阅读该块；命中任一条 → **停止**（亲自完成或 `Blocked`）。详见 **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**。
+- **`Delegation: forbidden`（或未写 `Delegation: allowed`）→ 你是 leaf executor**：`Execute as` 是身份锁，不是编排许可，工作由你在本会话内亲自完成（Read / Write / Edit / Shell / Grep / Glob）。
+- **`Delegation: allowed (...)`** 是唯一授权来源：工具可用 ≠ 授权，`Task` / subagent 出现在工具列表里不构成派发权；超出能力范围 → 写 `## Blocked` 回报 PM。
+- 收到 Assignment 先读其顶部 **`**You are a leaf executor. You MUST NOT:**`** 块（IDENTITY + CAPABILITY BOUNDARY + prohibitions，见 **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**）；命中任一条 → 停止并亲自完成或 `## Blocked`。
+- 完整红线清单（doc-level 并行拆分 ≠ N 个 subagent、Handoff / 路由措辞 ≠ invoke、同角色 / 兄弟角色、仅 PM 可分派）→ **`mstar-roles/references/_shared/leaf-executor-core.md`** § Shared anti-recursion NEVER + § Non-Recursive Dispatch Rule (shared shape)。
 
 > **Engine 执行范围（caller-scoped，#156）**：engine `antiRecursionPrecheck` 比较的是**派发方自身角色**（caller）与新 Assignment 的 `Execute as`（target）。能否在 engine 层做这个判定取决于宿主是否向 engine 提供派发方身份（dispatcher binding）：**提供方**在 hard enforcement 下真正硬执行（含 caller 空绑定 fail-closed）；**不提供方**的角色绑定字段携带的是**派发目标**——目标 == `Execute as` 正是 C5 合规派发模式——这些宿主上红线保持 prompt 级约束（本节），engine 不做判定。当前宿主属于哪一类、字段名与 fail-closed 细节 → 当前宿主的 **`mstar-host` reference**（角色绑定字段 / engine 判定范围两行）。
 
@@ -66,7 +46,7 @@ description: "Dispatch gates: PM-only leaf dispatch, executor/delegation identit
 
 > **On dsh:** the mounted layer decides the channel, not the shape of one task — **Agent Teams** is the default whenever `spawn_teammate` is mounted (one teammate per writable track, each handed its own absolute checkout path in the prompt; which scope the board may carry → `references/dsh-agent-teams.md` § Worktree hand-off and write isolation), **`subagent`** is the fallback when it is absent, and **`workflow`** carries read-only fan-out only. A board-task dispatch counts as a delegation, so the invariant stays **1 Assignment ⇒ 1 delegation** on every channel; board protocol, seat budget and wake discipline are not restated here → **`mstar-host`** → `references/dsh.md` § Delegation channels + `references/dsh-agent-teams.md`.
 
-> **Engine check (when available):** run `mstar dispatch validate <assignment-file> [--branch <branch>]` (or `import { validateAssignmentFields, assertDefaultBranchProtected } from "@mstar-harness/engine"` in a host hook) to validate the Assignment field contract — including the **`Task budget (implement / ops rounds)`** header field on non-review / non-audit rounds: presence-only in the header region, absent / empty / `N/A` → validation fail (field contract → `mstar-roles/references/project-manager/dispatch-and-assignment.md`) — and the default-branch gate (normative default-branch prose: **`mstar-branch-worktree`** SKILL.md § "Git 功能分支门禁（业务仓库）" — this skill covers dispatch mechanics only). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar dispatch validate <assignment-file> [--branch <branch>]` (engine `validateAssignmentFields`, `assertDefaultBranchProtected`) to validate the Assignment field contract — including the **`Task budget (implement / ops rounds)`** header field on non-review / non-audit rounds: presence-only in the header region, absent / empty / `N/A` → validation fail (field contract → `mstar-roles/references/project-manager/dispatch-and-assignment.md`) — and the default-branch gate (normative default-branch prose: **`mstar-branch-worktree`** SKILL.md § "Git 功能分支门禁（业务仓库）" — this skill covers dispatch mechanics only). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## SDD implement 波次（PM only）
 
@@ -99,7 +79,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - **Plan QC tri** after SDD task loop；席位与 `inline` 单席例外 → **`mstar-review-qc`** § 分派时机。共用 `Review cwd` / `Working branch` / `plan_id` / `Review range`（**`mstar-branch-worktree`**）。
 - **Tri 同消息规则**：plan QC tri（SDD 或 Assignment 显式 `QC mode: full tri-review`）时三席 **同一条消息**、**同一套** scope 字段。
 
-> **Engine check (when available):** run `mstar worktree check --workflow <id> --plan <plan-id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (or `import { l1PreDispatchCheck, l2PreDispatchCheck } from "@mstar-harness/engine"` in a host hook) to verify the 同仓写隔离 gate above (per-track feature worktree, branch alignment) before parallel dispatch. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar worktree check --workflow <id> --plan <plan-id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (engine `l1PreDispatchCheck`, `l2PreDispatchCheck`) to verify the 同仓写隔离 gate above (per-track feature worktree, branch alignment) before parallel dispatch. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## Specialist review-and-edit dispatch
 
@@ -135,4 +115,4 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 ## References
 
-- 承接方反递归共享清单与自检 → **`mstar-roles/references/_shared/leaf-executor-core.md`**（「Shared anti-recursion NEVER」+「Non-Recursive Dispatch Rule (shared shape)」）；本 skill 的 dispatch 专属条目与动手前自检见 § 承接方反递归红线。
+- 承接方反递归共享清单与自检 → **`mstar-roles/references/_shared/leaf-executor-core.md`**（「Shared anti-recursion NEVER」+「Non-Recursive Dispatch Rule (shared shape)」）；本 skill 的 dispatch 专属条目见 § 承接方反递归红线。

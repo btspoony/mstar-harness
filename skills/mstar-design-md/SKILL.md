@@ -136,7 +136,7 @@ gray-1000: #000   gray-1000: #eee
 - Token names are the **SSOT interface** — consumers reference tokens by name, not raw values
 - `references/design-md-spec.md` § Light/Dark rules defines the contract
 
-> **Engine check (when available):** run `mstar design-md validate <dir>` (or `import { validateDesignTokenFrontmatter, assertLightDarkParity, completenessLevel } from "@mstar-harness/engine"` in a host hook) to validate the token frontmatter schema above, the light/dark parity of `DESIGN.dark.md` (same token names, different values), and the achieved completeness level. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** run `mstar design-md validate <dir>` (engine `validateDesignTokenFrontmatter`, `assertLightDarkParity`, `completenessLevel`) to validate the token frontmatter schema above, the light/dark parity of `DESIGN.dark.md` (same token names, different values), and the achieved completeness level. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## References
 
