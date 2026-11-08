@@ -13,7 +13,7 @@
 ## Bootstrap 最小步骤
 
 1. **Bootstrap 唯一路径 = `mstar harness scaffold` + `mstar store init`**：scaffold 创建 `{HARNESS_DIR}`（推荐 `.mstar/`）与 authored 目录（`plans/` / `iterations/` / `knowledge/` / `specs/` / `sdd/`），建立 `projects/_default/` 目录并在可用 catalog 中登记；**不**写 `status.json`，不产出 roadmap Markdown 或 register。
-2. Store：ACTIVE root register / plan 行 / leases / sessions 在 store；findings 是 store issues，project register 无条件退役为迁移历史。初始化/升级与 staged activation 的分工只按 **`mstar-conventions` SKILL.md「初始化 Plan 目录」**：全新用 `store init`；已有/legacy 用 `store upgrade` 导入并激活执行权威；`store activate` 仅用于 reviewed staged migration，不是例行追加步骤。无 ACTIVE store 的 harness 没有执行权威——用对话追踪（no-plan mode），门禁（QC/QA）仍适用。
+2. Store：ACTIVE root register / plan 行 / leases / sessions 在 store；findings 是 store issues，project register 无条件退役为迁移历史。初始化/升级与 staged activation 的分工只按 **`mstar-conventions` SKILL.md「初始化 Plan 目录」**：全新用 `store init`；已有/legacy 用 `store upgrade` 导入并激活执行权威；`store activate` 仅用于 reviewed staged migration，不是例行追加步骤。无 ACTIVE store 的 harness 没有执行权威——用对话追踪（no-plan mode），门禁（QC/PM Acceptance）仍适用。
 3. per-plan SDD 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建（`sdd/` 由 scaffold 建好）。
 4. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（canonical snippet → `mstar-conventions` SKILL.md「Git 跟踪策略」；legacy `.agents/` 有等价表）。
 5. 可选：为 `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` 补导览 `README.md`（散文，无登记义务）；`{HARNESS_DIR}/specs/` 是解析后的 `{SPECS_DIR}` 默认落点；内容边界见 `mstar-conventions` SKILL.md 与 `references/knowledge-and-designs.md`。
@@ -45,7 +45,7 @@
 
 ### `{HARNESS_DIR}/AGENTS.md`（harness 层）
 
-- 放：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{ITERATION_DIR}`/`{KNOWLEDGE_DIR}`/`{SPECS_DIR}` 契约、`docs/` 与 harness 子树内容边界、状态推进门禁、QC/QA 对齐规则、residual 生命周期。
+- 放：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{ITERATION_DIR}`/`{KNOWLEDGE_DIR}`/`{SPECS_DIR}` 契约、`docs/` 与 harness 子树内容边界、状态推进门禁、QC/PM Acceptance 对齐规则、residual 生命周期。
 - 不放：语言/框架编码细节、业务模块实现约束。
 
 ### `<subdir>/AGENTS.md`（边界层）

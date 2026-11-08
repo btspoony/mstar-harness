@@ -17,7 +17,7 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 
 ## Workflow
 
-主链：按「路径符号」+「`{HARNESS_DIR}` 解析顺序」确定目录（默认 `.mstar/`，兼容 `.agents/`）→ 按「初始化 Plan 目录」以 **`mstar harness scaffold` + `mstar store init`** 建立 authored 目录与 ACTIVE store（唯一 bootstrap 路径），并追加 gitignore 进程产物集（未声明 harness 根规则时；进程本地、结果共享）→ 多 Plan · 同一 Spec 时登记 iteration base / spec 集成分支 / 各 Plan 实现分支 / PR target → 主 plan 写入 `{PLAN_DIR}`（**Plan-Writing Path Gate**）。未启用 plan 或无 ACTIVE store 时 → 对话追踪（no-plan mode），门禁（QC/QA）照常。
+主链：按「路径符号」+「`{HARNESS_DIR}` 解析顺序」确定目录（默认 `.mstar/`，兼容 `.agents/`）→ 按「初始化 Plan 目录」以 **`mstar harness scaffold` + `mstar store init`** 建立 authored 目录与 ACTIVE store（唯一 bootstrap 路径），并追加 gitignore 进程产物集（未声明 harness 根规则时；进程本地、结果共享）→ 多 Plan · 同一 Spec 时登记 iteration base / spec 集成分支 / 各 Plan 实现分支 / PR target → 主 plan 写入 `{PLAN_DIR}`（**Plan-Writing Path Gate**）。未启用 plan 或无 ACTIVE store 时 → 对话追踪（no-plan mode），门禁（QC/PM Acceptance）照常。
 
 ## 路径符号（SSOT）
 
@@ -113,7 +113,7 @@ enforcement=hard
 | `{PLAN_DIR}/` | 主 plan、durable gate summaries、可选 residual prose |
 | `{REVIEW_DIR}/` | review 运行目录：codebase audit 的 `README.md` 报告 + 证据、PR/branch/diff review 的 `report.md` + `stage<N>-<slug>.md` 证据（进程产物，gitignored；不是 plan 产物，不经 plan 状态机） |
 
-单 plan 的 QC/QA **原始过程报告**默认进入 **`{SDD_DIR}/review/`**（gitignored review bundle），非 `docs/`，也不默认进入 `{PLAN_DIR}`。主 plan 仅保留 durable gate summary；open finding 以 `{HARNESS_DIR}/store.db` 的 linked issues 为 SSOT（`mstar plan issue-add` / `mstar issue add`）；project residual register 无条件退役为迁移历史。细则 → **`mstar-artifacts`**。
+单 plan 的 QC/PM Acceptance **原始过程报告**默认进入 **`{SDD_DIR}/review/`**（gitignored review bundle），非 `docs/`，也不默认进入 `{PLAN_DIR}`。主 plan 仅保留 durable gate summary；open finding 以 `{HARNESS_DIR}/store.db` 的 linked issues 为 SSOT（`mstar plan issue-add` / `mstar issue add`）；project residual register 无条件退役为迁移历史。细则 → **`mstar-artifacts`**。
 
 ## Issue/catalog store 路径与权威分界
 
@@ -126,7 +126,7 @@ Issue/catalog/roadmap and ACTIVE execution authority live in control-root `{HARN
 | project / iteration / plan / document 的 identity、路径、kind、description、project/iteration 归属、spec/knowledge 关系、catalog 生命周期（`active` / `archived` / `superseded`） | **DB catalog** 行 | catalog 域 API；`mstar catalog list` / `mstar catalog show` |
 | 文档正文（compass 叙述、plan、spec/knowledge 内容、README 散文） | **文件** | 直接读文件 |
 | Root register and workflow status/phase/anchors/configuration/completion/coordinator/merge exclusion | ACTIVE DB `execution_*` authority（唯一） | `mstar status validate` / `mstar plan show`; dashboard is projection |
-| Row status/progress/task/QC/QA/done_at/source branch/worktree | Same selected execution authority (`execution_plans` when ACTIVE) | Domain calls; catalog and projections never reset runtime state |
+| Row status/progress/task/QC/PM Acceptance/done_at/source branch/worktree | Same selected execution authority (`execution_plans` when ACTIVE) | Domain calls; catalog and projections never reset runtime state |
 | Registered plan id/title/file and metadata | Registered row inputs from a catalog revision (`execution_inputs` / `catalog_pin`) | Correct supported source/configuration facts through ordinary writers; catalog edits never silently relocate an active plan or rewrite its registered inputs |
 
 Store is process-local and gitignored. Issue/catalog and execution domains retain their own authority boundaries. Missing stores refuse `store.not-initialized` rather than answering an empty catalog. Staged stores support ordinary read-only catalog list/show; catalog mutations require an active store and refuse `store.not-active` while staged. Staged catalog inspection does not activate execution authority, and ACTIVE execution reads never fall back to leftover root/snapshot/session files. Bootstrap/migration changes authority only through supported operator operations.
@@ -151,7 +151,7 @@ Store 落在 **control / process harness 根**，不随 feature worktree cwd；H
 
 PM 在需要持久化追踪时：
 
-1. **Bootstrap 唯一路径 = `mstar harness scaffold` + `mstar store init`**（store 分工见步骤 4）：scaffold 建 authored 目录与 `projects/_default/` 登记；`store init` 激活执行权威。**无 ACTIVE store 的 harness 没有执行权威**——用对话追踪（no-plan mode），门禁（QC/QA）仍适用；scaffold **不**写 `status.json`。
+1. **Bootstrap 唯一路径 = `mstar harness scaffold` + `mstar store init`**（store 分工见步骤 4）：scaffold 建 authored 目录与 `projects/_default/` 登记；`store init` 激活执行权威。**无 ACTIVE store 的 harness 没有执行权威**——用对话追踪（no-plan mode），门禁（QC/PM Acceptance）仍适用；scaffold **不**写 `status.json`。
 2. scaffold 建立 `plans/` / `iterations/` / `knowledge/` / `specs/` / `sdd/` / `reviews/` 空目录；运行时 per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建；`workflows/` 由 engine writers 按需创建，**不**预建。
 3. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（见下文「Git 跟踪策略」）— CLI `init` 可自动添加；文件已声明 harness 根规则时属作者所有，fence 不写入（见下文「Git 跟踪策略」）
 4. Store：全新、无 legacy register/catalog 的 harness 用 `mstar store init` 建 active issue/catalog store；已有或 legacy harness 用 `mstar store upgrade`（operator 见 help）导入可识别执行状态、激活 authority 并报告 skipped 项。`store activate` 是 staged `store migrate` apply 后的激活入口（attestation 自动生成，`--attestation <path>` 仅为显式覆盖，`--operator` 必填），不是 init/upgrade 的例行下一步。以回执确认 authority，再用 `mstar status validate` / `mstar plan show` 读执行状态。
@@ -245,11 +245,11 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 
 ## 状态与权限（摘要）
 
-`Todo` | `InProgress` | `InReview` | `Blocked` | `Done` — **`Done` 仅 PM 或 QA**。字段与 residual → **`mstar-artifacts`**。主 plan checkbox → **`mstar-artifacts`**。
+`Todo` | `InProgress` | `InReview` | `Blocked` | `Done` — **`Done` 仅 primary PM**。字段与 residual → **`mstar-artifacts`**。主 plan checkbox → **`mstar-artifacts`**。
 
 ## 未启用 Plan 时
 
-无 plan 目录或无 ACTIVE store：PM 用对话追踪（no-plan mode）；门禁（QC/QA）仍适用；复杂度上升时可建议初始化（`mstar harness scaffold` + `mstar store init`）。
+无 plan 目录或无 ACTIVE store：PM 用对话追踪（no-plan mode）；门禁（QC/PM Acceptance）仍适用；复杂度上升时可建议初始化（`mstar harness scaffold` + `mstar store init`）。
 
 ## 实现角色最小阅读
 

@@ -78,7 +78,7 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 
 如果以下情况在两个或以上场景中出现，则说明路由逻辑退化：
 
-- 实现类任务省略了 **QA gate 决策**（`mandatory` 或 `pm-acceptance` 须落 Assignment；禁止无字段即 Done）
+- Implementation closure lacks evidence-backed PM Acceptance (`QA gate: pm-acceptance` is the fixed carrier), or treats QC approval as per-AC runtime proof.
 - QC 路径相对任务类型被过度或不足使用
 - 跨模块工作缺少 architect/探索阶段
 - 未按 `specify -> clarify -> plan` 完成准备阶段即进入实现
@@ -88,9 +88,9 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 - `Context Loaded` 缺失或缺少必要的 plan 路径
 - 非热修缺陷在未记录根因或可证伪假设前大规模改代码
 - 生产/高危运维变更缺少回滚说明或高危清单
-- 声明 Report-only 的 QA 任务却改动业务逻辑，或无谓触发全量三审
-- Hotfix / clean small non-UI 误派 `qa-engineer`（应为 `QA gate: pm-acceptance`）
-- UI 可见变更跳过 mandatory QA 或无 observable 证据
+- Report-only work changes product logic or triggers unnecessary QC tri despite no implementation/test/config diff.
+- Any feature size, bug fix, residual/UI or report-only route dispatches a dedicated acceptance role instead of primary-PM acceptance.
+- UI acceptance omits relevant isolated evidence or claims unverified real-environment behavior; missing evidence is not pass.
 - Assignment 语言契约不一致（字段名漂移为中文、或要求英文报告却回报为中文且无用户豁免）
 - 实现类 Assignment **缺少 `Task category`** 或与 **`Execute as`**、`Why this agent` 明显矛盾（或缺少 **`Execute as`**）
 - **意图门禁**缺失：Prepare 未书面收敛真实目标/成功判据/非目标即进入开发分派
@@ -113,7 +113,7 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 - **Owned work duplicated/capacity invented:** duplicates native running tasks or depends on deleted extra-primary slots; native capacity and actual ownership remain (`phase2-owned-and-capacity`).
 - **空 ready 循环**：无 ready work 时反复自证同一事实、timer / 轮询、tick 计数或「still waiting」notice；为保持忙碌造工作（case `phase2-quiet-wait` · home 指针 → **`mstar-iteration`** → `references/phase-2-worktree-lease.md` §2.4）
 - **Observer becomes transport:** reads deleted settings, launches/journals terminal PMs, polls or invents ready/completion authority (`phase2-observer-native-tasks-only`). Preserve bounded bind/checkpoint/history and native leaf dispatch.
-- **`recovery-policy-product-proof`**：以 live provider receipt 作 development gate，或静默转为 mandatory QA/E2E；开发验收只要求隔离层可自证的证据。
+- **`recovery-policy-product-proof`**: rejects live provider receipts as development gates; does not replace them with acceptance-role dispatch or automatic E2E. Development acceptance uses isolated/local proof.
 - **`recovery-policy-isolated-proof`**：不接受 fixture / 本地构建层证据，或因未验证真实环境而阻塞开发完成；未验证行为如实记录。
 - **`recovery-policy-attribution-unknown`**：猜测 model、倒填编辑时间、将真实 provenance 写入 tracked plan，或新增机器完整性门禁。
 - **`recovery-policy-sparse-intent`**：强制 rebind / token-copy preflight、丢弃 verb 已应用的部分结果，或向 leaf 传 session credentials；实际输入仍按 CLI verb 显式提供。
@@ -154,16 +154,16 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 - 审查密集型路径（含评审意见冲突）
 - 提示词/规则重构任务
 - 间歇性/高歧义缺陷（RCA 先于大改）
-- 用户可见前端回归（`QA gate: mandatory` + 可观察 QA 证据）
-- Hotfix / clean small non-UI（`QA gate: pm-acceptance`，不派 QA）
+- UI/residual-bearing delivery: PM Acceptance, explicit issue dispositions and relevant unit/component evidence; no automatic browser/device gate
+- Hotfix / small non-UI delivery: same evidence-backed PM ownership, unchanged inline/single-seat QC exception
 - 生产或高危运维变更（回滚与清单）
-- QA Report-only（无业务代码改动）
+- Report-only specialist evidence accepted by PM against its registered fulfilment policy; no business-code edits
 
 每个测试应指定：
 
 - 预期路由（应使用哪些 agent）
 - 预期产出（计划、审查摘要、验证证据）
-- 硬性失败条件（缺少 QA gate、无 pm-acceptance 清单即 Done、跳过审查等）
+- Hard failures: missing required AC evidence/report, failed or partial proof presented as full pass, QA-role dispatch, weakened QC independence, or PM execution beyond named short acceptance checks
 - 阶段门禁轨迹（`specify -> clarify -> plan -> tasks -> implement`）
 
 ### 评分维度

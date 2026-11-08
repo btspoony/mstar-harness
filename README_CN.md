@@ -105,7 +105,7 @@ flowchart TD
     B --> C["在功能分支上实现"]
     C --> D["独立审查"]
     D -->|要求修改| C
-    D --> E["验收：QA 或 PM，独立取证"]
+    D --> E["PM Acceptance：逐条标准映射证据"]
     E -->|未通过| C
     E --> F{"迭代中仍有计划待执行？"}
     F -->|是：下一个计划| C
@@ -119,7 +119,7 @@ flowchart TD
     L --> M["核实合并结果，结束本次交付"]
 ```
 
-主路径展示的是一次 **development** 交付。每个 plan 都会做 plan 级 QC 审查 —— 默认由三个独立席位执行 —— 多任务 plan 还会在实现阶段加入 per-task review。hotfix（或显式设为 inline 执行模式的 plan）走更轻的通道，审查席位更少。验收是独立取证的一环 —— 由 QA 或 PM 执行，而不是复述实现者的总结；本轮没有修掉的已确认问题会变成跟踪中的 issue，而不是丢掉。
+主路径展示 **development** 交付。每个 plan 都有 plan 级 QC，默认三个独立席位；多任务 plan 另有 per-task review，hotfix/inline 仍保留较轻的席位规则。**PM Acceptance** 是所有范围唯一的验收路径：每条必需标准都映射到相关证据与真实结果，QC 批准本身不是测试证明。PM 可为具名缺口执行短小、有界的验收检查，但不得代做实现、编写测试、长套件或运维。已确认但未修复的问题仍作为 issue 跟踪。
 
 **范围说明。** 迭代会先与你锁定方向，然后对承接的每个 plan 各跑一遍上述循环，最后统一收尾再开 PR；不跑迭代时，这套循环就只为一个 plan 执行一次。验证或 report-only 的交付物 —— 例如一次审计 —— 在达到约定的完成条件时结束，没有 PR，也没有合并环节。在 development 这条路径上，plan 只有在证据齐全时才算完成：plan 完成、merge-ready 与已合并是三件不同的事，只有核实合并、走完 post-merge 收尾，交付才算结束。是否合并是一次单独的授权，来源只有一个记录：`owner-gated` 下由你批准或你自己合并；`reviewed-auto` 下该记录只在当前 PR head 上存在 settled、已 posted 的 `ship it` 报告时才构成授权；`reviewed-bot` 下只认挂载 bot 在该 head 上最新一次达到自身门的 review，而不是「有过一次 review」。从未记录 policy 的迭代会回到 Phase 1 补齐，而不是回退到任一值。分支清理则是收尾之后单独的、显式的动作。
 
@@ -160,19 +160,18 @@ mstar-harness dashboard
 
 | Agent ID | 职责 |
 |----------|------|
-| `project-manager` | 路由、分派、阶段推进 |
+| `project-manager` | 路由、分派、阶段推进、证据驱动的 PM Acceptance 与唯一 Done 签署 |
 | `product-manager` | 需求、产品规划、研究 |
 | `architect` | 架构与技术契约 |
 | `fullstack-dev` / `fullstack-dev-2` | 后端主导实现 / 第二并行轨 |
 | `frontend-dev` | UI、交互、前端性能 |
-| `qa-engineer` | `QA gate: mandatory` 时验收 |
 | `code-reviewer` | SDD per-task 快速验证；codebase audit（`audit` 类） |
 | `qc-specialist` / `-2` / `-3` | QC 三审 |
 | `ops-engineer` | 部署、监控、基础设施 |
 | `writing-specialist` | 文档、小说、文案、脚本 |
 | `prompt-engineer` | prompt / skill / rule |
 
-**project-manager** 在你的会话中运行并派发工作：需求与架构、后端与前端实现、QC 审查、验收、代码库与 PR 审计、运维、写作各自有专属角色。每个角色遵循 `mstar-*` skills 中的规则。
+**project-manager** 在你的会话中运行并负责验收，将需求与架构、实现、独立审查、审计、运维和写作派给对应专业角色。每个角色遵循 `mstar-*` skills。验收流程见 [`mstar-roles/references/project-manager/acceptance.md`](skills/mstar-roles/references/project-manager/acceptance.md)。
 
 ## 命令行
 

@@ -64,14 +64,14 @@ description: Spec-Driven 双阶段门禁：Prepare（specify→clarify→plan）
 - 开发角色（`@frontend-dev` / `@fullstack-dev` / `@fullstack-dev-2`）
   - 仅在 Execute gate 放行后开始实现。
   - 发现新约束时先回报并请求回写 plan。
-- `@qa-engineer` — when **`QA gate: mandatory`**, L4 per `mstar-roles/references/qa-engineer/acceptance-gate.md`; `pm-acceptance` is PM-only (`qa-trigger-matrix.md`).
+- `project-manager` owns L4 PM Acceptance for every route → `mstar-roles/references/project-manager/acceptance.md`; independent QC remains unchanged.
 
 ## 迭代级活动
 
 per-plan 门禁通过后，PM 在**迭代层面**管理以下活动（不计入 per-plan gate）：
 
 - **迭代启动**（`mstar-iteration` § Phase 1）：锁定迭代范围、**显式 branch policy**（`iteration_base_branch` / `target_branch`）、产出 compass。
-- **迭代驱动**（`mstar-iteration` § Phase 2 Autonomous Execute）：per-plan 派发循环（分支→实现→QC→**QA gate**→Done→合并），跨 plan 进度追踪，更新 compass 中各 plan 状态。
+- **迭代驱动**（`mstar-iteration` § Phase 2 Autonomous Execute）：per-plan 派发循环（分支→实现→QC→**PM Acceptance**→Done→合并），跨 plan 进度追踪，更新 compass 中各 plan 状态。
 - **迭代收口**（`mstar-iteration` § Phase 3 iteration-close）：迭代内所有 plan Done 后，执行一轮知识结晶（`mstar-knowledge`）沉淀迭代经验，更新 roadmap，标记迭代完成。
 
 per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动，不影响 per-plan 状态判定。此句不否定独立交付 plan 的 disposition 义务——它在交付 PR head 定稿前运行（迭代内 plan 行不各自触发）；语义权威 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
@@ -80,7 +80,7 @@ per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动�
 
 ## Plan 目录与审查证据（启用 `{PLAN_DIR}` 时）
 
-- 进入 `InReview` 后，QC/QA 原始过程报告默认落入 `{SDD_DIR}/review/`（**SDD 默认 tri** `qc1`…`qc-consolidated`；**inline** 单席 `qc.md`）。**fix 后默认 targeted re-review**。SDD per-task review 在 implement 波次内完成（`mstar-sdd` task reviewer）。PM 将 durable gate summary 回写主 plan / store.db-backed plan 行（经 `mstar plan progress` 等公共动词），而不是把 raw reports 作为默认 git 产物。
+- 进入 `InReview` 后，QC/PM Acceptance 原始过程报告默认落入 `{SDD_DIR}/review/`（**SDD 默认 tri** `qc1`…`qc-consolidated`；**inline** 单席 `qc.md`）。**fix 后默认 targeted re-review**。SDD per-task review 在 implement 波次内完成（`mstar-sdd` task reviewer）。PM 将 durable gate summary 回写主 plan / store.db-backed plan 行（经 `mstar plan progress` 等公共动词），而不是把 raw reports 作为默认 git 产物。
 - 非阻断项与后续技术债：PM 汇总后经 `mstar plan issue-add`（计划内）/ `mstar issue add` 捕获到 `{HARNESS_DIR}/store.db`；关闭用 `mstar plan issue-close` / `mstar issue close | waive | duplicate | supersede`。project register 仅迁移历史，不是写入目标。捕获契约 → **`mstar-project-governance`「Issue capture」**；severity 词表 → **`mstar-artifacts/references/status-and-residuals.md`**「Residual findings：severity」。
 
 ## 快速判定（PM）
@@ -119,4 +119,4 @@ per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动�
 
 - plan 文件落盘与路径符号 → **`mstar-conventions`**
 - 多 task 默认 `Execution mode: sdd` 的 implement 波次 → **`mstar-sdd`**
-- QC / QA 审查链与 residual 登记 → **`mstar-review-qc`**
+- QC / PM Acceptance 审查链与 residual 登记 → **`mstar-review-qc`**

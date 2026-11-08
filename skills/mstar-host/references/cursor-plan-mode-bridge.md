@@ -29,7 +29,7 @@ A control root with no ACTIVE store has no execution authority: create one with 
 
 ### `mirror-plan` minimum content
 
-- YAML or markdown frontmatter with `plan_id`, title, status (`Todo` / `InProgress` — not `Done` unless PM/QA authority).
+- YAML or markdown frontmatter with `plan_id`, title, status (`Todo` / `InProgress` — not `Done` unless primary-PM authority).
 - **Task list** as markdown checkboxes (`- [ ]` / `- [x]`) matching CreatePlan implement todos.
 - **Roadmap / deferred scope** section when delivery is staged, partial, or uses a temporary workaround.
 - Link: “Execution status: store.db registered workflow/plan rows (`mstar status validate` / `mstar plan show`); open findings: store.db issues (`mstar plan issue-add` / `mstar issue add`).”

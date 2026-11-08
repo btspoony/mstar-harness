@@ -23,7 +23,7 @@ The same coordinator owns all retained plan verbs:
 ```text
 mstar plan bind [--execution] --workflow <id> (--coordinator | --resume-ref <ref>) [--expect <token>] [--operation <id>] [--harness <path>] [--session-id <id>]
 mstar plan show --plan <id> [--session-ref <ref>] [--workflow <id>] [--harness <path>] [--session-id <id>]
-mstar plan prepare --plan <id> [--worktree-path <absolute-path>] [--working-branch <branch>] [--qa-gate mandatory|pm-acceptance] [--findings-cleanup zero-residual|allow-residual]
+mstar plan prepare --plan <id> [--worktree-path <absolute-path>] [--working-branch <branch>] [--qa-gate pm-acceptance] [--findings-cleanup zero-residual|allow-residual]
 mstar plan progress --plan <id> (--progress <json> | --file <json>)
 mstar plan issue-add --plan <id> (--entries <json-array> | --file <json>)
 mstar plan issue-close --plan <id> --issue <id> --disposition resolved|waived|duplicate|superseded (--evidence <json> | --file <json>) --expect-issue <revision>
@@ -32,7 +32,9 @@ mstar plan complete --plan <id> (--evidence <json> | --file <json>) [--integrati
 
 Mutation lines also accept their applicable transport context described above, including explicit workflow selection. Consult current source-built verb help for the complete transport option set. No retired verbs/flags or compatibility aliases are supported.
 
-`show` needs no preliminary bind when the acquired caller already has a live coordinator binding. `prepare` is revisable configuration and source metadata, not admission sealing: QA defaults to mandatory, cleanup to allow-residual; an existing valid source/default configuration needs no ceremonial prepare record. Changes while InProgress/InReview do not reset status or seal plan/Assignment bytes. A missing or corrected source checkout/branch uses ordinary prepare, validated against actual Git. `progress` records start/review/block states; Done is complete-only.
+`show` needs no preliminary bind when the acquired caller already has a live coordinator binding. `prepare` is revisable configuration and source metadata, not admission sealing: acceptance defaults to pm-acceptance, cleanup to allow-residual; an existing valid source/default configuration needs no ceremonial prepare record. Changes while InProgress/InReview do not reset status or seal plan/Assignment bytes. A missing or corrected source checkout/branch uses ordinary prepare, validated against actual Git. `progress` records start/review/block states; Done is complete-only.
+
+Acceptance procedure and historical evidence duties → `mstar-roles/references/project-manager/acceptance.md`. The optional `qaGate` / `--qa-gate` is a fixed-value constraint, never a route selector. Retired `mandatory` input retries with `pm-acceptance`. An existing active row still configured as `mandatory` uses ordinary `plan prepare` for the same workflow/plan with `--qa-gate pm-acceptance`, then retries completion with PM evidence; progress, issues, source metadata and unrelated rows remain intact. Completed historical QA records are not rewritten.
 
 ## Direct completion
 
@@ -44,7 +46,7 @@ Supply one complete evidence document:
   "review_base": "<actual review base SHA>",
   "review_head": "<actual reviewed head SHA>",
   "qc": {"decision": "Approve", "reports": ["<absolute report path>"], "consolidated": "<absolute summary path>"},
-  "qa": {"gate": "mandatory", "decision": "pass", "report": "<absolute report path>"}
+  "qa": {"gate": "pm-acceptance", "decision": "pass", "report": "<absolute PM acceptance report path>"}
 }
 ```
 
@@ -52,11 +54,11 @@ Use actual reports/source facts, not placeholders. The integration CLI pair must
 
 | Engine-selected route | Proof before direct complete | After row Done |
 |---|---|---|
-| Iteration/non-standalone | QC/QA and source/review ancestry plus already-performed serial two-parent merge in the clean recorded integration checkout on its target branch. Supply real base/result. The engine re-witnesses Git at commit. | Parent still owes compound/PR/verified merge/terminal close; no child PR. |
-| Standalone development, exactly one row | QC/QA and clean registered source checkout/ref/commit; integration input refuses. | Own compound/PR/verified merge/terminal close; workflow stays running. |
-| Standalone verification/report-only, exactly one row | Record explicit fulfilment matching registered completion_policy before Done, then supply QC/QA. Git fields are provenance only, not an invented source/integration requirement. Integration input refuses. | Evidence-backed terminal close; no invented compound-before-PR, PR or merge. |
+| Iteration/non-standalone | QC/PM Acceptance and source/review ancestry plus already-performed serial two-parent merge in the clean recorded integration checkout on its target branch. Supply real base/result. The engine re-witnesses Git at commit. | Parent still owes compound/PR/verified merge/terminal close; no child PR. |
+| Standalone development, exactly one row | QC/PM Acceptance and clean registered source checkout/ref/commit; integration input refuses. | Own compound/PR/verified merge/terminal close; workflow stays running. |
+| Standalone verification/report-only, exactly one row | Record explicit fulfilment matching registered completion_policy before Done, then supply QC/PM Acceptance. Git fields are provenance only, not an invented source/integration requirement. Integration input refuses. | Evidence-backed terminal close; no invented compound-before-PR, PR or merge. |
 
-Example report-only fulfilment: `mstar workflow evidence --workflow <id> --file <absolute-json>` with `{"completion":{"policy":"<registered policy>","evidence":"<real fulfilment reference>"}}`. QA pass alone is never fulfilment.
+Example report-only fulfilment: `mstar workflow evidence --workflow <id> --file <absolute-json>` with `{"completion":{"policy":"<registered policy>","evidence":"<real fulfilment reference>"}}`. acceptance pass alone is never fulfilment.
 
 Complete may atomically entail InProgress → InReview → Done with sufficient reviewed evidence. It retains source ownership metadata and completion evidence, releases only applicable workflow merge exclusion and preserves completed_at on exact replay. Per-plan execution leases are removed. Completion never runs Git merge: the coordinator explicitly performs it once in the recorded integration checkout, then submits actual SHAs. If merge output/state response is lost, retry complete against the real result, never merge again. Resolve or explicitly abort a real conflict in Git; never force state to Done.
 

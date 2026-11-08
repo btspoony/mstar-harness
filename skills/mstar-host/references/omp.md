@@ -61,7 +61,7 @@ Prefer the live schema every session (single-task shorthand may exist). Parallel
 
 Selection order:
 
-1. **Role match first** — Assignment `Execute as: <role-id>` present in the live `task.agent` list ⇒ **`agent: "<role-id>"`**. Commonly present after Morning Star plugin discovery: `product-manager`, `architect`, `frontend-dev`, `fullstack-dev`, `fullstack-dev-2`, `ops-engineer`, `prompt-engineer`, `qa-engineer`, `qc-specialist`, `qc-specialist-2`, `qc-specialist-3`, `writing-specialist`.
+1. **Role match first** — Assignment `Execute as: <role-id>` present in the live `task.agent` list ⇒ **`agent: "<role-id>"`**. Commonly present after Morning Star plugin discovery: `product-manager`, `architect`, `frontend-dev`, `fullstack-dev`, `fullstack-dev-2`, `ops-engineer`, `prompt-engineer`, `qc-specialist`, `qc-specialist-2`, `qc-specialist-3`, `writing-specialist`. PM Acceptance stays in the primary session, never a dispatch target.
 2. **Generic built-in only as fallback** when the role id is absent: `scout` / `explore` (read-only orientation, codebase survey, Prepare explore) · `reviewer` / `security-reviewer` (QC assist **only if** the matching `qc-specialist*` is missing) · `designer` (UI-heavy work when `frontend-dev` is missing) · `librarian` (external library/API research) · `sonic` / `quick_task` (mechanical, low-reasoning transcription only) · `task`, or omitting `agent` where the schema says omit means general worker (last resort).
 3. **Anti-pattern** — `agent: "task"`, or omitting `agent`, while a matching role agent is listed. Host generics remain useful for non-role orientation/assist; they never replace a listed role agent for a role-owned deliverable.
 

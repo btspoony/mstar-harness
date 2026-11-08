@@ -25,7 +25,7 @@ Kimi **Plan mode** (`EnterPlanMode` / `ExitPlanMode`, `/plan`, or `Shift-Tab`) u
 
 ## ExitPlanMode gate
 
-Host plan approval (`ExitPlanMode`) is **not** Morning Star **Done** (gate → core). Implementation still follows phase gates, per-task commits, QC, and QA per the SSOT plan.
+Host plan approval (`ExitPlanMode`) is **not** Morning Star **Done** (gate → core). Implementation still follows phase gates, per-task commits, QC, and PM Acceptance per the SSOT plan.
 
 ## `mstar-iteration` Phase 1
 

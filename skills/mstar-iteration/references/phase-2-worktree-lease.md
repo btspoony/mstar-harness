@@ -19,7 +19,7 @@ starts at **Phase 2 entry** — Phase 1 did walk §2.3's integration-worktree ch
 
 **Phase scope**：本参考仅约束 **Phase 2**（含 serial integration merge 与「control root / integration worktree 禁止产品编辑 / 每 plan feature worktree」）。**Phase 5** PR merge-ready 修复同样 **不**直接在 integration checkout 上改——产品修复走独立 fix feature worktree，review 后 merge 回 integration worktree → **`phase-4-5-pr-delivery.md`** §5.0。
 
-This Phase owns the complete per-plan dispatch loop: entry checks, session todos, backlog, integration branch/checkout management, isolated implementation, QC, QA, real serial merge, direct Done and dispatch-first discipline. Read §2.0–§2.5 and the workflow merge-exclusion guidance below before iteration execution.
+This Phase owns the complete per-plan dispatch loop: entry checks, session todos, backlog, integration branch/checkout management, isolated implementation, QC, PM Acceptance, real serial merge, direct Done and dispatch-first discipline. Read §2.0–§2.5 and the workflow merge-exclusion guidance below before iteration execution.
 
 **Findings cleanup（默认）**：Phase 2 Assignment 默认 **`Findings cleanup: allow-residual`**；open finding 先经 `mstar plan issue-add` 捕获为 store issue，再离 InReview，并披露 id / issue severity / 跟踪位置。`zero-residual` 为显式 opt-in；清理与披露权威 → **`mstar-artifacts`**「Findings cleanup modes」。project register 无条件退役为迁移历史。
 
@@ -43,7 +43,7 @@ This Phase owns the complete per-plan dispatch loop: entry checks, session todos
 
 | 宿主会话 | 工具 | 最小集合 |
 |----------|------|---------|
-| 任意宿主（有 session todo / plan UI 时） | 宿主自身的 session todo / plan UI | 当前 `plan_id`；下一批 gates（implement/QC/**QA gate**）；分支 checkpoint；**仅剩 1 个非 Done plan 时追加 `phase-3-iteration-close`**（open 直至 §3.5）；Phase 4 后 **`phase-5-pr-merge-ready`**（open 直至 §5.2 第 1–5 项全 `[x]`，即 merge-ready） |
+| 任意宿主（有 session todo / plan UI 时） | 宿主自身的 session todo / plan UI | 当前 `plan_id`；下一批 gates（implement/QC/**PM Acceptance**）；分支 checkpoint；**仅剩 1 个非 Done plan 时追加 `phase-3-iteration-close`**（open 直至 §3.5）；Phase 4 后 **`phase-5-pr-merge-ready`**（open 直至 §5.2 第 1–5 项全 `[x]`，即 merge-ready） |
 
 SSOT = ACTIVE store.db 执行行 + `{PLAN_DIR}/` authored plans；todos 只追踪本轮下一步。
 
@@ -167,7 +167,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 1. **用户 steering 与真实 blocker 优先于**任何调度续行；已返回结果**只消费一次**并判定其 acceptance —— **禁止**把 job completion 当作 accepted work。
 2. **Select work:** consider ready rows and their local tasks within the selected workflow. Only the primary coordinator changes row/workflow state.
 3. **Exclude unavailable work:** dispatched, already owned, terminal, contract-not-ready or genuinely dependent work. A prerequisite is ready only after its reviewed commit enters the dependent task's assigned base (`mstar-sdd` § Dependent-task readiness). Active leaf scope and `BASE_SHA` remain fixed; revise undispatched work before dispatch.
-4. **Apply constraints:** current user/plan serial policy, native leaf capacity, engine CAS, atomic coordination and L1/L2 isolation. Shared files/session/ledger or missing integration interfaces create serial edges; numbering and unrelated QC/QA do not.
+4. **Apply constraints:** current user/plan serial policy, native leaf capacity, engine CAS, atomic coordination and L1/L2 isolation. Shared files/session/ledger or missing integration interfaces create serial edges; numbering and unrelated QC/PM Acceptance do not.
 5. **Dispatch the full authorized ready batch:** use native leaf dispatch; no secondary primary PM transport. Only the coordinator's integration merge is serial.
 6. **没有有用且已授权动作 → native wait 一次**，并写下真实 wait reason：`dependency` / `ownership` / `capacity` / `user-blocked` / `no-ready-work`。
 
@@ -183,7 +183,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 
 对每个本轮要推进的 active `plan_id`（**可交错 / 并行**是默认读法：非强制 plan A 全 Done 再 plan B，plan 编号或 task 编号本身都不是串行理由）：
 
-1. **Configure/source facts:** use `show` for the explicitly selected workflow/plan. Create or verify the feature checkout/branch (the engine-verifiable form: per-plan L1 `mstar worktree check --workflow <id> --plan <plan-id>`) and record missing or corrected facts with revisable `prepare`; `QA gate` 的分级默认与 `findings cleanup` → **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**（`prepare` 未配置时记录 `mandatory` / `allow-residual`）。No prepare record is required when defaults and recorded metadata suffice.
+1. **Configure/source facts:** show the selected workflow/plan, verify its feature checkout/branch (`mstar worktree check --workflow <id> --plan <plan-id>`), and correct missing facts through ordinary prepare. Defaults are PM Acceptance / `allow-residual`; no ceremonial prepare is needed for valid metadata/defaults. A legacy active `mandatory` row uses ordinary prepare with `--qa-gate pm-acceptance` before completion → `mstar-roles/references/project-manager/acceptance.md`.
 2. **Start:** record `Todo → InProgress` through ordinary `progress` before writable dispatch. Leaf Assignments include absolute Worktree path, Working branch and control-root Plan Path/SDD dir; parallel tracks additionally satisfy L2 isolation.
 3. **Implement → InReview** (product edits in the feature worktree; authored plans, iteration package and SDD use absolute control paths; execution state uses public domain verbs):
    - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
@@ -196,8 +196,8 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
      6. Fix until task review is clean; append `{SDD_DIR}/progress.md`; update the authoritative row through `mstar plan progress` and the authored plan checkbox.
      7. Release ready dependent tasks without waiting for unrelated tasks; PM alone writes shared progress, and state changes use public verbs.
    - After each accepted Completion Report, the primary coordinator updates the row through `mstar plan progress` and the main plan. Status is `InProgress`, `InReview` or `Blocked`, never `Done`; paths remain within the resolved plan/SDD area. Leaves never write execution state.
-4. **QC → QA gate:** keep the row InReview; run the SDD task reviews, then plan QC tri (inline single-seat exception) and mandatory QA or qualified PM acceptance. Raw reports live in `{SDD_DIR}/review/`, with durable summaries in the main plan. Capture/disclose findings under the effective cleanup configuration.
-5. **Direct completion after the real serial merge:** from the clean recorded integration checkout on the authoritative workflow's `branch.integration`, record the actual base SHA and explicitly run `git -C <integration-worktree-path> merge --no-ff --no-edit <reviewed-source-sha>` once. Supply QC/QA/source-review evidence and `integration: {base_sha, result_sha}` to `mstar plan complete`. The engine verifies the actual checkout, merge/source/review ancestry and result reachability, re-witnesses Git at commit, then atomically writes Done/completion evidence and retains source ownership metadata. It releases only applicable write/merge exclusion. No pre-merge state record or ownership-transfer sequence is required.
+4. **QC → PM Acceptance:** keep InReview; finish SDD task reviews, then independent plan QC tri (inline single-seat exception) and PM-owned acceptance → `mstar-roles/references/project-manager/acceptance.md`. Reports land in `{SDD_DIR}/review/` and durable summaries in the main plan. Capture/disclose findings under the effective cleanup policy; residuals never select another acceptance owner.
+5. **Direct completion after the real serial merge:** from the clean recorded integration checkout on the authoritative workflow's `branch.integration`, record the actual base SHA and explicitly run `git -C <integration-worktree-path> merge --no-ff --no-edit <reviewed-source-sha>` once. Supply QC/PM Acceptance/source-review evidence and `integration: {base_sha, result_sha}` to `mstar plan complete`. The engine verifies the actual checkout, merge/source/review ancestry and result reachability, re-witnesses Git at commit, then atomically writes Done/completion evidence and retains source ownership metadata. It releases only applicable write/merge exclusion. No pre-merge state record or ownership-transfer sequence is required.
    - The integration merge commit uses the already-configured identity; identity refusal is Blocked, never fabricate or use per-commit identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
    - On merge conflict, retain InReview and resolve or explicitly abort Git in that same checkout; do not invent Done. After a completed merge, retry complete with the same actual SHAs, never repeat the merge because a response was lost. Exact operation replay does not re-run Git or rewrite timestamps. Missing scope facts use ordinary prepare; actual Git conflicts must be resolved, not suppressed by state edits.
 6. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` 的 `## Plans` 表状态列

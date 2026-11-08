@@ -11,7 +11,7 @@ description: DESIGN.md 设计系统规范：创建/审计/维护 design tokens�
 |-----------------|------|
 | `mstar-phase-gates` | Prepare 阶段判定 gate、何时 DESIGN.md 必须就绪 |
 | `mstar-conventions` | `{HARNESS_DIR}` / `{SPECS_DIR}` 路径解析 |
-| `mstar-roles` | `@architect` / `@product-manager` / `@frontend-dev` / `@qc-specialist` / `@qa-engineer` 角色职责边界 |
+| `mstar-roles` | Product/architecture/frontend/QC role boundaries and PM-owned acceptance |
 | `mstar-coding-behavior` | 实现角色消费 DESIGN.md 前的通用编码约束 |
 | `mstar-design-system` | 一个实现需要收敛到既有 baseline（原型 / 设计导出 / 既有产品标记 / 书面契约）时：baseline 定位与机器化、三层 parity、defect/decision/phantom 分诊、coverage 证据 |
 
@@ -61,7 +61,7 @@ In Prepare phase, PM decides whether the project needs a DESIGN.md. If yes, disp
 
 - `@frontend-dev` / `@fullstack-dev` — read DESIGN.md before implementing styled components; map tokens to CSS/theme variables
 - `@qc-specialist` — verify UI implementation aligns with DESIGN.md tokens
-- `@qa-engineer` — verify visual output matches design spec when **`QA gate: mandatory`**
+- `project-manager` — map relevant supplied visual/design evidence to the ACs through `mstar-roles/references/project-manager/acceptance.md`; no automatic real-environment gate
 
 ## Phase gate integration
 

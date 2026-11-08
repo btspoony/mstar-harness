@@ -104,7 +104,7 @@ flowchart TD
     B --> C["Implement on a feature branch"]
     C --> D["Independent review"]
     D -->|changes requested| C
-    D --> E["Acceptance by QA or the PM, with its own evidence"]
+    D --> E["PM Acceptance, mapped to per-criterion evidence"]
     E -->|not accepted| C
     E --> F{"Iteration with plans still to run?"}
     F -->|yes: next plan| C
@@ -118,7 +118,7 @@ flowchart TD
     L --> M["Verify the merge, then close the delivery"]
 ```
 
-The main path shows a **development** delivery. Every plan gets a plan-level QC review — three independent seats by default — and a multi-task plan adds a per-task review during implementation. A hotfix — or a plan explicitly set to run inline — takes a lighter route with fewer review seats. Acceptance is a separate pass with its own evidence — QA or the PM — not a re-read of the implementer's summary, and confirmed problems that this round does not fix become tracked issues instead of being dropped.
+The main path shows a **development** delivery. Every plan gets plan-level QC — three independent seats by default — and multi-task plans add per-task review. Hotfix/inline review keeps its lighter seat rules. **PM Acceptance** is the sole acceptance route for every scope: each required criterion maps to relevant evidence and an honest result; QC approval alone is not test proof. PM may fill a named gap with a short bounded acceptance check, not implementation, test authoring, long suites or ops. Unfixed confirmed problems remain tracked issues.
 
 **Scope notes.** An iteration locks its direction with you first, then runs the per-plan cycle for every plan it takes on and closes out once before its pull request; without an iteration, the cycle runs for a single plan. A verification or report-only deliverable — an audit, for example — ends at its agreed completion, with no pull request or merge. On the development path, a plan is complete only with its evidence: plan completion, merge-ready, and merged are three different facts, and only a verified merge, followed by the post-merge close, ends the delivery. Merging is a separate authorization with one recorded source: under `owner-gated` you approve it or merge yourself; under `reviewed-auto` the recorded policy supplies it only through a settled, posted `ship it` report at the current PR head; under `reviewed-bot` only through the attached bot's newest passing review on that head — not the mere existence of a review. An iteration that never recorded a policy returns to Phase 1 instead of falling back to any of them. Branch cleanup stays a separate, explicit step.
 
@@ -159,19 +159,18 @@ Further detail: [`docs/runtime-reference.md`](docs/runtime-reference.md#mcp).
 
 | Agent ID | Responsibility |
 |----------|----------------|
-| `project-manager` | Routing, assignment, phase progression |
+| `project-manager` | Routing, assignment, phase progression, evidence-backed PM Acceptance and sole Done sign-off |
 | `product-manager` | Requirements, product planning, research |
 | `architect` | Architecture and technical contracts |
 | `fullstack-dev` / `fullstack-dev-2` | Backend-led implement / second parallel track |
 | `frontend-dev` | UI, interaction, frontend performance |
-| `qa-engineer` | Acceptance when `QA gate: mandatory` |
 | `code-reviewer` | SDD per-task review; codebase audit (`audit` category) |
 | `qc-specialist` / `-2` / `-3` | QC trio |
 | `ops-engineer` | Deploy, monitoring, infrastructure |
 | `writing-specialist` | Docs, fiction, copy, scripts |
 | `prompt-engineer` | Prompt / skill / rule work |
 
-A **project-manager** runs your session and dispatches the work: requirements and architecture, backend and frontend implementation, QC review, acceptance, codebase and PR audits, operations, and writing each go to a dedicated role. Every role follows the `mstar-*` skills.
+A **project-manager** runs your session, owns acceptance, and dispatches requirements/architecture, implementation, independent review, audits, operations and writing to their specialist roles. Every role follows the `mstar-*` skills. Acceptance procedure: [`mstar-roles/references/project-manager/acceptance.md`](skills/mstar-roles/references/project-manager/acceptance.md).
 
 ## Command line
 

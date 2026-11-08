@@ -13,7 +13,7 @@ description: "Engine-absent execution-state boundary: without a CLI/engine, exec
 ## Scope
 
 - 本 skill 只承接**一件事**：engine-absent 宿主的**执行状态边界**。字段历史与迁移形状随 engine 留在运行时侧，不在本归档。
-- engine-absent 宿主没有文件执行路径：执行状态走对话追踪（no-plan mode），门禁（QC/QA）仍适用；本归档不重建任何文件执行面。
+- engine-absent 宿主没有文件执行路径：执行状态走对话追踪（no-plan mode），门禁（QC/PM Acceptance）仍适用；本归档不重建任何文件执行面。
 - 本归档**不**承载字段表、迁移映射、派发座次或反递归清单——这些契约的当前 owner 是运行时 skills。
 
 ## Workflow

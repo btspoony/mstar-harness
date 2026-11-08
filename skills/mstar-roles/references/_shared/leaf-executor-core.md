@@ -6,9 +6,9 @@
 
 Applies under every preset, including explicit `none`. Canonical policy when loaded: `mstar-harness-core` § 定向执行与验证边界.
 
-- Execute only the assigned task, owned files, named checks and acceptance criteria. Read the supplied inputs and relevant knowledge; during implement/fix/QC/QA do not restart whole-repository exploration, review, or scans.
+- Execute only the assigned task, owned files, named checks and acceptance criteria. Read the supplied inputs and relevant knowledge; implementation/fix/review work does not restart whole-repository exploration, review or scans.
 - Never run local full suites without explicit user authorization identifying the permitted scope; PM wording, risk, missing evidence, and fixes cannot supply it. Full suites belong to CI by default. Do not disguise a full suite as unrelated small checks.
-- Reuse unaffected evidence; verify only changed behavior or the assigned finding/fix delta. QA executes targeted unit tests only; QC runs no test/build/install. Browser/device/E2E belongs to an explicitly requested independent workflow, never routine QA.
+- Reuse unaffected evidence; verify only changed behavior or the assigned finding/fix delta. QC runs no test/build/install. PM alone accepts evidence; browser/device/E2E belongs to an explicitly requested independent workflow, never routine development acceptance.
 - Stop when the assigned result is evidenced. Do not over-analyze settled questions, invent extra checks, expand into downstream tasks, or repair unrelated findings. Report the concrete missing input/permission to PM if scope is insufficient; preserve completed work.
 
 ## Completion Report
@@ -31,7 +31,7 @@ Every leaf executor returns this template (only `**Agent**` and content fields c
 **Git**: ...
 ```
 
-`{role_id}` = the role's own id (e.g. `fullstack-dev`, `frontend-dev`, `ops-engineer`, `qa-engineer`, `architect`, `code-reviewer`, `product-manager`, `prompt-engineer`, `writing-specialist`, `qc-specialist*`).
+`{role_id}` = the role's own id (e.g. `fullstack-dev`, `frontend-dev`, `ops-engineer`, `architect`, `code-reviewer`, `product-manager`, `prompt-engineer`, `writing-specialist`, `qc-specialist*`).
 
 For repo/process edits, provide the PM the actual edit time, editor seat, observable model or `unknown`, iteration/workflow and scope for the **local ignored attribution record** (`mstar-artifacts/references/plan-files-and-reports.md`). Do not invent a child's model, backdate a correction, or copy real provenance into tracked plans/examples. This is review-side evidence, not a new engine check.
 
@@ -52,7 +52,7 @@ Apply when the assignment writes tracked repo files:
 
 - Follow `{HARNESS_DIR}` / `{PLAN_DIR}` conventions from `mstar-conventions`.
 - Update assigned task checkboxes and plan notes for your scope.
-- Do not mark full plan `Done` (only `project-manager` or `qa-engineer` per `mstar-harness-core`).
+- Do not mark full plan `Done` (only the primary `project-manager` per `mstar-harness-core`).
 
 ## Non-Recursive Dispatch Rule (shared shape)
 

@@ -10,12 +10,12 @@ When multiple routes apply, set one `Primary` route in Assignment and treat othe
 1. User explicit instruction in this turn
 2. Hotfix
 3. High-risk production/shared-environment ops
-4. QA report-only
+4. Report-only investigation
 5. High-ambiguity / intermittent bug
 6. Bug fix
 7. Refactor
 8. Feature size bucket (large/medium/small)
-9. User-visible UI/critical-flow unit evidence (additional gate); real browser/device/E2E requires an explicit independent `mstar-e2e` request, never an automatic iteration QA gate
+9. User-visible UI/critical-flow unit evidence (additional gate); real browser/device/E2E requires an explicit independent `mstar-e2e` request, never an automatic iteration acceptance gate
 
 ## Size Heuristics
 
@@ -81,7 +81,7 @@ Document override as `Dev owner tie-break: single id — <reason>`.
 - `fullstack-dev` + `fullstack-dev-2` can run in parallel when module boundaries are explicit.
 - Same-repo multi-writer concurrency requires branch + worktree isolation.
 - **SDD implement** (`Execution mode: sdd`, default multi-task): per-task **task reviewer** (L2) + plan **QC tri-review** (L3; seat count → **`mstar-review-qc`** § 分派时机).
-- **Inline / hotfix**: single-seat QC; default **`QA gate: pm-acceptance`** after QC — tier table in `references/project-manager/qa-trigger-matrix.md`.
+- **Inline / hotfix**: single-seat QC; PM Acceptance follows the same evidence procedure as every other route → `references/project-manager/acceptance.md`.
 
 ## Routing / allocation NEVER (PM)
 
@@ -95,5 +95,5 @@ Document override as `Dev owner tie-break: single id — <reason>`.
 - `Task category` matches route
 - `Dev routing` matches task board ownership
 - Parallel intent and branch/worktree policy align
-- **`QA gate`** and **`QA gate reason`** set per `qa-trigger-matrix.md`
-- If UI-visible changes: `QA gate: mandatory` with unit-evidence mapping per `qa-trigger-matrix.md`; record unverified real-environment behavior for a separately requested `mstar-e2e` workflow, not an iteration gate
+- Acceptance is PM-owned for every scope → `references/project-manager/acceptance.md`; `QA gate: pm-acceptance` is a fixed-value carrier.
+- UI-visible changes require relevant unit/component evidence mapped to ACs; disclose unverified real-environment behavior separately, never dispatch another acceptance role or add an automatic E2E gate.

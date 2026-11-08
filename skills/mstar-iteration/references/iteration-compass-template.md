@@ -116,9 +116,9 @@ This table tracks **iteration delivery nodes**, not store `project_milestones` r
 
 > Filled at iteration-close. Human summary only; per-plan gate details stay in each main plan. Open findings SSOT is the plan-linked open issues in `{HARNESS_DIR}/store.db`.
 
-| plan_id | QC decision | QA gate | Residuals | Durable summary |
+| plan_id | QC decision | PM Acceptance gate | Residuals | Durable summary |
 |---------|-------------|---------|-----------|-----------------|
-| <plan-id-1> | Approve / Approve with residuals / Request Changes / N/A | mandatory / pm-acceptance / report-only / N/A | none / R1,R2 / accepted | `{PLAN_DIR}/<plan>.md#review-gate-summary` |
+| <plan-id-1> | Approve / Approve with residuals / Request Changes / N/A | pm-acceptance | none / R1,R2 / accepted | `{PLAN_DIR}/<plan>.md#pm-acceptance-summary` |
 
 Notes:
 

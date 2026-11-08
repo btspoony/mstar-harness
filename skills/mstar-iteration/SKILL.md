@@ -13,7 +13,7 @@ Phase 1 roadmap/milestone reads and Phase 3 close updates → **`mstar-project-g
 
 **Phase detail 不在本 skill 正文**：按下方 **Phase route map** 只加载当前动作对应的一行 detail——**禁止**无条件通读全部 phase references。
 
-The primary coordinator owns all rows of the selected iteration and dispatches ordinary leaf tasks. Row configuration remains revisable during active execution; `progress` records the start and review states, and direct `complete` verifies QC/QA and the actual serial merge before writing `Done`. No row-specific PM launch or binding is required. Command entry accepts no arguments; reject nonempty arguments instead of broadening their scope.
+The primary coordinator owns all rows of the selected iteration and dispatches ordinary leaf tasks. Row configuration remains revisable during active execution; `progress` records the start and review states, and direct `complete` verifies QC/PM Acceptance and the actual serial merge before writing `Done`. No row-specific PM launch or binding is required. Command entry accepts no arguments; reject nonempty arguments instead of broadening their scope.
 
 ## 设计思路
 
@@ -129,7 +129,7 @@ Phase 6: post-merge close —— merge 授权完成、PR merged 后 §6.1–§6.
 
 ## Workflow
 
-Phase 1–6 总览见上文 **`## 设计思路`** 图。执行时按 **`## Phase route map`** 选当前动作的一行 detail：`start`（范围 + compass + §1.6 Review & Edit 链）→ `Autonomous Execute`（五道闸 → §2.4 per-plan 循环：分支 → 实现 → QC → QA gate → Done → 串行 merge）→ `iteration-close`（§3.1–§3.5 + `mstar-knowledge`）→ `PR delivery`（Phase 4）→ `PR merge-ready loop`（Phase 5 至 §5.2 第 1–5 项全 `[x]`，即 merge-ready）→ `post-merge close`（Phase 6，PR merged 后 §6.1–§6.4）。每波用 §2.1 session todos 设护栏防范围漂移；phase 切换以上方 **Phase transition gates** 为准。
+Phase 1–6 总览见上文 **`## 设计思路`** 图。执行时按 **`## Phase route map`** 选当前动作的一行 detail：`start`（范围 + compass + §1.6 Review & Edit 链）→ `Autonomous Execute`（五道闸 → §2.4 per-plan 循环：分支 → 实现 → QC → PM Acceptance → Done → 串行 merge）→ `iteration-close`（§3.1–§3.5 + `mstar-knowledge`）→ `PR delivery`（Phase 4）→ `PR merge-ready loop`（Phase 5 至 §5.2 第 1–5 项全 `[x]`，即 merge-ready）→ `post-merge close`（Phase 6，PR merged 后 §6.1–§6.4）。每波用 §2.1 session todos 设护栏防范围漂移；phase 切换以上方 **Phase transition gates** 为准。
 
 ## Evidence
 

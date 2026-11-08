@@ -39,7 +39,7 @@ First action after Build, before product-code edits:
 
 Allowed in the parent Build session: plan/status maintenance, routing decisions, Assignment writing, and host task dispatch.
 
-Not allowed in the parent Build session by default: product implementation, test implementation, QC execution, QA execution, deployment, or ops changes. Those follow the normal PM dispatch rules unless the user explicitly overrides the harness.
+Not allowed in the parent Build session: product implementation, test authoring, QC execution, deployment or specialist ops. PM Acceptance permits only the named short bounded checks defined in `mstar-roles/references/project-manager/acceptance.md`; Build grants no broader execution authority.
 
 ## CreatePlan: fixed bootstrap todos (prefix)
 
@@ -69,7 +69,7 @@ After the host plan is created, keep the host plan body and mirror file **in syn
 
 - Mark implement todos done without a commit when tracked files changed.
 - Batch all work into one closing commit unless PM documented an exception.
-- Mark plan-level `Done` in engine state without PM/QA authority and recorded **`QA gate`** (`mandatory` fulfilled or `pm-acceptance` checklist per `qa-trigger-matrix.md`).
+- Mark plan-level `Done` without primary-PM authority and completed evidence-backed PM Acceptance (`mstar-roles/references/project-manager/acceptance.md`).
 
 Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/references/fullstack-dev-shared.md` (Git NEVER).
 
@@ -81,7 +81,7 @@ Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/refe
 - **Supported permission recovery**: if Plan mode only permits its session-plan file, retain the pending prototype path, design intent and next steps there; explain that no package prototype has been persisted/presented and no design gate has passed. Ask the user to use the active host's normal Build / exit / resolve control to continue **prototype preparation only**, not to approve an unseen design or start product implementation. Resume the same carrier in PM context, persist/show the prototype, finish its design checkpoint, then draft and invoke selected reviewers. If invoke is still unavailable, resume through a host entry exposing the required role tools, retaining the existing artifact paths; report the exact missing capability rather than fake returns.
 - **Selected Review & Edit**: follow §1.6 — record product-manager / architect include/skip reasons and reuse prototype contributions; invoke selected roles sequentially in that order, then mandatory writing-specialist last. No fake skip receipts, omitted-role markers or unresolved blocking questions. PM lock and integration follow actual returns.
 - Prepare (`specify → clarify → plan`) still applies. Recommended `iteration_base_branch` / `target_branch` (+ rationale) goes into the carrier without silent `main`/`master` defaults. Formal plans reference the prototype through existing `metadata.iteration_refs`.
-- Host plan approval is not Morning Star **Done**. Implementation still follows phase gates, per-task commits, QC and QA; this Phase 1 exception to early dual-write/bootstrap does not change ordinary per-plan behavior above.
+- Host plan approval is not Morning Star **Done**. Implementation still follows phase gates, per-task commits, QC and PM Acceptance; this Phase 1 exception to early dual-write/bootstrap does not change ordinary per-plan behavior above.
 
 ## Anti-patterns (shared)
 
@@ -93,6 +93,6 @@ Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/refe
 | Host plan URI as Plan Path | Use `{PLAN_DIR}/...` path |
 | Skip `spec-register` | Register workflow/plan rows through public engine producer before implement |
 | Build starts coding in the parent session | Resume PM context; dispatch implement work or block on missing Assignment |
-| Host plan approval treated as Done authority | Check harness plan/status/QC/QA gates first |
+| Host plan approval treated as Done authority | Check harness plan/status/QC/PM Acceptance gates first |
 | Resume starts coding from host chat summary | Reload harness context and SSOT plan/status first |
 | Phase 1 Plan mode: formal drafts before prototype approval, or Review / branch before Build | Finish the current-design checkpoint first; use supported host permission-resume for restricted writes/invoke; never infer implementation permission from design approval |

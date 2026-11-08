@@ -14,7 +14,7 @@ Phase 2–5 全程有效（drive + loop 共有的行）：
 
 | 禁止（PM 线程） | 必须 |
 |-----------------|------|
-| Write/Edit/Shell 产品代码、写测试、跑 QC（Phase 2） | 派发 implement/QC/QA 席位（计数规则 → **`mstar-host`** `references/parallel-dispatch.md` § Mandatory order） |
+| Product-code edits, test authoring or QC execution (Phase 2) | Dispatch implementer/QC specialists; only bounded PM acceptance checks are direct → `mstar-roles/references/project-manager/acceptance.md` |
 | **多 task plan 用 inline 大包派发**（整份 plan / T1–Tn 贴进一个 dev Assignment） | **SDD**：`mstar-sdd` per-task 循环 — `mstar sdd task-brief` → implementer → `mstar sdd review-package` → task reviewer → `progress.md` |
 | 只写 Assignment 就进入下一 gate | 同轮发出对应 invoke（paste-only 判据 → **`mstar-host`** `references/parallel-dispatch.md` § Hard rules） |
 | 最后一个 plan `Done` 后直接开 PR / 汇报结束；§5.2 merge-ready exit 或 PR merged 即宣称交付完成 | **Phase 3 → 4 → 5 → 6** 顺序执行（Phase 6 = PR merged 后 post-merge close，`references/phase-6-post-merge-close.md`） |
@@ -24,7 +24,7 @@ Phase 2–5 全程有效（drive + loop 共有的行）：
 
 ## Assignment preflight（bash 块 — byte-identical 共享副本）
 
-`mstar-harness` bin 未安装时静默跳过；在每次 implement/QC/QA 派发前（**SDD** 下为最新 `{SDD_DIR}/task-N-brief.md` 或临时写盘的 Assignment）校验。模式由迭代 compass frontmatter 的 `enforcement` 键决定（Slice 5）：
+Before each implementer/QC dispatch, validate the latest SDD task brief or saved Assignment when the CLI is available. PM Acceptance is not dispatched. Enforcement follows the iteration compass:
 
 - **默认（compass 无 `enforcement: hard`）— 可选 warn-only**：exit 1 仅提示，不阻断派发（Slice 3 行为不变）：
 

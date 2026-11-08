@@ -72,7 +72,7 @@ Replace every placeholder with actual evidence. Unknown or duplicate modes withi
 
 ### Captured check evidence (`sdd evidence`)
 
-An already-authorized check can run **once** and retain raw evidence plus provenance digests in canonical SDD for read-only review, rather than repeating the child command. **PM publishes the task capture request** (task-specific JSON naming context, coverage declaration, declared inputs and selected environment keys); the **developer captures** the authorized check; QC/QA inspect it without repeating the child. The request is separate from rotating `context.json` and is not a checkout selector. Capture authorizes no dispatch, test/full-suite/E2E permission, or report-byte seal.
+An already-authorized check can run **once** and retain raw evidence plus provenance digests in canonical SDD for read-only review, rather than repeating the child command. **PM publishes the task capture request** (task-specific JSON naming context, coverage declaration, declared inputs and selected environment keys); the **developer captures** the authorized check; QC/PM Acceptance inspect it without repeating the child. The request is separate from rotating `context.json` and is not a checkout selector. Capture authorizes no dispatch, test/full-suite/E2E permission, or report-byte seal.
 
 Exact public command shapes (angle-bracket terms are required CLI values):
 
@@ -100,7 +100,7 @@ PM sets `FEATURE_CWD` from the completed task's immutable Assignment `Worktree p
 
 ## Task review report file (L2 output)
 
-The fresh task reviewer writes its full report to `task-N-review.md` — always, for every completed task under `Execution mode: sdd`: not optional, never conversation-only, separate from the implementer report it reads. Body sections and `Task quality` verdict → **`task-reviewer-prompt.md`**. This file is the L2 output only — not formal QC (`{SDD_DIR}/review/qcN.md`) and not QA, and no consumer silently searches another basename.
+The fresh task reviewer writes its full report to `task-N-review.md` — always, for every completed task under `Execution mode: sdd`: not optional, never conversation-only, separate from the implementer report it reads. Body sections and `Task quality` verdict → **`task-reviewer-prompt.md`**. This file is the L2 output only — not formal QC (`{SDD_DIR}/review/qcN.md`) and not PM Acceptance, and no consumer silently searches another basename.
 
 PM reads that named report before marking the task complete, and the ledger entry below records it. Partial findings and the `Task quality` verdict earned for the reviewed scope stay valid; assigned review scope left uncovered does **not**: PM routes the remaining scope through a fresh/tightened reviewer dispatch and does not append task-complete or release dependent work. A coverage gap is never converted into an invented code defect, and an `Approved` earned for checked scope is never overwritten.
 
@@ -150,7 +150,7 @@ mkdir -p "$SDD_DIR/review"
 mstar sdd review-package "$MERGE_BASE" HEAD --context "$SDD_DIR/context.json" "$SDD_DIR/review/branch-review-....diff"
 ```
 
-Pass **branch** diff path and bundle report paths (`$SDD_DIR/review/qc1.md` …) to QC dispatch — not task-level diffs. Raw QC/QA files stay in the gitignored review bundle; PM records durable summary and open residuals in authored main plan / store.db-backed plan row through public plan verbs, and captures open findings as store.db issues (`mstar plan issue-add` / `mstar issue add`; project register only migration history) and promotes cross-clone decisions into tracked knowledge/specs/`AGENTS.md` per `mstar-conventions` git policy.
+Pass **branch** diff path and bundle report paths (`$SDD_DIR/review/qc1.md` …) to QC dispatch — not task-level diffs. Raw QC/PM Acceptance files stay in the gitignored review bundle; PM records durable summary and open residuals in authored main plan / store.db-backed plan row through public plan verbs, and captures open findings as store.db issues (`mstar plan issue-add` / `mstar issue add`; project register only migration history) and promotes cross-clone decisions into tracked knowledge/specs/`AGENTS.md` per `mstar-conventions` git policy.
 
 ## PM context hygiene
 

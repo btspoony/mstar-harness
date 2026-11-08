@@ -5,7 +5,7 @@ description: "Dispatch gates: PM-only leaf dispatch, executor/delegation identit
 
 ## Load order（必读顺序）
 
-**首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** 同仓 worktree、QC/QA 检出字段 → **`mstar-branch-worktree`**。冲突时 **以 `mstar-harness-core` 为准**。
+**首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** 同仓 worktree、QC/PM Acceptance 检出字段 → **`mstar-branch-worktree`**。冲突时 **以 `mstar-harness-core` 为准**。
 
 ## 🚨 承接方：如果你是 leaf executor，先读本节！（身份锁 + 反递归红线）
 
@@ -32,7 +32,7 @@ description: "Dispatch gates: PM-only leaf dispatch, executor/delegation identit
 - 额外代理仅以 **`Delegation: allowed (...)`** 为准；未显式写时视为 **`Delegation: forbidden`**。
 - Assignment 正文中的 role 引用：默认 **plain id**（`product-manager`）。个别宿主会把堆叠的角色提及扩写成系统行——该宿主的 mention hygiene 规则见其 **`mstar-host` reference**。
 - 承接方若判断必须增加 subagent，应先回报 **`Blocked`** 请 PM 重分派。
-- Per-task informal review, when PM explicitly allows it, must not use `qc-specialist*`; use `code-reviewer` (generic fallback only when the role agent is absent on the host) or PM-marked informal `qa-engineer`. Formal QC remains `mstar-review-qc`.
+- Per-task informal review, when PM explicitly allows it, must not use `qc-specialist*`; use `code-reviewer` (generic fallback only when that role agent is absent on the host). Formal QC remains `mstar-review-qc`; acceptance remains PM-owned.
 
 ## 并发分派完整性门禁（PM 强制 · Evidence）
 

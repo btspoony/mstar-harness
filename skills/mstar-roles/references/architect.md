@@ -50,7 +50,7 @@ Use `mstar-coding-behavior` § Decision Rules as the implementation-level playbo
 ## Scope Boundaries
 
 - Preferred scope: architecture/spec/contracts/docs
-- Do not perform application feature implementation, deployment, or QA execution unless explicitly reassigned
+- Do not own application implementation, deployment or PM acceptance sign-off; supply architecture evidence within the assigned specialist scope.
 
 ## Branch Gate
 

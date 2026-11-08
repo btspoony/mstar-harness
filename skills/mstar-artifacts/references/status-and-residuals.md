@@ -15,7 +15,7 @@ Execution authority is the ACTIVE DB domain in `{HARNESS_DIR}/store.db`. There i
 
 **Migration sources:** root `status.json` and the workflow snapshot are retained history. The DB execution domain is the SSOT. **open item 的 SSOT 是 `{HARNESS_DIR}/store.db` 的 issue**（→ § Issue capture below）；project register 是**迁移历史**。Canonical residual definitions → **`mstar-artifacts` SKILL.md** ("Execution authority, migration sources, and open residual (summary)"); this reference covers **ACTIVE fields, severity, issue lifecycle and engine-check commands**.
 
-**Why this matters:** Within a working copy, the **local session SSOT** for risk and decisions is the issue store. Non-blocking conclusions that stay only in chat or a gitignored review bundle **without local SSOT update** cannot be inherited reliably in that session; `Done` drifts from visible known debt. **`@project-manager`** should capture trackable open items as issues soon after review closure; close after verification per **`QA gate`** (`qa-engineer` when `mandatory`, else PM acceptance checklist) — capture and closure per **`mstar-project-governance`「Issue capture」**.
+**Why this matters:** The issue store is the working copy's local risk/decision SSOT. Chat-only or ephemeral findings without a store update cannot be inherited reliably. PM captures confirmed items after review and closes only after evidence-backed PM Acceptance; capture and closure authority → **`mstar-project-governance` § Issue capture**.
 
 **Cross-clone handoff** (default git policy): tracked `{HARNESS_DIR}/AGENTS.md`, `{KNOWLEDGE_DIR}/**`, `{SPECS_DIR}/**`, and root `CONCEPTS.md` / `STRATEGY.md` when used. Residuals that must survive clone must be **promoted** (compound) or written into those tracked results — do not treat `status.json` / `workflows/` / `projects/` / `plans/` as the default clone handoff surface.
 
@@ -23,7 +23,7 @@ Execution authority is the ACTIVE DB domain in `{HARNESS_DIR}/store.db`. There i
 
 **Canonical capture duty（唯一权威，逐字文本）→ `mstar-project-governance`「Issue capture」（issue-store contract §6）。** 本文件不复述该契约；下面是 artifacts 侧的**落点应用**。
 
-- **谁捕获**：确认该结论的席位 —— PM 席位（dispatch/consolidation、QC tri、iteration close）与 PR-review 轮次 Stage 3 的 main agent。Leaf audit/QC/QA 席位**只回证据，不写 store**。
+- **谁捕获**：确认该结论的席位 —— PM 席位（dispatch/consolidation、QC tri、iteration close）与 PR-review 轮次 Stage 3 的 main agent。Leaf audit/QC 席位**只回证据，不写 store**。
 - **open 侧映射**：residual **open** 登记 → issue capture（计划内 `mstar plan issue-add`，计划外 `mstar issue add`）；同一 finding 再次出现 → `mstar issue occurrence` 追加 occurrence，**不**新开第二个 issue。本文 § Residual findings 的 `severity` 枚举就是 issue 的 `severity` 枚举。
 - **close 侧映射**：residual 关闭（`resolved` / `waived` / `duplicate` / `superseded`）→ issue 终态处置，由契约 §4 的关闭权威执行；`findings cleanup` 的 open 项是该 plan 的 **linked open issues**（`mstar status findings-cleanup <plan-id>`）。
 - **激活边界**：store 接受普通捕获/查询、并作为唯一权威，以 issue-store contract §7 的 activation 完成为准（staged 时 `store.not-active`）；live 切换归 cutover plan 的授权 ops 任务。register 是迁移历史，不再作为写入目标。
@@ -111,7 +111,7 @@ The blocking judgement is decided **once**, on the §3 axis. Each chain's label 
 
 ## Findings cleanup modes
 
-Plan-level policy for whether non-blocking QC/QA findings may remain as **open issues linked to the plan** or must be cleared in the current plan session.
+Plan-level policy for whether non-blocking QC/PM Acceptance findings may remain as **open issues linked to the plan** or must be cleared in the current plan session.
 
 ### Effective coordinator configuration
 
@@ -209,9 +209,9 @@ ACTIVE actions acquire caller identity independently and revalidate identity/roo
 | Row | `coordination.revision` | Row CAS revision |
 | Row | `coordination.prepared` | `{qa_gate, findings_cleanup, prepared_by, prepared_at}`; ordinary configuration, no Assignment seal |
 | Row | `coordination.progress` | `{status, summary, evidence_paths[], track_branches?}`; source/track ownership and plan-area evidence checks remain |
-| Row | `coordination.completion` | Source branch/SHA/worktree, review base/head, hashed QC/QA evidence, optional verified integration result, completed_by/completed_at |
+| Row | `coordination.completion` | Source branch/SHA/worktree, review base/head, hashed QC/PM Acceptance evidence, optional verified integration result, completed_by/completed_at |
 
-Source facts live in `metadata.working_branch`/`metadata.worktree_path`, not a prepared Assignment. QA defaults to `mandatory`, findings cleanup to `allow-residual`. Prepare may revise valid configuration while the row is active and never resets progress/status or locks plan prose. No ceremonial prepare record is required when ordinary defaults and metadata suffice.
+Source facts live in `metadata.working_branch` / `metadata.worktree_path`, not a prepared Assignment. Acceptance defaults to `pm-acceptance`, cleanup to `allow-residual`. Ordinary prepare revises active configuration without resetting progress/status or locking prose; no ceremonial prepare is needed for valid defaults/metadata. Legacy active `mandatory` configuration recovers through ordinary prepare with `--qa-gate pm-acceptance`, preserving prior records; procedure → `mstar-roles/references/project-manager/acceptance.md`.
 
 Session references, tokens and operation IDs never travel to leaf implementers/reviewers. Public recovery output includes workflow/public session ids, receipt/replay and token/version facts; never credential material.
 
@@ -220,16 +220,16 @@ Session references, tokens and operation IDs never travel to leaf implementers/r
 | Operation | Effect/admission |
 |---|---|
 | `show` | Read the explicitly selected row and applicable operations |
-| `prepare` | Revise source metadata and QA/cleanup configuration while row ≠ Done; validate actual checkout, not equality with an old config |
+| `prepare` | Revise source metadata and acceptance/cleanup configuration while row ≠ Done; validate actual checkout, not equality with an old config |
 | `progress` | Todo → InProgress or Blocked; InProgress/InReview/Blocked transitions retain their ordinary meaning, never Done |
 | `issue-add` / `issue-close` | Composed issue-store writes with existing closure authority and issue CAS; row ≠ Done |
-| `complete` | From InReview, or entailed InProgress → InReview in the same transaction; accept QC `Approve | Approve with residuals`, QA `pass` matching effective gate and findings-cleanup requirements; write Done/completion and retain source metadata |
+| `complete` | From InReview, or entailed InProgress → InReview in the same transaction; accept QC `Approve | Approve with residuals`, PM Acceptance `pass` matching the fixed pm-acceptance gate and findings-cleanup requirements; write Done/completion and retain source metadata |
 
 Completion takes `source_sha`, `review_base`, `review_head`, `qc {decision,reports,consolidated}`, `qa {gate,decision,report}` and optional `integration {base_sha,result_sha}`. Evidence paths are absolute existing files, recorded with informational digests. Exact replay never reruns Git or rewrites completed_at. No ownership-transfer state exists.
 
 1. **Iteration/non-standalone:** integration pair required; prove the already-performed serial two-parent merge in the recorded target checkout, source/review ancestry, result reachability and clean target branch. Re-witness Git at commit. Row Done creates no child PR; parent retains compound/PR/merge/close.
 2. **Standalone development:** source checkout/ref/clean HEAD must match registered source and evidence. Integration input refuses. Row Done precedes its own compound/PR/verified-merge/close tail.
-3. **Standalone report-only:** integration input refuses; use already-recorded fulfilment matching registered completion_policy, plus QC/QA. QA pass is not policy fulfilment. Git fields are provenance only; no Git/integration proof or PR is invented. Evidence-backed terminal close remains.
+3. **Standalone report-only:** integration input refuses; use already-recorded fulfilment matching registered completion_policy, plus QC/PM Acceptance. acceptance pass is not policy fulfilment. Git fields are provenance only; no Git/integration proof or PR is invented. Evidence-backed terminal close remains.
 
 Route selection uses workflow type, declared kind and cardinality, never missing anchors as an exemption. Source facts that cannot be safely derived are supplied by prepare. Refusals name missing facts/current operation; real Git conflicts require resolving/aborting Git, never raw state repair. Lost output after a successful merge means retry complete with the actual SHAs, not another merge.
 
@@ -260,12 +260,12 @@ Issues remain open until authorized disposition to `resolved`, `waived`, `supers
 | Action | Owner | When |
 | ------ | ----- | ---- |
 | Implement fix | `@fullstack-dev` / assignee | Completion Report cites the issue id + evidence |
-| Verify | `@qa-engineer` when **`QA gate: mandatory`**; else PM per acceptance checklist | Regression / acceptance; an open item is closed only after verify |
-| Capture / close | **`@project-manager`** or **`@qa-engineer`** | Capture after the confirmed outcome, close after verification; waivers after PM + user/architect alignment. Live items go through the issue verbs (`mstar plan issue-add` / `issue-close`, or the unscoped `mstar issue …`), never a hand edit — the register is migration history |
+| Verify | Primary `project-manager` accepts relevant dev/ops/CI evidence; narrow direct-check exception only | A fixed issue closes only after its regression/disposition is evidenced |
+| Capture / close | Primary `project-manager` (PR-review main may capture per contract) | Capture confirmed outcomes; close after verified disposition; waivers retain PM + user/architect alignment. Use public issue verbs, never hand-edit state |
 
 Do not claim an issue “fixed” in chat/plan only without the store update.
 
-PM should capture open items as issues after **`Approve with residuals`**; QA should state each related issue id (open / resolved this round / needs waiver).
+PM should capture open items as issues after **`Approve with residuals`**; PM Acceptance states each related issue id (open / resolved this round / needs waiver).
 
 Live items use authorized issue verbs only.
 

@@ -12,7 +12,7 @@ v1 held `{HARNESS_DIR}/status.json` as the SSOT for `plans[]` row status and ope
 | --- | --- |
 | `id` | Plan id (legacy alias `plan_id` read-compatible). |
 | `title` / `file` | Display title / main plan path (`{PLAN_DIR}/…`). |
-| `status` | `Todo \| InProgress \| InReview \| Blocked \| Done` (Done only by `@project-manager` / `@qa-engineer`). |
+| `status` | `Todo \| InProgress \| InReview \| Blocked \| Done`; historical actors remain recorded as-is, while new Done authority belongs only to the primary PM. |
 | `owner` / `agents` / `progress` / `tags` | PM ownership, role agents, progress 0–100, tags. |
 | `created_at` / `updated_at` / `done_at` | `YYYY-MM-DD`; `done_at` set at Done. |
 | `notes` | Per-plan timeline (string array recommended; legacy string OK). |

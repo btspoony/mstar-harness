@@ -101,15 +101,15 @@ iteration-start locks interactively, iteration-drive resumes an already locked i
 
 ### Direct row operations
 
-The primary coordinator uses ordinary `show`, revisable `prepare`, `progress`, `issue-add`, `issue-close` and direct `complete`. Source facts live in row metadata. Defaults are mandatory QA and allow-residual cleanup; configuration remains revisable during active execution, and valid metadata/defaults need no ceremonial prepare record. Leaf Assignments retain task identity/scope/worktree/evidence, not sealed plan admission.
+The primary coordinator uses ordinary `show`, revisable `prepare`, `progress`, `issue-add`, `issue-close` and direct `complete`. Source facts live in row metadata. Defaults are PM Acceptance (`pm-acceptance`) / `allow-residual`; valid facts/defaults need no ceremony. Active configuration remains revisable. The retained `qa: {gate, decision, report}` carrier requires `pm-acceptance`, `pass` and a real acceptance report; optional `qaGate` is fixed-value, not a selector. An active historical `mandatory` row recovers through same-row `plan prepare --qa-gate pm-acceptance`, then completion retry, preserving progress, issues, source metadata, unrelated rows and historical authorship. Leaf Assignments carry task scope/evidence, not coordinator authority.
 
 All rows use the same workflow coordinator, transaction/CAS/receipt discipline and declared-route completion:
 
 | Route | Direct completion proof | Outer obligation |
 |---|---|---|
-| Iteration/non-standalone | Reviewed source/QC/QA and real already-performed serial two-parent integration merge in recorded target checkout, with actual base/result SHAs | Parent compound/PR/verified merge/terminal close; no child PR |
-| Standalone development | Reviewed source/QC/QA and clean registered source checkout/ref, without iteration integration inputs | Own compound/PR/verified merge/terminal close |
-| Standalone report-only | Explicit registered-policy fulfilment recorded before Done plus QC/QA, without invented Git/integration | Evidence-backed terminal close, no PR/merge |
+| Iteration/non-standalone | Reviewed source, independent QC, PM Acceptance and the real serial two-parent integration merge in recorded target checkout, with actual base/result SHAs | Parent compound/PR/verified merge/terminal close; no child PR |
+| Standalone development | Reviewed source, independent QC, PM Acceptance and clean registered source checkout/ref, without iteration integration inputs | Own compound/PR/verified merge/terminal close |
+| Standalone report-only | Explicit registered-policy fulfilment before Done plus QC/PM Acceptance, without invented Git/integration | Evidence-backed terminal close, no PR/merge |
 
 Completion never performs Git merge or an ownership transfer. The coordinator explicitly merges once in the recorded integration checkout and then complete verifies the actual result. Lost output means retry complete against actual facts, not a second merge. Resolve/abort a real conflict in Git. Exact replay preserves completion timestamps. Recovery replaces only the explicitly stopped workflow coordinator; row-specific sessions/launches are removed.
 
@@ -190,8 +190,8 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 
 **Purpose** — run explicitly requested E2E, browser, device or installed-deployment scenarios as an independent verification workflow. The owning skill covers registration, evidence, scope boundaries and closure.
 
-**When** — on an explicit user request only. It is never a routine iteration QA gate, and routine QA never triggers it.
+**When** — explicit user request only, never a routine development/iteration acceptance gate.
 
-**Execution** — the PM orchestrates and the assigned `ops-engineer` executes; the entry itself does not authorize E2E from routine QA and does not insert it into an iteration.
+**Execution** — PM orchestrates and `ops-engineer` executes; routine acceptance does not authorize E2E or insert it into an iteration.
 
 **Defined in** — [`commands/amazing-e2e-check.md`](../commands/amazing-e2e-check.md); semantics → `mstar-e2e`.
