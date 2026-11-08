@@ -529,6 +529,17 @@ describe("mstar status workflow-close — the report-only row reaches Done witho
 });
 
 describe("mstar plan complete — a refusal names the verb that actually advances it", () => {
+  test("retired prepare input refuses with a usable PM acceptance retry", async () => {
+    const fixture = await activeFixture("mstar-retired-gate");
+    await registerAndBind(fixture);
+    const args = ["plan", "prepare", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--harness", fixture.harness, "--qa-gate"];
+    const refused = runCli([...args, "mandatory"], fixture.root, identityEnv());
+    expect(refused.exitCode).not.toBe(0);
+    expect(message(refused)).toContain("--qa-gate pm-acceptance");
+    const retried = runCli([...args, "pm-acceptance"], fixture.root, identityEnv());
+    expect(retried.exitCode, retried.stdout).toBe(0);
+  }, 30_000);
+
 
   /**
    * A Git object id refusal carries `field` too (`source_sha` / `review_base` /
