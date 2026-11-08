@@ -547,6 +547,24 @@ describe("consultDeliveryEvidence — pure delivery rules", () => {
       .not.toContain("workflow.snapshot.invalid-delivery-evidence");
     expect(consultDeliveryEvidence(storedReportOnly as never)).toEqual([]);
     expect(deliveryEvidenceViolations({ completion: legacyCompletion }, "patch").map((entry) => entry.code)).toContain(code);
+
+    // The intermediate revision persisted a close-owned `proof` member; a block
+    // written then must read as history too, not as an unknown member.
+    const legacyProof = { target: "main", tip: "a".repeat(40), at: "2026-11-08T00:00:00.000Z" };
+    const storedProof = validSnapshot({
+      type: "plan",
+      delivery_kind: "development",
+      branch: { work: "feature/fixture", target: "main" },
+      status: "completed",
+      ended_at: "2026-11-08T01:00:00.000Z",
+      delivery: { compound: { outcome: "created" }, proof: legacyProof },
+      plans: [{ id: "p-1", title: "Plan", file: "plans/p-1.md", status: "Done" }],
+    });
+    expect(validateWorkflowSnapshot(storedProof).violations.map((entry) => entry.code))
+      .not.toContain("workflow.snapshot.invalid-delivery-evidence");
+    expect(consultDeliveryEvidence(storedProof as never)).toEqual([]);
+    // No write path may record it again.
+    expect(deliveryEvidenceViolations({ proof: legacyProof }, "patch").map((entry) => entry.code)).toContain(code);
   });
 
   test("a terminal plan header without a registered kind is accepted history, never an actionable violation", () => {

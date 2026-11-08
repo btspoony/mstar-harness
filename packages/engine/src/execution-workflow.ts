@@ -18,9 +18,10 @@
  *   ever read;
  * - the lifecycle transition runs the existing terminal rules: every owned row
  *   `Done`, the existing delivery-evidence consultation for a `completed` close
- *   (the SAME `verifyDeliveryEvidence` the read-only Phase-6 gate consults — pure
- *   evidence rules plus the local Git merge proof), and the existing terminal
- *   invariant that a terminal lifecycle owns no execution or integration lease;
+ *   (`verifyDeliveryEvidence` — pure evidence rules plus the local Git merge
+ *   proof, run HERE and only here; the read-only Phase-6 gate reads the stored
+ *   terminal facts), and the existing terminal invariant that a terminal
+ *   lifecycle owns no execution or integration lease;
  * - the delivery transition runs the existing structural validator only: the
  *   delivery evidence records the compound disposition and the optional provider
  *   merge commit, never a copy of the branch anchors (contract §4c/§4f);

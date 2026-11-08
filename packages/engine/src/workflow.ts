@@ -535,16 +535,17 @@ export function deliveryEvidenceMembers(kind: WorkflowDeliveryKind): readonly st
 /**
  * The delivery block as a STORED document may carry it. The pre-§4f shape
  * recorded `delivery.pr` and a free-text `merge {provider, evidence}`; the
- * report-only route recorded `delivery.completion`. A stored block is history
- * and is never rewritten, so persisted-state validation reads those legacy
- * members as ABSENT instead of refusing the whole snapshot - the same read
- * tolerance the pre-rename `branch.source` spelling gets. Every WRITE path
- * refuses them (`deliveryEvidenceMembers` plus the strict shape rule), so the
- * tolerated shape can never be recorded again.
+ * report-only route recorded `delivery.completion`; an intermediate revision
+ * recorded the close-owned `delivery.proof`. A stored block is history and is
+ * never rewritten, so persisted-state validation reads those retired members
+ * as ABSENT instead of refusing the whole snapshot - the same read tolerance
+ * the pre-rename `branch.source` spelling gets. Every WRITE path refuses them
+ * (`deliveryEvidenceMembers` plus the strict shape rule), so the tolerated
+ * shape can never be recorded again.
  */
 export function storedDeliveryEvidence(value: unknown): unknown {
   if (!isPlainObject(value)) return value;
-  const { pr: _legacyPr, completion: _legacyCompletion, merge, ...members } = value;
+  const { pr: _legacyPr, completion: _legacyCompletion, proof: _legacyProof, merge, ...members } = value;
   // A non-object merge is not the retired spelling: leave it for the shape rule
   // to name instead of silently discarding structured state.
   if (!isPlainObject(merge)) return merge === undefined ? members : { ...members, merge };

@@ -15052,7 +15052,7 @@ function deliveryEvidenceViolations(value, what) {
 function storedDeliveryEvidence(value) {
   if (!isPlainObject(value))
     return value;
-  const { pr: _legacyPr, completion: _legacyCompletion, merge, ...members } = value;
+  const { pr: _legacyPr, completion: _legacyCompletion, proof: _legacyProof, merge, ...members } = value;
   if (!isPlainObject(merge))
     return merge === undefined ? members : { ...members, merge };
   return merge.commit === undefined ? members : { ...members, merge: { commit: merge.commit } };
