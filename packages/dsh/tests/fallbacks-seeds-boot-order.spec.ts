@@ -229,6 +229,7 @@ describe('fallbacks seeds boot-order — single REAL-package boot converges the 
           .map((row) => (typeof row === 'object' && row !== null && 'id' in row ? (row as { id: unknown }).id : undefined))
           .filter((id): id is string => typeof id === 'string'),
       )
+      expect(persistedIds.has('project-manager'), 'the PM is not persisted as a subagent seed').toBe(false)
       for (const id of mstarIds) {
         expect(persistedIds.has(id), `persisted settings row for ${id}`).toBe(true)
       }
