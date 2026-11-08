@@ -168,7 +168,7 @@ export type ValidatedCompletionEvidence = {
   qc_decision: "Approve" | "Approve with residuals";
   qc_reports: string[];
   qc_consolidated: string;
-  qa_gate: "mandatory" | "pm-acceptance";
+  qa_gate: "pm-acceptance";
   qa_decision: "pass";
   qa_report: string;
   /** Every evidence value with its payload field, so a path refusal can name it. */
@@ -192,12 +192,12 @@ export function readCompletionEvidence(value: unknown, route: RowValidationRoute
     throw new CoordinationError("coordination.invalid-input", "Invalid QC evidence: qc.reports must name at least one report. Inspect workflow state with mstar status validate.");
   }
   if (!isNonEmptyString(qc.consolidated)) throw new CoordinationError("coordination.invalid-input", "Invalid QC evidence: qc.consolidated must name the plan QC decision report. Inspect workflow state with mstar status validate.");
-  if (!isPlainObject(value.qa)) throw new CoordinationError("coordination.invalid-input", "Invalid completion evidence: provide a QA or PM acceptance report. Inspect workflow state with mstar status validate.");
+  if (!isPlainObject(value.qa)) throw new CoordinationError("coordination.invalid-input", "Invalid completion evidence: provide a PM acceptance report and retry plan complete.");
   assertExactKeys(value.qa, ["gate", "decision", "report"], "completion evidence qa");
-  if ((value.qa.gate !== "mandatory" && value.qa.gate !== "pm-acceptance") || value.qa.decision !== "pass" || !isNonEmptyString(value.qa.report)) {
-    throw new CoordinationError("coordination.invalid-input", "qa evidence requires string gate mandatory or pm-acceptance, decision pass and the acceptance report; correct the completion evidence and retry plan complete");
+  if (value.qa.gate !== "pm-acceptance" || value.qa.decision !== "pass" || !isNonEmptyString(value.qa.report)) {
+    throw new CoordinationError("coordination.invalid-input", "qa evidence requires gate pm-acceptance, decision pass and a PM acceptance report; correct the completion evidence and retry plan complete.");
   }
-  const qaGate = value.qa.gate as ValidatedCompletionEvidence["qa_gate"];
+  const qaGate = value.qa.gate;
   const qaReport = value.qa.report;
   const extra = value.evidence_paths === undefined ? [] : value.evidence_paths;
   if (!Array.isArray(extra) || !extra.every(isNonEmptyString)) {
@@ -242,7 +242,7 @@ export function assertCompletionReviewDecision(
   qaGate: "mandatory" | "pm-acceptance",
 ): void {
   if (evidence.qa_gate !== qaGate) {
-    throw new CoordinationError("coordination.invalid-transition", "Plan requires the configured QA acceptance evidence; provide the matching QA or PM acceptance report. Inspect workflow state with mstar status validate.", { plan_id: planId, required: qaGate });
+    throw new CoordinationError("coordination.invalid-transition", "The plan retains a retired mandatory acceptance gate. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --qa-gate pm-acceptance for this plan, then retry plan complete with PM acceptance evidence.", { plan_id: planId, required: qaGate });
   }
 }
 

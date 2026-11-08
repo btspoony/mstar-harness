@@ -87,7 +87,7 @@ const agentsTemplate = `# AGENTS.md — .mstar/ (harness layer)
 - Process vs results: process artifacts (plans/, iterations/, sdd/, status.json, workflows/,
   projects/) stay local and gitignored; results (this file, knowledge/, specs/) are tracked
   and shared across clones.
-- Done: only @project-manager or @qa-engineer may set Done; implementers set InReview.
+- Done: only @project-manager may set Done; implementers set InReview.
 `;
 
 function ok(id: string, data: unknown): CommandEnvelope {

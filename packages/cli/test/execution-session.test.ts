@@ -339,7 +339,7 @@ function prepareConfig(fixture: Fixture, overrides: { worktreePath?: string; wor
   return [
     "--worktree-path", overrides.worktreePath ?? fixture.worktreePath,
     "--working-branch", overrides.workingBranch ?? "feature/exec-session",
-    "--qa-gate", "mandatory",
+    "--qa-gate", "pm-acceptance",
     "--findings-cleanup", "allow-residual",
   ];
 }
@@ -1695,7 +1695,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
       review_base: fixture.baseSha,
       review_head: fixture.sourceSha,
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
     });
     const completed = runCli(
       ["plan", "complete", "--plan", PLAN_ID, "--file", evidencePath, "--harness", fixture.harnessDir],
@@ -1774,7 +1774,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
       review_base: fixture.baseSha,
       review_head: fixture.sourceSha,
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
     });
 
     // The refusal an operator sees before the row is review-complete: the text
@@ -1846,7 +1846,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
       review_base: fixture.baseSha,
       review_head: fixture.sourceSha,
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
     });
 
     const refused = runCli(
@@ -1890,7 +1890,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
       review_base: fixture.baseSha,
       review_head: fixture.sourceSha,
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
     });
 
     const refused = runCli(
@@ -1950,7 +1950,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
       review_base: fixture.baseSha,
       review_head: fixture.sourceSha,
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
     });
     const contaminated = runCli(
       ["plan", "complete", "--plan", PLAN_ID, "--file", evidencePath,
@@ -2253,7 +2253,7 @@ describe("mstar plan — ONE session drives two plans of one workflow (issue #40
           "--plan", plan.id,
           "--worktree-path", plan.worktree,
           "--working-branch", plan.branch,
-          "--qa-gate", "mandatory",
+          "--qa-gate", "pm-acceptance",
           "--findings-cleanup", "allow-residual",
           "--expect", await continuationPlanToken(fixture, plan.id),
           "--operation", `prepare-${plan.id}`,
@@ -2288,7 +2288,7 @@ describe("mstar plan — ONE session drives two plans of one workflow (issue #40
         review_base: fixture.rootCommit,
         review_head: plan.sourceSha,
         qc: { decision: "Approve", reports: [plan.qcReport], consolidated: plan.qcConsolidated },
-        qa: { gate: "mandatory", decision: "pass", report: plan.qaReport },
+        qa: { gate: "pm-acceptance", decision: "pass", report: plan.qaReport },
       });
       const completed = step(
         [

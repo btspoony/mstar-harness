@@ -82,7 +82,7 @@ describe("issue milestone association", () => {
   });
   test("wrong actor or session refuses without mutation", async () => {
     const before = revision();
-    await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: null, reason: "clear" }, mutation("milestone-wrong-actor", 2, before, "qa-engineer"))).rejects.toMatchObject({ code: "issue.scope-refused" });
+    await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: null, reason: "clear" }, mutation("milestone-wrong-actor", 2, before, "fullstack-dev"))).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: null, reason: "clear" }, mutation("milestone-stale-envelope", 2, before, "project-manager", join(root, "old-session-envelope.json")))).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: null, reason: "clear" }, mutation("milestone-stale-envelope-recovery", 2, before, "project-manager", join(root, "old-session-envelope.json")))).rejects.toThrow("--session-ref");
     expect(revision()).toBe(before);

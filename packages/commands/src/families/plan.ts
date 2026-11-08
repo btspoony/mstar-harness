@@ -59,9 +59,9 @@ const completionEvidenceSchema = z.object({
     consolidated: z.string().min(1).describe(`The consolidated QC decision report: ${EVIDENCE_PATH_DESCRIPTION}`),
   }).passthrough(),
   qa: z.object({
-    gate: z.enum(["mandatory", "pm-acceptance"]),
+    gate: z.literal("pm-acceptance"),
     decision: z.literal("pass"),
-    report: z.string().min(1).describe(`The QA or PM acceptance report: ${EVIDENCE_PATH_DESCRIPTION}`),
+    report: z.string().min(1).describe(`The PM acceptance report: ${EVIDENCE_PATH_DESCRIPTION}`),
   }).passthrough(),
 }).passthrough();
 const inputSchema = z.object({
@@ -77,7 +77,7 @@ const inputSchema = z.object({
   operation: z.string().min(1).optional(),
   worktreePath: z.string().min(1).optional(),
   workingBranch: z.string().min(1).optional(),
-  qaGate: z.enum(["mandatory", "pm-acceptance"]).optional(),
+  qaGate: z.string().min(1).optional().describe("Only pm-acceptance is accepted; retry retired mandatory input with --qa-gate pm-acceptance."),
   findingsCleanup: z.enum(["zero-residual", "allow-residual"]).optional(),
   progress: progressPayloadSchema.optional(),
   entries: entriesPayloadSchema.optional(),
@@ -140,9 +140,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
         // amount of correct QC/QA evidence substitutes for it.
         ? "Record the missing delivery evidence — for a report-only route the fulfilment of its registered completion policy — with mstar workflow evidence --workflow <workflow-id> --file <absolute-json>, then retry plan complete. Read the workflow's own state with mstar status validate."
         : id === "plan.complete" && code === "coordination.invalid-transition" && typeof details?.required === "string"
-          // The submission's gate is not the row's configured gate: either the
-          // evidence or the recorded configuration is what changes.
-          ? "The submitted QA evidence does not match the plan's configured QA gate. Submit the matching QA or PM acceptance report, or re-record the configured gate with mstar plan prepare --qa-gate <gate>, then retry."
+          ? "The plan retains a retired mandatory gate. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --qa-gate pm-acceptance, then retry plan complete with PM acceptance evidence."
           : (id === "plan.complete" || id === "plan.progress") && isEvidencePathField(details?.field)
             // The refusal names which payload field carried the bad VALUE; the
             // plan's own area is what that value must sit inside. A Git object id
@@ -159,7 +157,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
                 : id === "plan.show"
                   ? "Select a registered workflow and plan id from the execution authority. Run mstar plan show --workflow <workflow-id> --plan <plan-id>."
                   : id === "plan.prepare"
-                    ? "Correct the absolute feature-worktree path, feature branch, and Prepare gate values. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch>."
+                    ? "Correct the source checkout and branch, then retry mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch> --qa-gate pm-acceptance."
                     : id === "plan.progress"
                       ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress '<json-progress-object>'."
                       : id === "plan.issue-add"
@@ -191,13 +189,14 @@ function payloadFromFile(file: string | undefined, field: string): unknown {
 /**
  * The ordinary revisable execution configuration of `plan prepare`. Each member
  * is optional and falls back to the row's recorded metadata; the engine applies
- * its own defaults (`mandatory`, `allow-residual`) and validates the actual
+ * its own defaults (`pm-acceptance`, `allow-residual`) and validates the actual
  * supplied checkout/branch rather than comparing against a prior sealed value.
  */
 function prepareConfig(input: PlanInput): PlanCoordinationOperation {
   const config: { worktreePath?: string; workingBranch?: string; qaGate?: "mandatory" | "pm-acceptance"; findingsCleanup?: "zero-residual" | "allow-residual" } = {};
   if (input.worktreePath !== undefined) config.worktreePath = input.worktreePath;
   if (input.workingBranch !== undefined) config.workingBranch = input.workingBranch;
+  if (input.qaGate !== undefined && input.qaGate !== "pm-acceptance") throw new PlanInputError("The acceptance gate must be pm-acceptance. Retry mstar plan prepare --workflow <workflow-id> --plan <plan-id> --qa-gate pm-acceptance.");
   if (input.qaGate !== undefined) config.qaGate = input.qaGate;
   if (input.findingsCleanup !== undefined) config.findingsCleanup = input.findingsCleanup;
   return Object.keys(config).length === 0 ? { kind: "prepare" } : { kind: "prepare", config };
@@ -440,6 +439,7 @@ const PLAN_EXPECT_HELP = `CAS expectation: ${TOKEN_SUPPLIES.plan}`;
 const PLAN_BIND_EXPECT_HELP = `CAS expectation for the bound workflow: coordinator bind takes ${TOKEN_SUPPLIES.workflow}; read at bind time when omitted`;
 function optionHelpFor(verb: (typeof commandNames)[number]): Partial<Record<string, string>> {
   if (verb === "bind") return { expect: PLAN_BIND_EXPECT_HELP, sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}` };
+  if (verb === "prepare") return { qaGate: "Only pm-acceptance is accepted; use --qa-gate pm-acceptance to recover a retired mandatory gate.", expect: PLAN_EXPECT_HELP, sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}` };
   if (verb === "show") return { sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}` };
   if (verb === "progress") return {
     // The value is the JSON progress object, not a bare status word: the accepted

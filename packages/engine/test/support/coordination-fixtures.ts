@@ -118,7 +118,7 @@ export function assignmentText(input: {
     `**Working branch**: ${input.branch}`,
     `**SDD dir**: ${input.sddDir}`,
     "**Execute as**: project-manager",
-    "**QA gate**: mandatory",
+    "**QA gate**: pm-acceptance",
     "**Findings cleanup**: allow-residual",
     "",
     input.note,
@@ -329,7 +329,7 @@ export function completionEvidenceOf(
     review_base: fixture.baseSha,
     review_head: sourceSha,
     qc: { decision: "Approve", reports, consolidated },
-    qa: { gate: "mandatory", decision: "pass", report: qa },
+    qa: { gate: "pm-acceptance", decision: "pass", report: qa },
     ...overrides,
   };
 }

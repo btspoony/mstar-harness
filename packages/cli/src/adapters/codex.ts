@@ -59,7 +59,6 @@ const CODEX_AGENT_NAMES = [
   "fullstack-dev",
   "fullstack-dev-2",
   "frontend-dev",
-  "qa-engineer",
   "qc-specialist",
   "qc-specialist-2",
   "qc-specialist-3",

@@ -9,7 +9,6 @@ export const ALL_ROLES = [
   "qc-specialist",
   "qc-specialist-2",
   "qc-specialist-3",
-  "qa-engineer",
   "ops-engineer",
   "writing-specialist",
 ] as const;

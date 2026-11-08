@@ -669,7 +669,7 @@ describe("capture actor auditing", () => {
   test("leaf seats cannot capture or append, and the PM seat captures without a plan", async () => {
     const context = ctx("capture-seat-");
     await initializeStore(context).then((h) => h.close());
-    for (const actor of ["fullstack-dev", "frontend-dev", "qc-specialist-2", "qa-engineer", "ops-engineer"]) {
+    for (const actor of ["fullstack-dev", "frontend-dev", "qc-specialist-2", "ops-engineer"]) {
       await expect(captureIssue(context, baseInput(), mut("cap-leaf", actor))).rejects.toMatchObject({
         code: "issue.scope-refused",
       });
@@ -694,7 +694,7 @@ describe("capture actor auditing", () => {
         context,
         created.issueId,
         { relation: "related", issueId: other.issueId },
-        { operationId: "link-wrong-seat", actor: "qa-engineer", expectedRevision: created.revision },
+        { operationId: "link-wrong-seat", actor: "fullstack-dev", expectedRevision: created.revision },
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(

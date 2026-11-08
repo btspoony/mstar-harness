@@ -148,7 +148,7 @@ async function buildFixture(label: string): Promise<{
       planId,
       operation: {
         kind: "prepare",
-        config: { worktreePath: worktree, workingBranch: `feature/${planId}`, qaGate: "mandatory", findingsCleanup: "allow-residual" },
+        config: { worktreePath: worktree, workingBranch: `feature/${planId}`, qaGate: "pm-acceptance", findingsCleanup: "allow-residual" },
       },
     });
   }

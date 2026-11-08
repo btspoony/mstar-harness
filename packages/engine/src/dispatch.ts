@@ -135,10 +135,9 @@ const REQUIRED_FIELDS: ReadonlyArray<{ key: "executeAs" | "delegation" | "taskCa
  * Review seats whose dispatch must declare the round-bounding fields
  * (mstar-harness-core § "定向执行与验证边界" — "只读审查席位有界"; the cap may
  * only tighten the default). `code-reviewer` is the L2 task-review seat and
- * `qa-engineer` the QA gate seat, so they carry the same bounded-round rule
- * as the three QC seats. An `audit` `Task category` triggers the same fields
- * independently — audit execution is read-only review work. */
-export const REVIEW_SEAT_ROLES: readonly string[] = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer", "qa-engineer"];
+ * carries the same bounded-round rule as the three QC seats. An `audit`
+ * `Task category` triggers the same fields independently. */
+export const REVIEW_SEAT_ROLES: readonly string[] = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer"];
 
 /**
  * Assignment labels carrying the review-seat Budget cap. The PM template
