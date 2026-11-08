@@ -39,7 +39,7 @@ const SEAT = {
         },
       },
     },
-    leads: { type: 'array', items: { type: 'string' }, description: 'MEDIUM/unverified observations — leads, not findings.' },
+    leads: { type: 'array', items: { type: 'string' }, description: 'MEDIUM observations — leads, not findings.' },
     notes: { type: 'string', description: 'Truncated-coverage declaration and cross-domain notes.' },
   },
 }
