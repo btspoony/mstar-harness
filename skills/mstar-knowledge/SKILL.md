@@ -130,8 +130,9 @@ For each candidate document, classify into one of five outcomes:
 | **Replace** | Old doc is misleading; known better replacement exists | Create trustworthy successor, then delete old |
 | **Delete** | No longer useful, applicable, or distinct | Delete — git history preserves it |
 
-> **Guardrail — rejected approaches:** a captured rejected approach stays only while the losing idea remains a tempting, meaningful mistake; delete it once obsolete or no longer plausible.
-> **Calibration:** first real run of this axis — 9 size-divergent knowledge docs (36–78 lines) under `{KNOWLEDGE_DIR}/architecture-patterns/` classified at fold time, all kept by future value (evidence: the knowledge-prose-folds plan `## Review Gate Summary` → Task evidence); length proved not to be a criterion.
+**Future-decision-value criterion** — judge a document by the decision it still constrains, never by length or age: **delete** when that decision is closed and nothing in the body would guide a future change (git history preserves it, Core rule 6); **keep** when its rationale, negative guarantee or ownership boundary still constrains work, however long it is; **archive** only when the historical rationale warrants preservation, and only through the iteration-start §1.6 gate's existing archive tree. **Never archive a live proposal**; keep a rejected approach only while the losing idea remains a tempting mistake.
+
+**Calibration:** 9 size-divergent docs (36–78 lines) under `{KNOWLEDGE_DIR}/architecture-patterns/` were all kept by future value; length proved not to be a criterion.
 
 ### Scope selection
 
@@ -165,7 +166,7 @@ For each doc, check:
 2. **Referenced conventions still match?** — check against current `AGENTS.md`, `CONCEPTS.md`, lint configs.
 3. **Solution still the recommended approach?** — has a newer pattern superseded it?
 4. **Overlap with other docs?** — search for same module/tags to find duplicates.
-5. **Future decision value?** — rationale / alternatives considered / negative guarantees / reintroduction conditions that would still guide a future change → **Keep, regardless of length**. A completed decision whose body has no future leverage left (one-off fix detail, superseded mechanics) enters the Delete candidate pool. Word count and age remain discovery aids, never criteria.
+5. **Future decision value?** — the Maintain criterion above decides Keep versus the Delete candidate pool; apply it to the decision in the body, not to age or word count.
 
 #### Phase 3: Classify and act
 

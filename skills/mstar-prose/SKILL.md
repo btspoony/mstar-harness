@@ -38,6 +38,9 @@ Require an explicit `scope` — paths, globs or a named artifact. When it is mis
 
 No — restate every surviving fact from the repository's vantage and delete the rest. Yes — not leakage, however historical it sounds; resolvability alone still does not clear class 3 on a current-state surface, where a resolvable change story remains change narration.
 
+### Fact-check
+A prose claim about an operation, command, default, error or platform difference is admissible only if the operation was run against the current tree; a claim that fails to reproduce is corrected or deleted, never carried from memory or from a neighbouring document, and one whose prerequisite is unavailable is reported with the named verification owner. This rule judges truth — the one test above judges resolvability: a sentence can resolve at HEAD and still state behaviour the tree does not have.
+
 ### Leakage classes
 
 Each class takes its vantage from the authoring session instead of the repository.
