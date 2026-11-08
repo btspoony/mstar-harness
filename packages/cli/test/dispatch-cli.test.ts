@@ -458,6 +458,7 @@ describe("mstar dispatch validate — control writes", () => {
         writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": target }));
         return runCli(["dispatch", "validate", file], { cwd: linked });
       };
+      expect(() => execFileSync("git", ["-C", control, "check-ignore", "-q", "--", "notes/run.md/"])).not.toThrow();
       const ignored = run("notes/run.md");
       expect(ignored.exitCode).toBe(0);
       expectEnvelope(ignored, "ok", "dispatch.validate.ok");
@@ -467,9 +468,9 @@ describe("mstar dispatch validate — control writes", () => {
     });
   });
 
-  test("probes an absent target without a trailing slash as a file", () => {
+  test("probes an absent slash-less target under both ignore rules", () => {
     fixture((control, _linked, file) => {
-      writeFileSync(join(control, ".gitignore"), ".mstar/**\n!.mstar/notes/\n!.mstar/notes/**\n");
+      writeFileSync(join(control, ".gitignore"), ".mstar/**\n");
       const run = (target: string) => {
         writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": target }));
         return runCli(["dispatch", "validate", file], { cwd: control });
@@ -477,6 +478,20 @@ describe("mstar dispatch validate — control writes", () => {
       const fileTarget = run(".mstar/notes");
       expect(fileTarget.exitCode).toBe(0);
       expectEnvelope(fileTarget, "ok", "dispatch.validate.ok");
+    });
+  });
+
+  test("refuses slash-less committable directories while accepting ignored targets", () => {
+    fixture((control, linked, file) => {
+      writeFileSync(join(control, ".gitignore"), ".mstar/**\n!.mstar/notes/\n!.mstar/notes/**\n");
+      const run = (target: string) => {
+        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": target }));
+        return runCli(["dispatch", "validate", file], { cwd: linked });
+      };
+      const unsafe = run(".mstar/notes");
+      expect(unsafe.exitCode).toBe(1);
+      expect(violationCodes(unsafe)).toContain("dispatch.control-write.target-committable");
+      expect(run(".mstar/plans/run.md").exitCode).toBe(0);
     });
   });
 

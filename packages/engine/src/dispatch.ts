@@ -655,15 +655,19 @@ export function validateControlWriteAssignment(
       // Control-domain codes reuse the probe's ignored/checkoutRoot facts without
       // re-probing; callerCheckoutRoot is omitted because the caller's checkout
       // is not the authority for process state.
-      const ownership = probePathOwnership({ path: target, kind: declared.endsWith("/") ? "directory" : "file" }, controlRoot);
-      if (ownership.ignored === false) {
+      const directoryOnly = declared.endsWith("/");
+      const ownership = probePathOwnership({ path: target, kind: directoryOnly ? "directory" : "file" }, controlRoot);
+      // A slash-less target may name a file or a directory; only a location ignored in both shapes is safe to write.
+      const directory = directoryOnly ? ownership : probePathOwnership({ path: target, kind: "directory" }, controlRoot);
+      if (ownership.ignored === false || directory.ignored === false) {
         violations.push(violation("high", "dispatch.control-write.target-committable",
           `control write target ${target} is not Git-ignored and content there would be committed`,
           "declare only gitignored process targets, or dispatch the change on a work branch with Write domain: work"));
-      } else if (ownership.ignored === null) {
+      }
+      if (ownership.ignored === null || directory.ignored === null) {
         violations.push(violation("medium", "dispatch.control-write.target-unverifiable",
           `cannot verify the Git ignore status of control write target ${target}`,
-          `run git -C "${controlRoot}" check-ignore -v -- "${target}${declared.endsWith("/") ? "/" : ""}", then rerun mstar dispatch validate`));
+          `run git -C "${controlRoot}" check-ignore -v -- "${target}" "${target}/", then rerun mstar dispatch validate`));
       }
       if (ownership.checkoutRoot === null || canonicalizeNearestExisting(ownership.checkoutRoot) !== controlRoot) {
         violations.push(violation("high", "dispatch.control-write.target-outside-control",

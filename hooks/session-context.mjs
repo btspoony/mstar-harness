@@ -8660,11 +8660,14 @@ function validateControlWriteAssignment(text4, opts = {}) {
       if (/[*?[\]{}]/.test(declared) || !isAbsolute5(declared) && worktree === undefined)
         continue;
       const target = resolve6(worktree ?? controlRoot, declared);
-      const ownership = probePathOwnership({ path: target, kind: declared.endsWith("/") ? "directory" : "file" }, controlRoot);
-      if (ownership.ignored === false) {
+      const directoryOnly = declared.endsWith("/");
+      const ownership = probePathOwnership({ path: target, kind: directoryOnly ? "directory" : "file" }, controlRoot);
+      const directory = directoryOnly ? ownership : probePathOwnership({ path: target, kind: "directory" }, controlRoot);
+      if (ownership.ignored === false || directory.ignored === false) {
         violations.push(violation2("high", "dispatch.control-write.target-committable", `control write target ${target} is not Git-ignored and content there would be committed`, "declare only gitignored process targets, or dispatch the change on a work branch with Write domain: work"));
-      } else if (ownership.ignored === null) {
-        violations.push(violation2("medium", "dispatch.control-write.target-unverifiable", `cannot verify the Git ignore status of control write target ${target}`, `run git -C "${controlRoot}" check-ignore -v -- "${target}${declared.endsWith("/") ? "/" : ""}", then rerun mstar dispatch validate`));
+      }
+      if (ownership.ignored === null || directory.ignored === null) {
+        violations.push(violation2("medium", "dispatch.control-write.target-unverifiable", `cannot verify the Git ignore status of control write target ${target}`, `run git -C "${controlRoot}" check-ignore -v -- "${target}" "${target}/", then rerun mstar dispatch validate`));
       }
       if (ownership.checkoutRoot === null || canonicalizeNearestExisting(ownership.checkoutRoot) !== controlRoot) {
         violations.push(violation2("high", "dispatch.control-write.target-outside-control", `control write target ${target} is not in the control checkout ${controlRoot}`, `set Control write paths to targets inside ${controlRoot}`));
