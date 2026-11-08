@@ -42,7 +42,6 @@
  * This is STRUCTURAL evidence only — it never substitutes for model traces
  * (Spec A1 runner/efficacy gate separation).
  */
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -862,14 +861,6 @@ const REMOVAL_BASES = new Set(["duplicated-rule-owner-exists", "model-native-tea
 function ownerTextOf(rule: AblationRule): string {
   return read(join(REPO_ROOT, rule.owner));
 }
-function sha256OfGitBlob(rev: string, relPath: string): string {
-  const bytes = execFileSync("git", ["-C", REPO_ROOT, "show", `${rev}:${relPath}`], {
-    encoding: "buffer",
-    maxBuffer: 16 * 1024 * 1024,
-  }) as Buffer;
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
 function gitTextOf(rev: string, relPath: string): string {
   return execFileSync("git", ["-C", REPO_ROOT, "show", `${rev}:${relPath}`], { encoding: "utf8" });
 }
