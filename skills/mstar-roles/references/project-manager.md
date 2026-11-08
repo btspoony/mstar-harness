@@ -173,7 +173,7 @@ Use short go/no-go checks before moving phases:
 | --- | --- |
 | Enter `clarify` / lock `specify` | Primary route selected; if product-specify body is needed, delegated output exists or waiver is recorded. |
 | Lock `plan` / register `tasks` | If architecture/contracts are in scope, delegated architect output exists or justified exception is recorded; intention gate is explicit. |
-| First `implement` | Pre-implement gate check passes; owner matches route/task board; invoke exists in invoke-based hosts. |
+| First `implement` | `Dispatch preconditions (hard block)` hold; owner matches route/task board; invoke exists in invoke-based hosts. |
 | QC dispatch | Tri-review invoke and alignment fields pass hard checks. |
 | QA dispatch / PM acceptance | `QA gate` set per `qa-trigger-matrix.md`; if `mandatory`, QA scope aligns with QC scope; if `pm-acceptance`, checklist complete before `Done`. |
 
