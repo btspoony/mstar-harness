@@ -454,6 +454,22 @@ describe("mstar dispatch validate — control writes", () => {
     });
   });
 
+  test("distinguishes absent file and directory declarations", () => {
+    fixture((control, _linked, file) => {
+      writeFileSync(join(control, ".gitignore"), ".mstar/**\n!.mstar/notes/\n!.mstar/notes/**\n");
+      const run = (target: string) => {
+        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": target }));
+        return runCli(["dispatch", "validate", file], { cwd: control });
+      };
+      const fileTarget = run(".mstar/notes");
+      expect(fileTarget.exitCode).toBe(0);
+      expectEnvelope(fileTarget, "ok", "dispatch.validate.ok");
+      const directoryTarget = run(".mstar/notes/");
+      expect(directoryTarget.exitCode).toBe(1);
+      expect(violationCodes(directoryTarget)).toContain("dispatch.control-write.target-committable");
+    });
+  });
+
   test("checks a declared absent directory using directory ignore rules", () => {
     fixture((control, linked, file) => {
       writeFileSync(join(control, ".gitignore"), ".mstar/**\n!.mstar/notes/\n!.mstar/notes/**\n");
