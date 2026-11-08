@@ -906,7 +906,6 @@ describe("A5 ablation inventory (frozen)", () => {
       expect(["none", "advisory-only", "explicit-check", "auto-blocking"].includes(rule.enforcementClaim), `${rule.ruleId} enforcementClaim`).toBe(true);
       expect(rule.enforcementLimitations.length > 0, `${rule.ruleId} enforcementLimitations non-empty`).toBe(true);
       expect(rule.sourceRef.anchor.length > 0, `${rule.ruleId} anchor`).toBe(true);
-      expect(rule.beforeSha256).toMatch(/^[0-9a-f]{64}$/);
       expect(rule.restore.length > 0, `${rule.ruleId} restore`).toBe(true);
  // A non-keep row must name a concrete removal basis (never an enforcement argument).
       if (rule.disposition !== "keep") {

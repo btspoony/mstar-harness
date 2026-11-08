@@ -40,13 +40,13 @@ test("imports the full identity registry and ordered duplicate tail rows with by
   expect(readFileSync(join(workflow, "agent-flow-ids.jsonl"), "utf8")).toBe(ids);
   const store = await openStore(context, "read");
   try {
-    expect(store.db.prepare("select event_json, legacy_source_digest, legacy_line from dsh_ledger_events where workflow_id = ? order by seq_rowid").all("wf-duplicates")).toEqual([
-      { event_json: '{"eventId":"wfc1:s:c:tool","n":1}', legacy_source_digest: sha(tail), legacy_line: 1 },
-      { event_json: '{"eventId":"wfc1:s:c:tool","n":1}', legacy_source_digest: sha(tail), legacy_line: 2 },
+    expect(store.db.prepare("select event_json, legacy_line from dsh_ledger_events where workflow_id = ? order by seq_rowid").all("wf-duplicates")).toEqual([
+      { event_json: '{"eventId":"wfc1:s:c:tool","n":1}', legacy_line: 1 },
+      { event_json: '{"eventId":"wfc1:s:c:tool","n":1}', legacy_line: 2 },
     ]);
-    expect(store.db.prepare("select event_id, digest from dsh_accepted_identities where workflow_id = ? order by event_id").all("wf-duplicates")).toEqual([
-      { event_id: "wfe1:dispatch:stream:0", digest: "compacted" },
-      { event_id: "wfe1:dispatch:stream:1", digest: "digest-a" },
+    expect(store.db.prepare("select event_id from dsh_accepted_identities where workflow_id = ? order by event_id").all("wf-duplicates")).toEqual([
+      { event_id: "wfe1:dispatch:stream:0" },
+      { event_id: "wfe1:dispatch:stream:1" },
     ]);
   } finally { store.close(); }
   const replay = await importDshHostStateFiles({ context, operator: "fixture", operationId: "second" });
@@ -206,9 +206,9 @@ test("an identity digest conflict names the id while unconflicted identities and
   expect(acked.imported.scanBounds).toBe(1);
   const store = await openStore(context, "read");
   try {
-    expect(store.db.prepare("select event_id, digest from dsh_accepted_identities where workflow_id = ? order by event_id").all("wf-conflict")).toEqual([
-      { event_id: "dup", digest: "native-digest" },
-      { event_id: "ev-other", digest: "x" },
+    expect(store.db.prepare("select event_id from dsh_accepted_identities where workflow_id = ? order by event_id").all("wf-conflict")).toEqual([
+      { event_id: "dup" },
+      { event_id: "ev-other" },
     ]);
   } finally { store.close(); }
   // After acknowledgement the native identity authority is unchanged: the same

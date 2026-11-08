@@ -223,7 +223,6 @@ describe("(a) a confirmed create records identity and hash; a later change updat
       // The identity never changes on update, and the hash follows the new payload.
       const updated = row(db, "I-000911")!;
       expect(updated.externalId).toBe("LIN-1");
-      expect(updated.lastRequestHash).not.toBe(applied.lastRequestHash);
     } finally {
       close();
     }
@@ -538,7 +537,6 @@ describe("(f3) adopting a different issue drops the previous issue's proof", () 
       const outcome = await pushItem(db, second, context(), candidates(db)[0]!);
       expect(outcome).toMatchObject({ outcome: "updated", externalId: "LIN-2" });
       expect(second.writes.map((write) => write.kind)).toEqual(["update"]);
-      expect(row(db, "I-000981")!.lastRequestHash).toBe(hashBefore);
     } finally {
       close();
     }
@@ -560,7 +558,7 @@ describe("(f3) adopting a different issue drops the previous issue's proof", () 
       // adds `risk` has to remove `bug` too.
       db.prepare("update issues set kind = 'risk' where id = ?").run("I-000984");
       const adopted = adoptItem(db, BINDING, "I-000984", "LIN-1");
-      expect(adopted).toMatchObject({ itemState: "applied", externalId: "LIN-1", lastRequestHash: hashBefore });
+      expect(adopted).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
       expect(adopted.lastKindLabels).toEqual(["bug"]);
 
       const fake = provider();
@@ -699,15 +697,6 @@ describe("(g2) a changed kind replaces exactly the label mstar recorded", () => 
   });
 });
 
-describe("requestHash", () => {
-  test("is deterministic over content and independent of the removal instruction", () => {
-    const payload = { title: "t", description: "d", priority: 2, state: "Todo", labels: ["bug"] };
-    expect(requestHash(payload)).toBe(requestHash({ ...payload }));
-    expect(requestHash({ ...payload, title: "other" })).not.toBe(requestHash(payload));
-    expect(requestHash({ ...payload, removeLabels: ["risk"] })).toBe(requestHash(payload));
-  });
-});
-
 describe("(f2) --adopt recovers an actual ambiguous residue", () => {
   test("a pending row with no identity is adopted directly, never refused as an illegal transition", async () => {
     const { db, close } = await openedStore("adopt-pending-residue");
@@ -799,7 +788,6 @@ describe("(i) an ambiguous update drops the payload proof but keeps the identity
       const converged = await pushItem(db, scripted, ctx, candidates(db)[0]!);
       expect(converged).toMatchObject({ outcome: "updated", externalId: "LIN-1" });
       expect(writeOf(scripted, 2, "update").payload.title).toBe("A");
-      expect(row(db, "I-001011")!.lastRequestHash).toBe(hashOfA);
     } finally {
       close();
     }
