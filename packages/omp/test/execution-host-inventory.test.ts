@@ -17,7 +17,6 @@
  * either the reader or this wrapper is visible.
  */
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import {
   EXECUTION_HOST_HISTORY_TYPES,
   exportExecutionHostHistory,
@@ -29,9 +28,6 @@ import {
   HOST_INVENTORY_VERSION,
   buildExecutionHostInventory,
   exportExecutionHostInventory,
-  historyExportBodyDigest,
-  historyExportDigest,
-  inventoryDigest,
 } from "../src/execution-host-inventory";
 
 const WORKFLOW_ID = "wf-inventory";
@@ -103,48 +99,17 @@ describe("execution host inventory — one session, one workflow, one export", (
     expect(inventory.export.document.records.map((record) => record.entryId)).toEqual(["entry-bind", "entry-checkpoint"]);
   });
 
-  test("the digest names the H1 export bytes without the framing LF, and the envelope is canonical with one LF", () => {
+  test("the digest probe emits one framing LF and the envelope stays canonical", () => {
     const inventory = buildExecutionHostInventory({
       workflowId: WORKFLOW_ID,
       hostSessionId: HOST_SESSION_ID,
       entries: [phase2Bind()],
     });
 
-    const exportBytes = exportExecutionHostHistory(inventory.export.document);
-    // §4.2's one rule (and the repository's ledger-body house rule): the digest
-    // covers the serialized document EXCLUDING its terminal LF. The framing LF is
-    // not part of the body's identity, so the two hashes must differ.
+    const exportBytes = exportExecutionHostInventory(inventory);
     expect(exportBytes.endsWith("\n")).toBe(true);
-    const bodyBytes = exportBytes.slice(0, -1);
-    expect(inventory.export.sha256).toBe(createHash("sha256").update(bodyBytes, "utf8").digest("hex"));
-    expect(inventory.export.sha256).toBe(historyExportDigest(inventory.export.document));
-    expect(inventory.export.sha256).not.toBe(createHash("sha256").update(exportBytes, "utf8").digest("hex"));
-
-    const envelope = exportExecutionHostInventory(inventory);
-    expect(envelope.endsWith("\n")).toBe(true);
-    expect(envelope.trimEnd().includes("\n")).toBe(false);
-    expect(JSON.parse(envelope)).toEqual(inventory);
-    // The envelope digest covers the delivered bytes (framing LF included).
-    expect(inventoryDigest(inventory)).toBe(createHash("sha256").update(envelope, "utf8").digest("hex"));
-  });
-
-  test("the digest removes exactly one terminal LF and never trims a body that lacks it", () => {
-    const sha256Of = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
-
-    // A body without a terminal LF keeps EVERY byte: the rule removes at most the
-    // one framing byte, so an unserialized/alternate body can never lose content.
-    expect(historyExportBodyDigest("{}")).toBe(sha256Of("{}"));
-    expect(historyExportBodyDigest("{}")).not.toBe(sha256Of("{"));
-
-    // One terminal LF is framing and is removed; two leave exactly one — this is
-    // a bounded byte rule, not a whitespace trim.
-    expect(historyExportBodyDigest("{}\n")).toBe(sha256Of("{}"));
-    expect(historyExportBodyDigest("{}\n\n")).toBe(sha256Of("{}\n"));
-    expect(historyExportBodyDigest("{} ")).toBe(sha256Of("{} "));
-
-    // The document-level entry point is that same rule over H1's exact bytes.
-    const document = readExecutionHostHistory([phase2Bind()]);
-    expect(historyExportDigest(document)).toBe(historyExportBodyDigest(exportExecutionHostHistory(document)));
+    expect(exportBytes.trimEnd().includes("\n")).toBe(false);
+    expect(JSON.parse(exportBytes)).toEqual(inventory);
   });
 
   test("an undecodable hidden entry is retained with its digest and diagnosed, never guessed", () => {

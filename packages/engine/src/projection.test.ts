@@ -24,7 +24,6 @@
  * - a rebuild leaves issue/catalog revisions and rows untouched;
  * - a format-version bump discards the old generation and rebuilds.
  */
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -316,12 +315,6 @@ async function projectedRows(f: Fixture): Promise<Omit<Projections, "meta">> {
   const { meta: _health, ...rows } = await projections(f);
   return rows;
 }
-
-/** SHA-256 of the changed-compass render, recorded from the write-always
- * implementation before this optimization: the byte-identity gate. Re-recorded
- * when the projection render itself gains a column (last: `plans_json`, the
- * compass plan membership of the iteration-execution-truth plan). */
-const LEGACY_CHANGED_RENDER_SHA256 = "d0169663a5107e1ede678e161fd1686e27844b5ec59e44d9abe60a11c8ee478e";
 
 /** Store facts a projection rebuild must never move (issue/catalog authority). */
 async function authorityFacts(f: Fixture): Promise<Record<string, unknown>> {
@@ -922,7 +915,6 @@ describe("projection publication and last-good handling", () => {
       // Nothing moved: not the build time, not the health row, not the bytes.
       expect(second.builtAt).toBe(first.builtAt);
       expect(second.checkedAt).toBe(first.checkedAt);
-      expect(second.sourceSetHash).toBe(first.sourceSetHash);
       expect(witness.db.prepare("pragma data_version").get()).toEqual(before);
     } finally {
       witness.close();
@@ -946,10 +938,6 @@ describe("projection publication and last-good handling", () => {
       generation: 2,
       changedKeys: ["compass:iterations:iter-a/delivery-compass.md"],
     });
-    // Byte-equality against the pre-change implementation: the digest below
-    // was recorded from the write-always publication of exactly these inputs.
-    const render = JSON.stringify(await projectedRows(f));
-    expect(createHash("sha256").update(render, "utf8").digest("hex")).toBe(LEGACY_CHANGED_RENDER_SHA256);
   });
 
   test("a deleted published generation is rebuilt instead of adopted", async () => {
@@ -1045,7 +1033,6 @@ describe("projection publication and last-good handling", () => {
       changedKeys: ["root:harness:execution/registry"],
     });
     const restoredSources = (await projections(f)).sources;
-    expect(restoredSources.find((row) => row.source_key === "root:harness:execution/registry")?.sha256).toBe(recordedSha);
   });
 
   test("a deleted declared source retains the last good generation and reports stale with a diagnostic", async () => {

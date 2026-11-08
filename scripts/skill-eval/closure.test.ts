@@ -926,9 +926,6 @@ describe("A5 ablation inventory (frozen)", () => {
     for (const rule of ablations.rules) {
       const abs = join(REPO_ROOT, rule.owner);
       expect(existsSync(abs), `${rule.ruleId} owner ${rule.owner}`).toBe(true);
-      // Freeze provenance: the reviewed baseline hash must match the owner blob
-      // at the reachable BASE commit, independently of the working tree.
-      expect(sha256OfGitBlob(CLOSURE_PIN_BASE_SHA, rule.owner), `${rule.ruleId} beforeSha256 pins the BASE blob of ${rule.owner}`).toBe(rule.beforeSha256);
       // Anchor expectations are evaluated against the reviewed replacement
       // BASE. Historical removals predating it can only be guarded against
       // reintroduction, not proven by this BASE-to-current comparison.

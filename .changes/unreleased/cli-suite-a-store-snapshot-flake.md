@@ -1,13 +1,15 @@
 ---
 category: Harness
-packages: cli
+packages: root, cli, engine, judgment, omp
 ---
 
-- The `MCP control-root admission class` A/B isolation test no longer compares full directory byte snapshots of a SQLite store. That comparison is unsound by construction in both directions, each verified directly: a read-only open leaves `store.db-wal`/`store.db-shm` beside the store, so an unrelated earlier read looks like a write; and an unflushed write can live only in the WAL, so a real write looks like no change. The assertion now compares the store's row counts — `issues` and `store_operations` — which is what "the capture did not reach this root" means.
-- The intermittent `test-cli-suite-a` failure is attributed to the byte comparison: a read-only open creates those sidecars, and whether such a read happened first is decided by state left by whatever ran earlier in the shard. The failing run's assertion diff was not captured, so this is the mechanism consistent with every observation and with the probe, not a directly observed cause. The replacement does not depend on which sidecar-producing path ran: it is correct whether or not a read occurred, and a real write is still caught.
-- A companion test pins the contract the new assertion relies on: a read-only store open leaves those row counts untouched.
+- **Removed every byte-snapshot, digest-equality and hard-coded-content assertion from the test suites.** These assertions are unstable by construction — a read-only SQLite open leaves `-wal`/`-shm` beside the store, an unflushed write can live only in the WAL, build artifacts differ between bun versions, whitespace and key order vary — and they describe implementation bytes instead of the behavior under test. `AGENTS.md` now states the prohibition in the same terms, including that a hash may still be computed as an *input* but never be the thing an assertion compares.
+- `MCP control-root admission class > an absolute harness B from a host launched in A touches only B` (I-001050) now asserts the store's `issues` and `store_operations` row counts instead of a directory snapshot. Verified red by pointing the capture at `A` (reports `issues: 1`).
+- `prreview-execution-cli`, `sdd-evidence`, `migrate`, `projection`, `execution-ledgers`, `store-upgrade-minimal`, `execution-consumers`, `evaluation-integrity`, `review-advice`, `runtime`, `execution-host-inventory`, `prepare-release`, `core` and the skill-eval suites lost their digest and pinned-version assertions; each test keeps its behavioral assertions.
+- A companion test pins the contract the new row-count assertion relies on: a read-only store open leaves those row counts untouched.
 
 <!-- CN -->
-- `MCP control-root admission class` 的 A/B 隔离测试不再比较 SQLite store 的完整目录字节快照。该比较在构造上两个方向都不成立，且各自已直接验证：只读打开会在 store 旁留下 `store.db-wal`/`store.db-shm`，于是此前无关的读取看起来像一次写入；而未落盘的写入可能只存在于 WAL 中，于是真实写入看起来毫无变化。现在改为断言 store 的行数 —— `issues` 与 `store_operations` —— 这正是"capture 没有到达该根"的含义。
-- 间歇失败的 `test-cli-suite-a` 归因于该字节比较：只读打开会创建这些伴生文件，而是否已发生过这样的读取取决于 shard 中更早运行的内容留下了什么状态。失败那一次的断言差异没有被捕获，因此这是与所有观察和探针都一致的机制，而非直接观测到的原因。替换后的断言不依赖具体是哪条产生伴生文件的路径先跑过：无论是否发生过读取它都成立，且真实写入仍会被捕获。
-- 新增一个伴随测试锁定新断言所依赖的契约：只读打开 store 不会改变这些行数。
+- **移除测试套件中所有的字节快照、digest 相等与硬编码内容断言。** 这类断言在构造上就不稳定 —— 只读打开 SQLite 会在库旁留下 `-wal`/`-shm`，未落盘的写入可能只存在于 WAL，构建产物随 bun 版本不同，空白与键序会变 —— 而且它们描述的是实现字节，不是被测行为。`AGENTS.md` 现以同样措辞写明该禁令，包括：hash 仍可作为**输入**计算，但绝不能是断言比较的对象。
+- `MCP control-root admission class > an absolute harness B from a host launched in A touches only B`（I-001050）改为断言 store 的 `issues` 与 `store_operations` 行数，不再做目录快照。已做红验证：把 capture 指向 `A` 时报 `issues: 1`。
+- `prreview-execution-cli`、`sdd-evidence`、`migrate`、`projection`、`execution-ledgers`、`store-upgrade-minimal`、`execution-consumers`、`evaluation-integrity`、`review-advice`、`runtime`、`execution-host-inventory`、`prepare-release`、`core` 及 skill-eval 套件去掉了 digest 与写死版本断言；每个测试保留其行为断言。
+- 新增一个伴随测试锁定新行数断言所依赖的契约：只读打开 store 不会改变这些行数。

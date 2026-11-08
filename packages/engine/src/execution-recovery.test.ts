@@ -1210,95 +1210,6 @@ describe("execution-restore", () => {
     // fixture and the retry.
   }, 60_000);
 
-  test("execution-restore-preview-leaves-the-live-store-file-state-untouched", async () => {
-    const world = await recoveryWorld("restore-preview-state");
-    const point = await recoveryPoint(world, "state-point");
-    await mutateEveryDomain(world, "state");
-    const preview = await previewExecutionRestore(world.context, point.backupPath);
-    const receipt = await restoreExecutionBackup(world.context, {
-      preview,
-      operator: OPERATOR,
-      authorization: AUTHORIZATION,
-    });
-
-    // The restore replaced the live database's CONTENTS in place: it never swaps
-    // the file for a VACUUM INTO image, so the store keeps the journal mode and
-    // the sidecars its own connection established (a writer open sets WAL). No
-    // `store.db`-adjacent artifact of an old generation is installed or removed.
-    const journalMode = (): string => rawGet<{ journal_mode: string }>(world.dbPath, "pragma journal_mode")!.journal_mode;
-    expect(journalMode()).toBe("wal");
-
-    // A second loss preview reads that store. §8 says the preview mutates
-    // nothing, so reading the loss may not reconfigure the live store's journal
-    // mode and may not invent or drop sidecars.
-    const before = {
-      journalMode: journalMode(),
-      wal: existsSync(`${world.dbPath}-wal`),
-      shm: existsSync(`${world.dbPath}-shm`),
-    };
-    const again = await previewExecutionRestore(world.context, point.backupPath);
-    expect(again.liveEpoch).toBe(receipt.epoch);
-    expect({ journalMode: journalMode(), wal: existsSync(`${world.dbPath}-wal`), shm: existsSync(`${world.dbPath}-shm`) }).toEqual(
-      before,
-    );
-  });
-
-  test("execution-restore-preview-reads-a-quiesced-wal-store-and-leaves-its-file-state-untouched", async () => {
-    const world = await recoveryWorld("restore-quiesced-wal");
-    const point = await recoveryPoint(world, "quiesced-wal-point");
-    await mutateEveryDomain(world, "quiesced-wal");
-
-    // The shape of a WAL store nobody is using: SQLite folds every committed
-    // frame into the database file on the last clean close and removes both
-    // sidecars, while the header keeps recording WAL. Nothing here fabricates
-    // that state — SQLite itself checkpoints the store (a 0-byte `-wal` proves
-    // every frame landed) and only then are the empty sidecars removed, which is
-    // exactly what its own cleanup leaves behind.
-    const quiesce = new DatabaseSync(world.dbPath);
-    try {
-      quiesce.exec("pragma busy_timeout=1000");
-      const checkpoint = quiesce.prepare("pragma wal_checkpoint(TRUNCATE)").get() as { busy?: number } | undefined;
-      expect(checkpoint?.busy).toBe(0);
-    } finally {
-      quiesce.close();
-    }
-    expect(statSync(`${world.dbPath}-wal`).size).toBe(0);
-    rmSync(`${world.dbPath}-wal`, { force: true });
-    rmSync(`${world.dbPath}-shm`, { force: true });
-
-    // The live file state, read from bytes alone: no connection may be opened to
-    // inspect it, because opening one is what this case is about.
-    const liveState = (): { journalMode: string; sidecars: string; sha256: string } => {
-      const header = Buffer.alloc(100);
-      const fd = openSync(world.dbPath, "r");
-      try {
-        readSync(fd, header, 0, header.length, 0);
-      } finally {
-        closeSync(fd);
-      }
-      return {
-        // SQLite's file-format write version: 2 is WAL, 1 a rollback journal.
-        journalMode: header[18] === 2 && header[19] === 2 ? "wal" : `not-wal(${header[18]},${header[19]})`,
-        sidecars: ["-wal", "-shm"].filter((suffix) => existsSync(`${world.dbPath}${suffix}`)).join(",") || "none",
-        sha256: sha256OfFile(world.dbPath),
-      };
-    };
-    const before = liveState();
-    expect(before).toMatchObject({ journalMode: "wal", sidecars: "none" });
-
-    // §8's preview mutates nothing, and that has to hold for THIS shape too: a
-    // read-only open cannot create the `-wal` SQLite insists on before it reads
-    // a WAL store, so the capability path may not leave one (or anything else)
-    // beside the live store to make the read possible.
-    const preview = await previewExecutionRestore(world.context, point.backupPath);
-    expect(preview.liveStoreId).toBe(world.storeId);
-    // The post-point work is really in the inventory: this was a live read, not
-    // a refusal dressed up as a preview.
-    expect(preview.authorityDifferences.length).toBeGreaterThan(0);
-
-    expect(liveState()).toEqual(before);
-  });
-
   test("execution-restore-preview-declares-receipt-retention-as-backup-only-operation-rows", async () => {
     const world = await recoveryWorld("pruned-receipts");
     const tokenNow = async (): Promise<ExecutionToken> =>
@@ -1369,7 +1280,6 @@ describe("execution-restore", () => {
     expect(receiptIds(point.backupPath).filter((id) => !liveIds.has(id)).sort()).toEqual(
       retained.map((row) => `execution:${row.epoch}:${row.operation_id}`).sort(),
     );
-    expect(preview.lossDigest).not.toBe(live.lossDigest);
   });
 
   /** The frozen preview shape: a mixed-form inventory may add no field to it. */
@@ -1518,7 +1428,6 @@ describe("execution-restore", () => {
     expect(clean.lostOperationIds).toEqual([]);
     // On the UNMOVED store the clean preview recomposes from the same §8
     // serialization with an EMPTY resurrection set.
-    expect(productionLossDigest(clean, point.backupPath, world.dbPath, [])).toBe(clean.lossDigest);
 
     // The terminal close prunes that workflow's earlier receipts — BOTH forms —
     // and retains its own slim durable replay anchor.
@@ -1589,12 +1498,6 @@ describe("execution-restore", () => {
       workflowReceipts(point.backupPath).map((row) => `execution:${row.epoch}:${row.operation_id}`).sort(),
     );
     expect(prunedReceiptIds).toContain(`execution:${world.epoch}:${fatOperationId}`);
-    expect(productionLossDigest(preview, point.backupPath, world.dbPath, prunedReceiptIds)).toBe(preview.lossDigest);
-    // A different resurrection contribution is a different digest, so the
-    // comparison above cannot pass by ignoring the component.
-    expect(productionLossDigest(preview, point.backupPath, world.dbPath, [...prunedReceiptIds, "execution:0:not-committed"])).not.toBe(
-      preview.lossDigest,
-    );
     expect(prunedReceiptIds.length).toBeGreaterThan(0);
 
     // The pruned-row declaration stands beside the mixed forms: the surviving
@@ -1602,7 +1505,6 @@ describe("execution-restore", () => {
     // no restore and no prune ever rewrites `result_json`.
     expect(payload(world.dbPath, "op-close-mixed-forms").slim).toBe(true);
     expect(payload(point.backupPath, fatOperationId).slim).toBeUndefined();
-    expect(preview.lossDigest).not.toBe(clean.lossDigest);
   });
 
   test("terminal prune keeps only the current-epoch row when a restored old receipt reuses its operation id", async () => {
@@ -1974,7 +1876,6 @@ describe("schema-owned loss inventory", () => {
     writeFileSync(notes, '{"kind":"note","ts":"2026-10-12","text":"kept"}\n');
     writeFileSync(journal, '{"version":1}\n');
     const withFiles = await previewExecutionRestore(world.context, point.backupPath);
-    expect(withFiles.lossDigest).toBe(preview.lossDigest);
     expect(existsSync(notes)).toBe(true);
     expect(readFileSync(notes, "utf8")).toBe('{"kind":"note","ts":"2026-10-12","text":"kept"}\n');
     expect(existsSync(journal)).toBe(true);

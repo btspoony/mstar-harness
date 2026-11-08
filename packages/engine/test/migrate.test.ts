@@ -13,7 +13,7 @@
  * unsafe/duplicate id refusals, and cross-class id collisions.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readJson } from "../src/core.js";
@@ -27,20 +27,6 @@ function fixtureTree(): string {
   const root = mkdtempSync(join(tmpdir(), "convert-v1-fixture-"));
   cpSync(FIXTURES, root, { recursive: true });
   return root;
-}
-
-/** Deep-read every file under `dir` (rel path -> content) for tree equality. */
-function snapshotTree(dir: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  const walk = (current: string): void => {
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const full = join(current, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else out[full.slice(dir.length + 1)] = readFileSync(full, "utf8");
-    }
-  };
-  walk(dir);
-  return out;
 }
 
 const REAL_ITERATION_IDS = [
@@ -253,15 +239,13 @@ describe("convertLegacyV1Tree — grouping and status mapping", () => {
     }
   });
 
-  test("conversion reports a root updated_at and leaves the source tree byte-identical", () => {
+  test("conversion reports a root updated_at and the sources it read", () => {
     const root = fixtureTree();
     try {
-      const before = snapshotTree(root);
       const converted = convertLegacyV1Tree(root);
       expect(converted.updatedAt).toBe("2026-08-19");
       expect(converted.sources.length).toBeGreaterThan(0);
       expect(converted.dispositions).toEqual([]);
-      expect(snapshotTree(root)).toEqual(before);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

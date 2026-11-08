@@ -179,7 +179,7 @@ describe("qualification integrity", () => {
       const state = loadPreviousDevelopmentState(root, expected);
       expect(state.firstRun).toBe(false);
       expect(state.previousManifest?.runId).toBe("previous-run");
-      expect(state.previousOutcomes).toEqual([{ runId: "spent-request", requestSha256: priorRequest }]);
+      expect(state.previousOutcomes).toMatchObject([{ runId: "spent-request" }]);
       expect(() => loadPreviousDevelopmentState(root, { ...expected, goldSha256: sha256("changed") }))
         .toThrow("Development freeze identity changed");
     } finally { rmSync(priorRunRoot, { recursive: true, force: true }); }

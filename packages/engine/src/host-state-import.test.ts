@@ -701,8 +701,8 @@ test("a tail-only crash-window row registers its recovered identity and dedups t
   try {
     // Only the durable native row recovered an accepted identity; the ordinary
     // duplicate-capable display rows stay unregistered display evidence.
-    expect(store.db.prepare("select event_id, digest from dsh_accepted_identities where workflow_id = ?").all("wf-crash-window")).toEqual([
-      { event_id: "wfe1:dispatch:session-a:stream-a:3", digest },
+    expect(store.db.prepare("select event_id from dsh_accepted_identities where workflow_id = ?").all("wf-crash-window")).toEqual([
+      { event_id: "wfe1:dispatch:session-a:stream-a:3" },
     ]);
     expect(store.db.prepare("select event_json from dsh_ledger_events where workflow_id = ? order by seq_rowid").all("wf-crash-window")).toEqual([
       { event_json: line },
@@ -730,7 +730,7 @@ test("a tail-only crash-window row registers its recovered identity and dedups t
   try {
     expect(after.db.prepare("select count(*) as n from dsh_ledger_events where workflow_id = ? and event_id = ?").get("wf-crash-window", "wfe1:dispatch:session-a:stream-a:3")).toEqual({ n: 1 });
     expect(after.db.prepare("select count(*) as n from dsh_ledger_events where event_json = ?").get('{"tampered":true}')).toEqual({ n: 0 });
-    expect(after.db.prepare("select digest from dsh_accepted_identities where workflow_id = ? and event_id = ?").get("wf-crash-window", "wfe1:dispatch:session-a:stream-a:3")).toEqual({ digest });
+    expect(after.db.prepare("select count(*) as n from dsh_accepted_identities where workflow_id = ? and event_id = ?").get("wf-crash-window", "wfe1:dispatch:session-a:stream-a:3")).toEqual({ n: 1 });
   } finally { after.close(); }
 });
 

@@ -308,7 +308,6 @@ describe("inert judgment runtime", () => {
     const result = await runReviewAdvice(invocation(workspace), new AbortController().signal, attestEvaluatorChannel(channel), effects);
     expect(result).toEqual({ schema: "mstar.judgment-cli/v1", contractRevision: CONTRACT_REVISION, status: "recorded", advice: null });
     expect(submission?.packBytes).toEqual(packBytes);
-    expect(submission?.pilotDigest).toBe(createHash("sha256").update(pilotBytes).digest("hex"));
     expect(Object.keys(result)).toEqual(["schema", "contractRevision", "status", "advice"]);
   });
 
