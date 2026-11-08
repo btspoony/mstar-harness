@@ -218,13 +218,13 @@ const PR_SCORE_SCHEDULE_HINT =
  * partial grade its collected findings earn, labelled `partial`.
  */
 export function computePrTally(input: PrTallyInput): PrTallyResult {
- // Engine boundary guard : the `incomplete` fact IS the
- // verdict's cause — a blank reason renders a bare token with no cause
- // and an envelope its own validator (`review.incomplete-malformed`)
- // rejects, so no consumer can publish it. A line break would break the
- // four-line header contract (pr-review.md § Display contract), so the
- // cause and every scope entry stay single-line. An empty `unscanned`
- // array stays legal: it means nothing was left unscanned.
+  // Engine boundary guard: the `incomplete` fact IS the
+  // verdict's cause — a blank reason renders a bare token with no cause
+  // and an envelope its own validator (`review.incomplete-malformed`)
+  // rejects, so no consumer can publish it. A line break would break the
+  // four-line header contract (pr-review.md § Display contract), so the
+  // cause and every scope entry stay single-line. An empty `unscanned`
+  // array stays legal: it means nothing was left unscanned.
   if (input.incomplete !== undefined) {
     if (
       typeof input.incomplete.reason !== "string" ||

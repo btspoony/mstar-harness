@@ -862,8 +862,7 @@ describe("validatePrReviewReport — closed tally key set", () => {
   });
 
   test("a removed tally key is refused", () => {
-    const removedKey = "un" + "verified";
-    const oldReport = report("").replace(TALLY_LINE, `tally: { must-fix: 0, should-fix: 1, nit: 2, ${removedKey}: 0 }`);
+    const oldReport = report("").replace(TALLY_LINE, "tally: { must-fix: 0, should-fix: 1, nit: 2, unverified: 0 }");
     expect(codes(validatePrReviewReport(oldReport))).toContain("prreview.report.invalid-tally");
   });
 
