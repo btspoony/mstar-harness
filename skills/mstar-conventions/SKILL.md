@@ -180,7 +180,7 @@ PM 在需要持久化追踪时：
 - `reviews/`（review 运行目录树：codebase audit / PR / branch / diff review 的 report 与 evidence；进程产物）
 - `store.db`（issue/catalog/roadmap/milestone 与 execution_* 权威；默认随 `{HARNESS_DIR}` 忽略）
 
-Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。**仓库把 `{HARNESS_DIR}` 全量 gitignore 时**（tracked 结果无法提交），tracked specs / knowledge / adr 须解析到 `.agents/specs|knowledge|adr` 才可共享，且须落在**调用方自己的 checkout**（work / integration worktree）——linked worktree 写进 control checkout 会报 `path.result-outside-worktree`；进程目录则相反，须落在 control checkout 内。`mstar path check`（不带参数，exit `1` = findings）核对这两个域。
+Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。**仓库把 `{HARNESS_DIR}` 全量 gitignore 时**（tracked 结果无法提交），tracked specs / knowledge / adr 须解析到 `.agents/specs|knowledge|adr` 才可共享。`mstar path check` 按 Git 实况判定、**目录名不作准**：被忽略的文件只能留在 **control checkout**，可提交的文件属于**调用方自己的 checkout**（work / integration worktree）；结果目录被忽略只是 warning（`path.result-ignored`，exit `0`，指向 `.agents/` 或 `.mstarc`），位置越界才是 finding（exit `1`）。
 
 **v3 运行时目录的 gitignore 说明（文档化；canonical snippet 零改动）**：`workflows/`、`projects/` 与 `reviews/` 都位于已被 **`.mstar/**` 默认忽略**的 `{HARNESS_DIR}` 之下——**不需要**在仓库根 `.gitignore` 增加任何条目，也**不新增** re-include 条目（它们不是 tracked 结果）。`projects/_default/` 由 **`scaffoldHarness` / `mstar harness scaffold` 建目录并在可用的 catalog 中登记**，不生成 `roadmap.md` 或 `residuals.json`；其余 project id 与 `workflows/` 子目录由各自 domain writers 按需创建。历史文件的迁移只走 transport/review（→ `mstar-project-governance`）。**`review_dir` 声明在 `{HARNESS_DIR}` 之外时**（例如 `review_dir=process/reviews` 或绝对路径）`{REVIEW_DIR}` 落在 canonical snippet 的 `.mstar/**` / `.agents/**` 之外，review report 与证据因此**不再被忽略**——这类布局需自行在仓库根 `.gitignore` 声明对应规则（canonical snippet 只 bootstrap 默认 harness 布局）。
 
