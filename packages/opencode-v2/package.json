@@ -34,7 +34,7 @@
   "dependencies": {
     "@opencode/plugin": "2.2.5",
     "@opencode/schema": "2.2.1",
-    "effect": "4.1.0"
+    "effect": "4.1.2"
   },
   "publishConfig": {
     "access": "public"
