@@ -68,6 +68,7 @@ Topic skills, grouped by what they own:
 | `mstar-design-system` | Baseline-driven parity: baseline kinds, machine fixtures, layer parity, difference triage |
 | `mstar-knowledge` | Knowledge capture and maintenance for `{KNOWLEDGE_DIR}`, plus the project-knowledge bootstrap and the `STRATEGY.md` contract |
 | `mstar-skill-authoring` | Skill authoring gate |
+| `mstar-prose` | Prose judged against HEAD: leaked-session narration, keep rules, and where durable rationale goes instead |
 | `mstar-audit` | Read-only audit variants: codebase, tests, PR review |
 | `mstar-pr-loop` | Opt-in PR review → fix loop until `ship it`; also the local iteration Phase 5 review path under a recorded `reviewed-auto` (never under `reviewed-bot`) |
 | `mstar-e2e` | Explicit E2E, browser, device, and installed-deployment verification |
