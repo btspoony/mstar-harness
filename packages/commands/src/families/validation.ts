@@ -36,6 +36,7 @@ import {
   SddScriptError,
   stripFrontmatter,
   validateAssignmentFields,
+  validateControlWriteAssignment,
   validateDesignTokenFrontmatter,
   validateFindingDoc,
   validateQcReport,
@@ -288,7 +289,8 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         const file = absolute(context.cwd, required(input.assignmentFile, "usage: dispatch validate <assignment-file> [--branch <branch>]"));
         if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
         const text = readFileSync(file, "utf8");
-        const readOnly = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "");
+        const fields = parseAssignmentFields(text);
+        const readOnly = isReadOnlyAssignmentRole(fields.executeAs ?? "");
         const violations: Violation[] = [...validateAssignmentFields(text, { writable: readOnly ? false : undefined }).violations];
         if (!readOnly) {
           const forms = parseAssignmentBranchForms(text);
@@ -301,7 +303,11 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
               fix: "use the branch declared by the Assignment or update the Assignment",
             });
           }
-          if (branch?.trim()) violations.push(...assertDefaultBranchProtected(branch, { directOnException: parseBranchPolicyDirectOnBranch(text) === branch.trim() }).violations);
+          if (fields.writeDomain !== "control") {
+            if (branch?.trim()) violations.push(...assertDefaultBranchProtected(branch, { directOnException: parseBranchPolicyDirectOnBranch(text) === branch.trim() }).violations);
+          } else {
+            violations.push(...validateControlWriteAssignment(text, { cwd: context.cwd, assignmentDir: path.dirname(file) }));
+          }
         }
         const gate = { ok: violations.length === 0, violations };
         return gate.ok ? ok(id, gateData(gate)) : rejected(id, gate, "dispatch.assignment.invalid");
@@ -590,7 +596,7 @@ async function awaitSpawn(context: InvocationContext, argv: readonly string[], c
 }
 
 const contract: Record<(typeof verbs)[number], { path: string[]; args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; context?: "sessionId" }[]; effects: CommandDefinition["effects"]; description: string }> = {
-  "dispatch.validate": { path: ["dispatch", "validate"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "branch", flags: "--branch <branch>" }], effects: ["read", "validate"], description: "Validate Assignment fields and branch protection." },
+  "dispatch.validate": { path: ["dispatch", "validate"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "branch", flags: "--branch <branch>" }], effects: ["read", "validate"], description: "Validate Assignment fields and branch protection. Write domain: control requires Worktree path, one branch form, and Control write paths: <path>[, <path>...]; paths are concrete, absolute or relative to Worktree path, and must be gitignored in the control checkout. A trailing / declares a directory; a path without it is checked under both file and directory ignore rules and must be ignored in both." },
   "worktree.check": { path: ["worktree", "check"], args: [{ key: "planId", required: false, variadic: false }], options: [{ key: "plan", flags: "--plan <plan-id>" }, { key: "workflow", flags: "--workflow <id>" }, { key: "entry", flags: "--entry" }, { key: "harness", flags: "--harness <path>" }, { key: "integration", flags: "--integration <path>" }, { key: "mainBranch", flags: "--main-branch <branch>" }, { key: "control", flags: "--control <path>" }, { key: "l2", flags: "--l2" }, { key: "tracks", flags: "--tracks <json>" }], effects: ["read", "validate", "process"], description: "Check engine-enforced workflow-entry facts or the L1/L2 worktree pre-dispatch gate." },
   "worktree.qc-alignment": { path: ["worktree", "qc-alignment"], args: [{ key: "files", required: true, variadic: true }], options: [], effects: ["read", "validate"], description: "Assert QC/QA Assignment alignment." },
   "review.seats": { path: ["review", "seats"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "mode", flags: "--mode <mode>" }, { key: "reviewers", flags: "--reviewers <list>" }], effects: ["read", "validate"], description: "Map execution mode to QC seat count and assert tri identity." },

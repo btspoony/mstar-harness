@@ -206,6 +206,7 @@ __export(exports_engine, {
   caseFoldedRegisterRoot: () => caseFoldedRegisterRoot,
   catalogExportToInputs: () => catalogExportToInputs,
   catalogRootDir: () => catalogRootDir,
+  checkPathOwnership: () => checkPathOwnership,
   checkSddAction: () => checkSddAction,
   claimItem: () => claimItem,
   classifySkillLint: () => classifySkillLint,
@@ -282,6 +283,7 @@ __export(exports_engine, {
   isDistinctCheckout: () => isDistinctCheckout,
   isHarnessRootDir: () => isHarnessRootDir,
   isReadOnlyAssignmentRole: () => isReadOnlyAssignmentRole,
+  isResultPath: () => isResultPath,
   isStoreAuthorityName: () => isStoreAuthorityName,
   isStoreAuthorityTarget: () => isStoreAuthorityTarget,
   isTerminalSnapshot: () => isTerminalSnapshot,
@@ -319,6 +321,7 @@ __export(exports_engine, {
   moveIssueOn: () => moveIssueOn,
   mutateExecutionPlan: () => mutateExecutionPlan,
   mutateExecutionWorkflow: () => mutateExecutionWorkflow,
+  nearestExistingDir: () => nearestExistingDir,
   normalizeIterationCompassRef: () => normalizeIterationCompassRef,
   normalizeSeverity: () => normalizeSeverity,
   normalizeWorkflowNotesCoverage: () => normalizeWorkflowNotesCoverage,
@@ -333,6 +336,7 @@ __export(exports_engine, {
   parseLinearBinding: () => parseLinearBinding,
   parseMstarc: () => parseMstarc,
   parseRoadmapContent: () => parseRoadmapContent,
+  pathOwnershipWarning: () => pathOwnershipWarning,
   persistPayloadContracts: () => persistPayloadContracts,
   pickReviewBranchName: () => pickReviewBranchName,
   planCatalogImport: () => planCatalogImport,
@@ -348,6 +352,7 @@ __export(exports_engine, {
   preflightChangeset: () => preflightChangeset,
   previewExecutionRestore: () => previewExecutionRestore,
   probeCheckoutRoot: () => probeCheckoutRoot,
+  probePathOwnership: () => probePathOwnership,
   publishProjectionCapture: () => publishProjectionCapture,
   purgeCatalogRegistration: () => purgeCatalogRegistration,
   pushCadenceProbe: () => pushCadenceProbe,
@@ -408,6 +413,7 @@ __export(exports_engine, {
   requestHash: () => requestHash4,
   requireSafeId: () => requireSafeId,
   resetCursor: () => resetCursor,
+  resolveAdrDir: () => resolveAdrDir,
   resolveArtifactPath: () => resolveArtifactPath,
   resolveAssetPath: () => resolveAssetPath,
   resolveCompassEnforcement: () => resolveCompassEnforcement,
@@ -471,6 +477,7 @@ __export(exports_engine, {
   validateAssignmentFields: () => validateAssignmentFields,
   validateAuditFindingGates: () => validateAuditFindingGates,
   validateCompassFrontmatter: () => validateCompassFrontmatter,
+  validateControlWriteAssignment: () => validateControlWriteAssignment,
   validateDesignTokenFrontmatter: () => validateDesignTokenFrontmatter,
   validateExecutionIdentity: () => validateExecutionIdentity,
   validateFindingDoc: () => validateFindingDoc,
@@ -518,113 +525,117 @@ import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, re
 import { randomUUID } from "node:crypto";
 import { basename as basename2, dirname as dirname4, join as join4, resolve as resolve3 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync as existsSync4, readFileSync as readFileSync4, readdirSync, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname5, join as join5, resolve as resolve4, sep as sep2 } from "node:path";
-import { existsSync as existsSync5, readdirSync as readdirSync2, readFileSync as readFileSync5 } from "node:fs";
-import { join as join6 } from "node:path";
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync6, mkdirSync as mkdirSync2, readdirSync as readdirSync3, readFileSync as readFileSync6, writeFileSync as writeFileSync2 } from "node:fs";
-import { basename as basename3, join as join7, resolve as resolve5 } from "node:path";
+import { existsSync as existsSync4, realpathSync as realpathSync3 } from "node:fs";
+import { isAbsolute as isAbsolute3, join as join5, resolve as resolve4 } from "node:path";
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { statSync as statSync2 } from "node:fs";
+import { dirname as dirname5, isAbsolute as isAbsolute4, relative as relative2, resolve as resolve5, sep as sep2 } from "node:path";
+import { isAbsolute as isAbsolute5, resolve as resolve6 } from "node:path";
+import { existsSync as existsSync5, readFileSync as readFileSync4, readdirSync, realpathSync as realpathSync4 } from "node:fs";
+import { dirname as dirname6, join as join6, resolve as resolve7, sep as sep3 } from "node:path";
+import { existsSync as existsSync6, readdirSync as readdirSync2, readFileSync as readFileSync5 } from "node:fs";
+import { join as join7 } from "node:path";
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { existsSync as existsSync7, mkdirSync as mkdirSync2, readdirSync as readdirSync3, readFileSync as readFileSync6, writeFileSync as writeFileSync2 } from "node:fs";
+import { basename as basename3, join as join8, resolve as resolve8 } from "node:path";
 import { createHash as createHash3, randomUUID as randomUUID2 } from "node:crypto";
 import { lstatSync as lstatSync2, readFileSync as readFileSync7, readdirSync as readdirSync4 } from "node:fs";
-import { basename as basename4, join as join8, resolve as resolve6, sep as sep3 } from "node:path";
+import { basename as basename4, join as join9, resolve as resolve9, sep as sep4 } from "node:path";
 import { createHash as createHash4 } from "node:crypto";
 import {
   copyFileSync,
-  existsSync as existsSync7,
+  existsSync as existsSync8,
   lstatSync as lstatSync3,
   mkdirSync as mkdirSync3,
   readFileSync as readFileSync8,
   readdirSync as readdirSync5,
-  realpathSync as realpathSync4,
+  realpathSync as realpathSync5,
   renameSync as renameSync2,
   rmSync,
-  statSync as statSync2,
+  statSync as statSync3,
   unlinkSync as unlinkSync2,
   writeFileSync as writeFileSync3
 } from "node:fs";
 import { createRequire } from "node:module";
-import { basename as basename6, dirname as dirname6, join as join9, resolve as resolve7, sep as sep4 } from "node:path";
+import { basename as basename6, dirname as dirname7, join as join10, resolve as resolve10, sep as sep5 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { createHash as createHash5 } from "node:crypto";
 import { lstatSync as lstatSync4, readdirSync as readdirSync6 } from "node:fs";
-import { dirname as dirname7, join as join10 } from "node:path";
+import { dirname as dirname8, join as join11 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 import { createHash as createHash6 } from "node:crypto";
 import { readFileSync as readFileSync9, readdirSync as readdirSync7 } from "node:fs";
-import { join as join11 } from "node:path";
+import { join as join12 } from "node:path";
 import { createHash as createHash7 } from "node:crypto";
-import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync5, statSync as statSync3 } from "node:fs";
-import { execFileSync as execFileSync2 } from "node:child_process";
-import { basename as basename7, dirname as dirname8, isAbsolute as isAbsolute3, join as join12, relative as relative2, resolve as resolve8 } from "node:path";
-import { existsSync as existsSync10, readFileSync as readFileSync11, statSync as statSync4 } from "node:fs";
-import { isAbsolute as isAbsolute4, join as join13, normalize, sep as sep5 } from "node:path";
-import { existsSync as existsSync11, readFileSync as readFileSync12, statSync as statSync5 } from "node:fs";
-import { basename as basename8, isAbsolute as isAbsolute5, join as join14, relative as relative3, resolve as resolve9, sep as sep6 } from "node:path";
-import { createHash as createHash8 } from "node:crypto";
-import { isAbsolute as isAbsolute6, join as join15, resolve as resolve10, sep as sep7 } from "node:path";
-import { readFileSync as readFileSync13 } from "node:fs";
-import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync12, realpathSync as realpathSync6 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join16, resolve as resolve11 } from "node:path";
+import { existsSync as existsSync10, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync6, statSync as statSync4 } from "node:fs";
 import { execFileSync as execFileSync4 } from "node:child_process";
+import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute6, join as join13, relative as relative3, resolve as resolve11 } from "node:path";
+import { existsSync as existsSync11, readFileSync as readFileSync11, statSync as statSync5 } from "node:fs";
+import { isAbsolute as isAbsolute7, join as join14, normalize, sep as sep6 } from "node:path";
+import { existsSync as existsSync12, readFileSync as readFileSync12, statSync as statSync6 } from "node:fs";
+import { basename as basename8, isAbsolute as isAbsolute8, join as join15, relative as relative4, resolve as resolve12, sep as sep7 } from "node:path";
+import { createHash as createHash8 } from "node:crypto";
+import { isAbsolute as isAbsolute9, join as join16, resolve as resolve13, sep as sep8 } from "node:path";
+import { readFileSync as readFileSync13 } from "node:fs";
+import { execFileSync as execFileSync5 } from "node:child_process";
 import { createHash as createHash9 } from "node:crypto";
-import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync6 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute8, join as join17, resolve as resolve12, sep as sep8 } from "node:path";
+import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7 } from "node:fs";
+import { dirname as dirname10, isAbsolute as isAbsolute10, join as join17, resolve as resolve14, sep as sep9 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
 import { createHash as createHash10, randomUUID as randomUUID5 } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
-import { basename as basename9, dirname as dirname10, join as join18, resolve as resolve13 } from "node:path";
+import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync8, unlinkSync as unlinkSync3 } from "node:fs";
+import { basename as basename9, dirname as dirname11, join as join18, resolve as resolve15 } from "node:path";
 import { createHash as createHash11 } from "node:crypto";
 import { lstatSync as lstatSync7, readFileSync as readFileSync15, realpathSync as realpathSync7 } from "node:fs";
 import { createHash as createHash12 } from "node:crypto";
-import { basename as basename10, dirname as dirname11 } from "node:path";
-import { execFileSync as execFileSync5, spawn } from "node:child_process";
-import { mkdirSync as mkdirSync6, readFileSync as readFileSync16, realpathSync as realpathSync8, statSync as statSync8, writeFileSync as writeFileSync4 } from "node:fs";
+import { basename as basename10, dirname as dirname12 } from "node:path";
+import { execFileSync as execFileSync6, spawn } from "node:child_process";
+import { mkdirSync as mkdirSync6, readFileSync as readFileSync16, realpathSync as realpathSync8, statSync as statSync9, writeFileSync as writeFileSync4 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { basename as basename11, dirname as dirname12, isAbsolute as isAbsolute9, join as join19, relative as relative5, resolve as resolve14 } from "node:path";
-import { existsSync as existsSync15, statSync as statSync9 } from "node:fs";
-import { basename as basename12, dirname as dirname13, join as join20, relative as relative6, resolve as resolve15 } from "node:path";
+import { basename as basename11, dirname as dirname13, isAbsolute as isAbsolute11, join as join19, relative as relative6, resolve as resolve16 } from "node:path";
+import { existsSync as existsSync15, statSync as statSync10 } from "node:fs";
+import { basename as basename12, dirname as dirname14, join as join20, relative as relative7, resolve as resolve17 } from "node:path";
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
-import { basename as basename13, dirname as dirname14, relative as relative7, resolve as resolve16 } from "node:path";
+import { basename as basename13, dirname as dirname15, relative as relative8, resolve as resolve18 } from "node:path";
 import { createHash as createHash13 } from "node:crypto";
 import { closeSync as closeSync2, constants as constants2, fstatSync as fstatSync2, lstatSync as lstatSync8, openSync as openSync2, readFileSync as readFileSync17, readdirSync as readdirSync10 } from "node:fs";
-import { join as join21, relative as relative8 } from "node:path";
+import { join as join21, relative as relative9 } from "node:path";
 import { existsSync as existsSync16, readdirSync as readdirSync11 } from "node:fs";
-import { basename as basename14, isAbsolute as isAbsolute10, join as join22, resolve as resolve17, sep as sep9 } from "node:path";
+import { basename as basename14, isAbsolute as isAbsolute12, join as join22, resolve as resolve19, sep as sep10 } from "node:path";
 import { existsSync as existsSync17, readFileSync as readFileSync19, readdirSync as readdirSync12 } from "node:fs";
 import { join as join23 } from "node:path";
 import { lstatSync as lstatSync9, readdirSync as readdirSync13 } from "node:fs";
-import { isAbsolute as isAbsolute11, join as join24 } from "node:path";
+import { isAbsolute as isAbsolute13, join as join24 } from "node:path";
 import { existsSync as existsSync18, readdirSync as readdirSync14, unlinkSync as unlinkSync4 } from "node:fs";
-import { basename as basename15, isAbsolute as isAbsolute12, join as join25, resolve as resolve18, sep as sep10 } from "node:path";
+import { basename as basename15, isAbsolute as isAbsolute14, join as join25, resolve as resolve20, sep as sep11 } from "node:path";
 import { existsSync as existsSync19, readFileSync as readFileSync20 } from "node:fs";
-import { isAbsolute as isAbsolute13, join as join26, resolve as resolve19 } from "node:path";
+import { isAbsolute as isAbsolute15, join as join26, resolve as resolve21 } from "node:path";
 import { closeSync as closeSync4, constants as constants4, existsSync as existsSync20, fstatSync as fstatSync4, lstatSync as lstatSync11, mkdirSync as mkdirSync7, openSync as openSync4, readFileSync as readFileSync22, readdirSync as readdirSync16 } from "node:fs";
-import { dirname as dirname16, isAbsolute as isAbsolute14, join as join28, relative as relative9, resolve as resolve20, sep as sep11 } from "node:path";
+import { dirname as dirname17, isAbsolute as isAbsolute16, join as join28, relative as relative10, resolve as resolve22, sep as sep12 } from "node:path";
 import { createHash as createHash15 } from "node:crypto";
 import { createHash as createHash14 } from "node:crypto";
 import { closeSync as closeSync3, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync10, openSync as openSync3, readFileSync as readFileSync21, readdirSync as readdirSync15 } from "node:fs";
-import { dirname as dirname15, join as join27 } from "node:path";
-import { dirname as dirname18, isAbsolute as isAbsolute15 } from "node:path";
+import { dirname as dirname16, join as join27 } from "node:path";
+import { dirname as dirname19, isAbsolute as isAbsolute17 } from "node:path";
 import { createHash as createHash16, randomUUID as randomUUID6 } from "node:crypto";
 import { createHash as createHash17 } from "node:crypto";
 import { readFileSync as readFileSync23 } from "node:fs";
 import { join as join29 } from "node:path";
 import { existsSync as existsSync21 } from "node:fs";
-import { dirname as dirname17, join as join30, resolve as resolve21 } from "node:path";
+import { dirname as dirname18, join as join30, resolve as resolve23 } from "node:path";
 import { createHash as createHash18 } from "node:crypto";
-import { existsSync as existsSync22, readFileSync as readFileSync24, statSync as statSync10 } from "node:fs";
-import { dirname as dirname19, isAbsolute as isAbsolute16, join as join31 } from "node:path";
+import { existsSync as existsSync22, readFileSync as readFileSync24, statSync as statSync11 } from "node:fs";
+import { dirname as dirname20, isAbsolute as isAbsolute18, join as join31 } from "node:path";
 import { createHash as createHash19 } from "node:crypto";
 import { createHash as createHash20 } from "node:crypto";
 import { createHash as createHash21 } from "node:crypto";
-import { relative as relative10, sep as sep12 } from "node:path";
+import { relative as relative11, sep as sep13 } from "node:path";
 import { createHash as createHash22 } from "node:crypto";
 import { createHash as createHash23 } from "node:crypto";
 import { existsSync as existsSync23, lstatSync as lstatSync12, readFileSync as readFileSync25, readdirSync as readdirSync17 } from "node:fs";
-import { join as join32, resolve as resolve22 } from "node:path";
+import { join as join32, resolve as resolve24 } from "node:path";
 import { randomUUID as randomUUID7 } from "node:crypto";
 import {
   closeSync as closeSync5,
@@ -639,7 +650,7 @@ import {
   unlinkSync as unlinkSync5,
   writeSync
 } from "node:fs";
-import { basename as basename16, dirname as dirname20, join as join33 } from "node:path";
+import { basename as basename16, dirname as dirname21, join as join33 } from "node:path";
 import { createHash as createHash24, randomUUID as randomUUID8 } from "node:crypto";
 import {
   closeSync as closeSync6,
@@ -656,10 +667,10 @@ import {
 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname as dirname21, join as join34, relative as relative11, resolve as resolve23, sep as sep13 } from "node:path";
+import { dirname as dirname22, join as join34, relative as relative12, resolve as resolve25, sep as sep14 } from "node:path";
 import { chmodSync, existsSync as existsSync25, mkdirSync as mkdirSync9, readFileSync as readFileSync28, renameSync as renameSync4, rmSync as rmSync3, writeFileSync as writeFileSync6 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname as dirname22, join as join35 } from "node:path";
+import { dirname as dirname23, join as join35 } from "node:path";
 import { createHash as createHash25 } from "node:crypto";
 import { createServer } from "node:http";
 function __exportSetter2(name, newValue) {
@@ -987,7 +998,7 @@ function catalogRootDir(context, rootKind) {
     case "specs":
       return resolveSpecsDir(harness, { create: false });
     case "knowledge":
-      return resolveKnowledgeDir(harness);
+      return resolveKnowledgeDir(harness, { create: false });
     case "projects":
       return resolveProjectDir(harness, { harnessDir: harness });
   }
@@ -7926,7 +7937,510 @@ function readDeclaredNodeFloor() {
   }
   return null;
 }
+function gitProbeTimeoutMs() {
+  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "")
+    return DEFAULT_PROBE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
+}
+function parseMainWorktree(out) {
+  const tokens = out.split("\x00");
+  const first = tokens.findIndex((t) => t.startsWith("worktree "));
+  if (first === -1)
+    return null;
+  const rawPath = tokens[first].slice("worktree ".length);
+  if (rawPath.trim() === "")
+    return null;
+  let branch = null;
+  let detached = false;
+  for (let i = first + 1;i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.startsWith("worktree "))
+      break;
+    if (token === "bare")
+      return null;
+    if (token === "detached")
+      detached = true;
+    else if (token.startsWith("branch ")) {
+      const ref = token.slice("branch ".length).trim();
+      if (ref === "")
+        return null;
+      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+    }
+  }
+  if (detached)
+    branch = "";
+  if (branch === null)
+    return null;
+  try {
+    return { root: realpathSync3(rawPath), branch };
+  } catch {
+    return null;
+  }
+}
+function readMainWorktree(cwd) {
+  const start = cwd ?? process.cwd();
+  try {
+    const stdout = execFileSync("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: gitProbeTimeoutMs()
+    });
+    return parseMainWorktree(stdout);
+  } catch {
+    return null;
+  }
+}
+function assertMainWorktreeResidency(main, expectedBranch) {
+  const violations = [];
+  if (main.branch === "") {
+    violations.push(violation("high", "worktree.main.residency-switched", `main worktree "${main.root}" is detached (no branch checked out) — residency cannot match the recorded expectation ${JSON.stringify(expectedBranch)}`, `Inspect \`git -C ${shellQuote(main.root)} status --short\`; after resolving local changes, run \`git -C ${shellQuote(main.root)} checkout ${shellQuote(expectedBranch)}\` to restore the recorded main branch.`));
+  } else if (main.branch !== expectedBranch) {
+    violations.push(violation("high", "worktree.main.residency-switched", `main worktree "${main.root}" is on branch "${main.branch}", expected the recorded branch "${expectedBranch}" — residency is checked against the value recorded at lifecycle start, never re-pointed at the observed branch`, `Inspect \`git -C ${shellQuote(main.root)} status --short\`; after resolving local changes, run \`git -C ${shellQuote(main.root)} checkout ${shellQuote(expectedBranch)}\` to restore the recorded main branch.`));
+  }
+  return gate(violations);
+}
+function probeStatus(worktreePath, opts) {
+  const precomputed = opts.statusOf?.(worktreePath);
+  if (precomputed !== undefined)
+    return { status: precomputed };
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
+  try {
+    return { status: execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "status", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout }) };
+  } catch (error) {
+    return { error: error.message ?? "git status probe failed" };
+  }
+}
+function anchorRecovery(workflowId, key) {
+  const flag = deliveryAnchorFlags[key];
+  return flag === null || flag === undefined ? `Integration is recorded only at iteration registration, so no running-workflow repair admits it. Close it with mstar workflow lifecycle --workflow ${workflowId} --status failed --reason "<blocker>", then register a replacement iteration with branch source, target, and integration options; rerun mstar worktree check --workflow <new-id> --entry.` : `Record the missing branch.${key} with mstar workflow delivery-anchors --workflow ${workflowId} ${flag} <branch> --reason "<why branch.${key} is absent>", then rerun mstar worktree check --workflow ${workflowId} --entry.`;
+}
+function workflowEntryPreDispatchCheck(input, opts = {}) {
+  const violations = [];
+  const { base = "", target = "", integration = "" } = input.branch;
+  const iteration = input.workflowType === "iteration";
+  const anchors = iteration ? [["base", base], ["target", target], ["integration", integration]] : [["work", deliveryBranchOf(input.branch) ?? ""], ["target", target]];
+  for (const [key, value] of anchors) {
+    if (value.trim() === "") {
+      violations.push(violation("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, anchorRecovery(input.workflowId, key)));
+    }
+  }
+  const expected = (iteration ? base : target).trim();
+  if (input.mainWorktree === null) {
+    violations.push(violation("high", "worktree.main.unresolved", `main worktree identity cannot be proved for workflow "${input.workflowId}"`, "Run git worktree list --porcelain from an accessible repository checkout, then rerun mstar worktree check --workflow <id> --entry."));
+  } else {
+    if (expected === "")
+      violations.push(violation("high", "worktree.main.expected-branch-missing", `workflow "${input.workflowId}" has no recorded main branch expectation`, anchorRecovery(input.workflowId, iteration ? "base" : "target")));
+    else
+      violations.push(...assertMainWorktreeResidency(input.mainWorktree, expected).violations);
+    const owner = input.lifecycleBranches.find((entry) => entry.branch === input.mainWorktree.branch && entry.branch !== expected);
+    if (owner) {
+      const recovery = owner.workflowId === null ? `Run mstar status validate to identify the active lifecycle owner of branch "${owner.branch}", then coordinate its supported close process before switching branches.` : `Coordinate with workflow ${owner.workflowId}'s coordinator; if its lifecycle is ready to close, run mstar status workflow-close --workflow ${owner.workflowId} --reason <reason>, verify ownership is released with mstar status validate, then restore the recorded branch using git -C ${shellQuote(input.mainWorktree.root)} checkout ${shellQuote(expected)}.`;
+      violations.push(violation("high", "worktree.main.residency-switched", `main worktree branch "${owner.branch}" is owned by workflow ${owner.workflowId ?? "unknown"}`, recovery));
+    }
+  }
+  const integrationPath = input.integrationWorktreePath?.trim() ?? "";
+  if (iteration) {
+    if (integrationPath === "") {
+      violations.push(violation("high", "worktree.entry.integration-path-missing", `iteration "${input.workflowId}" has no recorded integration_worktree_path`, `Create a dedicated checkout with \`git worktree add <absolute-path> ${shellQuote(integration)}\`, then register it through \`mstar workflow integration-worktree --workflow ${shellQuote(input.workflowId)} --path <absolute-path>\`.`));
+    } else if (!existsSync4(integrationPath)) {
+      violations.push(violation("high", "worktree.entry.integration-missing", `integration worktree "${integrationPath}" does not exist`, `Create the recorded checkout with \`git worktree add ${shellQuote(integrationPath)} ${shellQuote(integration)}\`, then register or verify it with \`mstar workflow integration-worktree --workflow ${shellQuote(input.workflowId)} --path ${shellQuote(integrationPath)}\`.`));
+    } else {
+      const probe = probeBranch(integrationPath, opts);
+      if ("error" in probe)
+        violations.push(violation("high", "worktree.entry.integration-branch-probe-failed", `cannot probe integration branch: ${probe.error}`, `Inspect \`git -C ${shellQuote(integrationPath)} rev-parse --show-toplevel\` and \`git -C ${shellQuote(integrationPath)} branch --show-current\`; restore the accessible recorded checkout before rerunning mstar worktree check --workflow ${shellQuote(input.workflowId)} --entry.`));
+      else if (probe.branch !== integration)
+        violations.push(violation("high", "worktree.entry.integration-branch-mismatch", `integration worktree is on "${probe.branch}", expected branch.integration "${integration}"`, `Inspect \`git -C ${shellQuote(integrationPath)} status --short\`; after resolving local changes, run \`git -C ${shellQuote(integrationPath)} checkout ${shellQuote(integration)}\` to restore recorded branch.integration.`));
+      const status = probeStatus(integrationPath, opts);
+      if ("error" in status)
+        violations.push(violation("high", "worktree.entry.integration-status-probe-failed", `cannot inspect integration worktree status: ${status.error}`, `Inspect \`git -C ${shellQuote(integrationPath)} rev-parse --show-toplevel\`, then run \`git -C ${shellQuote(integrationPath)} status --short\` once the checkout is accessible.`));
+      else if (status.status.trim() !== "")
+        violations.push(violation("high", "worktree.entry.integration-dirty", "integration worktree has uncommitted changes", `Inspect \`git -C ${shellQuote(integrationPath)} status --short\`; commit intended changes or explicitly restore only changes you own, then rerun mstar worktree check --workflow ${shellQuote(input.workflowId)} --entry. Do not use git clean or reset as automatic cleanup.`));
+    }
+  }
+  const lease = input.integrationLease == null ? { claimed: false } : { claimed: true, lease: input.integrationLease };
+  if (lease.claimed) {
+    const result = validateIntegrationMergeLease(lease.lease);
+    violations.push(...result.violations);
+  }
+  return { ok: violations.length === 0, violations, lease, scope: "engine-enforced workflow-entry facts only" };
+}
 function violation(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
+}
+function gate(violations) {
+  return { ok: violations.length === 0, violations };
+}
+function probeBranch(worktreePath, opts) {
+  const precomputed = opts.branchOf?.(worktreePath);
+  if (precomputed !== undefined)
+    return { branch: precomputed };
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
+  try {
+    const stdout = execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "branch", "--show-current"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout
+    });
+    const branch = stdout.trim();
+    if (branch === "")
+      return { error: `no branch checked out (detached HEAD?) at "${worktreePath}"` };
+    return { branch };
+  } catch (err) {
+    const e = err;
+    if (e.killed === true || e.signal !== undefined) {
+      return { error: `git probe timed out after ${timeout}ms (killed by ${e.signal ?? "SIGTERM"})` };
+    }
+    const detail = (e.stderr !== undefined ? e.stderr.toString().trim() : "") || e.message || "git probe failed";
+    return { error: detail };
+  }
+}
+function probeCheckout(worktreePath, opts) {
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
+  try {
+    const stdout = execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "rev-parse", "--git-dir"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout
+    });
+    const raw = stdout.trim();
+    if (raw === "")
+      return { error: `no git dir reported at "${worktreePath}"` };
+    const abs = isAbsolute3(raw) ? raw : join5(worktreePath, raw);
+    return { gitDir: realpathSync3(abs) };
+  } catch (err) {
+    const e = err;
+    if (e.killed === true || e.signal !== undefined) {
+      return { error: `git probe timed out after ${timeout}ms (killed by ${e.signal ?? "SIGTERM"})` };
+    }
+    const detail = (e.stderr !== undefined ? e.stderr.toString().trim() : "") || e.message || "git probe failed";
+    return { error: detail };
+  }
+}
+function isDistinctCheckout(controlPath, candidatePath, opts = {}) {
+  const control = probeCheckout(controlPath, opts);
+  const candidate = probeCheckout(candidatePath, opts);
+  if ("error" in control || "error" in candidate)
+    return false;
+  return control.gitDir !== candidate.gitDir;
+}
+function probeCheckoutRoot(path2, opts = {}) {
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
+  try {
+    const stdout = execFileSync(opts.gitPath ?? "git", ["-C", path2, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout
+    });
+    const raw = stdout.trim();
+    if (raw === "")
+      return null;
+    return realpathSync3(raw);
+  } catch {
+    return null;
+  }
+}
+function l1PreDispatchCheck(input, opts = {}) {
+  const violations = [];
+  const checkoutCache = new Map;
+  const checkout = (path2) => {
+    const key = resolve4(path2);
+    if (!checkoutCache.has(key))
+      checkoutCache.set(key, probeCheckout(path2, opts));
+    return checkoutCache.get(key);
+  };
+  const {
+    workflowType,
+    integrationWorktreePath,
+    integrationBranch,
+    mainWorktree,
+    expectedMainBranch,
+    lifecycleBranches,
+    rowWorktreePath,
+    rowWorkingBranch,
+    planId
+  } = input;
+  if (mainWorktree === null) {
+    violations.push(violation("high", "worktree.main.unresolved", `main worktree identity cannot be proved for plan "${planId}" (git worktree discovery failed or unavailable) — L1 refuses instead of skipping the residency row`, "run from inside the repository (or pass a resolvable cwd) so the main worktree can be discovered"));
+  } else {
+    if (expectedMainBranch.trim() === "") {
+      violations.push(violation("high", "worktree.main.expected-branch-missing", `neither a recorded main-worktree branch nor an explicit branch.base is available for plan "${planId}" — the expectation is never the branch observed at check time`, "record the main worktree branch at lifecycle start (plan header / --main-branch) or carry the explicit branch.base"));
+    } else {
+      violations.push(...assertMainWorktreeResidency(mainWorktree, expectedMainBranch).violations);
+    }
+    const owner = lifecycleBranches.find((entry) => entry.branch === mainWorktree.branch && entry.branch !== expectedMainBranch);
+    if (mainWorktree.branch !== "" && owner) {
+      const ownerLabel = owner.workflowId === null ? "an active lifecycle with no recorded workflow id" : `workflow ${owner.workflowId}`;
+      const ownerRecovery = owner.workflowId === null ? "wait for the owning lifecycle to finish and close through its documented lifecycle verbs" : `wait for workflow ${owner.workflowId} to finish and close through its documented lifecycle verbs`;
+      violations.push(violation("high", "worktree.main.residency-switched", `main worktree "${mainWorktree.root}" is on branch "${mainWorktree.branch}", owned by ${ownerLabel}${owner.planId ? ` plan ${owner.planId}` : ""}`, `${ownerRecovery}, or have its coordinator correct the row via mstar plan prepare`));
+    }
+  }
+  const integrationRequired = workflowType === "iteration" || integrationWorktreePath.trim() !== "" || integrationBranch.trim() !== "";
+  if (integrationRequired && (integrationWorktreePath.trim() === "" || integrationBranch.trim() === "")) {
+    violations.push(violation("high", "worktree.l1.integration-missing", `integration worktree path and branch are both required (workflow type "${workflowType}") for plan "${planId}" — got path ${JSON.stringify(integrationWorktreePath)}, branch ${JSON.stringify(integrationBranch)}`, "record snapshot integration_worktree_path + branch.integration (the dedicated integration checkout), or pass both empty for a standalone plan"));
+  }
+  if (rowWorktreePath.trim() === "") {
+    violations.push(violation("high", "worktree.l1.feature-scope-missing", `metadata.worktree_path is empty for plan "${planId}" — no registered feature worktree to dispatch against`, `Run \`mstar plan prepare --workflow ${input.workflowId ?? "<workflow-id>"} --plan ${planId} --worktree-path <absolute-feature-worktree> --working-branch ${rowWorkingBranch.trim() === "" ? "<feature-branch>" : JSON.stringify(rowWorkingBranch)}\` to record the missing worktree path`));
+  }
+  if (rowWorkingBranch.trim() === "") {
+    violations.push(violation("high", "worktree.l1.feature-branch-missing", `metadata.working_branch is empty for plan "${planId}"`, `Run \`mstar plan prepare --workflow ${input.workflowId ?? "<workflow-id>"} --plan ${planId} --worktree-path ${rowWorktreePath.trim() === "" ? "<absolute-feature-worktree>" : JSON.stringify(rowWorktreePath)} --working-branch <feature-branch>\` to record the missing feature branch`));
+  }
+  if (integrationRequired && integrationWorktreePath.trim() !== "" && integrationBranch.trim() !== "") {
+    if (!existsSync4(integrationWorktreePath)) {
+      violations.push(violation("high", "worktree.l1.integration-missing", `integration worktree "${integrationWorktreePath}" does not exist for plan "${planId}" — the integration checkout must exist before dispatch`, `create it before dispatch: git worktree add ${shellQuote(integrationWorktreePath)} ${shellQuote(integrationBranch)}`));
+    } else {
+      const probe = probeBranch(integrationWorktreePath, opts);
+      if ("error" in probe) {
+        violations.push(violation("high", "worktree.branch-probe-failed", `cannot probe branch at the integration worktree "${integrationWorktreePath}" for plan "${planId}": ${probe.error}`, "verify the path is a git worktree checkout on the integration branch (not detached)"));
+      } else if (probe.branch !== integrationBranch) {
+        violations.push(violation("high", "worktree.branch-mismatch", `integration worktree "${integrationWorktreePath}" is on branch "${probe.branch}", expected branch.integration "${integrationBranch}" (plan "${planId}")`, `checkout ${shellQuote(integrationBranch)} in the integration worktree`));
+      }
+    }
+  }
+  const identityViolation = (aPath, bPath, code2, describe, fix) => {
+    if (resolve4(aPath) === resolve4(bPath)) {
+      return violation("critical", code2, `${describe} — the same checkout (normalized path equality) is not isolation`, fix);
+    }
+    if (!existsSync4(aPath) || !existsSync4(bPath))
+      return null;
+    const a = checkout(aPath);
+    const b = checkout(bPath);
+    if ("error" in a) {
+      return violation("high", "worktree.l1.checkout-probe-failed", `cannot establish the Git-checkout identity of "${aPath}" for plan "${planId}": ${a.error}`, "verify the path is a git checkout");
+    }
+    if ("error" in b) {
+      return violation("high", "worktree.l1.checkout-probe-failed", `cannot establish the Git-checkout identity of "${bPath}" for plan "${planId}": ${b.error}`, "verify the path is a git checkout");
+    }
+    if (a.gitDir === b.gitDir) {
+      return violation("critical", code2, `${describe} — a plain subdirectory or symlink alias of the other checkout is not isolation (canonical per-worktree git dirs match)`, fix);
+    }
+    return null;
+  };
+  if (mainWorktree !== null && rowWorktreePath.trim() !== "") {
+    const v = identityViolation(mainWorktree.root, rowWorktreePath, "worktree.l1.feature-equals-main", `row metadata worktree "${rowWorktreePath}" is the same Git checkout as the main worktree "${mainWorktree.root}" (plan "${planId}")`, "use a distinct feature worktree for the plan (git worktree add <path> <branch>)");
+    if (v !== null)
+      violations.push(v);
+  }
+  if (mainWorktree !== null && integrationRequired && integrationWorktreePath.trim() !== "") {
+    const v = identityViolation(mainWorktree.root, integrationWorktreePath, "worktree.l1.integration-equals-main", `integration worktree "${integrationWorktreePath}" is the same Git checkout as the main worktree "${mainWorktree.root}" (plan "${planId}") — the integration checkout is the sole merge cwd and must be dedicated`, "use a dedicated integration checkout on branch.integration (git worktree add <path> <integration-branch>) and record it as integration_worktree_path");
+    if (v !== null)
+      violations.push(v);
+  }
+  if (integrationRequired && integrationWorktreePath.trim() !== "" && rowWorktreePath.trim() !== "") {
+    const v = identityViolation(integrationWorktreePath, rowWorktreePath, "worktree.l1.feature-equals-integration", `row metadata worktree "${rowWorktreePath}" is the same Git checkout as the integration worktree "${integrationWorktreePath}" (plan "${planId}") — the feature worktree must be distinct from both main and integration`, "use a distinct feature worktree for the plan (git worktree add <path> <working-branch>)");
+    if (v !== null)
+      violations.push(v);
+  }
+  if (rowWorktreePath.trim() !== "" && !existsSync4(rowWorktreePath)) {
+    violations.push(violation("high", "worktree.l1.feature-missing", `feature worktree directory "${rowWorktreePath}" does not exist for plan "${planId}"`, `create it before dispatch: git worktree add ${shellQuote(rowWorktreePath)} <working-branch>`));
+  } else if (rowWorktreePath.trim() !== "" && rowWorkingBranch.trim() !== "") {
+    const probe = probeBranch(rowWorktreePath, opts);
+    if ("error" in probe) {
+      violations.push(violation("high", "worktree.l1.branch-probe-failed", `cannot probe branch at "${rowWorktreePath}" for plan "${planId}": ${probe.error}`, "verify the path is a git worktree checkout on the recorded working branch (not detached)"));
+    } else if (probe.branch !== rowWorkingBranch) {
+      violations.push(violation("high", "worktree.l1.branch-mismatch", `feature worktree "${rowWorktreePath}" is on branch "${probe.branch}", expected metadata.working_branch "${rowWorkingBranch}" (plan "${planId}")`, `checkout ${shellQuote(rowWorkingBranch)} in the feature worktree`));
+    }
+  }
+  return gate(violations);
+}
+function l2PreDispatchCheck(input, opts = {}) {
+  const violations = [];
+  const tracks = input.tracks ?? [];
+  const seenPaths = new Set;
+  if (tracks.length < 1) {
+    violations.push(violation("high", "worktree.l2.no-tracks", "no parallel writable tracks — the L2 pre-dispatch checklist requires at least one track with an absolute worktreePath and Working branch", "pass each track's absolute Worktree path and PM-approved Working branch"));
+  }
+  tracks.forEach((track, index2) => {
+    if (track.worktreePath.trim() === "" || track.workingBranch.trim() === "") {
+      violations.push(violation("high", "worktree.l2.track-invalid", `track ${index2 + 1} is missing worktreePath and/or workingBranch`, "fill both fields for every track"));
+      return;
+    }
+    if (!isAbsolute3(track.worktreePath)) {
+      violations.push(violation("high", "worktree.l2.track-path-relative", `track ${index2 + 1} worktreePath "${track.worktreePath}" is not an absolute path — L2 tracks MUST use absolute worktree checkout paths (consistent with the lease validator's absolute worktree_path enforcement)`, `use an absolute path for track ${index2 + 1} (e.g. /Users/<you>/worktrees/<branch>)`));
+      return;
+    }
+    const normalized = resolve4(track.worktreePath);
+    if (seenPaths.has(normalized)) {
+      violations.push(violation("high", "worktree.l2.track-path-collision", `duplicate worktreePath "${track.worktreePath}" across parallel tracks — L2 parallel-writable isolation requires a distinct absolute Worktree path per track (N parallel invokes ≠ isolation)`, "give every parallel track its own git worktree checkout"));
+      return;
+    }
+    seenPaths.add(normalized);
+    if (!existsSync4(track.worktreePath)) {
+      violations.push(violation("high", "worktree.l2.track-missing", `track worktree directory "${track.worktreePath}" does not exist`, `create it before dispatch: git worktree add ${track.worktreePath} ${track.workingBranch}`));
+      return;
+    }
+    const probe = probeBranch(track.worktreePath, opts);
+    if ("error" in probe) {
+      violations.push(violation("high", "worktree.l2.branch-probe-failed", `cannot probe branch at "${track.worktreePath}": ${probe.error}`, "verify the path is a git worktree checkout on its Working branch (not detached)"));
+    } else if (probe.branch !== track.workingBranch) {
+      violations.push(violation("high", "worktree.l2.branch-mismatch", `track worktree "${track.worktreePath}" is on branch "${probe.branch}", expected Working branch "${track.workingBranch}"`, `checkout ${track.workingBranch} in that worktree`));
+    }
+  });
+  return gate(violations);
+}
+function assertControlVsFeaturePath(controlWorktreePath, featureWorktreePath, opts = {}) {
+  const violations = [];
+  if (controlWorktreePath === "" && featureWorktreePath === "") {
+    violations.push(violation("critical", "worktree.control-feature.same", `main control root and feature worktree path are both empty — metadata.worktree_path MUST be a distinct checkout from the main worktree`, "record a distinct feature worktree path"));
+    return gate(violations);
+  }
+  if (controlWorktreePath === "" || featureWorktreePath === "") {
+    return gate(violations);
+  }
+  if (!isDistinctCheckout(controlWorktreePath, featureWorktreePath, opts)) {
+    violations.push(violation("critical", "worktree.control-feature.same", `main control root "${controlWorktreePath}" and feature worktree path "${featureWorktreePath}" are not distinct Git checkouts — a plain subdirectory or symlink alias of the main checkout is not isolation; metadata.worktree_path MUST be a distinct checkout`, "use a distinct feature worktree for the plan's product edits (git worktree add <path> <branch>)"));
+  }
+  return gate(violations);
+}
+function assertBranchAlignment(worktreePath, expectedBranch, opts = {}) {
+  const violations = [];
+  const probe = probeBranch(worktreePath, opts);
+  if ("error" in probe) {
+    violations.push(violation("high", "worktree.branch-probe-failed", `cannot probe branch at "${worktreePath}": ${probe.error}`, "verify the path is a git worktree checkout on the expected branch (not detached)"));
+  } else if (probe.branch !== expectedBranch) {
+    violations.push(violation("high", "worktree.branch-mismatch", `worktree "${worktreePath}" is on branch "${probe.branch}", expected "${expectedBranch}" (Assignment Working branch)`, `checkout ${expectedBranch} in that worktree`));
+  }
+  return gate(violations);
+}
+function assertQcAlignment(assignments) {
+  const violations = [];
+  const list2 = assignments ?? [];
+  for (const { key, label } of QC_ALIGNMENT_FIELDS) {
+    const distinct = [...new Set(list2.map((a) => a[key]))];
+    if (distinct.length > 1) {
+      violations.push(violation("high", "qc.alignment.mismatch", `QC/QA alignment field "${label}" is not byte-identical across ${list2.length} assignments: ${distinct.map((v) => `"${v}"`).join(" vs ")}`, `copy the same ${label} value verbatim into every QC tri and QA Assignment`));
+    }
+  }
+  return gate(violations);
+}
+function singleReviewSnapshot(assignments) {
+  const violations = [];
+  const list2 = assignments ?? [];
+  list2.forEach((a, index2) => {
+    if ((a.head ?? "").trim() === "") {
+      violations.push(violation("high", "qc.alignment.snapshot-missing", `review head not provided for assignment ${index2 + 1} (plan_id "${a.planId}") — cannot confirm the single review snapshot precondition`, "precompute and pass the review HEAD (full SHA) for every assignment"));
+    }
+  });
+  const distinct = [...new Set(list2.map((a) => a.head ?? "").filter((h) => h.trim() !== ""))];
+  if (distinct.length > 1) {
+    violations.push(violation("high", "qc.alignment.single-snapshot", `assignments cover ${distinct.length} different review heads (${distinct.join(", ")}) — all reviewable commits must sit on ONE Working branch HEAD before QC tri + QA`, "merge the parallel tracks to a single Working branch HEAD, then re-derive the heads"));
+  }
+  return gate(violations);
+}
+function shellQuote(value) {
+  return "'" + value.replaceAll("'", `'"'"'`) + "'";
+}
+function isResultPath(target, resultDirs) {
+  const path2 = resolve5(target);
+  return resultDirs.some((dir) => isAtOrBelow2(path2, dir));
+}
+function isAtOrBelow2(dir, root) {
+  const rel = relative2(root, dir);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute4(rel);
+}
+function isDirectoryEntry(candidate) {
+  try {
+    return statSync2(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function nearestExistingDir(target) {
+  let dir = resolve5(target);
+  for (;; ) {
+    if (isDirectoryEntry(dir))
+      return dir;
+    const parent = dirname5(dir);
+    if (parent === dir)
+      return dir;
+    dir = parent;
+  }
+}
+function probePathFor(target) {
+  const resolved = resolve5(target.path);
+  const directory = target.kind === "directory" || target.kind === undefined && isDirectoryEntry(resolved);
+  return directory && !resolved.endsWith(sep2) ? resolved + sep2 : resolved;
+}
+function exitStatus(error) {
+  if (error !== null && typeof error === "object" && "status" in error && typeof error.status === "number") {
+    return error.status;
+  }
+  return null;
+}
+function ignoreVerdict(checkoutRoot, probePath) {
+  if (checkoutRoot === null)
+    return null;
+  try {
+    execFileSync2("git", ["-C", checkoutRoot, "check-ignore", "-q", "--", probePath], {
+      stdio: ["ignore", "ignore", "ignore"],
+      timeout: gitProbeTimeoutMs()
+    });
+    return true;
+  } catch (error) {
+    return exitStatus(error) === 1 ? false : null;
+  }
+}
+function probePathOwnership(target, controlRoot, callerCheckoutRoot = null) {
+  const anchor = nearestExistingDir(target.path);
+  const checkoutRoot = probeCheckoutRoot(anchor);
+  const probePath = probePathFor(target);
+  const ignored = ignoreVerdict(checkoutRoot, probePath);
+  const processRoot = controlRoot ?? (checkoutRoot === null ? null : readMainWorktree(checkoutRoot)?.root ?? null);
+  const facts = {
+    path: target.path,
+    result: target.result === true,
+    ignored,
+    checkoutRoot,
+    controlRoot: processRoot
+  };
+  if (ignored === null) {
+    return {
+      ...facts,
+      code: "path.unverifiable",
+      severity: "medium",
+      message: `cannot read the Git ignore verdict for ${target.path}`,
+      fix: `Confirm the path sits inside a readable Git checkout: run \`git -C ${anchor} check-ignore -v -- ${probePath}\`. Run mstar path check.`
+    };
+  }
+  if (ignored && checkoutRoot !== processRoot) {
+    return {
+      ...facts,
+      code: "path.process-outside-control",
+      severity: "high",
+      message: `${target.path} is Git-ignored in the checkout ${checkoutRoot ?? "unknown"}, but ignored harness files belong to the control checkout ${processRoot ?? "unreadable"}`,
+      fix: `Keep ignored harness files in the control checkout: run mstar path check from ${processRoot ?? "the main worktree"}, or declare harness_dir in .mstarc.`
+    };
+  }
+  if (!ignored && callerCheckoutRoot !== null && checkoutRoot !== null && checkoutRoot !== callerCheckoutRoot) {
+    return {
+      ...facts,
+      code: "path.result-outside-worktree",
+      severity: "high",
+      message: `${target.path} is committable in the checkout ${checkoutRoot}, but the caller works in ${callerCheckoutRoot}`,
+      fix: `Write tracked results in the checkout that carries the target branch (the work/integration worktree), not the control checkout. Run mstar path check.`
+    };
+  }
+  return { ...facts, code: null, severity: null, message: null, fix: null };
+}
+function pathOwnershipWarning(probe) {
+  if (probe.code !== null || !probe.result || probe.ignored !== true)
+    return null;
+  return {
+    ...probe,
+    code: "path.result-ignored",
+    severity: "medium",
+    message: `${probe.path} is a tracked-result location that Git ignores: content written there can never be committed or shared`,
+    fix: `Write results under .agents/<sub> (or another committable directory) or declare the dir with specs_dir / knowledge_dir / adr_dir in .mstarc. Run mstar path check.`
+  };
+}
+function checkPathOwnership(targets, controlRoot, callerCheckoutRoot = null) {
+  const probes = targets.map((target) => probePathOwnership(target, controlRoot, callerCheckoutRoot));
+  const findings = probes.filter((probe) => probe.code !== null);
+  const warnings = probes.filter((probe) => probe.result).map((probe) => pathOwnershipWarning(probe)).filter((warning) => warning !== null);
+  return { ok: findings.length === 0, findings, warnings };
+}
+function violation2(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
 function describeAbsence(value) {
@@ -7949,6 +8463,12 @@ function parseAssignmentFields(assignmentText) {
       fields.workingBranch = value;
     else if (label === "Branch policy")
       fields.branchPolicy = value;
+    else if (label === "Worktree path")
+      fields.worktreePath = value;
+    else if (label === "Write domain")
+      fields.writeDomain = value;
+    else if (label === "Control write paths")
+      fields.controlWritePaths = value.split(",").map((item) => item.trim()).filter(Boolean);
     else if (BUDGET_LABELS.includes(label))
       fields.budget = value;
     else if (RETURN_SHAPE_LABELS.includes(label))
@@ -7981,11 +8501,11 @@ function parseEnforcementFlag(text4) {
 }
 function requireField(violations, value, label, code2) {
   if (value === undefined) {
-    const v = violation("high", `assignment.field.missing-${code2}`, `missing required Assignment field: ${label}`, `add "**${label}**: <value>" to the Assignment`);
+    const v = violation2("high", `assignment.field.missing-${code2}`, `missing required Assignment field: ${label}`, `add "**${label}**: <value>" to the Assignment`);
     v.aliases = [`assignment.presence.missing-${code2}`];
     violations.push(v);
   } else if (value === "") {
-    const v = violation("high", `assignment.field.invalid-${code2}`, `${label} must be non-empty`, `fill in "**${label}**: <value>"`);
+    const v = violation2("high", `assignment.field.invalid-${code2}`, `${label} must be non-empty`, `fill in "**${label}**: <value>"`);
     v.aliases = [`assignment.presence.missing-${code2}`];
     violations.push(v);
   }
@@ -8038,6 +8558,25 @@ function validateAssignmentFields(assignmentText, opts = {}) {
   for (const { key, label, code: code2 } of REQUIRED_FIELDS) {
     requireField(violations, fields[key], label, code2);
   }
+  if (fields.writeDomain !== undefined && fields.writeDomain !== "control" && fields.writeDomain !== "work") {
+    violations.push(violation2("high", "assignment.field.write-domain-unknown", `unknown Write domain: ${JSON.stringify(fields.writeDomain)}`, 'set "Write domain: control" or "Write domain: work"'));
+  }
+  if (fields.writeDomain === "control") {
+    if (describeAbsence(fields.worktreePath) !== undefined) {
+      violations.push(violation2("high", "assignment.field.control-write-missing-worktree", "control-domain assignment requires Worktree path", 'add "Worktree path: <control checkout path>"'));
+    }
+    if (describeAbsence(fields.workingBranch) !== undefined && describeAbsence(fields.branchPolicy) !== undefined) {
+      violations.push(violation2("high", "assignment.field.control-write-missing-branch", "control-domain assignment requires a branch form", `add exactly one of: ${BRANCH_FORMS_HINT}`));
+    }
+    if (!fields.controlWritePaths?.length) {
+      violations.push(violation2("high", "assignment.field.control-write-paths-missing", "control-domain assignment requires Control write paths", 'add "Control write paths: .mstar/plans/run.md"'));
+    }
+    for (const target of fields.controlWritePaths ?? []) {
+      if (/[*?[\]{}]/.test(target)) {
+        violations.push(violation2("high", "assignment.field.control-write-path-invalid", `Control write paths does not accept globs: ${target}`, 'list concrete paths in "Control write paths"'));
+      }
+    }
+  }
   const role = (fields.executeAs ?? "").trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? "";
   const reviewSeat = REVIEW_SEAT_ROLES.includes(role);
   const category = (fields.taskCategory ?? "").replace(/^[*_`"'\s]+/, "").toLowerCase();
@@ -8062,13 +8601,13 @@ function validateAssignmentFields(assignmentText, opts = {}) {
       const missing = describeAbsence(field.value);
       if (missing === undefined)
         continue;
-      violations.push(violation("high", field.code, `${subject} must declare a round ${field.label} — ${missing}`, field.fix));
+      violations.push(violation2("high", field.code, `${subject} must declare a round ${field.label} — ${missing}`, field.fix));
     }
   }
   if (!reviewSeat && !auditRound) {
     const missing = describeAbsence(fields.taskBudget);
     if (missing !== undefined) {
-      violations.push(violation("high", "assignment.field.task-budget-missing", `implement/ops round "${role}" must declare a Task budget — ${missing}`, `add "**Task budget (implement / ops rounds)**: <one implementer round closing the task's declared Files list and verification gates> — capacity contract spec § A1/A2"`));
+      violations.push(violation2("high", "assignment.field.task-budget-missing", `implement/ops round "${role}" must declare a Task budget — ${missing}`, `add "**Task budget (implement / ops rounds)**: <one implementer round closing the task's declared Files list and verification gates> — capacity contract spec § A1/A2"`));
     }
   }
   if (writable) {
@@ -8077,31 +8616,74 @@ function validateAssignmentFields(assignmentText, opts = {}) {
     const formCount = Number(workingPresent) + Number(policyPresent);
     const forms = parseAssignmentBranchForms(assignmentText);
     if (formCount === 0) {
-      violations.push(violation("high", "assignment.field.branch-missing", "writable assignment must contain exactly one branch form", `add exactly one of: ${BRANCH_FORMS_HINT}`));
+      violations.push(violation2("high", "assignment.field.branch-missing", "writable assignment must contain exactly one branch form", `add exactly one of: ${BRANCH_FORMS_HINT}`));
     } else if (formCount > 1) {
-      violations.push(violation("high", "assignment.field.branch-multiple", `writable assignment contains ${formCount} branch forms (Working branch + Branch policy) — exactly one required`, `keep exactly one of: ${BRANCH_FORMS_HINT}`));
+      violations.push(violation2("high", "assignment.field.branch-multiple", `writable assignment contains ${formCount} branch forms (Working branch + Branch policy) — exactly one required`, `keep exactly one of: ${BRANCH_FORMS_HINT}`));
     } else if (workingPresent) {
       const create = forms.createForm;
       if (create !== undefined && (create.base === undefined || create.base.trim() === "" || create.name.trim() === "")) {
-        violations.push(violation("high", "assignment.field.branch-missing-base", `create-form Working branch is incomplete: "${fields.workingBranch}" (expected "create <new-branch> from <base>")`, "write both the new branch name and the ancestor branch after `from` (main / existing feature branch / remote-tracking branch / `current`)"));
+        violations.push(violation2("high", "assignment.field.branch-missing-base", `create-form Working branch is incomplete: "${fields.workingBranch}" (expected "create <new-branch> from <base>")`, "write both the new branch name and the ancestor branch after `from` (main / existing feature branch / remote-tracking branch / `current`)"));
       }
     } else if (policyPresent) {
       const direct = forms.directOn;
       if (direct === undefined) {
-        violations.push(violation("high", "assignment.field.branch-policy-missing-branch", `unparseable Branch policy: "${fields.branchPolicy}" (expected "direct on <branch> — <reason>")`, "start the field with `direct on <branch>`"));
+        violations.push(violation2("high", "assignment.field.branch-policy-missing-branch", `unparseable Branch policy: "${fields.branchPolicy}" (expected "direct on <branch> — <reason>")`, "start the field with `direct on <branch>`"));
       } else if (direct.reason === "") {
-        violations.push(violation("high", "assignment.field.branch-policy-missing-reason", `Branch policy "direct on ${direct.branch}" is missing the reason`, 'append "— <reason>" after the branch name'));
+        violations.push(violation2("high", "assignment.field.branch-policy-missing-reason", `Branch policy "direct on ${direct.branch}" is missing the reason`, 'append "— <reason>" after the branch name'));
       }
     }
   }
   return { ok: violations.length === 0, violations };
+}
+function validateControlWriteAssignment(text4, opts = {}) {
+  const cwd = opts.cwd ?? process.cwd();
+  const unresolved = violation2("high", "dispatch.control-write.control-root-unresolved", `cannot resolve the control checkout from ${cwd}`, "run mstar dispatch validate from a checkout of this repository");
+  try {
+    const main = readMainWorktree(opts.controlRoot ?? cwd);
+    if (main === null)
+      return [unresolved];
+    const controlRoot = canonicalizeNearestExisting(main.root);
+    if (opts.controlRoot !== undefined && canonicalizeNearestExisting(opts.controlRoot) !== controlRoot)
+      return [unresolved];
+    const fields = parseAssignmentFields(text4);
+    const forms = parseAssignmentBranchForms(text4);
+    const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch;
+    const violations = [];
+    const worktree = fields.worktreePath && fields.worktreePath !== "N/A" ? resolve6(opts.assignmentDir ?? cwd, fields.worktreePath) : undefined;
+    if (worktree !== undefined && canonicalizeNearestExisting(worktree) !== controlRoot) {
+      violations.push(violation2("high", "dispatch.control-write.worktree-not-control", `Worktree path "${fields.worktreePath}" is not the control checkout ${controlRoot}`, `set "Worktree path: ${controlRoot}" in the Assignment`));
+    }
+    if (branch && branch !== "N/A" && branch !== main.branch) {
+      violations.push(violation2("high", "dispatch.control-write.branch-mismatch", `Assignment branch "${branch}" does not match the control checkout branch "${main.branch || "(detached)"}"`, main.branch ? `set "Working branch: ${main.branch}" in the Assignment` : "attach the control checkout to a branch, then set Working branch to that branch"));
+    }
+    for (const declared of fields.controlWritePaths ?? []) {
+      if (/[*?[\]{}]/.test(declared) || !isAbsolute5(declared) && worktree === undefined)
+        continue;
+      const target = resolve6(worktree ?? controlRoot, declared);
+      const directoryOnly = declared.endsWith("/");
+      const ownership = probePathOwnership({ path: target, kind: directoryOnly ? "directory" : "file" }, controlRoot);
+      const directory = directoryOnly ? ownership : probePathOwnership({ path: target, kind: "directory" }, controlRoot);
+      if (ownership.ignored === false || directory.ignored === false) {
+        violations.push(violation2("high", "dispatch.control-write.target-committable", `control write target ${target} is not Git-ignored and content there would be committed`, "declare only gitignored process targets, or dispatch the change on a work branch with Write domain: work"));
+      }
+      if (ownership.ignored === null || directory.ignored === null) {
+        violations.push(violation2("medium", "dispatch.control-write.target-unverifiable", `cannot verify the Git ignore status of control write target ${target}`, `run git -C "${controlRoot}" check-ignore -v -- "${target}" "${target}/", then rerun mstar dispatch validate`));
+      }
+      if (ownership.checkoutRoot === null || canonicalizeNearestExisting(ownership.checkoutRoot) !== controlRoot) {
+        violations.push(violation2("high", "dispatch.control-write.target-outside-control", `control write target ${target} is not in the control checkout ${controlRoot}`, `set Control write paths to targets inside ${controlRoot}`));
+      }
+    }
+    return violations;
+  } catch {
+    return [unresolved];
+  }
 }
 function assertDefaultBranchProtected(branch, opts = {}) {
   const defaultBranches = opts.defaultBranches ?? ["main", "master"];
   const violations = [];
   const normalized = branch.trim();
   if (normalized !== "" && defaultBranches.includes(normalized) && opts.directOnException !== true) {
-    violations.push(violation("high", "dispatch.default-branch.protected", `writable work on default protected branch "${normalized}" requires an explicit direct-on exception`, `add "Branch policy: direct on ${normalized} — <reason>" to the Assignment, or use a feature branch`));
+    violations.push(violation2("high", "dispatch.default-branch.protected", `writable work on default protected branch "${normalized}" requires an explicit direct-on exception`, `add "Branch policy: direct on ${normalized} — <reason>" to the Assignment, or use a feature branch`));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -8110,7 +8692,7 @@ function executionModeToN(executionMode, opts = {}) {
   const mode = executionMode.trim().toLowerCase().split(/\s+/)[0] ?? "";
   let n;
   if (mode === "") {
-    violations.push(violation("high", "dispatch.execution-mode.missing", "missing required Assignment field: Execution mode", 'add "**Execution mode**: sdd | inline | targeted"'));
+    violations.push(violation2("high", "dispatch.execution-mode.missing", "missing required Assignment field: Execution mode", 'add "**Execution mode**: sdd | inline | targeted"'));
   } else if (mode === "sdd") {
     n = 3;
   } else if (mode === "inline") {
@@ -8118,14 +8700,14 @@ function executionModeToN(executionMode, opts = {}) {
   } else if (mode === "targeted") {
     const seats = [...new Set((opts.seats ?? []).map((s) => s.trim()).filter((s) => s !== ""))];
     if (seats.length === 0) {
-      violations.push(violation("high", "dispatch.execution-mode.missing-seats", 'execution mode "targeted" requires listed reviewer seats', 'add "QC re-review: targeted — reviewers: <role-id>, …" to the Assignment and pass the seats'));
+      violations.push(violation2("high", "dispatch.execution-mode.missing-seats", 'execution mode "targeted" requires listed reviewer seats', 'add "QC re-review: targeted — reviewers: <role-id>, …" to the Assignment and pass the seats'));
     } else if (seats.length > 3) {
-      violations.push(violation("high", "dispatch.execution-mode.too-many-seats", `execution mode "targeted" lists ${seats.length} reviewer seats — at most 3 (targeted re-review seats are the tri seats, N = 1–3)`, "list at most three reviewer seats for the targeted re-review"));
+      violations.push(violation2("high", "dispatch.execution-mode.too-many-seats", `execution mode "targeted" lists ${seats.length} reviewer seats — at most 3 (targeted re-review seats are the tri seats, N = 1–3)`, "list at most three reviewer seats for the targeted re-review"));
     } else {
       n = seats.length;
     }
   } else {
-    violations.push(violation("high", "dispatch.execution-mode.unknown", `unknown execution mode "${executionMode.trim()}" (expected sdd | inline | targeted)`, "fix the Execution mode field"));
+    violations.push(violation2("high", "dispatch.execution-mode.unknown", `unknown execution mode "${executionMode.trim()}" (expected sdd | inline | targeted)`, "fix the Execution mode field"));
   }
   return n === undefined ? { ok: false, violations } : { ok: true, violations, n };
 }
@@ -8139,7 +8721,7 @@ function assertTriIdentity(reviewerRoles) {
   return {
     ok: false,
     violations: [
-      violation("high", "dispatch.tri-identity.invalid", `tri-review initial wave must be exactly qc-specialist / qc-specialist-2 / qc-specialist-3, got: ${got}`, "dispatch qc-specialist, qc-specialist-2 and qc-specialist-3 for the initial wave")
+      violation2("high", "dispatch.tri-identity.invalid", `tri-review initial wave must be exactly qc-specialist / qc-specialist-2 / qc-specialist-3, got: ${got}`, "dispatch qc-specialist, qc-specialist-2 and qc-specialist-3 for the initial wave")
     ]
   };
 }
@@ -8163,7 +8745,9 @@ function composeDispatchGate(text4, opts = {}) {
     if (caller.trim() !== "" || opts.callerRequired === true) {
       violations.push(...antiRecursionPrecheck(caller, parseAssignmentFields(text4).executeAs ?? "").violations);
     }
-    if (writable) {
+    if (writable && parseAssignmentFields(text4).writeDomain === "control") {
+      violations.push(...validateControlWriteAssignment(text4, { cwd: opts.cwd }));
+    } else if (writable) {
       const forms = parseAssignmentBranchForms(text4);
       const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH;
       if (branch !== undefined && branch.trim() !== "") {
@@ -8172,8 +8756,8 @@ function composeDispatchGate(text4, opts = {}) {
       }
     }
     const enforcement = parseEnforcementFlag(assignmentHeaderRegion(text4));
-    const gate = { ok: violations.length === 0, violations };
-    return { ...applyEnforcement(gate, { hard: enforcement.hard }), shaped: true, enforcement };
+    const gate2 = { ok: violations.length === 0, violations };
+    return { ...applyEnforcement(gate2, { hard: enforcement.hard }), shaped: true, enforcement };
   } catch {
     return silent;
   }
@@ -8185,7 +8769,7 @@ function antiRecursionPrecheck(subagentType, executeAs) {
     return {
       ok: false,
       violations: [
-        violation("critical", "dispatch.anti-recursion.empty-binding", `empty caller role binding — the host cannot report which agent is calling, so anti-recursion cannot be proven (a dispatch could silently recurse)`, "declare the dispatching agent's own role binding (dsh Config `dispatchBinding`) before dispatching")
+        violation2("critical", "dispatch.anti-recursion.empty-binding", `empty caller role binding — the host cannot report which agent is calling, so anti-recursion cannot be proven (a dispatch could silently recurse)`, "declare the dispatching agent's own role binding (dsh Config `dispatchBinding`) before dispatching")
       ]
     };
   }
@@ -8193,7 +8777,7 @@ function antiRecursionPrecheck(subagentType, executeAs) {
     return {
       ok: false,
       violations: [
-        violation("critical", "dispatch.anti-recursion.self-type", `recursive dispatch refused: role binding "${subagentType}" equals Execute as "${executeAs}" (leaf executors must not re-invoke their own role)`, "complete the work in this session, or return Blocked to project-manager")
+        violation2("critical", "dispatch.anti-recursion.self-type", `recursive dispatch refused: role binding "${subagentType}" equals Execute as "${executeAs}" (leaf executors must not re-invoke their own role)`, "complete the work in this session, or return Blocked to project-manager")
       ]
     };
   }
@@ -8212,7 +8796,7 @@ function rowPlanIds(row) {
 function rowPlanId(row) {
   return rowPlanIds(row)[0];
 }
-function violation2(severity, code2, message, fix) {
+function violation3(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
 function normalizeSeverity(value) {
@@ -8229,19 +8813,19 @@ function isOpenResidual(entry) {
 }
 function validateNonEmptyString(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation2("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation3("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation2("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation3("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 function validatePlanRow(row) {
   const violations = [];
   if (!isPlainObject(row)) {
-    return { ok: false, violations: [violation2("high", "status.plan-row.invalid", "plan row must be an object")] };
+    return { ok: false, violations: [violation3("high", "status.plan-row.invalid", "plan row must be an object")] };
   }
   const { id, plan_id: planId, title, file, status, metadata } = row;
   if (id === undefined && planId === undefined) {
-    violations.push(violation2("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
+    violations.push(violation3("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
   } else {
     if (id !== undefined) {
       validateNonEmptyString(violations, id, "id", "status.plan-row.missing-id", "status.plan-row.invalid-id");
@@ -8250,25 +8834,25 @@ function validatePlanRow(row) {
       validateNonEmptyString(violations, planId, "plan_id", "status.plan-row.missing-plan-id", "status.plan-row.invalid-plan-id");
     }
     if (id !== undefined && planId !== undefined && id !== planId) {
-      violations.push(violation2("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
+      violations.push(violation3("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
     }
   }
   validateNonEmptyString(violations, title, "title", "status.plan-row.missing-title", "status.plan-row.invalid-title");
   validateNonEmptyString(violations, file, "file", "status.plan-row.missing-file", "status.plan-row.invalid-file");
   if (status === undefined) {
-    violations.push(violation2("high", "status.plan-row.missing-status", "missing required field: status"));
+    violations.push(violation3("high", "status.plan-row.missing-status", "missing required field: status"));
   } else if (typeof status !== "string" || !PLAN_STATUSES.includes(status)) {
-    violations.push(violation2("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
+    violations.push(violation3("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
   }
   if (metadata !== undefined && !isPlainObject(metadata)) {
-    violations.push(violation2("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
+    violations.push(violation3("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
   }
   return { ok: violations.length === 0, violations };
 }
 function validateResidual(entry) {
   const violations = [];
   if (!isPlainObject(entry)) {
-    return { ok: false, violations: [violation2("high", "status.residual.invalid", "residual entry must be an object")] };
+    return { ok: false, violations: [violation3("high", "status.residual.invalid", "residual entry must be an object")] };
   }
   const { id, title, severity, source, scope, decision, owner, target, tracking, detail_doc, lifecycle, closed_at } = entry;
   validateNonEmptyString(violations, id, "id", "status.residual.missing-id", "status.residual.invalid-id");
@@ -8277,42 +8861,42 @@ function validateResidual(entry) {
   validateNonEmptyString(violations, scope, "scope", "status.residual.missing-scope", "status.residual.invalid-scope");
   validateNonEmptyString(violations, owner, "owner", "status.residual.missing-owner", "status.residual.invalid-owner");
   if (severity === undefined) {
-    violations.push(violation2("high", "status.residual.missing-severity", "missing required field: severity"));
+    violations.push(violation3("high", "status.residual.missing-severity", "missing required field: severity"));
   } else if (typeof severity !== "string" || !SEVERITY_ORDER.includes(severity) && severity !== "warning") {
-    violations.push(violation2("medium", "status.residual.invalid-severity", `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`));
+    violations.push(violation3("medium", "status.residual.invalid-severity", `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`));
   } else if (severity === "warning") {
-    violations.push(violation2("low", "status.residual.legacy-warning", `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`, `use "low" (normalizeSeverity maps 'warning' → 'low')`));
+    violations.push(violation3("low", "status.residual.legacy-warning", `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`, `use "low" (normalizeSeverity maps 'warning' → 'low')`));
   }
   if (decision === undefined) {
-    violations.push(violation2("high", "status.residual.missing-decision", "missing required field: decision"));
+    violations.push(violation3("high", "status.residual.missing-decision", "missing required field: decision"));
   } else if (typeof decision !== "string" || !RESIDUAL_DECISIONS.includes(decision)) {
-    violations.push(violation2("medium", "status.residual.invalid-decision", `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`));
+    violations.push(violation3("medium", "status.residual.invalid-decision", `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`));
   }
   if (target === undefined) {
-    violations.push(violation2("high", "status.residual.missing-target", "missing required field: target"));
+    violations.push(violation3("high", "status.residual.missing-target", "missing required field: target"));
   } else if (typeof target !== "string" && target !== null) {
-    violations.push(violation2("medium", "status.residual.invalid-target", "target must be a string or null"));
+    violations.push(violation3("medium", "status.residual.invalid-target", "target must be a string or null"));
   }
   if (tracking === undefined) {
-    violations.push(violation2("high", "status.residual.missing-tracking", "missing required field: tracking"));
+    violations.push(violation3("high", "status.residual.missing-tracking", "missing required field: tracking"));
   } else if (typeof tracking !== "string" && tracking !== null) {
-    violations.push(violation2("medium", "status.residual.invalid-tracking", "tracking must be a string or null"));
+    violations.push(violation3("medium", "status.residual.invalid-tracking", "tracking must be a string or null"));
   }
   if (detail_doc !== undefined && typeof detail_doc !== "string" && detail_doc !== null) {
-    violations.push(violation2("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
+    violations.push(violation3("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
   }
   if (closed_at !== undefined && (typeof closed_at !== "string" || !DATE_RE.test(closed_at))) {
-    violations.push(violation2("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
+    violations.push(violation3("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
   }
   if (lifecycle !== undefined) {
     if (typeof lifecycle !== "string" || !RESIDUAL_LIFECYCLES.includes(lifecycle)) {
-      violations.push(violation2("medium", "status.residual.invalid-lifecycle", `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`));
+      violations.push(violation3("medium", "status.residual.invalid-lifecycle", `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`));
     } else if (lifecycle !== "open") {
       if (closed_at === undefined) {
-        violations.push(violation2("high", "status.residual.closed-missing-closed-at", `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`, 'set closed_at (e.g. "2026-08-08")'));
+        violations.push(violation3("high", "status.residual.closed-missing-closed-at", `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`, 'set closed_at (e.g. "2026-08-08")'));
       }
       if (entry.closure_note === undefined) {
-        violations.push(violation2("medium", "status.residual.closed-missing-closure-note", `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`, "add closure_note explaining the close"));
+        violations.push(violation3("medium", "status.residual.closed-missing-closure-note", `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`, "add closure_note explaining the close"));
       }
     }
   }
@@ -8330,22 +8914,22 @@ function validateWorkflowEntry(entry) {
   if (!isPlainObject(entry)) {
     return {
       ok: false,
-      violations: [violation2("high", "status.workflow.invalid", "workflow entry must be an object")]
+      violations: [violation3("high", "status.workflow.invalid", "workflow entry must be an object")]
     };
   }
   validateNonEmptyString(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
   if (entry.type === undefined) {
-    violations.push(violation2("high", "status.workflow.missing-type", "missing required field: type"));
+    violations.push(violation3("high", "status.workflow.missing-type", "missing required field: type"));
   } else if (typeof entry.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(entry.type)) {
-    violations.push(violation2("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
+    violations.push(violation3("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
   }
   validateNonEmptyString(violations, entry.started_at, "started_at", "status.workflow.missing-started-at", "status.workflow.invalid-started-at");
   if (entry.dir === undefined) {
-    violations.push(violation2("high", "status.workflow.missing-dir", "missing required field: dir"));
+    violations.push(violation3("high", "status.workflow.missing-dir", "missing required field: dir"));
   } else if (typeof entry.dir !== "string" || entry.dir.trim() === "") {
-    violations.push(violation2("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
+    violations.push(violation3("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
   } else if (!isHarnessRelativePath(entry.dir)) {
-    violations.push(violation2("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
+    violations.push(violation3("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -8355,25 +8939,25 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (typeof docOrPath === "string") {
     try {
       doc = readJson(docOrPath);
-      harnessDir = dirname5(resolve4(docOrPath));
+      harnessDir = dirname6(resolve7(docOrPath));
     } catch (error) {
       return {
         ok: false,
-        violations: [violation2("high", "status.invalid-json", error.message)]
+        violations: [violation3("high", "status.invalid-json", error.message)]
       };
     }
   } else {
     doc = docOrPath;
   }
   if (!isPlainObject(doc)) {
-    return { ok: false, violations: [violation2("high", "status.invalid-doc", "status document must be an object")] };
+    return { ok: false, violations: [violation3("high", "status.invalid-doc", "status document must be an object")] };
   }
   const upgrade = `mstar store upgrade --operator <name> --harness ${harnessDir === undefined ? "<control-root>" : `'${harnessDir.replace(/'/g, "'\\''")}'`}`;
   if (doc.version !== 2) {
     return {
       ok: false,
       violations: [
-        violation2("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
+        violation3("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
       ]
     };
   }
@@ -8381,7 +8965,7 @@ function validateStatusV2(docOrPath, opts = {}) {
     return {
       ok: false,
       violations: [
-        violation2("high", "status.migration-required", `v1-shaped status.json (root plans[]) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
+        violation3("high", "status.migration-required", `v1-shaped status.json (root plans[]) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
       ]
     };
   }
@@ -8389,27 +8973,27 @@ function validateStatusV2(docOrPath, opts = {}) {
     return {
       ok: false,
       violations: [
-        violation2("high", "status.migration-required", `v1-shaped status.json (root residual_findings) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
+        violation3("high", "status.migration-required", `v1-shaped status.json (root residual_findings) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
       ]
     };
   }
   const violations = [];
   if (doc.updated_at === undefined) {
-    violations.push(violation2("high", "status.missing-updated-at", "missing required field: updated_at"));
+    violations.push(violation3("high", "status.missing-updated-at", "missing required field: updated_at"));
   } else if (typeof doc.updated_at !== "string" || !DATE_RE.test(doc.updated_at)) {
-    violations.push(violation2("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
+    violations.push(violation3("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
   }
   if (doc.workflows === undefined) {
-    violations.push(violation2("high", "status.missing-workflows", "missing required field: workflows"));
+    violations.push(violation3("high", "status.missing-workflows", "missing required field: workflows"));
   } else if (!Array.isArray(doc.workflows)) {
-    violations.push(violation2("high", "status.invalid-workflows", "workflows must be an array"));
+    violations.push(violation3("high", "status.invalid-workflows", "workflows must be an array"));
   } else {
     const seen = new Set;
     for (const entry of doc.workflows) {
       violations.push(...validateWorkflowEntry(entry).violations);
       if (isPlainObject(entry) && typeof entry.id === "string") {
         if (seen.has(entry.id)) {
-          violations.push(violation2("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
+          violations.push(violation3("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
         }
         seen.add(entry.id);
       }
@@ -8418,40 +9002,40 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (harnessDir !== undefined && Array.isArray(doc.workflows)) {
     let realHarnessDir = null;
     try {
-      realHarnessDir = realpathSync3(harnessDir);
+      realHarnessDir = realpathSync4(harnessDir);
     } catch {}
     for (const entry of doc.workflows) {
       if (!isPlainObject(entry) || typeof entry.dir !== "string")
         continue;
-      const relSnapshot = join5(entry.dir, WORKFLOW_SNAPSHOT_FILE);
-      const snapshotPath = join5(harnessDir, relSnapshot);
+      const relSnapshot = join6(entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join6(harnessDir, relSnapshot);
       const label = typeof entry.id === "string" ? entry.id : relSnapshot;
       let physical;
       try {
-        physical = realpathSync3(snapshotPath);
+        physical = realpathSync4(snapshotPath);
       } catch {
-        violations.push(violation2("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
+        violations.push(violation3("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
         continue;
       }
-      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep2}`)) {
-        violations.push(violation2("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
+      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep3}`)) {
+        violations.push(violation3("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
         continue;
       }
       let snapshot;
       try {
         snapshot = readJson(snapshotPath);
       } catch (error) {
-        violations.push(violation2("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
+        violations.push(violation3("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
         continue;
       }
       if (typeof snapshot.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(snapshot.status)) {
-        violations.push(violation2("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
+        violations.push(violation3("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
       }
       if (typeof entry.type === "string" && typeof snapshot.type === "string" && entry.type !== snapshot.type) {
-        violations.push(violation2("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
+        violations.push(violation3("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
       }
       if (typeof entry.started_at === "string" && typeof snapshot.started_at === "string" && entry.started_at !== snapshot.started_at) {
-        violations.push(violation2("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`mstar workflow register\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
+        violations.push(violation3("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`mstar workflow register\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
       }
     }
   }
@@ -8459,7 +9043,7 @@ function validateStatusV2(docOrPath, opts = {}) {
 }
 function resolveCompassEnforcement(harnessDir) {
   const iterationsDir = resolveIterationDir(harnessDir);
-  if (!existsSync4(iterationsDir))
+  if (!existsSync5(iterationsDir))
     return { hard: false, source: "none" };
   let entries;
   try {
@@ -8470,8 +9054,8 @@ function resolveCompassEnforcement(harnessDir) {
   for (const entry of entries) {
     if (!entry.isDirectory())
       continue;
-    const compassPath = join5(iterationsDir, entry.name, "delivery-compass.md");
-    if (!existsSync4(compassPath))
+    const compassPath = join6(iterationsDir, entry.name, "delivery-compass.md");
+    if (!existsSync5(compassPath))
       continue;
     let content3;
     try {
@@ -8490,8 +9074,8 @@ function resolveCompassEnforcement(harnessDir) {
   return { hard: false, source: "none" };
 }
 function resolveMstarcEnforcement(harnessDir) {
-  const dir = resolve4(harnessDir);
-  const rc = loadMstarc(dir, dirname5(dir));
+  const dir = resolve7(harnessDir);
+  const rc = loadMstarc(dir, dirname6(dir));
   const value = rc?.config.enforcement;
   if (value === "hard")
     return { hard: true, source: "mstarc" };
@@ -8576,7 +9160,7 @@ function validateCompassShape(doc) {
     }
   };
 }
-function violation3(severity, code2, message, fix) {
+function violation4(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
 function isPlainObject2(value) {
@@ -8587,7 +9171,7 @@ function validateCompassFrontmatter(doc) {
     return {
       ok: false,
       violations: [
-        violation3("medium", "COMPASS_INVALID_FIELD", "Compass frontmatter must be a YAML object with iteration_id / start_date / status / iteration_base_branch / target_branch (template: mstar-iteration §1.3)", "Fix the frontmatter of {ITERATION_DIR}/<iteration-id>/delivery-compass.md")
+        violation4("medium", "COMPASS_INVALID_FIELD", "Compass frontmatter must be a YAML object with iteration_id / start_date / status / iteration_base_branch / target_branch (template: mstar-iteration §1.3)", "Fix the frontmatter of {ITERATION_DIR}/<iteration-id>/delivery-compass.md")
       ]
     };
   }
@@ -8597,17 +9181,17 @@ function validateCompassFrontmatter(doc) {
       ok: false,
       violations: parsed.issues.map((issue) => {
         const field = issue.path.join(".") || "(root)";
-        return violation3("medium", "COMPASS_INVALID_FIELD", `Compass frontmatter field '${field}' is invalid: ${issue.message}`, `Fix '${field}' in {ITERATION_DIR}/<iteration-id>/delivery-compass.md frontmatter (template: mstar-iteration §1.3)`);
+        return violation4("medium", "COMPASS_INVALID_FIELD", `Compass frontmatter field '${field}' is invalid: ${issue.message}`, `Fix '${field}' in {ITERATION_DIR}/<iteration-id>/delivery-compass.md frontmatter (template: mstar-iteration §1.3)`);
       })
     };
   }
   const violations = [];
   const { status, end_date } = parsed.data;
   if (status === "completed" && end_date === undefined) {
-    violations.push(violation3("high", "COMPASS_END_DATE_REQUIRED", "Compass frontmatter status is 'completed' but end_date is missing — end_date is required at iteration-close (mstar-iteration §3.4, template Fields guide)", "Add `end_date: YYYY-MM-DD` to the frontmatter"));
+    violations.push(violation4("high", "COMPASS_END_DATE_REQUIRED", "Compass frontmatter status is 'completed' but end_date is missing — end_date is required at iteration-close (mstar-iteration §3.4, template Fields guide)", "Add `end_date: YYYY-MM-DD` to the frontmatter"));
   }
   if (status !== "completed" && end_date !== undefined) {
-    violations.push(violation3("medium", "COMPASS_END_DATE_NOT_ALLOWED", `Compass frontmatter sets end_date while status is '${status}' — end_date is only written at iteration-close (mstar-iteration §3.4)`, "Remove end_date until iteration-close"));
+    violations.push(violation4("medium", "COMPASS_END_DATE_NOT_ALLOWED", `Compass frontmatter sets end_date while status is '${status}' — end_date is only written at iteration-close (mstar-iteration §3.4)`, "Remove end_date until iteration-close"));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -8631,17 +9215,17 @@ function findPlanRow(snapshotDoc, planId) {
 function entryPlansAllDone(snapshotDoc, registered) {
   const violations = [];
   if (registered.length === 0) {
-    violations.push(violation3("medium", "COMPASS_NO_PLANS", "Compass frontmatter registers no plans — the all-plans-Done transition cannot be verified (mstar-iteration §1.3 / Phase transition gates)", "List the iteration's plan ids in the compass frontmatter `plans`"));
+    violations.push(violation4("medium", "COMPASS_NO_PLANS", "Compass frontmatter registers no plans — the all-plans-Done transition cannot be verified (mstar-iteration §1.3 / Phase transition gates)", "List the iteration's plan ids in the compass frontmatter `plans`"));
     return violations;
   }
   for (const planId of registered) {
     const row = findPlanRow(snapshotDoc, planId);
     if (row === null) {
-      violations.push(violation3("high", "PLAN_NOT_IN_STATUS", `Plan '${planId}' is registered in the compass frontmatter but has no row in the workflow snapshot plans[] (mstar-iteration §3.1 entry item 1)`, "Add the plan row to {HARNESS_DIR}/workflows/<id>/snapshot.json"));
+      violations.push(violation4("high", "PLAN_NOT_IN_STATUS", `Plan '${planId}' is registered in the compass frontmatter but has no row in the workflow snapshot plans[] (mstar-iteration §3.1 entry item 1)`, "Add the plan row to {HARNESS_DIR}/workflows/<id>/snapshot.json"));
       continue;
     }
     if (row.status !== PLAN_STATUS_DONE) {
-      violations.push(violation3("high", "PLAN_NOT_DONE", `Plan '${planId}' status is ${JSON.stringify(row.status)} in the workflow snapshot — all compass-registered plans must be 'Done' before iteration-close (mstar-iteration §3.1 entry item 1)`));
+      violations.push(violation4("high", "PLAN_NOT_DONE", `Plan '${planId}' status is ${JSON.stringify(row.status)} in the workflow snapshot — all compass-registered plans must be 'Done' before iteration-close (mstar-iteration §3.1 entry item 1)`));
     }
   }
   return violations;
@@ -8652,11 +9236,11 @@ function entryFrontmatterComplete(compassDoc) {
 function exitFrontmatterClosed(compassDoc) {
   const violations = [];
   if (compassDoc.status !== "completed") {
-    violations.push(violation3("high", "EXIT_STATUS_NOT_COMPLETED", `Compass frontmatter status must be 'completed' at close exit — current: ${JSON.stringify(compassDoc.status)} (mstar-iteration §3.4 / §3.5 exit item 4)`));
+    violations.push(violation4("high", "EXIT_STATUS_NOT_COMPLETED", `Compass frontmatter status must be 'completed' at close exit — current: ${JSON.stringify(compassDoc.status)} (mstar-iteration §3.4 / §3.5 exit item 4)`));
   }
   const endDate = compassDoc.end_date;
   if (typeof endDate !== "string" || !DATE_RE2.test(endDate)) {
-    violations.push(violation3("high", "EXIT_END_DATE_REQUIRED", "Compass frontmatter end_date (YYYY-MM-DD) is required when closing (mstar-iteration §3.4 / §3.5 exit item 4)"));
+    violations.push(violation4("high", "EXIT_END_DATE_REQUIRED", "Compass frontmatter end_date (YYYY-MM-DD) is required when closing (mstar-iteration §3.4 / §3.5 exit item 4)"));
   }
   return violations;
 }
@@ -8664,9 +9248,9 @@ function exitBranchCheck(opts) {
   const violations = [];
   const { currentBranch, specIntegrationBranch } = opts;
   if (currentBranch === undefined || specIntegrationBranch === undefined) {
-    violations.push(violation3("medium", "EXIT_BRANCH_UNVERIFIABLE", "Cannot verify the current branch is spec_integration_branch — missing currentBranch / specIntegrationBranch probe inputs (mstar-iteration §3.5 exit item 5)"));
+    violations.push(violation4("medium", "EXIT_BRANCH_UNVERIFIABLE", "Cannot verify the current branch is spec_integration_branch — missing currentBranch / specIntegrationBranch probe inputs (mstar-iteration §3.5 exit item 5)"));
   } else if (currentBranch !== specIntegrationBranch) {
-    violations.push(violation3("high", "EXIT_BRANCH_MISMATCH", `Current branch '${currentBranch}' is not the spec_integration_branch '${specIntegrationBranch}' (mstar-iteration §3.5 exit item 5)`));
+    violations.push(violation4("high", "EXIT_BRANCH_MISMATCH", `Current branch '${currentBranch}' is not the spec_integration_branch '${specIntegrationBranch}' (mstar-iteration §3.5 exit item 5)`));
   }
   return violations;
 }
@@ -8675,9 +9259,9 @@ function exitPrBaseCheck(compassDoc, opts) {
   const target = compassDoc.target_branch;
   const { prBaseBranch } = opts;
   if (prBaseBranch === undefined) {
-    violations.push(violation3("medium", "EXIT_PR_BASE_UNVERIFIABLE", "Cannot verify the PR base — missing prBaseBranch probe input (mstar-iteration §3.5 exit item 6)"));
+    violations.push(violation4("medium", "EXIT_PR_BASE_UNVERIFIABLE", "Cannot verify the PR base — missing prBaseBranch probe input (mstar-iteration §3.5 exit item 6)"));
   } else if (typeof target !== "string" || prBaseBranch !== target) {
-    violations.push(violation3("high", "EXIT_PR_BASE_MISMATCH", `PR base '${prBaseBranch}' must equal the compass target_branch '${String(target)}' — not an undocumented branch (mstar-iteration §3.5 exit item 6)`));
+    violations.push(violation4("high", "EXIT_PR_BASE_MISMATCH", `PR base '${prBaseBranch}' must equal the compass target_branch '${String(target)}' — not an undocumented branch (mstar-iteration §3.5 exit item 6)`));
   }
   return violations;
 }
@@ -8822,14 +9406,14 @@ async function evaluatePostMergeCloseFromExecutionAuthority(context, workflowId)
         rootMalformed = true;
       }
       if (rootDoc === null || rootMalformed || !validateStatusV2(rootDoc).ok) {
-        violations.push(violation3("high", "PHASE6_INVALID_ROOT", "The served root register is not a readable v2 workflow registry"));
+        violations.push(violation4("high", "PHASE6_INVALID_ROOT", "The served root register is not a readable v2 workflow registry"));
       }
       if (targetRegistered) {
-        violations.push(violation3("high", "PHASE6_ROOT_ENTRY_PRESENT", `Workflow '${workflowId}' is still registered in the root register — post-merge close unregisters it (removal-at-terminal)`, "Run 'mstar status workflow-close --workflow <id>' to finish the unregister"));
+        violations.push(violation4("high", "PHASE6_ROOT_ENTRY_PRESENT", `Workflow '${workflowId}' is still registered in the root register — post-merge close unregisters it (removal-at-terminal)`, "Run 'mstar status workflow-close --workflow <id>' to finish the unregister"));
       }
       const row = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId);
       if (row === undefined) {
-        violations.push(violation3("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' has no execution authority record`));
+        violations.push(violation4("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' has no execution authority record`));
         return { ok: false, violations };
       }
       let snapshot = null;
@@ -8838,9 +9422,9 @@ async function evaluatePostMergeCloseFromExecutionAuthority(context, workflowId)
         if (isPlainObject2(parsed))
           snapshot = parsed;
         else
-          violations.push(violation3("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' state is not an object`));
+          violations.push(violation4("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' state is not an object`));
       } catch {
-        violations.push(violation3("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' state is not valid JSON`));
+        violations.push(violation4("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' state is not valid JSON`));
       }
       let planRowsReadable = true;
       if (snapshot !== null) {
@@ -8857,12 +9441,12 @@ async function evaluatePostMergeCloseFromExecutionAuthority(context, workflowId)
         const blocking = shape.violations.filter((entry) => entry.code !== LEGACY_WORKTREE_PATH_CODE);
         shapeOk = blocking.length === 0 && planRowsReadable;
         if (!shapeOk) {
-          violations.push(violation3("high", "PHASE6_INVALID_SNAPSHOT", `Workflow state failed v3 snapshot validation — the Phase-6 close state cannot be verified (${blocking.map((entry) => entry.message).join("; ")}${planRowsReadable ? "" : "; plan state is not valid JSON"})`));
+          violations.push(violation4("high", "PHASE6_INVALID_SNAPSHOT", `Workflow state failed v3 snapshot validation — the Phase-6 close state cannot be verified (${blocking.map((entry) => entry.message).join("; ")}${planRowsReadable ? "" : "; plan state is not valid JSON"})`));
         }
       }
       const terminal = snapshot !== null && isTerminalSnapshot(snapshot);
       if (shapeOk && snapshot !== null && !terminal) {
-        violations.push(violation3("high", "PHASE6_NOT_TERMINAL", `Workflow status is ${JSON.stringify(snapshot.status)} — post-merge close requires a terminal state (completed | failed | stopped); run 'mstar status workflow-close --workflow <id>' first`));
+        violations.push(violation4("high", "PHASE6_NOT_TERMINAL", `Workflow status is ${JSON.stringify(snapshot.status)} — post-merge close requires a terminal state (completed | failed | stopped); run 'mstar status workflow-close --workflow <id>' first`));
       }
       if (terminal) {
         const integrationLease = handle.db.prepare("select lease_json from execution_integration_leases where workflow_id = ?").get(workflowId);
@@ -8874,7 +9458,7 @@ async function evaluatePostMergeCloseFromExecutionAuthority(context, workflowId)
               status = parsed.status;
           } catch {}
           if (status !== "released") {
-            violations.push(violation3("high", "PHASE6_DANGLING_LEASE", "The workflow still carries a held integration merge mutex; completed close cannot release it, and failed/stopped close needs an attested recovery of the exact recorded coordinator holder before terminal close.", "Cause: the workflow is stopped and its integration merge lease remains held by the recorded coordinator. Run `mstar status validate` (with no arguments), then locate this workflow by `id` in the returned `data.authority.terminalUnregistered[]` collection, or in `data.authority.terminalAdoptions[]` for an adopted close (a closed lifecycle is out of `data.workflows[]`); that row publishes the terminal status and the header revision. Then run `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --operation <id>`: omit `--expect` and the verb derives the terminal header's current CAS token itself inside the guarded transaction (pass `--expect <workflow-token>` when you already hold the token). That is the terminal lease release: it proceeds only while the lease is still held and the attestation names exactly that recorded holder as stopped, and it releases the lease alone — the terminal header, snapshot, registry membership and session rows stay exactly as recorded."));
+            violations.push(violation4("high", "PHASE6_DANGLING_LEASE", "The workflow still carries a held integration merge mutex; completed close cannot release it, and failed/stopped close needs an attested recovery of the exact recorded coordinator holder before terminal close.", "Cause: the workflow is stopped and its integration merge lease remains held by the recorded coordinator. Run `mstar status validate` (with no arguments), then locate this workflow by `id` in the returned `data.authority.terminalUnregistered[]` collection, or in `data.authority.terminalAdoptions[]` for an adopted close (a closed lifecycle is out of `data.workflows[]`); that row publishes the terminal status and the header revision. Then run `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --operation <id>`: omit `--expect` and the verb derives the terminal header's current CAS token itself inside the guarded transaction (pass `--expect <workflow-token>` when you already hold the token). That is the terminal lease release: it proceeds only while the lease is still held and the attestation names exactly that recorded holder as stopped, and it releases the lease alone — the terminal header, snapshot, registry membership and session rows stay exactly as recorded."));
           }
         }
       }
@@ -8882,7 +9466,7 @@ async function evaluatePostMergeCloseFromExecutionAuthority(context, workflowId)
         violations.push(...consultDeliveryEvidence(snapshot));
         for (const plan of snapshot.plans ?? []) {
           if (isPlainObject2(plan) && plan.status !== PLAN_STATUS_DONE) {
-            violations.push(violation3("high", "PHASE6_PLAN_ROW_NOT_DONE", `Workflow '${workflowId}' is completed but owned plan row '${String(plan.id)}' is ${JSON.stringify(plan.status)} — a completed close requires every plan row Done`, "Bring the owned plan row to Done (or close the lifecycle as failed/stopped with a recorded reason), then re-run 'mstar iteration gate --phase 6 --workflow <id>'"));
+            violations.push(violation4("high", "PHASE6_PLAN_ROW_NOT_DONE", `Workflow '${workflowId}' is completed but owned plan row '${String(plan.id)}' is ${JSON.stringify(plan.status)} — a completed close requires every plan row Done`, "Bring the owned plan row to Done (or close the lifecycle as failed/stopped with a recorded reason), then re-run 'mstar iteration gate --phase 6 --workflow <id>'"));
           }
         }
       }
@@ -8899,10 +9483,10 @@ async function evaluatePostMergeCloseFromExecutionAuthority(context, workflowId)
 function pushCadenceProbe(ciRunning, reviewWaveActive) {
   const violations = [];
   if (ciRunning) {
-    violations.push(violation3("high", "PUSH_BLOCKED_CI", "CI checks are still queued/in_progress on the current head — do not push until the wave completes (mstar-iteration §5.1a push gate 1)", "Wait for CI to settle, then push once with the whole local batch"));
+    violations.push(violation4("high", "PUSH_BLOCKED_CI", "CI checks are still queued/in_progress on the current head — do not push until the wave completes (mstar-iteration §5.1a push gate 1)", "Wait for CI to settle, then push once with the whole local batch"));
   }
   if (reviewWaveActive) {
-    violations.push(violation3("high", "PUSH_BLOCKED_REVIEW_WAVE", "An AI/bot review wave is still running on the current head — do not push until it settles (mstar-iteration §5.1a push gate 2)", "Wait for the review wave, then push once"));
+    violations.push(violation4("high", "PUSH_BLOCKED_REVIEW_WAVE", "An AI/bot review wave is still running on the current head — do not push until it settles (mstar-iteration §5.1a push gate 2)", "Wait for the review wave, then push once"));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -8926,7 +9510,7 @@ function listDocumentBodies(dir, base = "") {
       continue;
     const relativePath = base === "" ? entry.name : `${base}/${entry.name}`;
     if (entry.isDirectory()) {
-      bodies.push(...listDocumentBodies(join6(dir, entry.name), relativePath));
+      bodies.push(...listDocumentBodies(join7(dir, entry.name), relativePath));
     } else if (entry.name.endsWith(".md") && entry.name !== "README.md" && entry.name !== "index.md") {
       bodies.push(relativePath);
     }
@@ -8940,7 +9524,7 @@ function discoverCatalogLocations(context, roots) {
     switch (rootKind) {
       case "iterations": {
         for (const id of listChildDirectories(dir)) {
-          if (existsSync5(join6(dir, id, COMPASS_FILE))) {
+          if (existsSync6(join7(dir, id, COMPASS_FILE))) {
             locations.push({ rootKind, kind: "iteration", id, relativePath: `${id}/${COMPASS_FILE}` });
           }
         }
@@ -8948,7 +9532,7 @@ function discoverCatalogLocations(context, roots) {
       }
       case "projects": {
         for (const id of listChildDirectories(dir)) {
-          if (existsSync5(join6(dir, id, ROADMAP_FILE))) {
+          if (existsSync6(join7(dir, id, ROADMAP_FILE))) {
             locations.push({ rootKind, kind: "project", id, relativePath: `${id}/${ROADMAP_FILE}` });
           }
         }
@@ -9030,7 +9614,7 @@ async function readCatalogCompleteness(context, roots = COMPLETENESS_ROOTS) {
       message: `${location.rootKind}/${location.relativePath} exists but has no catalog row — ` + `register it through the catalog domain boundary (e.g. \`mstar catalog import\` after a reviewed \`mstar catalog discover\`)`
     });
   }
-  const violations = gaps.map((gap) => violation3("high", gap.code, gap.message, "run `mstar catalog discover` and import the reviewed mapping"));
+  const violations = gaps.map((gap) => violation4("high", gap.code, gap.message, "run `mstar catalog discover` and import the reviewed mapping"));
   return {
     ok: gaps.length === 0,
     discovered: discovered.length,
@@ -9047,7 +9631,7 @@ function completenessRefusal(code2, message, discovered, storeRevision, catalogR
     discovered,
     registered: 0,
     gaps: [],
-    violations: [violation3("high", code2, message, "run `mstar store init` (or the staged migration) and retry")],
+    violations: [violation4("high", code2, message, "run `mstar store init` (or the staged migration) and retry")],
     storeRevision,
     catalogRevision
   };
@@ -9121,14 +9705,14 @@ function parseFlowArray(raw, filePath) {
   }
   return items;
 }
-function violation4(severity, code2, message) {
+function violation5(severity, code2, message) {
   return { ok: false, severity, code: code2, message };
 }
 function validateNonEmptyString2(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation4("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation5("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation4("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation5("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 function frontmatterEnd(content3) {
@@ -9170,38 +9754,38 @@ function validateRoadmapContent(content3, sourceLabel) {
     doc = parseCompassFrontmatterText(content3, sourceLabel);
   } catch (err) {
     const message = err instanceof Error ? err.message : `invalid roadmap frontmatter in ${sourceLabel}`;
-    return { ok: false, violations: [violation4("high", "project.roadmap.invalid-frontmatter", message)], warnings: [] };
+    return { ok: false, violations: [violation5("high", "project.roadmap.invalid-frontmatter", message)], warnings: [] };
   }
   validateNonEmptyString2(violations, doc.project_id, "project_id", "project.roadmap.missing-project-id", "project.roadmap.invalid-project-id");
   validateNonEmptyString2(violations, doc.title, "title", "project.roadmap.missing-title", "project.roadmap.invalid-title");
   if (doc.status === undefined) {
-    violations.push(violation4("high", "project.roadmap.missing-status", "missing required field: status"));
+    violations.push(violation5("high", "project.roadmap.missing-status", "missing required field: status"));
   } else if (typeof doc.status !== "string" || !ROADMAP_STATUSES.includes(doc.status)) {
-    violations.push(violation4("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
+    violations.push(violation5("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
   }
   if (doc.created_at === undefined) {
-    violations.push(violation4("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
+    violations.push(violation5("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
   } else if (typeof doc.created_at !== "string" || !DATE_RE3.test(doc.created_at)) {
-    violations.push(violation4("medium", "project.roadmap.invalid-created-at", "created_at must be YYYY-MM-DD"));
+    violations.push(violation5("medium", "project.roadmap.invalid-created-at", "created_at must be YYYY-MM-DD"));
   }
   if (doc.milestones !== undefined && doc.milestones !== null) {
     if (!Array.isArray(doc.milestones)) {
-      violations.push(violation4("medium", "project.roadmap.invalid-milestones", "milestones must be a list of milestone names"));
+      violations.push(violation5("medium", "project.roadmap.invalid-milestones", "milestones must be a list of milestone names"));
     } else if (doc.milestones.some((item) => typeof item !== "string" || item.trim() === "")) {
-      violations.push(violation4("medium", "project.roadmap.invalid-milestones", "milestones items must be non-empty strings"));
+      violations.push(violation5("medium", "project.roadmap.invalid-milestones", "milestones items must be non-empty strings"));
     }
   }
   if (doc.residuals_ref !== undefined && doc.residuals_ref !== null && (typeof doc.residuals_ref !== "string" || doc.residuals_ref.trim() === "")) {
-    violations.push(violation4("medium", "project.roadmap.invalid-residuals-ref", "residuals_ref must be a non-empty string"));
+    violations.push(violation5("medium", "project.roadmap.invalid-residuals-ref", "residuals_ref must be a non-empty string"));
   }
   const warnings = [];
   const end = frontmatterEnd(content3);
   const body = content3.slice(end);
   if (!/^##\s+Direction\s*$/m.test(body)) {
-    warnings.push(violation4("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) — state the project direction there"));
+    warnings.push(violation5("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) — state the project direction there"));
   }
   if (!/^\s*[-*]\s+\[[xX ]\]/m.test(body)) {
-    warnings.push(violation4("low", "project.roadmap.body.no-goal-items", "roadmap body has no goal-item task list (documented body convention) — list goals as `- [ ]` / `- [x]` markdown task items"));
+    warnings.push(violation5("low", "project.roadmap.body.no-goal-items", "roadmap body has no goal-item task list (documented body convention) — list goals as `- [ ]` / `- [x]` markdown task items"));
   }
   return { ok: violations.length === 0, violations, warnings };
 }
@@ -9261,7 +9845,7 @@ function parseRoadmapContent(contentMarkdown) {
     sections
   };
 }
-function violation5(severity, code2, message, fix) {
+function violation6(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
 function buildLineStarts(text4) {
@@ -9484,11 +10068,11 @@ function rootLockfiles(root) {
     return [];
   }
   const names = new Set(LOCKFILE_NAMES);
-  const present = entries.filter((entry) => entry.isFile() && names.has(entry.name)).map((entry) => join7(root, entry.name));
+  const present = entries.filter((entry) => entry.isFile() && names.has(entry.name)).map((entry) => join8(root, entry.name));
   if (present.length === 0)
     return [];
   try {
-    const tracked = new Set(execFileSync("git", ["ls-files", "-z", "--", "."], {
+    const tracked = new Set(execFileSync3("git", ["ls-files", "-z", "--", "."], {
       cwd: root,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
@@ -9504,12 +10088,12 @@ function supplyChainChecks(repoRoot) {
   const lockfiles = rootLockfiles(repoRoot);
   if (lockfiles.length === 0) {
     findings.push({ kind: "lockfile-missing", file: repoRoot });
-    violations.push(violation5("medium", "audit.supply.lockfile-missing", `no recognized lockfile at ${repoRoot}`, "commit a lockfile (package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lock, …)"));
+    violations.push(violation6("medium", "audit.supply.lockfile-missing", `no recognized lockfile at ${repoRoot}`, "commit a lockfile (package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lock, …)"));
   } else if (lockfiles.length > 1) {
     findings.push({ kind: "lockfile-duplicate", file: lockfiles.map((f) => f.replace(`${repoRoot}/`, "")).join(", ") });
-    violations.push(violation5("medium", "audit.supply.lockfile-duplicate", `multiple lockfiles at ${repoRoot}: ${lockfiles.join(", ")}`, "keep exactly one lockfile per package manager"));
+    violations.push(violation6("medium", "audit.supply.lockfile-duplicate", `multiple lockfiles at ${repoRoot}: ${lockfiles.join(", ")}`, "keep exactly one lockfile per package manager"));
   }
-  const workflowsDir = join7(repoRoot, ".github", "workflows");
+  const workflowsDir = join8(repoRoot, ".github", "workflows");
   let wfEntries = [];
   try {
     wfEntries = readdirSync3(workflowsDir, { withFileTypes: true });
@@ -9519,7 +10103,7 @@ function supplyChainChecks(repoRoot) {
   for (const entry of wfEntries) {
     if (!entry.isFile() || !/\.(?:ya?ml)$/.test(entry.name))
       continue;
-    const wfPath = join7(workflowsDir, entry.name);
+    const wfPath = join8(workflowsDir, entry.name);
     const relPath = `.github/workflows/${entry.name}`;
     let text4;
     try {
@@ -9563,12 +10147,12 @@ function supplyChainChecks(repoRoot) {
         const versionLike = /^v\d+(?:\.\d+)*$/.test(ref);
         if (!shaLike && !versionLike) {
           findings.push({ kind: "action-unpinned", file: relPath, line: i + 1 });
-          violations.push(violation5("high", "audit.supply.action-unpinned", `${relPath}:${i + 1} uses \`${uses[1]}@${ref}\` — mutable ref`, "pin the action to a full commit SHA"));
+          violations.push(violation6("high", "audit.supply.action-unpinned", `${relPath}:${i + 1} uses \`${uses[1]}@${ref}\` — mutable ref`, "pin the action to a full commit SHA"));
         }
       }
       if (hasPrt && prtHeadSteps.has(i)) {
         findings.push({ kind: "pull_request_target-head", file: relPath, line: i + 1 });
-        violations.push(violation5("high", "audit.supply.pull_request_target-head", `${relPath}:${i + 1} checks out the PR head under pull_request_target`, "check out the base ref or use a pull_request trigger for untrusted code"));
+        violations.push(violation6("high", "audit.supply.pull_request_target-head", `${relPath}:${i + 1} checks out the PR head under pull_request_target`, "check out the base ref or use a pull_request trigger for untrusted code"));
       }
     }
   }
@@ -9611,16 +10195,16 @@ function validateAuditFindingGates(findings) {
   const seen = new Map;
   let previousFingerprint;
   if (!Array.isArray(findings)) {
-    violations.push(violation5("high", "audit.finding.shape", "findings — audit.finding.shape"));
+    violations.push(violation6("high", "audit.finding.shape", "findings — audit.finding.shape"));
     return { ok: false, violations };
   }
   findings.forEach((finding, index2) => {
     const at = (field) => `findings[${index2}].${field}`;
     const push2 = (code2, field) => {
-      violations.push(violation5("high", code2, `${at(field)} — ${code2}`));
+      violations.push(violation6("high", code2, `${at(field)} — ${code2}`));
     };
     if (!isPlainObject3(finding)) {
-      violations.push(violation5("high", "audit.finding.shape", `findings[${index2}] — audit.finding.shape`));
+      violations.push(violation6("high", "audit.finding.shape", `findings[${index2}] — audit.finding.shape`));
       return;
     }
     if (finding.fingerprint !== undefined) {
@@ -9838,14 +10422,14 @@ function localToday() {
 function scaffoldAuditReport(findings, options) {
   const date = options.date ?? localToday();
   const level = options.level ?? "standard";
-  const gate = validateAuditFindingGates(findings);
-  if (!gate.ok) {
-    const first = gate.violations[0];
+  const gate2 = validateAuditFindingGates(findings);
+  if (!gate2.ok) {
+    const first = gate2.violations[0];
     throw new TypeError(`invalid audit findings — ${first.code}: ${first.message}`);
   }
   let outDir;
   if (options.dir !== undefined) {
-    outDir = resolve5(options.dir);
+    outDir = resolve8(options.dir);
     mkdirSync2(outDir, { recursive: true });
   } else if (options.round !== undefined) {
     outDir = resolveReviewRunDir({ reviewsDir: options.reviewsDir, date, spec: { kind: "codebase", level, round: options.round } });
@@ -9865,8 +10449,8 @@ function scaffoldAuditReport(findings, options) {
     }
   }
   const round = options.round ?? (options.dir !== undefined ? 1 : Number(basename3(outDir).split("-").pop()));
-  const file = join7(outDir, "README.md");
-  const carried = existsSync6(file) ? extractSecurityDispositionSections(readFileSync6(file, "utf8")) : { needsVerification: [], hardeningChecked: [] };
+  const file = join8(outDir, "README.md");
+  const carried = existsSync7(file) ? extractSecurityDispositionSections(readFileSync6(file, "utf8")) : { needsVerification: [], hardeningChecked: [] };
   const redacted = findings.map(redactFinding);
   const details = redacted.map((finding, index2) => renderFindingDetail(String(index2 + 1).padStart(3, "0"), finding));
   const rows = redacted.map((finding, index2) => ({
@@ -9959,9 +10543,9 @@ function resolveRelativePath(raw, label) {
   return { ok: true, relativePath: parts.join("/") };
 }
 function sourcePath(context, rootKind, relativePath) {
-  const root = resolve6(catalogRootDir(context, rootKind));
-  const absolute = resolve6(join8(root, relativePath));
-  if (absolute !== root && !absolute.startsWith(root + sep3)) {
+  const root = resolve9(catalogRootDir(context, rootKind));
+  const absolute = resolve9(join9(root, relativePath));
+  if (absolute !== root && !absolute.startsWith(root + sep4)) {
     throw invalidPlan(`"${relativePath}" escapes the ${rootKind} catalog root`);
   }
   return absolute;
@@ -10279,14 +10863,14 @@ function listDirectories(root) {
 }
 function hasFile(root, name) {
   try {
-    const info = lstatSync2(join8(root, name));
+    const info = lstatSync2(join9(root, name));
     return info.isFile() && !info.isSymbolicLink();
   } catch {
     return false;
   }
 }
 function collectBodies(root, relativeDir = "") {
-  const dir = relativeDir === "" ? root : join8(root, relativeDir);
+  const dir = relativeDir === "" ? root : join9(root, relativeDir);
   let entries;
   try {
     entries = readdirSync4(dir, { withFileTypes: true });
@@ -10472,7 +11056,7 @@ function parseIterationRow(acc, context, source, sourceKey, row, header) {
       sourceKey
     });
   }
-  if (!hasFile(join8(catalogRootDir(context, source.rootKind), location), COMPASS_FILE2)) {
+  if (!hasFile(join9(catalogRootDir(context, source.rootKind), location), COMPASS_FILE2)) {
     acc.unknowns.push({
       code: "reference-missing",
       key: `iteration:${id}`,
@@ -10617,8 +11201,8 @@ async function discoverCatalog(context) {
   const knowledgeRoot = catalogRootDir(context, "knowledge");
   const plansRoot = catalogRootDir(context, "plans");
   const projectsRoot = catalogRootDir(context, "projects");
-  const iterationIds = listDirectories(iterationsRoot).filter((id) => hasFile(join8(iterationsRoot, id), COMPASS_FILE2));
-  const projectIds = listDirectories(projectsRoot).filter((id) => hasFile(join8(projectsRoot, id), ROADMAP_FILE2));
+  const iterationIds = listDirectories(iterationsRoot).filter((id) => hasFile(join9(iterationsRoot, id), COMPASS_FILE2));
+  const projectIds = listDirectories(projectsRoot).filter((id) => hasFile(join9(projectsRoot, id), ROADMAP_FILE2));
   for (const id of projectIds) {
     bodyProposal(acc, context, "projects", id, "project", null, {
       value: id,
@@ -11031,8 +11615,8 @@ function scalar2(db, sql) {
   return typeof row?.n === "number" ? row.n : 0;
 }
 function writeTextAtomic(path2, text4) {
-  mkdirSync3(dirname6(path2), { recursive: true });
-  const tmp = join9(dirname6(path2), `.${basename6(path2)}.${process.pid}.tmp`);
+  mkdirSync3(dirname7(path2), { recursive: true });
+  const tmp = join10(dirname7(path2), `.${basename6(path2)}.${process.pid}.tmp`);
   try {
     writeFileSync3(tmp, text4, "utf8");
     renameSync2(tmp, path2);
@@ -11109,15 +11693,15 @@ function sameExecution(a, b) {
   return a.protocolVersion === b.protocolVersion && a.authorityState === b.authorityState && a.revision === b.revision && a.rootUpdatedAt === b.rootUpdatedAt && a.manifestId === b.manifestId && a.activatedAt === b.activatedAt;
 }
 function canonicalPath(value) {
-  let current = resolve7(value);
+  let current = resolve10(value);
   const trailing = [];
   for (;; ) {
     try {
-      return join9(realpathSync4(current), ...[...trailing].reverse());
+      return join10(realpathSync5(current), ...[...trailing].reverse());
     } catch {
-      const parent = dirname6(current);
+      const parent = dirname7(current);
       if (parent === current)
-        return resolve7(value);
+        return resolve10(value);
       trailing.push(basename6(current));
       current = parent;
     }
@@ -11128,7 +11712,7 @@ function isPathWithin(root, candidate) {
   const child = canonicalPath(candidate);
   if (child === parent)
     return true;
-  return child.startsWith(parent.endsWith(sep4) ? parent : `${parent}${sep4}`);
+  return child.startsWith(parent.endsWith(sep5) ? parent : `${parent}${sep5}`);
 }
 function refuseUnlessSameGeneration(live, expected, what) {
   if (live.storeId !== expected.storeId) {
@@ -11200,7 +11784,7 @@ function sameCounts(a, b) {
 }
 function defaultBackupPath(context, meta, label) {
   const name = label === undefined ? `${meta.storeId.slice(0, 8)}-e${meta.epoch}-r${meta.revision}.db` : `${label}.db`;
-  return join9(dirname6(storeDbPath(context)), "archived", "store-migration", "backups", name);
+  return join10(dirname7(storeDbPath(context)), "archived", "store-migration", "backups", name);
 }
 async function takeVerifiedBackup(context, options) {
   const dbPath = storeDbPath(context);
@@ -11209,12 +11793,12 @@ async function takeVerifiedBackup(context, options) {
     const meta = readMetaRow(handle.db);
     let walPending = false;
     try {
-      walPending = statSync2(`${dbPath}-wal`).size > 0;
+      walPending = statSync3(`${dbPath}-wal`).size > 0;
     } catch {
       walPending = false;
     }
-    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve7(options.out);
-    if (existsSync7(targetPath)) {
+    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve10(options.out);
+    if (existsSync8(targetPath)) {
       if (!options.reuseMatchingIdentity) {
         throw new StoreActivationError("store.activation-stale", `a backup already exists at ${targetPath}; pass --out <path> for a different target instead of overwriting a ` + `recorded recovery point.`);
       }
@@ -11230,11 +11814,11 @@ async function takeVerifiedBackup(context, options) {
         backupPath: targetPath,
         ...existing,
         walPending,
-        bytes: statSync2(targetPath).size,
+        bytes: statSync3(targetPath).size,
         takenAt: new Date().toISOString()
       };
     }
-    mkdirSync3(dirname6(targetPath), { recursive: true });
+    mkdirSync3(dirname7(targetPath), { recursive: true });
     handle.db.prepare("vacuum into ?").run(targetPath);
     const verified = await inspectBackupCopy(targetPath).catch((error) => {
       rmSync(targetPath, { force: true });
@@ -11249,7 +11833,7 @@ async function takeVerifiedBackup(context, options) {
       backupPath: targetPath,
       ...verified,
       walPending,
-      bytes: statSync2(targetPath).size,
+      bytes: statSync3(targetPath).size,
       takenAt: new Date().toISOString()
     };
   } finally {
@@ -11266,7 +11850,7 @@ async function assertBackupDescribesStore(context, receipt, reviewed) {
   if (!receipt || receipt.receiptVersion !== ACTIVATION_PROTOCOL_VERSION && receipt.receiptVersion !== BACKUP_RECEIPT_VERSION || typeof receipt.backupPath !== "string" || receipt.backupPath.trim() === "") {
     stale("the supplied recovery point is not a backup receipt of this protocol version; take one with `backupStore` and " + "apply the manifest that names it.");
   }
-  const controlRoot = dirname6(storeDbPath(context));
+  const controlRoot = dirname7(storeDbPath(context));
   if (!isPathWithin(controlRoot, receipt.backupPath)) {
     stale(`the recovery point ${receipt.backupPath} is outside the authorized control root ${controlRoot}; a migration ` + `recovery point must live inside the root it protects.`);
   }
@@ -11436,7 +12020,7 @@ function currentRegisterSources(context) {
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isSymbolicLink() || !entry.isDirectory())
       continue;
-    const absolutePath = join9(projectsRoot, entry.name, "residuals.json");
+    const absolutePath = join10(projectsRoot, entry.name, "residuals.json");
     let info;
     try {
       info = lstatSync3(absolutePath);
@@ -11461,7 +12045,7 @@ function revalidateSources(context, manifest, mode) {
     }
   }
   for (const reviewedSource of manifest.sources) {
-    const live = readIfExists(join9(catalogRootDir(context, "projects"), reviewedSource.relativePath));
+    const live = readIfExists(join10(catalogRootDir(context, "projects"), reviewedSource.relativePath));
     if (live === undefined && !retired.has(reviewedSource.relativePath)) {
       changed(`register ${reviewedSource.relativePath} is gone.`);
     }
@@ -11474,7 +12058,7 @@ function readReceiptRows(db, where, param) {
 async function appliedReceiptFor(context, manifest) {
   const handle = await openStore(context, "read");
   try {
-    if (resolve7(manifest.controlRoot) !== resolve7(context.harnessDir)) {
+    if (resolve10(manifest.controlRoot) !== resolve10(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`);
     }
     const row = readReceiptRows(handle.db, "phase = 'applied'").at(-1);
@@ -11596,7 +12180,7 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
       throw new StoreActivationError("store.activation-stale", `the supplied receipt is not the FINAL applied manifest (a later apply, receipt #${applied.at(-1).id}, is recorded); ` + `revalidate the final manifest, re-apply it and re-attest. Nothing was activated.`);
     }
     manifest = JSON.parse(appliedRow.manifest_json);
-    if (resolve7(manifest.controlRoot) !== resolve7(context.harnessDir)) {
+    if (resolve10(manifest.controlRoot) !== resolve10(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the applied manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}. Nothing was activated.`);
     }
     if (meta.revision !== receipt.storeRevision) {
@@ -11729,13 +12313,13 @@ function retirementReceiptOfRow(row, replayed) {
 }
 function finalizeDisclosure(ledgerPath, ledger, receipt) {
   writeLedger(ledgerPath, ledger);
-  writeTextAtomic(join9(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
+  writeTextAtomic(join10(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
 }
 function retireRegister(context, ledgerPath, ledger, item) {
-  const livePath = join9(catalogRootDir(context, "projects"), item.relativePath);
+  const livePath = join10(catalogRootDir(context, "projects"), item.relativePath);
   const liveBytes = readIfExists(livePath);
   if (liveBytes !== undefined) {
-    mkdirSync3(dirname6(item.archivePath), { recursive: true });
+    mkdirSync3(dirname7(item.archivePath), { recursive: true });
     rmSync(item.archivePath, { force: true });
     copyFileSync(livePath, item.archivePath);
     item.state = "archived";
@@ -11781,7 +12365,7 @@ function selectReviewedSection(live, item) {
   return best;
 }
 function retireSection(context, ledgerPath, ledger, item, hooks) {
-  const livePath = join9(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
+  const livePath = join10(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
   const live = readIfExists(livePath)?.toString("utf8");
   if (live === undefined) {
     throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; the reviewed section cannot be retired truthfully. ` + `Nothing was retired.`);
@@ -11807,7 +12391,7 @@ function retireSection(context, ledgerPath, ledger, item, hooks) {
   const excised = live.split(`
 `).filter((_line, index2) => !dropped.has(index2 + 1)).join(`
 `);
-  mkdirSync3(dirname6(item.archivePath), { recursive: true });
+  mkdirSync3(dirname7(item.archivePath), { recursive: true });
   rmSync(item.archivePath, { force: true });
   copyFileSync(livePath, item.archivePath);
   item.retiredRows = [...new Set(selection.hits.map((hit) => hit.identity))].sort();
@@ -11858,8 +12442,8 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
     const manifest = JSON.parse(appliedRow.manifest_json);
     const registers = manifest.retirement.registers;
     const sections = manifest.catalog.retirementSections;
-    const archiveDir = join9(dirname6(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
-    const ledgerPath = join9(archiveDir, "ledger.json");
+    const archiveDir = join10(dirname7(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
+    const ledgerPath = join10(archiveDir, "ledger.json");
     const retirementHash = sha256Bytes2(Buffer.from(`retirement\x00${JSON.stringify({
       activationReceiptId: activationReceipt.receiptId,
       activationHash: activationReceipt.activationHash,
@@ -11904,7 +12488,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
         project: register.project,
         relativePath: register.relativePath,
         sha256: register.sha256,
-        archivePath: join9(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
+        archivePath: join10(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
       sections: sections.map((section) => ({
@@ -11919,7 +12503,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
         reviewedRows: section.rows,
         retiredRows: null,
         removedLines: null,
-        archivePath: join9(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
+        archivePath: join10(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
         expectedLiveSha256: null,
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine)
@@ -11953,7 +12537,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
       project: item.project,
       relativePath: item.relativePath,
       sha256: item.sha256,
-      bytes: statSync2(item.archivePath).size,
+      bytes: statSync3(item.archivePath).size,
       archivedPath: item.archivePath
     }));
     const retiredSections = ledger.sections.map((item) => ({
@@ -11980,7 +12564,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
         storeId: meta.storeId,
         epoch: meta.epoch,
         archiveDir,
-        markerPath: join9(archiveDir, "MARKER.md"),
+        markerPath: join10(archiveDir, "MARKER.md"),
         registers: retiredRegisters,
         sections: retiredSections,
         resumed
@@ -12011,7 +12595,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
       storeId: meta.storeId,
       epoch: meta.epoch,
       archiveDir,
-      markerPath: join9(archiveDir, "MARKER.md"),
+      markerPath: join10(archiveDir, "MARKER.md"),
       registers: retiredRegisters,
       sections: retiredSections,
       resumed,
@@ -12701,10 +13285,10 @@ function readExecutionStateGraph(tx) {
   };
 }
 function assertNoLegacyExecutionSources(context) {
-  const harnessDir = dirname7(storeDbPath(context));
+  const harnessDir = dirname8(storeDbPath(context));
   const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
   const sources = [];
-  const statusPath = join10(harnessDir, "status.json");
+  const statusPath = join11(harnessDir, "status.json");
   try {
     lstatSync4(statusPath);
     sources.push(statusPath);
@@ -12731,14 +13315,14 @@ function assertNoLegacyExecutionSources(context) {
       sources.push(`${workflowDir} (unreadable)`);
     }
     for (const entry of entries) {
-      const dir = join10(workflowDir, entry.name);
+      const dir = join11(workflowDir, entry.name);
       if (entry.isSymbolicLink()) {
         sources.push(dir);
         continue;
       }
       if (!entry.isDirectory())
         continue;
-      const path2 = join10(dir, WORKFLOW_SNAPSHOT_FILE);
+      const path2 = join11(dir, WORKFLOW_SNAPSHOT_FILE);
       try {
         lstatSync4(path2);
         sources.push(path2);
@@ -12746,7 +13330,7 @@ function assertNoLegacyExecutionSources(context) {
         if (error.code !== "ENOENT")
           sources.push(`${path2} (unreadable)`);
       }
-      const sessionsDir = join10(dir, "sessions");
+      const sessionsDir = join11(dir, "sessions");
       try {
         const info = lstatSync4(sessionsDir);
         if (info.isSymbolicLink() || !info.isDirectory()) {
@@ -12761,7 +13345,7 @@ function assertNoLegacyExecutionSources(context) {
           }
           for (const session of sessions) {
             if (session.name.endsWith(".json"))
-              sources.push(join10(sessionsDir, session.name));
+              sources.push(join11(sessionsDir, session.name));
           }
         }
       } catch (error) {
@@ -14988,14 +15572,14 @@ async function linkIssue(context, issueId, link, mutation) {
   assertIssueLinkVocabulary(link);
   return withWrite(context, (handle) => linkIssueOn(handle.db, issueId, link, mutation));
 }
-function violation6(severity, code2, message, fix) {
+function violation7(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
 function validateNonEmptyString3(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation6("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation7("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation6("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation7("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 function validateRoadmap(filePath) {
@@ -15005,7 +15589,7 @@ function validateRoadmap(filePath) {
   } catch {
     return {
       ok: false,
-      violations: [violation6("high", "project.roadmap.unreadable", `cannot read roadmap file: ${filePath}`)],
+      violations: [violation7("high", "project.roadmap.unreadable", `cannot read roadmap file: ${filePath}`)],
       warnings: []
     };
   }
@@ -15016,20 +15600,20 @@ function validateProjectRegister(doc) {
   if (!isPlainObject(doc)) {
     return {
       ok: false,
-      violations: [violation6("high", "project.register.invalid", "project register must be an object")]
+      violations: [violation7("high", "project.register.invalid", "project register must be an object")]
     };
   }
   if (doc.entries === undefined) {
-    violations.push(violation6("high", "project.register.missing-entries", "missing required field: entries"));
+    violations.push(violation7("high", "project.register.missing-entries", "missing required field: entries"));
   } else if (!isPlainObject(doc.entries)) {
-    violations.push(violation6("high", "project.register.invalid-entries", "entries must be an object keyed by plan id"));
+    violations.push(violation7("high", "project.register.invalid-entries", "entries must be an object keyed by plan id"));
   } else {
     for (const [key, entries] of Object.entries(doc.entries)) {
       if (key.trim() === "") {
-        violations.push(violation6("medium", "project.register.invalid-key", "entries keys must be non-empty plan ids"));
+        violations.push(violation7("medium", "project.register.invalid-key", "entries keys must be non-empty plan ids"));
       }
       if (!Array.isArray(entries)) {
-        violations.push(violation6("high", "project.register.invalid-entry-list", `entries[${JSON.stringify(key)}] must be an array of residual entries (one entry per residual; v1 multi-finding semantics)`));
+        violations.push(violation7("high", "project.register.invalid-entry-list", `entries[${JSON.stringify(key)}] must be an array of residual entries (one entry per residual; v1 multi-finding semantics)`));
         continue;
       }
       for (const entry of entries) {
@@ -15038,15 +15622,15 @@ function validateProjectRegister(doc) {
           continue;
         validateNonEmptyString3(violations, entry.source_plan, "source_plan", "project.register.missing-source-plan", "project.register.invalid-source-plan");
         if (entry.registered_at === undefined) {
-          violations.push(violation6("high", "project.register.missing-registered-at", "missing required field: registered_at"));
+          violations.push(violation7("high", "project.register.missing-registered-at", "missing required field: registered_at"));
         } else if (typeof entry.registered_at !== "string" || !DATE_RE4.test(entry.registered_at)) {
-          violations.push(violation6("medium", "project.register.invalid-registered-at", "registered_at must be YYYY-MM-DD"));
+          violations.push(violation7("medium", "project.register.invalid-registered-at", "registered_at must be YYYY-MM-DD"));
         }
         if (entry.lifecycle_id !== undefined && (typeof entry.lifecycle_id !== "string" || entry.lifecycle_id.trim() === "")) {
-          violations.push(violation6("medium", "project.register.invalid-lifecycle-id", "lifecycle_id must be a non-empty string"));
+          violations.push(violation7("medium", "project.register.invalid-lifecycle-id", "lifecycle_id must be a non-empty string"));
         }
         if (typeof entry.source_plan === "string" && entry.source_plan.trim() !== "" && entry.source_plan !== key) {
-          violations.push(violation6("medium", "project.register.mismatched-source-plan", `source_plan ${JSON.stringify(entry.source_plan)} does not match the entries key ${JSON.stringify(key)} — entries are keyed by plan id`));
+          violations.push(violation7("medium", "project.register.mismatched-source-plan", `source_plan ${JSON.stringify(entry.source_plan)} does not match the entries key ${JSON.stringify(key)} — entries are keyed by plan id`));
         }
       }
     }
@@ -15071,9 +15655,9 @@ async function findingsCleanupGate(context, planId, opts) {
     for (const row of rows) {
       const label = row.id;
       if (normalizeSeverity(row.severity) === "critical") {
-        violations.push(mode === "zero-residual" ? violation6("high", "findings.zero-residual-critical", `${label}: unresolved critical blocks approval under zero-residual — fix now or close via explicit risk acceptance`) : violation6("high", "findings.allow-residual-critical", `${label}: unresolved critical blocks Approve with residuals`));
+        violations.push(mode === "zero-residual" ? violation7("high", "findings.zero-residual-critical", `${label}: unresolved critical blocks approval under zero-residual — fix now or close via explicit risk acceptance`) : violation7("high", "findings.allow-residual-critical", `${label}: unresolved critical blocks Approve with residuals`));
       } else if (mode === "zero-residual") {
-        violations.push(violation6("medium", "findings.zero-residual-open-issue", `${label}: an open issue cannot remain under zero-residual — close it through the authorized disposition path before handoff`));
+        violations.push(violation7("medium", "findings.zero-residual-open-issue", `${label}: an open issue cannot remain under zero-residual — close it through the authorized disposition path before handoff`));
       }
     }
     return { ok: violations.length === 0, violations };
@@ -15082,7 +15666,7 @@ async function findingsCleanupGate(context, planId, opts) {
   }
 }
 function listProjectReferenceFiles(projectDir) {
-  const root = join11(projectDir, PROJECT_REFERENCES_DIR);
+  const root = join12(projectDir, PROJECT_REFERENCES_DIR);
   let entries;
   try {
     entries = readdirSync7(root, { withFileTypes: true });
@@ -15098,7 +15682,7 @@ function listProjectReferenceFiles(projectDir) {
     } else if (entry.isDirectory()) {
       let nested;
       try {
-        nested = readdirSync7(join11(root, entry.name), { withFileTypes: true });
+        nested = readdirSync7(join12(root, entry.name), { withFileTypes: true });
       } catch {
         continue;
       }
@@ -15233,25 +15817,25 @@ function bindProject(context, projectId, target, mutation) {
   });
 }
 function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
-  const start = resolve8(startDir);
-  const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
+  const start = resolve11(startDir);
+  const explicit = opts.harnessDir ?? (opts.ignoreEnvOverride ? undefined : process.env.MSTAR_HARNESS_DIR);
   if (explicit)
-    return resolve8(start, explicit);
-  const boundary = resolve8(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
+    return resolve11(start, explicit);
+  const boundary = resolve11(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
   const rc = loadMstarc(start, boundary);
   if (rc !== null && rc.config.harnessDir)
-    return resolve8(rc.dir, rc.config.harnessDir);
+    return resolve11(rc.dir, rc.config.harnessDir);
   let dir = start;
   for (;; ) {
-    if (!isAtOrBelow2(dir, boundary))
+    if (!isAtOrBelow3(dir, boundary))
       return null;
-    for (const candidate of [join12(dir, ".mstar"), join12(dir, ".agents"), join12(dir, ".plans"), join12(dir, "plans")]) {
+    for (const candidate of [join13(dir, ".mstar"), join13(dir, ".agents"), join13(dir, ".plans"), join13(dir, "plans")]) {
       if (isDirectory2(candidate))
         return candidate;
     }
     if (dir === boundary)
       return null;
-    const parent = dirname8(dir);
+    const parent = dirname9(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -15259,7 +15843,7 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
 }
 function defaultWorkspaceRoot(startDir) {
   try {
-    const cdup = execFileSync2("git", ["rev-parse", "--show-cdup"], {
+    const cdup = execFileSync4("git", ["rev-parse", "--show-cdup"], {
       cwd: startDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
@@ -15269,21 +15853,21 @@ function defaultWorkspaceRoot(startDir) {
     let boundary = startDir;
     for (const segment of cdup.split(/[\\/]/)) {
       if (segment && segment !== ".")
-        boundary = dirname8(boundary);
+        boundary = dirname9(boundary);
     }
-    return resolve8(boundary);
+    return resolve11(boundary);
   } catch {}
   return startDir;
 }
-function isAtOrBelow2(dir, root) {
-  const rel = relative2(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute3(rel);
+function isAtOrBelow3(dir, root) {
+  const rel = relative3(root, dir);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute6(rel);
 }
 function mstarcDirOverride(harnessDir, key) {
-  const dir = resolve8(harnessDir);
-  const rc = loadMstarc(dir, dirname8(dir));
+  const dir = resolve11(harnessDir);
+  const rc = loadMstarc(dir, dirname9(dir));
   const declared = rc?.config[key];
-  return declared ? resolve8(rc.dir, declared) : null;
+  return declared ? resolve11(rc.dir, declared) : null;
 }
 function resolveSpecsDir(harnessDir, opts = {}) {
   const declared = mstarcDirOverride(harnessDir, "specsDir");
@@ -15292,20 +15876,21 @@ function resolveSpecsDir(harnessDir, opts = {}) {
       mkdirSync4(declared, { recursive: true });
     return declared;
   }
-  const harness = resolve8(harnessDir);
-  const repoRoot = dirname8(harness);
+  const harness = resolve11(harnessDir);
+  const repoRoot = dirname9(harness);
   const candidates = [
-    join12(harness, "specs"),
-    join12(repoRoot, "docs", "specs"),
-    join12(repoRoot, "specs"),
-    join12(harness, "designs"),
-    join12(repoRoot, "designs")
+    join13(harness, "specs"),
+    join13(repoRoot, ".agents", "specs"),
+    join13(repoRoot, "docs", "specs"),
+    join13(repoRoot, "specs"),
+    join13(harness, "designs"),
+    join13(repoRoot, "designs")
   ];
-  for (const candidate of candidates) {
+  for (const candidate of new Set(candidates)) {
     if (isDirectory2(candidate) && hasFiles(candidate))
       return candidate;
   }
-  const fallback = join12(harness, "specs");
+  const fallback = join13(harness, "specs");
   if (opts.create !== false)
     mkdirSync4(fallback, { recursive: true });
   return fallback;
@@ -15314,11 +15899,11 @@ function resolvePlanDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "planDir");
   if (declared !== null)
     return declared;
-  const dir = resolve8(harnessDir);
+  const dir = resolve11(harnessDir);
   const name = basename7(dir);
   if (name === ".plans" || name === "plans")
     return dir;
-  return join12(dir, "plans");
+  return join13(dir, "plans");
 }
 function assertSafePathComponent(value, what) {
   if (value === "" || value === "." || value === ".." || !/^[A-Za-z0-9._-]+$/.test(value)) {
@@ -15326,18 +15911,18 @@ function assertSafePathComponent(value, what) {
   }
 }
 function canonicalizeNearestExisting(path2) {
-  const abs = resolve8(path2);
+  const abs = resolve11(path2);
   let dir = abs;
   const tail = [];
   for (;; ) {
-    if (existsSync9(dir)) {
+    if (existsSync10(dir)) {
       try {
-        return join12(realpathSync5(dir), ...tail);
+        return join13(realpathSync6(dir), ...tail);
       } catch {
         return abs;
       }
     }
-    const parent = dirname8(dir);
+    const parent = dirname9(dir);
     if (parent === dir)
       return abs;
     tail.unshift(basename7(dir));
@@ -15346,30 +15931,46 @@ function canonicalizeNearestExisting(path2) {
 }
 function resolveSddDir(harnessDir, planId) {
   assertSafePathComponent(planId, "planId");
-  const base = resolve8(harnessDir);
+  const base = resolve11(harnessDir);
   const declared = mstarcDirOverride(base, "sddDir");
-  const sddBase = declared !== null ? declared : join12(base, "sdd");
-  return join12(sddBase, planId);
+  const sddBase = declared !== null ? declared : join13(base, "sdd");
+  return join13(sddBase, planId);
 }
 function resolveIterationDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "iterationDir");
   if (declared !== null)
     return declared;
-  return join12(resolve8(harnessDir), "iterations");
+  return join13(resolve11(harnessDir), "iterations");
 }
-function resolveKnowledgeDir(harnessDir) {
-  const declared = mstarcDirOverride(harnessDir, "knowledgeDir");
+function resolveKnowledgeDir(harnessDir, opts = {}) {
+  return resolveTrackedDir(harnessDir, opts, "knowledgeDir", "knowledge", [".agents", "knowledge"]);
+}
+function resolveAdrDir(harnessDir, opts = {}) {
+  return resolveTrackedDir(harnessDir, opts, "adrDir", "adr", [".agents", "adr"], ["docs", "adr"]);
+}
+function resolveTrackedDir(harnessDir, opts, key, name, ...extra) {
+  const declared = mstarcDirOverride(harnessDir, key);
   if (declared !== null)
     return declared;
-  return join12(resolve8(harnessDir), "knowledge");
+  const harness = resolve11(harnessDir);
+  const repoRoot = dirname9(harness);
+  const candidates = [join13(harness, name), ...extra.map((segments) => join13(repoRoot, ...segments))];
+  for (const candidate of new Set(candidates)) {
+    if (isDirectory2(candidate) && hasFiles(candidate))
+      return candidate;
+  }
+  const fallback = join13(harness, name);
+  if (opts.create !== false)
+    mkdirSync4(fallback, { recursive: true });
+  return fallback;
 }
 function resolveHarnessSubdir(startDir, opts, key, fallback) {
   const harness = resolveHarnessDir(startDir, opts);
   if (harness === null) {
-    throw new Error(`harness dir not found from ${resolve8(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
+    throw new Error(`harness dir not found from ${resolve11(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
   }
   const declared = mstarcDirOverride(harness, key);
-  return declared !== null ? declared : join12(resolve8(harness), fallback);
+  return declared !== null ? declared : join13(resolve11(harness), fallback);
 }
 function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
   return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
@@ -15439,28 +16040,28 @@ function resolveReviewRunDir(opts) {
   assertReviewDate(date);
   const spec = opts.spec;
   const resolved = spec.kind === "codebase" ? { kind: "codebase", level: spec.level, round: spec.round ?? nextCodebaseRound(opts.reviewsDir, date, spec.level) } : spec;
-  return join12(opts.reviewsDir, reviewRunDirName(date, resolved));
+  return join13(opts.reviewsDir, reviewRunDirName(date, resolved));
 }
 function resolveScaffoldDirs(root, options = {}) {
-  const start = resolve8(root);
+  const start = resolve11(root);
   if (options.harnessDir !== undefined) {
     const harnessDir2 = options.harnessDir;
-    const projectDir2 = mstarcDirOverride(harnessDir2, "projectDir") ?? join12(harnessDir2, "projects");
+    const projectDir2 = mstarcDirOverride(harnessDir2, "projectDir") ?? join13(harnessDir2, "projects");
     return { harnessDir: harnessDir2, projectDir: projectDir2 };
   }
-  const boundary = resolve8(start, defaultWorkspaceRoot(start));
+  const boundary = resolve11(start, defaultWorkspaceRoot(start));
   const rc = loadMstarc(start, boundary);
   const explicit = process.env.MSTAR_HARNESS_DIR;
-  const harnessDir = explicit ? resolve8(start, explicit) : rc !== null && rc.config.harnessDir ? resolve8(rc.dir, rc.config.harnessDir) : join12(start, ".mstar");
+  const harnessDir = explicit ? resolve11(start, explicit) : rc !== null && rc.config.harnessDir ? resolve11(rc.dir, rc.config.harnessDir) : join13(start, ".mstar");
   const declaredProjectDir = mstarcDirOverride(harnessDir, "projectDir");
-  const projectDir = declaredProjectDir !== null ? declaredProjectDir : join12(harnessDir, "projects");
+  const projectDir = declaredProjectDir !== null ? declaredProjectDir : join13(harnessDir, "projects");
   return { harnessDir, projectDir };
 }
 async function scaffoldHarness(root, options = {}) {
   const { harnessDir, projectDir } = resolveScaffoldDirs(root, options);
   for (const dir of SCAFFOLD_DIRS)
-    mkdirSync4(join12(harnessDir, dir), { recursive: true });
-  const defaultProjectDir = join12(projectDir, _DEFAULT_PROJECT);
+    mkdirSync4(join13(harnessDir, dir), { recursive: true });
+  const defaultProjectDir = join13(projectDir, _DEFAULT_PROJECT);
   mkdirSync4(defaultProjectDir, { recursive: true });
   await registerScaffoldCatalog(harnessDir);
   return harnessDir;
@@ -15513,7 +16114,7 @@ function hasHarnessRootDeclaration(content3) {
   });
 }
 function validateGitignore(root) {
-  const gitignorePath = join12(resolve8(root), ".gitignore");
+  const gitignorePath = join13(resolve11(root), ".gitignore");
   const kind = detectHarnessKind(resolveHarnessDir(root));
   let content3;
   try {
@@ -15550,7 +16151,7 @@ function validateGitignore(root) {
 function detectHarnessKind(harnessDir) {
   if (!harnessDir)
     return null;
-  const name = basename7(resolve8(harnessDir));
+  const name = basename7(resolve11(harnessDir));
   if (name === ".mstar")
     return "mstar";
   if (name === ".agents")
@@ -15558,7 +16159,7 @@ function detectHarnessKind(harnessDir) {
   return null;
 }
 function assertPlanWritingPath(planPath, harnessDir) {
-  const planAbs = resolve8(planPath);
+  const planAbs = resolve11(planPath);
   if (!harnessDir) {
     return {
       ok: false,
@@ -15569,8 +16170,8 @@ function assertPlanWritingPath(planPath, harnessDir) {
     };
   }
   const planDir = resolvePlanDir(harnessDir);
-  const rel = relative2(planDir, planAbs);
-  const inside = rel === "" || !rel.startsWith("..") && !isAbsolute3(rel);
+  const rel = relative3(planDir, planAbs);
+  const inside = rel === "" || !rel.startsWith("..") && !isAbsolute6(rel);
   if (!inside) {
     return {
       ok: false,
@@ -15580,12 +16181,12 @@ function assertPlanWritingPath(planPath, harnessDir) {
       fix: `write the plan under ${planDir}`
     };
   }
-  if (existsSync9(planAbs)) {
+  if (existsSync10(planAbs)) {
     try {
-      const canonicalPlan = realpathSync5(planAbs);
-      const canonicalPlanDir = existsSync9(planDir) ? realpathSync5(planDir) : resolve8(planDir);
-      const canonicalRel = relative2(canonicalPlanDir, canonicalPlan);
-      const canonicalInside = canonicalRel === "" || !canonicalRel.startsWith("..") && !isAbsolute3(canonicalRel);
+      const canonicalPlan = realpathSync6(planAbs);
+      const canonicalPlanDir = existsSync10(planDir) ? realpathSync6(planDir) : resolve11(planDir);
+      const canonicalRel = relative3(canonicalPlanDir, canonicalPlan);
+      const canonicalInside = canonicalRel === "" || !canonicalRel.startsWith("..") && !isAbsolute6(canonicalRel);
       if (!canonicalInside) {
         return {
           ok: false,
@@ -15606,7 +16207,7 @@ function assertPlanWritingPath(planPath, harnessDir) {
 }
 function isDirectory2(dir) {
   try {
-    return statSync3(dir).isDirectory();
+    return statSync4(dir).isDirectory();
   } catch {
     return false;
   }
@@ -15615,7 +16216,7 @@ function hasFiles(dir) {
   try {
     for (const entry of readdirSync8(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        if (hasFiles(join12(dir, entry.name)))
+        if (hasFiles(join13(dir, entry.name)))
           return true;
       } else if (entry.isFile()) {
         return true;
@@ -15690,8 +16291,8 @@ function planPointerContext(input) {
   }
   const base = canonicalizeNearestExisting(harnessRoot);
   const planDir = canonicalizeNearestExisting(resolvePlanDir(harnessRoot));
-  const expected = join13(planDir, `${planId}.md`);
-  const form = isAbsolute4(file) ? "canonical-absolute" : "harness-relative";
+  const expected = join14(planDir, `${planId}.md`);
+  const form = isAbsolute7(file) ? "canonical-absolute" : "harness-relative";
   const permitted = [
     `canonical absolute path ${expected}`,
     `normalized harness-relative path resolved against ${base}`
@@ -15708,12 +16309,12 @@ function planPointerContext(input) {
   if (file.trim() === "") {
     throw refusal("plan-path.invalid-pointer", `plan ${planId} file must not be empty`);
   }
-  const candidate = canonicalTarget(form === "canonical-absolute" ? file : join13(base, file));
+  const candidate = canonicalTarget(form === "canonical-absolute" ? file : join14(base, file));
   const normalized = normalize(file);
   if (normalized !== file) {
     throw refusal("plan-path.invalid-pointer", `plan ${planId} file ${JSON.stringify(file)} is not a normalized ${form === "canonical-absolute" ? "absolute" : "harness-relative"} spelling (${JSON.stringify(normalized)}); permitted forms are ${permitted.join(" or ")}`, { plan_id: planId, actual: candidate, normalized });
   }
-  if (form === "harness-relative" && (normalized === ".." || normalized.startsWith(`..${sep5}`))) {
+  if (form === "harness-relative" && (normalized === ".." || normalized.startsWith(`..${sep6}`))) {
     throw refusal("plan-path.invalid-pointer", `plan ${planId} file ${JSON.stringify(file)} traverses out of the harness root ${base}; permitted forms are ${permitted.join(" or ")}`, { plan_id: planId, actual: candidate, normalized });
   }
   if (candidate !== expected) {
@@ -15731,7 +16332,7 @@ function resolveRegisteredPlanFile(input) {
   const refusal = planPointerRefusal(context);
   let isFile2 = false;
   try {
-    isFile2 = existsSync10(expected) && statSync4(expected).isFile();
+    isFile2 = existsSync11(expected) && statSync5(expected).isFile();
   } catch {
     isFile2 = false;
   }
@@ -15796,21 +16397,21 @@ function validateIntegrationMergeLease(lease) {
     return {
       ok: false,
       violations: [
-        violation7("high", "lease.merge-lease.invalid", "integration_merge_lease must be an object — absent means unclaimed; null and tombstone objects are invalid; writers delete the key on release")
+        violation8("high", "lease.merge-lease.invalid", "integration_merge_lease must be an object — absent means unclaimed; null and tombstone objects are invalid; writers delete the key on release")
       ]
     };
   }
   validateNonEmptyString4(violations, lease.holder, "holder", "lease.merge-lease.missing-holder", "lease.merge-lease.invalid-holder");
   if (lease.claimed_at === undefined) {
-    violations.push(violation7("high", "lease.merge-lease.missing-claimed-at", "missing required field: claimed_at"));
+    violations.push(violation8("high", "lease.merge-lease.missing-claimed-at", "missing required field: claimed_at"));
   } else if (typeof lease.claimed_at !== "string" || !(RFC3339_Z_RE.test(lease.claimed_at) || DATE_ONLY_RE.test(lease.claimed_at))) {
-    violations.push(violation7("medium", "lease.merge-lease.invalid-claimed-at", "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T04:00:00Z) or a YYYY-MM-DD date"));
+    violations.push(violation8("medium", "lease.merge-lease.invalid-claimed-at", "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T04:00:00Z) or a YYYY-MM-DD date"));
   }
   validateNonEmptyString4(violations, lease.plan_id, "plan_id", "lease.merge-lease.missing-plan-id", "lease.merge-lease.invalid-plan-id");
   validateNonEmptyString4(violations, lease.source_branch, "source_branch", "lease.merge-lease.missing-source-branch", "lease.merge-lease.invalid-source-branch");
   validateNonEmptyString4(violations, lease.target_branch, "target_branch", "lease.merge-lease.missing-target-branch", "lease.merge-lease.invalid-target-branch");
   if (lease.session_label !== undefined && typeof lease.session_label !== "string") {
-    violations.push(violation7("medium", "lease.merge-lease.invalid-session-label", "session_label must be a string (display only — never used for ownership comparison)"));
+    violations.push(violation8("medium", "lease.merge-lease.invalid-session-label", "session_label must be a string (display only — never used for ownership comparison)"));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -15838,25 +16439,25 @@ function stableJson(value) {
   }
   return JSON.stringify(value) ?? "undefined";
 }
-function violation7(severity, code2, message, fix) {
+function violation8(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
 function validateNonEmptyString4(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation7("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation8("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation7("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation8("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 function validateWorktreePathValue(violations, value, field) {
-  if (typeof value !== "string" || value.trim() === "" || !isAbsolute5(value)) {
-    violations.push(violation7("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
+  if (typeof value !== "string" || value.trim() === "" || !isAbsolute8(value)) {
+    violations.push(violation8("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
   }
 }
 function deliveryEvidenceViolations(value, what) {
   const violations = [];
   const invalid3 = (message) => {
-    violations.push(violation7("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
+    violations.push(violation8("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
   };
   if (!isPlainObject(value)) {
     invalid3("must be an object");
@@ -15916,27 +16517,27 @@ function validateWorkflowSnapshot(doc) {
   if (!isPlainObject(doc)) {
     return {
       ok: false,
-      violations: [violation7("high", "workflow.snapshot.invalid", "workflow snapshot must be an object")]
+      violations: [violation8("high", "workflow.snapshot.invalid", "workflow snapshot must be an object")]
     };
   }
   if (doc.schema_version === undefined) {
-    violations.push(violation7("high", "workflow.snapshot.missing-schema-version", "missing required field: schema_version"));
+    violations.push(violation8("high", "workflow.snapshot.missing-schema-version", "missing required field: schema_version"));
   } else if (doc.schema_version !== 1) {
-    violations.push(violation7("high", "workflow.snapshot.invalid-schema-version", `schema_version must be 1 — got ${JSON.stringify(doc.schema_version)} (version is reserved for the root file discriminator)`));
+    violations.push(violation8("high", "workflow.snapshot.invalid-schema-version", `schema_version must be 1 — got ${JSON.stringify(doc.schema_version)} (version is reserved for the root file discriminator)`));
   }
   if (doc.version !== undefined) {
-    violations.push(violation7("medium", "workflow.snapshot.reserved-version", `top-level version is reserved for the root status.json discriminator — snapshots use schema_version; remove the version key (got ${JSON.stringify(doc.version)})`, "remove the version key from the snapshot"));
+    violations.push(violation8("medium", "workflow.snapshot.reserved-version", `top-level version is reserved for the root status.json discriminator — snapshots use schema_version; remove the version key (got ${JSON.stringify(doc.version)})`, "remove the version key from the snapshot"));
   }
   validateNonEmptyString4(violations, doc.id, "id", "workflow.snapshot.missing-id", "workflow.snapshot.invalid-id");
   if (doc.type === undefined) {
-    violations.push(violation7("high", "workflow.snapshot.missing-type", "missing required field: type"));
+    violations.push(violation8("high", "workflow.snapshot.missing-type", "missing required field: type"));
   } else if (typeof doc.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(doc.type)) {
-    violations.push(violation7("medium", "workflow.snapshot.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(doc.type)}`));
+    violations.push(violation8("medium", "workflow.snapshot.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(doc.type)}`));
   }
   if (doc.status === undefined) {
-    violations.push(violation7("high", "workflow.snapshot.missing-status", "missing required field: status"));
+    violations.push(violation8("high", "workflow.snapshot.missing-status", "missing required field: status"));
   } else if (typeof doc.status !== "string" || !WORKFLOW_LIFECYCLE_STATUSES.includes(doc.status)) {
-    violations.push(violation7("medium", "workflow.snapshot.invalid-status", `status must be one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
+    violations.push(violation8("medium", "workflow.snapshot.invalid-status", `status must be one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
   }
   validateNonEmptyString4(violations, doc.started_at, "started_at", "workflow.snapshot.missing-started-at", "workflow.snapshot.invalid-started-at");
   validateNonEmptyString4(violations, doc.updated_at, "updated_at", "workflow.snapshot.missing-updated-at", "workflow.snapshot.invalid-updated-at");
@@ -15944,12 +16545,12 @@ function validateWorkflowSnapshot(doc) {
     validateNonEmptyString4(violations, doc.ended_at, "ended_at", "workflow.snapshot.missing-ended-at", "workflow.snapshot.invalid-ended-at");
   }
   if (doc.phase !== undefined && typeof doc.phase !== "string") {
-    violations.push(violation7("medium", "workflow.snapshot.invalid-phase", "phase must be a string (free-form phase machine label)"));
+    violations.push(violation8("medium", "workflow.snapshot.invalid-phase", "phase must be a string (free-form phase machine label)"));
   }
   if (doc.plans === undefined) {
-    violations.push(violation7("high", "workflow.snapshot.missing-plans", "missing required field: plans"));
+    violations.push(violation8("high", "workflow.snapshot.missing-plans", "missing required field: plans"));
   } else if (!Array.isArray(doc.plans)) {
-    violations.push(violation7("high", "workflow.snapshot.invalid-plans", "plans must be an array of legacy plan rows"));
+    violations.push(violation8("high", "workflow.snapshot.invalid-plans", "plans must be an array of legacy plan rows"));
   } else {
     const snapshotDoc = doc;
     for (const row of doc.plans) {
@@ -15966,7 +16567,7 @@ function validateWorkflowSnapshot(doc) {
   }
   if (doc.execution_policy !== undefined) {
     if (!isPlainObject(doc.execution_policy)) {
-      violations.push(violation7("medium", "workflow.snapshot.invalid-execution-policy", "execution_policy must be an object"));
+      violations.push(violation8("medium", "workflow.snapshot.invalid-execution-policy", "execution_policy must be an object"));
     }
   }
   if (doc.integration_merge_lease !== undefined) {
@@ -15974,11 +16575,11 @@ function validateWorkflowSnapshot(doc) {
   }
   if (doc.branch !== undefined) {
     if (!isPlainObject(doc.branch)) {
-      violations.push(violation7("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
+      violations.push(violation8("medium", "workflow.snapshot.invalid-branch", "branch must be an object"));
     } else {
       for (const key of ["base", "work", "source", "integration", "target"]) {
         if (doc.branch[key] !== undefined && (typeof doc.branch[key] !== "string" || doc.branch[key].trim() === "")) {
-          violations.push(violation7("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
+          violations.push(violation8("medium", "workflow.snapshot.invalid-branch", `branch.${key} must be a non-empty string`));
         }
       }
     }
@@ -15986,25 +16587,25 @@ function validateWorkflowSnapshot(doc) {
   const legacyWorktreePath = doc.control_worktree_path;
   const canonicalWorktreePath = doc.integration_worktree_path;
   if (legacyWorktreePath !== undefined && canonicalWorktreePath !== undefined) {
-    violations.push(violation7("high", "workflow.snapshot.conflicting-worktree-paths", "both integration_worktree_path and the legacy control_worktree_path key are present — the canonical snapshot carries only integration_worktree_path (refused even when the values are equal)", "remove the legacy control_worktree_path key"));
+    violations.push(violation8("high", "workflow.snapshot.conflicting-worktree-paths", "both integration_worktree_path and the legacy control_worktree_path key are present — the canonical snapshot carries only integration_worktree_path (refused even when the values are equal)", "remove the legacy control_worktree_path key"));
   } else {
     if (canonicalWorktreePath !== undefined) {
       validateWorktreePathValue(violations, canonicalWorktreePath, "integration_worktree_path");
     }
     if (legacyWorktreePath !== undefined) {
-      violations.push(violation7("medium", "workflow.snapshot.legacy-control-worktree-path", "legacy control_worktree_path is present — the canonical reader normalizes it to integration_worktree_path in memory; migrate on the next authorized write (writers emit only the canonical key)", "rename control_worktree_path to integration_worktree_path on the next authorized write"));
+      violations.push(violation8("medium", "workflow.snapshot.legacy-control-worktree-path", "legacy control_worktree_path is present — the canonical reader normalizes it to integration_worktree_path in memory; migrate on the next authorized write (writers emit only the canonical key)", "rename control_worktree_path to integration_worktree_path on the next authorized write"));
       validateWorktreePathValue(violations, legacyWorktreePath, "control_worktree_path (legacy alias)");
     }
   }
   if (doc.legacy_metadata !== undefined && !isPlainObject(doc.legacy_metadata)) {
-    violations.push(violation7("medium", "workflow.snapshot.invalid-legacy-metadata", "legacy_metadata must be an object"));
+    violations.push(violation8("medium", "workflow.snapshot.invalid-legacy-metadata", "legacy_metadata must be an object"));
   }
   if (doc.compass_ref !== undefined) {
     validateNonEmptyString4(violations, doc.compass_ref, "compass_ref", "workflow.snapshot.missing-compass-ref", "workflow.snapshot.invalid-compass-ref");
   }
   if (doc.delivery_kind !== undefined) {
     if (typeof doc.delivery_kind !== "string" || !WORKFLOW_DELIVERY_KINDS.includes(doc.delivery_kind)) {
-      violations.push(violation7("medium", "workflow.snapshot.invalid-delivery-kind", `delivery_kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} — got ${JSON.stringify(doc.delivery_kind)}`));
+      violations.push(violation8("medium", "workflow.snapshot.invalid-delivery-kind", `delivery_kind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} — got ${JSON.stringify(doc.delivery_kind)}`));
     }
   }
   if (doc.project !== undefined) {
@@ -16019,17 +16620,17 @@ function validateWorkflowSnapshot(doc) {
   const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
   if (terminal) {
     if (doc.ended_at === undefined) {
-      violations.push(violation7("high", "workflow.snapshot.missing-ended-at", `terminal status ${JSON.stringify(doc.status)} requires ended_at — a terminal snapshot must record when the lifecycle ended`));
+      violations.push(violation8("high", "workflow.snapshot.missing-ended-at", `terminal status ${JSON.stringify(doc.status)} requires ended_at — a terminal snapshot must record when the lifecycle ended`));
     }
     if (doc.integration_merge_lease !== undefined) {
-      violations.push(violation7("high", "workflow.snapshot.terminal-dangling-merge-lease", "terminal snapshot must not carry integration_merge_lease (dangling lease) — release the merge lease before the lifecycle ends"));
+      violations.push(violation8("high", "workflow.snapshot.terminal-dangling-merge-lease", "terminal snapshot must not carry integration_merge_lease (dangling lease) — release the merge lease before the lifecycle ends"));
     }
   }
   return { ok: violations.length === 0, violations };
 }
 function readWorkflowSnapshot(dir) {
-  const snapshotPath = join14(dir, WORKFLOW_SNAPSHOT_FILE);
-  if (!existsSync11(snapshotPath)) {
+  const snapshotPath = join15(dir, WORKFLOW_SNAPSHOT_FILE);
+  if (!existsSync12(snapshotPath)) {
     throw new Error(`workflow snapshot not found: ${snapshotPath}`);
   }
   let doc;
@@ -16041,9 +16642,9 @@ function readWorkflowSnapshot(dir) {
   return normalizeWorkflowSnapshot(doc, snapshotPath);
 }
 function normalizeWorkflowSnapshot(doc, snapshotPath) {
-  const gate = validateWorkflowSnapshot(doc);
-  const migration = gate.violations.filter((v) => v.code === LEGACY_WORKTREE_PATH_CODE);
-  const blocking = gate.violations.filter((v) => v.code !== LEGACY_WORKTREE_PATH_CODE);
+  const gate2 = validateWorkflowSnapshot(doc);
+  const migration = gate2.violations.filter((v) => v.code === LEGACY_WORKTREE_PATH_CODE);
+  const blocking = gate2.violations.filter((v) => v.code !== LEGACY_WORKTREE_PATH_CODE);
   if (blocking.length > 0) {
     const detail = blocking.map((v) => `${v.code}: ${v.message}`).join("; ");
     throw new WorkflowSnapshotValidationError(`refusing to read invalid workflow snapshot ${snapshotPath}: ${detail}`, blocking);
@@ -16065,7 +16666,7 @@ function normalizeWorkflowSnapshot(doc, snapshotPath) {
   if (snapshot.phase === undefined) {
     const derivation = deriveLifecyclePhase(snapshot);
     if (derivation.phase !== undefined) {
-      diagnostics.push(violation7("medium", DERIVED_PHASE_CODE, `snapshot ${snapshotPath} declares no phase; the lifecycle facts derive ${derivation.phase} (${derivation.facts.join("; ")})`, "no action needed - the derived phase is a read-time view and the next authorized mutation persists it"));
+      diagnostics.push(violation8("medium", DERIVED_PHASE_CODE, `snapshot ${snapshotPath} declares no phase; the lifecycle facts derive ${derivation.phase} (${derivation.facts.join("; ")})`, "no action needed - the derived phase is a read-time view and the next authorized mutation persists it"));
       return { snapshot: { ...snapshot, phase: derivation.phase }, diagnostics };
     }
   }
@@ -16099,7 +16700,7 @@ function consultDeliveryEvidence(snapshot) {
     if (isTerminalSnapshot(snapshot))
       return [];
     return [
-      violation7("high", "PHASE6_DELIVERY_KIND_UNREGISTERED", `Workflow '${workflowId}' is type 'plan' but carries no registered delivery_kind — a plan workflow declares its delivery kind at registration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §1), so this snapshot's delivery evidence cannot be consulted`, 'Cause: this plan workflow has no registered delivery_kind, so delivery evidence cannot be checked. The kind is fixed at registration and cannot be added to an existing workflow. Close it honestly with `mstar workflow lifecycle --workflow <id> --status failed --reason "<blocker>"`, then register a replacement workflow with a new id and the correct declared delivery kind; keep the failed workflow as history.')
+      violation8("high", "PHASE6_DELIVERY_KIND_UNREGISTERED", `Workflow '${workflowId}' is type 'plan' but carries no registered delivery_kind — a plan workflow declares its delivery kind at registration (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §1), so this snapshot's delivery evidence cannot be consulted`, 'Cause: this plan workflow has no registered delivery_kind, so delivery evidence cannot be checked. The kind is fixed at registration and cannot be added to an existing workflow. Close it honestly with `mstar workflow lifecycle --workflow <id> --status failed --reason "<blocker>"`, then register a replacement workflow with a new id and the correct declared delivery kind; keep the failed workflow as history.')
     ];
   }
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : undefined;
@@ -16139,7 +16740,7 @@ function consultDeliveryEvidence(snapshot) {
   }
   if (missing.length === 0)
     return [];
-  const incomplete = (fix) => violation7("high", "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE", `Workflow '${workflowId}' declares delivery_kind '${kind}' but its delivery evidence is incomplete — missing: ${missing.join(", ")} (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §3 lifecycle stages + §4c/§4d/§4f)`, fix);
+  const incomplete = (fix) => violation8("high", "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE", `Workflow '${workflowId}' declares delivery_kind '${kind}' but its delivery evidence is incomplete — missing: ${missing.join(", ")} (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §3 lifecycle stages + §4c/§4d/§4f)`, fix);
   const record = `Record the missing evidence with 'mstar workflow evidence --workflow ${workflowId} --file <payload.json>' (add --session <coordinator envelope> for a coordinated workflow)`;
   return [
     kind === "development" ? incomplete(`${record}: the compound disposition (§4c, before the PR head is finalized), the PR identity (§4d, at submission) and the verified-merge record (§4f, the PM's own check — the engine never verifies the remote merge). Done rows alone are not delivery evidence`) : incomplete(`${record}: the fulfilment record must name the registered completion policy and its evidence (§1)`)
@@ -16152,7 +16753,7 @@ function derivePlanRegistration(input) {
   if (typeof file !== "string" || file.trim() === "") {
     throw new Error("derivePlanRegistration: the selected plan document is required - supply plan.file as the registered plan pointer " + "(`{PLAN_DIR}/<id>.md` or its canonical absolute path)");
   }
-  const harnessRoot = resolve9(input.harnessDir);
+  const harnessRoot = resolve12(input.harnessDir);
   const planId = declaredId ?? basename8(file).replace(/\.md$/, "");
   const resolved = resolveRegisteredPlanFile({ harnessRoot, planId, file });
   const heading = /^# (.+)$/m.exec(readFileSync12(resolved.planPath, "utf8"))?.[1]?.trim();
@@ -16161,7 +16762,7 @@ function derivePlanRegistration(input) {
     throw Object.assign(new Error(`derivePlanRegistration: plan ${JSON.stringify(planId)} was declared with title ${JSON.stringify(declaredTitle)}, but the ` + `selected document ${resolved.planPath} states ${JSON.stringify(documentTitle)} - the selected plan document is the ` + "registration authority (R1/section 4), so a supplied title is a constraint against it, never an override"), { code: "workflow.register.title-constraint" });
   }
   const title = documentTitle ?? declaredTitle ?? planId;
-  const catalogRelativePath = relative3(canonicalizeNearestExisting(resolvePlanDir(harnessRoot)), resolved.planPath).split(sep6).join("/");
+  const catalogRelativePath = relative4(canonicalizeNearestExisting(resolvePlanDir(harnessRoot)), resolved.planPath).split(sep7).join("/");
   return {
     plan: { id: planId, title, file: resolved.planPath },
     catalogRelativePath,
@@ -16208,8 +16809,8 @@ function planWorkflowSnapshot(workflowId, options, startedAt) {
 }
 function normalizeIterationCompassRef(ref, harnessRoot, refuse) {
   const canonical2 = canonicalIterationCompassRef(ref, harnessRoot, refuse);
-  const path2 = canonicalizeNearestExisting(resolve9(harnessRoot, canonical2));
-  if (!existsSync11(path2) || !statSync5(path2).isFile()) {
+  const path2 = canonicalizeNearestExisting(resolve12(harnessRoot, canonical2));
+  if (!existsSync12(path2) || !statSync6(path2).isFile()) {
     throw refuse(reviewedCompassMissing(ref, harnessRoot));
   }
   return canonical2;
@@ -16217,21 +16818,21 @@ function normalizeIterationCompassRef(ref, harnessRoot, refuse) {
 function canonicalIterationCompassRef(ref, harnessRoot, refuse) {
   const rootCanon = canonicalizeNearestExisting(harnessRoot);
   const prefix = rootCanon.endsWith("/") ? rootCanon : `${rootCanon}/`;
-  if (isAbsolute5(ref)) {
-    const canon2 = canonicalizeNearestExisting(resolve9(ref));
+  if (isAbsolute8(ref)) {
+    const canon2 = canonicalizeNearestExisting(resolve12(ref));
     if (canon2 !== rootCanon && !canon2.startsWith(prefix)) {
       throw refuse(`options.compassRef resolves outside the harness root - the reviewed compass_ref must address a ` + `document inside ${harnessRoot}; store the harness-relative pointer of that compass instead`);
     }
-    return relative3(rootCanon, canon2).split(sep6).join("/");
+    return relative4(rootCanon, canon2).split(sep7).join("/");
   }
-  const canon = canonicalizeNearestExisting(resolve9(harnessRoot, ref));
+  const canon = canonicalizeNearestExisting(resolve12(harnessRoot, ref));
   if (canon !== rootCanon && !canon.startsWith(prefix)) {
     throw refuse(`options.compassRef escapes the harness root - the reviewed compass_ref must address a document inside ` + `${harnessRoot}; store the harness-relative pointer of that compass instead`);
   }
-  return relative3(rootCanon, canon).split(sep6).join("/");
+  return relative4(rootCanon, canon).split(sep7).join("/");
 }
 function reviewedCompassMissing(ref, harnessRoot) {
-  const repoRelative = isAbsolute5(ref) ? undefined : /^(?:\.\/)?\.mstar\//.test(ref);
+  const repoRelative = isAbsolute8(ref) ? undefined : /^(?:\.\/)?\.mstar\//.test(ref);
   return `options.compassRef names no existing reviewed compass under ${harnessRoot}` + (repoRelative ? ` - the pointer ${JSON.stringify(ref)} is repository-relative, but a compass_ref is resolved against the ` + `harness root, so it would name a nested ".mstar/.mstar/..." document; drop the leading ".mstar/"` : "") + `; pass the compass document's absolute path inside the harness root, or its harness-relative pointer ` + `(e.g. iterations/<iteration-id>/delivery-compass.md)`;
 }
 function iterationWorkflowSnapshot(workflowId, options, startedAt) {
@@ -16248,7 +16849,7 @@ function iterationWorkflowSnapshot(workflowId, options, startedAt) {
     plans: options.rows.map((r) => ({
       id: r.id,
       title: r.title,
-      file: canonicalRegisteredPlanPath({ harnessRoot: resolve9(options.harnessDir), planId: r.id, file: r.file }).planPath,
+      file: canonicalRegisteredPlanPath({ harnessRoot: resolve12(options.harnessDir), planId: r.id, file: r.file }).planPath,
       status: "Todo",
       metadata: {
         iteration_refs: [options.compassRef],
@@ -16263,7 +16864,7 @@ function iterationWorkflowSnapshot(workflowId, options, startedAt) {
   return snapshot;
 }
 function summarize(violations) {
-  return violations.map((violation8) => violation8.message).join("; ");
+  return violations.map((violation9) => violation9.message).join("; ");
 }
 function projectBucketOf(row) {
   const metadata = isPlainObject(row.metadata) ? row.metadata : {};
@@ -16611,7 +17212,7 @@ function validateCatalogExecutionRequest(request) {
   };
 }
 function assertReviewedCompassDocument(workflowId, harnessDir, compassRef) {
-  const path2 = canonicalizeNearestExisting(join15(harnessDir, compassRef));
+  const path2 = canonicalizeNearestExisting(join16(harnessDir, compassRef));
   const invalid4 = (detail) => new CatalogRegistrationError("catalog.registration-invalid", detail);
   let text4;
   try {
@@ -16644,7 +17245,7 @@ function assertRegisteredPlanDocuments(workflow) {
   if (workflow.kind !== "iteration")
     return;
   for (const row of workflow.options.rows) {
-    resolveRegisteredPlanFile({ harnessRoot: resolve10(workflow.options.harnessDir), planId: row.id, file: row.file });
+    resolveRegisteredPlanFile({ harnessRoot: resolve13(workflow.options.harnessDir), planId: row.id, file: row.file });
   }
 }
 function normalizeIterationRowFiles(workflow) {
@@ -16655,7 +17256,7 @@ function normalizeIterationRowFiles(workflow) {
     return workflow;
   const rows = options.rows;
   const harnessDir = options.harnessDir;
-  if (!Array.isArray(rows) || typeof harnessDir !== "string" || !isAbsolute6(harnessDir))
+  if (!Array.isArray(rows) || typeof harnessDir !== "string" || !isAbsolute9(harnessDir))
     return workflow;
   let changed = false;
   const resolvedRows = rows.map((row) => {
@@ -16693,7 +17294,7 @@ function normalizeIterationPlanPaths(request) {
     return request;
   const compassRef = options.compassRef;
   const harnessDir = options.harnessDir;
-  if (!Array.isArray(options.rows) || typeof harnessDir !== "string" || !isAbsolute6(harnessDir) || typeof compassRef !== "string" || compassRef.trim() === "")
+  if (!Array.isArray(options.rows) || typeof harnessDir !== "string" || !isAbsolute9(harnessDir) || typeof compassRef !== "string" || compassRef.trim() === "")
     return request;
   const normalizedCompassRef = canonicalIterationCompassRef(compassRef, harnessDir, (detail) => new CatalogRegistrationError("catalog.registration-invalid", detail));
   const withRows = normalizeIterationRowFiles(workflow);
@@ -16726,9 +17327,9 @@ function assertDeliveryRegistrationFor(options, at) {
 }
 function executionPlanFor(context, request) {
   const workflow = request.workflow;
-  const harnessDir = resolve10(workflow.options.harnessDir);
-  if (resolve10(context.harnessDir) !== harnessDir) {
-    invalid3(`the store context harness dir (${resolve10(context.harnessDir)}) and the producer's harnessDir (${harnessDir}) must be the same root: ` + "one execution registration, one catalog root");
+  const harnessDir = resolve13(workflow.options.harnessDir);
+  if (resolve13(context.harnessDir) !== harnessDir) {
+    invalid3(`the store context harness dir (${resolve13(context.harnessDir)}) and the producer's harnessDir (${harnessDir}) must be the same root: ` + "one execution registration, one catalog root");
   }
   const workflowId = workflow.workflowId;
   assertSafePathComponent(workflowId, "workflow id");
@@ -16736,8 +17337,8 @@ function executionPlanFor(context, request) {
   const snapshot = workflow.kind === "plan" ? planWorkflowSnapshot(workflowId, workflow.options, startedAt) : iterationWorkflowSnapshot(workflowId, workflow.options, startedAt);
   for (const entity of request.delta.entities) {
     const root = catalogRootDir(context, entity.rootKind);
-    const target = resolve10(root, entity.relativePath);
-    if (target !== root && !target.startsWith(`${root}${sep7}`)) {
+    const target = resolve13(root, entity.relativePath);
+    if (target !== root && !target.startsWith(`${root}${sep8}`)) {
       invalid3(`request.delta entity ${entity.kind} ${JSON.stringify(entity.id)} resolves to ${target}, outside its ${entity.rootKind} root`);
     }
   }
@@ -16759,9 +17360,9 @@ function workflowEntryOf(plan, snapshot) {
     started_at: snapshot.started_at,
     dir: `workflows/${plan.workflowId}`
   };
-  const gate = validateWorkflowEntry(entry);
-  if (!gate.ok) {
-    throw new CatalogRegistrationError("catalog.registration-invalid", `refusing to register invalid workflow entry: ${gate.violations.map((v) => v.message).join("; ")}`);
+  const gate2 = validateWorkflowEntry(entry);
+  if (!gate2.ok) {
+    throw new CatalogRegistrationError("catalog.registration-invalid", `refusing to register invalid workflow entry: ${gate2.violations.map((v) => v.message).join("; ")}`);
   }
   return entry;
 }
@@ -16952,9 +17553,9 @@ async function purgeCatalogRegistration(context, input) {
     if (!isPlainObject(failure) || failure.workflow_id !== workflowId || typeof failure.snapshot_path !== "string" || typeof failure.snapshot_content_sha256 !== "string" || typeof failure.reviewed_identity !== "string") {
       throw new CatalogRegistrationError("catalog.purge-not-found", `operation ${JSON.stringify(operationId)} has no identity-failure record for this workflow; if it is pending and unregistered, abandon it without file changes using \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
     }
-    const snapshotPath = resolve10(failure.snapshot_path);
-    const harnessDir = resolve10(context.harnessDir);
-    if (!snapshotPath.startsWith(`${harnessDir}${sep7}`)) {
+    const snapshotPath = resolve13(failure.snapshot_path);
+    const harnessDir = resolve13(context.harnessDir);
+    if (!snapshotPath.startsWith(`${harnessDir}${sep8}`)) {
       throw new CatalogRegistrationError("catalog.purge-identity-mismatch", `recorded snapshot path is outside the canonical harness root; original bytes were retained; settle the pending journal with \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
     }
     return { snapshotPath, digest: failure.snapshot_content_sha256, identity: failure.reviewed_identity, generation };
@@ -17014,400 +17615,6 @@ async function purgeCatalogRegistration(context, input) {
     return receipt;
   });
 }
-function gitProbeTimeoutMs() {
-  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "")
-    return DEFAULT_PROBE_TIMEOUT_MS;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
-}
-function parseMainWorktree(out) {
-  const tokens = out.split("\x00");
-  const first = tokens.findIndex((t) => t.startsWith("worktree "));
-  if (first === -1)
-    return null;
-  const rawPath = tokens[first].slice("worktree ".length);
-  if (rawPath.trim() === "")
-    return null;
-  let branch = null;
-  let detached = false;
-  for (let i = first + 1;i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token.startsWith("worktree "))
-      break;
-    if (token === "bare")
-      return null;
-    if (token === "detached")
-      detached = true;
-    else if (token.startsWith("branch ")) {
-      const ref = token.slice("branch ".length).trim();
-      if (ref === "")
-        return null;
-      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
-    }
-  }
-  if (detached)
-    branch = "";
-  if (branch === null)
-    return null;
-  try {
-    return { root: realpathSync6(rawPath), branch };
-  } catch {
-    return null;
-  }
-}
-function readMainWorktree(cwd) {
-  const start = cwd ?? process.cwd();
-  try {
-    const stdout = execFileSync3("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs()
-    });
-    return parseMainWorktree(stdout);
-  } catch {
-    return null;
-  }
-}
-function assertMainWorktreeResidency(main, expectedBranch) {
-  const violations = [];
-  if (main.branch === "") {
-    violations.push(violation8("high", "worktree.main.residency-switched", `main worktree "${main.root}" is detached (no branch checked out) — residency cannot match the recorded expectation ${JSON.stringify(expectedBranch)}`, `Inspect \`git -C ${shellQuote(main.root)} status --short\`; after resolving local changes, run \`git -C ${shellQuote(main.root)} checkout ${shellQuote(expectedBranch)}\` to restore the recorded main branch.`));
-  } else if (main.branch !== expectedBranch) {
-    violations.push(violation8("high", "worktree.main.residency-switched", `main worktree "${main.root}" is on branch "${main.branch}", expected the recorded branch "${expectedBranch}" — residency is checked against the value recorded at lifecycle start, never re-pointed at the observed branch`, `Inspect \`git -C ${shellQuote(main.root)} status --short\`; after resolving local changes, run \`git -C ${shellQuote(main.root)} checkout ${shellQuote(expectedBranch)}\` to restore the recorded main branch.`));
-  }
-  return gate(violations);
-}
-function probeStatus(worktreePath, opts) {
-  const precomputed = opts.statusOf?.(worktreePath);
-  if (precomputed !== undefined)
-    return { status: precomputed };
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
-  try {
-    return { status: execFileSync3(opts.gitPath ?? "git", ["-C", worktreePath, "status", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout }) };
-  } catch (error) {
-    return { error: error.message ?? "git status probe failed" };
-  }
-}
-function anchorRecovery(workflowId, key) {
-  const flag = deliveryAnchorFlags[key];
-  return flag === null || flag === undefined ? `Integration is recorded only at iteration registration, so no running-workflow repair admits it. Close it with mstar workflow lifecycle --workflow ${workflowId} --status failed --reason "<blocker>", then register a replacement iteration with branch source, target, and integration options; rerun mstar worktree check --workflow <new-id> --entry.` : `Record the missing branch.${key} with mstar workflow delivery-anchors --workflow ${workflowId} ${flag} <branch> --reason "<why branch.${key} is absent>", then rerun mstar worktree check --workflow ${workflowId} --entry.`;
-}
-function workflowEntryPreDispatchCheck(input, opts = {}) {
-  const violations = [];
-  const { base = "", target = "", integration = "" } = input.branch;
-  const iteration = input.workflowType === "iteration";
-  const anchors = iteration ? [["base", base], ["target", target], ["integration", integration]] : [["work", deliveryBranchOf(input.branch) ?? ""], ["target", target]];
-  for (const [key, value] of anchors) {
-    if (value.trim() === "") {
-      violations.push(violation8("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, anchorRecovery(input.workflowId, key)));
-    }
-  }
-  const expected = (iteration ? base : target).trim();
-  if (input.mainWorktree === null) {
-    violations.push(violation8("high", "worktree.main.unresolved", `main worktree identity cannot be proved for workflow "${input.workflowId}"`, "Run git worktree list --porcelain from an accessible repository checkout, then rerun mstar worktree check --workflow <id> --entry."));
-  } else {
-    if (expected === "")
-      violations.push(violation8("high", "worktree.main.expected-branch-missing", `workflow "${input.workflowId}" has no recorded main branch expectation`, anchorRecovery(input.workflowId, iteration ? "base" : "target")));
-    else
-      violations.push(...assertMainWorktreeResidency(input.mainWorktree, expected).violations);
-    const owner = input.lifecycleBranches.find((entry) => entry.branch === input.mainWorktree.branch && entry.branch !== expected);
-    if (owner) {
-      const recovery = owner.workflowId === null ? `Run mstar status validate to identify the active lifecycle owner of branch "${owner.branch}", then coordinate its supported close process before switching branches.` : `Coordinate with workflow ${owner.workflowId}'s coordinator; if its lifecycle is ready to close, run mstar status workflow-close --workflow ${owner.workflowId} --reason <reason>, verify ownership is released with mstar status validate, then restore the recorded branch using git -C ${shellQuote(input.mainWorktree.root)} checkout ${shellQuote(expected)}.`;
-      violations.push(violation8("high", "worktree.main.residency-switched", `main worktree branch "${owner.branch}" is owned by workflow ${owner.workflowId ?? "unknown"}`, recovery));
-    }
-  }
-  const integrationPath = input.integrationWorktreePath?.trim() ?? "";
-  if (iteration) {
-    if (integrationPath === "") {
-      violations.push(violation8("high", "worktree.entry.integration-path-missing", `iteration "${input.workflowId}" has no recorded integration_worktree_path`, `Create a dedicated checkout with \`git worktree add <absolute-path> ${shellQuote(integration)}\`, then register it through \`mstar workflow integration-worktree --workflow ${shellQuote(input.workflowId)} --path <absolute-path>\`.`));
-    } else if (!existsSync12(integrationPath)) {
-      violations.push(violation8("high", "worktree.entry.integration-missing", `integration worktree "${integrationPath}" does not exist`, `Create the recorded checkout with \`git worktree add ${shellQuote(integrationPath)} ${shellQuote(integration)}\`, then register or verify it with \`mstar workflow integration-worktree --workflow ${shellQuote(input.workflowId)} --path ${shellQuote(integrationPath)}\`.`));
-    } else {
-      const probe = probeBranch(integrationPath, opts);
-      if ("error" in probe)
-        violations.push(violation8("high", "worktree.entry.integration-branch-probe-failed", `cannot probe integration branch: ${probe.error}`, `Inspect \`git -C ${shellQuote(integrationPath)} rev-parse --show-toplevel\` and \`git -C ${shellQuote(integrationPath)} branch --show-current\`; restore the accessible recorded checkout before rerunning mstar worktree check --workflow ${shellQuote(input.workflowId)} --entry.`));
-      else if (probe.branch !== integration)
-        violations.push(violation8("high", "worktree.entry.integration-branch-mismatch", `integration worktree is on "${probe.branch}", expected branch.integration "${integration}"`, `Inspect \`git -C ${shellQuote(integrationPath)} status --short\`; after resolving local changes, run \`git -C ${shellQuote(integrationPath)} checkout ${shellQuote(integration)}\` to restore recorded branch.integration.`));
-      const status = probeStatus(integrationPath, opts);
-      if ("error" in status)
-        violations.push(violation8("high", "worktree.entry.integration-status-probe-failed", `cannot inspect integration worktree status: ${status.error}`, `Inspect \`git -C ${shellQuote(integrationPath)} rev-parse --show-toplevel\`, then run \`git -C ${shellQuote(integrationPath)} status --short\` once the checkout is accessible.`));
-      else if (status.status.trim() !== "")
-        violations.push(violation8("high", "worktree.entry.integration-dirty", "integration worktree has uncommitted changes", `Inspect \`git -C ${shellQuote(integrationPath)} status --short\`; commit intended changes or explicitly restore only changes you own, then rerun mstar worktree check --workflow ${shellQuote(input.workflowId)} --entry. Do not use git clean or reset as automatic cleanup.`));
-    }
-  }
-  const lease = input.integrationLease == null ? { claimed: false } : { claimed: true, lease: input.integrationLease };
-  if (lease.claimed) {
-    const result = validateIntegrationMergeLease(lease.lease);
-    violations.push(...result.violations);
-  }
-  return { ok: violations.length === 0, violations, lease, scope: "engine-enforced workflow-entry facts only" };
-}
-function violation8(severity, code2, message, fix) {
-  return { ok: false, severity, code: code2, message, fix };
-}
-function gate(violations) {
-  return { ok: violations.length === 0, violations };
-}
-function probeBranch(worktreePath, opts) {
-  const precomputed = opts.branchOf?.(worktreePath);
-  if (precomputed !== undefined)
-    return { branch: precomputed };
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
-  try {
-    const stdout = execFileSync3(opts.gitPath ?? "git", ["-C", worktreePath, "branch", "--show-current"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout
-    });
-    const branch = stdout.trim();
-    if (branch === "")
-      return { error: `no branch checked out (detached HEAD?) at "${worktreePath}"` };
-    return { branch };
-  } catch (err) {
-    const e = err;
-    if (e.killed === true || e.signal !== undefined) {
-      return { error: `git probe timed out after ${timeout}ms (killed by ${e.signal ?? "SIGTERM"})` };
-    }
-    const detail = (e.stderr !== undefined ? e.stderr.toString().trim() : "") || e.message || "git probe failed";
-    return { error: detail };
-  }
-}
-function probeCheckout(worktreePath, opts) {
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
-  try {
-    const stdout = execFileSync3(opts.gitPath ?? "git", ["-C", worktreePath, "rev-parse", "--git-dir"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout
-    });
-    const raw = stdout.trim();
-    if (raw === "")
-      return { error: `no git dir reported at "${worktreePath}"` };
-    const abs = isAbsolute7(raw) ? raw : join16(worktreePath, raw);
-    return { gitDir: realpathSync6(abs) };
-  } catch (err) {
-    const e = err;
-    if (e.killed === true || e.signal !== undefined) {
-      return { error: `git probe timed out after ${timeout}ms (killed by ${e.signal ?? "SIGTERM"})` };
-    }
-    const detail = (e.stderr !== undefined ? e.stderr.toString().trim() : "") || e.message || "git probe failed";
-    return { error: detail };
-  }
-}
-function isDistinctCheckout(controlPath, candidatePath, opts = {}) {
-  const control = probeCheckout(controlPath, opts);
-  const candidate = probeCheckout(candidatePath, opts);
-  if ("error" in control || "error" in candidate)
-    return false;
-  return control.gitDir !== candidate.gitDir;
-}
-function probeCheckoutRoot(path2, opts = {}) {
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
-  try {
-    const stdout = execFileSync3(opts.gitPath ?? "git", ["-C", path2, "rev-parse", "--show-toplevel"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout
-    });
-    const raw = stdout.trim();
-    if (raw === "")
-      return null;
-    return realpathSync6(raw);
-  } catch {
-    return null;
-  }
-}
-function l1PreDispatchCheck(input, opts = {}) {
-  const violations = [];
-  const checkoutCache = new Map;
-  const checkout = (path2) => {
-    const key = resolve11(path2);
-    if (!checkoutCache.has(key))
-      checkoutCache.set(key, probeCheckout(path2, opts));
-    return checkoutCache.get(key);
-  };
-  const {
-    workflowType,
-    integrationWorktreePath,
-    integrationBranch,
-    mainWorktree,
-    expectedMainBranch,
-    lifecycleBranches,
-    rowWorktreePath,
-    rowWorkingBranch,
-    planId
-  } = input;
-  if (mainWorktree === null) {
-    violations.push(violation8("high", "worktree.main.unresolved", `main worktree identity cannot be proved for plan "${planId}" (git worktree discovery failed or unavailable) — L1 refuses instead of skipping the residency row`, "run from inside the repository (or pass a resolvable cwd) so the main worktree can be discovered"));
-  } else {
-    if (expectedMainBranch.trim() === "") {
-      violations.push(violation8("high", "worktree.main.expected-branch-missing", `neither a recorded main-worktree branch nor an explicit branch.base is available for plan "${planId}" — the expectation is never the branch observed at check time`, "record the main worktree branch at lifecycle start (plan header / --main-branch) or carry the explicit branch.base"));
-    } else {
-      violations.push(...assertMainWorktreeResidency(mainWorktree, expectedMainBranch).violations);
-    }
-    const owner = lifecycleBranches.find((entry) => entry.branch === mainWorktree.branch && entry.branch !== expectedMainBranch);
-    if (mainWorktree.branch !== "" && owner) {
-      const ownerLabel = owner.workflowId === null ? "an active lifecycle with no recorded workflow id" : `workflow ${owner.workflowId}`;
-      const ownerRecovery = owner.workflowId === null ? "wait for the owning lifecycle to finish and close through its documented lifecycle verbs" : `wait for workflow ${owner.workflowId} to finish and close through its documented lifecycle verbs`;
-      violations.push(violation8("high", "worktree.main.residency-switched", `main worktree "${mainWorktree.root}" is on branch "${mainWorktree.branch}", owned by ${ownerLabel}${owner.planId ? ` plan ${owner.planId}` : ""}`, `${ownerRecovery}, or have its coordinator correct the row via mstar plan prepare`));
-    }
-  }
-  const integrationRequired = workflowType === "iteration" || integrationWorktreePath.trim() !== "" || integrationBranch.trim() !== "";
-  if (integrationRequired && (integrationWorktreePath.trim() === "" || integrationBranch.trim() === "")) {
-    violations.push(violation8("high", "worktree.l1.integration-missing", `integration worktree path and branch are both required (workflow type "${workflowType}") for plan "${planId}" — got path ${JSON.stringify(integrationWorktreePath)}, branch ${JSON.stringify(integrationBranch)}`, "record snapshot integration_worktree_path + branch.integration (the dedicated integration checkout), or pass both empty for a standalone plan"));
-  }
-  if (rowWorktreePath.trim() === "") {
-    violations.push(violation8("high", "worktree.l1.feature-scope-missing", `metadata.worktree_path is empty for plan "${planId}" — no registered feature worktree to dispatch against`, `Run \`mstar plan prepare --workflow ${input.workflowId ?? "<workflow-id>"} --plan ${planId} --worktree-path <absolute-feature-worktree> --working-branch ${rowWorkingBranch.trim() === "" ? "<feature-branch>" : JSON.stringify(rowWorkingBranch)}\` to record the missing worktree path`));
-  }
-  if (rowWorkingBranch.trim() === "") {
-    violations.push(violation8("high", "worktree.l1.feature-branch-missing", `metadata.working_branch is empty for plan "${planId}"`, `Run \`mstar plan prepare --workflow ${input.workflowId ?? "<workflow-id>"} --plan ${planId} --worktree-path ${rowWorktreePath.trim() === "" ? "<absolute-feature-worktree>" : JSON.stringify(rowWorktreePath)} --working-branch <feature-branch>\` to record the missing feature branch`));
-  }
-  if (integrationRequired && integrationWorktreePath.trim() !== "" && integrationBranch.trim() !== "") {
-    if (!existsSync12(integrationWorktreePath)) {
-      violations.push(violation8("high", "worktree.l1.integration-missing", `integration worktree "${integrationWorktreePath}" does not exist for plan "${planId}" — the integration checkout must exist before dispatch`, `create it before dispatch: git worktree add ${shellQuote(integrationWorktreePath)} ${shellQuote(integrationBranch)}`));
-    } else {
-      const probe = probeBranch(integrationWorktreePath, opts);
-      if ("error" in probe) {
-        violations.push(violation8("high", "worktree.branch-probe-failed", `cannot probe branch at the integration worktree "${integrationWorktreePath}" for plan "${planId}": ${probe.error}`, "verify the path is a git worktree checkout on the integration branch (not detached)"));
-      } else if (probe.branch !== integrationBranch) {
-        violations.push(violation8("high", "worktree.branch-mismatch", `integration worktree "${integrationWorktreePath}" is on branch "${probe.branch}", expected branch.integration "${integrationBranch}" (plan "${planId}")`, `checkout ${shellQuote(integrationBranch)} in the integration worktree`));
-      }
-    }
-  }
-  const identityViolation = (aPath, bPath, code2, describe, fix) => {
-    if (resolve11(aPath) === resolve11(bPath)) {
-      return violation8("critical", code2, `${describe} — the same checkout (normalized path equality) is not isolation`, fix);
-    }
-    if (!existsSync12(aPath) || !existsSync12(bPath))
-      return null;
-    const a = checkout(aPath);
-    const b = checkout(bPath);
-    if ("error" in a) {
-      return violation8("high", "worktree.l1.checkout-probe-failed", `cannot establish the Git-checkout identity of "${aPath}" for plan "${planId}": ${a.error}`, "verify the path is a git checkout");
-    }
-    if ("error" in b) {
-      return violation8("high", "worktree.l1.checkout-probe-failed", `cannot establish the Git-checkout identity of "${bPath}" for plan "${planId}": ${b.error}`, "verify the path is a git checkout");
-    }
-    if (a.gitDir === b.gitDir) {
-      return violation8("critical", code2, `${describe} — a plain subdirectory or symlink alias of the other checkout is not isolation (canonical per-worktree git dirs match)`, fix);
-    }
-    return null;
-  };
-  if (mainWorktree !== null && rowWorktreePath.trim() !== "") {
-    const v = identityViolation(mainWorktree.root, rowWorktreePath, "worktree.l1.feature-equals-main", `row metadata worktree "${rowWorktreePath}" is the same Git checkout as the main worktree "${mainWorktree.root}" (plan "${planId}")`, "use a distinct feature worktree for the plan (git worktree add <path> <branch>)");
-    if (v !== null)
-      violations.push(v);
-  }
-  if (mainWorktree !== null && integrationRequired && integrationWorktreePath.trim() !== "") {
-    const v = identityViolation(mainWorktree.root, integrationWorktreePath, "worktree.l1.integration-equals-main", `integration worktree "${integrationWorktreePath}" is the same Git checkout as the main worktree "${mainWorktree.root}" (plan "${planId}") — the integration checkout is the sole merge cwd and must be dedicated`, "use a dedicated integration checkout on branch.integration (git worktree add <path> <integration-branch>) and record it as integration_worktree_path");
-    if (v !== null)
-      violations.push(v);
-  }
-  if (integrationRequired && integrationWorktreePath.trim() !== "" && rowWorktreePath.trim() !== "") {
-    const v = identityViolation(integrationWorktreePath, rowWorktreePath, "worktree.l1.feature-equals-integration", `row metadata worktree "${rowWorktreePath}" is the same Git checkout as the integration worktree "${integrationWorktreePath}" (plan "${planId}") — the feature worktree must be distinct from both main and integration`, "use a distinct feature worktree for the plan (git worktree add <path> <working-branch>)");
-    if (v !== null)
-      violations.push(v);
-  }
-  if (rowWorktreePath.trim() !== "" && !existsSync12(rowWorktreePath)) {
-    violations.push(violation8("high", "worktree.l1.feature-missing", `feature worktree directory "${rowWorktreePath}" does not exist for plan "${planId}"`, `create it before dispatch: git worktree add ${shellQuote(rowWorktreePath)} <working-branch>`));
-  } else if (rowWorktreePath.trim() !== "" && rowWorkingBranch.trim() !== "") {
-    const probe = probeBranch(rowWorktreePath, opts);
-    if ("error" in probe) {
-      violations.push(violation8("high", "worktree.l1.branch-probe-failed", `cannot probe branch at "${rowWorktreePath}" for plan "${planId}": ${probe.error}`, "verify the path is a git worktree checkout on the recorded working branch (not detached)"));
-    } else if (probe.branch !== rowWorkingBranch) {
-      violations.push(violation8("high", "worktree.l1.branch-mismatch", `feature worktree "${rowWorktreePath}" is on branch "${probe.branch}", expected metadata.working_branch "${rowWorkingBranch}" (plan "${planId}")`, `checkout ${shellQuote(rowWorkingBranch)} in the feature worktree`));
-    }
-  }
-  return gate(violations);
-}
-function l2PreDispatchCheck(input, opts = {}) {
-  const violations = [];
-  const tracks = input.tracks ?? [];
-  const seenPaths = new Set;
-  if (tracks.length < 1) {
-    violations.push(violation8("high", "worktree.l2.no-tracks", "no parallel writable tracks — the L2 pre-dispatch checklist requires at least one track with an absolute worktreePath and Working branch", "pass each track's absolute Worktree path and PM-approved Working branch"));
-  }
-  tracks.forEach((track, index2) => {
-    if (track.worktreePath.trim() === "" || track.workingBranch.trim() === "") {
-      violations.push(violation8("high", "worktree.l2.track-invalid", `track ${index2 + 1} is missing worktreePath and/or workingBranch`, "fill both fields for every track"));
-      return;
-    }
-    if (!isAbsolute7(track.worktreePath)) {
-      violations.push(violation8("high", "worktree.l2.track-path-relative", `track ${index2 + 1} worktreePath "${track.worktreePath}" is not an absolute path — L2 tracks MUST use absolute worktree checkout paths (consistent with the lease validator's absolute worktree_path enforcement)`, `use an absolute path for track ${index2 + 1} (e.g. /Users/<you>/worktrees/<branch>)`));
-      return;
-    }
-    const normalized = resolve11(track.worktreePath);
-    if (seenPaths.has(normalized)) {
-      violations.push(violation8("high", "worktree.l2.track-path-collision", `duplicate worktreePath "${track.worktreePath}" across parallel tracks — L2 parallel-writable isolation requires a distinct absolute Worktree path per track (N parallel invokes ≠ isolation)`, "give every parallel track its own git worktree checkout"));
-      return;
-    }
-    seenPaths.add(normalized);
-    if (!existsSync12(track.worktreePath)) {
-      violations.push(violation8("high", "worktree.l2.track-missing", `track worktree directory "${track.worktreePath}" does not exist`, `create it before dispatch: git worktree add ${track.worktreePath} ${track.workingBranch}`));
-      return;
-    }
-    const probe = probeBranch(track.worktreePath, opts);
-    if ("error" in probe) {
-      violations.push(violation8("high", "worktree.l2.branch-probe-failed", `cannot probe branch at "${track.worktreePath}": ${probe.error}`, "verify the path is a git worktree checkout on its Working branch (not detached)"));
-    } else if (probe.branch !== track.workingBranch) {
-      violations.push(violation8("high", "worktree.l2.branch-mismatch", `track worktree "${track.worktreePath}" is on branch "${probe.branch}", expected Working branch "${track.workingBranch}"`, `checkout ${track.workingBranch} in that worktree`));
-    }
-  });
-  return gate(violations);
-}
-function assertControlVsFeaturePath(controlWorktreePath, featureWorktreePath, opts = {}) {
-  const violations = [];
-  if (controlWorktreePath === "" && featureWorktreePath === "") {
-    violations.push(violation8("critical", "worktree.control-feature.same", `main control root and feature worktree path are both empty — metadata.worktree_path MUST be a distinct checkout from the main worktree`, "record a distinct feature worktree path"));
-    return gate(violations);
-  }
-  if (controlWorktreePath === "" || featureWorktreePath === "") {
-    return gate(violations);
-  }
-  if (!isDistinctCheckout(controlWorktreePath, featureWorktreePath, opts)) {
-    violations.push(violation8("critical", "worktree.control-feature.same", `main control root "${controlWorktreePath}" and feature worktree path "${featureWorktreePath}" are not distinct Git checkouts — a plain subdirectory or symlink alias of the main checkout is not isolation; metadata.worktree_path MUST be a distinct checkout`, "use a distinct feature worktree for the plan's product edits (git worktree add <path> <branch>)"));
-  }
-  return gate(violations);
-}
-function assertBranchAlignment(worktreePath, expectedBranch, opts = {}) {
-  const violations = [];
-  const probe = probeBranch(worktreePath, opts);
-  if ("error" in probe) {
-    violations.push(violation8("high", "worktree.branch-probe-failed", `cannot probe branch at "${worktreePath}": ${probe.error}`, "verify the path is a git worktree checkout on the expected branch (not detached)"));
-  } else if (probe.branch !== expectedBranch) {
-    violations.push(violation8("high", "worktree.branch-mismatch", `worktree "${worktreePath}" is on branch "${probe.branch}", expected "${expectedBranch}" (Assignment Working branch)`, `checkout ${expectedBranch} in that worktree`));
-  }
-  return gate(violations);
-}
-function assertQcAlignment(assignments) {
-  const violations = [];
-  const list2 = assignments ?? [];
-  for (const { key, label } of QC_ALIGNMENT_FIELDS) {
-    const distinct = [...new Set(list2.map((a) => a[key]))];
-    if (distinct.length > 1) {
-      violations.push(violation8("high", "qc.alignment.mismatch", `QC/QA alignment field "${label}" is not byte-identical across ${list2.length} assignments: ${distinct.map((v) => `"${v}"`).join(" vs ")}`, `copy the same ${label} value verbatim into every QC tri and QA Assignment`));
-    }
-  }
-  return gate(violations);
-}
-function singleReviewSnapshot(assignments) {
-  const violations = [];
-  const list2 = assignments ?? [];
-  list2.forEach((a, index2) => {
-    if ((a.head ?? "").trim() === "") {
-      violations.push(violation8("high", "qc.alignment.snapshot-missing", `review head not provided for assignment ${index2 + 1} (plan_id "${a.planId}") — cannot confirm the single review snapshot precondition`, "precompute and pass the review HEAD (full SHA) for every assignment"));
-    }
-  });
-  const distinct = [...new Set(list2.map((a) => a.head ?? "").filter((h) => h.trim() !== ""))];
-  if (distinct.length > 1) {
-    violations.push(violation8("high", "qc.alignment.single-snapshot", `assignments cover ${distinct.length} different review heads (${distinct.join(", ")}) — all reviewable commits must sit on ONE Working branch HEAD before QC tri + QA`, "merge the parallel tracks to a single Working branch HEAD, then re-derive the heads"));
-  }
-  return gate(violations);
-}
-function shellQuote(value) {
-  return "'" + value.replaceAll("'", `'"'"'`) + "'";
-}
 function persistPayloadContracts() {
   return PERSIST_PAYLOAD_CONTRACTS;
 }
@@ -17437,19 +17644,19 @@ function snapshotPathOf(harnessRoot, workflowId) {
   return join17(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), workflowId, SNAPSHOT_FILE);
 }
 function isWithin(parent, child) {
-  return child === parent || child.startsWith(parent.endsWith(sep8) ? parent : `${parent}${sep8}`);
+  return child === parent || child.startsWith(parent.endsWith(sep9) ? parent : `${parent}${sep9}`);
 }
 function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   if (isNonEmptyString(harnessDir))
-    return resolve12(cwd, harnessDir);
-  const start = resolve12(cwd);
+    return resolve14(cwd, harnessDir);
+  const start = resolve14(cwd);
   const main = readMainWorktree(start);
   if (main !== null)
     return resolveHarnessDir(main.root);
   for (let dir = start;; ) {
     let linked = false;
     try {
-      const marker = statSync6(join17(dir, ".git"));
+      const marker = statSync7(join17(dir, ".git"));
       if (marker.isDirectory())
         return resolveHarnessDir(start, { workspaceRoot: dir });
       linked = marker.isFile();
@@ -17464,7 +17671,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
         return resolveHarnessDir(start);
       throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join17(dir, ".git") });
     }
-    const parent = dirname9(dir);
+    const parent = dirname10(dir);
     if (parent === dir)
       break;
     dir = parent;
@@ -17484,12 +17691,12 @@ function probeProcessRoot(cwd) {
 function resolveIntentRoot(context, association) {
   const resolvedFrom = [];
   const warnings = [];
-  const cwd = resolve12(context.cwd);
+  const cwd = resolve14(context.cwd);
   if (isNonEmptyString(context.controlRoot)) {
     resolvedFrom.push({ path: "controlRoot", source: "intent.explicit" });
     return {
       ok: true,
-      root: canonicalizeNearestExisting(resolve12(cwd, context.controlRoot)),
+      root: canonicalizeNearestExisting(resolve14(cwd, context.controlRoot)),
       resolvedFrom,
       warnings
     };
@@ -17620,7 +17827,7 @@ function resolveIntentTarget(input) {
     return { ok: true, workflowId: id, resolvedFrom };
   const plan = safePlanId(planId, "planId");
   resolvedFrom.push({ path: "planId", source: explicitPlan !== undefined ? "intent.explicit" : "target.association" });
-  const snapshot = readSnapshot(dirname9(snapshotFile));
+  const snapshot = readSnapshot(dirname10(snapshotFile));
   if (!snapshot.plans.some((row) => rowPlanIds(row).includes(plan))) {
     return unresolvedTarget({
       code: "coordination.plan-not-found",
@@ -17835,7 +18042,7 @@ function assertEvidenceInsidePlanArea(roots, refs) {
   const allowed = roots.join(" or ");
   for (const { field, path: path2 } of refs) {
     const details = { field, value: path2, allowed: roots };
-    if (!isAbsolute8(path2)) {
+    if (!isAbsolute10(path2)) {
       throw invalidInput2(`Evidence value in ${field} is not an absolute path: ${JSON.stringify(path2)}; evidence must be an absolute path inside ${allowed}`, details);
     }
     const abs = canonicalizeNearestExisting(path2);
@@ -17862,7 +18069,7 @@ function gitUnavailable(cwd, args, error) {
 }
 function gitRead(cwd, args) {
   try {
-    return execFileSync4("git", ["-C", cwd, ...args], {
+    return execFileSync5("git", ["-C", cwd, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
       timeout: GIT_READ_TIMEOUT_MS
@@ -17886,7 +18093,7 @@ function gitCheckout(path2) {
   let operation;
   for (const [marker, label] of UNFINISHED_GIT_OPERATIONS) {
     const markerPath = gitRead(path2, ["rev-parse", "--git-path", marker]);
-    if (markerPath !== undefined && markerPath.length > 0 && existsSync13(resolve12(path2, markerPath))) {
+    if (markerPath !== undefined && markerPath.length > 0 && existsSync13(resolve14(path2, markerPath))) {
       operation = label;
       break;
     }
@@ -17894,7 +18101,7 @@ function gitCheckout(path2) {
   return { head, clean: dirty.length === 0, operation };
 }
 function gitDirectoryIdentity(path2) {
-  const stat = statSync6(path2);
+  const stat = statSync7(path2);
   return [Number(stat.dev), Number(stat.ino)];
 }
 function currentGitHead(gitDir, commonDir) {
@@ -17913,14 +18120,14 @@ function currentGitHead(gitDir, commonDir) {
   return { head: entry?.split(" ")[0] ?? "", ref };
 }
 function captureGitProofWitness(cwd, refusal = "coordination.git-proof") {
-  const repository = canonicalTarget(resolve12(cwd));
+  const repository = canonicalTarget(resolve14(cwd));
   const gitDir = gitRead(repository, ["rev-parse", "--absolute-git-dir"]);
   const common = gitRead(repository, ["rev-parse", "--git-common-dir"]);
   const head = gitRead(repository, ["rev-parse", "HEAD"]);
   if (gitDir === undefined || common === undefined || head === undefined) {
     throw new CoordinationError(refusal, "Cannot read the Git checkout. Inspect registered scope with mstar plan show. Pass the plan id registered in the workflow row.", { repository });
   }
-  const commonDir = canonicalTarget(resolve12(repository, common));
+  const commonDir = canonicalTarget(resolve14(repository, common));
   const current = currentGitHead(gitDir, commonDir);
   if (current.head !== head) {
     throw new CoordinationError(refusal, "Git HEAD changed between reads. Inspect registered scope with mstar plan show. Pass the plan id registered in the workflow row.", { repository, expected: head, actual: current.head });
@@ -18061,7 +18268,7 @@ function loadSqliteDriverSync() {
 function storeDbPath(context) {
   if (!context?.harnessDir)
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  const root = resolve13(context.harnessDir);
+  const root = resolve15(context.harnessDir);
   return join18(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS) {
@@ -18581,7 +18788,7 @@ function probeConnectionFor(dbPath) {
   let dev;
   let ino;
   try {
-    const stats = statSync7(dbPath);
+    const stats = statSync8(dbPath);
     dev = stats.dev;
     ino = stats.ino;
   } catch {
@@ -18656,7 +18863,7 @@ function withDshWriteTransaction(context, body, selectedGeneration) {
   assertStoreRuntimeSupported();
   assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync14(dbPath)) {
-    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}. Run "mstar harness scaffold" and "mstar store init", or "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" when legacy state must be imported; nothing was written.`);
+    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}. Run "mstar harness scaffold" and "mstar store init", or "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" when legacy state must be imported; nothing was written.`);
   }
   dshTransactions.add(dbPath);
   let db;
@@ -18670,7 +18877,7 @@ function withDshWriteTransaction(context, body, selectedGeneration) {
     const initial = readStoreMeta(db);
     const execution = readExecutionMeta(db, schemaVersion);
     if (!execution || execution.authorityState !== "active") {
-      const recovery = execution?.authorityState === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : `Run "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
+      const recovery = execution?.authorityState === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : `Run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
       throw new StoreError("store.not-active", `The execution authority is ${execution?.authorityState ?? "missing"}. ${recovery} Nothing was written.`);
     }
     db.exec("begin immediate");
@@ -18682,7 +18889,7 @@ function withDshWriteTransaction(context, body, selectedGeneration) {
       const current = readStoreMeta(db);
       const currentExecution = readExecutionMeta(db, schemaVersion);
       if (!currentExecution || currentExecution.authorityState !== "active") {
-        const recovery = currentExecution?.authorityState === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : `Run "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
+        const recovery = currentExecution?.authorityState === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : `Run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
         throw new StoreError("store.not-active", `The execution authority is ${currentExecution?.authorityState ?? "missing"}. ${recovery} Nothing was written.`);
       }
       if (current.storeId !== initial.storeId || current.epoch !== initial.epoch || selectedGeneration !== undefined && (current.storeId !== selectedGeneration.storeId || current.epoch !== selectedGeneration.epoch)) {
@@ -18719,7 +18926,7 @@ async function openStore(context, mode, options = {}) {
   const timeout = busyTimeoutMs(options.busyTimeoutMs);
   assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync14(dbPath)) {
-    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve13(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
+    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
   }
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
   for (let attempt = 1;; attempt++) {
@@ -18798,7 +19005,7 @@ async function initializeStore(context, options = {}) {
   await loadSqliteDriver();
   if (existsSync14(dbPath))
     throw alreadyExists();
-  const stagingPath = join18(dirname10(dbPath), `.${basename9(dbPath)}.init-${process.pid}-${randomUUID5()}.tmp`);
+  const stagingPath = join18(dirname11(dbPath), `.${basename9(dbPath)}.init-${process.pid}-${randomUUID5()}.tmp`);
   let claim;
   try {
     claim = openSync(stagingPath, "wx");
@@ -18856,7 +19063,7 @@ async function initializeStore(context, options = {}) {
     throw publicationRefusal("linked into place at its canonical path", error, dbPath);
   }
   try {
-    syncDirectoryEntry(dirname10(dbPath));
+    syncDirectoryEntry(dirname11(dbPath));
   } catch (error) {
     throw publicationBarrierRefusal(error, dbPath, "creation");
   }
@@ -18901,7 +19108,7 @@ async function upgradeStore(context, options = {}) {
     db.close();
   }
   try {
-    syncDirectoryEntry(dirname10(dbPath));
+    syncDirectoryEntry(dirname11(dbPath));
   } catch (error) {
     throw publicationBarrierRefusal(error, dbPath, "upgrade");
   }
@@ -19942,10 +20149,10 @@ function verifyValidatedRecord(rec, artifacts, expected) {
   if (basename10(sddDir) !== expected.planId) {
     identity.push(`sddDir basename must be the expected plan id ${JSON.stringify(expected.planId)}`);
   }
-  if (basename10(dirname11(sddDir)) !== "sdd") {
+  if (basename10(dirname12(sddDir)) !== "sdd") {
     identity.push('sddDir parent directory must be named "sdd"');
   }
-  if (dirname11(dirname11(sddDir)) !== rec.request.context.controlHarnessRoot) {
+  if (dirname12(dirname12(sddDir)) !== rec.request.context.controlHarnessRoot) {
     identity.push("sddDir must sit under the recorded control harness root");
   }
   for (const detail of identity) {
@@ -20205,21 +20412,21 @@ function collectActiveLifecycleBranches(snapshots) {
 }
 function isDirectory3(dir) {
   try {
-    return statSync8(dir).isDirectory();
+    return statSync9(dir).isDirectory();
   } catch {
     return false;
   }
 }
 function isFile2(file) {
   try {
-    return statSync8(file).isFile();
+    return statSync9(file).isFile();
   } catch {
     return false;
   }
 }
 function gitOut(cwd, args) {
   try {
-    return execFileSync5("git", args, {
+    return execFileSync6("git", args, {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -20231,16 +20438,16 @@ function gitOut(cwd, args) {
   }
 }
 function checkoutRootNearestExisting(dir, boundary) {
-  const stop = resolve14(boundary);
-  const startInside = isInside(resolve14(dir), stop);
-  let current = resolve14(dir);
+  const stop = resolve16(boundary);
+  const startInside = isInside(resolve16(dir), stop);
+  let current = resolve16(dir);
   for (;; ) {
     const probed = probeCheckoutRoot(current);
     if (probed !== null)
       return probed;
     if (startInside && current === stop)
       return null;
-    const parent = dirname12(current);
+    const parent = dirname13(current);
     if (parent === current)
       return null;
     if (startInside && !isInside(parent, stop))
@@ -20287,12 +20494,12 @@ function sddWorkspace(planId, opts = {}) {
   const harnessOverride = opts.harnessDir ?? (process.env.MSTAR_HARNESS_DIR || undefined);
   let harnessDir;
   if (harnessOverride) {
-    harnessDir = resolve14(root, harnessOverride);
+    harnessDir = resolve16(root, harnessOverride);
   } else {
     const rc = findMstarc(root, root);
     const rcHarnessDir = rc !== null ? parseMstarc(readFileSync16(rc, "utf8")).harnessDir : undefined;
     if (rcHarnessDir) {
-      harnessDir = resolve14(rc !== null ? dirname12(rc) : root, rcHarnessDir);
+      harnessDir = resolve16(rc !== null ? dirname13(rc) : root, rcHarnessDir);
     } else {
       if (isDirectory3(join19(root, ".mstar"))) {
         harnessDir = join19(root, ".mstar");
@@ -20321,7 +20528,7 @@ function taskBrief(planFile, taskN, outFile, opts = {}) {
   const bound = opts.context;
   const observedCwd = opts.cwd ?? process.cwd();
   if (bound) {
-    const inputPlan = canonicalizeNearestExisting(resolve14(observedCwd, planFile));
+    const inputPlan = canonicalizeNearestExisting(resolve16(observedCwd, planFile));
     if (inputPlan !== canonicalizeNearestExisting(bound.planFile)) {
       throwGateFail([
         contextViolation("high", "sdd.context.plan-file-mismatch", `plan file "${planFile}" does not match the bound context plan file "${bound.planFile}" — ` + "bound mode extracts only the resolved context's plan; refused before any read or write")
@@ -20337,7 +20544,7 @@ function taskBrief(planFile, taskN, outFile, opts = {}) {
   let out;
   let mkdirAfterGate = null;
   if (outFile) {
-    out = bound ? resolve14(observedCwd, outFile) : outFile;
+    out = bound ? resolve16(observedCwd, outFile) : outFile;
   } else if (bound) {
     out = join19(bound.sddDir, `task-${taskN}-brief.md`);
     mkdirAfterGate = bound.sddDir;
@@ -20379,7 +20586,7 @@ function taskBrief(planFile, taskN, outFile, opts = {}) {
   writeFileSync4(out, `${printed.join(`
 `)}
 `);
-  return bound ? resolve14(observedCwd, out) : out;
+  return bound ? resolve16(observedCwd, out) : out;
 }
 function reviewPackage(base, head, outFile, opts = {}) {
   if (!base || !head) {
@@ -20390,7 +20597,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
   const observedCwd = opts.cwd ?? process.cwd();
   const verifyRef = (ref, what) => {
     try {
-      execFileSync5("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, stdio: ["ignore", "pipe", "pipe"], timeout: gitProbeTimeoutMs() });
+      execFileSync6("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, stdio: ["ignore", "pipe", "pipe"], timeout: gitProbeTimeoutMs() });
     } catch {
       throw new SddScriptError(`bad ${what}: ${ref}`, 2);
     }
@@ -20400,7 +20607,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
   let out;
   let mkdirAfterGate = null;
   if (outFile) {
-    out = bound ? resolve14(observedCwd, outFile) : outFile;
+    out = bound ? resolve16(observedCwd, outFile) : outFile;
   } else if (bound) {
     const shortBase = gitOut(cwd, ["rev-parse", "--short", base]) ?? base;
     const shortHead = gitOut(cwd, ["rev-parse", "--short", head]) ?? head;
@@ -20423,7 +20630,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
     if (mkdirAfterGate !== null)
       mkdirSync6(mkdirAfterGate, { recursive: true });
   }
-  const run = (args) => execFileSync5("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES, timeout: gitProbeTimeoutMs() });
+  const run = (args) => execFileSync6("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES, timeout: gitProbeTimeoutMs() });
   const commits = run(["log", "--oneline", `${base}..${head}`]);
   if (commits.length === 0) {
     throw new SddScriptError(`review package range ${base}..${head} is empty in ${cwd} — refusing to write an empty package ` + `(run the command from the branch worktree, not the control checkout)`, 1);
@@ -20444,14 +20651,14 @@ function reviewPackage(base, head, outFile, opts = {}) {
     run(["diff", "-U10", `${base}..${head}`])
   ];
   writeFileSync4(out, Buffer.concat(parts));
-  return bound ? resolve14(observedCwd, out) : out;
+  return bound ? resolve16(observedCwd, out) : out;
 }
 function assertBaseSha(ref, opts = {}) {
   if (typeof ref !== "string" || !/^[0-9a-f]{4,40}$/i.test(ref)) {
     throw new SddScriptError(`assertBaseSha: BASE must be a commit SHA (full or prefix); got ${JSON.stringify(ref)}. ` + "Never use HEAD~1 as review BASE (multi-commit tasks truncate).", 2);
   }
   try {
-    execFileSync5("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+    execFileSync6("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
       cwd: opts.cwd,
       timeout: gitProbeTimeoutMs(),
       stdio: ["ignore", "pipe", "pipe"]
@@ -20462,7 +20669,7 @@ function assertBaseSha(ref, opts = {}) {
 }
 function taskReportExists(sddDir, taskN) {
   try {
-    const st = statSync8(join19(sddDir, `task-${taskN}-report.md`));
+    const st = statSync9(join19(sddDir, `task-${taskN}-report.md`));
     return st.isFile() && st.size > 0;
   } catch {
     return false;
@@ -20507,12 +20714,12 @@ function isPlainObject7(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isInside(child, ancestor) {
-  const rel = relative5(ancestor, child);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute9(rel);
+  const rel = relative6(ancestor, child);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute11(rel);
 }
 function canonicalDir(path2) {
   try {
-    return statSync8(path2).isDirectory() ? realpathSync8(path2) : null;
+    return statSync9(path2).isDirectory() ? realpathSync8(path2) : null;
   } catch {
     return null;
   }
@@ -20557,7 +20764,7 @@ async function resolveSddExecutionContext(input) {
     if (typeof value !== "string" || value.trim() === "") {
       throwUsage(`SddExecutionContext.${field} must be a non-empty string`);
     }
-    if (!isAbsolute9(value)) {
+    if (!isAbsolute11(value)) {
       throwUsage(`SddExecutionContext.${field} must be an absolute path (A3: all paths normalized absolute); got ${JSON.stringify(value)}`);
     }
   }
@@ -20694,11 +20901,11 @@ function checkSddAction(context, action) {
   const featureReal = canonicalDir(context.featureCwd);
   const canonicalSddDir = canonicalizeNearestExisting(context.sddDir);
   const canonicalPlanFile = canonicalizeNearestExisting(context.planFile);
-  const cwdResolved = resolve14(action.cwd);
+  const cwdResolved = resolve16(action.cwd);
   const checkTarget = (baseDir, target, kind) => {
     if (featureReal === null)
       return;
-    const targetAbs = resolve14(baseDir, target);
+    const targetAbs = resolve16(baseDir, target);
     const canonical2 = canonicalizeNearestExisting(targetAbs);
     if (!isInside(canonical2, featureReal)) {
       const declaredPrefix = targetAbs === featureReal || targetAbs.startsWith(`${featureReal}/`);
@@ -20726,10 +20933,10 @@ function checkSddAction(context, action) {
       add("sdd.context.target-missing", "artifact checks require the destination target");
       return { ok: false, violations };
     }
-    const targetAbs = resolve14(cwdResolved, action.target);
+    const targetAbs = resolve16(cwdResolved, action.target);
     const canonical2 = canonicalizeNearestExisting(targetAbs);
     if (!isInside(canonical2, canonicalSddDir) && canonical2 !== canonicalPlanFile) {
-      const rawSddDir = resolve14(context.sddDir);
+      const rawSddDir = resolve16(context.sddDir);
       const declaredPrefix = targetAbs === rawSddDir || targetAbs.startsWith(`${rawSddDir}/`) || targetAbs === canonicalSddDir || targetAbs.startsWith(`${canonicalSddDir}/`) || targetAbs === canonicalPlanFile;
       if (declaredPrefix) {
         add("sdd.context.artifact-symlink-escape", `artifact target "${targetAbs}" canonicalizes to "${canonical2}", outside the plan's control sddDir — symlink escape refused before write`);
@@ -20832,7 +21039,7 @@ function eventTargetPaths(input) {
 }
 function hasEntry(dir, name) {
   try {
-    statSync9(join20(dir, name));
+    statSync10(join20(dir, name));
     return true;
   } catch {
     return false;
@@ -20852,15 +21059,15 @@ function hasHarnessRootMarkers(dir) {
 function isHarnessRootDir(dir) {
   if (hasHarnessRootMarkers(dir))
     return true;
-  const parentResolved = resolveHarnessDir(dirname13(dir));
-  return parentResolved !== null && resolve15(parentResolved) === dir;
+  const parentResolved = resolveHarnessDir(dirname14(dir));
+  return parentResolved !== null && resolve17(parentResolved) === dir;
 }
 function resolveHarnessRootOf(target) {
-  let dir = resolve15(target);
+  let dir = resolve17(target);
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
-    const parent = dirname13(dir);
+    const parent = dirname14(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -20869,12 +21076,12 @@ function resolveHarnessRootOf(target) {
 function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
-  const resolved = resolve15(targetPath);
+  const resolved = resolve17(targetPath);
   const name = basename12(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
-    const rel = relative6(harnessDir2, resolved);
+    const rel = relative7(harnessDir2, resolved);
     if (name === STATUS_FILE && rel === STATUS_FILE)
       return { harnessDir: harnessDir2, kind: "status" };
     let workflowDir;
@@ -20886,16 +21093,16 @@ function harnessDocKindOfTarget(targetPath) {
       workflowDir = join20(harnessDir2, "workflows");
       projectDir = join20(harnessDir2, "projects");
     }
-    if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative6(workflowDir, resolved))) {
+    if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative7(workflowDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "snapshot" };
     }
-    if (name === REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(relative6(projectDir, resolved))) {
+    if (name === REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(relative7(projectDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "register" };
     }
     return null;
   };
-  const probeRoot = resolveHarnessRootOf(dirname13(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname13(resolved));
+  const probeRoot = resolveHarnessRootOf(dirname14(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -20903,7 +21110,7 @@ function harnessDocKindOfTarget(targetPath) {
     return classified;
   if (probeRoot === null)
     return null;
-  const fallbackDir = resolveHarnessDir(dirname13(resolved));
+  const fallbackDir = resolveHarnessDir(dirname14(resolved));
   if (fallbackDir === null || fallbackDir === probeRoot)
     return null;
   return classify(fallbackDir);
@@ -20953,7 +21160,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
   if (!existsSync15(filePath))
     return [];
   try {
-    if (statSync9(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
+    if (statSync10(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
       return oversized === "violate" ? [oversizedViolation(filePath)] : [];
     }
   } catch {
@@ -21001,20 +21208,20 @@ function caseFoldedKindOf(name) {
   return null;
 }
 function landedPathOf(filePath) {
-  let probe = resolve16(filePath);
+  let probe = resolve18(filePath);
   const suffix = [];
   let symlinkHops = 0;
   for (;; ) {
     try {
-      return resolve16(realpathSync9(probe), ...suffix);
+      return resolve18(realpathSync9(probe), ...suffix);
     } catch {
       let linkTarget;
       try {
         linkTarget = readlinkSync(probe);
       } catch {
-        const parent = dirname14(probe);
+        const parent = dirname15(probe);
         if (parent === probe)
-          return resolve16(filePath);
+          return resolve18(filePath);
         suffix.unshift(basename13(probe));
         probe = parent;
         continue;
@@ -21022,22 +21229,22 @@ function landedPathOf(filePath) {
       if (symlinkHops >= MAX_SYMLINK_HOPS)
         throw new SymlinkResolutionError;
       symlinkHops++;
-      probe = resolve16(dirname14(probe), linkTarget);
+      probe = resolve18(dirname15(probe), linkTarget);
     }
   }
 }
 function isStoreAuthorityTarget(target) {
   if (!isStoreAuthorityName(basename13(target)))
     return false;
-  return isHarnessRootDir(dirname14(target));
+  return isHarnessRootDir(dirname15(target));
 }
 function caseFoldedDocKind(candidate) {
-  const target = resolve16(candidate);
+  const target = resolve18(candidate);
   const name = basename13(target);
   const kind = caseFoldedKindOf(name);
   if (kind === null)
     return null;
-  let dir = dirname14(target);
+  let dir = dirname15(target);
   for (;; ) {
     if (isHarnessRootDir(dir)) {
       let base = dir;
@@ -21045,13 +21252,13 @@ function caseFoldedDocKind(candidate) {
         try {
           base = kind === "snapshot" ? resolveWorkflowDir(dir, { harnessDir: dir }) : resolveProjectDir(dir, { harnessDir: dir });
         } catch {
-          base = resolve16(dir, kind === "snapshot" ? "workflows" : "projects");
+          base = resolve18(dir, kind === "snapshot" ? "workflows" : "projects");
         }
       }
-      if (CASE_FOLDED_SHAPES[kind].test(relative7(base, target)))
+      if (CASE_FOLDED_SHAPES[kind].test(relative8(base, target)))
         return { harnessDir: dir, kind };
     }
-    const parent = dirname14(dir);
+    const parent = dirname15(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -21105,7 +21312,7 @@ function scanCompasses(harnessDir, acknowledgedCompassSkips) {
     if (info.isSymbolicLink() || !info.isFile()) {
       if (acknowledgedCompassSkips.has(entry.name)) {
         consumed.add(entry.name);
-        skipped.push({ id: entry.name, path: relative8(harnessDir, compassPath).split(/[\\/]+/).join("/") });
+        skipped.push({ id: entry.name, path: relative9(harnessDir, compassPath).split(/[\\/]+/).join("/") });
         continue;
       }
       refusals.push(notRegular());
@@ -21443,9 +21650,9 @@ function convertLegacyV1Tree(root, declarations = [], verifiedStatusBytes, ackno
     snapshots,
     duplicatePlanIds,
     skippedCompasses: scan.skipped,
-    sources: compasses.map((compass) => relative8(root, compass.file).split(/[\\/]+/).join("/")),
+    sources: compasses.map((compass) => relative9(root, compass.file).split(/[\\/]+/).join("/")),
     sourceHashes: compasses.map((compass) => [
-      relative8(root, compass.file).split(/[\\/]+/).join("/"),
+      relative9(root, compass.file).split(/[\\/]+/).join("/"),
       compass.hash
     ]),
     dispositions
@@ -22002,7 +22209,7 @@ function referenceExists(repoRoot, docText) {
     if (ref === "" || seen.has(ref))
       continue;
     seen.add(ref);
-    if (SCHEME_RE.test(ref) || ref.startsWith("{") || ref.startsWith("#") || ref.includes("*") || ref.includes("?") || ref.startsWith("~") || isAbsolute10(ref)) {
+    if (SCHEME_RE.test(ref) || ref.startsWith("{") || ref.startsWith("#") || ref.includes("*") || ref.includes("?") || ref.startsWith("~") || isAbsolute12(ref)) {
       continue;
     }
     if (ref.includes("/") || REF_EXT_RE.test(ref)) {
@@ -22042,7 +22249,7 @@ function referenceExists(repoRoot, docText) {
   for (const { ref, isSymbol, module } of refs) {
     if (!isSymbol || module === undefined) {
       const candidate = ref.replace(LINE_SUFFIX_RE, "").replace(ANCHOR_RE, "");
-      if (existsSync16(resolve17(repoRoot, candidate))) {
+      if (existsSync16(resolve19(repoRoot, candidate))) {
         checked++;
       } else {
         violations.push(violation11("medium", "compound.reference.missing-file", `referenced path \`${ref}\` does not exist under ${repoRoot} (Maintain Phase 2: referenced code still exists?)`, "update the doc to reference an existing path, or delete the stale reference"));
@@ -22077,13 +22284,13 @@ function isFileLikeRoot(root) {
   return /^[^.]*\.[A-Za-z0-9]{1,10}$/.test(basename14(root));
 }
 function scopeGuard(path2, allowedRoots) {
-  const resolved = resolve17(path2);
+  const resolved = resolve19(path2);
   for (const root of allowedRoots) {
-    const r = resolve17(root);
+    const r = resolve19(root);
     if (isFileLikeRoot(r)) {
       if (resolved === r)
         return { ok: true, violations: [] };
-    } else if (resolved === r || resolved.startsWith(r + sep9)) {
+    } else if (resolved === r || resolved.startsWith(r + sep10)) {
       return { ok: true, violations: [] };
     }
   }
@@ -23453,13 +23660,13 @@ function prReviewSeatPrompt(opts) {
   }
   const skillRoot = opts.skillRoot.trim();
   const worktreePath = opts.worktreePath.trim();
-  if (!isAbsolute11(skillRoot)) {
+  if (!isAbsolute13(skillRoot)) {
     throw new TypeError(`prReviewSeatPrompt: skillRoot must be an absolute path - got ${JSON.stringify(opts.skillRoot)}`);
   }
-  if (!isAbsolute11(worktreePath)) {
+  if (!isAbsolute13(worktreePath)) {
     throw new TypeError(`prReviewSeatPrompt: worktreePath must be an absolute path - got ${JSON.stringify(opts.worktreePath)}`);
   }
-  if (opts.diffFile !== undefined && opts.diffFile !== "" && !isAbsolute11(opts.diffFile)) {
+  if (opts.diffFile !== undefined && opts.diffFile !== "" && !isAbsolute13(opts.diffFile)) {
     throw new TypeError(`prReviewSeatPrompt: diffFile must be an absolute path - got ${JSON.stringify(opts.diffFile)}`);
   }
   const slug = `${domain2}-${seat}`;
@@ -23865,7 +24072,7 @@ function resolveArtifactPath(harnessRoot, ref) {
   const { kind, key } = ref;
   assertKindAdmitted(kind);
   if (kind === "json") {
-    if (!isAbsolute12(key)) {
+    if (!isAbsolute14(key)) {
       throw new Error(`ArtifactStore json key must be an absolute path — got ${JSON.stringify(key)}`);
     }
     if (key.split(/[\\/]+/).includes("..")) {
@@ -23901,7 +24108,7 @@ function assertNotRetiredRegisterTarget(root, ref, filePath) {
     if (basename15(canonical2) !== "residuals.json")
       return;
     const projectDir = canonicalTarget(resolveProjectDir(root, { harnessDir: root }));
-    if (canonical2.startsWith(`${projectDir}${sep10}`)) {
+    if (canonical2.startsWith(`${projectDir}${sep11}`)) {
       throw new Error(`refusing to persist ${canonical2} through a json alias — project registers are retired migration history; the issue store (store.db) is the only findings authority`);
     }
   }
@@ -23913,7 +24120,7 @@ function protectedKindOf(root, ref, filePath) {
   if (canonical2 === canonicalTarget(legacyStatusDocPath(root)))
     return "root";
   const workflowDir = canonicalTarget(resolveWorkflowDir(root, { harnessDir: root }));
-  if (basename15(canonical2) === "snapshot.json" && canonical2.startsWith(`${workflowDir}${sep10}`))
+  if (basename15(canonical2) === "snapshot.json" && canonical2.startsWith(`${workflowDir}${sep11}`))
     return "snapshot";
   return null;
 }
@@ -23925,7 +24132,7 @@ function tryResolveGetPath(root, kind, key) {
   }
 }
 function createFsStore(harnessRoot) {
-  const root = resolve18(harnessRoot);
+  const root = resolve20(harnessRoot);
   const store = {
     root,
     async put(doc) {
@@ -23983,7 +24190,7 @@ function createFsStore(harnessRoot) {
   return store;
 }
 function processControlRoot() {
-  return resolveProcessHarnessDir(process.cwd()) ?? resolve18(process.cwd());
+  return resolveProcessHarnessDir(process.cwd()) ?? resolve20(process.cwd());
 }
 function assertInjectedAccessAllowed(ref) {
   assertKindAdmitted(ref.kind);
@@ -24026,7 +24233,7 @@ function getArtifactStore() {
     return injectedStore;
   const root = resolveHarnessDir(process.cwd());
   if (root === null) {
-    throw new Error(`harness dir not found from ${resolve18(process.cwd())} — cannot create the default FsStore (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
+    throw new Error(`harness dir not found from ${resolve20(process.cwd())} — cannot create the default FsStore (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
   }
   return createFsStore(root);
 }
@@ -24040,7 +24247,7 @@ async function loadStoreModule(modulePath) {
   if (URI_SCHEME_RE.test(modulePath)) {
     throw new Error(`loadStoreModule: only filesystem paths are allowed — got ${JSON.stringify(modulePath)} (URI schemes such as http:/https:/file: are rejected)`);
   }
-  const resolved = resolve18(modulePath);
+  const resolved = resolve20(modulePath);
   if (!existsSync18(resolved)) {
     throw new Error(`loadStoreModule: module file not found — ${JSON.stringify(resolved)}`);
   }
@@ -24053,10 +24260,10 @@ async function loadStoreModule(modulePath) {
   return store;
 }
 function readSessionEnvelope(sessionPath) {
-  if (!isNonEmptyString(sessionPath) || !isAbsolute13(sessionPath)) {
+  if (!isNonEmptyString(sessionPath) || !isAbsolute15(sessionPath)) {
     throw new CoordinationError("coordination.invalid-input", "sessionPath must be an absolute path. Inspect the harness authority with mstar status validate.");
   }
-  const abs = resolve19(sessionPath);
+  const abs = resolve21(sessionPath);
   if (!existsSync19(abs)) {
     throw new CoordinationError("coordination.session-not-found", "Session envelope was not found. Inspect the harness authority with mstar status validate.", { path: abs });
   }
@@ -24072,10 +24279,10 @@ function readSessionEnvelope(sessionPath) {
   return parseSessionEnvelope(parsed, abs);
 }
 function parseSessionEnvelope(parsed, sessionPath) {
-  if (!isNonEmptyString(sessionPath) || !isAbsolute13(sessionPath)) {
+  if (!isNonEmptyString(sessionPath) || !isAbsolute15(sessionPath)) {
     throw new CoordinationError("coordination.invalid-input", "sessionPath must be an absolute path. Inspect the harness authority with mstar status validate.");
   }
-  const abs = resolve19(sessionPath);
+  const abs = resolve21(sessionPath);
   if (!isPlainObject(parsed)) {
     throw new CoordinationError("coordination.store", "Session envelope must be an object. Inspect the harness authority with mstar status validate.", { path: abs });
   }
@@ -24101,7 +24308,7 @@ function parseSessionEnvelope(parsed, sessionPath) {
   if (!isNonEmptyString(harnessRoot)) {
     throw new CoordinationError("coordination.invalid-input", "Session envelope requires a non-empty harness_root. Inspect the harness authority with mstar status validate.", { path: abs });
   }
-  if (!isAbsolute13(harnessRoot)) {
+  if (!isAbsolute15(harnessRoot)) {
     throw new CoordinationError("coordination.invalid-input", "Session envelope harness_root must be absolute. Inspect the harness authority with mstar status validate.", { path: abs });
   }
   return {
@@ -24588,7 +24795,7 @@ function readInside(parent, child) {
   return readBytes(join27(parent, child));
 }
 function evaluate(context, now2) {
-  const root = dirname15(storeDbPath(context));
+  const root = dirname16(storeDbPath(context));
   const allFiles = [];
   const workflows = [];
   const findings = [];
@@ -25046,7 +25253,7 @@ function conflict2(message) {
   throw new ExecutionError("execution.migration-conflict", message);
 }
 function rootOf(context) {
-  return canonicalPath(dirname16(storeDbPath(context)));
+  return canonicalPath(dirname17(storeDbPath(context)));
 }
 function conversionInputDigest(declarations, acknowledgedCompassSkips) {
   const deliveryDeclarations = [...declarations].map((entry) => ({
@@ -25091,7 +25298,7 @@ function provenReplayIds(db, sourceDigest, inputDigest, carriesInput) {
 }
 function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, acknowledgedWorkflowSkips) {
   const workflowsDir = join28(root, "workflows");
-  const workflowsPrefix = workflowsDir.endsWith(sep11) ? workflowsDir : `${workflowsDir}${sep11}`;
+  const workflowsPrefix = workflowsDir.endsWith(sep12) ? workflowsDir : `${workflowsDir}${sep12}`;
   const registeredUnderRoot = registeredExecution.filter(({ dir }) => dir !== workflowsDir && dir.startsWith(workflowsPrefix));
   let info;
   try {
@@ -25132,7 +25339,7 @@ function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, 
     const refusedRegisteredIds = new Set(registeredUnderRoot.map(({ id }) => id));
     const unacknowledged = registeredUnderRoot.filter(({ id }) => !acknowledgedWorkflowSkips.has(id));
     if (unacknowledged.length > 0) {
-      return { enumerable: false, refusedRegisteredIds, refusal: `workflow root ${workflowsDir} is a symlink and its registration names execution workflow(s) under it (${unacknowledged.map(({ dir }) => relative9(root, dir).split(/[\\/]+/).join("/")).join(", ")}); a linked directory is never followed, so a registered execution source is never discarded by a DSH acknowledgement — rerun store upgrade with \`--ack-skip-workflow ${unacknowledged.map(({ id }) => id).join(" ")}\` to skip importing exactly those registered workflows (their legacy sources remain in place and no execution row is imported for them), or replace the symlink with a real in-root directory holding those workflows, then rerun store upgrade.` };
+      return { enumerable: false, refusedRegisteredIds, refusal: `workflow root ${workflowsDir} is a symlink and its registration names execution workflow(s) under it (${unacknowledged.map(({ dir }) => relative10(root, dir).split(/[\\/]+/).join("/")).join(", ")}); a linked directory is never followed, so a registered execution source is never discarded by a DSH acknowledgement — rerun store upgrade with \`--ack-skip-workflow ${unacknowledged.map(({ id }) => id).join(" ")}\` to skip importing exactly those registered workflows (their legacy sources remain in place and no execution row is imported for them), or replace the symlink with a real in-root directory holding those workflows, then rerun store upgrade.` };
     }
     return { enumerable: false, refusedRegisteredIds };
   }
@@ -25140,7 +25347,7 @@ function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, 
     const refusedRegisteredIds = new Set(registeredUnderRoot.map(({ id }) => id));
     const unacknowledged = registeredUnderRoot.filter(({ id }) => !acknowledgedWorkflowSkips.has(id));
     if (unacknowledged.length > 0) {
-      return { enumerable: false, refusedRegisteredIds, refusal: `workflow root ${workflowsDir} is not a real directory, and its registration names execution workflow(s) under it (${unacknowledged.map(({ dir }) => relative9(root, dir).split(/[\\/]+/).join("/")).join(", ")}); a source that is not a real in-root directory is never read as a workflow source — rerun store upgrade with \`--ack-skip-workflow ${unacknowledged.map(({ id }) => id).join(" ")}\` to keep the source in place and skip ONLY those legacy IMPORTs (each loss is reported in the receipt), or restore the root as a real in-root directory holding those workflows, then rerun store upgrade.` };
+      return { enumerable: false, refusedRegisteredIds, refusal: `workflow root ${workflowsDir} is not a real directory, and its registration names execution workflow(s) under it (${unacknowledged.map(({ dir }) => relative10(root, dir).split(/[\\/]+/).join("/")).join(", ")}); a source that is not a real in-root directory is never read as a workflow source — rerun store upgrade with \`--ack-skip-workflow ${unacknowledged.map(({ id }) => id).join(" ")}\` to keep the source in place and skip ONLY those legacy IMPORTs (each loss is reported in the receipt), or restore the root as a real in-root directory holding those workflows, then rerun store upgrade.` };
     }
     return { enumerable: false, refusedRegisteredIds };
   }
@@ -25149,7 +25356,7 @@ function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, 
 function binding(value) {
   if (!isPlainObject(value))
     return null;
-  if (!isNonEmptyString(value.session_id) || !isNonEmptyString(value.session_file) || !isAbsolute14(value.session_file) || !isNonEmptyString(value.bound_at))
+  if (!isNonEmptyString(value.session_id) || !isNonEmptyString(value.session_file) || !isAbsolute16(value.session_file) || !isNonEmptyString(value.bound_at))
     return null;
   return { session_id: value.session_id, session_file: value.session_file, bound_at: value.bound_at };
 }
@@ -25191,7 +25398,7 @@ function readRegularJson(path2, label, read = readSourceBytes) {
 }
 function verifyBinding(value, source, read = readSourceBytes) {
   const sessionsDir = join28(source.dir, "sessions");
-  const path2 = resolve20(value.session_file);
+  const path2 = resolve22(value.session_file);
   if (!isPathWithin(canonicalPath(sessionsDir), path2) || path2 === canonicalPath(sessionsDir)) {
     throw new UnsafeSourceError(`coordinator binding ${value.session_id} points outside ${sessionsDir}; move its envelope into that workflow's sessions directory or remove the binding.`);
   }
@@ -25299,7 +25506,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
   const statusPath = join28(root, "status.json");
   const skipped = [];
   const sourceHashes = new Map;
-  const relOf = (path2) => relative9(root, path2).split(/[\\/]+/).join("/");
+  const relOf = (path2) => relative10(root, path2).split(/[\\/]+/).join("/");
   const readTracked = (path2, label) => {
     const bytes = readSourceBytes(path2, label);
     sourceHashes.set(relOf(path2), createHash15("sha256").update(bytes).digest("hex"));
@@ -25352,7 +25559,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
   for (const entry of entries ?? []) {
     if (isPlainObject(entry) && typeof entry.id === "string" && typeof entry.dir === "string") {
       const dir = join28(root, entry.dir);
-      const prefix = root.endsWith(sep11) ? root : `${root}${sep11}`;
+      const prefix = root.endsWith(sep12) ? root : `${root}${sep12}`;
       if (!dir.startsWith(prefix) || dir === root)
         conflict2(`workflow ${entry.id} records dir ${JSON.stringify(entry.dir)} outside control root ${root}; correct or remove that status.json entry, then rerun store upgrade.`);
     }
@@ -25374,15 +25581,15 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       const snapshotValue = readRegularJson(snapshotPath, `unregistered snapshot at ${snapshotPath}`, readTracked);
       const snapshotGate = snapshotValue === UNPARSEABLE_JSON ? { ok: false, violations: [{ code: "workflow.snapshot.invalid-json" }] } : validateWorkflowSnapshot(projectLegacySnapshot(snapshotValue));
       if (!snapshotGate.ok) {
-        skipped.push({ path: relative9(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "unregistered snapshot is unrecognizable; left in place" });
+        skipped.push({ path: relative10(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "unregistered snapshot is unrecognizable; left in place" });
         continue;
       }
       const snapshot = snapshotValue;
       if (snapshot.id !== dirent.name)
         conflict2(`unregistered workflow directory ${dir} contains snapshot id ${snapshot.id}; rename the directory to match or correct the snapshot id, then rerun store upgrade.`);
-      const synthetic = { id: snapshot.id, type: snapshot.type, started_at: snapshot.started_at, dir: relative9(root, dir).split(/[\\/]+/).join("/") };
+      const synthetic = { id: snapshot.id, type: snapshot.type, started_at: snapshot.started_at, dir: relative10(root, dir).split(/[\\/]+/).join("/") };
       if (!validateWorkflowEntry(synthetic).ok) {
-        skipped.push({ path: relative9(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "unregistered snapshot has an unrecognizable workflow identity; left in place" });
+        skipped.push({ path: relative10(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "unregistered snapshot has an unrecognizable workflow identity; left in place" });
         continue;
       }
       safeEntries.push(synthetic);
@@ -25407,7 +25614,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
     const dir = join28(root, entry.dir);
     const refusedRegistered = tree.refusedRegisteredIds.has(entry.id);
     if (refusedRegistered && acknowledgedWorkflowSkips.has(entry.id)) {
-      const path2 = relative9(root, dir).split(/[\\/]+/).join("/");
+      const path2 = relative10(root, dir).split(/[\\/]+/).join("/");
       skipped.push({
         path: path2,
         reason: `registered workflow ${entry.id} skipped by --ack-skip-workflow; its registered legacy source is not a real in-root directory, so it was not read and no execution row was imported for it`
@@ -25434,17 +25641,17 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       const sessionsDir = join28(dir, "sessions");
       const snapshotPath = join28(dir, WORKFLOW_SNAPSHOT_FILE);
       if (info === null || !existsSync20(snapshotPath)) {
-        skipped.push({ path: relative9(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "registered workflow snapshot is missing; left in place" });
+        skipped.push({ path: relative10(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "registered workflow snapshot is missing; left in place" });
         continue;
       }
       const snapshotValue = readRegularJson(snapshotPath, `snapshot for workflow ${entry.id}`, readTracked);
       if (snapshotValue === UNPARSEABLE_JSON) {
-        skipped.push({ path: relative9(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "unparseable snapshot; left in place" });
+        skipped.push({ path: relative10(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "unparseable snapshot; left in place" });
         continue;
       }
       const snapshotGate = validateWorkflowSnapshot(projectLegacySnapshot(snapshotValue));
       if (!snapshotGate.ok) {
-        skipped.push({ path: relative9(root, snapshotPath).split(/[\\/]+/).join("/"), reason: `snapshot is unrecognizable (${snapshotGate.violations.map((v) => v.code).join(", ")}); left in place` });
+        skipped.push({ path: relative10(root, snapshotPath).split(/[\\/]+/).join("/"), reason: `snapshot is unrecognizable (${snapshotGate.violations.map((v) => v.code).join(", ")}); left in place` });
         continue;
       }
       const rawInventory = legacySnapshotInventory(snapshotValue);
@@ -25456,7 +25663,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
         for (const sessionEntry of readdirSync16(sessionsDir, { withFileTypes: true })) {
           const sessionPath = join28(sessionsDir, sessionEntry.name);
           if (!sessionEntry.isFile() || sessionEntry.isSymbolicLink()) {
-            skipped.push({ path: relative9(root, sessionPath).split(/[\\/]+/).join("/"), reason: "unrecognized session entry; left in place" });
+            skipped.push({ path: relative10(root, sessionPath).split(/[\\/]+/).join("/"), reason: "unrecognized session entry; left in place" });
             continue;
           }
           const envelopeBytes = readTracked(sessionPath, `session envelope for workflow ${entry.id}`);
@@ -25467,7 +25674,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
             rawEnvelope = null;
           }
           if (isPlainObject(rawEnvelope) && rawEnvelope.role === "plan-pm") {
-            skipped.push({ path: relative9(root, sessionPath).split(/[\\/]+/).join("/"), reason: "legacy plan-PM session envelope dropped; the seat was removed" });
+            skipped.push({ path: relative10(root, sessionPath).split(/[\\/]+/).join("/"), reason: "legacy plan-PM session envelope dropped; the seat was removed" });
             continue;
           }
           if (isPlainObject(rawEnvelope) && (typeof rawEnvelope.workflow_id === "string" && rawEnvelope.workflow_id !== entry.id || typeof rawEnvelope.harness_root === "string" && canonicalPath(rawEnvelope.harness_root) !== canonicalPath(root))) {
@@ -25477,7 +25684,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
           try {
             envelope = parseSessionEnvelope(rawEnvelope, sessionPath);
           } catch {
-            skipped.push({ path: relative9(root, sessionPath).split(/[\\/]+/).join("/"), reason: "unrecognizable session envelope; left in place" });
+            skipped.push({ path: relative10(root, sessionPath).split(/[\\/]+/).join("/"), reason: "unrecognizable session envelope; left in place" });
             continue;
           }
           if (envelope.workflow_id !== entry.id || canonicalPath(envelope.harness_root) !== canonicalPath(root)) {
@@ -25517,8 +25724,8 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
         if (dirent.isSymbolicLink())
           throw new UnsafeSourceError(`workflow entry ${path2} is a symlink.`);
         if (dirent.isFile()) {
-          readTracked(path2, `workspace source ${relative9(root, path2)}`);
-          skipped.push({ path: relative9(root, path2).split(/[\\/]+/).join("/"), reason: "unrecognized workflow entry; left in place" });
+          readTracked(path2, `workspace source ${relative10(root, path2)}`);
+          skipped.push({ path: relative10(root, path2).split(/[\\/]+/).join("/"), reason: "unrecognized workflow entry; left in place" });
         }
       }
       rows.push({ entry: registeredIds.has(entry.id) ? entry : null, id: entry.id, dir, snapshot, coordinator, plans });
@@ -25526,7 +25733,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       if (!(error instanceof UnsafeSourceError))
         throw error;
       refusedSourceIds.add(entry.id);
-      const path2 = relative9(root, dir).split(/[\\/]+/).join("/");
+      const path2 = relative10(root, dir).split(/[\\/]+/).join("/");
       if (acknowledgedWorkflowSkips.has(entry.id)) {
         skipped.push({ path: path2, reason: `workflow ${entry.id} skipped by --ack-skip-workflow; unsafe nested source was not followed and no execution row was imported for it` });
         skippedWorkflowAcknowledgements.push({ id: entry.id, path: path2 });
@@ -25576,7 +25783,7 @@ async function importExecutionMinimal(input) {
     const provenIds = new Set([...replayProof.proven].filter((id) => collidingIds.has(id)));
     const inputUnprovenIds = new Set([...replayProof.inputUnproven].filter((id) => collidingIds.has(id)));
     const importable = source.rows.filter((row) => !collidingIds.has(row.id));
-    const acknowledgedCollisions = source.rows.filter((row) => collidingIds.has(row.id) && !provenIds.has(row.id) && workflowSkips.has(row.id)).map((row) => ({ id: row.id, path: relative9(source.root, row.dir).split(/[\\/]+/).join("/") }));
+    const acknowledgedCollisions = source.rows.filter((row) => collidingIds.has(row.id) && !provenIds.has(row.id) && workflowSkips.has(row.id)).map((row) => ({ id: row.id, path: relative10(source.root, row.dir).split(/[\\/]+/).join("/") }));
     const unmatchedWorkflowSkips = [...workflowSkips].filter((id) => !source.refusedSourceIds.has(id) && !collidingIds.has(id));
     if (unmatchedWorkflowSkips.length > 0) {
       throw new WorkflowSkipError(`--ack-skip-workflow ${unmatchedWorkflowSkips.join(" ")} matched no workflow source this run refuses — neither a registered source that is not a real in-root directory (a linked source or a non-directory path) nor a recognized legacy source whose id the native execution authority already holds. ` + `Skipping an unrefused source would silently drop a workflow this run would otherwise import — pass only the original workflow ids named by the refusal, or omit --ack-skip-workflow entirely.`);
@@ -25614,7 +25821,7 @@ async function importExecutionMinimal(input) {
       dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the native execution authority already holds that id, so this run kept the native workflow/plan rows, coordination, header and revisions unchanged and imported nothing from the retained legacy source at ${entry.path}. The legacy bytes remain in place and the native progress stays authoritative even if that source body was later edited — this is import disposal, not deletion, and no prior import or resumption is inferred.`);
     }
     for (const row of source.rows.filter((entry) => provenIds.has(entry.id))) {
-      const path2 = relative9(source.root, row.dir).split(/[\\/]+/).join("/");
+      const path2 = relative10(source.root, row.dir).split(/[\\/]+/).join("/");
       const acknowledged = workflowSkips.has(row.id) ? " The --ack-skip-workflow acknowledgement this run also carried was unnecessary for that id and disposed of no import." : "";
       const shaped = conversionInput.carriesInput ? ` It also recorded input digest ${conversionInput.digest} for the delivery declarations and compass acknowledgements this run carries.` : "";
       dispositions.push(`workflow ${row.id}: proven replay — this store's own retained import receipt for source digest ${source.sourceDigest} already imported this id, so the native execution authority already holds it from an import of these exact source bytes at ${path2}.${shaped} This run imported nothing for it and kept the native workflow/plan rows, coordination, header and revisions unchanged; the legacy bytes remain in place.${acknowledged}`);
@@ -25662,7 +25869,7 @@ async function upgradeStoreMinimal(input) {
   const attestation = input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
   const dbPath = storeDbPath(context);
   let schemaVersion;
-  mkdirSync7(dirname16(dbPath), { recursive: true });
+  mkdirSync7(dirname17(dbPath), { recursive: true });
   const run = (resolved) => !existsSync20(dbPath) ? initializeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, now: input.now, raiseSettlementSignal: true }).then((initialized) => {
     initialized.close();
     return initialized.schemaVersion;
@@ -26838,7 +27045,7 @@ function queryIssueFlow(projectId) {
   };
 }
 function parentThatDeclares(harnessDir) {
-  const parent = dirname17(resolve21(harnessDir));
+  const parent = dirname18(resolve23(harnessDir));
   return existsSync21(join30(parent, MSTARC_FILE)) ? parent : null;
 }
 function readSyncBindingProjects(handle) {
@@ -26853,7 +27060,7 @@ function readSyncBindingProjects(handle) {
   }
 }
 function querySyncBinding(harnessDir, filters) {
-  const repo = readRepoLinearBinding(resolveRepoRoot(harnessDir) ?? parentThatDeclares(harnessDir) ?? resolve21(harnessDir));
+  const repo = readRepoLinearBinding(resolveRepoRoot(harnessDir) ?? parentThatDeclares(harnessDir) ?? resolve23(harnessDir));
   const binding2 = repo.kind === "bound" ? { enabled: repo.binding.enabled, mode: repo.binding.mode, workspace: repo.binding.workspace, team: repo.binding.team } : null;
   const bindingError = repo.kind === "bound" ? null : repo.message;
   if (filters.probeState !== undefined && (filters.probeCause ?? "").trim() === "") {
@@ -27587,7 +27794,7 @@ function resolvePlanAddress(stated, kind) {
   });
 }
 function controlHarnessRoot(context) {
-  return canonicalizeNearestExisting(dirname18(storeDbPath(context)));
+  return canonicalizeNearestExisting(dirname19(storeDbPath(context)));
 }
 async function assertSparseExecutionAuthority(context, what) {
   const authority = await resolveCurrentAuthority(context);
@@ -27797,7 +28004,7 @@ function branchOfClaim(value) {
 function readPrepareInputs(call) {
   const config = call.operation.config ?? {};
   assertExactKeys(config, ["worktreePath", "workingBranch", "qaGate", "findingsCleanup"], "prepare config");
-  if (config.worktreePath !== undefined && (!isNonEmptyString(config.worktreePath) || !isAbsolute15(config.worktreePath))) {
+  if (config.worktreePath !== undefined && (!isNonEmptyString(config.worktreePath) || !isAbsolute17(config.worktreePath))) {
     throw invalidPlanInput("Invalid prepare worktreePath: provide an absolute path; retry through mstar plan prepare.");
   }
   if (config.workingBranch !== undefined && !isNonEmptyString(config.workingBranch)) {
@@ -28118,7 +28325,7 @@ function planScopeOf(view, planId) {
   const metadata = isPlainObject(view.plan.metadata) ? view.plan.metadata : {};
   const worktree = metadata.worktree_path;
   const branch = metadata.working_branch;
-  if (!isNonEmptyString(worktree) || !isAbsolute15(worktree) || !isNonEmptyString(branch)) {
+  if (!isNonEmptyString(worktree) || !isAbsolute17(worktree) || !isNonEmptyString(branch)) {
     throw new CoordinationError("coordination.scope-mismatch", `plan ${planId} records no plan worktree/branch scope (metadata.worktree_path must be an absolute path and metadata.working_branch a non-empty branch); record it with plan prepare, then retry`, { plan_id: planId, worktree_path: worktree ?? null, working_branch: branch ?? null });
   }
   return { worktreePath: canonicalTarget(worktree), workingBranch: branch };
@@ -28495,7 +28702,7 @@ function assertWorkflowOperationShape(operation) {
       assertExactKeys(op, ["kind", "phase", "compassPath"], "a phase operation");
       if (!isNonEmptyString(op.phase))
         throw invalidWorkflowInput("Invalid phase operation: provide a non-empty phase; retry through mstar workflow phase.");
-      if (!isNonEmptyString(op.compassPath) || !isAbsolute16(op.compassPath)) {
+      if (!isNonEmptyString(op.compassPath) || !isAbsolute18(op.compassPath)) {
         throw invalidWorkflowInput("a phase operation needs the absolute compassPath of the lifecycle's registered compass — the gate is evaluated " + "against the canonical compass, never against a caller-supplied verdict");
       }
       return;
@@ -28520,7 +28727,7 @@ function assertWorkflowOperationShape(operation) {
     }
     case "integration-worktree": {
       assertExactKeys(op, ["kind", "path"], "an integration-worktree operation");
-      if (!isNonEmptyString(op.path) || !isAbsolute16(op.path)) {
+      if (!isNonEmptyString(op.path) || !isAbsolute18(op.path)) {
         throw invalidWorkflowInput("Invalid integration-worktree operation: provide an absolute checkout path; retry through mstar workflow integration-worktree.");
       }
       return;
@@ -28696,7 +28903,7 @@ function describeValue(value) {
   }
 }
 function controlHarnessRoot2(context) {
-  return canonicalizeNearestExisting(dirname19(storeDbPath(context)));
+  return canonicalizeNearestExisting(dirname20(storeDbPath(context)));
 }
 async function readWorkflowHeaderBefore(context, workflowId) {
   const state = await readExecutionState(context);
@@ -28766,7 +28973,7 @@ async function readIntegrationWorktreeEvidence(context, workflowId, operation) {
   if (path2 === mainRoot || path2 === canonicalTarget(control)) {
     throw invalidWorkflowTransition("The integration checkout is the control checkout; provide a dedicated worktree, then retry through mstar workflow integration-worktree.", { workflow_id: workflowId, path: path2, expected: `a checkout distinct from ${mainRoot}` });
   }
-  if (!existsSync22(path2) || !statSync10(path2).isDirectory()) {
+  if (!existsSync22(path2) || !statSync11(path2).isDirectory()) {
     throw invalidWorkflowTransition("The integration checkout does not exist; provide an existing checkout path, then retry through mstar workflow integration-worktree.", { workflow_id: workflowId, path: path2 });
   }
   const owner = readMainWorktree(path2);
@@ -28801,8 +29008,8 @@ async function readCompassRefEvidence(context, workflowId, operation) {
     throw invalidWorkflowTransition(`workflow ${workflowId} records type ${JSON.stringify(header.type)}, which carries no reviewed delivery compass; a compass_ref is repaired only on an iteration workflow`, { workflow_id: workflowId, type: header.type });
   }
   const harnessRoot = controlHarnessRoot2(context);
-  const relative102 = normalizeIterationCompassRef(operation.compassPath, harnessRoot, (detail) => invalidWorkflowInput(detail));
-  const path2 = canonicalizeNearestExisting(isAbsolute16(operation.compassPath) ? operation.compassPath : join31(harnessRoot, operation.compassPath));
+  const relative112 = normalizeIterationCompassRef(operation.compassPath, harnessRoot, (detail) => invalidWorkflowInput(detail));
+  const path2 = canonicalizeNearestExisting(isAbsolute18(operation.compassPath) ? operation.compassPath : join31(harnessRoot, operation.compassPath));
   const text6 = readFileSync24(path2, "utf8");
   if (text6.trim() === "") {
     throw invalidWorkflowTransition("The named compass document is empty; name the reviewed delivery compass, then retry through mstar workflow compass-ref.", {
@@ -28830,7 +29037,7 @@ async function readCompassRefEvidence(context, workflowId, operation) {
   if (doc.iteration_id !== workflowId) {
     throw new CoordinationError("coordination.scope-mismatch", "the named compass belongs to a different iteration than the addressed workflow; name this workflow's own reviewed delivery compass, then retry through mstar workflow compass-ref.", { workflow_id: workflowId, compass_path: path2, compass_iteration_id: String(doc.iteration_id) });
   }
-  return { compassRef: { path: path2, relative: relative102 } };
+  return { compassRef: { path: path2, relative: relative112 } };
 }
 async function readWorkflowEvidence(context, resolved) {
   const operation = resolved.call.operation;
@@ -28850,13 +29057,13 @@ async function readWorkflowEvidence(context, resolved) {
 }
 function revalidateWorkflowEvidence(evidence) {
   const compassRef = evidence.compassRef;
-  if (compassRef !== undefined && (!existsSync22(compassRef.path) || !statSync10(compassRef.path).isFile())) {
+  if (compassRef !== undefined && (!existsSync22(compassRef.path) || !statSync11(compassRef.path).isFile())) {
     throw invalidWorkflowTransition(`the named compass ${compassRef.path} disappeared after it was validated; restore the reviewed delivery compass and retry the workflow transition`, { path: compassRef.path });
   }
   const checkout = evidence.worktree ?? evidence.checkout;
   if (checkout !== undefined && checkout.branch !== null) {
     const { path: path2, branch } = checkout;
-    if (!existsSync22(path2) || !statSync10(path2).isDirectory()) {
+    if (!existsSync22(path2) || !statSync11(path2).isDirectory()) {
       throw new CoordinationError("coordination.integration-unresolved", `the integration checkout ${path2} disappeared after it was validated; restore the checkout at the registered path and retry the workflow transition`, { path: path2 });
     }
     const alignment = assertBranchAlignment(path2, branch);
@@ -31609,7 +31816,7 @@ function catalogDeltaFor(workflow) {
       id: row.id,
       title: row.title,
       rootKind: "plans",
-      relativePath: relative10(resolved.planDir, resolved.planPath).split(sep12).join("/")
+      relativePath: relative11(resolved.planDir, resolved.planPath).split(sep13).join("/")
     };
   });
   const projects = [...new Set(workflow.options.projects ?? (workflow.options.project === undefined ? [] : [workflow.options.project]))];
@@ -32239,7 +32446,7 @@ async function applyStoreMigration(context, manifest, hooks = {}) {
   if (!manifest || manifest.version !== MIGRATION_MANIFEST_VERSION || typeof manifest.controlRoot !== "string") {
     throw new StoreMigrationError("store.migration-manifest-invalid", "the manifest is missing or carries an unsupported version; re-run the preview");
   }
-  if (resolve22(manifest.controlRoot) !== resolve22(context.harnessDir)) {
+  if (resolve24(manifest.controlRoot) !== resolve24(context.harnessDir)) {
     throw new StoreMigrationError("store.migration-manifest-invalid", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was written.`);
   }
   if (manifest.unresolved.length > 0 || manifest.catalog.conflicts.length > 0 || manifest.blocksApply) {
@@ -32376,7 +32583,7 @@ async function applyStoreMigration(context, manifest, hooks = {}) {
   }
 }
 function controlRootOf(context) {
-  return canonicalTarget(dirname20(storeDbPath(context)));
+  return canonicalTarget(dirname21(storeDbPath(context)));
 }
 function assertWorkflowId(workflowId, what = "workflow id") {
   try {
@@ -32559,7 +32766,7 @@ function commitLedgerFrame(path2, frame) {
     closeSync5(fd);
   }
   if (created)
-    fsyncDirectory(dirname20(path2));
+    fsyncDirectory(dirname21(path2));
   assertLedgerPathIdentity(path2, opened, "before success receipt");
 }
 function ledgerSpans(bytes) {
@@ -32587,7 +32794,7 @@ function markerReserveBytes(totalBytes, workflowId) {
   return reserve + 5 * String(totalBytes).length + 2;
 }
 function writeLedgerTempFile(path2, content3) {
-  const temp = join33(dirname20(path2), `${basename16(path2)}.compaction-${randomUUID7()}.tmp`);
+  const temp = join33(dirname21(path2), `${basename16(path2)}.compaction-${randomUUID7()}.tmp`);
   try {
     const fd = openWithoutFollowing(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 420);
     try {
@@ -32700,7 +32907,7 @@ function compactWorkflowNotesLedger(path2, workflowId, trigger) {
     return;
   }
   renameSync3(temp, path2);
-  fsyncDirectory(dirname20(path2));
+  fsyncDirectory(dirname21(path2));
 }
 function withWorkflowNotesMaintenanceLock(context, body) {
   return withExecutionTransaction(context, () => body());
@@ -32743,7 +32950,7 @@ function prepareWorkflowBodyDir(context, session, dir) {
   }
   assertExecutionSessionCurrent(context, session);
   mkdirSync8(dir, { recursive: true });
-  fsyncDirectory(dirname20(dir));
+  fsyncDirectory(dirname21(dir));
 }
 function assertNoteScope(session, note) {
   assertWorkflowId(session.workflowId, "execution session workflow id");
@@ -32759,7 +32966,7 @@ async function appendWorkflowNote(context, session, note) {
   assertNoteScope(session, note);
   assertRealDirectory(controlRootOf(context), "the control root");
   const ledgerPath = workflowNotesLedgerPath(context, session.workflowId);
-  prepareWorkflowBodyDir(context, session, dirname20(ledgerPath));
+  prepareWorkflowBodyDir(context, session, dirname21(ledgerPath));
   const frame = Buffer.from(`${canonicalNoteLine({ ...note, ts: note.ts ?? new Date().toISOString() })}
 `, "utf8");
   assertExecutionSessionCurrent(context, session);
@@ -32872,7 +33079,7 @@ function normalizeWorkflowNotesCoverage(input) {
   };
 }
 function controlRootOf2(context) {
-  return canonicalPath(dirname21(storeDbPath(context)));
+  return canonicalPath(dirname22(storeDbPath(context)));
 }
 function sha256Of(bytes) {
   return createHash24("sha256").update(bytes).digest("hex");
@@ -33291,7 +33498,7 @@ function recoveryPointPath(context, root, backupPath) {
   if (!isNonEmptyString(backupPath)) {
     throw conflict3("a restore preview needs the recovery point path it is previewed against");
   }
-  const point3 = canonicalPath(resolve23(backupPath));
+  const point3 = canonicalPath(resolve25(backupPath));
   if (!isPathWithin(root, point3)) {
     throw new StoreActivationError("store.activation-stale", `the recovery point ${backupPath} is outside the authorized control root ${root}; a recovery point must live inside the root it protects.`);
   }
@@ -33703,10 +33910,10 @@ function parseStoredJson(value, what, redacted) {
 function relativeSourcePath(root, path2) {
   if (!isPathWithin(root, path2))
     return null;
-  const rel = relative11(root, canonicalPath(path2));
-  if (rel === "" || rel.split(sep13).some((segment) => segment === ".." || segment === ""))
+  const rel = relative12(root, canonicalPath(path2));
+  if (rel === "" || rel.split(sep14).some((segment) => segment === ".." || segment === ""))
     return null;
-  return rel.split(sep13).join("/");
+  return rel.split(sep14).join("/");
 }
 function sourceStatusOf(root, manifestJson) {
   let manifest;
@@ -33867,7 +34074,7 @@ function readLinearCredential(now2 = Date.now()) {
 }
 function writeLinearCredential(credential) {
   const path2 = linearCredentialPath();
-  mkdirSync9(dirname22(path2), { recursive: true, mode: 448 });
+  mkdirSync9(dirname23(path2), { recursive: true, mode: 448 });
   const payload = {
     access_token: credential.accessToken,
     refresh_token: credential.refreshToken,
@@ -34122,7 +34329,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
       configurable: true,
       set: __exportSetter2.bind(all, name)
     });
-}, __esm2 = (fn, res) => () => (fn && (res = fn(fn = 0)), res), CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, ENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at, source_hash", LINK_COLUMNS = "from_kind, from_id, relation, to_kind, to_id, ordinal", LINK_ORDER = "order by from_kind asc, from_id asc, relation asc, to_kind asc, to_id asc", init_catalog, MSTARC_FILE = ".mstarc", MSTARC_SECTION = "config", LINEAR_SECTION = "linear", LINEAR_MAPPING_SECTION = "linear.mapping", MSTARC_HARNESS_DIR_KEY = "harness_dir", MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, convert = function(test) {
+}, __esm2 = (fn, res) => () => (fn && (res = fn(fn = 0)), res), CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, ENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at, source_hash", LINK_COLUMNS = "from_kind, from_id, relation, to_kind, to_id, ordinal", LINK_ORDER = "order by from_kind asc, from_id asc, relation asc, to_kind asc, to_id asc", init_catalog, MSTARC_FILE = ".mstarc", MSTARC_SECTION = "config", LINEAR_SECTION = "linear", LINEAR_MAPPING_SECTION = "linear.mapping", MSTARC_HARNESS_DIR_KEY = "harness_dir", MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, convert = function(test) {
   if (test === null || test === undefined) {
     return ok2;
   }
@@ -34136,7 +34343,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
     return typeFactory(test);
   }
   throw new Error("Expected function, string, or object as test");
-}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, ACTIVATION_PROTOCOL_VERSION = 1, init_core, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, init_activation_provisioning, exports_store_activation, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
+}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, ACTIVATION_PROTOCOL_VERSION = 1, init_core, DEFAULT_PROBE_TIMEOUT_MS = 1e4, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, init_activation_provisioning, exports_store_activation, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
@@ -34149,6 +34356,8 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
 !.mstar/knowledge/**
 !.mstar/specs/
 !.mstar/specs/**
+!.mstar/adr/
+!.mstar/adr/**
 # .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
 .mstarc
 `, GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
@@ -34159,7 +34368,9 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
 !.agents/knowledge/**
 !.agents/specs/
 !.agents/specs/**
-`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, PREPARE_PHASE = "phase-1-prepare", EXECUTE_PHASE = "phase-2-execute", CLOSE_PHASE = "phase-3-close", DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path", DERIVED_PHASE_CODE = "workflow.snapshot.derived-phase", WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, CATALOG_REGISTRATION_JOURNAL_VERSION = 1, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, JOURNAL_COLUMNS = "operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at", init_catalog_registration, DEFAULT_PROBE_TIMEOUT_MS = 1e4, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, SNAPSHOT_FILE = "snapshot.json", EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_TIMEOUT_MS = 1e4, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, SCHEMA_VERSION_TABLE_SQL = "create table schema_version(version integer primary key,name text not null unique,checksum text not null,applied_at text not null)", MIGRATION_1_SQL = `
+!.agents/adr/
+!.agents/adr/**
+`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, PREPARE_PHASE = "phase-1-prepare", EXECUTE_PHASE = "phase-2-execute", CLOSE_PHASE = "phase-3-close", DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path", DERIVED_PHASE_CODE = "workflow.snapshot.derived-phase", WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, CATALOG_REGISTRATION_JOURNAL_VERSION = 1, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, JOURNAL_COLUMNS = "operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at", init_catalog_registration, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, SNAPSHOT_FILE = "snapshot.json", EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_TIMEOUT_MS = 1e4, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, SCHEMA_VERSION_TABLE_SQL = "create table schema_version(version integer primary key,name text not null unique,checksum text not null,applied_at text not null)", MIGRATION_1_SQL = `
 create table store_meta(
   id integer primary key check (id = 1),
   store_id text not null,
@@ -34877,6 +35088,7 @@ var init_engine = __esm(() => {
       [MSTARC_ITERATION_DIR_KEY]: "iterationDir",
       [MSTARC_KNOWLEDGE_DIR_KEY]: "knowledgeDir",
       [MSTARC_SPECS_DIR_KEY]: "specsDir",
+      [MSTARC_ADR_DIR_KEY]: "adrDir",
       [MSTARC_WORKFLOW_DIR_KEY]: "workflowDir",
       [MSTARC_PROJECT_DIR_KEY]: "projectDir",
       [MSTARC_REVIEW_DIR_KEY]: "reviewDir",
@@ -38153,7 +38365,27 @@ var init_engine = __esm(() => {
   init_core = __esm2(() => {
     SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
   });
+  init_worktree = __esm2(() => {
+    init_workflow();
+    deliveryAnchorFlags = {
+      base: "--branch-base",
+      work: "--branch-work",
+      target: "--branch-target",
+      integration: null
+    };
+    QC_ALIGNMENT_FIELDS = [
+      { key: "planId", label: "plan_id" },
+      { key: "reviewRange", label: "Review range" },
+      { key: "diffBasis", label: "Diff basis" }
+    ];
+  });
+  init_path_check = __esm2(() => {
+    init_worktree();
+  });
   init_dispatch = __esm2(() => {
+    init_path();
+    init_path_check();
+    init_worktree();
     init_core();
     REQUIRED_FIELDS = [
       { key: "executeAs", label: "Execute as", code: "execute-as" },
@@ -38861,20 +39093,6 @@ var init_engine = __esm(() => {
       supersedes: true
     };
   });
-  init_worktree = __esm2(() => {
-    init_workflow();
-    deliveryAnchorFlags = {
-      base: "--branch-base",
-      work: "--branch-work",
-      target: "--branch-target",
-      integration: null
-    };
-    QC_ALIGNMENT_FIELDS = [
-      { key: "planId", label: "plan_id" },
-      { key: "reviewRange", label: "Review range" },
-      { key: "diffBasis", label: "Diff basis" }
-    ];
-  });
   init_qcreview_schema = __esm2(() => {
     MSTAR_REVIEW_V1_PAYLOAD_SCHEMA = {
       schema: { required: true, type: "string", description: "Must be mstar.review/v1." },
@@ -39003,6 +39221,7 @@ var init_engine = __esm(() => {
   init_core();
   init_mstarc();
   init_path();
+  init_path_check();
   init_plan_path();
   init_status();
   init_status();
@@ -40292,7 +40511,7 @@ var init_engine = __esm(() => {
 // hooks/src/session-context.ts
 import fs from "node:fs";
 import path2 from "node:path";
-import { execFileSync as execFileSync6 } from "node:child_process";
+import { execFileSync as execFileSync7 } from "node:child_process";
 function readStdinJson() {
   try {
     const raw = fs.readFileSync(0, "utf8");
@@ -40304,7 +40523,7 @@ function readStdinJson() {
   }
 }
 function git(args, cwd) {
-  return execFileSync6("git", args, {
+  return execFileSync7("git", args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"]

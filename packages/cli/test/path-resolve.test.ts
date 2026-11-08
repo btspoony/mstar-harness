@@ -14,9 +14,10 @@
  * Each case runs the real CLI as a subprocess against a temp fixture tree.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 
@@ -31,12 +32,23 @@ interface PathEnvelope {
   status: "ok" | "refused" | "usage" | "error";
   code: string;
   message?: string;
+  recovery?: string;
+  details?: Record<string, unknown>;
   data?: {
     startDir: string;
-    harnessDir: string;
-    specsDir: string;
+    harnessDir: string | null;
+    specsDir: string | null;
     workflowDir: string;
     projectDir: string;
+    knowledgeDir?: string | null;
+    adrDir?: string | null;
+    trackedHarness?: string | null;
+    processHarness?: string | null;
+    callerCheckoutRoot?: string | null;
+    ok?: boolean;
+    findings?: Array<{ path: string; expect?: string; code: string; severity: string; message: string }>;
+    warnings?: Array<{ path: string; code: string; severity: string; message: string }>;
+    checked?: Array<{ path: string; result?: boolean; kind?: "directory" | "file" }>;
   };
 }
 
@@ -65,9 +77,14 @@ function cliEnv(): Record<string, string> {
 }
 
 function runResolve(args: string[]): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", "src/index.ts", "path", "resolve", ...args], {
-    cwd: CLI_ROOT,
-    env: cliEnv(),
+  return runCli(["path", "resolve", ...args]);
+}
+
+/** Run an arbitrary CLI verb; `cwd` is the directory the caller stands in. */
+function runCli(args: string[], cwd: string = CLI_ROOT, env: Record<string, string> = cliEnv()): RunResult {
+  const proc = Bun.spawnSync([process.execPath, "run", join(CLI_ROOT, "src", "index.ts"), ...args], {
+    cwd,
+    env,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -229,6 +246,203 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       // Engine default would create the fallback; the CLI opts out.
       expect(existsSync(join(root, ".mstar", "specs"))).toBe(false);
       expect(data(result).specsDir).toBe(join(root, ".mstar", "specs"));
+    });
+  });
+
+  test("resolve reports knowledgeDir and adrDir without creating them", () => {
+    withRoot((root) => {
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
+      const result = runResolve([root]);
+      expect(result.exitCode).toBe(0);
+      expect(data(result).knowledgeDir).toBe(join(root, ".mstar", "knowledge"));
+      expect(data(result).adrDir).toBe(join(root, ".mstar", "adr"));
+      expect(existsSync(join(root, ".mstar", "knowledge"))).toBe(false);
+      expect(existsSync(join(root, ".mstar", "adr"))).toBe(false);
+    });
+  });
+});
+
+/** Real `git init`: `check-ignore` needs a repository, unlike the resolve probes. */
+function gitRepo(root: string): void {
+  execFileSync("git", ["init", "-q", root], { stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["-C", root, "config", "user.email", "path-check-test@example.com"], { stdio: "ignore" });
+  execFileSync("git", ["-C", root, "config", "user.name", "Path Check Test"], { stdio: "ignore" });
+}
+
+/** Commit `content` as `.gitignore`: a linked checkout only sees committed rules. */
+function commitIgnore(repo: string, content: string): void {
+  writeFileSync(join(repo, ".gitignore"), content);
+  execFileSync("git", ["-C", repo, "add", "-A"], { stdio: "ignore" });
+  execFileSync("git", ["-C", repo, "commit", "-q", "-m", "ignore"], { stdio: "ignore" });
+}
+
+/** A real linked checkout of `repo`. */
+function addWorktree(root: string, repo: string): string {
+  const worktree = join(root, "wt");
+  execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", "feat", worktree], { stdio: "ignore" });
+  return worktree;
+}
+
+/** The `.gitignore` that re-includes the tracked results of a `.mstar/` harness. */
+const TRACKED_RESULTS_IGNORE = [
+  ".mstar/**",
+  "!.mstar/specs/",
+  "!.mstar/specs/**",
+  "!.mstar/knowledge/",
+  "!.mstar/knowledge/**",
+  "!.mstar/adr/",
+  "!.mstar/adr/**",
+  "",
+].join("\n");
+
+describe("mstar path check \u2014 verdict from Git state", () => {
+  test("a control harness environment override keeps tracked results in the linked checkout", () => {
+    withRoot((root) => {
+      gitRepo(root);
+      commitIgnore(root, TRACKED_RESULTS_IGNORE);
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      const worktree = addWorktree(root, root);
+      const result = runCli(["path", "check"], worktree, { ...cliEnv(), MSTAR_HARNESS_DIR: join(root, ".mstar") });
+      expect(result.exitCode).toBe(0);
+      expect(data(result).trackedHarness).toBe(join(realpathSync(worktree), ".mstar"));
+      expect(data(result).specsDir).toBe(join(realpathSync(worktree), ".mstar", "specs"));
+      expect(data(result).knowledgeDir).toBe(join(realpathSync(worktree), ".mstar", "knowledge"));
+    });
+  });
+
+  test("an ignored result dir in the control checkout exits 0 with a path.result-ignored warning", () => {
+    withRoot((root) => {
+      gitRepo(root);
+      writeFileSync(join(root, ".gitignore"), ".mstar/\n");
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
+      const result = runCli(["path", "check"], root);
+      expect(result.exitCode).toBe(0);
+      const okEnvelope = envelope(result);
+      expect(okEnvelope).toMatchObject({ command: "path.check", status: "ok", code: "path.check.ok" });
+      expect(data(result).ok).toBe(true);
+      expect(data(result).findings).toEqual([]);
+      // The layout resolver answers canonical (realpath'd) directories.
+      const warnings = data(result).warnings ?? [];
+      expect(warnings.map((warning) => warning.path)).toEqual([
+        join(realpathSync(root), ".mstar", "specs"),
+        join(realpathSync(root), ".mstar", "knowledge"),
+        join(realpathSync(root), ".mstar", "adr"),
+      ]);
+      expect(warnings.every((warning) => warning.code === "path.result-ignored")).toBe(true);
+      expect(warnings[0]?.message).toContain("never be committed or shared");
+    });
+  });
+
+  test("a re-included result dir is clean with no warning (exit 0)", () => {
+    withRoot((root) => {
+      gitRepo(root);
+      writeFileSync(join(root, ".gitignore"), TRACKED_RESULTS_IGNORE);
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
+      mkdirSync(join(root, ".mstar", "knowledge"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "knowledge", "kb.md"), "# kb\n");
+      mkdirSync(join(root, ".mstar", "adr"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "adr", "0001.md"), "# adr\n");
+      const result = runCli(["path", "check"], root);
+      expect(result.exitCode).toBe(0);
+      expect(data(result).ok).toBe(true);
+      expect(data(result).findings).toEqual([]);
+      expect(data(result).warnings).toEqual([]);
+      // Process state is checked too — the store is the notable one.
+      expect(data(result).checked?.some((target) => target.result === true)).toBe(true);
+      expect(data(result).checked?.some((target) => target.result !== true)).toBe(true);
+    });
+  });
+
+  test("an ignored named result dir warns without failing; a committable dir is clean", () => {
+    withRoot((root) => {
+      gitRepo(root);
+      writeFileSync(join(root, ".gitignore"), ".mstar/\n");
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      mkdirSync(join(root, "docs", "adr"), { recursive: true });
+      const ignored = runCli(["path", "check", ".mstar/specs"], root);
+      expect(ignored.exitCode).toBe(0);
+      expect(envelope(ignored).status).toBe("ok");
+      expect(data(ignored).warnings?.map((warning) => warning.code)).toEqual(["path.result-ignored"]);
+
+      const okDir = runCli(["path", "check", "docs/adr"], root);
+      expect(okDir.exitCode).toBe(0);
+      expect(data(okDir).ok).toBe(true);
+      expect(data(okDir).warnings).toEqual([]);
+    });
+  });
+
+  test("an ignored file named inside {HARNESS_DIR}/specs still earns the warning", () => {
+    withRoot((root) => {
+      gitRepo(root);
+      writeFileSync(join(root, ".gitignore"), ".mstar/\n");
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "specs", "0001.md"), "# spec\n");
+      const result = runCli(["path", "check", ".mstar/specs/0001.md"], root);
+      expect(result.exitCode).toBe(0);
+      expect(data(result).warnings?.map((warning) => warning.path)).toEqual([realpathSync(join(root, ".mstar", "specs", "0001.md"))]);
+    });
+  });
+
+  test("outside any Git checkout the named probe refuses as path.unverifiable", () => {
+    withRoot((root) => {
+      mkdirSync(join(root, "docs", "adr"), { recursive: true });
+      const result = runCli(["path", "check", "docs/adr"], root);
+      expect(result.exitCode).toBe(1);
+      expect(envelope(result).code).toBe("path.unverifiable");
+    });
+  });
+
+  test("in a linked checkout, ignored state is checked in the control root and results in the caller's checkout", () => {
+    withRoot((root) => {
+      const control = join(root, "control");
+      mkdirSync(control);
+      gitRepo(control);
+      commitIgnore(control, TRACKED_RESULTS_IGNORE);
+      const worktree = addWorktree(root, control);
+      // The control harness owns ignored state, so it must exist.
+      mkdirSync(join(control, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(control, ".mstar", "specs", "base.md"), "# spec\n");
+      // Committable results live in the caller's checkout (the branch it carries).
+      mkdirSync(join(worktree, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(worktree, ".mstar", "specs", "0001.md"), "# spec\n");
+      const result = runCli(["path", "check"], worktree);
+      expect(result.exitCode).toBe(0);
+      expect(realpathSync(data(result).trackedHarness!)).toBe(realpathSync(join(worktree, ".mstar")));
+      expect(realpathSync(data(result).processHarness!)).toBe(realpathSync(join(control, ".mstar")));
+      expect(data(result).checked?.find((entry) => basename(entry.path) === "store.db")?.kind).toBe("file");
+      expect(data(result).ok).toBe(true);
+    });
+  });
+
+  test("an ignored process dir in a linked checkout refuses as path.process-outside-control", () => {
+    withRoot((root) => {
+      const control = join(root, "control");
+      mkdirSync(control);
+      gitRepo(control);
+      commitIgnore(control, TRACKED_RESULTS_IGNORE);
+      const worktree = addWorktree(root, control);
+      mkdirSync(join(worktree, ".mstar", "plans"), { recursive: true });
+      const result = runCli(["path", "check", join(worktree, ".mstar", "plans")], worktree);
+      expect(result.exitCode).toBe(1);
+      expect(envelope(result).code).toBe("path.process-outside-control");
+    });
+  });
+
+  test("a committable result owned by the control checkout refuses when named from a linked checkout", () => {
+    withRoot((root) => {
+      const control = join(root, "control");
+      mkdirSync(control);
+      gitRepo(control);
+      commitIgnore(control, TRACKED_RESULTS_IGNORE);
+      const worktree = addWorktree(root, control);
+      mkdirSync(join(control, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(control, ".mstar", "specs", "0001.md"), "# spec\n");
+      const result = runCli(["path", "check", join(control, ".mstar", "specs")], worktree);
+      expect(result.exitCode).toBe(1);
+      expect(envelope(result).code).toBe("path.result-outside-worktree");
     });
   });
 });

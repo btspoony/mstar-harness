@@ -4,18 +4,28 @@ import os from "node:os";
 import path from "node:path";
 import {
   CoordinationError,
+  checkPathOwnership,
   detectHarnessKind,
   detectHost,
   emitGitignoreSnippet,
   hasHarnessRootDeclaration,
+  isResultPath,
+  nearestExistingDir,
+  pathOwnershipWarning,
   probeCheckoutRoot,
+  probePathOwnership,
   readMainWorktree,
+  resolveAdrDir,
   resolveHarnessDir,
+  resolveIterationDir,
+  resolveKnowledgeDir,
+  resolvePlanDir,
   resolveProcessHarnessDir,
   resolveProjectDir,
   resolveProjectRoot as projectRootFrom,
   resolveReviewDir,
   resolveScaffoldDirs,
+  resolveSddDir,
   resolveSkillRoot,
   resolveSpecsDir,
   resolveWorkflowDir,
@@ -23,6 +33,9 @@ import {
   setArtifactStore,
   createFsStore,
   type HostId,
+  type PathOwnershipFinding,
+  type PathOwnershipTarget,
+  type PathOwnershipWarning,
   type ToolSignal,
 } from "@mstar-harness/engine";
 import { z } from "zod";
@@ -269,6 +282,86 @@ export function linkedWorktreeOf(controlRoot: string | null, startCheckout: stri
   return controlRoot !== null && startCheckout !== controlRoot;
 }
 
+/** The shared control-root facts `path resolve` and `path check` answer from. */
+type ControlFacts = {
+  /** Harness dir probed from the start path (the local, worktree-local answer). */
+  harnessDir: string | null;
+  /** Git main worktree — the process root, `null` outside Git. */
+  controlRoot: string | null;
+  /** Harness dir of the control checkout, `null` when unreadable or absent. */
+  controlHarnessDir: string | null;
+  /** The start path belongs to a checkout other than the control root. */
+  linkedWorktree: boolean;
+  /** Envelope fields describing the control root. */
+  control: Record<string, unknown>;
+  /** A named cause when the control root cannot be read at all. */
+  unavailable?: { code: "coordination.not-in-git" | "path.control-root-unreadable"; message: string };
+};
+
+/**
+ * Resolve the control-root facts from `startDir`: the probed harness dir, the
+ * Git main worktree, the control harness and whether `startDir` is a linked
+ * checkout. A linked checkout whose main worktree is unreadable is data here,
+ * not a failed lookup: the cause is returned so the caller refuses by name
+ * instead of falling back to a local guess. Filesystem-availability errors
+ * escape the same walk-up and must answer a named refusal too — but they are
+ * not "not in git", so they carry their own code.
+ */
+function controlFacts(startDir: string): ControlFacts {
+  const harnessDir = resolveHarnessDir(startDir);
+  // The process root comes from Git only: the first `worktree list` record is
+  // the main checkout, whatever the start path looks like.
+  const controlRoot = readMainWorktree(startDir)?.root ?? null;
+  let controlHarnessDir: string | null = null;
+  let unavailable: ControlFacts["unavailable"];
+  try {
+    controlHarnessDir = resolveProcessHarnessDir(startDir);
+  } catch (error) {
+    const code = error instanceof CoordinationError ? error.code : (error as NodeJS.ErrnoException).code;
+    if (code !== "coordination.not-in-git" && code !== "EACCES" && code !== "EPERM") throw error;
+    unavailable = {
+      code: code === "coordination.not-in-git" ? "coordination.not-in-git" : "path.control-root-unreadable",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  // A plain subdirectory of the main checkout belongs to that worktree; a
+  // nested `git worktree add` under it is a distinct checkout. Git's own
+  // top-level for the start path decides this, not path prefixes.
+  const linkedWorktree = linkedWorktreeOf(controlRoot, probeCheckoutRoot(startDir));
+  return {
+    harnessDir,
+    controlRoot,
+    controlHarnessDir,
+    linkedWorktree,
+    control: { controlRoot, controlHarnessDir, linkedWorktree, ...(unavailable === undefined ? {} : { controlUnavailable: unavailable.message }) },
+    ...(unavailable === undefined ? {} : { unavailable }),
+  };
+}
+
+/**
+ * `path check` answer: no finding is the clean exit-0 envelope (warnings ride
+ * along without failing it), every finding is one refusal carrying them all
+ * (the operator sees every cause at once).
+ */
+function pathCheckEnvelope(
+  command: string,
+  data: Record<string, unknown>,
+  findings: readonly PathOwnershipFinding[],
+  warnings: readonly PathOwnershipWarning[],
+): CommandEnvelope {
+  const first = findings[0];
+  if (first === undefined) return ok(command, { ...data, ok: true, findings: [], warnings });
+  return refusalEnvelope({
+    command,
+    status: "refused",
+    code: first.code,
+    exitCode: 1,
+    message: findings.map((finding) => finding.message).join("; "),
+    details: { ...data, ok: false, findings, warnings },
+    recovery: "Keep Git-ignored harness files in the control checkout and committable results in the checkout that carries your branch; if a result dir is ignored, write it under .agents/ or declare specs_dir / knowledge_dir / adr_dir in .mstarc. Run mstar path check.",
+  });
+}
+
 export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
   return [
     command("harness.scaffold", {
@@ -465,7 +558,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       cli: { path: ["path", "resolve"], aliases: [], arguments: [{ key: "path", required: false, variadic: false }], options: [] },
       input: z.object({ path: z.string().min(1).optional() }),
       effects: ["read"],
-      description: "Resolve harness, specs, workflow, project, and review directories from a start directory.",
+      description: "Resolve harness, specs, knowledge, adr, workflow, project, and review directories from a start directory.",
       async execute(input, context) {
         // On a connection that declared no workspace the invocation directory is
         // the MCP server's LAUNCH directory (the host's checkout), which says
@@ -481,47 +574,12 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         // as `workspaceRoot` makes the resolver refuse the very harness it
         // sits inside (the boundary contains the answer). Resolve from the
         // start directory alone, as the contract's canonical form does.
-        const harnessDir = resolveHarnessDir(startDir);
-        // The process root comes from Git only: the first `worktree list`
-        // record is the main checkout, whatever the start path looks like.
-        const main = readMainWorktree(startDir);
-        const controlRoot = main?.root ?? null;
-        let controlHarnessDir: string | null = null;
-        let controlUnavailable: string | undefined;
-        let controlUnavailableCode: "coordination.not-in-git" | "path.control-root-unreadable" | undefined;
-        try {
-          controlHarnessDir = resolveProcessHarnessDir(startDir);
-        } catch (error) {
-          // A linked checkout whose main worktree is unreadable is data here,
-          // not a failed lookup: report the cause instead of a local guess.
-          // Filesystem-availability errors escape the same walk-up and must
-          // answer a named refusal, not an unclassified internal error — but
-          // they are not "not in git", so they carry their own code.
-          const code = error instanceof CoordinationError
-            ? error.code
-            : (error as NodeJS.ErrnoException).code;
-          if (code !== "coordination.not-in-git" && code !== "EACCES" && code !== "EPERM") throw error;
-          controlUnavailableCode = code === "coordination.not-in-git"
-            ? "coordination.not-in-git"
-            : "path.control-root-unreadable";
-          controlUnavailable = error instanceof Error ? error.message : String(error);
-        }
-        // A plain subdirectory of the main checkout belongs to that worktree;
-        // a nested `git worktree add` under it is a distinct checkout. Git's
-        // own top-level for the start path decides this, not path prefixes.
-        const startCheckout = probeCheckoutRoot(startDir);
-        const linkedWorktree = linkedWorktreeOf(controlRoot, startCheckout);
-        const control = {
-          controlRoot,
-          controlHarnessDir,
-          linkedWorktree,
-          ...(controlUnavailable === undefined ? {} : { controlUnavailable }),
-        };
+        const { harnessDir, controlRoot, controlHarnessDir, linkedWorktree, control, unavailable } = controlFacts(startDir);
         // A linked checkout whose main worktree cannot be read must not fall
         // back to local artifacts — misreporting the worktree's own directory
         // as the process root is the confusion this command exists to remove.
-        if (controlUnavailable !== undefined) {
-          return refusalEnvelope({ command: "path.resolve", status: "refused", code: controlUnavailableCode ?? "coordination.not-in-git", exitCode: 1, message: `the checkout ${startDir} cannot read its control root`, details: {
+        if (unavailable !== undefined) {
+          return refusalEnvelope({ command: "path.resolve", status: "refused", code: unavailable.code, exitCode: 1, message: `the checkout ${startDir} cannot read its control root`, details: {
             startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control, local: { harnessDir },
           } , recovery: "From the main worktree: run mstar status validate; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path resolve."});
         }
@@ -542,6 +600,8 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             // checkout. The probe stays under `local`.
             harnessDir: controlHarnessDir,
             specsDir: resolveSpecsDir(controlHarnessDir, { create: false }),
+            knowledgeDir: resolveKnowledgeDir(controlHarnessDir, { create: false }),
+            adrDir: resolveAdrDir(controlHarnessDir, { create: false }),
             workflowDir: resolveWorkflowDir(controlRoot),
             projectDir: resolveProjectDir(controlRoot),
             reviewDir: resolveReviewDir(controlRoot),
@@ -549,6 +609,8 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             local: {
               harnessDir,
               specsDir: harnessDir === null ? null : resolveSpecsDir(harnessDir, { create: false }),
+              knowledgeDir: harnessDir === null ? null : resolveKnowledgeDir(harnessDir, { create: false }),
+              adrDir: harnessDir === null ? null : resolveAdrDir(harnessDir, { create: false }),
               workflowDir: harnessDir === null ? null : resolveWorkflowDir(startDir),
               projectDir: harnessDir === null ? null : resolveProjectDir(startDir),
               reviewDir: harnessDir === null ? null : resolveReviewDir(startDir),
@@ -564,11 +626,116 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           startDir,
           harnessDir,
           specsDir: resolveSpecsDir(harnessDir, { create: false }),
+          knowledgeDir: resolveKnowledgeDir(harnessDir, { create: false }),
+          adrDir: resolveAdrDir(harnessDir, { create: false }),
           workflowDir: resolveWorkflowDir(startDir),
           projectDir: resolveProjectDir(startDir),
           reviewDir: resolveReviewDir(startDir),
           ...control,
         });
+      },
+    }),
+    command("path.check", {
+      cli: { path: ["path", "check"], aliases: [], arguments: [{ key: "path", required: false, variadic: false }], options: [] },
+      input: z.object({ path: z.string().min(1).optional() }),
+      effects: ["read"],
+      description: "Check harness file ownership from Git state: Git-ignored files must live in the control checkout, committable files in the caller's checkout; an ignored result dir is reported as a warning.",
+      async execute(input, context) {
+        // Same launch-directory rule as `path resolve`: an unnamed start path
+        // would answer about the host's checkout instead of the caller's.
+        const unnamedStart = launchDirectoryRefusal("path.check", context, {
+          fields: [{ field: "path", subject: "the path to check", value: input.path }],
+        });
+        if (unnamedStart !== undefined) return unnamedStart;
+        const startDir = input.path === undefined ? context.cwd : resolveCliPath(input.path, context.cwd);
+        if (input.path !== undefined) {
+          // The verdict comes from Git state; the resolved result dirs only
+          // decide whether an ignored-but-legal path also earns the warning.
+          // The anchor is the nearest existing directory — Git and the harness
+          // probe both need a real path, and the target may not exist.
+          const anchor = nearestExistingDir(startDir);
+          const { controlRoot } = controlFacts(anchor);
+          // The caller is the invoker, not the named target: a committable path
+          // checked from a linked checkout that lives in the control checkout
+          // belongs to the wrong checkout. Outside Git the target's own
+          // checkout is the only identity available.
+          const callerCheckoutRoot = probeCheckoutRoot(context.cwd) ?? probeCheckoutRoot(anchor);
+          const trackedHarness = callerCheckoutRoot === null ? null : resolveHarnessDir(callerCheckoutRoot, { ignoreEnvOverride: true }) ?? path.join(callerCheckoutRoot, ".mstar");
+          const resultDirs = trackedHarness === null ? [] : [
+            resolveSpecsDir(trackedHarness, { create: false }),
+            resolveKnowledgeDir(trackedHarness, { create: false }),
+            resolveAdrDir(trackedHarness, { create: false }),
+          ];
+          const probe = probePathOwnership(
+            { path: startDir, result: isResultPath(startDir, resultDirs), ...(input.path.endsWith("/") ? { kind: "directory" as const } : {}) },
+            controlRoot,
+            callerCheckoutRoot,
+          );
+          const warning = pathOwnershipWarning(probe);
+          return pathCheckEnvelope(
+            "path.check",
+            { startDir, trackedHarness, controlRoot, callerCheckoutRoot, result: probe.result, ignored: probe.ignored, checkoutRoot: probe.checkoutRoot },
+            probe.code === null ? [] : [probe],
+            warning === null ? [] : [warning],
+          );
+        }
+        const { harnessDir, controlRoot, controlHarnessDir, linkedWorktree, control, unavailable } = controlFacts(startDir);
+        if (unavailable !== undefined) {
+          return refusalEnvelope({ command: "path.check", status: "refused", code: unavailable.code, exitCode: 1, message: `the checkout ${startDir} cannot read its control root`, details: {
+            startDir, ...control, checked: [],
+          } , recovery: "From the main worktree: run mstar status validate; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path check."});
+        }
+        // The two domains have different owners. Ignored harness files live in
+        // the control harness (unchanged by `path resolve`). Committable
+        // results live in the CALLER's checkout: a linked worktree shares the
+        // control harness for ignored state, but its results must be committed
+        // from the branch it carries, so resolving them from the control
+        // harness would check the wrong checkout and bless results the caller
+        // never has.
+        const processHarness = linkedWorktree && controlRoot !== null ? controlHarnessDir : harnessDir;
+        if (processHarness === null) {
+          return refusalEnvelope({ command: "path.check", status: "refused", code: "path.harness-not-found", exitCode: 1, message: `no harness dir found from ${startDir}${controlRoot === null ? "" : ` (control root ${controlRoot})`}`, details: {
+            startDir, ...control, checked: [],
+          } , recovery: "From the main worktree: run mstar harness scaffold; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path check."});
+        }
+        const callerCheckoutRoot = probeCheckoutRoot(startDir);
+        // Without a probed harness the caller checkout still names a result
+        // base; it is only a probe base — nothing is created there.
+        const trackedHarness = callerCheckoutRoot === null ? null : resolveHarnessDir(callerCheckoutRoot, { ignoreEnvOverride: true }) ?? path.join(callerCheckoutRoot, ".mstar");
+        const specsDir = trackedHarness === null ? null : resolveSpecsDir(trackedHarness, { create: false });
+        const knowledgeDir = trackedHarness === null ? null : resolveKnowledgeDir(trackedHarness, { create: false });
+        const adrDir = trackedHarness === null ? null : resolveAdrDir(trackedHarness, { create: false });
+        const targets: PathOwnershipTarget[] = [
+          // The result marking only adds the ignored-result warning.
+          ...[specsDir, knowledgeDir, adrDir].flatMap((dir) => (dir === null ? [] : [{ path: dir, result: true }])),
+          { path: resolvePlanDir(processHarness) },
+          // The per-plan join makes `dirname` the SDD base, declaration included.
+          { path: path.dirname(resolveSddDir(processHarness, "path-check")) },
+          { path: resolveIterationDir(processHarness) },
+          { path: resolveWorkflowDir(processHarness, { harnessDir: processHarness }) },
+          { path: resolveProjectDir(processHarness, { harnessDir: processHarness }) },
+          { path: resolveReviewDir(processHarness, { harnessDir: processHarness }) },
+        ].map((target) => ({ ...target, kind: "directory" as const }));
+        // The execution store is a file at the harness root.
+        targets.push({ path: path.join(processHarness, "store.db"), kind: "file" });
+        const check = checkPathOwnership(targets, controlRoot, callerCheckoutRoot);
+        return pathCheckEnvelope(
+          "path.check",
+          {
+            startDir,
+            controlRoot,
+            callerCheckoutRoot,
+            linkedWorktree,
+            trackedHarness,
+            processHarness,
+            specsDir,
+            knowledgeDir,
+            adrDir,
+            checked: targets,
+          },
+          check.findings,
+          check.warnings,
+        );
       },
     }),
     command("host.detect", {

@@ -1,6 +1,6 @@
 ---
 name: mstar-conventions
-description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{ITERATION_DIR}`/`{KNOWLEDGE_DIR}`/`{SPECS_DIR}`/`{REVIEW_DIR}` 等符号的发现与初始化、docs 与 harness 子树边界、Spec 分支模型。读写 `.mstar/` 或开 plan 前必读。
+description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{ITERATION_DIR}`/`{KNOWLEDGE_DIR}`/`{SPECS_DIR}`/`{ADR_DIR}`/`{REVIEW_DIR}` 等符号的发现与初始化、docs 与 harness 子树边界、Spec 分支模型。读写 `.mstar/` 或开 plan 前必读。
 ---
 
 ## Load order（必读顺序）
@@ -27,14 +27,15 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 | `{PLAN_DIR}` | `{HARNESS_DIR}/plans/` |
 | `{SDD_DIR}` | `{HARNESS_DIR}/sdd/<plan-id>/`（SDD 运行时 scratch + review bundle；gitignored） |
 | `{ITERATION_DIR}` | `{HARNESS_DIR}/iterations/` |
-| `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/`（默认；`.mstarc` `knowledge_dir` 声明时用声明值） |
+| `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/`（默认）；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
 | `{SPECS_DIR}` | `{HARNESS_DIR}/specs/`（默认）；解析见下文「`{SPECS_DIR}` 解析」 |
+| `{ADR_DIR}` | `{HARNESS_DIR}/adr/`（默认）；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
 | `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/` (default; `.mstarc` `workflow_dir` overrides it) — retained ordinary bodies, append-only `notes.jsonl` and workflow-owned `reports/` (e.g. `<workflow-id>/reports/e2e.md`) |
 | `{PROJECT_DIR}` | `{HARNESS_DIR}/projects/`（默认；`.mstarc` `project_dir` 声明时用声明值）——project 层目录；旧 `roadmap.md` 仅作文件 transport/history |
 | `{REVIEW_DIR}` | `{HARNESS_DIR}/reviews/`（默认；`.mstarc` `review_dir` 声明时用声明值）——review 运行目录树（codebase audit / PR / branch / diff review 的 report 与 evidence；`mstar audit scaffold` 写入，`mstar pr-review report-path` 解析；gitignored） |
 | `{HARNESS_DIR}/store.db` | 进程/control harness 根下的 issue/catalog/roadmap/milestone 与 **execution_* 执行权威** SQLite（`resolveProcessHarnessDir` 后 `<resolved root>/store.db`；尊重 `.mstarc`）。功能/集成 worktree **不**在 cwd 建库；roadmap 规则 → `mstar-project-governance`。 |
 
-> **Engine check (when available):** import `resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveWorkflowDir` / `resolveProjectDir` / `resolveReviewDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve [path]` (`--json` for machine output) to print the resolved dirs — to confirm the resolution below. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** import `resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveAdrDir` / `resolveWorkflowDir` / `resolveProjectDir` / `resolveReviewDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve [path]`, whose JSON envelope prints the resolved dirs (including `specsDir`, `knowledgeDir`, `adrDir`) — to confirm the resolution below. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ### `{HARNESS_DIR}` 解析顺序（找到即停；探测**永不越过工作区根**——CLI=start 的 git top-level（非 git→start 自身）；dsh=会话工作区）
 
@@ -57,6 +58,7 @@ sdd_dir=process/sdd
 iteration_dir=process/iterations
 knowledge_dir=knowledge
 specs_dir=specs/custom
+adr_dir=docs/adr
 workflow_dir=process/workflows
 project_dir=process/projects
 review_dir=process/reviews
@@ -64,9 +66,9 @@ enforcement=hard
 ```
 
 - `#` / `;` 注释；`[section]` 头；`key=value`（去空白）。仅读 `[config]` 段，未知键忽略（向前兼容）。
-- 目录键：`harness_dir`（`{HARNESS_DIR}`）、`plan_dir`（`{PLAN_DIR}`）、`sdd_dir`（`{SDD_DIR}` 的 per-plan 基目录，`<plan-id>` 仍会追加）、`iteration_dir`（`{ITERATION_DIR}`）、`knowledge_dir`（`{KNOWLEDGE_DIR}`）、`specs_dir`（`{SPECS_DIR}`，**权威**——声明后不再走候选链）、`workflow_dir`（`{WORKFLOW_DIR}`）、`project_dir`（`{PROJECT_DIR}`）、`review_dir`（`{REVIEW_DIR}`）。全部相对 `.mstarc` 所在目录解析（绝对路径亦可）；无需目录已存在（可后续 scaffold；v3 的 `workflows/` / `projects/` / `reviews/` 子目录由 engine writers 按需创建）。
+- 目录键：`harness_dir`（`{HARNESS_DIR}`）、`plan_dir`（`{PLAN_DIR}`）、`sdd_dir`（`{SDD_DIR}` 的 per-plan 基目录，`<plan-id>` 仍会追加）、`iteration_dir`（`{ITERATION_DIR}`）、`knowledge_dir`（`{KNOWLEDGE_DIR}`）、`specs_dir`（`{SPECS_DIR}`，**权威**——声明后不再走候选链）、`adr_dir`（`{ADR_DIR}`，**权威**——同上）、`workflow_dir`（`{WORKFLOW_DIR}`）、`project_dir`（`{PROJECT_DIR}`）、`review_dir`（`{REVIEW_DIR}`）。全部相对 `.mstarc` 所在目录解析（绝对路径亦可）；无需目录已存在（可后续 scaffold；v3 的 `workflows/` / `projects/` / `reviews/` 子目录由 engine writers 按需创建）。
 - **`enforcement=hard|soft`**：仓库级硬门禁策略（`hard` 硬门禁、`soft` 本地回滚；其他值忽略）。优先级：显式 Config > Assignment `Enforcement: hard` 头标记（仅派发闸门）> `.mstarc` > 迭代 compass frontmatter > 默认 warn-only。`.mstarc` `soft` 可回滚 hard compass；`.mstarc` `hard` 硬化无标记的派发与各闸门。
-- 子目录键与 `enforcement` 由 engine `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveWorkflowDir` / `resolveProjectDir` / `resolveReviewDir` / `resolveRepoEnforcement` 读取：从 harness 目录与其父目录（仓库根，`.mstarc` 的文档化位置）向上找最近配置文件。
+- 子目录键与 `enforcement` 由 engine `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveAdrDir` / `resolveWorkflowDir` / `resolveProjectDir` / `resolveReviewDir` / `resolveRepoEnforcement` 读取：从 harness 目录与其父目录（仓库根，`.mstarc` 的文档化位置）向上找最近配置文件。
 - 优先级：显式 override > `.mstarc` > 探测。非默认布局的仓库写一个 `.mstarc` 即可程序化解目录问题，无需逐宿主设置 env / config。
 
 **无 engine 时的手工解析（runtime 缺席，技能文本为权威）：**
@@ -74,23 +76,28 @@ enforcement=hard
 1. 从当前目录向上找**最近**的 `.mstarc`（find-first-stop），**不越过工作区根**（CLI=git top-level，非 git=start 自身；dsh=会话工作区）。
 2. 读 `[config]` 段：`key=value`（去空白），`#`/`;` 注释与空行忽略；同一键最后一次出现生效。
 3. `harness_dir` 存在 → 相对该 `.mstarc` 所在目录解析（绝对路径直接用），即 `{HARNESS_DIR}`；无需目录已存在。
-4. 其余键（`plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` / `workflow_dir` / `project_dir` / `review_dir`）从 **`{HARNESS_DIR}` 或其父目录**（仓库根）向上找最近 `.mstarc` 读取；值同样相对配置文件目录解析；`specs_dir` 声明后直接采用（跳过「`{SPECS_DIR}` 解析」候选链与空目录规则），`sdd_dir` 只替换基目录（`<plan-id>` 仍追加），`workflow_dir` / `project_dir` / `review_dir` 直接替换默认子目录名。
-5. 未声明的键回落默认组合：`{HARNESS_DIR}/plans/`、`{HARNESS_DIR}/sdd/<plan-id>/`、`{HARNESS_DIR}/iterations/`、`{HARNESS_DIR}/knowledge/`、`{HARNESS_DIR}/workflows/`、`{HARNESS_DIR}/projects/`、`{HARNESS_DIR}/reviews/`、`{SPECS_DIR}` 候选链。
+4. 其余键（`plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` / `adr_dir` / `workflow_dir` / `project_dir` / `review_dir`）从 **`{HARNESS_DIR}` 或其父目录**（仓库根）向上找最近 `.mstarc` 读取；值同样相对配置文件目录解析；`specs_dir` / `adr_dir` 声明后直接采用（跳过下方候选链与空目录规则），`sdd_dir` 只替换基目录（`<plan-id>` 仍追加），`workflow_dir` / `project_dir` / `review_dir` 直接替换默认子目录名。
+5. 未声明的键回落默认组合：`{HARNESS_DIR}/plans/`、`{HARNESS_DIR}/sdd/<plan-id>/`、`{HARNESS_DIR}/iterations/`、`{HARNESS_DIR}/workflows/`、`{HARNESS_DIR}/projects/`、`{HARNESS_DIR}/reviews/`；`{SPECS_DIR}` / `{KNOWLEDGE_DIR}` / `{ADR_DIR}` 走下方候选链。
 
 ### `{SPECS_DIR}` 解析（找到非空目录即停）
 
-1. `{HARNESS_DIR}/specs/`（默认 `.mstar/specs/`）
-2. `docs/specs/`
-3. `specs/`（仓库根）
+1. `.mstarc` `specs_dir`（**权威**：声明即采用，跳过本链）
+2. `{HARNESS_DIR}/specs/`（默认 `.mstar/specs/`）
+3. `<repo-root>/.agents/specs/`
+4. `docs/specs/`
+5. `specs/`（仓库根）
+6. legacy 只读：`{HARNESS_DIR}/designs/`、仓库根 `designs/`（仅非空时可用；init **不**新建）
 
-**空目录规则**：候选路径存在但无任何文件 → 视为不存在，继续下一候选。
+**空目录规则**：候选路径存在但无任何文件 → 视为不存在，继续下一候选；候选按解析后路径去重（harness 根即 `.agents/` 时第 3 项与第 2 项是同一目录）。
 
 **创建默认**：全部缺失或皆空 → 创建并使用 `{HARNESS_DIR}/specs/`（统一落在 `.mstar/` 下）。**禁止**在 greenfield init 时优先创建裸仓库根 `specs/`。
 
-**Legacy 兼容读**：若以上皆无内容，但 `{HARNESS_DIR}/designs/` 或仓库根 `designs/` **非空**，可作 `{SPECS_DIR}` 使用；init 时**不**新建 `designs/`。
+### `{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析（找到非空目录即停）
 
+- `{KNOWLEDGE_DIR}`：`.mstarc` `knowledge_dir`（权威）→ `{HARNESS_DIR}/knowledge/` → `<repo-root>/.agents/knowledge/`（空目录视为不存在）→ 回退 `{HARNESS_DIR}/knowledge/`，需创建时创建（`resolveKnowledgeDir` 默认创建，`{ create: false }` 关闭）。
+- `{ADR_DIR}`：`.mstarc` `adr_dir`（权威）→ `{HARNESS_DIR}/adr/` → `<repo-root>/.agents/adr/` → `<repo-root>/docs/adr/`（均按空目录规则）→ 回退 `{HARNESS_DIR}/adr/`，创建规则同上（`resolveAdrDir`）。
 
-> **Engine check (when available):** import `resolveSpecsDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve` (prints the resolved specs dir) — to confirm the candidate order (empty-dir-as-absent included). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** import `resolveSpecsDir` / `resolveKnowledgeDir` / `resolveAdrDir` from `@mstar-harness/engine` in a host hook — or run `mstar path resolve` (prints all three) — to confirm the candidate order (empty-dir-as-absent included). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 部分 spoke 仓库 opt-in 跟踪的 `{HARNESS_DIR}/roadmap.md` 仅是既有 Markdown 文件/可审导入候选，非项目内容权威；读写规则 → `mstar-project-governance`。
 
@@ -99,7 +106,8 @@ enforcement=hard
 | 区域 | 内容 |
 |------|------|
 | `docs/` | 人类文档：安装、贡献 |
-| `{SPECS_DIR}` | 冻结规格 / ADR |
+| `{SPECS_DIR}` | 冻结规格 |
+| `{ADR_DIR}` | 决策记录（ADR：proposed / implemented / rejected） |
 | `{ITERATION_DIR}` | Iteration package: retained `prototypes/` design context first, then formal compass + guides/specs; prototype path/disposition → `mstar-iteration` Phase 1 §1.2.5 |
 | `{KNOWLEDGE_DIR}` | 实现 SSOT、可复用设计 |
 | `{PLAN_DIR}/` | 主 plan、durable gate summaries、可选 residual prose |
@@ -129,20 +137,15 @@ Store is process-local and gitignored. Issue/catalog and execution domains retai
 
 ### 职责：discover / import / register / query
 
-- **discover** — `mstar catalog discover` 只读提案：配置根的 tracked 正文 + legacy 索引行的 dry-run，写出 nothing，带 reviewed source hash、显式 `unknowns` 与拟退役索引节。
-- **import** — `mstar catalog import` applies the reviewed mapping with current semantic identity/path/revision checks. Source hashes are provenance; reviewed source-byte drift alone does not refuse import. It creates no workflow session and retires no index.
-- **register / update / link** — 单行登记与元数据/关系变更走 catalog 域边界（`mstar catalog register` / `mstar catalog update` / `mstar catalog link`；identity 不可改，revision 守卫与可改字段见 help）。
-- **query** — `mstar catalog list` / `mstar catalog show`。
-- **reconcile** — 执行注册中断的收口（pending 状态 `catalog.registration-pending`，contract §3；只读列出见 help）。
-- **export** — `mstar catalog export` 是版本化 transport，**不是**持续维护的文件权威（回灌用 `mstar catalog import`）。
+`mstar catalog discover` 是只读 dry-run 提案（配置根 tracked 正文 + legacy 索引行 → 候选证据，带 reviewed source hash、显式 `unknowns` 与拟退役索引节）；`import` 按当前语义 identity/path/revision 应用该映射（source hash 仅 provenance，reviewed 字节漂移不单独拒绝），不建 workflow session、不退休索引；`register` / `update` / `link` 是单行登记与元数据/关系变更（identity 不可改）；`query` = `list` / `show`；`reconcile` 收口注册中断（pending `catalog.registration-pending`，contract §3）；`export` 是版本化 transport，回灌用 `import`。
 
-动词、选项与标志一律以 `mstar catalog --help`（group help）为准，本文不复述；族名索引 → **`mstar-use-cli`**。
+标志、revision 守卫与可改字段以 `mstar catalog --help` 为准（族名索引 → **`mstar-use-cli`**）。
 
 ### 跨 clone 限制（contract §4）
 
-`store.db` 是本地/进程产物，**仅凭 tracked 正文无法重建本地 catalog 历史**。`catalog discover` 枚举配置根的 tracked 正文并提取当前 title/path/content hash 与显式元数据作为**候选证据**，**从不**假设文件名编码 project/iteration 归属、归档状态、执行状态或 provenance——未声明的一律以显式 `unknowns`（identity / membership / document-kind / source-missing …）披露，需人工 review 后 import。新 clone 因此可以不依赖维护中的 Markdown 索引发现 tracked specs/knowledge；完整 catalog 恢复需要显式 `catalog export` + reviewed import。
+`store.db` 是本地/进程产物，**仅凭 tracked 正文无法重建 catalog 历史**。`discover` 只提取 tracked 正文的 title/path/content hash 与显式元数据作**候选证据**，**从不**假设文件名编码 project/iteration 归属、归档状态、执行状态或 provenance——未声明的一律以显式 `unknowns`（identity / membership / document-kind / source-missing …）披露，需人工 review 后 import；完整恢复需 `catalog export` + reviewed import。
 
-Store 落在 **control / process harness 根**，不随 feature worktree cwd。Help / 普通 validator / engine import **不**打开 SQLite。本 skill 只声明路径与权威分界；动词与标志以 `mstar issue --help` / `mstar catalog --help` 为准（`mstar-use-cli` 索引族名）。文档本身不证明打包兼容或激活就绪。
+Store 落在 **control / process harness 根**，不随 feature worktree cwd；Help / validator / engine import **不**打开 SQLite。文档本身不证明打包兼容或激活就绪。
 
 ## 初始化 Plan 目录
 
@@ -167,20 +170,17 @@ PM 在需要持久化追踪时：
 - `{HARNESS_DIR}/AGENTS.md`
 - `{KNOWLEDGE_DIR}/**`
 - `{HARNESS_DIR}/specs/`（即解析后的 `{SPECS_DIR}` 在 harness 下的默认落点）
+- `{ADR_DIR}/**`
 
 **默认 gitignored（`{HARNESS_DIR}` 下）**：
 
-- `archived/`
-- `iterations/`
-- `plans/`
-- `sdd/`
-- `status.json` — historical input only.
+- `archived/`、`iterations/`、`plans/`、`sdd/`、`status.json`（进程产物；`status.json` 仅历史输入，无 live writer）
 - `workflows/` — retained ordinary bodies/notes.
 - `projects/` — project files; roadmap transport rules → `mstar-project-governance`.
 - `reviews/`（review 运行目录树：codebase audit / PR / branch / diff review 的 report 与 evidence；进程产物）
 - `store.db`（issue/catalog/roadmap/milestone 与 execution_* 权威；默认随 `{HARNESS_DIR}` 忽略）
 
-Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。
+Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。**仓库把 `{HARNESS_DIR}` 全量 gitignore 时**（tracked 结果无法提交），tracked specs / knowledge / adr 须解析到 `.agents/specs|knowledge|adr` 才可共享。`mstar path check` 按 Git 实况判定、**目录名不作准**：被忽略的文件只能留在 **control checkout**，可提交的文件属于**调用方自己的 checkout**（work / integration worktree）；结果目录被忽略只是 warning（`path.result-ignored`，exit `0`，指向 `.agents/` 或 `.mstarc`），位置越界才是 finding（exit `1`）。
 
 **v3 运行时目录的 gitignore 说明（文档化；canonical snippet 零改动）**：`workflows/`、`projects/` 与 `reviews/` 都位于已被 **`.mstar/**` 默认忽略**的 `{HARNESS_DIR}` 之下——**不需要**在仓库根 `.gitignore` 增加任何条目，也**不新增** re-include 条目（它们不是 tracked 结果）。`projects/_default/` 由 **`scaffoldHarness` / `mstar harness scaffold` 建目录并在可用的 catalog 中登记**，不生成 `roadmap.md` 或 `residuals.json`；其余 project id 与 `workflows/` 子目录由各自 domain writers 按需创建。历史文件的迁移只走 transport/review（→ `mstar-project-governance`）。**`review_dir` 声明在 `{HARNESS_DIR}` 之外时**（例如 `review_dir=process/reviews` 或绝对路径）`{REVIEW_DIR}` 落在 canonical snippet 的 `.mstar/**` / `.agents/**` 之外，review report 与证据因此**不再被忽略**——这类布局需自行在仓库根 `.gitignore` 声明对应规则（canonical snippet 只 bootstrap 默认 harness 布局）。
 
@@ -202,6 +202,8 @@ Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。
 !.mstar/knowledge/**
 !.mstar/specs/
 !.mstar/specs/**
+!.mstar/adr/
+!.mstar/adr/**
 # .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
 .mstarc
 ```
@@ -217,6 +219,8 @@ Legacy `.agents/` 等价：
 !.agents/knowledge/**
 !.agents/specs/
 !.agents/specs/**
+!.agents/adr/
+!.agents/adr/**
 ```
 
 > **Engine check (when available):** import `emitGitignoreSnippet` / `validateGitignore` from `@mstar-harness/engine` in a host hook to emit or validate the canonical snippet above — a declared file validates as author-owned (`gitignore.author-declared`) with no rewrite, while a missing file still fails as `gitignore.missing`. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.

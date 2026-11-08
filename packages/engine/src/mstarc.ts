@@ -19,6 +19,7 @@
  * | `iteration_dir`| `{ITERATION_DIR}` | `resolveIterationDir`            |
  * | `knowledge_dir`| `{KNOWLEDGE_DIR}` | `resolveKnowledgeDir`            |
  * | `specs_dir`    | `{SPECS_DIR}`     | `resolveSpecsDir` (authoritative)|
+ * | `adr_dir`      | `{ADR_DIR}`       | `resolveAdrDir` (authoritative)  |
  * | `workflow_dir` | `{WORKFLOW_DIR}`  | `resolveWorkflowDir`            |
  * | `project_dir`  | `{PROJECT_DIR}`   | `resolveProjectDir`             |
  * | `enforcement`  | hard-gate policy  | `resolveRepoEnforcement`        |
@@ -55,6 +56,8 @@ export const MSTARC_ITERATION_DIR_KEY = "iteration_dir";
 export const MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir";
 /** `[config]` key declaring `{SPECS_DIR}`. */
 export const MSTARC_SPECS_DIR_KEY = "specs_dir";
+/** `[config]` key declaring `{ADR_DIR}`. */
+export const MSTARC_ADR_DIR_KEY = "adr_dir";
 /** `[config]` key declaring `{WORKFLOW_DIR}` (v3 workflow lifecycle layout). */
 export const MSTARC_WORKFLOW_DIR_KEY = "workflow_dir";
 /** `[config]` key declaring `{PROJECT_DIR}` (v3 project roadmap/register). */
@@ -78,6 +81,8 @@ export type MstarcConfig = {
   knowledgeDir?: string;
   /** Declared `{SPECS_DIR}` (authoritative — skips the candidate chain). */
   specsDir?: string;
+  /** Declared `{ADR_DIR}` (authoritative — skips the candidate chain). */
+  adrDir?: string;
   /** Declared `{WORKFLOW_DIR}` (v3 workflow snapshots live under it). */
   workflowDir?: string;
   /** Declared `{PROJECT_DIR}` (v3 project roadmap + register live under it). */
@@ -110,6 +115,7 @@ const CONFIG_KEYS: Record<string, keyof MstarcConfig> = {
   [MSTARC_ITERATION_DIR_KEY]: "iterationDir",
   [MSTARC_KNOWLEDGE_DIR_KEY]: "knowledgeDir",
   [MSTARC_SPECS_DIR_KEY]: "specsDir",
+  [MSTARC_ADR_DIR_KEY]: "adrDir",
   [MSTARC_WORKFLOW_DIR_KEY]: "workflowDir",
   [MSTARC_PROJECT_DIR_KEY]: "projectDir",
   [MSTARC_REVIEW_DIR_KEY]: "reviewDir",

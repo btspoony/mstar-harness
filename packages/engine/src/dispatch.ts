@@ -46,6 +46,10 @@
  * - Hard-gate enforcement (`Enforcement: hard` flag — per Assignment/compass,
  * never global; rollback = unset flag): roadmap §8.5 C4 + decision D2.
  */
+import { isAbsolute, resolve } from "node:path";
+import { canonicalizeNearestExisting } from "./path.js";
+import { probePathOwnership } from "./path-check.js";
+import { readMainWorktree } from "./worktree.js";
 import { applyEnforcement } from "./core.js";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
 
@@ -64,6 +68,9 @@ export type AssignmentFields = {
   delegation?: string;
   taskCategory?: string;
   workingBranch?: string;
+  worktreePath?: string;
+  writeDomain?: string;
+  controlWritePaths?: string[];
   branchPolicy?: string;
   /**
    * `Budget (review / QC seats)` round cap. Required (present, non-empty,
@@ -118,7 +125,7 @@ export type ExecutionModeToNOptions = {
 /** Result of {@link executionModeToN}: a GateResult carrying `n` on success. */
 export type ExecutionModeToNResult = GateResult & { n?: number };
 
-const REQUIRED_FIELDS: ReadonlyArray<{ key: keyof AssignmentFields; label: string; code: string }> = [
+const REQUIRED_FIELDS: ReadonlyArray<{ key: "executeAs" | "delegation" | "taskCategory"; label: string; code: string }> = [
   { key: "executeAs", label: "Execute as", code: "execute-as" },
   { key: "delegation", label: "Delegation", code: "delegation" },
   { key: "taskCategory", label: "Task category", code: "task-category" },
@@ -200,6 +207,9 @@ export function parseAssignmentFields(assignmentText: string): AssignmentFields 
     }
     if (label === "Working branch") fields.workingBranch = value;
     else if (label === "Branch policy") fields.branchPolicy = value;
+    else if (label === "Worktree path") fields.worktreePath = value;
+    else if (label === "Write domain") fields.writeDomain = value;
+    else if (label === "Control write paths") fields.controlWritePaths = value.split(",").map((item) => item.trim()).filter(Boolean);
     else if (BUDGET_LABELS.includes(label)) fields.budget = value;
     else if (RETURN_SHAPE_LABELS.includes(label)) fields.returnShape = value;
     else if (TASK_BUDGET_LABELS.includes(label)) fields.taskBudget = value;
@@ -450,6 +460,30 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
   for (const { key, label, code } of REQUIRED_FIELDS) {
     requireField(violations, fields[key], label, code);
   }
+  if (fields.writeDomain !== undefined && fields.writeDomain !== "control" && fields.writeDomain !== "work") {
+    violations.push(violation("high", "assignment.field.write-domain-unknown",
+      `unknown Write domain: ${JSON.stringify(fields.writeDomain)}`, 'set "Write domain: control" or "Write domain: work"'));
+  }
+  if (fields.writeDomain === "control") {
+    if (describeAbsence(fields.worktreePath) !== undefined) {
+      violations.push(violation("high", "assignment.field.control-write-missing-worktree",
+        "control-domain assignment requires Worktree path", 'add "Worktree path: <control checkout path>"'));
+    }
+    if (describeAbsence(fields.workingBranch) !== undefined && describeAbsence(fields.branchPolicy) !== undefined) {
+      violations.push(violation("high", "assignment.field.control-write-missing-branch",
+        "control-domain assignment requires a branch form", `add exactly one of: ${BRANCH_FORMS_HINT}`));
+    }
+    if (!fields.controlWritePaths?.length) {
+      violations.push(violation("high", "assignment.field.control-write-paths-missing",
+        "control-domain assignment requires Control write paths", 'add "Control write paths: .mstar/plans/run.md"'));
+    }
+    for (const target of fields.controlWritePaths ?? []) {
+      if (/[*?[\]{}]/.test(target)) {
+        violations.push(violation("high", "assignment.field.control-write-path-invalid",
+          `Control write paths does not accept globs: ${target}`, 'list concrete paths in "Control write paths"'));
+      }
+    }
+  }
 
 // Review/audit rounds are bounded (mstar-harness-core § 定向执行与验证边界);
 // `Budget` and `Return shape` are the PM's declared cap and stop condition and
@@ -582,6 +616,69 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
   }
 
   return { ok: violations.length === 0, violations };
+}
+
+/** Verify control-domain writes against the Git-derived main checkout. */
+export function validateControlWriteAssignment(
+  text: string,
+  opts: { cwd?: string; assignmentDir?: string; controlRoot?: string } = {},
+): ValidationResult[] {
+  const cwd = opts.cwd ?? process.cwd();
+  const unresolved = violation("high", "dispatch.control-write.control-root-unresolved",
+    `cannot resolve the control checkout from ${cwd}`,
+    "run mstar dispatch validate from a checkout of this repository");
+  try {
+    const main = readMainWorktree(opts.controlRoot ?? cwd);
+    if (main === null) return [unresolved];
+    const controlRoot = canonicalizeNearestExisting(main.root);
+    if (opts.controlRoot !== undefined && canonicalizeNearestExisting(opts.controlRoot) !== controlRoot) return [unresolved];
+    const fields = parseAssignmentFields(text);
+    const forms = parseAssignmentBranchForms(text);
+    const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch;
+    const violations: ValidationResult[] = [];
+    const worktree = fields.worktreePath && fields.worktreePath !== "N/A"
+      ? resolve(opts.assignmentDir ?? cwd, fields.worktreePath)
+      : undefined;
+    if (worktree !== undefined && canonicalizeNearestExisting(worktree) !== controlRoot) {
+      violations.push(violation("high", "dispatch.control-write.worktree-not-control",
+        `Worktree path "${fields.worktreePath}" is not the control checkout ${controlRoot}`,
+        `set "Worktree path: ${controlRoot}" in the Assignment`));
+    }
+    if (branch && branch !== "N/A" && branch !== main.branch) {
+      violations.push(violation("high", "dispatch.control-write.branch-mismatch",
+        `Assignment branch "${branch}" does not match the control checkout branch "${main.branch || "(detached)"}"`,
+        main.branch ? `set "Working branch: ${main.branch}" in the Assignment` : "attach the control checkout to a branch, then set Working branch to that branch"));
+    }
+    for (const declared of fields.controlWritePaths ?? []) {
+      if (/[*?[\]{}]/.test(declared) || (!isAbsolute(declared) && worktree === undefined)) continue;
+      const target = resolve(worktree ?? controlRoot, declared);
+      // Control-domain codes reuse the probe's ignored/checkoutRoot facts without
+      // re-probing; callerCheckoutRoot is omitted because the caller's checkout
+      // is not the authority for process state.
+      const directoryOnly = declared.endsWith("/");
+      const ownership = probePathOwnership({ path: target, kind: directoryOnly ? "directory" : "file" }, controlRoot);
+      // A slash-less target may name a file or a directory; only a location ignored in both shapes is safe to write.
+      const directory = directoryOnly ? ownership : probePathOwnership({ path: target, kind: "directory" }, controlRoot);
+      if (ownership.ignored === false || directory.ignored === false) {
+        violations.push(violation("high", "dispatch.control-write.target-committable",
+          `control write target ${target} is not Git-ignored and content there would be committed`,
+          "declare only gitignored process targets, or dispatch the change on a work branch with Write domain: work"));
+      }
+      if (ownership.ignored === null || directory.ignored === null) {
+        violations.push(violation("medium", "dispatch.control-write.target-unverifiable",
+          `cannot verify the Git ignore status of control write target ${target}`,
+          `run git -C "${controlRoot}" check-ignore -v -- "${target}" "${target}/", then rerun mstar dispatch validate`));
+      }
+      if (ownership.checkoutRoot === null || canonicalizeNearestExisting(ownership.checkoutRoot) !== controlRoot) {
+        violations.push(violation("high", "dispatch.control-write.target-outside-control",
+          `control write target ${target} is not in the control checkout ${controlRoot}`,
+          `set Control write paths to targets inside ${controlRoot}`));
+      }
+    }
+    return violations;
+  } catch {
+    return [unresolved];
+  }
 }
 
 /**
@@ -760,6 +857,8 @@ export type ComposeDispatchGateOptions = {
  * default-branch gates. Default: `true` (writable).
  */
   writable?: boolean;
+  /** Checkout from which to discover the control worktree. */
+  cwd?: string;
 };
 
 /**
@@ -837,7 +936,9 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
  // (4) Default-branch gate for writable text — branch from the
  // Assignment's own forms, else $MSTAR_WORKING_BRANCH (env fallback
  // shared by all adapters / ).
-    if (writable) {
+    if (writable && parseAssignmentFields(text).writeDomain === "control") {
+      violations.push(...validateControlWriteAssignment(text, { cwd: opts.cwd }));
+    } else if (writable) {
       const forms = parseAssignmentBranchForms(text);
       const branch =
         forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH;
