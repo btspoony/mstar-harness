@@ -27,7 +27,7 @@ or a custom profile).
   message (the mstar workflow prompt — the model executes it as a task, not
   injected context), returning a success result. The plugin registers **no
   duplicated** mstar command tools: the writable mstar command surface on this
-  host is the **MCP** route (the dsh package README — `@mstar-harness/dsh/README.md` on an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface),
+  host is the **MCP** route (the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface),
   and the only native tools are the three the MCP route cannot replace.
 - **No `sessionStart.skill`** — enter PM manually via the `pm` skill (the
   `mstar-roles` load path), then **Read next** → `mstar-harness-core` →
@@ -36,7 +36,7 @@ or a custom profile).
   `ctx.tools` — **`mstar_plan_bind`** (the durable-slot producer),
   **`mstar_audit_validate`** (no MCP twin) and **`mstar_execution_clear`** (no
   shared command); the membership rule and each tool's unique contribution are
-  in the dsh package README — `@mstar-harness/dsh/README.md` on an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface. Every other RUNTIME
+  in the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface. Every other RUNTIME
   capability is an MCP tool of the one shared connection — store-level commands
   (`store.*`: init, upgrade, migrate, backup, activate, retire, execution
   restore/export) are CLI-only and are not published there, because their
@@ -45,7 +45,7 @@ or a custom profile).
   (`mcp__mstar__mstar_plan`, `mstar_workflow`, `mstar_issue`, `mstar_sdd`,
   `mstar_iteration`, `mstar_design_md`, `mstar_audit`, `mstar_compound`,
   `mstar_roles`, …) with an `action` argument selecting the member command.
-- Web client plugin (workflow panel) → the dsh package README — `@mstar-harness/dsh/README.md` on an installed host, `packages/dsh/README.md` in this repo's checkout — § Web client plugin (workflow panel).
+- Web client plugin (workflow panel) → the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Web client plugin (workflow panel).
 
 ## Runtime and upgrade
 
@@ -119,8 +119,8 @@ never replace a running child with a second spawn because you could not see it.
 | **`subagent`** / **`subagent_fork`** | Direct-delegation channel — one Assignment per invoke, returned at activation start (default `toolName`; a renamed instance must be declared via Config `dispatchTools`). The default channel on a profile WITHOUT the Team layer; also a one-off seat the board does not track. `subagent_fork` is the variant that seeds the child with the completed conversation (§ Delegation channels) |
 | **`spawn_teammate`** / **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` | Agent Teams — the DEFAULT dispatch channel whenever the Team layer is mounted (one board task per Assignment, one teammate per track). Protocol → `references/dsh-agent-teams.md` |
 | **`workflow`** | Read-only fan-out — one run, one conversation `workflow-run` node. N≥3 is its design width; a one-seat read-only run is supported when no direct delegation can carry it (§ Read-only fan-out via the `workflow` tool; script files under `workflows/`, call contract → `references/dsh-workflow-scripts.md`) |
-| **`mcp__mstar__mstar_<family>`** | The writable mstar command surface — one MCP tool per command family with an `action` argument (`mstar_plan` → `bind`/`prepare`/`progress`/`complete`, `mstar_workflow` → `register`, `mstar_issue` → `add`/`close`, `mstar_sdd` → `workspace`/`task-brief`, `mstar_iteration` → `gate`, `mstar_design_md` / `mstar_compound` / `mstar_roles` → `validate`, `mstar_audit` → `scaffold`/`secret-scan`/`supply-chain`). The one shared connection carries no identity of its own; the shipped row passes `--trust-caller-session-id`, so the per-call `sessionId` selector is published there (a connection launched without the flag publishes none and refuses a supplied one). A call may name the control root through `harness` when the connection is unpinned. An operation needing a session identity passes `sessionId` on an opted-in connection, or uses the native tool where one exists (plan bind, audit validate, execution clear), or the CLI (the dsh package README — `@mstar-harness/dsh/README.md` on an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface) |
-| **`mstar_plan_bind`** | Native bind — the only producer of the dsh-local durable record: it binds the engine coordinator row AND writes the session's `executionBinding` slot plus the adoption receipt that ledger attribution reads (the dsh package README — `@mstar-harness/dsh/README.md` on an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface). A coordinating session that wants dsh-local ledger attribution uses this tool, not the MCP action |
+| **`mcp__mstar__mstar_<family>`** | The writable mstar command surface — one MCP tool per command family with an `action` argument (`mstar_plan` → `bind`/`prepare`/`progress`/`complete`, `mstar_workflow` → `register`, `mstar_issue` → `add`/`close`, `mstar_sdd` → `workspace`/`task-brief`, `mstar_iteration` → `gate`, `mstar_design_md` / `mstar_compound` / `mstar_roles` → `validate`, `mstar_audit` → `scaffold`/`secret-scan`/`supply-chain`). The one shared connection carries no identity of its own; the shipped row passes `--trust-caller-session-id`, so the per-call `sessionId` selector is published there (a connection launched without the flag publishes none and refuses a supplied one). A call may name the control root through `harness` when the connection is unpinned. An operation needing a session identity passes `sessionId` on an opted-in connection, or uses the native tool where one exists (plan bind, audit validate, execution clear), or the CLI (the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface) |
+| **`mstar_plan_bind`** | Native bind — the only producer of the dsh-local durable record: it binds the engine coordinator row AND writes the session's `executionBinding` slot plus the adoption receipt that ledger attribution reads (the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface). A coordinating session that wants dsh-local ledger attribution uses this tool, not the MCP action |
 | **`mstar_audit_validate`** | Native report validator — the review-report credential scan (`mstar-audit` Hard Rule 4); the `mstar_audit` family publishes no report validator, so this capability has no MCP action |
 | **`mstar_execution_clear`** | Clear the calling session's own durable execution binding — no shared `execution.clear` command exists. No parameters, identity from `exec.agent.id`, leaf seats refused fail-closed |
 | **bash / read / write / edit / grep / glob / web_search** | Standard agent tools — evidence per `mstar-coding-behavior` |
@@ -201,7 +201,7 @@ discipline, capacity, and worktree hand-off — → **`references/dsh-agent-team
 
 ## Gates and enforcement
 
-Gate wiring, enforcement semantics and the execution read route → the dsh package README — `@mstar-harness/dsh/README.md` on an installed host, `packages/dsh/README.md` in this repo's checkout — § Gates; the native command surface → the same file § Native command surface. What a refusal means here:
+Gate wiring, enforcement semantics and the execution read route → the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Gates; the native command surface → the same file § Native command surface. What a refusal means here:
 
 - A store-authority refusal on a coordination write is repaired with a store
   command (`mstar store init|upgrade|migrate`), never by rewriting the document.
@@ -215,7 +215,7 @@ Gate wiring, enforcement semantics and the execution read route → the dsh pack
 
 ## Agent-flow ledger
 
-Ledger rows, record identity, settle pairing, the child-identity join and its bounds → the dsh package README — `@mstar-harness/dsh/README.md` on an installed host, `packages/dsh/README.md` in this repo's checkout — § Agent-flow ledger.
+Ledger rows, record identity, settle pairing, the child-identity join and its bounds → the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Agent-flow ledger.
 
 The orchestration-level fact: attribution resolves through the native `mstar_plan_bind` adoption receipt — a session that bound through the MCP `bind` action has no dsh-local attribution, and the clear finds no binding of its own to remove. The ledger is advisory evidence: a failing write never blocks a dispatch or a settle.
 

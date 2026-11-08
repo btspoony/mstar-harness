@@ -28,7 +28,7 @@ The first line is `# ADR: <title>`. The header block also carries one bare line 
 
 - `proposed/TEMPLATE.md` — `Problem`, `Proposal`, `Alternatives considered`, `Acceptance criteria`, `Risks`.
 - `implemented/TEMPLATE.md` — `Problem`, `Decision`, `Alternatives considered`, `Consequences`. `Decision` is present tense ("identity flows through native channels"), never "we will".
-- `rejected/` has no third template: it reuses the proposed skeleton with a **frozen body**. After rejection, problem, proposal and alternatives are never rewritten — only the Status line says why the proposal died.
+- `rejected/` has no third template: it reuses the proposed skeleton's shape with a **frozen body**, but the gate requires only `Problem`, `Proposal` and `Alternatives considered` — the proposal-era `Acceptance criteria` and `Risks` sections are not required of a rejected record. After rejection, problem, proposal and alternatives are never rewritten — only the Status line says why the proposal died.
 
 `Proposal`, `Plan`, `Migration plan` and `Acceptance criteria` are banned as sections of an implemented record: they are proposal-era scaffolding, and a promotion that keeps them is half-finished. Extra sections that are neither required nor banned stay — the contract fixes required and banned, not the whole skeleton.
 
@@ -51,7 +51,7 @@ An `implemented` record is a live statement of the system, not history: the same
 
 ## What the gate checks, and what it cannot
 
-`bun run validation:drift` (Guard 12) checks membership, filename shape, `Status` agreeing with the directory, balanced code fences (an unterminated fence fails the record instead of hiding its tail), and the required and banned sections per bucket. It walks `{bucket}/{class}/` only, so a stray `.md` directly under `docs/adr/` or directly under a bucket root is invisible to it, and review catches those rather than CI. Two rules no tree walk can check, and both stay review duties:
+`bun run validation:drift` (Guard 12) checks membership, filename shape, `Status` agreeing with the directory, balanced code fences (an unterminated fence fails the record instead of hiding its tail), and the required and banned sections per bucket. The record-format checks walk `{bucket}/{class}/`, so a stray `.md` directly under `docs/adr/` or directly under a bucket root is invisible to them and review catches it rather than CI; the `INDEX.md` ban covers the whole tree, so an index at either level still fails. Two rules no tree walk can check, and both stay review duties:
 
 1. **Why the decision mattered** — `Problem` carries real stakes (what breaks or re-breaks without it), not a restatement of the change. A present heading proves nothing.
 2. **Whether the alternatives were real** — `Alternatives considered` lists options genuinely weighed and why each lost, not strawmen built after the fact.

@@ -151,6 +151,17 @@ describe("checkAdrTree — headings inside fenced code blocks", () => {
     expect(result.failures).toEqual([]);
   });
 
+  test("a real banned heading outside a fence still fails, whatever the fence quotes", () => {
+    const body = record("implemented", [...IMPLEMENTED_SECTIONS, "Proposal"]).replace(
+      "## Decision\n",
+      "```markdown\n## Proposal\n\nQuoted proposal-era shape; not a section.\n```\n\n## Decision\n",
+    );
+    const result = withTree({ "implemented/architecture/2026-01-13-banned-outside.md": body }, checkAdrTree);
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.section-banned"]);
+    const [failure] = result.failures;
+    expect(failure.message).toContain("## Proposal");
+  });
+
   test("a required heading that only exists inside a fence does not count", () => {
     const body = record(
       "implemented",
