@@ -26,18 +26,13 @@
  * because that value already carries the ordered record IDs, types and payload
  * digests: a parallel summary would be a second, drift-prone copy of the same
  * facts, so there is none. What the wrapper adds is the binding of those bytes
- * to ONE workflow and ONE native session, plus the digest of the exact export
- * bytes, so a consumer can recompute both instead of trusting a summary:
+ * to ONE workflow and ONE native session:
  *
  *     {version:1, protocol:"host-hidden-inventory-v1", workflowId, host:"omp",
- *      hostSessionId, export:{sha256, document:ExecutionHostHistory}}
+ *      hostSessionId, export:{document:ExecutionHostHistory}}
  *
- * - `export.sha256` is the sha256 of the exact UTF-8 bytes
- *   `exportExecutionHostHistory(document)` returns — H1's canonical form (sorted
- *   keys, no whitespace, one terminal LF). No further LF is appended: the digest
- *   names those bytes, not a file encoding of them.
- * - the serialized envelope is `serializeExecutionValue(envelope)`, which is the
- *   same canonical form with its own single terminal LF.
+ * The serialized envelope is `serializeExecutionValue(envelope)`, the engine's
+ * canonical form with its own single terminal LF.
  *
  * Refusals are fail-closed and produce no document at all:
  *
@@ -52,7 +47,6 @@
  *   payloads are retained exactly as H1 returns them (its own diagnosis policy);
  *   they are not upgraded into verified coverage here.
  */
-import { createHash } from "node:crypto";
 import { serializeExecutionValue } from "@mstar-harness/engine";
 import {
   exportExecutionHostHistory,
@@ -78,7 +72,7 @@ export type ExecutionHostInventory = Readonly<{
   workflowId: string;
   host: typeof HOST_INVENTORY_HOST;
   hostSessionId: string;
-  export: Readonly<{ sha256: string; document: ExecutionHostHistory }>;
+  export: Readonly<{ document: ExecutionHostHistory }>;
 }>;
 
 /**
@@ -101,38 +95,6 @@ function refuse(code: string, message: string): never {
 
 function isNonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
-}
-
-/**
- * The §4.2 `export.sha256` rule over one already-serialized export body: sha256
- * of the canonical bytes with **exactly one** terminal LF removed.
- *
- * That is the repository's house rule for a ledger body's identity — the
- * append-only identity index defines a row as the sha256 of the "exact ledger
- * line bytes excluding the final LF" — and canonical contract §4.2 states it as
- * the one rule for `export.sha256`: the serialized document's terminal LF is
- * framing, and the ENVELOPE's own LF is not part of this digest either. The
- * removal is **conditional and bounded**: at most the one framing LF is dropped,
- * so a body that does not end in LF keeps every byte (a caller's serialization
- * change can never silently lose content), and a body ending in more than one LF
- * keeps all but the last (the rule is not a whitespace trim).
- *
- * Exported so a consumer's recomputation and this producer's digest use one rule.
- */
-export function historyExportBody(canonical: string): string {
-  return canonical.endsWith("\n") ? canonical.slice(0, -1) : canonical;
-}
-
-export function historyExportBodyDigest(canonical: string): string {
-  return createHash("sha256").update(historyExportBody(canonical), "utf8").digest("hex");
-}
-
-/**
- * The §4.2 `export.sha256` of one history: the same rule applied to the exact
- * bytes `exportExecutionHostHistory` returns.
- */
-export function historyExportDigest(document: ExecutionHostHistory): string {
-  return historyExportBodyDigest(exportExecutionHostHistory(document));
 }
 
 /**
@@ -173,23 +135,13 @@ export function buildExecutionHostInventory(input: {
     }
   }
 
-  let sha256: string;
-  try {
-    sha256 = historyExportDigest(document);
-  } catch (error) {
-    if (error instanceof Error && error.name === "ExecutionHostHistoryExportRefusal") {
-      refuse("inventory.export-refused", error.message);
-    }
-    throw error;
-  }
-
   return {
     version: HOST_INVENTORY_VERSION,
     protocol: HOST_INVENTORY_PROTOCOL,
     workflowId: input.workflowId,
     host: HOST_INVENTORY_HOST,
     hostSessionId: input.hostSessionId,
-    export: { sha256, document },
+    export: { document },
   };
 }
 
@@ -201,14 +153,4 @@ export function buildExecutionHostInventory(input: {
  */
 export function exportExecutionHostInventory(inventory: ExecutionHostInventory): string {
   return serializeExecutionValue(inventory);
-}
-
-/**
- * sha256 of the exact canonical envelope bytes as delivered — the evidence
- * witness digest, framing LF included (that byte is part of the FILE this
- * producer hands over, unlike the terminal LF of the embedded export, which the
- * §4.2 rule excludes from `export.sha256`).
- */
-export function inventoryDigest(inventory: ExecutionHostInventory): string {
-  return createHash("sha256").update(exportExecutionHostInventory(inventory), "utf8").digest("hex");
 }
