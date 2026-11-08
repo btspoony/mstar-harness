@@ -6,6 +6,20 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-11-08
+
+### Harness
+
+- **Removed every byte-snapshot, digest-equality and hard-coded-content assertion from the test suites.** These assertions are unstable by construction — a read-only SQLite open leaves `-wal`/`-shm` beside the store, an unflushed write can live only in the WAL, build artifacts differ between bun versions, whitespace and key order vary — and they describe implementation bytes instead of the behavior under test. `AGENTS.md` now states the prohibition in the same terms, including that a hash may still be computed as an *input* but never be the thing an assertion compares.
+- `MCP control-root admission class > an absolute harness B from a host launched in A touches only B` (I-001050) now asserts the store's `issues` and `store_operations` row counts instead of a directory snapshot. Verified red by pointing the capture at `A` (reports `issues: 1`).
+- `prreview-execution-cli`, `sdd-evidence`, `migrate`, `projection`, `execution-ledgers`, `store-upgrade-minimal`, `execution-consumers`, `evaluation-integrity`, `review-advice`, `runtime`, `execution-host-inventory`, `prepare-release`, `core` and the skill-eval suites lost their digest and pinned-version assertions; each test keeps its behavioral assertions.
+- A companion test pins the contract the new row-count assertion relies on: a read-only store open leaves those row counts untouched.
+- `@mstar-harness/omp` no longer computes or returns the inventory digests: `historyExportBodyDigest`, `historyExportDigest` and `inventoryDigest` are removed, and `export` carries the document alone. Nothing in the repository read or compared them, and their only test expression was a digest comparison.
+
+- Version alignment with harness **4.3.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.3.0**.
+
 ## [4.2.3] - 2026-11-06
 
 ### Changed
