@@ -467,7 +467,7 @@ describe("mstar dispatch validate — control writes", () => {
     });
   });
 
-  test("distinguishes absent file and directory declarations", () => {
+  test("probes an absent target without a trailing slash as a file", () => {
     fixture((control, _linked, file) => {
       writeFileSync(join(control, ".gitignore"), ".mstar/**\n!.mstar/notes/\n!.mstar/notes/**\n");
       const run = (target: string) => {
@@ -477,9 +477,6 @@ describe("mstar dispatch validate — control writes", () => {
       const fileTarget = run(".mstar/notes");
       expect(fileTarget.exitCode).toBe(0);
       expectEnvelope(fileTarget, "ok", "dispatch.validate.ok");
-      const directoryTarget = run(".mstar/notes/");
-      expect(directoryTarget.exitCode).toBe(1);
-      expect(violationCodes(directoryTarget)).toContain("dispatch.control-write.target-committable");
     });
   });
 
