@@ -184,72 +184,28 @@ Anti-patterns:
 
 ---
 
-## PM Self-Check Before Dispatch
+## Dispatch preconditions (hard block)
 
-- Q1: Is this implementation/test/review/deploy/research delivery? If yes, delegate.
-- Q2: Is specialist role explicit in `Execute as`?
-- Q3: Is this only PM coordination/indexing? If artifact body is PRD/story/acceptance/architecture/contract and route points to specialist role, delegation is mandatory.
-- Q4: Is Assignment complete (role-fit, acceptance, evidence)?
-- Q5: Is parallelism decision explicit and aligned with branch/worktree policy?
-- Q6: Is `Task category` aligned with route?
-- Q7: Is `quick` being misused to bypass prepare?
-- Q8: Is intention gate explicit before implement?
-- Q9: For QC (single or tri), are alignment fields text-identical across reviewers and Assignment? SDD / tri: `Execution mode: sdd` or explicit `QC mode: full tri-review`; inline: `QC mode: single` or skip reason.
-- Q10: Is `Delegation` consistent with dispatch and worktree usage?
-- Q11: For non-trivial plan, is PM Task Board published with coverage?
-- Q12: In invoke-based hosts, were matching invokes actually issued?
-- Q13: With **>=2 independent** backend/fullstack units, are owners spread across `fullstack-dev` and `fullstack-dev-2` (parallel or rotated), or is `single_stream_justified: yes` recorded with a real reason?
-- Q14: If this is partial/staged/temporary, is the roadmap/tracking location written in the plan/status artifacts rather than only in prose?
-
----
-
-## Pre-Implement Gate Check (Required Output)
-
-Emit before first implement dispatch:
-
-```markdown
-Pre-implement Gate Check:
-- plan_id: <id>
-- non_hotfix: yes|no
-- harness_active: yes|no
-- plan_path: <path or N/A>
-- plan_file_on_disk: yes|no|n/a
-- status_json_has_plan_id: yes|no|n/a
-- non_trivial_plan: yes|no
-- PM_Task_Board_published: yes|no
-- batch_strategy_defined: yes|no
-- roadmap_written: yes|no|n/a
-- roadmap_location: <Plan section / PM Task Board / workflow snapshot / issue id / n/a>
-- assignment_batch_index: <e.g. 1/3>
-- coverage_ids: <e.g. T1,T2>
-- reason_if_single_assignment: <required when only one batch>
-- per_task_comment_gate: yes|no
-- single_stream_justified: yes|no|n/a
-Decision:
-- GO | BLOCKED
-```
+Before the first implement dispatch of a non-trivial plan, these conditions must hold; one unmet condition means `Blocked`, not a narrative caveat. There is no printable pre-implement receipt — the plan row and the status carry the evidence.
 
 Hard block when:
 
-- Non-trivial plan has required field = `no`
-- Harness-active non-hotfix flow lacks on-disk main plan or status registration
-- `assignment_batch_index` is not `1/1` but `roadmap_written` is not `yes`
-- Any temporary workaround or deferred scope lacks a durable tracking location
-- `Task category: quick` is used on non-trivial work
-- **>=2 independent** backend/fullstack units on the task board but `single_stream_justified: no` with no spread across `fullstack-dev` / `fullstack-dev-2` and no documented single-id override
+- Harness-active non-hotfix flow lacks the on-disk main plan or its status registration
+- Dispatch spans more than one batch, or carries deferred/temporary scope, with no durable tracking location (`mstar-harness-core` § Durable Roadmap Gate)
+- `Task category: quick` is used on non-trivial work, or `Task category` contradicts the selected route
+- `Execute as` does not name the specialist role the route assigns
+- The parallelism decision is not explicit, or contradicts the branch/worktree policy (**`mstar-branch-worktree`**)
+- QC alignment fields are not text-identical across seats and the Assignment (`Execution mode` / `QC mode` per seat mapping → **`mstar-review-qc`**)
+- In invoke-based hosts, the matching invokes were not actually issued (→ **`mstar-host`**)
+- **>=2 independent** backend/fullstack units on the task board but `single_stream_justified: yes` carries no real reason and no spread across `fullstack-dev` / `fullstack-dev-2`
 
 ---
 
 ## PM Task Board Contract (Non-Trivial Plan)
 
-Before first implement dispatch:
-
-- Publish PM Task Board with ID/owner/deps/parallel/coverage mapping
-- If delivery spans batches, include the full roadmap: batch order, deferred scope, dependencies, owner/trigger, and final Done definition
-- Every implement Assignment declares `PM Task Board coverage`
-- Default batch size 1-2 IDs; `>=3` requires `Why batching is safe`
-- Completion rhythm: commit -> Completion Report -> PM Status Update -> next dispatch
+- Board tasks map ID/owner/deps to their Assignment; every implement Assignment declares `PM Task Board coverage`.
 - The plan row stays the delivery authority and the board a coordination projection — mirror one board task per Assignment and keep both records in step (dsh Agent Teams board protocol → **`mstar-host`** → `references/dsh-agent-teams.md`).
+- Recovery from board/row drift: a board task with no plan row, or a row with no board task, is reconciled in the same coordination round with the row as authority; never dispatch from the board alone.
 
 ---
 
