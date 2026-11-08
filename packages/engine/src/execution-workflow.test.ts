@@ -4573,8 +4573,13 @@ describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to run
     }));
     expect(stillClosed.code).toBe("workflow.reopen-not-terminal");
 
-    // Rebuild the checkout and let the ordinary close re-prove the merge.
+    // The smaller recovery first: rebuilding the recorded checkout is enough
+    // for the read-only gate, with no reopen and no new state.
     runGit(["worktree", "add", fixture.planPath, SOURCE_BRANCH], fixture.repoRoot);
+    const minGate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
+    expect(minGate.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN")).toBeUndefined();
+
+    // The durable recovery: the ordinary close re-proves and persists the proof.
     const reclosed = await workflowMutation(fixture, "op-legacy-reclose", {
       kind: "lifecycle",
       status: "completed",

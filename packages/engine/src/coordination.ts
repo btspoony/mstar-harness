@@ -1496,7 +1496,7 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot, facts?: { target?: 
       recorded.length === 0
         ? `Workflow '${workflowId}' records no plan worktree, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in the plan's own checkout`
         : `Workflow '${workflowId}' records plan worktree(s) ${recorded.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`,
-      `Rebuild the recorded checkout with 'git worktree add ${recorded[0]} ${deliveryBranch}'; for an already-closed lifecycle, reopen it with 'mstar workflow reopen --workflow ${workflowId} --reason <text>', then the ordinary close re-proves the merge and persists its proof. If the merge was a squash or rebase, ${record}.`,
+      `Rebuild the recorded checkout with 'git worktree add ${recorded[0]} ${deliveryBranch}', then re-run this gate — the re-proof is read-only and needs no reopen. To make the proof durable again, reopen with 'mstar workflow reopen --workflow ${workflowId} --reason <text>' and close once more; if the merge was a squash or rebase, ${record}.`,
     );
   }
   const checkouts = readable.filter((path) => gitRead(path, ["rev-parse", "--show-toplevel"]) !== undefined);
