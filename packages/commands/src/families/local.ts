@@ -667,7 +667,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             resolveAdrDir(trackedHarness, { create: false }),
           ];
           const probe = probePathOwnership(
-            { path: startDir, result: isResultPath(startDir, resultDirs) },
+            { path: startDir, result: isResultPath(startDir, resultDirs), ...(input.path.endsWith("/") ? { kind: "directory" as const } : {}) },
             controlRoot,
             callerCheckoutRoot,
           );
@@ -715,9 +715,9 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           { path: resolveWorkflowDir(processHarness, { harnessDir: processHarness }) },
           { path: resolveProjectDir(processHarness, { harnessDir: processHarness }) },
           { path: resolveReviewDir(processHarness, { harnessDir: processHarness }) },
-          // The execution store lives at the harness root.
-          { path: path.join(processHarness, "store.db") },
-        ];
+        ].map((target) => ({ ...target, kind: "directory" as const }));
+        // The execution store is a file at the harness root.
+        targets.push({ path: path.join(processHarness, "store.db"), kind: "file" });
         const check = checkPathOwnership(targets, controlRoot, callerCheckoutRoot);
         return pathCheckEnvelope(
           "path.check",

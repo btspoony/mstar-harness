@@ -438,6 +438,32 @@ describe("mstar dispatch validate — control writes", () => {
     });
   });
 
+  test("probes the declared absent file rather than a synthetic child", () => {
+    fixture((control, linked, file) => {
+      writeFileSync(join(control, ".gitignore"), "*.md\n");
+      const run = (target: string) => {
+        writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": target }));
+        return runCli(["dispatch", "validate", file], { cwd: linked });
+      };
+      const ignored = run("notes/run.md");
+      expect(ignored.exitCode).toBe(0);
+      expectEnvelope(ignored, "ok", "dispatch.validate.ok");
+      const committable = run("notes/run.txt");
+      expect(committable.exitCode).toBe(1);
+      expect(violationCodes(committable)).toContain("dispatch.control-write.target-committable");
+    });
+  });
+
+  test("checks a declared absent directory using directory ignore rules", () => {
+    fixture((control, linked, file) => {
+      writeFileSync(join(control, ".gitignore"), ".mstar/**\n!.mstar/notes/\n!.mstar/notes/**\n");
+      writeFileSync(file, assignment({ "Write domain": "control", "Worktree path": control, "Working branch": "main", "Control write paths": ".mstar/notes/" }));
+      const result = runCli(["dispatch", "validate", file], { cwd: linked });
+      expect(result.exitCode).toBe(1);
+      expect(violationCodes(result)).toContain("dispatch.control-write.target-committable");
+    });
+  });
+
   test("checks each concrete target against the canonical ignore layout", () => {
     fixture((control, linked, file) => {
       const run = (targets: string) => {

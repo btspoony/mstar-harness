@@ -23,14 +23,12 @@
  * `rev-parse --show-toplevel` from the target's nearest existing directory names
  * the checkout, then `check-ignore -q` runs IN that checkout with the absolute
  * target. `check-ignore` refuses a path belonging to another worktree (exit 128
- * "outside repository"), so `-C` must be the resolved checkout root. The target
- * is probed as a file path: a not-yet-existing directory has no trailing-slash
- * identity for pattern matching, and a file path answers the ignore verdict of
- * the directory's contents.
+ * "outside repository"), so `-C` must be the resolved checkout root. Directory
+ * targets retain a trailing separator so Git applies directory-only rules.
  */
 import { execFileSync } from "node:child_process";
 import { statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Severity } from "./core.js";
 import { gitProbeTimeoutMs, probeCheckoutRoot, readMainWorktree } from "./worktree.js";
 
@@ -45,6 +43,7 @@ export type PathOwnershipCode =
 export type PathOwnershipTarget = {
   /** Absolute or caller-relative path; the probe resolves it. */
   path: string;
+  kind?: "directory" | "file";
   /**
    * The caller treats this path as a tracked-result dir (specs / knowledge /
    * adr). It only ever adds the non-blocking `path.result-ignored` warning —
@@ -104,9 +103,6 @@ export type PathOwnershipCheck = {
   warnings: PathOwnershipWarning[];
 };
 
-/** Probe file name; a plain name so no dotfile pattern decides the verdict. */
-const PROBE_FILE = "mstar-path-check-probe.md";
-
 /**
  * Whether `target` is one of the caller's tracked-result locations. This is the
  * ONLY use of the result marking: Git decides the verdict, the marking decides
@@ -142,17 +138,11 @@ export function nearestExistingDir(target: string): string {
   }
 }
 
-/** The path whose ignore verdict stands for `target`: its own file, or a file in it. */
-function probePathFor(target: string): string {
-  const path = resolve(target);
-  try {
-    if (statSync(path).isFile()) return path;
-  } catch {
-    // Absent targets are probed as a file inside them (see the module note).
-  }
-  return join(path, PROBE_FILE);
+function probePathFor(target: PathOwnershipTarget): string {
+  const resolved = resolve(target.path);
+  const directory = target.kind === "directory" || (target.kind === undefined && isDirectoryEntry(resolved));
+  return directory && !resolved.endsWith(sep) ? resolved + sep : resolved;
 }
-
 /** Exit status of a failed `execFileSync` call, or `null` when it never ran. */
 function exitStatus(error: unknown): number | null {
   if (error !== null && typeof error === "object" && "status" in error && typeof error.status === "number") {
@@ -198,7 +188,7 @@ export function probePathOwnership(
 ): PathOwnershipProbe {
   const anchor = nearestExistingDir(target.path);
   const checkoutRoot = probeCheckoutRoot(anchor);
-  const probePath = probePathFor(target.path);
+  const probePath = probePathFor(target);
   const ignored = ignoreVerdict(checkoutRoot, probePath);
   // A caller naming a not-yet-existing target cannot probe the process root
   // itself; the first `worktree list` record of the target's OWN checkout is

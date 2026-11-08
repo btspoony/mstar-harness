@@ -340,7 +340,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
               for (const declared of fields.controlWritePaths ?? []) {
                 if (/[*?[\]{}]/.test(declared) || (!path.isAbsolute(declared) && worktree === undefined)) continue;
                 const target = path.resolve(worktree ?? controlRoot, declared);
-                const ownership = probePathOwnership({ path: target }, controlRoot);
+                const ownership = probePathOwnership({ path: target, kind: declared.endsWith("/") ? "directory" : "file" }, controlRoot);
                 if (ownership.ignored === false) {
                   violations.push({
                     ok: false, severity: "high", code: "dispatch.control-write.target-committable",
@@ -351,7 +351,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
                   violations.push({
                     ok: false, severity: "medium", code: "dispatch.control-write.target-unverifiable",
                     message: `cannot verify the Git ignore status of control write target ${target}`,
-                    fix: `run git -C "${controlRoot}" check-ignore -v -- "${target}", then rerun mstar dispatch validate`,
+                    fix: `run git -C "${controlRoot}" check-ignore -v -- "${target}${declared.endsWith("/") ? "/" : ""}", then rerun mstar dispatch validate`,
                   });
                 }
                 if (ownership.checkoutRoot === null || canonicalizeNearestExisting(ownership.checkoutRoot) !== controlRoot) {

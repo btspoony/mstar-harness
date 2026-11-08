@@ -30,7 +30,7 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 
 ### 控制域写入（`Write domain: control`）
 
-仅当 Assignment **只写控制根的 gitignored 过程目标**（plans、assignments、sdd、iterations、workflows、projects、reviews、`store.db`）时声明 **`Write domain: control`**（取值 `control` | `work`；缺省 = `work`），并用 **`Control write paths: <path>[, <path>…]`** 列出实际要写的目标（绝对路径，或相对 `Worktree path` 解析）。这类单子可写 **`Worktree path`** = 控制根、**`Working branch: main`**，**豁免**默认保护分支门禁；分支写法仍须三选一。
+仅当 Assignment **只写控制根的 gitignored 过程目标**（plans、assignments、sdd、iterations、workflows、projects、reviews、`store.db`）时声明 **`Write domain: control`**（取值 `control` | `work`；缺省 = `work`），并用 **`Control write paths: <path>[, <path>…]`** 列出实际要写的目标（绝对路径，或相对 `Worktree path` 解析；条目按形状探测：以 `/` 结尾的为目录，适用 Git 目录规则如 `!.mstar/notes/`；其余按文件逐字探测，只忽略 `*.md` 的仓库接受 `notes/run.md`）。这类单子可写 **`Worktree path`** = 控制根、**`Working branch: main`**，**豁免**默认保护分支门禁；分支写法仍须三选一。
 
 引擎核验（`mstar dispatch validate`）：`Worktree path`（按 Assignment 所在目录解析后 realpath）等于控制根、`Working branch` 等于控制根当前检出分支，且**逐个探测声明的目标**——每个目标须被 Git 忽略且位于控制根内。核验的是真实声明目标而非整个 harness：仓库只忽略 `.mstar/plans/` 时，声明 `plans/` 下的目标即通过；声明被跟踪的目标（如 `.mstar/specs/…`）被拒。拒绝码：`dispatch.control-write.control-root-unresolved`（从本仓库的检出运行）、`dispatch.control-write.worktree-not-control`、`dispatch.control-write.branch-mismatch`、`dispatch.control-write.target-committable`（该目标会被提交 ⇒ 改用工作分支/PR）、`dispatch.control-write.target-outside-control`、`dispatch.control-write.target-unverifiable`。字段层另有 `assignment.field.write-domain-unknown`、`assignment.field.control-write-missing-worktree`、`assignment.field.control-write-missing-branch`、`assignment.field.control-write-paths-missing`（`control` 域必须写 `Worktree path`、`Working branch` 与 `Control write paths`）。
 

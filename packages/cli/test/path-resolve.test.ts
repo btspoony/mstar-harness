@@ -17,7 +17,7 @@ import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 
@@ -48,7 +48,7 @@ interface PathEnvelope {
     ok?: boolean;
     findings?: Array<{ path: string; expect?: string; code: string; severity: string; message: string }>;
     warnings?: Array<{ path: string; code: string; severity: string; message: string }>;
-    checked?: Array<{ path: string; result?: boolean }>;
+    checked?: Array<{ path: string; result?: boolean; kind?: "directory" | "file" }>;
   };
 }
 
@@ -398,6 +398,7 @@ describe("mstar path check \u2014 verdict from Git state", () => {
       expect(result.exitCode).toBe(0);
       expect(realpathSync(data(result).trackedHarness!)).toBe(realpathSync(join(worktree, ".mstar")));
       expect(realpathSync(data(result).processHarness!)).toBe(realpathSync(join(control, ".mstar")));
+      expect(data(result).checked?.find((entry) => basename(entry.path) === "store.db")?.kind).toBe("file");
       expect(data(result).ok).toBe(true);
     });
   });
