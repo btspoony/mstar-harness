@@ -46,8 +46,9 @@ interface PathEnvelope {
     processHarness?: string | null;
     callerCheckoutRoot?: string | null;
     ok?: boolean;
-    findings?: Array<{ path: string; expect: string; code: string; severity: string; message: string }>;
-    checked?: Array<{ path: string; expect: string }>;
+    findings?: Array<{ path: string; expect?: string; code: string; severity: string; message: string }>;
+    warnings?: Array<{ path: string; code: string; severity: string; message: string }>;
+    checked?: Array<{ path: string; result?: boolean }>;
   };
 }
 
@@ -295,33 +296,32 @@ const TRACKED_RESULTS_IGNORE = [
   "",
 ].join("\n");
 
-describe("mstar path check — ownership of the resolved layout", () => {
-  test("a fully gitignored `.mstar/` refuses with path.result-ignored and the .agents recovery", () => {
+describe("mstar path check \u2014 verdict from Git state", () => {
+  test("an ignored result dir in the control checkout exits 0 with a path.result-ignored warning", () => {
     withRoot((root) => {
       gitRepo(root);
       writeFileSync(join(root, ".gitignore"), ".mstar/\n");
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
       const result = runCli(["path", "check"], root);
-      expect(result.exitCode).toBe(1);
-      const refused = envelope(result);
-      expect(refused.status).toBe("refused");
-      expect(refused.code).toBe("path.result-ignored");
-      const findings = refused.details?.findings as Array<{ code: string; path: string }>;
+      expect(result.exitCode).toBe(0);
+      const okEnvelope = envelope(result);
+      expect(okEnvelope).toMatchObject({ command: "path.check", status: "ok", code: "path.check.ok" });
+      expect(data(result).ok).toBe(true);
+      expect(data(result).findings).toEqual([]);
       // The layout resolver answers canonical (realpath'd) directories.
-      expect(findings.map((finding) => finding.path)).toEqual([
+      const warnings = data(result).warnings ?? [];
+      expect(warnings.map((warning) => warning.path)).toEqual([
         join(realpathSync(root), ".mstar", "specs"),
         join(realpathSync(root), ".mstar", "knowledge"),
         join(realpathSync(root), ".mstar", "adr"),
       ]);
-      expect(findings.every((finding) => finding.code === "path.result-ignored")).toBe(true);
-      // The recovery must name a command an operator can actually run.
-      expect(String(refused.details?.recovery)).toContain("mstar path check");
-      expect(refused.message).toContain("Git-ignored");
+      expect(warnings.every((warning) => warning.code === "path.result-ignored")).toBe(true);
+      expect(warnings[0]?.message).toContain("never be committed or shared");
     });
   });
 
-  test("re-included result dirs and ignored process dirs are clean (exit 0)", () => {
+  test("a re-included result dir is clean with no warning (exit 0)", () => {
     withRoot((root) => {
       gitRepo(root);
       writeFileSync(join(root, ".gitignore"), TRACKED_RESULTS_IGNORE);
@@ -333,40 +333,42 @@ describe("mstar path check — ownership of the resolved layout", () => {
       writeFileSync(join(root, ".mstar", "adr", "0001.md"), "# adr\n");
       const result = runCli(["path", "check"], root);
       expect(result.exitCode).toBe(0);
-      expect(envelope(result)).toMatchObject({ command: "path.check", status: "ok", code: "path.check.ok" });
       expect(data(result).ok).toBe(true);
       expect(data(result).findings).toEqual([]);
+      expect(data(result).warnings).toEqual([]);
       // Process state is checked too — the store is the notable one.
-      expect(data(result).checked?.map((target) => target.expect)).toContain("process");
+      expect(data(result).checked?.some((target) => target.result === true)).toBe(true);
+      expect(data(result).checked?.some((target) => target.result !== true)).toBe(true);
     });
   });
 
-  test("a named tracked-result dir is refused, a named committable dir is ok", () => {
+  test("an ignored named result dir warns without failing; a committable dir is clean", () => {
     withRoot((root) => {
       gitRepo(root);
       writeFileSync(join(root, ".gitignore"), ".mstar/\n");
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       mkdirSync(join(root, "docs", "adr"), { recursive: true });
       const ignored = runCli(["path", "check", ".mstar/specs"], root);
-      expect(ignored.exitCode).toBe(1);
-      expect(envelope(ignored).code).toBe("path.result-ignored");
+      expect(ignored.exitCode).toBe(0);
+      expect(envelope(ignored).status).toBe("ok");
+      expect(data(ignored).warnings?.map((warning) => warning.code)).toEqual(["path.result-ignored"]);
 
       const okDir = runCli(["path", "check", "docs/adr"], root);
       expect(okDir.exitCode).toBe(0);
       expect(data(okDir).ok).toBe(true);
+      expect(data(okDir).warnings).toEqual([]);
     });
   });
 
-  test("an ignored file named inside {HARNESS_DIR}/specs is still a tracked result", () => {
+  test("an ignored file named inside {HARNESS_DIR}/specs still earns the warning", () => {
     withRoot((root) => {
       gitRepo(root);
       writeFileSync(join(root, ".gitignore"), ".mstar/\n");
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(root, ".mstar", "specs", "0001.md"), "# spec\n");
-      // The role comes from the resolved layout, not from the file's basename.
       const result = runCli(["path", "check", ".mstar/specs/0001.md"], root);
-      expect(result.exitCode).toBe(1);
-      expect(envelope(result).code).toBe("path.result-ignored");
+      expect(result.exitCode).toBe(0);
+      expect(data(result).warnings?.map((warning) => warning.path)).toEqual([realpathSync(join(root, ".mstar", "specs", "0001.md"))]);
     });
   });
 
@@ -379,17 +381,17 @@ describe("mstar path check — ownership of the resolved layout", () => {
     });
   });
 
-  test("in a linked checkout, tracked results are checked in the caller's checkout and process state in the control root", () => {
+  test("in a linked checkout, ignored state is checked in the control root and results in the caller's checkout", () => {
     withRoot((root) => {
       const control = join(root, "control");
       mkdirSync(control);
       gitRepo(control);
       commitIgnore(control, TRACKED_RESULTS_IGNORE);
       const worktree = addWorktree(root, control);
-      // The control harness owns process state, so it must exist.
+      // The control harness owns ignored state, so it must exist.
       mkdirSync(join(control, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(control, ".mstar", "specs", "base.md"), "# spec\n");
-      // Results live in the caller's checkout (the branch it carries).
+      // Committable results live in the caller's checkout (the branch it carries).
       mkdirSync(join(worktree, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(worktree, ".mstar", "specs", "0001.md"), "# spec\n");
       const result = runCli(["path", "check"], worktree);
@@ -400,7 +402,21 @@ describe("mstar path check — ownership of the resolved layout", () => {
     });
   });
 
-  test("a tracked path owned by the control checkout refuses when named from a linked checkout", () => {
+  test("an ignored process dir in a linked checkout refuses as path.process-outside-control", () => {
+    withRoot((root) => {
+      const control = join(root, "control");
+      mkdirSync(control);
+      gitRepo(control);
+      commitIgnore(control, TRACKED_RESULTS_IGNORE);
+      const worktree = addWorktree(root, control);
+      mkdirSync(join(worktree, ".mstar", "plans"), { recursive: true });
+      const result = runCli(["path", "check", join(worktree, ".mstar", "plans")], worktree);
+      expect(result.exitCode).toBe(1);
+      expect(envelope(result).code).toBe("path.process-outside-control");
+    });
+  });
+
+  test("a committable result owned by the control checkout refuses when named from a linked checkout", () => {
     withRoot((root) => {
       const control = join(root, "control");
       mkdirSync(control);

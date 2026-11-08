@@ -8,9 +8,10 @@ import {
   detectHarnessKind,
   detectHost,
   emitGitignoreSnippet,
-  expectForPath,
   hasHarnessRootDeclaration,
+  isResultPath,
   nearestExistingDir,
+  pathOwnershipWarning,
   probeCheckoutRoot,
   probePathOwnership,
   readMainWorktree,
@@ -34,6 +35,7 @@ import {
   type HostId,
   type PathOwnershipFinding,
   type PathOwnershipTarget,
+  type PathOwnershipWarning,
   type ToolSignal,
 } from "@mstar-harness/engine";
 import { z } from "zod";
@@ -337,24 +339,26 @@ function controlFacts(startDir: string): ControlFacts {
 }
 
 /**
- * `path check` answer: no finding is the clean exit-0 envelope, every finding
- * is one refusal carrying them all (the operator sees every cause at once).
+ * `path check` answer: no finding is the clean exit-0 envelope (warnings ride
+ * along without failing it), every finding is one refusal carrying them all
+ * (the operator sees every cause at once).
  */
 function pathCheckEnvelope(
   command: string,
   data: Record<string, unknown>,
   findings: readonly PathOwnershipFinding[],
+  warnings: readonly PathOwnershipWarning[],
 ): CommandEnvelope {
   const first = findings[0];
-  if (first === undefined) return ok(command, { ...data, ok: true, findings: [] });
+  if (first === undefined) return ok(command, { ...data, ok: true, findings: [], warnings });
   return refusalEnvelope({
     command,
     status: "refused",
     code: first.code,
     exitCode: 1,
     message: findings.map((finding) => finding.message).join("; "),
-    details: { ...data, ok: false, findings },
-    recovery: "Re-include the tracked result dirs in .gitignore, or point specs_dir / knowledge_dir / adr_dir at a tracked directory such as .agents/ in .mstarc; keep process artifacts in the control checkout. Run mstar path check.",
+    details: { ...data, ok: false, findings, warnings },
+    recovery: "Keep Git-ignored harness files in the control checkout and committable results in the checkout that carries your branch; if a result dir is ignored, write it under .agents/ or declare specs_dir / knowledge_dir / adr_dir in .mstarc. Run mstar path check.",
   });
 }
 
@@ -554,7 +558,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       cli: { path: ["path", "resolve"], aliases: [], arguments: [{ key: "path", required: false, variadic: false }], options: [] },
       input: z.object({ path: z.string().min(1).optional() }),
       effects: ["read"],
-      description: "Resolve harness, specs, workflow, project, and review directories from a start directory.",
+      description: "Resolve harness, specs, knowledge, adr, workflow, project, and review directories from a start directory.",
       async execute(input, context) {
         // On a connection that declared no workspace the invocation directory is
         // the MCP server's LAUNCH directory (the host's checkout), which says
@@ -635,7 +639,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       cli: { path: ["path", "check"], aliases: [], arguments: [{ key: "path", required: false, variadic: false }], options: [] },
       input: z.object({ path: z.string().min(1).optional() }),
       effects: ["read"],
-      description: "Check that process state is Git-ignored inside the control checkout and tracked results (specs, knowledge, adr) are committable from the caller's own checkout.",
+      description: "Check harness file ownership from Git state: Git-ignored files must live in the control checkout, committable files in the caller's checkout; an ignored result dir is reported as a warning.",
       async execute(input, context) {
         // Same launch-directory rule as `path resolve`: an unnamed start path
         // would answer about the host's checkout instead of the caller's.
@@ -645,32 +649,34 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         if (unnamedStart !== undefined) return unnamedStart;
         const startDir = input.path === undefined ? context.cwd : resolveCliPath(input.path, context.cwd);
         if (input.path !== undefined) {
-          // The target's role comes from the resolved layout, never from its
-          // own name: a file under `{HARNESS_DIR}/specs/` is a tracked result
-          // too. The anchor is the nearest existing directory — Git and the
-          // harness probe both need a real path, and the target may not exist.
+          // The verdict comes from Git state; the resolved result dirs only
+          // decide whether an ignored-but-legal path also earns the warning.
+          // The anchor is the nearest existing directory — Git and the harness
+          // probe both need a real path, and the target may not exist.
           const anchor = nearestExistingDir(startDir);
           const { harnessDir, controlRoot } = controlFacts(anchor);
-          // The caller is the invoker, not the named target: a path checked
-          // from a linked checkout that lives in the control checkout is a
-          // result outside the caller's worktree. Outside Git the target's own
+          // The caller is the invoker, not the named target: a committable path
+          // checked from a linked checkout that lives in the control checkout
+          // belongs to the wrong checkout. Outside Git the target's own
           // checkout is the only identity available.
           const callerCheckoutRoot = probeCheckoutRoot(context.cwd) ?? probeCheckoutRoot(anchor);
           const trackedHarness = harnessDir ?? (callerCheckoutRoot === null ? null : path.join(callerCheckoutRoot, ".mstar"));
-          const tracked = trackedHarness === null ? [] : [
+          const resultDirs = trackedHarness === null ? [] : [
             resolveSpecsDir(trackedHarness, { create: false }),
             resolveKnowledgeDir(trackedHarness, { create: false }),
             resolveAdrDir(trackedHarness, { create: false }),
           ];
           const probe = probePathOwnership(
-            { path: startDir, expect: expectForPath(startDir, tracked) },
+            { path: startDir, result: isResultPath(startDir, resultDirs) },
             controlRoot,
             callerCheckoutRoot,
           );
+          const warning = pathOwnershipWarning(probe);
           return pathCheckEnvelope(
             "path.check",
-            { startDir, trackedHarness, controlRoot, callerCheckoutRoot, expect: probe.expect, ignored: probe.ignored, checkoutRoot: probe.checkoutRoot },
+            { startDir, trackedHarness, controlRoot, callerCheckoutRoot, result: probe.result, ignored: probe.ignored, checkoutRoot: probe.checkoutRoot },
             probe.code === null ? [] : [probe],
+            warning === null ? [] : [warning],
           );
         }
         const { harnessDir, controlRoot, controlHarnessDir, linkedWorktree, control, unavailable } = controlFacts(startDir);
@@ -679,12 +685,13 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             startDir, ...control, checked: [],
           } , recovery: "From the main worktree: run mstar status validate; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path check."});
         }
-        // The two domains have different owners. Process state belongs to the
-        // control harness (unchanged by `path resolve`). Tracked results belong
-        // to the CALLER's checkout: a linked worktree shares the control
-        // harness for process state, but its results must be committed from the
-        // branch it carries, so resolving them from the control harness would
-        // check the wrong checkout and bless results the caller never has.
+        // The two domains have different owners. Ignored harness files live in
+        // the control harness (unchanged by `path resolve`). Committable
+        // results live in the CALLER's checkout: a linked worktree shares the
+        // control harness for ignored state, but its results must be committed
+        // from the branch it carries, so resolving them from the control
+        // harness would check the wrong checkout and bless results the caller
+        // never has.
         const processHarness = linkedWorktree && controlRoot !== null ? controlHarnessDir : harnessDir;
         if (processHarness === null) {
           return refusalEnvelope({ command: "path.check", status: "refused", code: "path.harness-not-found", exitCode: 1, message: `no harness dir found from ${startDir}${controlRoot === null ? "" : ` (control root ${controlRoot})`}`, details: {
@@ -692,24 +699,26 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           } , recovery: "From the main worktree: run mstar harness scaffold; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path check."});
         }
         const callerCheckoutRoot = probeCheckoutRoot(startDir);
-        // Without a probed harness the caller checkout still names a tracked
+        // Without a probed harness the caller checkout still names a result
         // base; it is only a probe base — nothing is created there.
         const trackedHarness = harnessDir ?? (callerCheckoutRoot === null ? null : path.join(callerCheckoutRoot, ".mstar"));
         const specsDir = trackedHarness === null ? null : resolveSpecsDir(trackedHarness, { create: false });
         const knowledgeDir = trackedHarness === null ? null : resolveKnowledgeDir(trackedHarness, { create: false });
         const adrDir = trackedHarness === null ? null : resolveAdrDir(trackedHarness, { create: false });
         const targets: PathOwnershipTarget[] = [
-          ...[specsDir, knowledgeDir, adrDir].flatMap((dir) => (dir === null ? [] : [{ path: dir, expect: "tracked" as const }])),
-          { path: resolvePlanDir(processHarness), expect: "process" },
+          // The result marking only adds the ignored-result warning.
+          ...[specsDir, knowledgeDir, adrDir].flatMap((dir) => (dir === null ? [] : [{ path: dir, result: true }])),
+          { path: resolvePlanDir(processHarness) },
           // The per-plan join makes `dirname` the SDD base, declaration included.
-          { path: path.dirname(resolveSddDir(processHarness, "path-check")), expect: "process" },
-          { path: resolveIterationDir(processHarness), expect: "process" },
-          { path: resolveWorkflowDir(processHarness, { harnessDir: processHarness }), expect: "process" },
-          { path: resolveProjectDir(processHarness, { harnessDir: processHarness }), expect: "process" },
-          { path: resolveReviewDir(processHarness, { harnessDir: processHarness }), expect: "process" },
-          // The execution store is process state; it lives at the harness root.
-          { path: path.join(processHarness, "store.db"), expect: "process" },
+          { path: path.dirname(resolveSddDir(processHarness, "path-check")) },
+          { path: resolveIterationDir(processHarness) },
+          { path: resolveWorkflowDir(processHarness, { harnessDir: processHarness }) },
+          { path: resolveProjectDir(processHarness, { harnessDir: processHarness }) },
+          { path: resolveReviewDir(processHarness, { harnessDir: processHarness }) },
+          // The execution store lives at the harness root.
+          { path: path.join(processHarness, "store.db") },
         ];
+        const check = checkPathOwnership(targets, controlRoot, callerCheckoutRoot);
         return pathCheckEnvelope(
           "path.check",
           {
@@ -724,7 +733,8 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             adrDir,
             checked: targets,
           },
-          checkPathOwnership(targets, controlRoot, callerCheckoutRoot).findings,
+          check.findings,
+          check.warnings,
         );
       },
     }),

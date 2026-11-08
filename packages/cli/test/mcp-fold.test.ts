@@ -30,14 +30,18 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * for `plan.issue-add` and `workflow.execution-policy` are sanctioned contract
  * detail, not per-command republishing.
  *
- * The current measurement is 33,629. The may-fix surface gate added the two
- * tally properties `unmetAcTests` (33 characters) and `unmetAcDocs` (32
- * characters) — 65 together — so the surface immediately before that gate was
- * 33,564 (the current measurement minus those 65). Earlier revisions of this
- * note recorded intermediate values (33,274, 33,539, 33,592, 33,621) for the
- * push and issue-sync steps; those are superseded and this note re-asserts
- * none of them, because they do not reconcile with the 33,564 the surface held
- * before the gate.
+ * The measurement was 33,629 after the may-fix surface gate. The path-ownership
+ * work then added the `path.check` action line and the knowledge/adr/dir
+ * wording of the `path` family purpose and the `path.resolve` description — 168
+ * characters of published surface, no republished contract — so the current
+ * measurement is 33,797. The may-fix gate added the two tally properties
+ * `unmetAcTests` (33 characters) and `unmetAcDocs` (32 characters) — 65
+ * together — so the surface immediately before that gate was 33,564 (that
+ * measurement minus those 65). Earlier revisions of this note recorded
+ * intermediate values (33,274, 33,539, 33,592, 33,621) for the push and
+ * issue-sync steps; those are superseded and this note re-asserts none of them,
+ * because they do not reconcile with the 33,564 the surface held before the
+ * gate.
  *
  * The regression the guard catches: republishing per-command contracts inside
  * family descriptions, or per-action tools creeping back. A published discovery
@@ -45,7 +49,7 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * family that publishes an identity selector also publishes the per-action
  * `x-mstar-selectors` index a host-side injector reads.
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 33_629;
+const PUBLISHED_SURFACE_CEILING_CHARS = 33_797;
 
 type PublishedTool = Readonly<{
   name: string;

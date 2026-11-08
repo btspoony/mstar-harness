@@ -1,15 +1,23 @@
 /**
  * Engine path-ownership probe — real `git init` fixtures and real Git probes,
- * no mocks. The facts are Git's (`rev-parse --show-toplevel` +
- * `check-ignore`), so the verdicts are true only against a real repository:
- * `.gitignore` patterns, a linked checkout, and a not-yet-existing path.
+ * no mocks.
+ *
+ * The verdict is Git state, not directory names: an ignored path is wrong
+ * outside the control checkout, a committable path is wrong outside the
+ * caller's checkout. The caller's `result` marking only adds the non-blocking
+ * ignored-result warning.
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkPathOwnership, expectForPath, probePathOwnership } from "./path-check.js";
+import {
+  checkPathOwnership,
+  isResultPath,
+  pathOwnershipWarning,
+  probePathOwnership,
+} from "./path-check.js";
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -32,7 +40,7 @@ function gitRepo(root: string): string {
   return repo;
 }
 
-/** A linked checkout of `repo` (the "non-control" half of the probe). */
+/** A linked checkout of `repo` (the "caller" half of the probe). */
 function linkedWorktree(root: string, repo: string): string {
   const path = join(root, "wt-feat");
   git(["worktree", "add", "-q", "-b", "feat", path], repo);
@@ -41,7 +49,7 @@ function linkedWorktree(root: string, repo: string): string {
 
 /**
  * Repo whose COMMITTED ignore policy keeps `.mstar/specs` committable, plus a
- * linked checkout — the two-domain fixture. A linked checkout only sees the
+ * linked checkout — the two-checkout fixture. A linked checkout only sees the
  * ignore rules of the commit it was added from.
  */
 function trackedRepo(root: string): { repo: string; worktree: string } {
@@ -61,123 +69,63 @@ function withRoot(fn: (root: string) => void): void {
   }
 }
 
-describe("probePathOwnership \u2014 tracked results", () => {
-  test("a tracked, non-ignored result dir is owned as expected", () => {
-    withRoot((root) => {
-      const repo = gitRepo(root);
-      writeFileSync(join(repo, ".gitignore"), ".mstar/**\n!.mstar/specs/\n!.mstar/specs/**\n");
-      mkdirSync(join(repo, ".mstar", "specs"), { recursive: true });
-      const probe = probePathOwnership({ path: join(repo, ".mstar", "specs"), expect: "tracked" }, realpathSync(repo));
-      expect(probe.ignored).toBe(false);
-      expect(probe.checkoutRoot).toBe(realpathSync(repo));
-      expect(probe.code).toBeNull();
-      expect(probe.severity).toBeNull();
-    });
-  });
-
-  test("an ignored result dir refuses as path.result-ignored and names the .mstarc / .agents recovery", () => {
+describe("verdict \u2014 ignored state belongs to the control checkout", () => {
+  test("an ignored result dir in the control checkout is clean and warns without failing", () => {
     withRoot((root) => {
       const repo = gitRepo(root);
       writeFileSync(join(repo, ".gitignore"), ".mstar/\n");
       mkdirSync(join(repo, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(repo, ".mstar", "specs", "spec.md"), "# spec\n");
-      const probe = probePathOwnership({ path: join(repo, ".mstar", "specs"), expect: "tracked" }, realpathSync(repo));
+      const probe = probePathOwnership({ path: join(repo, ".mstar", "specs"), result: true }, realpathSync(repo));
       expect(probe.ignored).toBe(true);
-      expect(probe.code).toBe("path.result-ignored");
-      expect(probe.severity).toBe("high");
-      expect(probe.fix).toContain(".mstarc");
-      expect(probe.fix).toContain(".agents");
+      expect(probe.code).toBeNull();
+
+      const warning = pathOwnershipWarning(probe);
+      expect(warning?.code).toBe("path.result-ignored");
+      expect(warning?.severity).toBe("medium");
+      expect(warning?.message).toContain("never be committed or shared");
+      expect(warning?.fix).toContain(".agents/");
+      expect(warning?.fix).toContain(".mstarc");
     });
   });
 
-  test("a not-yet-existing result dir still answers the ignore verdict", () => {
-    withRoot((root) => {
-      const repo = gitRepo(root);
-      writeFileSync(join(repo, ".gitignore"), ".mstar/\n");
-      // No `.mstar` on disk: the probe path is a file inside the missing dir.
-      const probe = probePathOwnership({ path: join(repo, ".mstar", "adr"), expect: "tracked" }, realpathSync(repo));
-      expect(probe.ignored).toBe(true);
-      expect(probe.code).toBe("path.result-ignored");
-    });
-  });
-
-  test("an ignored FILE under the result dir is refused the same way", () => {
+  test("the same ignored dir without the result marking is clean and silent", () => {
     withRoot((root) => {
       const repo = gitRepo(root);
       writeFileSync(join(repo, ".gitignore"), ".mstar/\n");
       mkdirSync(join(repo, ".mstar", "specs"), { recursive: true });
-      writeFileSync(join(repo, ".mstar", "specs", "0001.md"), "# spec\n");
-      const probe = probePathOwnership({ path: join(repo, ".mstar", "specs", "0001.md"), expect: "tracked" }, realpathSync(repo));
+      const probe = probePathOwnership({ path: join(repo, ".mstar", "specs") }, realpathSync(repo));
       expect(probe.ignored).toBe(true);
-      expect(probe.code).toBe("path.result-ignored");
+      expect(probe.code).toBeNull();
+      expect(pathOwnershipWarning(probe)).toBeNull();
     });
   });
 
-  test("a tracked result in the caller's own checkout is owned", () => {
+  test("an ignored process dir in the control checkout is clean", () => {
     withRoot((root) => {
-      const { repo, worktree } = trackedRepo(root);
-      mkdirSync(join(worktree, ".mstar", "specs"), { recursive: true });
-      writeFileSync(join(worktree, ".mstar", "specs", "0001.md"), "# spec\n");
-      const probe = probePathOwnership(
-        { path: join(worktree, ".mstar", "specs"), expect: "tracked" },
-        realpathSync(repo),
-        realpathSync(worktree),
-      );
-      expect(probe.ignored).toBe(false);
-      expect(probe.checkoutRoot).toBe(realpathSync(worktree));
+      const repo = gitRepo(root);
+      writeFileSync(join(repo, ".gitignore"), ".mstar/\n");
+      mkdirSync(join(repo, ".mstar", "plans"), { recursive: true });
+      const probe = probePathOwnership({ path: join(repo, ".mstar", "plans") }, realpathSync(repo));
+      expect(probe.ignored).toBe(true);
       expect(probe.code).toBeNull();
     });
   });
 
-  test("a tracked result in the control checkout refuses when the caller works in a linked checkout", () => {
-    withRoot((root) => {
-      const { repo, worktree } = trackedRepo(root);
-      // The same tracked path exists only in the control checkout.
-      mkdirSync(join(repo, ".mstar", "specs"), { recursive: true });
-      const probe = probePathOwnership(
-        { path: join(repo, ".mstar", "specs"), expect: "tracked" },
-        realpathSync(repo),
-        realpathSync(worktree),
-      );
-      expect(probe.ignored).toBe(false);
-      expect(probe.checkoutRoot).toBe(realpathSync(repo));
-      expect(probe.code).toBe("path.result-outside-worktree");
-      expect(probe.severity).toBe("high");
-      expect(probe.message).toContain(realpathSync(worktree));
-      expect(probe.message).toContain(realpathSync(repo));
-      expect(probe.fix).toContain("work/integration worktree");
-    });
-  });
-});
-
-describe("probePathOwnership \u2014 process state", () => {
-  test("ignored process state in a checkout that is not the control root refuses as path.process-outside-control", () => {
+  test("an ignored path in a linked checkout refuses as path.process-outside-control", () => {
     withRoot((root) => {
       const repo = gitRepo(root);
-      // The ignore rules must be committed: a linked checkout only sees the
-      // tracked `.gitignore` of the commit it was added from.
       writeFileSync(join(repo, ".gitignore"), ".mstar/\n");
       git(["add", "-A"], repo);
       git(["commit", "-q", "-m", "ignore"], repo);
       const worktree = linkedWorktree(root, repo);
       mkdirSync(join(worktree, ".mstar", "plans"), { recursive: true });
-      const probe = probePathOwnership({ path: join(worktree, ".mstar", "plans"), expect: "process" }, realpathSync(repo));
+      const probe = probePathOwnership({ path: join(worktree, ".mstar", "plans") }, realpathSync(repo), realpathSync(worktree));
       expect(probe.ignored).toBe(true);
       expect(probe.checkoutRoot).toBe(realpathSync(worktree));
       expect(probe.code).toBe("path.process-outside-control");
       expect(probe.severity).toBe("high");
       expect(probe.message).toContain(realpathSync(repo));
-    });
-  });
-
-  test("ignored process state in the control checkout is owned as expected", () => {
-    withRoot((root) => {
-      const repo = gitRepo(root);
-      writeFileSync(join(repo, ".gitignore"), ".mstar/\n");
-      mkdirSync(join(repo, ".mstar", "iterations"), { recursive: true });
-      const probe = probePathOwnership({ path: join(repo, ".mstar", "iterations"), expect: "process" }, realpathSync(repo));
-      expect(probe.ignored).toBe(true);
-      expect(probe.code).toBeNull();
     });
   });
 
@@ -190,21 +138,68 @@ describe("probePathOwnership \u2014 process state", () => {
       const worktree = linkedWorktree(root, repo);
       // No `.mstar` on disk and no caller-supplied control root: the probe
       // derives the main worktree from the target's own checkout.
-      const inControl = probePathOwnership({ path: join(repo, ".mstar", "plans"), expect: "process" }, null);
+      const inControl = probePathOwnership({ path: join(repo, ".mstar", "plans") }, null);
       expect(inControl.controlRoot).toBe(realpathSync(repo));
       expect(inControl.code).toBeNull();
 
-      const inLinked = probePathOwnership({ path: join(worktree, ".mstar", "plans"), expect: "process" }, null);
+      const inLinked = probePathOwnership({ path: join(worktree, ".mstar", "plans") }, null);
       expect(inLinked.controlRoot).toBe(realpathSync(repo));
       expect(inLinked.code).toBe("path.process-outside-control");
     });
   });
 });
 
-describe("probePathOwnership \u2014 unverifiable", () => {
+describe("verdict \u2014 committable state belongs to the caller's checkout", () => {
+  test("a committable result dir in the caller's own checkout is clean", () => {
+    withRoot((root) => {
+      const { repo, worktree } = trackedRepo(root);
+      mkdirSync(join(worktree, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(worktree, ".mstar", "specs", "0001.md"), "# spec\n");
+      const probe = probePathOwnership(
+        { path: join(worktree, ".mstar", "specs"), result: true },
+        realpathSync(repo),
+        realpathSync(worktree),
+      );
+      expect(probe.ignored).toBe(false);
+      expect(probe.checkoutRoot).toBe(realpathSync(worktree));
+      expect(probe.code).toBeNull();
+      expect(pathOwnershipWarning(probe)).toBeNull();
+    });
+  });
+
+  test("a committable result in the control checkout refuses as path.result-outside-worktree", () => {
+    withRoot((root) => {
+      const { repo, worktree } = trackedRepo(root);
+      mkdirSync(join(repo, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(repo, ".mstar", "specs", "base.md"), "# spec\n");
+      const probe = probePathOwnership(
+        { path: join(repo, ".mstar", "specs"), result: true },
+        realpathSync(repo),
+        realpathSync(worktree),
+      );
+      expect(probe.ignored).toBe(false);
+      expect(probe.code).toBe("path.result-outside-worktree");
+      expect(probe.severity).toBe("high");
+      expect(probe.message).toContain(realpathSync(repo));
+      expect(probe.message).toContain(realpathSync(worktree));
+      expect(probe.fix).toContain("work/integration worktree");
+    });
+  });
+
+  test("names do not decide: a committable non-result path outside the caller checkout is refused too", () => {
+    withRoot((root) => {
+      const { repo, worktree } = trackedRepo(root);
+      const probe = probePathOwnership({ path: join(repo, "README.md") }, realpathSync(repo), realpathSync(worktree));
+      expect(probe.ignored).toBe(false);
+      expect(probe.code).toBe("path.result-outside-worktree");
+    });
+  });
+});
+
+describe("verdict \u2014 unverifiable", () => {
   test("a path outside any Git checkout is path.unverifiable, never silently ok", () => {
     withRoot((root) => {
-      const probe = probePathOwnership({ path: join(root, "docs", "adr"), expect: "tracked" }, null);
+      const probe = probePathOwnership({ path: join(root, "docs", "adr") }, null);
       expect(probe.checkoutRoot).toBeNull();
       expect(probe.ignored).toBeNull();
       expect(probe.code).toBe("path.unverifiable");
@@ -214,54 +209,49 @@ describe("probePathOwnership \u2014 unverifiable", () => {
   });
 });
 
-describe("checkPathOwnership / expectForPath \u2014 layout classification", () => {
-  test("the layout check reports only the failing targets, in order", () => {
+describe("checkPathOwnership / isResultPath", () => {
+  test("findings fail the check; warnings ride along without failing it", () => {
     withRoot((root) => {
       const repo = gitRepo(root);
-      writeFileSync(join(repo, ".gitignore"), ".mstar/**\n!.mstar/specs/\n!.mstar/specs/**\n.mstar/plans/\n");
+      writeFileSync(join(repo, ".gitignore"), ".mstar/\n");
+      git(["add", "-A"], repo);
+      git(["commit", "-q", "-m", "ignore"], repo);
+      const worktree = linkedWorktree(root, repo);
       mkdirSync(join(repo, ".mstar", "specs"), { recursive: true });
+      mkdirSync(join(worktree, ".mstar", "plans"), { recursive: true });
       const controlRoot = realpathSync(repo);
-      const clean = checkPathOwnership(
-        [
-          { path: join(repo, ".mstar", "specs"), expect: "tracked" },
-          { path: join(repo, ".mstar", "plans"), expect: "process" },
-        ],
-        controlRoot,
-      );
+
+      const clean = checkPathOwnership([{ path: join(repo, ".mstar", "specs"), result: true }], controlRoot, controlRoot);
       expect(clean.ok).toBe(true);
       expect(clean.findings).toEqual([]);
+      expect(clean.warnings.map((warning) => warning.code)).toEqual(["path.result-ignored"]);
 
       const dirty = checkPathOwnership(
         [
-          { path: join(repo, ".mstar", "plans"), expect: "process" },
-          { path: join(repo, ".mstar", "specs"), expect: "process" },
-          { path: join(repo, ".mstar", "knowledge"), expect: "tracked" },
+          { path: join(repo, ".mstar", "specs"), result: true },
+          { path: join(worktree, ".mstar", "plans") },
         ],
         controlRoot,
+        realpathSync(worktree),
       );
       expect(dirty.ok).toBe(false);
-      expect(dirty.findings.map((finding) => finding.code)).toEqual(["path.result-ignored"]);
-      expect(dirty.findings[0]?.path).toBe(join(repo, ".mstar", "knowledge"));
+      expect(dirty.findings.map((finding) => finding.code)).toEqual(["path.process-outside-control"]);
+      // The clean-but-ignored result dir still reports its warning; only the
+      // misplaced path fails the check.
+      expect(dirty.warnings.map((warning) => warning.path)).toEqual([join(repo, ".mstar", "specs")]);
     });
   });
 
-  test("a caller-named path is classified against the resolved tracked dirs", () => {
+  test("isResultPath compares containment, not names", () => {
     const harness = "/repo/.mstar";
-    const tracked = [`${harness}/specs`, `${harness}/knowledge`, `${harness}/adr`];
-    expect(expectForPath(`${harness}/specs`, tracked)).toBe("tracked");
-    expect(expectForPath(`${harness}/specs/nested/spec.md`, tracked)).toBe("tracked");
-    expect(expectForPath(`${harness}/adr/0001.md`, tracked)).toBe("tracked");
-    expect(expectForPath(`${harness}/plans/p.md`, tracked)).toBe("process");
+    const resultDirs = [`${harness}/specs`, `${harness}/knowledge`, `${harness}/adr`];
+    expect(isResultPath(`${harness}/specs`, resultDirs)).toBe(true);
+    expect(isResultPath(`${harness}/specs/nested/spec.md`, resultDirs)).toBe(true);
+    expect(isResultPath(`${harness}/adr/0001.md`, resultDirs)).toBe(true);
+    expect(isResultPath(`${harness}/plans/p.md`, resultDirs)).toBe(false);
     // A sibling sharing the name prefix is not contained.
-    expect(expectForPath(`${harness}/specs-old/x.md`, tracked)).toBe("process");
-  });
-
-  test("a result-named path stays a result even when the layout points elsewhere", () => {
-    // Linked checkout: the resolved result dirs live at the control harness,
-    // but a result-named directory in this checkout is still a result.
-    expect(expectForPath("/wt/.mstar/specs", ["/control/.mstar/specs"])).toBe("tracked");
-    expect(expectForPath("/wt/.mstar/specs/0001.md", ["/control/.mstar/specs"])).toBe("tracked");
-    expect(expectForPath("/wt/.mstar/knowledge/db.md", [])).toBe("tracked");
-    expect(expectForPath("/wt/.mstar/plans/p.md", [])).toBe("process");
+    expect(isResultPath(`${harness}/specs-old/x.md`, resultDirs)).toBe(false);
+    // Outside the resolved layout a result-looking name is not a result.
+    expect(isResultPath("/wt/.mstar/specs", resultDirs)).toBe(false);
   });
 });

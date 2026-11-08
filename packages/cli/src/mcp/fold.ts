@@ -87,7 +87,7 @@ export const FAMILY_PURPOSE: Readonly<Record<string, string>> = {
   harness: "Scaffold harness directories and the default project.",
   doctor: "Validate the host setup for one supported target.",
   plugin: "Validate a plugin package against Agent Plugins v1.0.0.",
-  path: "Resolve harness, specs, workflow, project and review directories.",
+  path: "Resolve harness, specs, knowledge, adr, workflow, project and review directories; check that Git-ignored harness files live in the control checkout and committable results in the caller's checkout.",
   host: "Host detection and skill-root resolution.",
   dashboard: "Start the read-only Morning Star dashboard on 127.0.0.1.",
   schema: "Bounded command-contract discovery: one leaf command, a family list or a payload schema.",

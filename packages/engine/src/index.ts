@@ -118,12 +118,12 @@ export {
 export type {
   PathOwnershipCheck,
   PathOwnershipCode,
-  PathOwnershipExpect,
   PathOwnershipFinding,
   PathOwnershipProbe,
   PathOwnershipTarget,
+  PathOwnershipWarning,
 } from "./path-check.js";
-export { checkPathOwnership, expectForPath, nearestExistingDir, probePathOwnership } from "./path-check.js";
+export { checkPathOwnership, isResultPath, nearestExistingDir, pathOwnershipWarning, probePathOwnership } from "./path-check.js";
 // The one registered-plan path contract (prerequisite contract §4): iteration
 // registration, the catalog registration preflight, the Prepare append and the
 // readiness readers import THIS resolver instead of restating the
