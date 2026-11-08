@@ -19,7 +19,7 @@
   { "file": "skills/mstar-branch-worktree/SKILL.md", "maxLines": 290 },
   { "file": "skills/mstar-branch-worktree/references/parallel-writable-pre-dispatch.md", "maxLines": 70 },
   { "file": "skills/mstar-coding-behavior/SKILL.md", "maxLines": 70 },
-  { "file": "skills/mstar-coding-behavior/references/evidence-selection.md", "maxLines": 31 },
+  { "file": "skills/mstar-coding-behavior/references/evidence-selection.md", "maxLines": 32 },
   { "file": "skills/mstar-coding-behavior/references/test-reliability.md", "maxLines": 70 },
   { "file": "skills/mstar-conventions/SKILL.md", "maxLines": 270 },
   { "file": "skills/mstar-conventions/references/artifact-storage-paths.md", "maxLines": 60 },
