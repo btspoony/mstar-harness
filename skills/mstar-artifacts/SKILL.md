@@ -41,7 +41,7 @@ description: "Plan artifacts: main plans, durable review summaries, QC/QA bundle
 - **`{WORKFLOW_DIR}/<id>/notes.jsonl`**: plain append-only runtime notes, not accepted-operation authority; duplicate IDs/submissions append again. Historical plan-row arrays stay read-only. Append/read semantics → **`references/status-and-residuals.md`**; `mstar status tech-debt` reads open issues in the store.
 - **Iteration safety:** source metadata supplies checkout scope; atomic coordinator transactions/CAS protect state, while workflow-wide integration merge exclusion protects real serial merges (`execution_integration_leases`). Fields → `references/status-and-residuals.md`; procedure → `mstar-iteration/references/phase-2-worktree-lease.md`.
 
-> **Engine check:** `mstar worktree check` is the one engine-enforced checkout command (per-plan L1, workflow `--entry`, and L2), including integration merge-lease state. It is an engine-enforced subset, not a mutation substitute, a per-row admission ceremony, or clearance of the full pre-dispatch checklist.
+> **Engine check:** `mstar worktree check` is the one engine-enforced checkout command (per-plan L1, workflow `--entry`, and L2), including integration merge-lease state. It is an engine-enforced subset, not a mutation substitute, a per-row admission ceremony, or clearance of the full pre-dispatch checklist. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 Current field semantics, severity mapping, findings cleanup and issue closure → **`references/status-and-residuals.md`**; migration-source shapes → **`mstar-project-governance`** `references/migration-source-shapes.md`.
 

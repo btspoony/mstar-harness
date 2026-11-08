@@ -8,9 +8,9 @@ Payload discovery is read-only: mstar-harness schema <type> describes supported 
 
 ## Engine check callouts
 
-A callout is live when an engine is reachable — the built `mstar` CLI on PATH, or the engine import in a host hook; without one, the owning skill's text stays authoritative and the callout adds nothing it does not already say.
-It names its exact command and, where one exists, the engine export behind it — then only the semantics unique to that site.
-`fail` means do not proceed: fix the cause and re-run. No callout restates this contract or re-adds a fallback sentence.
+A callout is live when an engine is reachable — the built `mstar` CLI on PATH, or the engine import in a host hook. This section owns that availability meaning and what replaces it: when the engine is absent, the owning skill's text stays authoritative and the callout adds nothing it does not already say.
+Each callout keeps its own fail sentence beside its own command, so a reader never travels to another file to learn what a failure means, and names its exact command, the engine export behind it where one exists, and the semantics unique to that site.
+Each callout closes with a `Contract →` pointer to this section (`mstar-use-cli` `references/checks-and-lints.md`); no callout restates the fallback sentence or the when-available meaning.
 
 ## Reading a result
 

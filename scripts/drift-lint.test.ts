@@ -73,6 +73,11 @@ import {
   findOversizedTestFiles,
 } from "./drift-lint.ts";
 
+/** The retired `(when available)` marker, derived from the live one so this
+ * file carries no copy of it: both guards must ignore that form (the rename
+ * pinned by the marker cases below). */
+const RETIRED_CALLOUT_MARKER = ENGINE_CHECK_MARKER.replace(" check:", " check (when available):");
+
 describe("checkBilingualPairing — README pairing logic (guard 2)", () => {
   test("both READMEs changed passes", () => {
     expect(checkBilingualPairing(["README.md", "README_CN.md", "docs/commands.md"])).toEqual([]);
@@ -296,7 +301,7 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
       [
         {
           rel: "skills/mstar-foo/SKILL.md",
-          text: `> **Engine check (when available):** ${body}\n> On \`fail\` -> do not proceed.`,
+          text: `> ${RETIRED_CALLOUT_MARKER} ${body}\n> On \`fail\` -> do not proceed.`,
         },
       ],
       { cliCommands: new Set(["status validate"]), engineExports: new Set(), binNames: declaredBins() },
@@ -619,7 +624,7 @@ describe("checkCalloutDuplication — Guard 6 Engine-check callout dedup", () =>
     const text = [
       "> A plain blockquote, no Engine-check marker.",
       "run `mstar lease validate` in prose",
-      "> **Engine check (when available):** run `mstar lease validate`",
+      "> " + RETIRED_CALLOUT_MARKER + " run `mstar lease validate`",
     ].join("\n");
     const { failures } = checkCalloutDuplication([
       { rel: "skills/mstar-a/SKILL.md", text },
@@ -646,7 +651,7 @@ describe("checkCalloutDuplication — Guard 6 Engine-check callout dedup", () =>
       ]).failures.length,
     ).toBe(1);
 
-    const legacy = `> **Engine check (when available):** ${body}\n> On \`fail\` -> do not proceed; fix and re-run.`;
+    const legacy = `> ${RETIRED_CALLOUT_MARKER} ${body}\n> On \`fail\` -> do not proceed; fix and re-run.`;
     expect(
       checkCalloutDuplication([
         { rel: "skills/mstar-a/SKILL.md", text: legacy },

@@ -104,6 +104,7 @@ import {
   ruleFingerprintHash,
   type RuleDuplicationResult,
 } from "./rule-duplication.ts";
+import { ENGINE_CHECK_MARKER } from "./skill-callout-contract.ts";
 import {
   SKILL_BUDGETS_MANIFEST,
   checkSkillBudgets,
@@ -124,10 +125,14 @@ import {
 } from "../packages/engine/src/index.ts";
 export const AUDIT_CATEGORY_DOC = "skills/mstar-use-cli/references/checks-and-lints.md";
 export const USE_CLI_SKILL_DIR = "skills/mstar-use-cli";
-/** The one literal that makes a blockquote an engine-check callout. Both
- * callout guards key off it, so a form change moves here once instead of
- * leaving a renamed marker silently unscanned (`0 callouts` still exits 0). */
-export const ENGINE_CHECK_MARKER = "**Engine check:**";
+/* The callout marker and the contract pointer live in
+ * `scripts/skill-callout-contract.ts` (dependency-free, so the standalone
+ * smoke job can import them without the engine installed) and are re-exported
+ * here for the guard tests. */
+export {
+  ENGINE_CHECK_CONTRACT_POINTER,
+  ENGINE_CHECK_MARKER,
+} from "./skill-callout-contract.ts";
 const root = process.cwd();
 const failures: string[] = [];
 let calloutsChecked = 0;
