@@ -51,7 +51,7 @@ An `implemented` record is a live statement of the system, not history: the same
 
 ## What the gate checks, and what it cannot
 
-`bun run validation:drift` (Guard 12) checks membership, filename shape, `Status` agreeing with the directory, balanced code fences (an unterminated fence fails the record instead of hiding its tail), and the required and banned sections per bucket. It walks `{bucket}/{class}/` only, so a stray `.md` directly under `docs/adr/` or directly under a bucket root is invisible to it, and review catches those rather than CI. Two rules no tree walk can check, and both stay review duties:
+`bun run validation:drift` (Guard 12) checks membership, filename shape, `Status` agreeing with the directory, balanced code fences (an unterminated fence fails the record instead of hiding its tail), and the required and banned sections per bucket. The record-format checks walk `{bucket}/{class}/`, so a stray `.md` directly under `docs/adr/` or directly under a bucket root is invisible to them and review catches it rather than CI; the `INDEX.md` ban covers the whole tree, so an index at either level still fails. Two rules no tree walk can check, and both stay review duties:
 
 1. **Why the decision mattered** — `Problem` carries real stakes (what breaks or re-breaks without it), not a restatement of the change. A present heading proves nothing.
 2. **Whether the alternatives were real** — `Alternatives considered` lists options genuinely weighed and why each lost, not strawmen built after the fact.
