@@ -59,9 +59,9 @@ const completionEvidenceSchema = z.object({
     consolidated: z.string().min(1).describe(`The consolidated QC decision report: ${EVIDENCE_PATH_DESCRIPTION}`),
   }).passthrough(),
   qa: z.object({
-    gate: z.literal("pm-acceptance"),
+    gate: z.enum(["pm-acceptance", "mandatory"]).describe("New completions require pm-acceptance; mandatory is accepted only for an exact historical receipt replay."),
     decision: z.literal("pass"),
-    report: z.string().min(1).describe(`The PM acceptance report: ${EVIDENCE_PATH_DESCRIPTION}`),
+    report: z.string().min(1).describe(`The acceptance report (historical QA report for an exact replay): ${EVIDENCE_PATH_DESCRIPTION}`),
   }).passthrough(),
 }).passthrough();
 const inputSchema = z.object({
@@ -452,7 +452,7 @@ function optionHelpFor(verb: (typeof commandNames)[number]): Partial<Record<stri
   if (verb === "complete") return {
     // Both transports validate this exact schema, so the rule it encodes is the
     // one a file payload and an inline --evidence value meet.
-    evidence: `Completion evidence JSON object (--file <absolute-json> or inline). ${EVIDENCE_PATH_DESCRIPTION}`,
+    evidence: `Completion evidence JSON object (--file <absolute-json> or inline). New completions require qa.gate pm-acceptance; mandatory is accepted only for an exact historical receipt replay. ${EVIDENCE_PATH_DESCRIPTION}`,
     file: `Completion evidence JSON file (absolute path); its qc.reports[], qc.consolidated, qa.report and evidence_paths[] values are evidence paths. ${EVIDENCE_PATH_DESCRIPTION}`,
     expect: PLAN_EXPECT_HELP,
     sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}`,

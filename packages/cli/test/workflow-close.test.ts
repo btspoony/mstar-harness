@@ -38,6 +38,8 @@ import {
   type ExecutionIdentity,
   type StoreContext,
 } from "@mstar-harness/engine";
+import { semanticRequestHash } from "../../engine/src/execution-store.js";
+import { PLAN_OPERATION_SEMANTICS, selectSemanticFields } from "../../engine/src/recovery-intent.js";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -510,6 +512,58 @@ describe("mstar status workflow-close — the report-only row reaches Done witho
     expect(await servedRoot(fixture)).toHaveLength(0);
   }, 30_000);
 });
+
+test("historical mandatory completion replays only its exact receipt", async () => {
+  const fixture = await activeFixture("mstar-close-legacy-replay");
+  await registerAndBind(fixture);
+  const started = join(fixture.root, "progress-legacy-replay.json");
+  writeJson(started, { status: "InProgress", summary: "replay fixture", evidence_paths: [fixture.qcReport] });
+  expect(runCli(["plan", "progress", "--plan", PLAN_ID, "--file", started, "--harness", fixture.harness], fixture.root, identityEnv()).exitCode).toBe(0);
+
+  const evidence = {
+    qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
+    qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+  };
+  const args = ["plan", "complete", "--plan", PLAN_ID, "--harness", fixture.harness, "--operation", "legacy-complete"];
+  const submit = (value: typeof evidence, operationArgs = args) =>
+    runCli([...operationArgs, "--evidence", JSON.stringify(value)], fixture.root, identityEnv());
+  const refused = submit(evidence);
+  expect(refused.exitCode).not.toBe(0);
+  expect(envelope(refused).code).toBe("coordination.invalid-input");
+
+  const current = { ...evidence, qa: { ...evidence.qa, gate: "pm-acceptance" } };
+  expect(submit(current).exitCode).toBe(0);
+
+  // Model a pre-cutover receipt and its original completed record in this isolated store.
+  const operation = { kind: "complete", evidence };
+  const requestHash = semanticRequestHash({
+    operation: "complete",
+    address: { workflow_id: WORKFLOW_ID, plan_id: PLAN_ID },
+    caller: { sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID },
+    intent: selectSemanticFields({ planId: PLAN_ID, operation }, PLAN_OPERATION_SEMANTICS.complete),
+  });
+  const store = await openStore(fixture.context, "write");
+  try {
+    const row = store.db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?").get(WORKFLOW_ID, PLAN_ID) as { coordination_json: string };
+    const coordination = JSON.parse(row.coordination_json);
+    coordination.completion.qa.gate = "mandatory";
+    store.db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(coordination), WORKFLOW_ID, PLAN_ID);
+    const receipt = store.db.prepare("select result_json from execution_operations where operation_id = ?").get("legacy-complete") as { result_json: string };
+    const historicalReceipt = JSON.parse(receipt.result_json);
+    historicalReceipt.data.coordination.completion.qa.gate = "mandatory";
+    store.db.prepare("update execution_operations set request_hash = ?, result_json = ? where operation_id = ?").run(requestHash, JSON.stringify(historicalReceipt), "legacy-complete");
+  } finally {
+    store.close();
+  }
+  rmSync(fixture.qaReport);
+  const replay = submit(evidence);
+  expect(replay.exitCode, replay.stdout).toBe(0);
+  expect(dataOf(replay)).toMatchObject({ replayed: true, data: { coordination: { completion: { qa: { gate: "mandatory" } } } } });
+  const changed = submit({ ...evidence, qa: { ...evidence.qa, report: `${fixture.qaReport}.other` } });
+  expect(envelope(changed).code).toBe("execution.operation-conflict");
+  const fresh = submit(evidence, [...args.slice(0, -1), "new-complete"]);
+  expect(envelope(fresh).code).toBe("coordination.invalid-input");
+}, 30_000);
 
 describe("mstar plan complete — a refusal names the verb that actually advances it", () => {
   test("retired prepare input refuses with a usable PM acceptance retry", async () => {
