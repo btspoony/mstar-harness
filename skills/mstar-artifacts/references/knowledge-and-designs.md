@@ -2,7 +2,7 @@
 
 > **Load order（与其它 `mstar-*` skill 一致）**：依赖本 reference 维护知识库 / 迭代 compass / 规格挂接前，须已 Read **`mstar-harness-core`** skill（SKILL.md；仓库写操作与分支门禁见 **`mstar-branch-worktree`**）。冲突以 **`mstar-harness-core`** 为准。
 
-**路径符号（默认）**：`**{KNOWLEDGE_DIR}** = **{HARNESS_DIR}/knowledge/**`；`**{ITERATION_DIR}** = **{HARNESS_DIR}/iterations/**`。完整符号表见 `mstar-conventions` SKILL.md「Harness 与 Plan 目录发现」。
+**路径符号（默认）**：`**{KNOWLEDGE_DIR}** = **{HARNESS_DIR}/knowledge/**`（`.mstarc` `knowledge_dir` 或 `.agents/knowledge/` 候选见 `mstar-conventions`）；`**{ITERATION_DIR}** = **{HARNESS_DIR}/iterations/**`。完整符号表见 `mstar-conventions` SKILL.md「路径符号」。
 
 本节将「用户文档」与「agent / 实施用知识」分开，**与具体业务仓库无关**；项目可在根目录 `AGENTS.md` 用一小段指向本 reference 或复述分界关键词，避免重复维护长文。
 
@@ -13,7 +13,7 @@
 | 区域 | 典型内容 | 受众 / 权威 |
 |------|----------|-------------|
 | **`docs/`**（或项目约定的用户文档根） | 安装/quickstart、稳定架构概览、贡献指南、对外 API 说明 | 人类贡献者与终端用户；clone 后应可读 |
-| **`{SPECS_DIR}`**（可选） | 冻结 v1-spec、ADR、program roadmap — **跨迭代长期权威** | 产品/API 规范性最高权威；**仅**在 Phase 3 iteration-close 提升时写入（Phase 1 的规格留在 `<iteration-id>/specs/`） |
+| **`{SPECS_DIR}`**（可选） | 冻结 v1-spec、program roadmap、既有 ADR（新记录落 **`{ADR_DIR}`**） — **跨迭代长期权威** | 产品/API 规范性最高权威；**仅**在 Phase 3 iteration-close 提升时写入（Phase 1 的规格留在 `<iteration-id>/specs/`） |
 | **`{ITERATION_DIR}`**（可选） | **`<iteration-id>/` package**（`delivery-compass.md` + `guides/`、`specs/`） | Agent handoff；迭代级草稿；close 时 compound **提升** → knowledge |
 | **`{KNOWLEDGE_DIR}`**（可选） | 实现细节 SSOT、架构细则、契约说明、跨版本 tracker — **经 `mstar-knowledge` 结晶** | Agent handoff；**不**在 iteration-start 由 product/architect 新增 |
 | **`{PROJECT_DIR}/<id>/references/`**（可选） | 主题化研究：surveys、epic roadmaps、第三方 notes — **与项目绑定**，非跨迭代 corpora | 项目所有者 / operator；engine 只列文件名，**无 markdown schema** |
@@ -33,8 +33,8 @@
 
 ## `{SPECS_DIR}`（可选·长期规格）
 
-- `{SPECS_DIR}` 解析（非空即停）：`{HARNESS_DIR}/specs/` → `docs/specs/` → 仓库根 `specs/`；皆无或皆空则 init 创建 `{HARNESS_DIR}/specs/`。Legacy 只读：`{HARNESS_DIR}/designs/` 或根 `designs/` 非空时可用。细则 → `mstar-conventions` SKILL.md「`{SPECS_DIR}` 解析」。
-- **放什么**：跨迭代有效、已锁定或待锁定的产品/API 规范、ADR、契约 — **Phase 3 iteration-close 提升时写入**（Phase 1 的规格留在 `<iteration-id>/specs/`）。
+- `{SPECS_DIR}` 解析（非空即停）：`.mstarc` `specs_dir` → `{HARNESS_DIR}/specs/` → `.agents/specs/` → `docs/specs/` → 仓库根 `specs/` → legacy `{HARNESS_DIR}/designs/`、根 `designs/`（仅非空可用）；皆无或皆空则 init 创建 `{HARNESS_DIR}/specs/`。ADR 走各自的 `{ADR_DIR}` 链（`.mstarc` `adr_dir` → `{HARNESS_DIR}/adr/` → `.agents/adr/` → `docs/adr/`）。细则 → `mstar-conventions` SKILL.md「`{SPECS_DIR}` 解析」「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」。
+- **放什么**：跨迭代有效、已锁定或待锁定的产品/API 规范、契约、既有 ADR — **Phase 3 iteration-close 提升时写入**（Phase 1 的规格留在 `<iteration-id>/specs/`；新 ADR 记录落 `{ADR_DIR}/`）。
 - **不放什么**：本迭代-only 探索（→ `<iteration-id>/guides/`）；迭代级 spec 草案（→ `<iteration-id>/specs/`）；实施踩坑原文（→ package 或 plan 素材，**close 时 compound 提升**）。
 - **登记**：spec 文档的 identity / path / kind 与 provenance 关系是 `{HARNESS_DIR}/store.db` 的 catalog 行（查询 `mstar catalog list`；登记走 reviewed `mstar catalog discover` + `mstar catalog import` 或 `mstar catalog register` / `mstar catalog link`）。`{SPECS_DIR}/README.md`（若有）只是散文导览，**不**作为登记表。plan **`primary_spec` / `spec_refs`** 主要指向此处。
 

@@ -69,7 +69,7 @@ The CLI publishes each command's owning skill itself: a refusal envelope carries
 | Post-merge worktree and branch cleanup (dry-run first) | `mstar worktree cleanup` |
 | SDD helpers: workspace, brief, branch diff package, bound launch, evidence capture | `mstar sdd workspace`, `mstar sdd task-brief`, `mstar sdd review-package`, `mstar sdd check-context`, `mstar sdd exec`, `mstar sdd evidence` |
 | Evaluate a phase-transition gate; probe push cadence | `mstar iteration gate`, `mstar iteration push-cadence` |
-| Resolve the harness / plan / SDD / workflow / project dirs | `mstar path resolve` |
+| Resolve the harness / plan / SDD / workflow / project / specs / knowledge / adr dirs; check that resolved result paths are committable and process state stays in the control root | `mstar path resolve`, `mstar path check` |
 | Read/export or mutate issues in `{HARNESS_DIR}/store.db` (`add` / `list` / `show` / `occurrence` / `triage` / `close` / `move` / `waive` / `duplicate` / `supersede` / `link` / `export`) | `mstar issue …` |
 | Serve the read-only local dashboard (issues, execution/roadmap views, issue-flow chart) on `127.0.0.1` | `mstar dashboard` |
 | Discover, import, register, update, link, list, show, export, reconcile or purge a verified producer registration in the harness catalog | `mstar catalog …` |
