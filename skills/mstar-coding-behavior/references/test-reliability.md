@@ -24,13 +24,15 @@ Environment variables, working directory, fake timers, locale and timezone, modu
 
 Prefer an injected dependency or an instance-local adapter. Where mutation is required, capture whether the original value was absent or present, restore that exact state, register the restoration immediately, keep the mutation inside the smallest `try/finally`, and keep an `afterEach` fallback where a failure before the local `finally` is plausible. Intercept the narrowest call the fixture owns rather than the whole surface.
 
+Set the state a case needs before it asserts instead of inheriting whatever the previous case left. A test whose result depends on run order is a defect even while the whole file passes.
+
 ## Respect platform-owned values
 
 A value the operating system owns does not always return the way a test wrote it: environment names may fold case, file handles may be released asynchronously, and permission or signal semantics may be absent. Where an assertion depends on a write-back, take the expected value from a fresh read rather than from memory. A case that genuinely cannot hold on a platform is excluded there explicitly with the reason named, never weakened for every platform.
 
 ## Synchronize on state
 
-A fixed sleep is not evidence that setup completed or cleanup settled; the reasoning and the fixture-owned gate pattern belong to `.mstar/knowledge/testing-patterns/verification-redundancy-and-unholdable-gates.md` under the wall-clock synchronization subject.
+A fixed sleep is not evidence that setup completed or cleanup settled: it spends elapsed time instead of the state the test needs, and a loaded runner spends that time before the work lands. Where the fixture owns the asynchronous seam, expose a gate the fixture settles and await the product's own completion point instead of elapsed time.
 
 Wait on an explicit readiness event, handshake, state transition, owned promise or externally observable condition. Use a deferred promise or barrier to place a race at a deterministic point and prove the operations overlap. A timeout bounds a wait; it never makes the assertion correct. Do not assert scheduler-dependent ordering unless that ordering is the product behavior under test. Where time itself is the subject, inject or fake the clock and restore real timers.
 
@@ -65,6 +67,12 @@ Retries stay legitimate for a documented transient external provider under that 
 - A timeout set to the lane budget with the awaited state named.
 - A narrow sequential scope for a resource whose owner really is exclusive.
 
-## Where the rest is owned
+## Keep the test out of the producer's job
 
-`.mstar/knowledge/testing-patterns/verification-redundancy-and-unholdable-gates.md` owns the deterministic and CI-environment side: one home per rule instead of a test-side copy, environment-derived pins, which checkout a pull-request gate describes, push cadence, verifying the owning surface, constructing invalid states in the domain's own terms, failure messages that name the entry, prerequisites inside the command, and inlined bundles. This file adds the concurrency, allocation, global-state, timeout, teardown and flake-judgement side; where both apply, that document wins on its subjects and this one on topology.
+Call the owner's check instead of re-implementing its rule in the test. A second implementation of a producer's validation, digest walk or lifecycle can disagree with the real one, and once it does neither is authoritative; where the producer owns the assertion, the test's job is to invoke it and report its failure.
+
+Construct invalid states in the domain's own terms — remove a required table, truncate through an open descriptor — rather than by raw bytes or a filesystem side effect, which smuggle platform behavior into the assertion and fail only where that behavior differs.
+
+Make a failure name the offending entry. Two digests, or a bare boolean, are not actionable; the evidence belongs in the single implementation that owns the check, not in a test-side copy of it.
+
+Pin a value as a cross-environment invariant only when it is a pure function of its declared inputs. For an artifact whose bytes belong to its producer, prove provenance by re-deriving it under stated conditions instead of recording the bytes.
