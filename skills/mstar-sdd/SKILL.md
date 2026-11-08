@@ -94,7 +94,7 @@ Detail: **`references/file-handoffs.md`**.
     - **Complete ledger, scoped dispatch**: PM retains every open finding, including unverified items; each fix assignment carries only its owned findings and relevant fix delta. Unrelated findings do not expand a leaf task.
     - **Capped cross-round excerpt**: from round ≥2, the fix dispatch attaches only relevant prior findings and dispositions (advisory caps: ~500 words per round, ~1500 total — suggested values, not hard limits).
     - **Honest non-convergence**: open findings at wave close → list them in detail and state the disposition — re-feed to the next fix round **or** transfer to residual tracking — never silently close.
-4. PM Acceptance → `mstar-harness-core` Done rules and `mstar-roles/references/project-manager/acceptance.md`. The primary coordinator then uses direct complete with independent QC, acceptance and declared-route proof: iteration verifies the real serial merge; standalone development verifies registered source; report-only consumes matching policy fulfilment recorded before Done without invented Git. Task ledger completion is not row Done, and row Done does not discharge workflow delivery → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`.
+4. PM Acceptance → `mstar-harness-core` Done rules and `mstar-roles/references/project-manager/acceptance.md`. The primary coordinator then uses direct complete with independent QC, acceptance and declared-route proof: iteration verifies the real serial merge; standalone development verifies registered source; report-only needs QC/PM Acceptance under the policy declared at registration without invented Git. Task ledger completion is not row Done, and row Done does not discharge workflow delivery → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`.
 
 ## Progress ledger（Evidence）
 
@@ -132,7 +132,7 @@ The SDD helpers are engine-backed commands under **`mstar sdd`**（引擎 CLI；
 | `mstar sdd review-package` | `BASE HEAD [OUTFILE]` |
 | `mstar sdd check-context` | Action-seam gate against resolved SDD context; arguments and refusal recovery → command `--help` |
 
-Developer check evidence: `mstar sdd evidence capture|verify` — capture runs an already-authorized argv once and retains raw evidence; verify is read-only. Command shapes, exit meanings and role boundaries → **`references/file-handoffs.md`** § Verification evidence. `mstar sdd exec` stays PM-only.
+Developer check evidence: the task report's command plus its observed result; a retained log is optional. Route and citation rule → **`references/file-handoffs.md`** § Optional retained output. `mstar sdd exec` stays PM-only.
 
 ## References
 

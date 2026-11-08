@@ -880,15 +880,25 @@ async function retainedComplete(
   bodies: { qc: string; consolidated: string; qa: string },
   operationId: string,
 ) {
+  return retainedCompleteEvidence(
+    fixture,
+    completionRequest(bodies, { sourceSha: fixture.sourceSha, baseSha: fixture.baseSha }),
+    operationId,
+  );
+}
+
+/** Direct completion carrying an explicit evidence document (the SHAs may be absent). */
+async function retainedCompleteEvidence(
+  fixture: RetainedCompletionFixture,
+  evidence: CompletionEvidence,
+  operationId: string,
+) {
   return completeExecutionPlan(domainContext(fixture.context, fixture.coordinator.caller), {
     operationId,
     session: fixture.coordinator.session,
     expected: (await retainedPlanRead(fixture)).token,
     planId: RETAINED_PLAN,
-    operation: {
-      kind: "complete",
-      evidence: completionRequest(bodies, { sourceSha: fixture.sourceSha, baseSha: fixture.baseSha }),
-    },
+    operation: { kind: "complete", evidence },
   });
 }
 
@@ -1009,6 +1019,96 @@ describe("retained evidence at the completion consumer", () => {
       expect(completed.data.coordination?.completion?.qa.report.path).toBe(bodies.qa);
     } finally {
       setCompleteWitnessGapForTest(undefined);
+      rmSync(fixture.context.harnessDir, { recursive: true, force: true });
+    }
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * Completion SHAs are derived from the recorded worktree, not demanded
+ * ------------------------------------------------------------------------ */
+
+/** The QC/QA members of ordinary completion evidence, without any commit. */
+function completionBodies(bodies: { qc: string; consolidated: string; qa: string }) {
+  const { qc, qa } = completionRequest(bodies);
+  return { qc, qa };
+}
+
+describe("completion SHAs derive from the recorded worktree", () => {
+  test("omitted completion SHAs record the worktree HEAD as source and review head", async () => {
+    const fixture = await retainedCompletionFixture("complete-derived-shas");
+    try {
+      const bodies = retainedCompletionBodies(fixture.harnessRoot);
+      writeBody(bodies.qc, QC_BODY);
+      writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+      writeBody(bodies.qa, QA_BODY);
+      const completed = await retainedCompleteEvidence(fixture, completionBodies(bodies), "complete-derived-shas");
+      expect(completed.data.plan.status).toBe("Done");
+      expect(completed.data.coordination?.completion).toMatchObject({
+        source_sha: fixture.sourceSha,
+        review_head: fixture.sourceSha,
+        review_base: null,
+      });
+    } finally {
+      rmSync(fixture.context.harnessDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a supplied source SHA that is not the worktree HEAD refuses", async () => {
+    const fixture = await retainedCompletionFixture("complete-source-mismatch");
+    try {
+      const bodies = retainedCompletionBodies(fixture.harnessRoot);
+      writeBody(bodies.qc, QC_BODY);
+      writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+      writeBody(bodies.qa, QA_BODY);
+      expect(await refusalOf(() => retainedCompleteEvidence(
+        fixture,
+        { source_sha: fixture.baseSha, ...completionBodies(bodies) },
+        "complete-source-mismatch",
+      ))).toEqual({ code: "coordination.git-proof" });
+      expect((await retainedPlanRead(fixture)).data.plan.status).toBe("InReview");
+    } finally {
+      rmSync(fixture.context.harnessDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a supplied review base outside the source ancestry refuses, and an omitted base records null", async () => {
+    const fixture = await retainedCompletionFixture("complete-review-base");
+    try {
+      const bodies = retainedCompletionBodies(fixture.harnessRoot);
+      writeBody(bodies.qc, QC_BODY);
+      writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+      writeBody(bodies.qa, QA_BODY);
+      // Advance the target branch after the source branch was cut: that commit
+      // is a real object of this repository but not an ancestor of the source.
+      const repoRoot = dirname(fixture.worktreePath);
+      git(repoRoot, ["-c", "user.email=fixture@example.test", "-c", "user.name=harness-fixture", "commit", "-q", "--allow-empty", "-m", "advance main"]);
+      const unrelatedBase = git(repoRoot, ["rev-parse", "HEAD"]);
+      expect(await refusalOf(() => retainedCompleteEvidence(
+        fixture,
+        { review_base: unrelatedBase, ...completionBodies(bodies) },
+        "complete-review-base",
+      ))).toEqual({ code: "coordination.git-proof" });
+      const completed = await retainedCompleteEvidence(fixture, completionBodies(bodies), "complete-review-base");
+      expect(completed.data.coordination?.completion?.review_base).toBeNull();
+    } finally {
+      rmSync(fixture.context.harnessDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a supplied review head that is not the derived source refuses", async () => {
+    const fixture = await retainedCompletionFixture("complete-review-head");
+    try {
+      const bodies = retainedCompletionBodies(fixture.harnessRoot);
+      writeBody(bodies.qc, QC_BODY);
+      writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+      writeBody(bodies.qa, QA_BODY);
+      expect(await refusalOf(() => retainedCompleteEvidence(
+        fixture,
+        { review_head: fixture.baseSha, ...completionBodies(bodies) },
+        "complete-review-head",
+      ))).toEqual({ code: "coordination.git-proof" });
+    } finally {
       rmSync(fixture.context.harnessDir, { recursive: true, force: true });
     }
   });

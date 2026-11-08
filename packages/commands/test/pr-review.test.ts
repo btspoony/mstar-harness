@@ -251,7 +251,7 @@ describe("pr-review command family", () => {
     expect(settled.status).toBe("ok");
     expect(settled.data).toMatchObject({
       verdict: "blocked",
-      chatHeader: "blocked \u00b7 53% (fail)\nmust-fix=1 should-fix=0 may-fix=0 nit=1 unverified=0",
+      chatHeader: "blocked \u00b7 53% (fail)\nmust-fix=1 should-fix=0 may-fix=0 nit=1",
     });
     expect(settled.data).not.toMatchObject({ incomplete: expect.anything() });
   });
@@ -271,7 +271,7 @@ describe("pr-review command family", () => {
     expect(surfaceOnly.data).toMatchObject({
       verdict: "ship it",
       scorePct: 90,
-      tally: { mustFix: 0, shouldFix: 0, mayFix: 2, nit: 0, unverified: 0 },
+      tally: { mustFix: 0, shouldFix: 0, mayFix: 2, nit: 0 },
     });
 
     const withImplementation = await command("pr-review.tally").execute(
@@ -281,14 +281,14 @@ describe("pr-review command family", () => {
     expect(withImplementation.status).toBe("ok");
     expect(withImplementation.data).toMatchObject({
       verdict: "needs fixes",
-      tally: { mustFix: 0, shouldFix: 1, mayFix: 3, nit: 0, unverified: 0 },
+      tally: { mustFix: 0, shouldFix: 1, mayFix: 3, nit: 0 },
     });
   });
 
   test("tally help documents every count input and the bucket it feeds", () => {
     const tally = command("pr-review.tally");
     const help = (key: string) => tally.cli.options.find((option) => option.key === key)?.help ?? "";
-    for (const key of ["unverified", "unmetAcUnsafe", "unmetAcSafe", "unmetAcTests", "unmetAcDocs"]) {
+    for (const key of ["unmetAcUnsafe", "unmetAcSafe", "unmetAcTests", "unmetAcDocs"]) {
       expect(help(key)).toContain("Optional; non-negative integer no greater than 50; defaults to 0;");
     }
     expect(help("unmetAcUnsafe")).toContain("must-fix");
@@ -313,7 +313,7 @@ describe("pr-review command family", () => {
       band: "fail",
       incomplete: { reason: "required domain seat(s) never opened: security", unscanned: ["security"] },
       chatHeader:
-        "incomplete \u00b7 53% (fail, partial)\nmust-fix=1 should-fix=0 may-fix=0 nit=1 unverified=0\n" +
+        "incomplete \u00b7 53% (fail, partial)\nmust-fix=1 should-fix=0 may-fix=0 nit=1\n" +
         "cause: required domain seat(s) never opened: security\nunscanned: security",
     });
   });
@@ -420,14 +420,14 @@ describe("pr-review command family", () => {
     const refusal = await command("pr-review.tally").execute(
       {
         findings, requiredDomains: "persist", openedDomains: "persist", diffBasis: "readable",
-        partialScope: ["dashboard HTTP server", "  "], unverified: "x",
+        partialScope: ["dashboard HTTP server", "  "], unmetAcUnsafe: "x",
       },
       context,
     );
     expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect(diagnosticsOf(refusal, "invalid run facts")).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "partialScope", code: "invalid" }),
-      expect.objectContaining({ path: "unverified", code: "invalid" }),
+      expect.objectContaining({ path: "unmetAcUnsafe", code: "invalid" }),
     ]));
   });
 
@@ -437,7 +437,7 @@ describe("pr-review command family", () => {
     writeFileSync(findings, "[]");
     const facts = {
       findings, stopped: " ", requiredDomains: "persist,, security",
-      openedDomains: "persist, ", diffBasis: "readable", unverified: "x",
+      openedDomains: "persist, ", diffBasis: "readable", unmetAcUnsafe: "x",
     };
 
     // The run-fact checks and the count checks share one collection phase, so
@@ -453,11 +453,11 @@ describe("pr-review command family", () => {
         expect.objectContaining({ path: "stopped", code: "invalid" }),
         expect.objectContaining({ path: "requiredDomains", code: "invalid" }),
         expect.objectContaining({ path: "openedDomains", code: "invalid" }),
-        expect.objectContaining({ path: "unverified", code: "invalid" }),
+        expect.objectContaining({ path: "unmetAcUnsafe", code: "invalid" }),
       ]));
       const text = refusal.status === "ok" ? "" : refusal.message;
       expect(text).toContain("--stopped must be a single line of non-blank text");
-      expect(text).toContain("--unverified must be a non-negative integer no greater than 50");
+      expect(text).toContain("--unmet-ac-unsafe must be a non-negative integer no greater than 50");
     }
   });
 
@@ -491,7 +491,7 @@ describe("pr-review command family", () => {
     // admission, so a call that omits a fact and also carries an invalid
     // count and payload reports all three in one refusal
     // (packages/cli/AGENTS.md § Aggregated validation).
-    const facts = { findings, requiredDomains: "persist", openedDomains: "persist", unverified: "x" };
+    const facts = { findings, requiredDomains: "persist", openedDomains: "persist", unmetAcUnsafe: "x" };
 
     for (const refusal of [
       await command("pr-review.tally").execute(facts, context),
@@ -500,12 +500,12 @@ describe("pr-review command family", () => {
       expect(refusal).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
       expect(diagnosticsOf(refusal, "omitted fact with invalid count and findings")).toEqual(expect.arrayContaining([
         expect.objectContaining({ path: "diffBasis", code: "required" }),
-        expect.objectContaining({ path: "unverified", code: "invalid" }),
+        expect.objectContaining({ path: "unmetAcUnsafe", code: "invalid" }),
         expect.objectContaining({ path: "findings", code: "invalid" }),
       ]));
       const text = refusal.status === "ok" ? "" : refusal.message;
       expect(text).toContain("Rejected diffBasis: expected present; received undefined");
-      expect(text).toContain("--unverified must be a non-negative integer no greater than 50");
+      expect(text).toContain("--unmet-ac-unsafe must be a non-negative integer no greater than 50");
       expect(text).toContain("findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit");
     }
   });
@@ -557,7 +557,7 @@ describe("pr-review command family", () => {
     const { cwd, context } = fixture();
     const findings = path.join(cwd, "findings.json");
     writeFileSync(findings, JSON.stringify([{}]));
-    const flags = { findings, openedDomains: "persist", diffBasis: "maybe", unverified: "x" };
+    const flags = { findings, openedDomains: "persist", diffBasis: "maybe", unmetAcUnsafe: "x" };
 
     // Admission must not reject the basis on its own: the family's collection
     // phase is the single validator, so one call reports the invalid basis
@@ -572,13 +572,13 @@ describe("pr-review command family", () => {
       expect(diagnosticsOf(refusal, "combined tally faults")).toEqual(expect.arrayContaining([
         expect.objectContaining({ path: "diffBasis", code: "invalid" }),
         expect.objectContaining({ path: "requiredDomains", code: "required" }),
-        expect.objectContaining({ path: "unverified", code: "invalid" }),
+        expect.objectContaining({ path: "unmetAcUnsafe", code: "invalid" }),
         expect.objectContaining({ path: "findings", code: "invalid" }),
       ]));
       const text = refusal.status === "ok" ? "" : refusal.message;
       expect(text).toContain("--diff-basis must be readable or unreadable");
       expect(text).toContain("Rejected requiredDomains: expected present; received undefined");
-      expect(text).toContain("--unverified must be a non-negative integer no greater than 50");
+      expect(text).toContain("--unmet-ac-unsafe must be a non-negative integer no greater than 50");
       expect(text).toContain("findings[0].mergeClass must be one of must-fix | should-fix | may-fix | nit");
     }
   });

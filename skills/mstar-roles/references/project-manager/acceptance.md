@@ -20,13 +20,12 @@ Scope/authorization authority → `mstar-harness-core` § 定向执行与验证�
 
 ## Retained evidence and historical provenance
 
-Consume retained `sdd evidence` bundles read-only; integrity-check and assess them through `mstar-sdd/references/file-handoffs.md` § Verification evidence without repeating the captured child command.
+The command and observed result in the task report are evidence; retaining output is optional. When a log is cited, read it without re-running the command and assess its integrity, outcome, coverage and applicability to the target (`mstar-sdd/references/file-handoffs.md` § Optional retained output). Cite the log and verification round, or the manual report/CI citation with its provenance.
 
-- **Run/manual reference:** cite `{SDD_DIR}/evidence/<run-uuid>/`, record and raw `stdout.log` / `stderr.log`, or the manual report/CI citation with its producer, time and scope.
-- **Original input identity:** retain the recorded Git HEAD and declared-input digest from `record.json`; manual evidence keeps its actual original identity, never a manufactured runner record.
-- **Integrity / outcome:** preserve the recorded result. A pre-fix failure remains failed, never a pre-feature baseline or a pass; its affected AC needs separate passing proof.
-- **Target applicability:** record the assessed target and reason for reuse. Equal tested inputs or docs-only changes may reuse evidence; changed shared runtime/config/fixture/dependency inputs create only their affected gaps. Unknown scope, incomplete/failed proof or no target assessment stays uncertain / `not-assessed`.
-- **Coverage judgment:** remains reviewer reasoning (`review-required`), not automatic pass/fail counts. Review raw logs/code where skips or behavior coverage matter. Caller assumptions (`reviewed`, empty environment allowlist, lockfile-only rationale) are not completeness proofs.
+- Preserve the original command, scope and outcome. A pre-fix failure remains failed and needs separate passing proof for the affected AC.
+- Record the reason for reuse; unchanged tested behavior or docs-only changes may permit it, while changed runtime, configuration, fixtures or dependencies identify only affected gaps. Failed, incomplete or unknown-scope evidence remains unverified.
+- Coverage is reviewer judgment, not an automatic log verdict. Inspect logs and code where skips or behavior coverage matter; assumptions about environment or dependencies are not completeness proofs.
+
 - Preserve prior QA report authorship, completion actors, timestamps and stored records. Historical evidence may support current acceptance with an explicit applicability judgment; it is never relabeled as PM-executed verification.
 
 ## Coverage and stopping
@@ -56,8 +55,8 @@ Write `{SDD_DIR}/review/qa.md` by default, or an explicitly chosen same-director
 - Review cwd (verified): <actual checkout root>
 
 ## Acceptance Criteria (AC → evidence → result)
-| AC | run/manual reference | original input identity | integrity | outcome | target applicability and reason | coverage judgment | targeted gap |
-| --- | --- | --- | --- | --- | --- | --- | --- |
+| AC | evidence | result | applicability and gaps |
+| --- | --- | --- | --- |
 
 ## QC and issue dispositions
 ## Reused evidence / newly executed checks
@@ -66,7 +65,7 @@ Write `{SDD_DIR}/review/qa.md` by default, or an explicitly chosen same-director
 ## Acceptance decision
 ```
 
-Every required AC gets all eight columns; use `n/a` / `not-assessed` where genuinely inapplicable, never omit a column. `report-only` is a delivery kind, not an acceptance mode: PM accepts the scoped specialist report against its criteria and registered fulfilment policy. An advisory filename alone confers no pass or Done authority.
+Map every required AC honestly. `report-only` is a delivery kind, not an acceptance mode: PM accepts the scoped specialist report against its criteria and registered completion policy. An advisory filename alone confers no pass or Done authority.
 
 ## Public completion and recovery
 

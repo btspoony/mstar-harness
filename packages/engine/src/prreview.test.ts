@@ -19,8 +19,8 @@ const LEGACY_ENVELOPE: MstarReviewV1 = {
   tally: {
     verdict: "needs fixes",
     scorePct: 86,
-    tally: { mustFix: 0, shouldFix: 1, nit: 1, unverified: 0 },
-    chatHeader: "needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 nit=1 unverified=0",
+    tally: { mustFix: 0, shouldFix: 1, nit: 1 },
+    chatHeader: "needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 may-fix=0 nit=1",
   },
   findings: [],
 };
@@ -83,13 +83,13 @@ describe("MstarReviewV1 envelope shape: keys outside the documented set are refu
     expect(refusal).toContain('review.tally-malformed: unknown key "tally.tally.mayfix"');
   });
 
-  test("tally.tally accepts the four legacy counts and the five-key form", () => {
+  test("tally.tally accepts three required counts and the four-key form", () => {
     expect(validateMstarReviewV1(LEGACY_ENVELOPE).ok).toBe(true);
-    const fiveKey = {
+    const fourKey = {
       ...COMPUTED_TALLY,
-      tally: { mustFix: 0, shouldFix: 1, mayFix: 0, nit: 1, unverified: 0 },
+      tally: { mustFix: 0, shouldFix: 1, mayFix: 0, nit: 1 },
     };
-    expect(validateMstarReviewV1({ ...BAND_ENVELOPE, tally: fiveKey }).ok).toBe(true);
+    expect(validateMstarReviewV1({ ...BAND_ENVELOPE, tally: fourKey }).ok).toBe(true);
   });
 
   test("every unknown key is named in one refusal, own keys only", () => {
@@ -148,7 +148,6 @@ describe("renderReviewMarkdown: the template body", () => {
       "| \u{1F7E0} should-fix | 1 |",
       "| \u{1F7E1} may-fix | 0 |",
       "| \u{1F535} nit | 1 |",
-      "| \u2753 unverified | 0 |",
       "",
       "## \u{1F4CB} Review",
       "",

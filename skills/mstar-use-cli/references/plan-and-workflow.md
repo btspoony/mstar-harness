@@ -42,23 +42,21 @@ Supply one complete evidence document:
 
 ```json
 {
-  "source_sha": "<actual source SHA>",
-  "review_base": "<actual review base SHA>",
-  "review_head": "<actual reviewed head SHA>",
+  "source_sha": "<optional checked source SHA>",
+  "review_base": "<optional review base SHA>",
+  "review_head": "<optional checked reviewed head SHA>",
   "qc": {"decision": "Approve", "reports": ["<absolute report path>"], "consolidated": "<absolute summary path>"},
   "qa": {"gate": "pm-acceptance", "decision": "pass", "report": "<absolute PM acceptance report path>"}
 }
 ```
 
-Use actual reports/source facts, not placeholders. The integration CLI pair must be supplied together, or the document may carry `integration: {base_sha,result_sha}`. Evidence paths are existing absolute files; hashes are informational provenance, not resealing requirements.
+Use actual reports/source facts, not placeholders. Source and review head are derived from the recorded checkout when omitted; supplied values are checked, and review base is optional. The integration CLI pair must be supplied together, or the document may carry `integration: {base_sha,result_sha}`. Evidence paths are existing absolute files; hashes are informational provenance, not resealing requirements.
 
 | Engine-selected route | Proof before direct complete | After row Done |
 |---|---|---|
-| Iteration/non-standalone | QC/PM Acceptance and source/review ancestry plus already-performed serial two-parent merge in the clean recorded integration checkout on its target branch. Supply real base/result. The engine re-witnesses Git at commit. | Parent still owes compound/PR/verified merge/terminal close; no child PR. |
-| Standalone development, exactly one row | QC/PM Acceptance and clean registered source checkout/ref/commit; integration input refuses. | Own compound/PR/verified merge/terminal close; workflow stays running. |
-| Standalone verification/report-only, exactly one row | Record explicit fulfilment matching registered completion_policy before Done, then supply QC/PM Acceptance. Git fields are provenance only, not an invented source/integration requirement. Integration input refuses. | Evidence-backed terminal close; no invented compound-before-PR, PR or merge. |
-
-Example report-only fulfilment: `mstar workflow evidence --workflow <id> --file <absolute-json>` with `{"completion":{"policy":"<registered policy>","evidence":"<real fulfilment reference>"}}`. acceptance pass alone is never fulfilment.
+| Iteration/non-standalone | QC/PM Acceptance and source/review ancestry plus already-performed serial two-parent merge in the clean recorded integration checkout on its target branch. Supply real base/result. The engine re-witnesses Git at commit. | Parent still owes compound/PR/proved merge/terminal close; no child PR. |
+| Standalone development, exactly one row | QC/PM Acceptance and clean registered source checkout/ref/commit; integration input refuses. | Own compound/PR/proved merge/terminal close; workflow stays running. |
+| Standalone verification/report-only, exactly one row | QC/PM Acceptance under the registered completion_policy, a declaration and no payload. Git fields are provenance only, not an invented source/integration requirement. Integration input refuses. | Evidence-backed terminal close; no invented compound-before-PR, PR or merge. |
 
 Complete may atomically entail InProgress → InReview → Done with sufficient reviewed evidence. It retains source ownership metadata and completion evidence, releases only applicable workflow merge exclusion and preserves completed_at on exact replay. Per-plan execution leases are removed. Completion never runs Git merge: the coordinator explicitly performs it once in the recorded integration checkout, then submits actual SHAs. If merge output/state response is lost, retry complete against the real result, never merge again. Resolve or explicitly abort a real conflict in Git; never force state to Done.
 

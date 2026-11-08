@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -46,7 +47,21 @@ function definition(id: string) {
   return found;
 }
 
-async function activeWorkflow(cwd: string, workflowId: string, rowDone = false) {
+/**
+ * A real repository whose delivery branch (`feature/test`, the fixture's
+ * `branch.source`) is contained in the registered target `main`: the close
+ * proves the merge from the plan's own checkout, never from a sentence.
+ */
+function deliveryCheckout(root: string): string {
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  git("init", "-q", "-b", "main");
+  git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init");
+  git("branch", "feature/test");
+  return root;
+}
+
+async function activeWorkflow(cwd: string, workflowId: string, rowDone = false, planWorktree?: string) {
   const harness = path.join(cwd, ".mstar");
   mkdirSync(harness, { recursive: true });
   const storeContext = { harnessDir: harness };
@@ -66,7 +81,11 @@ async function activeWorkflow(cwd: string, workflowId: string, rowDone = false) 
     snapshot: {
       schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-09-01T00:00:00.000Z",
       updated_at: "2026-09-01T00:00:00.000Z", phase: "phase-2-execute",
-      plans: [{ id: planId, title: planId, file: `${planId}.md`, status: rowDone ? "Done" : "InProgress" }],
+      plans: [{
+        id: planId, title: planId, file: `${planId}.md`, status: rowDone ? "Done" : "InProgress",
+        // The close's merge proof reads the checkout the row records.
+        ...(planWorktree === undefined ? {} : { metadata: { worktree_path: planWorktree } }),
+      }],
       delivery_kind: "development",
       branch: { base: "main", source: "feature/test", target: "main", integration: "integration/test" },
     } as unknown as WorkflowSnapshot,
@@ -118,15 +137,14 @@ async function completeAndUnregister(
 
   test("completed unregistered workflow remains addressable in execution history", async () => {
     const cwd = tempRoot();
-    const { harness, execution, workflowToken } = await activeWorkflow(cwd, "wf-active-closed", true);
+    // The close proves the delivery merge from the plan's own checkout: a real
+    // repository whose delivery branch is contained in the registered target.
+    const checkout = deliveryCheckout(cwd);
+    const { harness, execution, workflowToken } = await activeWorkflow(cwd, "wf-active-closed", true, checkout);
     const bound = await bindExecutionSession(execution, { workflowId: "wf-active-closed", expected: workflowToken, operationId: "bind-closed" });
     await mutateExecutionWorkflow(execution, {
       workflowId: "wf-active-closed", session: bound.data, operationId: "evidence-closed",
-      operation: { kind: "delivery", delivery: {
-        compound: { outcome: "updated" },
-        pr: { repo: "fixture/repo", head: "feature/test", target: "main" },
-        merge: { provider: "fixture", evidence: "merged" },
-      } },
+      operation: { kind: "delivery", delivery: { compound: { outcome: "updated" } } },
     });
     await mutateExecutionWorkflow(execution, {
       workflowId: "wf-active-closed", session: bound.data, operationId: "close-history",
@@ -152,7 +170,7 @@ async function completeAndUnregister(
     expect(result).toMatchObject({ status: "ok", data: { gate: { ok: true, violations: [] } } });
   });
 
-  test("completed plan without delivery evidence is blocked", async () => {
+  test("a completed plan without stored delivery evidence is read as state, not re-litigated", async () => {
     const cwd = tempRoot();
     const { harness, storeContext, planId } = await activeWorkflow(cwd, "wf-active-no-delivery");
     await completeAndUnregister(storeContext, "wf-active-no-delivery", planId, { rowDone: true });
@@ -160,12 +178,9 @@ async function completeAndUnregister(
       { workflow: "wf-active-no-delivery", phase: "6", harness } as never,
       context(cwd),
     );
-    expect(result.status).toBe("refused");
-    if (result.status === "refused") {
-      expect(result.details?.gate).toMatchObject({ violations: expect.arrayContaining([
-        expect.objectContaining({ code: "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE" }),
-      ]) });
-    }
+    // The close proved the merge before it wrote this state; the gate reads the
+    // terminal facts and never demands evidence a cleanup can no longer supply.
+    expect(result).toMatchObject({ status: "ok", data: { gate: { ok: true, violations: [] } } });
   });
 
   test("completed plan with a non-Done owned row is blocked", async () => {

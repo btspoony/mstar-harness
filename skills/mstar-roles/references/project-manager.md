@@ -94,7 +94,7 @@ Detailed conflict priority and dev allocation:
 - **`Execution mode: inline`**: hotfix single-seat QC (`{SDD_DIR}/review/qc.md`) or explicit skip rules unchanged.
 - Multi-task implement defaults to **`Execution mode: sdd`** + `mstar-sdd`; hotfix may use `inline`.
 - All acceptance uses PM Acceptance (`QA gate: pm-acceptance` is the retained fixed-value carrier); no risk tier selects a dispatched acceptance role.
-- Report-only work may skip QC tri-review only when no implementation/test/config artifact is committed; acceptance and registered fulfilment remain required.
+- Report-only work may skip QC tri-review only when no implementation/test/config artifact is committed; acceptance under the registered completion policy remains required.
 - Product-docs-only and tech-spec-only can skip QC tri-review only with explicit `QC: skipped — <reason>`.
 - Plan Done sign-off belongs only to the primary PM; its direct `mstar plan complete` requires independent QC, acceptance and declared-route proof. Leaf agents never write Done.
 

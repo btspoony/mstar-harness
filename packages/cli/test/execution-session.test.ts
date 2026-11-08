@@ -1713,8 +1713,6 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     const deliveryPath = join(fixture.root, "delivery.json");
     writeJson(deliveryPath, {
       compound: { outcome: "skipped", reason: "fixture-only compound disposition" },
-      pr: { repo: "synthetic/example", head: "feature/exec-session", target: "main" },
-      merge: { provider: "synthetic-fixture", evidence: "fixture verified-merge record; no live provider" },
     });
     const evidence = runCli(
       ["workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", deliveryPath, "--harness", fixture.harnessDir],
@@ -1723,6 +1721,12 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     );
     expect(evidence.exitCode, evidence.stdout).toBe(0);
     expect(jsonOf(evidence).command).toBe("workflow.evidence");
+
+    // The delivery PR landed: the close re-proves it from local Git, so the
+    // fixture must carry the real merge into the registered target.
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "merge the delivery", "feature/exec-session"], {
+      cwd: fixture.root,
+    });
 
     const closed = runCli(
       ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--reason", "delivery complete", "--harness", fixture.harnessDir],

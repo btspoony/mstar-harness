@@ -124,8 +124,8 @@ const REVIEW_PAYLOAD = {
   tally: {
     verdict: "needs fixes",
     scorePct: 86,
-    tally: { mustFix: 0, shouldFix: 1, nit: 1, unverified: 0 },
-    chatHeader: "needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 nit=1 unverified=0",
+    tally: { mustFix: 0, shouldFix: 1, nit: 1 },
+    chatHeader: "needs fixes \u00b7 86% (good)\nmust-fix=0 should-fix=1 may-fix=0 nit=1",
   },
 };
 
