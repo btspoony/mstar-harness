@@ -1210,6 +1210,53 @@ describe("execution-restore", () => {
     // fixture and the retry.
   }, 60_000);
 
+  test("execution-restore-preview-keeps-the-live-store-journal-mode-and-epoch", async () => {
+    const world = await recoveryWorld("restore-preview-state");
+    const point = await recoveryPoint(world, "state-point");
+    await mutateEveryDomain(world, "state");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview,
+      operator: OPERATOR,
+      authorization: AUTHORIZATION,
+    });
+
+    // §8 says a second preview mutates nothing: it reports the restored epoch
+    // rather than reconfiguring the live store.
+    const again = await previewExecutionRestore(world.context, point.backupPath);
+    expect(again.liveEpoch).toBe(receipt.epoch);
+  });
+
+  test("execution-restore-preview-reads-a-quiesced-wal-store-without-reconfiguring-it", async () => {
+    const world = await recoveryWorld("restore-quiesced-wal");
+    const point = await recoveryPoint(world, "quiesced-wal-point");
+    await mutateEveryDomain(world, "quiesced-wal");
+
+    // The shape of a WAL store nobody is using: SQLite folds every committed
+    // frame into the database file on the last clean close and removes both
+    // sidecars, while the header keeps recording WAL.
+    const quiesce = new DatabaseSync(world.dbPath);
+    try {
+      quiesce.exec("pragma busy_timeout=1000");
+      const checkpoint = quiesce.prepare("pragma wal_checkpoint(TRUNCATE)").get() as { busy?: number } | undefined;
+      expect(checkpoint?.busy).toBe(0);
+    } finally {
+      quiesce.close();
+    }
+    rmSync(`${world.dbPath}-wal`, { force: true });
+    rmSync(`${world.dbPath}-shm`, { force: true });
+
+    // §8's preview mutates nothing, and that has to hold for THIS shape too: a
+    // read-only open cannot create the `-wal` SQLite insists on before it reads
+    // a WAL store, so the capability path may not leave one beside the live
+    // store to make the read possible.
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    expect(preview.liveStoreId).toBe(world.storeId);
+    // The post-point work is really in the inventory: this was a live read, not
+    // a refusal dressed up as a preview.
+    expect(preview.authorityDifferences.length).toBeGreaterThan(0);
+  });
+
   test("execution-restore-preview-declares-receipt-retention-as-backup-only-operation-rows", async () => {
     const world = await recoveryWorld("pruned-receipts");
     const tokenNow = async (): Promise<ExecutionToken> =>
