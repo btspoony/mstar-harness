@@ -115,9 +115,9 @@ Plan-level policy for whether non-blocking QC/PM Acceptance findings may remain 
 
 ### Effective coordinator configuration
 
-Ordinary prepare records cleanup `zero-residual | allow-residual`; absent configuration defaults to allow-residual. This remains revisable during active execution and requires no ceremonial prepare record. Leaf Assignments mirror the selected policy for review/evidence duties, not a sealed authority. The issue store remains the sole findings store.
+Ordinary prepare records cleanup `zero-residual | allow-residual`. A new row without recorded cleanup defaults to `allow-residual`; on reprepare, omitted `findingsCleanup` preserves the recorded value and an explicit value revises it. No ceremonial prepare record is required. Leaf Assignments mirror the selected policy for review/evidence duties, not a sealed authority. The issue store remains the sole findings store.
 
-**Defaults**
+**New-row defaults (reprepare preserves recorded cleanup when omitted)**
 
 | Context | Default |
 | ------- | ------- |
@@ -211,7 +211,7 @@ ACTIVE actions acquire caller identity independently and revalidate identity/roo
 | Row | `coordination.progress` | `{status, summary, evidence_paths[], track_branches?}`; source/track ownership and plan-area evidence checks remain |
 | Row | `coordination.completion` | Source branch/SHA/worktree, review base/head, hashed QC/PM Acceptance evidence, optional verified integration result, completed_by/completed_at |
 
-Source facts live in `metadata.working_branch` / `metadata.worktree_path`, not a prepared Assignment. Acceptance defaults to `pm-acceptance`, cleanup to `allow-residual`. Ordinary prepare revises active configuration without resetting progress/status or locking prose; no ceremonial prepare is needed for valid defaults/metadata. Legacy active `mandatory` configuration recovers through ordinary prepare with `--qa-gate pm-acceptance`, preserving prior records; procedure → `mstar-roles/references/project-manager/acceptance.md`.
+Source facts live in `metadata.working_branch` / `metadata.worktree_path`, not a prepared Assignment. Acceptance uses `pm-acceptance`; cleanup defaults to `allow-residual` only for a new row without a recorded value. Ordinary reprepare preserves recorded cleanup when `findingsCleanup` is omitted and revises it when explicit, without resetting progress/status or locking prose; valid metadata/defaults need no ceremony. Legacy active `mandatory` configuration recovers through ordinary prepare with `--qa-gate pm-acceptance`, preserving prior records; procedure → `mstar-roles/references/project-manager/acceptance.md`.
 
 Session references, tokens and operation IDs never travel to leaf implementers/reviewers. Public recovery output includes workflow/public session ids, receipt/replay and token/version facts; never credential material.
 

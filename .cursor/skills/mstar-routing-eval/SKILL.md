@@ -38,6 +38,8 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 5. 验证 Assignment 的语言契约：字段名英文、任务正文可中文、执行产出/报告英文（除非用户明确要求其他语言）。
 6. 记录路由质量和缺失的证据。
 
+`expected_route` names agent roles (plus the existing QC group labels), not acceptance procedures. `@project-manager` denotes the primary-session coordinator, never a dispatchable PM subagent; list that role only once per route. PM Acceptance methods and evidence expectations belong in `must_have_artifacts` / `hard_fail_if`.
+
 **Authority-aware fixture interpretation**：未显式标注文件路由的断言按 ACTIVE 主线判定：`integration_merge_lease` 是 workflow 级串行合并 exclusion 的逻辑名称，经公共 workflow view 读取（per-plan execution lease 已移除，fixture 不得要求 per-row lease/claim 断言）；协调写入经公共动词的事务 + execution-token CAS。仅显式 pre-activation / engine-absent 场景保留 snapshot + same-host 文件锁语义。control root 是主 checkout 的路径定位，不要求发明 ACTIVE `control_worktree_path` 列；branch anchors 与 `integration_worktree_path` 经执行域 workflow view 读取。open findings 始终为 store linked issues，`residuals.json` 只作迁移历史。措辞 SSOT → `mstar-artifacts`、`mstar-branch-worktree` L1、`mstar-dispatch-gates` 与 `mstar-iteration/references/phase-2-worktree-lease.md` §2.0 / Coordination transactions。
 
 ### 评估执行步骤（1-2-3）

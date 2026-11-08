@@ -9,7 +9,7 @@
       "expected_route": [
         "@frontend-dev",
         "QC-3-reviewers",
-        "PM Acceptance"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -59,7 +59,7 @@
         "@explore",
         "@fullstack-dev",
         "QC-3-reviewers",
-        "PM Acceptance"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -85,7 +85,7 @@
         "@fullstack-dev",
         "@frontend-dev",
         "QC-3-reviewers",
-        "PM Acceptance"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -158,7 +158,7 @@
         "@architect",
         "@fullstack-dev",
         "QC-3-reviewers",
-        "PM Acceptance"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -182,7 +182,7 @@
       "expected_route": [
         "@frontend-dev",
         "QC-3-reviewers",
-        "PM Acceptance"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -207,7 +207,7 @@
         "@ops-engineer",
         "@fullstack-dev",
         "@qc-specialist",
-        "PM Acceptance"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -229,7 +229,7 @@
       "prompt": "帮我全面测一下登录流程，只出 bug 报告和复现步骤，不要改业务代码",
       "expected_route": [
         "@fullstack-dev",
-        "PM Acceptance"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -319,7 +319,7 @@
         "@fullstack-dev",
         "@frontend-dev",
         "QC-3-reviewers",
-        "PM Acceptance"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -348,7 +348,7 @@
         "@fullstack-dev",
         "@fullstack-dev-2",
         "QC-3-reviewers",
-        "PM Acceptance"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -378,7 +378,7 @@
         "@fullstack-dev",
         "@fullstack-dev-2",
         "QC-3-reviewers",
-        "PM Acceptance"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -402,8 +402,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "PM Acceptance"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -477,8 +476,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "PM Acceptance"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -503,8 +501,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "PM Acceptance"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -544,8 +541,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "PM Acceptance"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -570,8 +566,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "PM Acceptance"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -655,7 +650,7 @@
       "expected_route": [
         "@fullstack-dev",
         "QC-3-reviewers",
-        "PM Acceptance"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -678,8 +673,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "PM Acceptance"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -774,8 +768,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "PM Acceptance"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -1168,15 +1161,15 @@
     },
     {
       "id": "direct-plan-report-only-completion",
-      "prompt": "Standalone report-only registered completion_policy, QC/PM Acceptance pass, no Git/PR. Explain absent versus already-recorded matching policy fulfilment.",
+      "prompt": "Standalone report-only has a registered completion_policy and passing QC/PM Acceptance, with no separate fulfilment payload or Git/PR. Explain completion and terminal close under the registered policy.",
       "expected_route": ["@project-manager"],
-      "must_have_artifacts": ["absent fulfilment blocks despite PM Acceptance pass", "record matching fulfilment before Done", "direct complete consumes policy/QC/PM Acceptance", "evidence-backed close; no fabricated Git/PR"],
-      "hard_fail_if": ["PM Acceptance substitutes for policy", "requires Git/integration/compound-before-PR/PR", "row Done closes workflow", "accepts integration input"]
+      "must_have_artifacts": ["registered completion_policy remains the report-only declaration", "direct complete uses independent QC and evidence-backed PM Acceptance without an additional fulfilment payload", "evidence-backed close; no fabricated Git/PR"],
+      "hard_fail_if": ["requires a separate fulfilment payload or blocks solely because it is absent", "skips independent QC or PM Acceptance", "requires Git/integration/compound-before-PR/PR", "row Done closes workflow", "accepts integration input"]
     },
     {
       "id": "direct-plan-noargs",
       "prompt": "/iteration-drive with no arguments on selected locked iteration, multiple rows remain. Continue complete lifecycle.",
-      "expected_route": ["@project-manager", "@fullstack-dev", "QC-3-reviewers", "PM Acceptance"],
+      "expected_route": ["@project-manager", "@fullstack-dev", "QC-3-reviewers"],
       "must_have_artifacts": ["whole iteration Phase 2 through 6", "one coordinator/native leaves", "SDD/QC/PM Acceptance/worktrees preserved"],
       "hard_fail_if": ["requires scoped args/seal", "stops at transfer/row Done", "creates another primary"]
     },
@@ -1496,14 +1489,14 @@
     {
       "id": "pm-acceptance-residual-ui",
       "prompt": "A medium UI feature has completed L2 and independent QC tri with Approve with residuals. One non-blocking linked issue remains under allow-residual; relevant unit/component evidence exists. Close acceptance without real browser/device work.",
-      "expected_route": ["PM Acceptance"],
+      "expected_route": ["@project-manager"],
       "must_have_artifacts": ["per-AC evidence/result/input identity/applicability", "issue id/severity/tracking/owner and disposition; waiver authority unchanged", "landed acceptance report and durable PM Acceptance Summary", "same frozen QC scope/checkout and honest real-environment gaps"],
       "hard_fail_if": ["dispatches an acceptance role or upgrades to mandatory", "uses QC approval alone as runtime proof", "ignores open issues or claims live UI validation", "changes QC seat independence"]
     },
     {
       "id": "pm-acceptance-named-evidence-gap",
       "prompt": "QC approved a bug fix, but AC2 lacks relevant execution proof. One existing short unit-test selector can fill the gap. Distinguish PM direct acceptance checking from writing tests, running long suites or ops.",
-      "expected_route": ["PM Acceptance"],
+      "expected_route": ["@project-manager"],
       "must_have_artifacts": ["AC2 remains unverified/Blocked until supported", "name exact command/selector, checkout/environment, expected result and stopping bound before the narrow PM check", "record actual outcome and provenance; retain observed failures", "delegate implementation/test-authoring/long-suite/ops work to existing specialists without transferring acceptance authority"],
       "hard_fail_if": ["whole-scope pass from a clean checked subset or QC approval", "PM authors product/tests or runs unrestricted verification", "new QA mode or role", "reruns unaffected evidence"]
     }
