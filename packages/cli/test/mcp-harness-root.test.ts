@@ -6,7 +6,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
-import { backupStore, captureIssue, initializeStore } from "@mstar-harness/engine";
+import { backupStore, captureIssue, initializeStore, openStore } from "@mstar-harness/engine";
 import { getCommandDefinitions, getCommandSchemas, type CommandEnvelope } from "@mstar-harness/commands";
 import { mapParserError } from "../src/command-adapter";
 import { registerMcpCommand } from "../src/mcp/command";
@@ -1011,6 +1011,27 @@ describe("MCP harness root", () => {
 });
 
 /**
+ * The rows a write would create in a store, read without trusting file bytes:
+ * SQLite sidecars and WAL contents are invisible here, a committed or pending
+ * write is not.
+ */
+async function storeRowCounts(harnessDir: string): Promise<{ issues: number; operations: number }> {
+  const handle = await openStore({ harnessDir }, "read");
+  try {
+    const count = (table: string): number => {
+      const row: unknown = handle.db.prepare(`select count(*) as n from ${table}`).get();
+      if (row === null || typeof row !== "object" || !("n" in row) || typeof row.n !== "number") {
+        throw new Error(`count query on ${table} returned no numeric n`);
+      }
+      return row.n;
+    };
+    return { issues: count("issues"), operations: count("store_operations") };
+  } finally {
+    handle.close();
+  }
+}
+
+/**
  * Every path under `dir` with its bytes (directories as a trailing slash), so a
  * write ANYWHERE in it shows up as a diff. Read-only: builds nothing.
  */
@@ -1805,17 +1826,22 @@ describe("MCP control-root admission class", () => {
     delete process.env.MSTAR_HARNESS_DIR;
     process.chdir(launch);
     try {
-      const launchBefore = snapshotTree(launchHarness);
       // A write rooted at B, from a server whose launch directory owns A's
       // harness: the pin is the only root candidate, so the capture lands in B
-      // and leaves every file under A byte-identical.
+      // and leaves A's store rows untouched.
+      //
+      // The assertion reads A's ROWS rather than its file bytes: SQLite leaves
+      // `-wal`/`-shm` beside a store after a read, and it keeps an unflushed
+      // write in the WAL, so a byte snapshot is both noisy (a read looks like a
+      // diff) and incomplete (a WAL-only write looks like no diff). Row counts
+      // are exactly what "the capture did not reach A" means.
       const added = await callRawTool(createContextResolver({ harnessRoot: otherHarness }), "issue.add", {
         payload: { ...CAPTURE_INPUT },
         actor: "project-manager",
       });
       expect(added.isError).toBe(false);
       expect(rawEnvelope(added)).toMatchObject({ status: "ok", code: "issue.add.ok" });
-      expect(snapshotTree(launchHarness)).toEqual(launchBefore);
+      expect(await storeRowCounts(launchHarness)).toEqual({ issues: 0, operations: 0 });
 
       const inB = await callRawTool(createContextResolver({ harnessRoot: otherHarness }), "status.tech-debt", {});
       expect(((inB.structuredContent as CommandEnvelope).data as { total_open: number }).total_open).toBe(1);
@@ -1827,6 +1853,21 @@ describe("MCP control-root admission class", () => {
       if (previousHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
       else process.env.MSTAR_HARNESS_DIR = previousHarness;
     }
+  });
+
+  test("a read-only store open leaves the store's rows untouched", async () => {
+    // The root-touching tests now assert ROW counts rather than file bytes,
+    // because a read leaves SQLite sidecars behind and a pending write can live
+    // only in the WAL. This pins that contract: reading is invisible to it.
+    const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
+    roots.push(root);
+    const harness = path.join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    (await initializeStore({ harnessDir: harness })).close();
+    const before = await storeRowCounts(harness);
+    const handle = await openStore({ harnessDir: harness }, "read");
+    handle.close();
+    expect(await storeRowCounts(harness)).toEqual(before);
   });
 
   test("a relative MSTAR_HARNESS_DIR is a boot refusal naming the absolute requirement", async () => {
