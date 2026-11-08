@@ -170,7 +170,7 @@ async function completeAndUnregister(
     expect(result).toMatchObject({ status: "ok", data: { gate: { ok: true, violations: [] } } });
   });
 
-  test("completed plan without delivery evidence is blocked", async () => {
+  test("a completed plan without stored delivery evidence is read as state, not re-litigated", async () => {
     const cwd = tempRoot();
     const { harness, storeContext, planId } = await activeWorkflow(cwd, "wf-active-no-delivery");
     await completeAndUnregister(storeContext, "wf-active-no-delivery", planId, { rowDone: true });
@@ -178,12 +178,9 @@ async function completeAndUnregister(
       { workflow: "wf-active-no-delivery", phase: "6", harness } as never,
       context(cwd),
     );
-    expect(result.status).toBe("refused");
-    if (result.status === "refused") {
-      expect(result.details?.gate).toMatchObject({ violations: expect.arrayContaining([
-        expect.objectContaining({ code: "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE" }),
-      ]) });
-    }
+    // The close proved the merge before it wrote this state; the gate reads the
+    // terminal facts and never demands evidence a cleanup can no longer supply.
+    expect(result).toMatchObject({ status: "ok", data: { gate: { ok: true, violations: [] } } });
   });
 
   test("completed plan with a non-Done owned row is blocked", async () => {
