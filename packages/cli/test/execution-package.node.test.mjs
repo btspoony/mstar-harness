@@ -442,7 +442,7 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
         "--working-branch",
         BRANCH,
         "--qa-gate",
-        "mandatory",
+        "pm-acceptance",
         "--findings-cleanup",
         "allow-residual",
         "--expect",
@@ -804,7 +804,7 @@ test("H2's OMP source fixture recipe executes on the built engine under real Nod
     planId: OMP_PLAN_ID,
     operation: {
       kind: "prepare",
-      config: { worktreePath, workingBranch: BRANCH, qaGate: "mandatory", findingsCleanup: "allow-residual" },
+      config: { worktreePath, workingBranch: BRANCH, qaGate: "pm-acceptance", findingsCleanup: "allow-residual" },
     },
   });
   assert.equal(prepared.data.coordination.prepared.prepared_by, OMP_COORDINATOR_ID);

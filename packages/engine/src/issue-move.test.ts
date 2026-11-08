@@ -204,7 +204,7 @@ describe("issue project move", () => {
         context,
         missingTargetIssue.issueId,
         { projectId: projectB, reason: "wrong seat" },
-        { actor: "qa-engineer", operationId: "move-wrong-seat", expectedRevision: missingTargetIssue.revision, expectedStoreRevision: before },
+        { actor: "fullstack-dev", operationId: "move-wrong-seat", expectedRevision: missingTargetIssue.revision, expectedStoreRevision: before },
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
   });

@@ -181,7 +181,6 @@ description: Fixture role hub.
     'code-reviewer.md',
     'fullstack-dev-shared.md',
     'frontend-dev.md',
-    'qa-engineer.md',
     'qc-specialist-shared.md',
     'ops-engineer.md',
     'writing-specialist.md',

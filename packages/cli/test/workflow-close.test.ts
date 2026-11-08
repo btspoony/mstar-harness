@@ -242,7 +242,7 @@ async function driveToDone(fixture: Fixture): Promise<void> {
     "--plan", PLAN_ID,
     "--worktree-path", fixture.worktree,
     "--working-branch", "feature/close",
-    "--qa-gate", "mandatory",
+    "--qa-gate", "pm-acceptance",
     "--findings-cleanup", "allow-residual",
     "--harness", fixture.harness,
   ], fixture.root, identityEnv());
@@ -266,7 +266,7 @@ async function driveToDone(fixture: Fixture): Promise<void> {
     review_base: fixture.baseSha,
     review_head: fixture.sourceSha,
     qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-    qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+    qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
   });
   const completed = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
   if (completed.exitCode !== 0) throw new Error(`plan complete failed: ${completed.stdout}${completed.stderr}`);
@@ -501,7 +501,7 @@ describe("mstar status workflow-close — the report-only row reaches Done witho
     const completion = join(fixture.root, "completion-report-only.json");
     writeJson(completion, {
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
     });
 
     // Nothing is recorded yet: the refusal names the command that records the
@@ -529,39 +529,6 @@ describe("mstar status workflow-close — the report-only row reaches Done witho
 });
 
 describe("mstar plan complete — a refusal names the verb that actually advances it", () => {
-  /**
-   * `coordination.invalid-transition` covers several causes. The report-only
-   * policy question is one of them; a QA gate that disagrees with the row's
-   * configured gate is another, and re-recording workflow delivery evidence
-   * cannot fix that one.
-   */
-  test("a QA gate mismatch keeps its own recovery", async () => {
-    const fixture = await activeFixture("mstar-complete-gate-mismatch");
-    await registerAndBind(fixture);
-
-    const started = join(fixture.root, "progress-gate-mismatch.json");
-    writeJson(started, { status: "InProgress", summary: "gate mismatch probe", evidence_paths: [fixture.qcReport] });
-    const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", started, "--harness", fixture.harness], fixture.root, identityEnv());
-    expect(moved.exitCode, moved.stdout).toBe(0);
-
-    // The policy fulfilment IS recorded, so the report-only question is settled;
-    // the row's QA gate defaults to mandatory and the payload says pm-acceptance.
-    const delivery = join(fixture.root, "delivery-gate-mismatch.json");
-    writeJson(delivery, { completion: { policy: COMPLETION_POLICY, evidence: "acceptance/plan-close/report.md" } });
-    const recorded = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", delivery, "--harness", fixture.harness], fixture.root, identityEnv());
-    expect(recorded.exitCode, recorded.stdout).toBe(0);
-
-    const completion = join(fixture.root, "completion-gate-mismatch.json");
-    writeJson(completion, {
-      qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
-    });
-    const refused = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
-    expect(refused.exitCode).toBe(1);
-    expect(envelope(refused).code).toBe("coordination.invalid-transition");
-    expect(recoveryOf(refused)).toContain("mstar plan prepare");
-    expect(recoveryOf(refused)).not.toContain("mstar workflow evidence");
-  }, 30_000);
 
   /**
    * A Git object id refusal carries `field` too (`source_sha` / `review_base` /
@@ -581,7 +548,7 @@ describe("mstar plan complete — a refusal names the verb that actually advance
     writeJson(completion, {
       source_sha: "abc123",
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
     });
     const refused = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
     expect(refused.exitCode).toBe(1);
