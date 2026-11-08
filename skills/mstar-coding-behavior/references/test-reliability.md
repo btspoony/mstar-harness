@@ -42,9 +42,7 @@ Raise the hook budget together with the case budget, because setup and teardown 
 
 ## Dispose to quiescence
 
-Register cleanup immediately after acquisition, so an assertion failure also releases the resource. Cleanup stops new callbacks and requests, detaches listeners, restores global hooks, terminates owned work, and awaits child exit, server close, worker termination or the equivalent completion signal.
-
-Calling `abort()`, `close()` or `kill()` without awaiting the owned completion signal is incomplete teardown. Where late completion is possible, prove that disposal prevents it from mutating another test.
+Register cleanup immediately after acquisition, so an assertion failure also releases the resource. Cleanup stops new callbacks and requests, detaches listeners, restores global hooks, terminates owned work, and awaits child exit, server close, worker termination or the equivalent completion signal. Calling `abort()`, `close()` or `kill()` without awaiting the owned completion signal is incomplete teardown; where late completion is possible, prove that disposal prevents it from mutating another test.
 
 ## Prove the intended regression
 
@@ -73,6 +71,8 @@ Make a failure name the offending entry — the path, row or field that disagree
 
 ## Assert the semantic, not the bytes
 
-Never use bytes, a digest or a hard-coded document text as the expected value. Such an assertion is volatile — database sidecars, write-ahead residency, build drift, whitespace and version bumps all move it — and it hides what the test means.
+The banned forms are narrow and specific: a directory's file bytes or a base64/hex dump of them; a digest equal to `createHash(...)` of the same input, or to a literal digest constant; a file equal to a hard-coded full text, even held in a named constant; and a version or module version as the expected side of an assertion. Each is volatile — database sidecars, write-ahead residency, build drift, whitespace and version bumps move it — and each hides what the test means.
 
-Assert the observable semantic instead: the rows a write created, the field a caller reads, the refusal a command emits, the relation between a computed value and its input. A requirement that genuinely needs a byte, digest or pinned-version comparison is an open question to confirm, not a test to write.
+A version or hash passed in as an input — a fixture field, a manifest value — is allowed: the prohibition sits on what the assertion expects, not on constants a fixture supplies. A requirement that genuinely needs a byte, digest or pinned-version comparison is an open question to confirm, not a test to write.
+
+Assert the observable semantic instead: the rows a write created, the field a caller reads, the refusal a command emits, the relation between a computed value and its input. Text a user or model reads is behaviour, so assert it through parsed fields, exit status, a refusal's structured code and message fields, or the rendered state — never by comparing a literal transcript, a byte blob or a whole-file text.
