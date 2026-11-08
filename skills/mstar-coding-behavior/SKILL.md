@@ -61,10 +61,8 @@ Completion means the requested behavior meets its acceptance criteria, supported
 
 Standalone use requires no other Morning Star skill.
 
-Only when working under Morning Star lifecycle or assignments, follow the existing authorities:
-
-- `mstar-harness-core` — lifecycle, safeguards, gates, and Done ownership.
-- `mstar-roles` — identity and Assignment skill-preset selection.
-- `mstar-branch-worktree` / `mstar-dispatch-gates` — assigned checkout and delegation authority when applicable.
+- `references/evidence-selection.md` — load when choosing which checks evidence a change, or judging whether a result is enough to claim done.
+- `references/test-reliability.md` — load when the change adds, reviews or diagnoses a test that owns a port, process, clock, temporary root, global state or async teardown.
+- Only when working under Morning Star lifecycle or assignments, follow the existing authorities: `mstar-harness-core` (lifecycle, safeguards, gates, and Done ownership), `mstar-roles` (identity and Assignment skill-preset selection), and `mstar-branch-worktree` / `mstar-dispatch-gates` (assigned checkout and delegation authority when applicable).
 
 This skill does not waive those contracts, grant dispatch permission, or authorize Done.
