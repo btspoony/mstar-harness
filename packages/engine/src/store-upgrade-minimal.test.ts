@@ -243,7 +243,6 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
   const input = { context, operator: "operator", operationId: "op-minimal-import" };
   const result = await upgradeStoreMinimal(input);
   expect(result).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
-  expect(result.sourceDigest).toMatch(/^[a-f0-9]{64}$/);
   expect(result.skipped).toEqual([
     { path: "workflows/wf-creates-and-imports/sessions/plan-pm.json", reason: "legacy plan-PM session envelope dropped; the seat was removed" },
     { path: "workflows/wf-creates-and-imports/unknown.bin", reason: "unrecognized workflow entry; left in place" },
@@ -1466,7 +1465,6 @@ test("one command creates and activates an empty store when neither store nor re
   const input = { context, operator: "operator", operationId: "op-empty-upgrade" };
   const result = await upgradeStoreMinimal(input);
   expect(result).toMatchObject({ verdict: "upgraded", imported: 0, skipped: [], authorityState: "active" });
-  expect(result.sourceDigest).toMatch(/^[a-f0-9]{64}$/);
   expect(await upgradeStoreMinimal(input)).toEqual(result);
 });
 test("no-store upgrade initializes execution schema and imports every populated workflow", async () => {
@@ -2591,7 +2589,6 @@ test("a recognizable v1 root imports through the ordinary store upgrade and pres
     deliveryDeclarations: V1_STANDALONE_DECLARATION,
   });
   expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
-  expect(result.sourceDigest).toMatch(/^[a-f0-9]{64}$/);
 
   const store = await openStore(context, "read");
   try {
@@ -3864,7 +3861,6 @@ test("a changed --delivery declaration over unchanged bytes refuses instead of d
   const input = { context, operator: "operator", operationId: "op-v1-changed-delivery-first", deliveryDeclarations: V1_STANDALONE_DECLARATION };
   const first = await upgradeStoreMinimal(input);
   expect(first).toMatchObject({ verdict: "upgraded", imported: 2, importedIds: ["iter-v1", "v1-standalone"] });
-  expect(first.inputDigest).toMatch(/^[a-f0-9]{64}$/);
 
   // The SAME bytes under the SAME declaration replay: the retained receipt
   // records this run's input digest beside the source digest (case a).

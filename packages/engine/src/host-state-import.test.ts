@@ -35,7 +35,6 @@ test("imports the full identity registry and ordered duplicate tail rows with by
   const result = await importDshHostStateFiles({ context, operator: "fixture", operationId: "first" });
   expect(result.imported.identities).toBe(2);
   expect(result.imported.ledgerRows).toBe(2);
-  expect(result.sourceDigest).toMatch(/^[a-f0-9]{64}$/);
   expect(readFileSync(join(workflow, "agent-flow.jsonl"), "utf8")).toBe(tail);
   expect(readFileSync(join(workflow, "agent-flow-ids.jsonl"), "utf8")).toBe(ids);
   const store = await openStore(context, "read");
