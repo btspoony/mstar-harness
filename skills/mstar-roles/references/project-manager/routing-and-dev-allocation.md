@@ -46,7 +46,7 @@ When **>=2 independent** backend/fullstack units exist (on the task board or acr
 
 **Independence gate:** do **not** split genuinely dependent or sequential work across two dev IDs just to use both tracks.
 
-**Single-id path needs justification:** collapsing >=2 independent units onto one backend-capable dev id requires `Dev owner tie-break: single id — <reason>` and Pre-Implement `single_stream_justified: yes` with that reason.
+**Single-id path needs justification:** collapsing >=2 independent units onto one backend-capable dev id requires `Dev owner tie-break: single id — <reason>` and `single_stream_justified: yes` with that reason (`project-manager.md` § Dispatch preconditions (hard block)).
 
 ### When `frontend-dev` is required
 
