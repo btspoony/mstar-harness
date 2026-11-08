@@ -14,7 +14,8 @@
  * Each case runs the real CLI as a subprocess against a temp fixture tree.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -31,12 +32,22 @@ interface PathEnvelope {
   status: "ok" | "refused" | "usage" | "error";
   code: string;
   message?: string;
+  recovery?: string;
+  details?: Record<string, unknown>;
   data?: {
     startDir: string;
-    harnessDir: string;
-    specsDir: string;
+    harnessDir: string | null;
+    specsDir: string | null;
     workflowDir: string;
     projectDir: string;
+    knowledgeDir?: string | null;
+    adrDir?: string | null;
+    trackedHarness?: string | null;
+    processHarness?: string | null;
+    callerCheckoutRoot?: string | null;
+    ok?: boolean;
+    findings?: Array<{ path: string; expect: string; code: string; severity: string; message: string }>;
+    checked?: Array<{ path: string; expect: string }>;
   };
 }
 
@@ -65,8 +76,13 @@ function cliEnv(): Record<string, string> {
 }
 
 function runResolve(args: string[]): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", "src/index.ts", "path", "resolve", ...args], {
-    cwd: CLI_ROOT,
+  return runCli(["path", "resolve", ...args]);
+}
+
+/** Run an arbitrary CLI verb; `cwd` is the directory the caller stands in. */
+function runCli(args: string[], cwd: string = CLI_ROOT): RunResult {
+  const proc = Bun.spawnSync([process.execPath, "run", join(CLI_ROOT, "src", "index.ts"), ...args], {
+    cwd,
     env: cliEnv(),
     stdout: "pipe",
     stderr: "pipe",
@@ -229,6 +245,173 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       // Engine default would create the fallback; the CLI opts out.
       expect(existsSync(join(root, ".mstar", "specs"))).toBe(false);
       expect(data(result).specsDir).toBe(join(root, ".mstar", "specs"));
+    });
+  });
+
+  test("resolve reports knowledgeDir and adrDir without creating them", () => {
+    withRoot((root) => {
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
+      const result = runResolve([root]);
+      expect(result.exitCode).toBe(0);
+      expect(data(result).knowledgeDir).toBe(join(root, ".mstar", "knowledge"));
+      expect(data(result).adrDir).toBe(join(root, ".mstar", "adr"));
+      expect(existsSync(join(root, ".mstar", "knowledge"))).toBe(false);
+      expect(existsSync(join(root, ".mstar", "adr"))).toBe(false);
+    });
+  });
+});
+
+/** Real `git init`: `check-ignore` needs a repository, unlike the resolve probes. */
+function gitRepo(root: string): void {
+  execFileSync("git", ["init", "-q", root], { stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["-C", root, "config", "user.email", "path-check-test@example.com"], { stdio: "ignore" });
+  execFileSync("git", ["-C", root, "config", "user.name", "Path Check Test"], { stdio: "ignore" });
+}
+
+/** Commit `content` as `.gitignore`: a linked checkout only sees committed rules. */
+function commitIgnore(repo: string, content: string): void {
+  writeFileSync(join(repo, ".gitignore"), content);
+  execFileSync("git", ["-C", repo, "add", "-A"], { stdio: "ignore" });
+  execFileSync("git", ["-C", repo, "commit", "-q", "-m", "ignore"], { stdio: "ignore" });
+}
+
+/** A real linked checkout of `repo`. */
+function addWorktree(root: string, repo: string): string {
+  const worktree = join(root, "wt");
+  execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", "feat", worktree], { stdio: "ignore" });
+  return worktree;
+}
+
+/** The `.gitignore` that re-includes the tracked results of a `.mstar/` harness. */
+const TRACKED_RESULTS_IGNORE = [
+  ".mstar/**",
+  "!.mstar/specs/",
+  "!.mstar/specs/**",
+  "!.mstar/knowledge/",
+  "!.mstar/knowledge/**",
+  "!.mstar/adr/",
+  "!.mstar/adr/**",
+  "",
+].join("\n");
+
+describe("mstar path check — ownership of the resolved layout", () => {
+  test("a fully gitignored `.mstar/` refuses with path.result-ignored and the .agents recovery", () => {
+    withRoot((root) => {
+      gitRepo(root);
+      writeFileSync(join(root, ".gitignore"), ".mstar/\n");
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
+      const result = runCli(["path", "check"], root);
+      expect(result.exitCode).toBe(1);
+      const refused = envelope(result);
+      expect(refused.status).toBe("refused");
+      expect(refused.code).toBe("path.result-ignored");
+      const findings = refused.details?.findings as Array<{ code: string; path: string }>;
+      // The layout resolver answers canonical (realpath'd) directories.
+      expect(findings.map((finding) => finding.path)).toEqual([
+        join(realpathSync(root), ".mstar", "specs"),
+        join(realpathSync(root), ".mstar", "knowledge"),
+        join(realpathSync(root), ".mstar", "adr"),
+      ]);
+      expect(findings.every((finding) => finding.code === "path.result-ignored")).toBe(true);
+      // The recovery must name a command an operator can actually run.
+      expect(String(refused.details?.recovery)).toContain("mstar path check");
+      expect(refused.message).toContain("Git-ignored");
+    });
+  });
+
+  test("re-included result dirs and ignored process dirs are clean (exit 0)", () => {
+    withRoot((root) => {
+      gitRepo(root);
+      writeFileSync(join(root, ".gitignore"), TRACKED_RESULTS_IGNORE);
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
+      mkdirSync(join(root, ".mstar", "knowledge"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "knowledge", "kb.md"), "# kb\n");
+      mkdirSync(join(root, ".mstar", "adr"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "adr", "0001.md"), "# adr\n");
+      const result = runCli(["path", "check"], root);
+      expect(result.exitCode).toBe(0);
+      expect(envelope(result)).toMatchObject({ command: "path.check", status: "ok", code: "path.check.ok" });
+      expect(data(result).ok).toBe(true);
+      expect(data(result).findings).toEqual([]);
+      // Process state is checked too — the store is the notable one.
+      expect(data(result).checked?.map((target) => target.expect)).toContain("process");
+    });
+  });
+
+  test("a named tracked-result dir is refused, a named committable dir is ok", () => {
+    withRoot((root) => {
+      gitRepo(root);
+      writeFileSync(join(root, ".gitignore"), ".mstar/\n");
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      mkdirSync(join(root, "docs", "adr"), { recursive: true });
+      const ignored = runCli(["path", "check", ".mstar/specs"], root);
+      expect(ignored.exitCode).toBe(1);
+      expect(envelope(ignored).code).toBe("path.result-ignored");
+
+      const okDir = runCli(["path", "check", "docs/adr"], root);
+      expect(okDir.exitCode).toBe(0);
+      expect(data(okDir).ok).toBe(true);
+    });
+  });
+
+  test("an ignored file named inside {HARNESS_DIR}/specs is still a tracked result", () => {
+    withRoot((root) => {
+      gitRepo(root);
+      writeFileSync(join(root, ".gitignore"), ".mstar/\n");
+      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "specs", "0001.md"), "# spec\n");
+      // The role comes from the resolved layout, not from the file's basename.
+      const result = runCli(["path", "check", ".mstar/specs/0001.md"], root);
+      expect(result.exitCode).toBe(1);
+      expect(envelope(result).code).toBe("path.result-ignored");
+    });
+  });
+
+  test("outside any Git checkout the named probe refuses as path.unverifiable", () => {
+    withRoot((root) => {
+      mkdirSync(join(root, "docs", "adr"), { recursive: true });
+      const result = runCli(["path", "check", "docs/adr"], root);
+      expect(result.exitCode).toBe(1);
+      expect(envelope(result).code).toBe("path.unverifiable");
+    });
+  });
+
+  test("in a linked checkout, tracked results are checked in the caller's checkout and process state in the control root", () => {
+    withRoot((root) => {
+      const control = join(root, "control");
+      mkdirSync(control);
+      gitRepo(control);
+      commitIgnore(control, TRACKED_RESULTS_IGNORE);
+      const worktree = addWorktree(root, control);
+      // The control harness owns process state, so it must exist.
+      mkdirSync(join(control, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(control, ".mstar", "specs", "base.md"), "# spec\n");
+      // Results live in the caller's checkout (the branch it carries).
+      mkdirSync(join(worktree, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(worktree, ".mstar", "specs", "0001.md"), "# spec\n");
+      const result = runCli(["path", "check"], worktree);
+      expect(result.exitCode).toBe(0);
+      expect(realpathSync(data(result).trackedHarness!)).toBe(realpathSync(join(worktree, ".mstar")));
+      expect(realpathSync(data(result).processHarness!)).toBe(realpathSync(join(control, ".mstar")));
+      expect(data(result).ok).toBe(true);
+    });
+  });
+
+  test("a tracked path owned by the control checkout refuses when named from a linked checkout", () => {
+    withRoot((root) => {
+      const control = join(root, "control");
+      mkdirSync(control);
+      gitRepo(control);
+      commitIgnore(control, TRACKED_RESULTS_IGNORE);
+      const worktree = addWorktree(root, control);
+      mkdirSync(join(control, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(control, ".mstar", "specs", "0001.md"), "# spec\n");
+      const result = runCli(["path", "check", join(control, ".mstar", "specs")], worktree);
+      expect(result.exitCode).toBe(1);
+      expect(envelope(result).code).toBe("path.result-outside-worktree");
     });
   });
 });

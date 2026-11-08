@@ -64,6 +64,7 @@ export type {
   HarnessKind,
   ResolveHarnessDirOptions,
   ResolveSpecsDirOptions,
+  ResolveTrackedDirOptions,
   ReviewRunLevel,
   ReviewRunRequest,
   ReviewRunSpec,
@@ -95,6 +96,7 @@ export {
   detectHarnessKind,
   emitGitignoreSnippet,
   hasHarnessRootDeclaration,
+  resolveAdrDir,
   resolveHarnessDir,
   resolveIterationDir,
   resolveKnowledgeDir,
@@ -110,6 +112,18 @@ export {
   scaffoldHarness,
   validateGitignore,
 } from "./path.js";
+// Path ownership: the Git-backed probe decides whether a harness path is owned
+// as expected — process state inside the control checkout, tracked results
+// committable at all. `mstar path check` is its only consumer.
+export type {
+  PathOwnershipCheck,
+  PathOwnershipCode,
+  PathOwnershipExpect,
+  PathOwnershipFinding,
+  PathOwnershipProbe,
+  PathOwnershipTarget,
+} from "./path-check.js";
+export { checkPathOwnership, expectForPath, nearestExistingDir, probePathOwnership } from "./path-check.js";
 // The one registered-plan path contract (prerequisite contract §4): iteration
 // registration, the catalog registration preflight, the Prepare append and the
 // readiness readers import THIS resolver instead of restating the

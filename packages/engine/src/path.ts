@@ -186,13 +186,17 @@ export type ResolveSpecsDirOptions = {
  * directly (resolved against the config file's directory; created when
  * `create` is not false; no candidate chain, no empty-dir rule). Otherwise
  * the first non-empty candidate wins — `{HARNESS_DIR}/specs/` →
- * `docs/specs/` → repo-root `specs/` (repo root = parent of the harness
- * dir), then the legacy read-only `designs/` candidates
- * (`{HARNESS_DIR}/designs/` → repo-root `designs/`, § {SPECS_DIR} 解析
- * Legacy — 兼容读 only, never created by init). A candidate that exists
- * but holds no files is treated as absent (empty-dir rule, recursive).
- * When all candidates are absent, `{HARNESS_DIR}/specs/` is created and
- * returned (unless `create: false`).
+ * `<repoRoot>/.agents/specs/` → `docs/specs/` → repo-root `specs/` (repo
+ * root = parent of the harness dir), then the legacy read-only `designs/`
+ * candidates (`{HARNESS_DIR}/designs/` → repo-root `designs/`,
+ * § {SPECS_DIR} 解析 Legacy — 兼容读 only, never created by init). The
+ * `<repoRoot>/.agents/specs/` rung lets a repo whose `.mstar/` is fully
+ * gitignored keep its tracked specs in the tracked `.agents/` tree; when the
+ * harness dir IS `.agents` it duplicates the first candidate and the
+ * candidate list drops the repeat. A candidate that exists but holds no
+ * files is treated as absent (empty-dir rule, recursive). When all
+ * candidates are absent, `{HARNESS_DIR}/specs/` is created and returned
+ * (unless `create: false`).
  */
 export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions = {}): string {
   const declared = mstarcDirOverride(harnessDir, "specsDir");
@@ -204,14 +208,15 @@ export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions
   const repoRoot = dirname(harness);
   const candidates = [
     join(harness, "specs"),
+    join(repoRoot, ".agents", "specs"),
     join(repoRoot, "docs", "specs"),
     join(repoRoot, "specs"),
- // Legacy 兼容读 (plan-conventions § {SPECS_DIR} 解析 Legacy): read-only —
- // init must NOT create designs/; same empty-dir-as-absent rule applies.
+// Legacy 兼容读 (plan-conventions § {SPECS_DIR} 解析 Legacy): read-only —
+// init must NOT create designs/; same empty-dir-as-absent rule applies.
     join(harness, "designs"),
     join(repoRoot, "designs"),
   ];
-  for (const candidate of candidates) {
+  for (const candidate of new Set(candidates)) {
     if (isDirectory(candidate) && hasFiles(candidate)) return candidate;
   }
   const fallback = join(harness, "specs");
@@ -307,14 +312,67 @@ export function resolveIterationDir(harnessDir: string): string {
 }
 
 /**
- * Compose `{KNOWLEDGE_DIR}` = `{HARNESS_DIR}/knowledge/` (plan-conventions
- * § 路径符号). A `.mstarc` `[config] knowledge_dir` declaration wins
- * (resolved against the config file's directory).
+ * Options for `resolveKnowledgeDir` / `resolveAdrDir`.
  */
-export function resolveKnowledgeDir(harnessDir: string): string {
-  const declared = mstarcDirOverride(harnessDir, "knowledgeDir");
+export type ResolveTrackedDirOptions = {
+  /**
+   * Default true: when every candidate is absent or empty, create the
+   * `{HARNESS_DIR}` fallback. Read-only callers (e.g. `mstar path resolve`)
+   * pass `false` to skip the side effect.
+   */
+  create?: boolean;
+};
+
+/**
+ * Resolve `{KNOWLEDGE_DIR}`. A `.mstarc` `[config] knowledge_dir`
+ * declaration is authoritative (resolved against the config file's
+ * directory). Otherwise the first non-empty candidate wins —
+ * `{HARNESS_DIR}/knowledge/` → `<repoRoot>/.agents/knowledge/` (tracked
+ * knowledge survives a fully gitignored `.mstar/`) — with the empty-dir
+ * rule applied to both; when neither holds files the fallback
+ * `{HARNESS_DIR}/knowledge/` is created (unless `create: false`).
+ */
+export function resolveKnowledgeDir(harnessDir: string, opts: ResolveTrackedDirOptions = {}): string {
+  return resolveTrackedDir(harnessDir, opts, "knowledgeDir", "knowledge", [".agents", "knowledge"]);
+}
+
+/**
+ * Resolve `{ADR_DIR}`. A `.mstarc` `[config] adr_dir` declaration is
+ * authoritative (resolved against the config file's directory). Otherwise
+ * the first non-empty candidate wins — `{HARNESS_DIR}/adr/` →
+ * `<repoRoot>/.agents/adr/` → `<repoRoot>/docs/adr/` — all subject to the
+ * empty-dir rule; when none holds files the fallback `{HARNESS_DIR}/adr/`
+ * is created (unless `create: false`).
+ */
+export function resolveAdrDir(harnessDir: string, opts: ResolveTrackedDirOptions = {}): string {
+  return resolveTrackedDir(harnessDir, opts, "adrDir", "adr", [".agents", "adr"], ["docs", "adr"]);
+}
+
+/**
+ * Shared body of the tracked-result resolvers: `.mstarc` override, then the
+ * non-empty candidate chain (`{HARNESS_DIR}/<name>` followed by the given
+ * repo-root-relative segments), then the created `{HARNESS_DIR}/<name>`
+ * fallback. Candidates are deduped so a `.agents` harness does not test its
+ * own directory twice.
+ */
+function resolveTrackedDir(
+  harnessDir: string,
+  opts: ResolveTrackedDirOptions,
+  key: MstarcStringKey,
+  name: string,
+  ...extra: readonly (readonly string[])[]
+): string {
+  const declared = mstarcDirOverride(harnessDir, key);
   if (declared !== null) return declared;
-  return join(resolve(harnessDir), "knowledge");
+  const harness = resolve(harnessDir);
+  const repoRoot = dirname(harness);
+  const candidates = [join(harness, name), ...extra.map((segments) => join(repoRoot, ...segments))];
+  for (const candidate of new Set(candidates)) {
+    if (isDirectory(candidate) && hasFiles(candidate)) return candidate;
+  }
+  const fallback = join(harness, name);
+  if (opts.create !== false) mkdirSync(fallback, { recursive: true });
+  return fallback;
 }
 
 /**
@@ -660,6 +718,8 @@ const GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
 !.mstar/knowledge/**
 !.mstar/specs/
 !.mstar/specs/**
+!.mstar/adr/
+!.mstar/adr/**
 # .mstarc \u2014 repo-local harness config (may declare [config] harness_dir=<name>)
 .mstarc
 `;
@@ -678,6 +738,8 @@ const GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) \u2014 legac
 !.agents/knowledge/**
 !.agents/specs/
 !.agents/specs/**
+!.agents/adr/
+!.agents/adr/**
 `;
 
 /** Harness `.gitignore` fence entries (ignore + re-include), derived from the `.mstar/` snippet. */
@@ -700,7 +762,7 @@ export type HarnessKind = "mstar" | "agents";
 /**
  * Emit the canonical `.gitignore` snippet for `kind` (plan-conventions
  * § Git 跟踪策略): default-ignore the whole harness dir (`<dir>/**`) and
- * re-include only the tracked results (AGENTS.md, knowledge/, specs/).
+ * re-include only the tracked results (AGENTS.md, knowledge/, specs/, adr/).
  * When the kind is unknown (omitted), both snippets are emitted so either
  * fence can be applied.
  */
