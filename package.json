@@ -46,7 +46,7 @@
     "@mstar-harness/engine": "^4.2.3"
   },
   "devDependencies": {
-    "@oh-my-pi/pi-coding-agent": "^18.13.3",
+    "@oh-my-pi/pi-coding-agent": "^18.16.0",
     "@types/hast": "^3.0.0",
     "@types/mdast": "^4.0.0",
     "@types/node": "^26.6.6",

@@ -157,8 +157,8 @@
     "@mstar-harness/commands": "workspace:*",
     "@mstar-harness/engine": "workspace:*",
     "@mstar-harness/ui": "workspace:*",
-    "@shikijs/langs": "^4.5.0",
-    "@tanstack/react-virtual": "3.14.23",
+    "@shikijs/langs": "^4.6.0",
+    "@tanstack/react-virtual": "3.14.26",
     "@types/node": "^26.6.6",
     "@types/react": "~19.3.0",
     "anser": "^2.3.5",
@@ -183,11 +183,11 @@
     "micromark-util-types": "^2.0.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "shiki": "^4.5.0",
+    "shiki": "^4.6.0",
     "simple-icons": "16.36.0",
     "typescript": "^7.0.2",
     "use-sync-external-store": "1.7.0",
-    "vitest": "^5.0.3",
+    "vitest": "^5.1.0",
     "zustand": "~5.0.16"
   }
 }
