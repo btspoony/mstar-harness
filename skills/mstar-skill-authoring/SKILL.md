@@ -101,7 +101,7 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 
 三层分工：frontmatter 只写触发，`SKILL.md` 只写主执行路径，`references/` / `templates/` / `scripts/` 放变体细节、长示例与 schema 并按需加载；每份额外资源都要在 body 写明「何时打开哪一份」。
 
-写 / 评审 skill body **以外**的模型可见文本——tool 与参数定义、Assignment 字段、拒绝与诊断字符串、CLI 帮助——时加载 skill **`mstar-skill-authoring`** → `references/context-economy.md`（六条原则、三条 tool 定义规则、测量规则）。
+写 / 评审 skill body **以外**的模型可见文本——tool 与参数定义、Assignment 字段、拒绝与诊断字符串、CLI 帮助——时加载 `references/context-economy.md`（六条原则、三条 tool 定义规则、测量规则）。
 
 skill body 自身的经济性归本 skill 判断；其散文是否在 HEAD 可解析归 **`mstar-prose`**。
 
