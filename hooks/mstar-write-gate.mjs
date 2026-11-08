@@ -329,7 +329,7 @@ var SHA256_HEX;
 var GIT_SHA;
 var HASH_RE;
 var init_coordination_write = __esm(() => {
-  CoordinationError = class CoordinationError extends Error {
+  CoordinationError = class CoordinationError2 extends Error {
     code;
     details;
     constructor(code, message, details = {}) {
@@ -414,7 +414,7 @@ var init_catalog = __esm(() => {
     "derived-from": true,
     supersedes: true
   };
-  CatalogError = class CatalogError extends Error {
+  CatalogError = class CatalogError2 extends Error {
     code;
     constructor(code, message) {
       super(`[${code}] ${message}`);
@@ -559,7 +559,7 @@ var AssertionError;
 var init_development = __esm(() => {
   init_dist();
   codesWarned = new Set;
-  AssertionError = class AssertionError extends Error {
+  AssertionError = class AssertionError2 extends Error {
     name = "Assertion";
     code = "ERR_ASSERTION";
     constructor(message, actual, expected, operator, generated) {
@@ -3653,10 +3653,10 @@ function resolveAll(constructs2, events, context) {
   const called = [];
   let index = -1;
   while (++index < constructs2.length) {
-    const resolve3 = constructs2[index].resolveAll;
-    if (resolve3 && !called.includes(resolve3)) {
-      events = resolve3(events, context);
-      called.push(resolve3);
+    const resolve32 = constructs2[index].resolveAll;
+    if (resolve32 && !called.includes(resolve32)) {
+      events = resolve32(events, context);
+      called.push(resolve32);
     }
   }
   return events;
@@ -11206,7 +11206,7 @@ var init_catalog_import = __esm(() => {
     supersedes: true
   };
   ORDINARY_FILES = { "readme.md": true, "install.md": true, "index.md": true };
-  CatalogImportError = class CatalogImportError extends Error {
+  CatalogImportError = class CatalogImportError2 extends Error {
     code;
     partial;
     constructor(code2, message, partial = null) {
@@ -12328,7 +12328,7 @@ var init_store_activation = __esm(() => {
   init_core();
   init_activation_provisioning();
   init_store_db();
-  StoreActivationError = class StoreActivationError extends Error {
+  StoreActivationError = class StoreActivationError2 extends Error {
     code;
     constructor(code2, message) {
       super(`[${code2}] ${message}`);
@@ -14251,7 +14251,7 @@ var init_execution_store = __esm(() => {
   init_activation_provisioning();
   init_store_db();
   init_workflow();
-  ExecutionError = class ExecutionError extends Error {
+  ExecutionError = class ExecutionError2 extends Error {
     code;
     details;
     constructor(code2, message, details) {
@@ -14603,7 +14603,7 @@ var init_issue = __esm(() => {
     export: { payload: null, read: true, cas: false, disposition: null }
   };
   ISSUE_ACTION_NAMES = Object.keys(ISSUE_ACTIONS);
-  IssueError = class IssueError extends Error {
+  IssueError = class IssueError2 extends Error {
     code;
     details = {};
     constructor(code2, message) {
@@ -14699,7 +14699,7 @@ var init_project = __esm(() => {
   init_issue();
   init_status();
   DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
-  BindingError = class BindingError extends Error {
+  BindingError = class BindingError2 extends Error {
     code;
     constructor(code2, message) {
       super(`[${code2}] ${message}`);
@@ -14913,7 +14913,7 @@ var PLAN_CONSULTED_HEADERS;
 var init_plan_path = __esm(() => {
   init_coordination_write();
   init_path();
-  PlanPathError = class PlanPathError extends Error {
+  PlanPathError = class PlanPathError2 extends Error {
     code;
     details;
     constructor(code2, message, details = {}) {
@@ -15201,7 +15201,7 @@ var init_workflow = __esm(() => {
   DATE_PART = String.raw`\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])`;
   RFC3339_Z_RE = new RegExp(String.raw`^${DATE_PART}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`);
   DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
-  WorkflowSnapshotValidationError = class WorkflowSnapshotValidationError extends Error {
+  WorkflowSnapshotValidationError = class WorkflowSnapshotValidationError2 extends Error {
     violations;
     constructor(message, violations) {
       super(message);
@@ -15251,7 +15251,7 @@ var init_catalog_registration = __esm(() => {
   init_store_db();
   init_status();
   init_workflow();
-  CatalogRegistrationError = class CatalogRegistrationError extends Error {
+  CatalogRegistrationError = class CatalogRegistrationError2 extends Error {
     code;
     constructor(code2, message) {
       super(`[${code2}] ${message}`);
@@ -15390,7 +15390,7 @@ var init_coordination = __esm(() => {
       alternative: "Use review for governed artifacts."
     }
   };
-  ExecutionPinConflictError = class ExecutionPinConflictError extends Error {
+  ExecutionPinConflictError = class ExecutionPinConflictError2 extends Error {
     code = EXECUTION_PIN_CONFLICT_CODE;
     details;
     constructor(message, details = {}) {
@@ -16718,7 +16718,7 @@ var dshTransactions;
 var init_store_db = __esm(() => {
   init_coordination();
   init_core();
-  StoreError = class StoreError extends Error {
+  StoreError = class StoreError2 extends Error {
     code;
     details;
     constructor(code2, message, details) {
@@ -16730,7 +16730,7 @@ var init_store_db = __esm(() => {
     }
   };
   RUNTIME_GLOBAL = globalThis;
-  SettlementAttestationNeeded = class SettlementAttestationNeeded extends Error {
+  SettlementAttestationNeeded = class SettlementAttestationNeeded2 extends Error {
     holders;
     stopped;
     attestedAt;
@@ -19034,8 +19034,8 @@ var PRE_ACTIVATION_CODES = ["store.not-initialized", "store.not-active"];
 var storeRuntimeProbe = { info: detectStoreRuntime };
 function refusalOf(error) {
   const message = error instanceof Error ? error.message : String(error);
-  const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "";
-  return { code: code === "" ? "store.authority-unreadable" : code, message };
+  const code2 = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "";
+  return { code: code2 === "" ? "store.authority-unreadable" : code2, message };
 }
 async function readAuthorityRoute(harnessDir) {
   try {
@@ -19065,8 +19065,8 @@ function landedRegisterDirOf(resolved, landed) {
     return aliased.harnessDir;
   return caseFoldedRegisterRoot(landed);
 }
-function authorityViolation(code, message) {
-  return { ok: false, severity: "high", code, message };
+function authorityViolation(code2, message) {
+  return { ok: false, severity: "high", code: code2, message };
 }
 function storeDirectWriteRefusal(targetPath) {
   return authorityViolation(STORE_DIRECT_WRITE_CODE, `${targetPath} is the issue/catalog authority database and is owned by the runtime — a direct hand write ` + "is refused (the schema and its WAL are managed in-process). Schema changes go through `mstar store " + "init|upgrade|migrate`, findings through `mstar issue add|close`, catalog rows through `mstar catalog " + "register|update`");
@@ -19100,8 +19100,8 @@ function blockAuthorityWrite(toolName, display, violations) {
   process.exit(2);
 }
 var MAX_GATED_TARGETS = 32;
-function displaySafe(text) {
-  return text.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`);
+function displaySafe(text6) {
+  return text6.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`);
 }
 function displayTarget(targetPath, harnessDir) {
   const rel = relative2(harnessDir, targetPath);
@@ -19122,15 +19122,15 @@ function readStdinJson() {
 }
 function writeTargetPaths(toolInput) {
   const paths = [];
-  const push = (value) => {
+  const push2 = (value) => {
     if (typeof value === "string" && value.trim() !== "")
       paths.push(value);
   };
-  push(toolInput.file_path);
-  push(toolInput.path);
+  push2(toolInput.file_path);
+  push2(toolInput.path);
   if (Array.isArray(toolInput.paths)) {
     for (const value of toolInput.paths)
-      push(value);
+      push2(value);
   }
   return paths.slice(0, MAX_GATED_TARGETS);
 }
@@ -19245,8 +19245,8 @@ try {
       }
     }
     const gated = target ?? { harnessDir: registerDir, kind: "register" };
-    const content = typeof tool.content === "string" ? tool.content : reconstructEditContent(tool, targetPath) ?? tool.content;
-    const violations = validateStatusWriteDoc(content, targetPath, gated.kind, { oversized: "violate" });
+    const content3 = typeof tool.content === "string" ? tool.content : reconstructEditContent(tool, targetPath) ?? tool.content;
+    const violations = validateStatusWriteDoc(content3, targetPath, gated.kind, { oversized: "violate" });
     if (violations.length === 0)
       continue;
     const enforcement = resolveRepoEnforcement(gated.harnessDir);
