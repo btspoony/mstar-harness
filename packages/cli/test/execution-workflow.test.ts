@@ -1190,9 +1190,11 @@ describe("mstar workflow \u2014 published payload contracts", () => {
     const delivery = descriptorOf("workflow.evidence").payloadSchemas.delivery as Record<string, any>;
     const members = JSON.stringify(delivery.anyOf);
     // §4d the PR identity is the registered anchors, so no `pr` member exists;
-    // §4f `merge` carries only the optional provider commit.
-    for (const member of ["compound", "merge", "completion"]) expect(members).toContain(`"${member}"`);
+    // §4f `merge` carries only the optional provider commit; a report-only
+    // workflow records no delivery evidence, so no `completion` member exists.
+    for (const member of ["compound", "merge"]) expect(members).toContain(`"${member}"`);
     expect(members).not.toContain('"pr"');
+    expect(members).not.toContain('"completion"');
     expect(members).toContain('"commit"');
   });
 

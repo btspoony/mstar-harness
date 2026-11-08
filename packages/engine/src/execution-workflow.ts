@@ -1805,7 +1805,7 @@ function applyDeliveryEvidence(input: {
   if (unused.length > 0) {
     throw invalidWorkflowTransition(
       allowed.length === 0
-        ? `workflow ${workflowId} cannot record member(s) ${unused.join(", ")}: a '${kind}' workflow records no delivery evidence — ` +
+        ? `workflow ${workflowId} cannot record member(s) ${unused.join(", ")}: a '${kind}' workflow records no delivery evidence \u2014 ` +
           `its registered completion_policy is a registration-time declaration, not a fulfilment payload`
         : `workflow ${workflowId} cannot record member(s) ${unused.join(", ")}: the declared delivery_kind '${kind}' uses ` +
           `${allowed.join(" | ")}`,

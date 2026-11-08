@@ -1484,7 +1484,7 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
 
   return refuse(
     `Workflow '${workflowId}' cannot prove its delivery merge: ${unproven.join("; ")}`,
-    `Fetch the target branch into the plan checkout and retry the close; if ${deliveryBranch} has no ref there, restore or fetch refs/heads/${deliveryBranch} first, then ${record}. A recorded commit must carry the delivery's own diff, and a squash that resolved conflicts differently has no local proof — record that outcome instead with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'.`,
+    `Fetch the target branch into the plan checkout and retry the close; if ${deliveryBranch} has no ref there, restore or fetch refs/heads/${deliveryBranch} first, then ${record}. A recorded commit must carry the delivery's own diff, and a squash that resolved conflicts differently has no local proof \u2014 record that outcome instead with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'.`,
   );
 }
 

@@ -4,8 +4,6 @@ Extension of `references/qa-engineer.md`. Read when PM dispatches you with **`QA
 
 Layer **L4** runs after the QC gate. **`QA gate: pm-acceptance`** is PM-only — see **`references/project-manager/qa-trigger-matrix.md`**.
 
-**Do not collapse L4 into L3.** QC reviewers do not close residuals or mark plan `Done`.
-
 ## Scope (L4 vs L3)
 
 | L3 Plan QC (`qc-specialist*`) | L4 QA (`qa-engineer`) |
