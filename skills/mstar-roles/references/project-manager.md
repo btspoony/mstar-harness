@@ -83,7 +83,7 @@ Pick one `Primary` route per Assignment; attach additional gates as needed.
 Detailed conflict priority and dev allocation:
 `references/project-manager/routing-and-dev-allocation.md`.
 
-**Dev spread default:** when the task board has **>=2 independent** backend/fullstack units, prefer **`fullstack-dev` + `fullstack-dev-2`** (parallel with boundaries) or **round-robin** owners across sequential batches. Using a single backend-capable dev id for multiple independent units requires documented justification (`Dev owner tie-break: single id — <reason>` plus `single_stream_justified: yes` — § Dispatch preconditions (hard block)).
+**Dev spread default:** when the task board has **>=2 independent** backend/fullstack units, prefer **`fullstack-dev` + `fullstack-dev-2`** (parallel with boundaries) or **round-robin** owners across sequential batches. Using a single backend-capable dev id for multiple independent units requires the documented single-id override defined in § Dispatch preconditions (hard block).
 
 ---
 
