@@ -71,7 +71,7 @@ Make a failure name the offending entry — the path, row or field that disagree
 
 ## Assert the semantic, not the bytes
 
-The banned forms are narrow and specific: a directory's file bytes or a base64/hex dump of them; a digest equal to `createHash(...)` of the same input, or to a literal digest constant; a file equal to a hard-coded full text, even held in a named constant; and a version or module version as the expected side of an assertion. Each is volatile — database sidecars, write-ahead residency, build drift, whitespace and version bumps move it — and each hides what the test means.
+The banned forms are narrow and specific: a directory's file bytes or a base64/hex dump of them; a digest equal to `createHash(...)` of the same input, or to a literal digest constant; a file equal to a hard-coded full text, even held in a named constant; and a version or module version asserted against a hard-coded literal — derive it from its owning source (the manifest, a directory listing, the CLI) instead. Each is volatile — database sidecars, write-ahead residency, build drift, whitespace and version bumps move it — and each hides what the test means.
 
 A version or hash passed in as an input — a fixture field, a manifest value — is allowed: the prohibition sits on what the assertion expects, not on constants a fixture supplies. A requirement that genuinely needs a byte, digest or pinned-version comparison is an open question to confirm, not a test to write.
 
