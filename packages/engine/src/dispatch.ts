@@ -652,6 +652,9 @@ export function validateControlWriteAssignment(
     for (const declared of fields.controlWritePaths ?? []) {
       if (/[*?[\]{}]/.test(declared) || (!isAbsolute(declared) && worktree === undefined)) continue;
       const target = resolve(worktree ?? controlRoot, declared);
+      // Control-domain codes reuse the probe's ignored/checkoutRoot facts without
+      // re-probing; callerCheckoutRoot is omitted because the caller's checkout
+      // is not the authority for process state.
       const ownership = probePathOwnership({ path: target, kind: declared.endsWith("/") ? "directory" : "file" }, controlRoot);
       if (ownership.ignored === false) {
         violations.push(violation("high", "dispatch.control-write.target-committable",

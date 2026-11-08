@@ -222,6 +222,7 @@ describe("control write host gate", () => {
       const base = { "Write domain": "control", "Worktree path": root, "Working branch": "main", "Control write paths": ".mstar/plans/", "Task budget": "one round", Enforcement: "hard" };
       expect(composeDispatchGate(assignment(base), { cwd: root }).ok).toBe(true);
       expect(composeDispatchGate(assignment({ ...base, "Worktree path": linked }), { cwd: root }).violations.map((v) => v.code)).toContain("dispatch.control-write.worktree-not-control");
+      expect(composeDispatchGate(assignment({ ...base, "Control write paths": "tracked.txt" }), { cwd: root }).violations.map((v) => v.code)).toContain("dispatch.control-write.target-committable");
       const direct = { ...base, "Working branch": undefined, "Branch policy": "direct on main \u2014 maintenance" };
       expect(validateAssignmentFields(assignment(direct)).ok).toBe(true);
       expect(composeDispatchGate(assignment(direct), { cwd: root }).ok).toBe(true);
