@@ -25,8 +25,14 @@ A check that cannot fail for this regression is not evidence. Green from a check
 
 A test filter chooses which tests run; a coverage scope chooses which source those tests must prove. Where coverage is the evidence, name both — the owning tests and the affected source scope — and do not lower a threshold or narrow the scope to hide a file the change reaches.
 
+## Scope discipline
+
+Verify the owning surface, not a neighbouring one. Map the change to the code that owns the behavior, run that, and state the mapping; an adjacent suite earns its run only when the change alters a contract it shares.
+
+Name the artifacts the change produces, and treat any committed artifact that inlines the changed code as part of the changed surface: regenerating and checking it belongs to this change's evidence, not to a discovery in CI one round later.
+
+Batch local fixes and validate once the batch is coherent. Re-running the same check for each intermediate state yields partial results that are hard to attribute and adds no evidence.
+
 ## Where the rest is owned
 
 - Concurrency, process, port, clock, temporary-root, global-state or teardown risk → `references/test-reliability.md` in this skill.
-- Verifying the owning surface instead of a neighbouring one, and batching local fixes into one settled push → `.mstar/knowledge/testing-patterns/verification-redundancy-and-unholdable-gates.md`.
-- Working out which committed artifacts inline the changed code, and so belong in its scope → same document, inlined-bundle subject.
