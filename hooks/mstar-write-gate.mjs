@@ -45,12 +45,12 @@ import { existsSync as existsSync10, mkdirSync as mkdirSync4, readdirSync as rea
 import { execFileSync as execFileSync4 } from "node:child_process";
 import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute6, join as join13, relative as relative3, resolve as resolve11 } from "node:path";
 import { basename as basename8, isAbsolute as isAbsolute8, join as join15, relative as relative4, resolve as resolve12, sep as sep7 } from "node:path";
-import { createHash as createHash9 } from "node:crypto";
-import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7 } from "node:fs";
+import { createHash as createHash9, randomUUID as randomUUID4 } from "node:crypto";
+import { closeSync, existsSync as existsSync13, fstatSync, openSync, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
 import { dirname as dirname10, isAbsolute as isAbsolute10, join as join17, resolve as resolve14, sep as sep9 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync8, unlinkSync as unlinkSync3 } from "node:fs";
+import { closeSync as closeSync2, existsSync as existsSync14, fstatSync as fstatSync2, fsyncSync, linkSync, lstatSync as lstatSync6, openSync as openSync2, readSync, statSync as statSync8, unlinkSync as unlinkSync4 } from "node:fs";
 import { basename as basename9, dirname as dirname11, join as join18, resolve as resolve15 } from "node:path";
 import { existsSync as existsSync15, statSync as statSync10 } from "node:fs";
 import { basename as basename11, dirname as dirname13, join as join20, relative as relative7, resolve as resolve17 } from "node:path";
@@ -15003,7 +15003,7 @@ function validateWorktreePathValue(violations, value, field) {
     violations.push(violation8("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
   }
 }
-function deliveryEvidenceViolations(value, what) {
+function deliveryEvidenceViolations(value, what, options) {
   const violations = [];
   const invalid3 = (message) => {
     violations.push(violation8("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
@@ -15012,10 +15012,30 @@ function deliveryEvidenceViolations(value, what) {
     invalid3("must be an object");
     return violations;
   }
-  const members = ["compound", "merge"];
+  const allowProof = options?.allowProof === true;
+  const members = allowProof ? ["compound", "merge", "proof"] : ["compound", "merge"];
   const unknownMembers = Object.keys(value).filter((key) => !members.includes(key));
   if (unknownMembers.length > 0)
     invalid3(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
+  if (allowProof && value.proof !== undefined) {
+    const proof = value.proof;
+    if (!isPlainObject(proof))
+      invalid3("proof must be an object");
+    else {
+      const unknown = Object.keys(proof).filter((key) => !["target", "tip", "at", "commit"].includes(key));
+      if (unknown.length > 0)
+        invalid3(`proof has unknown key(s) ${unknown.join(", ")}`);
+      if (typeof proof.target !== "string" || proof.target.trim() === "")
+        invalid3("proof.target must be a non-empty string");
+      if (typeof proof.tip !== "string" || proof.tip.trim() === "")
+        invalid3("proof.tip must be a non-empty string");
+      if (typeof proof.at !== "string" || proof.at.trim() === "")
+        invalid3("proof.at must be a non-empty string");
+      if (proof.commit !== undefined && (typeof proof.commit !== "string" || !DELIVERY_COMMIT_RE.test(proof.commit))) {
+        invalid3("proof.commit must be a full lowercase 40- or 64-hex commit id when recorded");
+      }
+    }
+  }
   const compound = value.compound;
   if (compound !== undefined) {
     if (!isPlainObject(compound))
@@ -15161,7 +15181,7 @@ function validateWorkflowSnapshot(doc) {
     validateNonEmptyString4(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
   }
   if (doc.delivery !== undefined) {
-    violations.push(...deliveryEvidenceViolations(storedDeliveryEvidence(doc.delivery), "delivery"));
+    violations.push(...deliveryEvidenceViolations(storedDeliveryEvidence(doc.delivery), "delivery", { allowProof: true }));
   }
   const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
   if (terminal) {
@@ -15375,6 +15395,7 @@ var FROZEN_ROW_FIELDS;
 var FROZEN_METADATA_FIELDS;
 var GIT_OBJECT_ID;
 var UNFINISHED_GIT_OPERATIONS;
+var GIT_READ_MAX_BUFFER;
 var PLAN_PARALLELISM_VALUES;
 var init_coordination = __esm(() => {
   init_coordination_write();
@@ -15415,6 +15436,7 @@ var init_coordination = __esm(() => {
     ["rebase-merge", "rebase"],
     ["rebase-apply", "rebase"]
   ];
+  GIT_READ_MAX_BUFFER = 16 * 1024 * 1024;
   PLAN_PARALLELISM_VALUES = ["serial", "parallel"];
 });
 function parsedInstant(value) {
@@ -15573,13 +15595,13 @@ function ensureJournalForRead(dbPath) {
   const header = Buffer.alloc(DATABASE_HEADER_BYTES);
   let bytes;
   try {
-    const source = openSync(dbPath, "r");
+    const source = openSync2(dbPath, "r");
     try {
-      bytes = fstatSync(source).size;
+      bytes = fstatSync2(source).size;
       if (readSync(source, header, 0, header.length, 0) < header.length)
         return;
     } finally {
-      closeSync(source);
+      closeSync2(source);
     }
   } catch {
     return;
@@ -15588,11 +15610,11 @@ function ensureJournalForRead(dbPath) {
     return;
   let journal;
   try {
-    journal = openSync(`${dbPath}-wal`, "wx");
+    journal = openSync2(`${dbPath}-wal`, "wx");
   } catch {
     return;
   }
-  closeSync(journal);
+  closeSync2(journal);
 }
 function openConnection(dbPath, mode, DatabaseSync, timeout = DEFAULT_BUSY_TIMEOUT_MS) {
   let db;

@@ -574,14 +574,15 @@ import { basename as basename8, isAbsolute as isAbsolute8, join as join15, relat
 import { createHash as createHash8 } from "node:crypto";
 import { isAbsolute as isAbsolute9, join as join16, resolve as resolve13, sep as sep8 } from "node:path";
 import { readFileSync as readFileSync13 } from "node:fs";
-import { execFileSync as execFileSync5 } from "node:child_process";
-import { createHash as createHash9 } from "node:crypto";
-import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7 } from "node:fs";
+import { execFileSync as execFileSync5, spawnSync } from "node:child_process";
+import { createHash as createHash9, randomUUID as randomUUID4 } from "node:crypto";
+import { closeSync, existsSync as existsSync13, fstatSync, openSync, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname as dirname10, isAbsolute as isAbsolute10, join as join17, resolve as resolve14, sep as sep9 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
 import { createHash as createHash10, randomUUID as randomUUID5 } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync, existsSync as existsSync14, fstatSync, fsyncSync, linkSync, lstatSync as lstatSync6, openSync, readSync, statSync as statSync8, unlinkSync as unlinkSync3 } from "node:fs";
+import { closeSync as closeSync2, existsSync as existsSync14, fstatSync as fstatSync2, fsyncSync, linkSync, lstatSync as lstatSync6, openSync as openSync2, readSync, statSync as statSync8, unlinkSync as unlinkSync4 } from "node:fs";
 import { basename as basename9, dirname as dirname11, join as join18, resolve as resolve15 } from "node:path";
 import { createHash as createHash11 } from "node:crypto";
 import { lstatSync as lstatSync7, readFileSync as readFileSync15, realpathSync as realpathSync7 } from "node:fs";
@@ -594,7 +595,7 @@ import { basename as basename11, dirname as dirname13, join as join20, relative 
 import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
 import { basename as basename12, dirname as dirname14, relative as relative8, resolve as resolve18 } from "node:path";
 import { createHash as createHash12 } from "node:crypto";
-import { closeSync as closeSync2, constants as constants2, fstatSync as fstatSync2, lstatSync as lstatSync8, openSync as openSync2, readFileSync as readFileSync17, readdirSync as readdirSync10 } from "node:fs";
+import { closeSync as closeSync3, constants as constants2, fstatSync as fstatSync3, lstatSync as lstatSync8, openSync as openSync3, readFileSync as readFileSync17, readdirSync as readdirSync10 } from "node:fs";
 import { join as join21, relative as relative9 } from "node:path";
 import { existsSync as existsSync16, readdirSync as readdirSync11 } from "node:fs";
 import { basename as basename13, isAbsolute as isAbsolute12, join as join22, resolve as resolve19, sep as sep10 } from "node:path";
@@ -602,15 +603,15 @@ import { existsSync as existsSync17, readFileSync as readFileSync19, readdirSync
 import { join as join23 } from "node:path";
 import { lstatSync as lstatSync9, readdirSync as readdirSync13 } from "node:fs";
 import { isAbsolute as isAbsolute13, join as join24 } from "node:path";
-import { existsSync as existsSync18, readdirSync as readdirSync14, unlinkSync as unlinkSync4 } from "node:fs";
+import { existsSync as existsSync18, readdirSync as readdirSync14, unlinkSync as unlinkSync5 } from "node:fs";
 import { basename as basename14, isAbsolute as isAbsolute14, join as join25, resolve as resolve20, sep as sep11 } from "node:path";
 import { existsSync as existsSync19, readFileSync as readFileSync20 } from "node:fs";
 import { isAbsolute as isAbsolute15, join as join26, resolve as resolve21 } from "node:path";
-import { closeSync as closeSync4, constants as constants4, existsSync as existsSync20, fstatSync as fstatSync4, lstatSync as lstatSync11, mkdirSync as mkdirSync7, openSync as openSync4, readFileSync as readFileSync22, readdirSync as readdirSync16 } from "node:fs";
+import { closeSync as closeSync5, constants as constants4, existsSync as existsSync20, fstatSync as fstatSync5, lstatSync as lstatSync11, mkdirSync as mkdirSync7, openSync as openSync5, readFileSync as readFileSync22, readdirSync as readdirSync16 } from "node:fs";
 import { dirname as dirname16, isAbsolute as isAbsolute16, join as join28, relative as relative10, resolve as resolve22, sep as sep12 } from "node:path";
 import { createHash as createHash14 } from "node:crypto";
 import { createHash as createHash13 } from "node:crypto";
-import { closeSync as closeSync3, constants as constants3, fstatSync as fstatSync3, lstatSync as lstatSync10, openSync as openSync3, readFileSync as readFileSync21, readdirSync as readdirSync15 } from "node:fs";
+import { closeSync as closeSync4, constants as constants3, fstatSync as fstatSync4, lstatSync as lstatSync10, openSync as openSync4, readFileSync as readFileSync21, readdirSync as readdirSync15 } from "node:fs";
 import { dirname as dirname15, join as join27 } from "node:path";
 import { dirname as dirname18, isAbsolute as isAbsolute17 } from "node:path";
 import { createHash as createHash15, randomUUID as randomUUID6 } from "node:crypto";
@@ -632,27 +633,27 @@ import { existsSync as existsSync23, lstatSync as lstatSync12, readFileSync as r
 import { join as join32, resolve as resolve24 } from "node:path";
 import { randomUUID as randomUUID7 } from "node:crypto";
 import {
-  closeSync as closeSync5,
+  closeSync as closeSync6,
   constants as fsConstants,
-  fstatSync as fstatSync5,
+  fstatSync as fstatSync6,
   fsyncSync as fsyncSync2,
   lstatSync as lstatSync13,
   mkdirSync as mkdirSync8,
-  openSync as openSync5,
+  openSync as openSync6,
   readFileSync as readFileSync26,
   renameSync as renameSync3,
-  unlinkSync as unlinkSync5,
+  unlinkSync as unlinkSync6,
   writeSync
 } from "node:fs";
 import { basename as basename15, dirname as dirname20, join as join33 } from "node:path";
 import { createHash as createHash23, randomUUID as randomUUID8 } from "node:crypto";
 import {
-  closeSync as closeSync6,
+  closeSync as closeSync7,
   copyFileSync as copyFileSync2,
   createReadStream,
   existsSync as existsSync24,
   mkdtempSync,
-  openSync as openSync6,
+  openSync as openSync7,
   readFileSync as readFileSync27,
   readdirSync as readdirSync18,
   readSync as readSync2,
@@ -660,7 +661,7 @@ import {
   writeFileSync as writeFileSync5
 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
-import { tmpdir } from "node:os";
+import { tmpdir as tmpdir2 } from "node:os";
 import { dirname as dirname21, join as join34, relative as relative12, resolve as resolve25, sep as sep14 } from "node:path";
 import { chmodSync, existsSync as existsSync25, mkdirSync as mkdirSync9, readFileSync as readFileSync28, renameSync as renameSync4, rmSync as rmSync3, writeFileSync as writeFileSync6 } from "node:fs";
 import { homedir } from "node:os";
@@ -16451,7 +16452,7 @@ function validateWorktreePathValue(violations, value, field) {
     violations.push(violation8("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
   }
 }
-function deliveryEvidenceViolations(value, what) {
+function deliveryEvidenceViolations(value, what, options) {
   const violations = [];
   const invalid3 = (message) => {
     violations.push(violation8("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
@@ -16460,10 +16461,30 @@ function deliveryEvidenceViolations(value, what) {
     invalid3("must be an object");
     return violations;
   }
-  const members = ["compound", "merge"];
+  const allowProof = options?.allowProof === true;
+  const members = allowProof ? ["compound", "merge", "proof"] : ["compound", "merge"];
   const unknownMembers = Object.keys(value).filter((key) => !members.includes(key));
   if (unknownMembers.length > 0)
     invalid3(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
+  if (allowProof && value.proof !== undefined) {
+    const proof = value.proof;
+    if (!isPlainObject(proof))
+      invalid3("proof must be an object");
+    else {
+      const unknown = Object.keys(proof).filter((key) => !["target", "tip", "at", "commit"].includes(key));
+      if (unknown.length > 0)
+        invalid3(`proof has unknown key(s) ${unknown.join(", ")}`);
+      if (typeof proof.target !== "string" || proof.target.trim() === "")
+        invalid3("proof.target must be a non-empty string");
+      if (typeof proof.tip !== "string" || proof.tip.trim() === "")
+        invalid3("proof.tip must be a non-empty string");
+      if (typeof proof.at !== "string" || proof.at.trim() === "")
+        invalid3("proof.at must be a non-empty string");
+      if (proof.commit !== undefined && (typeof proof.commit !== "string" || !DELIVERY_COMMIT_RE.test(proof.commit))) {
+        invalid3("proof.commit must be a full lowercase 40- or 64-hex commit id when recorded");
+      }
+    }
+  }
   const compound = value.compound;
   if (compound !== undefined) {
     if (!isPlainObject(compound))
@@ -16612,7 +16633,7 @@ function validateWorkflowSnapshot(doc) {
     validateNonEmptyString4(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
   }
   if (doc.delivery !== undefined) {
-    violations.push(...deliveryEvidenceViolations(storedDeliveryEvidence(doc.delivery), "delivery"));
+    violations.push(...deliveryEvidenceViolations(storedDeliveryEvidence(doc.delivery), "delivery", { allowProof: true }));
   }
   const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
   if (terminal) {
@@ -18048,7 +18069,8 @@ function gitPipe(cwd, args, stdin) {
       stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       input: stdin,
       encoding: "utf8",
-      timeout: GIT_READ_TIMEOUT_MS
+      timeout: GIT_READ_TIMEOUT_MS,
+      maxBuffer: GIT_READ_MAX_BUFFER
     });
   } catch (error) {
     if (typeof propertyOf(error, "status") === "number")
@@ -18066,11 +18088,51 @@ function gitIsAncestor(cwd, ancestor, descendant) {
   return gitRead(cwd, ["merge-base", "--is-ancestor", ancestor, descendant]) !== undefined;
 }
 function gitPatchId(cwd, from, to) {
-  const diff = gitPipe(cwd, ["diff", "--no-color", "--no-ext-diff", from, to]);
-  if (diff === undefined || diff.trim() === "")
-    return;
-  const id = gitPipe(cwd, ["patch-id", "--stable"], diff)?.trim().split(" ")[0];
-  return isNonEmptyString(id) ? id : undefined;
+  const scratch = join17(tmpdir(), `mstar-patchid-${process.pid}-${randomUUID4()}`);
+  let diffFd;
+  try {
+    diffFd = openSync(scratch, "w+");
+    const diff = spawnSync("git", ["-C", cwd, "diff", "--no-color", "--no-ext-diff", from, to], {
+      stdio: ["ignore", diffFd, "pipe"],
+      encoding: "utf8",
+      timeout: GIT_READ_TIMEOUT_MS
+    });
+    if (diff.error !== undefined)
+      throw gitUnavailable(cwd, ["diff", from, to], diff.error);
+    if (diff.status !== 0)
+      return;
+    if (fstatSync(diffFd).size === 0)
+      return;
+    closeSync(diffFd);
+    diffFd = undefined;
+    const patchFd = openSync(scratch, "r");
+    try {
+      const id = spawnSync("git", ["-C", cwd, "patch-id", "--stable"], {
+        stdio: [patchFd, "pipe", "pipe"],
+        encoding: "utf8",
+        timeout: GIT_READ_TIMEOUT_MS
+      });
+      if (id.error !== undefined)
+        throw gitUnavailable(cwd, ["patch-id", "--stable"], id.error);
+      const first = id.status === 0 ? id.stdout.trim().split(" ")[0] : undefined;
+      return isNonEmptyString(first) ? first : undefined;
+    } finally {
+      closeSync(patchFd);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "CoordinationError")
+      throw error;
+    throw gitUnavailable(cwd, ["diff", from, to], error);
+  } finally {
+    if (diffFd !== undefined) {
+      try {
+        closeSync(diffFd);
+      } catch {}
+    }
+    try {
+      unlinkSync3(scratch);
+    } catch {}
+  }
 }
 function gitCheckout(path2) {
   const head = gitRead(path2, ["rev-parse", "HEAD"]);
@@ -18187,15 +18249,44 @@ function deliveryRef(cwd, branch, remoteFirst) {
   }
   return;
 }
+function deliveryMergeProofOf(snapshot) {
+  const proof = isPlainObject(snapshot.delivery) ? snapshot.delivery.proof : undefined;
+  if (!isPlainObject(proof))
+    return;
+  if (typeof proof.target !== "string" || proof.target === "" || typeof proof.tip !== "string" || proof.tip === "" || typeof proof.at !== "string" || proof.at === "") {
+    return;
+  }
+  const out = { target: proof.target, tip: proof.tip, at: proof.at };
+  if (typeof proof.commit === "string" && proof.commit !== "")
+    out.commit = proof.commit;
+  return out;
+}
 function verifyDeliveryEvidence(snapshot) {
   const violations = consultDeliveryEvidence(snapshot);
   if (violations.length > 0)
     return violations;
   if (snapshot.type !== "plan" || snapshot.delivery_kind !== "development")
     return [];
+  if (deliveryMergeProofOf(snapshot) !== undefined)
+    return [];
   return deliveryMergeViolations(snapshot);
 }
-function deliveryMergeViolations(snapshot) {
+function verifyDeliveryEvidenceForClose(snapshot) {
+  const violations = consultDeliveryEvidence(snapshot);
+  if (violations.length > 0)
+    return { violations };
+  if (snapshot.type !== "plan" || snapshot.delivery_kind !== "development")
+    return { violations: [] };
+  const facts = {};
+  const remaining = deliveryMergeViolations(snapshot, facts);
+  if (remaining.length > 0)
+    return { violations: remaining };
+  return {
+    violations: [],
+    proof: { target: facts.target, tip: facts.tip, at: new Date().toISOString(), ...facts.commit !== undefined ? { commit: facts.commit } : {} }
+  };
+}
+function deliveryMergeViolations(snapshot, facts) {
   const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
   const deliveryBranch = deliveryBranchOf(branch);
@@ -18203,15 +18294,15 @@ function deliveryMergeViolations(snapshot) {
   const refuse = (message, fix) => [
     { ok: false, severity: "high", code: "PHASE6_DELIVERY_MERGE_UNPROVEN", message, fix }
   ];
-  const record = `record the provider merge/squash commit with 'mstar workflow evidence --workflow ${workflowId} --file <absolute-json>' using {"merge":{"commit":"<full commit id>"}} (on an already-closed lifecycle, reopen it with 'mstar workflow reopen' first)`;
+  const record = `record the provider merge/squash commit with 'mstar workflow evidence --workflow ${workflowId} --file <absolute-json>' using {"merge":{"commit":"<full commit id>"}}`;
   const recorded = (snapshot.plans ?? []).map((row) => isPlainObject(row.metadata) ? row.metadata.worktree_path : undefined).filter((path2) => isNonEmptyString(path2));
   const readable = recorded.filter((path2) => isAbsolute10(path2) && existsSync13(path2));
   if (readable.length === 0) {
-    return refuse(recorded.length === 0 ? `Workflow '${workflowId}' records no plan worktree, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in the plan's own checkout` : `Workflow '${workflowId}' records plan worktree(s) ${recorded.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`, `Record the plan's own checkout with 'mstar plan prepare --workflow ${workflowId} --plan <plan-id> --worktree-path <absolute-checkout> --working-branch <branch>', then retry the close. If the merge was a squash or rebase, ${record}.`);
+    return refuse(recorded.length === 0 ? `Workflow '${workflowId}' records no plan worktree, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in the plan's own checkout` : `Workflow '${workflowId}' records plan worktree(s) ${recorded.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`, `Rebuild the recorded checkout with 'git worktree add ${recorded[0]} ${deliveryBranch}'; for an already-closed lifecycle, reopen it with 'mstar workflow reopen --workflow ${workflowId} --reason <text>', then the ordinary close re-proves the merge and persists its proof. If the merge was a squash or rebase, ${record}.`);
   }
   const checkouts = readable.filter((path2) => gitRead(path2, ["rev-parse", "--show-toplevel"]) !== undefined);
   if (checkouts.length === 0) {
-    return refuse(`Workflow '${workflowId}' cannot prove its delivery merge: ${readable[0]} is not a readable Git checkout`, `Repair or re-record the plan checkout, then retry the close; if the merge was a squash or rebase, ${record}.`);
+    return refuse(`Workflow '${workflowId}' cannot prove its delivery merge: ${readable[0]} is not a readable Git checkout`, `Rebuild or repair the recorded checkout so it is a readable Git worktree, then retry the close; if the merge was a squash or rebase, ${record}.`);
   }
   const resolving = checkouts.map((path2) => ({ path: path2, target: deliveryRef(path2, targetBranch, true) })).find((candidate) => candidate.target !== undefined);
   const checkout = resolving?.path ?? checkouts[0];
@@ -18220,8 +18311,13 @@ function deliveryMergeViolations(snapshot) {
     return refuse(`Workflow '${workflowId}' cannot prove its delivery merge: the plan checkout ${checkout} has neither refs/remotes/origin/${targetBranch} nor refs/heads/${targetBranch}, so ${deliveryBranch} has no ref to be an ancestor of`, `Fetch the target branch into the plan checkout, then retry the close; a recorded merge commit cannot substitute for the missing target ref.`);
   }
   const tip = deliveryRef(checkout, deliveryBranch, false);
-  if (tip !== undefined && gitIsAncestor(checkout, tip, target))
+  if (tip !== undefined && gitIsAncestor(checkout, tip, target)) {
+    if (facts !== undefined) {
+      facts.target = target;
+      facts.tip = tip;
+    }
     return [];
+  }
   const recordedCommit = isPlainObject(snapshot.delivery) && isPlainObject(snapshot.delivery.merge) ? snapshot.delivery.merge.commit : undefined;
   const mergeCommit = isNonEmptyString(recordedCommit) ? recordedCommit : undefined;
   const fork = tip === undefined ? undefined : gitRead(checkout, ["merge-base", target, tip]);
@@ -18235,9 +18331,15 @@ function deliveryMergeViolations(snapshot) {
     const cherry = gitRead(checkout, ["cherry", target, tip]);
     if (cherry !== undefined && cherry !== "" && cherry.split(`
 `).every((line) => line.startsWith("-"))) {
-      if (gitRead(checkout, ["rev-list", "--merges", `${target}..${tip}`]) === "")
+      const merges = gitRead(checkout, ["rev-list", "--merges", `${target}..${tip}`]);
+      if (merges === "") {
+        if (facts !== undefined) {
+          facts.target = target;
+          facts.tip = tip;
+        }
         return [];
-      unproven.push(`${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and its history carries merge commits in ${target}..${tip} that 'git cherry' does not report`);
+      }
+      unproven.push(merges === undefined ? `${target}..${tip} could not be read in ${checkout}, so the all-equivalent 'git cherry' result cannot be trusted as a merge-free proof` : `${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and its history carries merge commits in ${target}..${tip} that 'git cherry' does not report`);
     } else {
       unproven.push(cherry === undefined || cherry === "" ? `${fork}..${tip} carries no commit to associate with ${targetBranch} (${target})` : `${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and ${cherry.split(`
 `).filter((line) => !line.startsWith("-")).length} of ${fork}..${tip}'s commits have no patch-equivalent commit there`);
@@ -18253,8 +18355,14 @@ function deliveryMergeViolations(snapshot) {
     unproven.push(`the recorded delivery.merge.commit ${mergeCommit} cannot be associated: ${deliveryBranch} supplies no delivery diff in ${checkout} to compare it with`);
   } else {
     const mergedPatch = gitPatchId(checkout, `${mergeCommit}^`, mergeCommit);
-    if (mergedPatch !== undefined && mergedPatch === deliveryPatch)
+    if (mergedPatch !== undefined && mergedPatch === deliveryPatch) {
+      if (facts !== undefined) {
+        facts.target = target;
+        facts.tip = tip;
+        facts.commit = mergeCommit;
+      }
       return [];
+    }
     unproven.push(mergedPatch === undefined ? `the recorded delivery.merge.commit ${mergeCommit} has no readable diff in ${checkout}` : `the recorded delivery.merge.commit ${mergeCommit} is an ancestor of ${targetBranch} (${target}) but carries different content (patch id ${mergedPatch}) than the delivery ${fork}..${tip} (patch id ${deliveryPatch})`);
   }
   return refuse(`Workflow '${workflowId}' cannot prove its delivery merge: ${unproven.join("; ")}`, `Fetch the target branch into the plan checkout and retry the close; if ${deliveryBranch} has no ref there, restore or fetch refs/heads/${deliveryBranch} first, then ${record}. A recorded commit must carry the delivery's own diff, and a squash that resolved conflicts differently has no local proof — record that outcome instead with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'.`);
@@ -18436,13 +18544,13 @@ function ensureJournalForRead(dbPath) {
   const header = Buffer.alloc(DATABASE_HEADER_BYTES);
   let bytes;
   try {
-    const source = openSync(dbPath, "r");
+    const source = openSync2(dbPath, "r");
     try {
-      bytes = fstatSync(source).size;
+      bytes = fstatSync2(source).size;
       if (readSync(source, header, 0, header.length, 0) < header.length)
         return;
     } finally {
-      closeSync(source);
+      closeSync2(source);
     }
   } catch {
     return;
@@ -18451,11 +18559,11 @@ function ensureJournalForRead(dbPath) {
     return;
   let journal;
   try {
-    journal = openSync(`${dbPath}-wal`, "wx");
+    journal = openSync2(`${dbPath}-wal`, "wx");
   } catch {
     return;
   }
-  closeSync(journal);
+  closeSync2(journal);
 }
 function openConnection(dbPath, mode, DatabaseSync, timeout = DEFAULT_BUSY_TIMEOUT_MS) {
   let db;
@@ -19042,7 +19150,7 @@ async function openStoreOnce(dbPath, mode, timeout) {
 function removeStagingFiles(stagingPath) {
   for (const suffix of ["", "-journal", "-wal", "-shm"]) {
     try {
-      unlinkSync3(stagingPath + suffix);
+      unlinkSync4(stagingPath + suffix);
     } catch {}
   }
 }
@@ -19056,11 +19164,11 @@ function publicationRefusal(step, error, dbPath) {
   return new StoreError("store.publication-failed", `The fresh store could not be ${step}: ${cause}. NO store was published at ${dbPath} — the canonical path ` + `holds no store and nothing was written to it. Resolve the filesystem condition named above (permissions, space, hard-link support) and rerun the same command, or select a harness on a filesystem that supports atomic hard links with --harness.`, { path: dbPath, cause });
 }
 function syncDirectoryEntry(dir) {
-  const fd = openSync(dir, "r");
+  const fd = openSync2(dir, "r");
   try {
     fsyncSync(fd);
   } finally {
-    closeSync(fd);
+    closeSync2(fd);
   }
 }
 function publicationBarrierRefusal(error, dbPath, phase) {
@@ -19080,11 +19188,11 @@ async function initializeStore(context, options = {}) {
   const stagingPath = join18(dirname11(dbPath), `.${basename9(dbPath)}.init-${process.pid}-${randomUUID5()}.tmp`);
   let claim;
   try {
-    claim = openSync(stagingPath, "wx");
+    claim = openSync2(stagingPath, "wx");
   } catch (error) {
     throw publicationRefusal("created in the control root's own directory", error, dbPath);
   }
-  closeSync(claim);
+  closeSync2(claim);
   let db;
   try {
     db = await connect(stagingPath, "write", timeout);
@@ -20514,8 +20622,8 @@ function scanCompasses(harnessDir, acknowledgedCompassSkips) {
     }
     let fd;
     try {
-      fd = openSync2(compassPath, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
-      const opened = fstatSync2(fd);
+      fd = openSync3(compassPath, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+      const opened = fstatSync3(fd);
       if (!opened.isFile())
         throw notRegular();
       if (opened.dev !== info.dev || opened.ino !== info.ino)
@@ -20533,7 +20641,7 @@ function scanCompasses(harnessDir, acknowledgedCompassSkips) {
       continue;
     } finally {
       if (fd !== undefined)
-        closeSync2(fd);
+        closeSync3(fd);
     }
     const content3 = bytes.toString("utf8");
     const doc = parseCompassFrontmatterText(content3, compassPath);
@@ -23334,7 +23442,7 @@ function createFsStore(harnessRoot) {
         assertProtectedWriteAuthorized(filePath, "delete", protectedKind);
       }
       if (existsSync18(filePath))
-        unlinkSync4(filePath);
+        unlinkSync5(filePath);
     },
     async list(kind) {
       if (kind === "json") {
@@ -23951,13 +24059,13 @@ function lossStatement(refusal) {
   }
 }
 function readBytes(path2) {
-  const fd = openSync3(path2, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
+  const fd = openSync4(path2, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
   try {
-    if (!fstatSync3(fd).isFile())
+    if (!fstatSync4(fd).isFile())
       throw new Error(`not a regular file: ${path2}`);
     return readFileSync21(fd);
   } finally {
-    closeSync3(fd);
+    closeSync4(fd);
   }
 }
 function readInside(parent, child) {
@@ -24543,8 +24651,8 @@ function readSourceBytes(path2, label) {
     throw new UnsafeSourceError(`${label} at ${path2} is not a regular file.`);
   let fd;
   try {
-    fd = openSync4(path2, constants4.O_RDONLY | (constants4.O_NOFOLLOW ?? 0) | (constants4.O_NONBLOCK ?? 0));
-    const opened = fstatSync4(fd);
+    fd = openSync5(path2, constants4.O_RDONLY | (constants4.O_NOFOLLOW ?? 0) | (constants4.O_NONBLOCK ?? 0));
+    const opened = fstatSync5(fd);
     if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) {
       throw new UnsafeSourceError(`${label} at ${path2} was replaced, is not a regular file, or is no longer the verified bytes.`);
     }
@@ -24557,7 +24665,7 @@ function readSourceBytes(path2, label) {
     return conflict2(`${label} at ${path2} is unreadable (${error instanceof Error ? error.message : String(error)}); restore read access and rerun store upgrade.`);
   } finally {
     if (fd !== undefined)
-      closeSync4(fd);
+      closeSync5(fd);
   }
 }
 function readRegularJson(path2, label, read = readSourceBytes) {
@@ -28588,7 +28696,7 @@ function applyLifecycleTransition(input) {
         workflow_id: workflowId
       });
     }
-    const violations = verifyDeliveryEvidence({ ...header, plans: [...rows] });
+    const { violations, proof } = verifyDeliveryEvidenceForClose({ ...header, plans: [...rows] });
     if (violations.length > 0) {
       throw invalidWorkflowTransition("The workflow cannot complete; inspect the workflow with mstar status validate.", {
         violations: violations.map((entry) => entry.message),
@@ -28596,6 +28704,10 @@ function applyLifecycleTransition(input) {
         code: violations[0]?.code,
         workflow_id: workflowId
       });
+    }
+    if (proof !== undefined) {
+      const base = isPlainObject(header.delivery) ? header.delivery : {};
+      header.delivery = { ...base, proof };
     }
   }
   const dangling = danglingOwnership(witness);
@@ -28654,8 +28766,8 @@ function applyDeliveryEvidence(input) {
       violations: shape.map((entry) => entry.message)
     });
   }
-  const stored = isPlainObject(header.delivery) ? header.delivery : {};
-  return { ...stored, ...delivery };
+  const stored = isPlainObject(header.delivery) ? storedDeliveryEvidence(header.delivery) : {};
+  return { ...isPlainObject(stored) ? stored : {}, ...delivery };
 }
 function recoverCoordinatorRequestHash(caller, workflowId, input) {
   return createHash17("sha256").update(serializeExecutionValue({
@@ -28902,9 +29014,13 @@ async function reopenExecutionWorkflow(context, input) {
     }
     const status = String(header.state.status ?? "");
     if (status === "completed") {
-      throw new ExecutionError("workflow.reopen-completed", `workflow ${workflowId} is completed — a completed lifecycle is never reopened, and this route has no override. ` + `Register a new lifecycle for further work; the completed history stays exactly as it was recorded.`, { workflow_id: workflowId, status });
+      const delivery = isPlainObject(header.state.delivery) ? header.state.delivery : {};
+      const unprovenHistory = String(header.state.delivery_kind ?? "") === "development" && isPlainObject(delivery.compound) && !isPlainObject(delivery.proof);
+      if (!unprovenHistory) {
+        throw new ExecutionError("workflow.reopen-completed", `workflow ${workflowId} is completed — a completed lifecycle is never reopened, and this route has no override. ` + `Register a new lifecycle for further work; the completed history stays exactly as it was recorded.`, { workflow_id: workflowId, status });
+      }
     }
-    if (status !== "failed" && status !== "stopped") {
+    if (status !== "completed" && status !== "failed" && status !== "stopped") {
       throw new ExecutionError("workflow.reopen-not-terminal", `workflow ${workflowId} is ${JSON.stringify(status)}; only a failed or stopped lifecycle is reopened, and a running/paused one is already active. Nothing was written.`, { workflow_id: workflowId, status });
     }
     assertExecutionToken(input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [workflowId], header.revision), {
@@ -31820,7 +31936,7 @@ function scanLedger(bytes) {
 function openWithoutFollowing(path2, flags, mode) {
   const noFollow = fsConstants.O_NOFOLLOW ?? 0;
   try {
-    return mode === undefined ? openSync5(path2, flags | noFollow) : openSync5(path2, flags | noFollow, mode);
+    return mode === undefined ? openSync6(path2, flags | noFollow) : openSync6(path2, flags | noFollow, mode);
   } catch (error) {
     if (error.code === "ELOOP") {
       throw new ExecutionLedgerError("execution-ledgers.target-untrusted", `${path2} is a symbolic link; a retained ledger leaf is opened directly and never followed.`);
@@ -31829,11 +31945,11 @@ function openWithoutFollowing(path2, flags, mode) {
   }
 }
 function fsyncDirectory(dir) {
-  const fd = openSync5(dir, "r");
+  const fd = openSync6(dir, "r");
   try {
     fsyncSync2(fd);
   } finally {
-    closeSync5(fd);
+    closeSync6(fd);
   }
 }
 function assertLedgerPathIdentity(path2, opened, phase) {
@@ -31860,7 +31976,7 @@ function commitLedgerFrame(path2, frame) {
     fd = openWithoutFollowing(path2, fsConstants.O_WRONLY | fsConstants.O_APPEND);
   }
   try {
-    opened = fstatSync5(fd);
+    opened = fstatSync6(fd);
     if (!opened.isFile()) {
       throw new ExecutionLedgerError("execution-ledgers.target-untrusted", `${path2} is not a regular file; nothing was written.`);
     }
@@ -31873,7 +31989,7 @@ function commitLedgerFrame(path2, frame) {
     }
     fsyncSync2(fd);
   } finally {
-    closeSync5(fd);
+    closeSync6(fd);
   }
   if (created)
     fsyncDirectory(dirname20(path2));
@@ -31918,12 +32034,12 @@ function writeLedgerTempFile(path2, content3) {
       }
       fsyncSync2(fd);
     } finally {
-      closeSync5(fd);
+      closeSync6(fd);
     }
     return temp;
   } catch (error) {
     try {
-      unlinkSync5(temp);
+      unlinkSync6(temp);
     } catch {}
     throw error;
   }
@@ -32012,7 +32128,7 @@ function compactWorkflowNotesLedger(path2, workflowId, trigger) {
   ]));
   if (!ledgerSnapshotUnchanged(path2, totalBytes)) {
     try {
-      unlinkSync5(temp);
+      unlinkSync6(temp);
     } catch {}
     return;
   }
@@ -32371,7 +32487,7 @@ function walStoreShapeOf(context) {
   const header = Buffer.alloc(DATABASE_HEADER_BYTES2);
   let fd;
   try {
-    fd = openSync6(dbPath, "r");
+    fd = openSync7(dbPath, "r");
   } catch {
     return null;
   }
@@ -32380,7 +32496,7 @@ function walStoreShapeOf(context) {
   } catch {
     return null;
   } finally {
-    closeSync6(fd);
+    closeSync7(fd);
   }
   if (header[18] !== WAL_FILE_FORMAT_VERSION2 || header[19] !== WAL_FILE_FORMAT_VERSION2)
     return null;
@@ -32390,7 +32506,7 @@ async function openWalWithoutJournalReadSnapshot(context) {
   const walWithoutJournal = walStoreShapeOf(context);
   if (walWithoutJournal === null || walWithoutJournal.wal)
     return null;
-  const scratch = mkdtempSync(join34(tmpdir(), "mstar-store-read-"));
+  const scratch = mkdtempSync(join34(tmpdir2(), "mstar-store-read-"));
   try {
     const image = join34(scratch, "store.db");
     copyFileSync2(storeDbPath(context), image);
@@ -33480,7 +33596,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
 !.agents/specs/**
 !.agents/adr/
 !.agents/adr/**
-`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, PREPARE_PHASE = "phase-1-prepare", EXECUTE_PHASE = "phase-2-execute", CLOSE_PHASE = "phase-3-close", DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, DELIVERY_COMMIT_RE, LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path", DERIVED_PHASE_CODE = "workflow.snapshot.derived-phase", WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, CATALOG_REGISTRATION_JOURNAL_VERSION = 1, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, JOURNAL_COLUMNS = "operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at", init_catalog_registration, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, SNAPSHOT_FILE = "snapshot.json", EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_TIMEOUT_MS = 1e4, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, SCHEMA_VERSION_TABLE_SQL = "create table schema_version(version integer primary key,name text not null unique,checksum text not null,applied_at text not null)", MIGRATION_1_SQL = `
+`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, PREPARE_PHASE = "phase-1-prepare", EXECUTE_PHASE = "phase-2-execute", CLOSE_PHASE = "phase-3-close", DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, DELIVERY_COMMIT_RE, LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path", DERIVED_PHASE_CODE = "workflow.snapshot.derived-phase", WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, CATALOG_REGISTRATION_JOURNAL_VERSION = 1, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, JOURNAL_COLUMNS = "operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at", init_catalog_registration, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, SNAPSHOT_FILE = "snapshot.json", EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID, UNFINISHED_GIT_OPERATIONS, GIT_READ_TIMEOUT_MS = 1e4, GIT_READ_MAX_BUFFER, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, SCHEMA_VERSION_TABLE_SQL = "create table schema_version(version integer primary key,name text not null unique,checksum text not null,applied_at text not null)", MIGRATION_1_SQL = `
 create table store_meta(
   id integer primary key check (id = 1),
   store_id text not null,
@@ -38255,6 +38371,7 @@ var init_engine = __esm(() => {
       ["rebase-merge", "rebase"],
       ["rebase-apply", "rebase"]
     ];
+    GIT_READ_MAX_BUFFER = 16 * 1024 * 1024;
     PLAN_PARALLELISM_VALUES = ["serial", "parallel"];
   });
   init_store_db = __esm2(() => {
