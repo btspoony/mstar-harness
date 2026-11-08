@@ -137,19 +137,24 @@ export function retireCodexQaAgent(target: string, dryRun: boolean): string[] {
   if (status === "unknown") return [unknownQaNote(target)];
   if (dryRun) return [`Would retire managed QA agent outside Codex discovery with a backup: ${target}`];
   const backup = `${target}.${randomUUID()}${BACKUP_SUFFIX}`;
-  try { fs.linkSync(target, backup); }
-  catch (error) {
-    throw new Error(`Could not back up retired QA agent ${target}. Check the agent directory and permissions, then re-run init: ${error instanceof Error ? error.message : String(error)}`);
+  try {
+    fs.closeSync(fs.openSync(backup, "wx", 0o600));
+    // Rename captures the actual directory entry even if it changed after inspection.
+    fs.renameSync(target, backup);
+  } catch (error) {
+    throw new Error(`Could not retire QA agent ${target}; inspect any reserved backup at ${backup}, check the directory and permissions, then re-run init: ${error instanceof Error ? error.message : String(error)}`);
   }
   try {
-    if (inspectRetiredQa(target) !== "managed" || !fs.lstatSync(target).isFile() ||
-        fs.lstatSync(target).ino !== fs.lstatSync(backup).ino ||
-        fs.lstatSync(target).dev !== fs.lstatSync(backup).dev) {
-      throw new Error(`QA agent changed during retirement: ${target}. Review it and re-run init.`);
+    if (inspectRetiredQa(backup) !== "managed") {
+      try {
+        fs.linkSync(backup, target);
+        return [`QA agent changed during retirement; restored ${target} and preserved ${backup}. ${unknownQaNote(target)}`];
+      } catch (error) {
+        throw new Error(`QA agent changed during retirement; preserved it at ${backup}, but could not restore ${target}: ${error instanceof Error ? error.message : String(error)}. Review both paths and restore or migrate the backup yourself.`);
+      }
     }
-    fs.unlinkSync(target);
   } catch (error) {
-    throw new Error(`Could not retire QA agent ${target}; preserved backup ${backup}. Check the file and permissions, then re-run init: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Could not confirm retired QA agent; preserved captured entry at ${backup}. Review it and ${target} before re-running init: ${error instanceof Error ? error.message : String(error)}`);
   }
   return [`Retired managed QA agent to ${backup}; preserved its contents outside Codex discovery.`];
 }

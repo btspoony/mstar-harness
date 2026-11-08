@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { retireCodexQaAgent } from "../src/adapters/codex-agent-files";
 
 const adapterUrl = new URL("../src/adapters/codex.ts", import.meta.url).href;
 const repoAgents = new URL("../../../codex/agents/", import.meta.url).pathname;
@@ -60,6 +61,34 @@ catch (e) { console.log(JSON.stringify({failure: e.message})); }`;
   return JSON.parse(result.stdout.toString());
 }
 describe("Codex regular agent installation", () => {
+  test("captures and restores a custom QA agent swapped in before retirement", () => {
+    const f = fixture();
+    const rename = fs.renameSync;
+    try {
+      const dest = path.join(f.root, "project/.codex/agents");
+      fs.mkdirSync(dest, { recursive: true });
+      const target = path.join(dest, "qa-engineer.toml");
+      const replacement = path.join(dest, "custom.tmp");
+      fs.writeFileSync(target, legacyQa);
+      fs.writeFileSync(replacement, 'name = "custom-agent"\ndeveloper_instructions = "Keep my instructions"\n');
+      fs.renameSync = ((source, destination) => {
+        rename(replacement, target);
+        return rename(source, destination);
+      }) as typeof fs.renameSync;
+      const notes = retireCodexQaAgent(target, false);
+      expect(notes.join(" ")).toContain("restored");
+      const backup = fs.readdirSync(dest).find((name) => name.startsWith("qa-engineer.toml.") && name.endsWith(".bak"));
+      expect(backup).toBeDefined();
+      for (const file of [target, path.join(dest, backup!)]) {
+        const parsed = Bun.TOML.parse(fs.readFileSync(file, "utf8"));
+        expect(parsed.name).toBe("custom-agent");
+        expect(parsed.developer_instructions).toContain("Keep my instructions");
+      }
+    } finally {
+      fs.renameSync = rename;
+      f.cleanup();
+    }
+  });
   for (const scope of ["global", "project"]) {
     test(`${scope}: retires managed QA shell without losing instructions`, () => {
       const f = fixture();
