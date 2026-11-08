@@ -79,7 +79,7 @@ Failure between steps 2 and 3 is reported as a partial close. A re-run finishes 
 
 ## Lifecycle reopen
 
-A `failed` or `stopped` lifecycle returns to `running` on the SAME id through `mstar workflow reopen`; a `completed` lifecycle keeps `workflow.reopen-completed` unless it predates the merge proof (no `delivery.proof` on a development close), which reopens for a re-proven close:
+A `failed` or `stopped` lifecycle returns to `running` on the SAME id through `mstar workflow reopen`; a `completed` lifecycle is never reopened and keeps `workflow.reopen-completed` with no override:
 
 ```sh
 mstar workflow reopen --workflow <id> --reason <text> [--attestation <absolute-json>] \

@@ -1421,61 +1421,15 @@ function deliveryRef(cwd: string, branch: string, remoteFirst: boolean): string 
  * refusal, never a pass — while a stale LOCAL target head is not, because the
  * fetched remote ref is read first.
  */
-/**
- * The merge proof a completed close persisted in its own transaction: the
- * target and tip it associated, when it ran, and the recorded provider commit
- * it verified when patch equivalence alone could not prove the delivery. The
- * read-only gate trusts this instead of re-reading a checkout routine cleanup
- * may already have removed; no caller-facing write path can supply it.
- */
-export interface DeliveryMergeProof {
-  target: string;
-  tip: string;
-  at: string;
-  commit?: string;
-}
-
-/** The stored proof, only when it carries the full fact set the gate trusts. */
-export function deliveryMergeProofOf(snapshot: WorkflowSnapshot): DeliveryMergeProof | undefined {
-  const proof = isPlainObject(snapshot.delivery) ? snapshot.delivery.proof : undefined;
-  if (!isPlainObject(proof)) return undefined;
-  if (typeof proof.target !== "string" || proof.target === "" || typeof proof.tip !== "string" || proof.tip === "" || typeof proof.at !== "string" || proof.at === "") {
-    return undefined;
-  }
-  const out: DeliveryMergeProof = { target: proof.target, tip: proof.tip, at: proof.at };
-  if (typeof proof.commit === "string" && proof.commit !== "") out.commit = proof.commit;
-  return out;
-}
-
 export function verifyDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationResult[] {
   const violations = consultDeliveryEvidence(snapshot);
   if (violations.length > 0) return violations;
   if (snapshot.type !== "plan" || snapshot.delivery_kind !== "development") return [];
-  // The close that proved the merge recorded its facts atomically with the
-  // terminal state; the checkout that supplied them may already be gone.
-  if (deliveryMergeProofOf(snapshot) !== undefined) return [];
   return deliveryMergeViolations(snapshot);
 }
 
-/** The close path: identical rules, plus the facts to persist on success. */
-export function verifyDeliveryEvidenceForClose(snapshot: WorkflowSnapshot): {
-  violations: ValidationResult[];
-  proof?: DeliveryMergeProof;
-} {
-  const violations = consultDeliveryEvidence(snapshot);
-  if (violations.length > 0) return { violations };
-  if (snapshot.type !== "plan" || snapshot.delivery_kind !== "development") return { violations: [] };
-  const facts: { target?: string; tip?: string; commit?: string } = {};
-  const remaining = deliveryMergeViolations(snapshot, facts);
-  if (remaining.length > 0) return { violations: remaining };
-  return {
-    violations: [],
-    proof: { target: facts.target as string, tip: facts.tip as string, at: new Date().toISOString(), ...(facts.commit !== undefined ? { commit: facts.commit } : {}) },
-  };
-}
 
-
-function deliveryMergeViolations(snapshot: WorkflowSnapshot, facts?: { target?: string; tip?: string; commit?: string }): ValidationResult[] {
+function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[] {
   const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
   // Both anchors and the merge member were just proven present by the pure
@@ -1496,7 +1450,7 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot, facts?: { target?: 
       recorded.length === 0
         ? `Workflow '${workflowId}' records no plan worktree, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in the plan's own checkout`
         : `Workflow '${workflowId}' records plan worktree(s) ${recorded.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`,
-      `Rebuild the recorded checkout with 'git worktree add ${recorded[0]} ${deliveryBranch}', then re-run this gate — the re-proof is read-only and needs no reopen. To make the proof durable again, reopen with 'mstar workflow reopen --workflow ${workflowId} --reason <text>' and close once more; if the merge was a squash or rebase, ${record}.`,
+      `Rebuild the recorded checkout with 'git worktree add ${recorded[0]} ${deliveryBranch}', then re-run this gate \u2014 the re-proof is read-only and needs no reopen. To make the proof durable again, reopen with 'mstar workflow reopen --workflow ${workflowId} --reason <text>' and close once more; if the merge was a squash or rebase, ${record}.`,
     );
   }
   const checkouts = readable.filter((path) => gitRead(path, ["rev-parse", "--show-toplevel"]) !== undefined);
@@ -1522,13 +1476,7 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot, facts?: { target?: 
   }
   // A merge commit or fast-forward: the delivery tip is itself upstream.
   const tip = deliveryRef(checkout, deliveryBranch, false);
-  if (tip !== undefined && gitIsAncestor(checkout, tip, target)) {
-    if (facts !== undefined) {
-      facts.target = target;
-      facts.tip = tip;
-    }
-    return [];
-  }
+  if (tip !== undefined && gitIsAncestor(checkout, tip, target)) return [];
 
   const recordedCommit = isPlainObject(snapshot.delivery) && isPlainObject(snapshot.delivery.merge)
     ? snapshot.delivery.merge.commit
@@ -1555,13 +1503,7 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot, facts?: { target?: 
       // not be reported. A merge-bearing history falls through to the recorded
       // commit proof or the refusal below.
       const merges = gitRead(checkout, ["rev-list", "--merges", `${target}..${tip}`]);
-      if (merges === "") {
-        if (facts !== undefined) {
-          facts.target = target;
-          facts.tip = tip;
-        }
-        return [];
-      }
+      if (merges === "") return [];
       unproven.push(
         merges === undefined
           ? `${target}..${tip} could not be read in ${checkout}, so the all-equivalent 'git cherry' result cannot be trusted as a merge-free proof`
@@ -1589,14 +1531,7 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot, facts?: { target?: 
     );
   } else {
     const mergedPatch = gitPatchId(checkout, `${mergeCommit}^`, mergeCommit);
-    if (mergedPatch !== undefined && mergedPatch === deliveryPatch) {
-      if (facts !== undefined) {
-        facts.target = target;
-        facts.tip = tip;
-        facts.commit = mergeCommit;
-      }
-      return [];
-    }
+    if (mergedPatch !== undefined && mergedPatch === deliveryPatch) return [];
     unproven.push(
       mergedPatch === undefined
         ? `the recorded delivery.merge.commit ${mergeCommit} has no readable diff in ${checkout}`

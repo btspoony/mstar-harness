@@ -87,7 +87,6 @@ import {
   gitRead,
   prepareAmendmentComponent,
   verifyDeliveryEvidence,
-  verifyDeliveryEvidenceForClose,
 } from "./coordination.js";
 import { rowStatusOf, summarize } from "./coordination-transitions.js";
 import {
@@ -1672,7 +1671,7 @@ function applyLifecycleTransition(input: {
         },
       );
     }
-    const { violations, proof } = verifyDeliveryEvidenceForClose({ ...(header as unknown as WorkflowSnapshot), plans: [...rows] });
+    const violations = verifyDeliveryEvidence({ ...(header as unknown as WorkflowSnapshot), plans: [...rows] });
     if (violations.length > 0) {
       throw invalidWorkflowTransition(
         "The workflow cannot complete; inspect the workflow with mstar status validate.",
@@ -1688,13 +1687,6 @@ function applyLifecycleTransition(input: {
           workflow_id: workflowId,
         },
       );
-    }
-    // The close proved the merge from the live checkout; persist its facts in
-    // the same transaction as the terminal state, so the read-only gate never
-    // has to re-read a checkout routine cleanup may already have removed.
-    if (proof !== undefined) {
-      const base = isPlainObject(header.delivery) ? header.delivery : {};
-      header.delivery = { ...base, proof };
     }
   }
   const dangling = danglingOwnership(witness);
@@ -2348,27 +2340,14 @@ export async function reopenExecutionWorkflow(
     }
     const status = String(header.state.status ?? "");
     if (status === "completed") {
-      // ONE recovery edge, and the repair the Phase-6 gate's own refusal names:
-      // a pre-\u00a74f `completed` development close recorded no
-      // `delivery.proof`, so a cleaned-up checkout left its merge unprovable. A
-      // reopen returns it to `running` on the same id; the operator repairs the
-      // checkout and the ordinary close re-proves the merge and persists the
-      // proof. A completed header that already carries the proof stays closed.
-      const delivery = isPlainObject(header.state.delivery) ? header.state.delivery : {};
-      const unprovenHistory =
-        String(header.state.delivery_kind ?? "") === "development" &&
-        isPlainObject(delivery.compound) &&
-        !isPlainObject(delivery.proof);
-      if (!unprovenHistory) {
-        throw new ExecutionError(
-          "workflow.reopen-completed",
-          `workflow ${workflowId} is completed \u2014 a completed lifecycle is never reopened, and this route has no override. ` +
-            `Register a new lifecycle for further work; the completed history stays exactly as it was recorded.`,
-          { workflow_id: workflowId, status },
-        );
-      }
+      throw new ExecutionError(
+        "workflow.reopen-completed",
+        `workflow ${workflowId} is completed \u2014 a completed lifecycle is never reopened, and this route has no override. ` +
+          `Register a new lifecycle for further work; the completed history stays exactly as it was recorded.`,
+        { workflow_id: workflowId, status },
+      );
     }
-    if (status !== "completed" && status !== "failed" && status !== "stopped") {
+    if (status !== "failed" && status !== "stopped") {
       throw new ExecutionError(
         "workflow.reopen-not-terminal",
         `workflow ${workflowId} is ${JSON.stringify(status)}; only a failed or stopped lifecycle is reopened, and a ` +

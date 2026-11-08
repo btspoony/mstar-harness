@@ -9461,7 +9461,6 @@ async function evaluatePostMergeCloseFromExecutionAuthority(context, workflowId)
         }
       }
       if (shapeOk && terminal && snapshot?.type === "plan" && snapshot.status === "completed") {
-        violations.push(...verifyDeliveryEvidence(snapshot));
         for (const plan of snapshot.plans ?? []) {
           if (isPlainObject2(plan) && plan.status !== PLAN_STATUS_DONE) {
             violations.push(violation4("high", "PHASE6_PLAN_ROW_NOT_DONE", `Workflow '${workflowId}' is completed but owned plan row '${String(plan.id)}' is ${JSON.stringify(plan.status)} — a completed close requires every plan row Done`, "Bring the owned plan row to Done (or close the lifecycle as failed/stopped with a recorded reason), then re-run 'mstar iteration gate --phase 6 --workflow <id>'"));
@@ -16452,7 +16451,7 @@ function validateWorktreePathValue(violations, value, field) {
     violations.push(violation8("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
   }
 }
-function deliveryEvidenceViolations(value, what, options) {
+function deliveryEvidenceViolations(value, what) {
   const violations = [];
   const invalid3 = (message) => {
     violations.push(violation8("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
@@ -16461,30 +16460,10 @@ function deliveryEvidenceViolations(value, what, options) {
     invalid3("must be an object");
     return violations;
   }
-  const allowProof = options?.allowProof === true;
-  const members = allowProof ? ["compound", "merge", "proof"] : ["compound", "merge"];
+  const members = ["compound", "merge"];
   const unknownMembers = Object.keys(value).filter((key) => !members.includes(key));
   if (unknownMembers.length > 0)
     invalid3(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
-  if (allowProof && value.proof !== undefined) {
-    const proof = value.proof;
-    if (!isPlainObject(proof))
-      invalid3("proof must be an object");
-    else {
-      const unknown = Object.keys(proof).filter((key) => !["target", "tip", "at", "commit"].includes(key));
-      if (unknown.length > 0)
-        invalid3(`proof has unknown key(s) ${unknown.join(", ")}`);
-      if (typeof proof.target !== "string" || proof.target.trim() === "")
-        invalid3("proof.target must be a non-empty string");
-      if (typeof proof.tip !== "string" || proof.tip.trim() === "")
-        invalid3("proof.tip must be a non-empty string");
-      if (typeof proof.at !== "string" || proof.at.trim() === "")
-        invalid3("proof.at must be a non-empty string");
-      if (proof.commit !== undefined && (typeof proof.commit !== "string" || !DELIVERY_COMMIT_RE.test(proof.commit))) {
-        invalid3("proof.commit must be a full lowercase 40- or 64-hex commit id when recorded");
-      }
-    }
-  }
   const compound = value.compound;
   if (compound !== undefined) {
     if (!isPlainObject(compound))
@@ -16633,7 +16612,7 @@ function validateWorkflowSnapshot(doc) {
     validateNonEmptyString4(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
   }
   if (doc.delivery !== undefined) {
-    violations.push(...deliveryEvidenceViolations(storedDeliveryEvidence(doc.delivery), "delivery", { allowProof: true }));
+    violations.push(...deliveryEvidenceViolations(storedDeliveryEvidence(doc.delivery), "delivery"));
   }
   const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
   if (terminal) {
@@ -18249,44 +18228,15 @@ function deliveryRef(cwd, branch, remoteFirst) {
   }
   return;
 }
-function deliveryMergeProofOf(snapshot) {
-  const proof = isPlainObject(snapshot.delivery) ? snapshot.delivery.proof : undefined;
-  if (!isPlainObject(proof))
-    return;
-  if (typeof proof.target !== "string" || proof.target === "" || typeof proof.tip !== "string" || proof.tip === "" || typeof proof.at !== "string" || proof.at === "") {
-    return;
-  }
-  const out = { target: proof.target, tip: proof.tip, at: proof.at };
-  if (typeof proof.commit === "string" && proof.commit !== "")
-    out.commit = proof.commit;
-  return out;
-}
 function verifyDeliveryEvidence(snapshot) {
   const violations = consultDeliveryEvidence(snapshot);
   if (violations.length > 0)
     return violations;
   if (snapshot.type !== "plan" || snapshot.delivery_kind !== "development")
     return [];
-  if (deliveryMergeProofOf(snapshot) !== undefined)
-    return [];
   return deliveryMergeViolations(snapshot);
 }
-function verifyDeliveryEvidenceForClose(snapshot) {
-  const violations = consultDeliveryEvidence(snapshot);
-  if (violations.length > 0)
-    return { violations };
-  if (snapshot.type !== "plan" || snapshot.delivery_kind !== "development")
-    return { violations: [] };
-  const facts = {};
-  const remaining = deliveryMergeViolations(snapshot, facts);
-  if (remaining.length > 0)
-    return { violations: remaining };
-  return {
-    violations: [],
-    proof: { target: facts.target, tip: facts.tip, at: new Date().toISOString(), ...facts.commit !== undefined ? { commit: facts.commit } : {} }
-  };
-}
-function deliveryMergeViolations(snapshot, facts) {
+function deliveryMergeViolations(snapshot) {
   const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
   const deliveryBranch = deliveryBranchOf(branch);
@@ -18311,13 +18261,8 @@ function deliveryMergeViolations(snapshot, facts) {
     return refuse(`Workflow '${workflowId}' cannot prove its delivery merge: the plan checkout ${checkout} has neither refs/remotes/origin/${targetBranch} nor refs/heads/${targetBranch}, so ${deliveryBranch} has no ref to be an ancestor of`, `Fetch the target branch into the plan checkout, then retry the close; a recorded merge commit cannot substitute for the missing target ref.`);
   }
   const tip = deliveryRef(checkout, deliveryBranch, false);
-  if (tip !== undefined && gitIsAncestor(checkout, tip, target)) {
-    if (facts !== undefined) {
-      facts.target = target;
-      facts.tip = tip;
-    }
+  if (tip !== undefined && gitIsAncestor(checkout, tip, target))
     return [];
-  }
   const recordedCommit = isPlainObject(snapshot.delivery) && isPlainObject(snapshot.delivery.merge) ? snapshot.delivery.merge.commit : undefined;
   const mergeCommit = isNonEmptyString(recordedCommit) ? recordedCommit : undefined;
   const fork = tip === undefined ? undefined : gitRead(checkout, ["merge-base", target, tip]);
@@ -18332,13 +18277,8 @@ function deliveryMergeViolations(snapshot, facts) {
     if (cherry !== undefined && cherry !== "" && cherry.split(`
 `).every((line) => line.startsWith("-"))) {
       const merges = gitRead(checkout, ["rev-list", "--merges", `${target}..${tip}`]);
-      if (merges === "") {
-        if (facts !== undefined) {
-          facts.target = target;
-          facts.tip = tip;
-        }
+      if (merges === "")
         return [];
-      }
       unproven.push(merges === undefined ? `${target}..${tip} could not be read in ${checkout}, so the all-equivalent 'git cherry' result cannot be trusted as a merge-free proof` : `${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and its history carries merge commits in ${target}..${tip} that 'git cherry' does not report`);
     } else {
       unproven.push(cherry === undefined || cherry === "" ? `${fork}..${tip} carries no commit to associate with ${targetBranch} (${target})` : `${deliveryBranch} tip ${tip} is not contained in ${targetBranch} (${target}), and ${cherry.split(`
@@ -18355,14 +18295,8 @@ function deliveryMergeViolations(snapshot, facts) {
     unproven.push(`the recorded delivery.merge.commit ${mergeCommit} cannot be associated: ${deliveryBranch} supplies no delivery diff in ${checkout} to compare it with`);
   } else {
     const mergedPatch = gitPatchId(checkout, `${mergeCommit}^`, mergeCommit);
-    if (mergedPatch !== undefined && mergedPatch === deliveryPatch) {
-      if (facts !== undefined) {
-        facts.target = target;
-        facts.tip = tip;
-        facts.commit = mergeCommit;
-      }
+    if (mergedPatch !== undefined && mergedPatch === deliveryPatch)
       return [];
-    }
     unproven.push(mergedPatch === undefined ? `the recorded delivery.merge.commit ${mergeCommit} has no readable diff in ${checkout}` : `the recorded delivery.merge.commit ${mergeCommit} is an ancestor of ${targetBranch} (${target}) but carries different content (patch id ${mergedPatch}) than the delivery ${fork}..${tip} (patch id ${deliveryPatch})`);
   }
   return refuse(`Workflow '${workflowId}' cannot prove its delivery merge: ${unproven.join("; ")}`, `Fetch the target branch into the plan checkout and retry the close; if ${deliveryBranch} has no ref there, restore or fetch refs/heads/${deliveryBranch} first, then ${record}. A recorded commit must carry the delivery's own diff, and a squash that resolved conflicts differently has no local proof — record that outcome instead with 'mstar workflow lifecycle --workflow ${workflowId} --status stopped --reason <why>'.`);
@@ -28696,7 +28630,7 @@ function applyLifecycleTransition(input) {
         workflow_id: workflowId
       });
     }
-    const { violations, proof } = verifyDeliveryEvidenceForClose({ ...header, plans: [...rows] });
+    const violations = verifyDeliveryEvidence({ ...header, plans: [...rows] });
     if (violations.length > 0) {
       throw invalidWorkflowTransition("The workflow cannot complete; inspect the workflow with mstar status validate.", {
         violations: violations.map((entry) => entry.message),
@@ -28704,10 +28638,6 @@ function applyLifecycleTransition(input) {
         code: violations[0]?.code,
         workflow_id: workflowId
       });
-    }
-    if (proof !== undefined) {
-      const base = isPlainObject(header.delivery) ? header.delivery : {};
-      header.delivery = { ...base, proof };
     }
   }
   const dangling = danglingOwnership(witness);
@@ -29014,13 +28944,9 @@ async function reopenExecutionWorkflow(context, input) {
     }
     const status = String(header.state.status ?? "");
     if (status === "completed") {
-      const delivery = isPlainObject(header.state.delivery) ? header.state.delivery : {};
-      const unprovenHistory = String(header.state.delivery_kind ?? "") === "development" && isPlainObject(delivery.compound) && !isPlainObject(delivery.proof);
-      if (!unprovenHistory) {
-        throw new ExecutionError("workflow.reopen-completed", `workflow ${workflowId} is completed — a completed lifecycle is never reopened, and this route has no override. ` + `Register a new lifecycle for further work; the completed history stays exactly as it was recorded.`, { workflow_id: workflowId, status });
-      }
+      throw new ExecutionError("workflow.reopen-completed", `workflow ${workflowId} is completed — a completed lifecycle is never reopened, and this route has no override. ` + `Register a new lifecycle for further work; the completed history stays exactly as it was recorded.`, { workflow_id: workflowId, status });
     }
-    if (status !== "completed" && status !== "failed" && status !== "stopped") {
+    if (status !== "failed" && status !== "stopped") {
       throw new ExecutionError("workflow.reopen-not-terminal", `workflow ${workflowId} is ${JSON.stringify(status)}; only a failed or stopped lifecycle is reopened, and a running/paused one is already active. Nothing was written.`, { workflow_id: workflowId, status });
     }
     assertExecutionToken(input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [workflowId], header.revision), {
@@ -37664,7 +37590,6 @@ var init_engine = __esm(() => {
     init_catalog();
     init_store_db();
     init_status();
-    init_coordination();
     init_workflow();
     COMPASS_STATUSES = ["active", "locked", "completed"];
     DATE_RE2 = /^\d{4}-\d{2}-\d{2}$/;

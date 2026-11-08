@@ -924,7 +924,7 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
   });
 
-  test("an unmerged delivery refuses the close, and the Phase-6 gate publishes the same code", async () => {
+  test("an unmerged delivery refuses the close, and the gate reads a completed state without re-proving it", async () => {
     const fixture = await workflowFixture("merge-unproven");
     setRowStatus(fixture.context, PLAN_ID, "Done");
     await workflowMutation(fixture, "op-unproven-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
@@ -942,8 +942,9 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     expect(stated).toContain("mstar workflow evidence");
     expect(await workflowFootprint(fixture.context)).toEqual(before);
 
-    // The read-only gate runs the SAME function over the same stored state, so
-    // an unmerged completed header it is handed publishes that identical code.
+    // The gate reads stored lifecycle facts. A completed close proved the merge
+    // before it wrote that state, so the gate never re-litigates it — no proof
+    // material of a long-cleaned checkout is demanded.
     withRaw(fixture.context, (db) => {
       const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
       const state = JSON.parse(row.state_json) as Record<string, unknown>;
@@ -952,8 +953,7 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
       db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
     });
     const gate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
-    const mergeViolation = gate.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN");
-    expect(mergeViolation?.fix).toContain("mstar workflow evidence");
+    expect(gate.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN")).toBeUndefined();
   });
 
   test("a squash merge is proven by its recorded commit, and refused while that commit is not in the target", async () => {
@@ -1038,10 +1038,10 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     runGit(["add", "-A"], fixture.repoRoot);
     runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "delivery commit C"], fixture.repoRoot);
     const c = headOf(fixture.repoRoot);
-    runGit(["merge", "-q", "--no-ff", "--no-commit", "side"], fixture.planPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", "-m", "merge C into A", "side"], fixture.planPath);
     writeText(join(fixture.planPath, "z.txt"), "merge-only content\n");
     runGit(["add", "-A"], fixture.planPath);
-    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "merge C into A"], fixture.planPath);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "--no-edit"], fixture.planPath);
     const mergeTip = headOf(fixture.planPath);
     // The target received patch-equivalent A' and C' and nothing else: Z, which
     // only M introduced, is absent and M is not an ancestor of `main`.
@@ -1167,33 +1167,22 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     expect(stated).toContain("mstar workflow evidence");
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
-  test("the close persists its merge proof, so the gate passes after routine cleanup removes the checkout", async () => {
-    const fixture = await workflowFixture("merge-proof-survives-cleanup");
+
+  test("routine cleanup that removes the checkout and the merged branch leaves the gate passing", async () => {
+    const fixture = await workflowFixture("merge-cleanup-after-close");
     setRowStatus(fixture.context, PLAN_ID, "Done");
-    await workflowMutation(fixture, "op-proof-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
-    const closed = await workflowMutation(fixture, "op-proof-close", {
+    await workflowMutation(fixture, "op-cleanup-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    const closed = await workflowMutation(fixture, "op-cleanup-close", {
       kind: "lifecycle",
       status: "completed",
       reason: "the merge was proven",
     });
     expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
 
-    // The durable record the close itself wrote, atomically with the terminal state.
-    withRaw(fixture.context, (db) => {
-      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
-      const delivery = (JSON.parse(row.state_json) as { delivery?: Record<string, unknown> }).delivery ?? {};
-      const proof = delivery.proof as Record<string, unknown>;
-      // Shape only: the durable facts a cleanup-surviving gate trusts, no hash
-      // comparison against anything recomputed here.
-      expect(typeof proof.target).toBe("string");
-      expect((proof.target as string).length).toBeGreaterThan(0);
-      expect(typeof proof.tip).toBe("string");
-      expect((proof.tip as string).length).toBe(40);
-      expect(typeof proof.at).toBe("string");
-    });
+    // Supported cleanup: the plan worktree and then the merged branch go away.
+    runGit(["worktree", "remove", "--force", fixture.planPath], fixture.repoRoot);
+    runGit(["branch", "-D", SOURCE_BRANCH], fixture.repoRoot);
 
-    // Supported cleanup removes the plan checkout entirely.
-    rmSync(fixture.planPath, { recursive: true, force: true });
     const gate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
     expect(gate.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN")).toBeUndefined();
   });
@@ -1222,42 +1211,6 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
   });
 
 
-  test("no write path can supply a close-owned proof, and a persisted one survives stored reads", async () => {
-    const proof = { target: "main", tip: "a".repeat(40), at: TS };
-    // (1) The caller-facing member set refuses `proof` outright.
-    const refused = deliveryEvidenceViolations({ compound: { outcome: "created" }, proof }, "delivery");
-    expect(refused.map((entry) => entry.message).join(" ")).toContain("unknown member(s) proof");
-
-    // (1b) The real write entry refuses it the same way, before any state moves.
-    const fixture = await workflowFixture("merge-proof-forgery");
-    setRowStatus(fixture.context, PLAN_ID, "Done");
-    const before = await workflowFootprint(fixture.context);
-    const denied = await refusalOf(() =>
-      workflowMutation(fixture, "op-forged-proof", {
-        kind: "delivery",
-        delivery: { compound: { outcome: "created" }, proof } as unknown as Record<string, never>,
-      }),
-    );
-    expect(denied.code).toBeDefined();
-    expect(JSON.stringify({ code: denied.code, details: denied.details })).toContain("proof");
-    expect(await workflowFootprint(fixture.context)).toEqual(before);
-
-    // (2) The persisted-state read accepts the close-owned shape.
-    const accepted = deliveryEvidenceViolations({ compound: { outcome: "created" }, proof }, "delivery", { allowProof: true });
-    expect(accepted).toEqual([]);
-
-    // (3) The tolerant stored read keeps the proof while stripping history.
-    const kept = storedDeliveryEvidence({
-      pr: { repo: "r", number: 1 },
-      completion: { policy: "p" },
-      merge: { provider: "github", evidence: "merged on the provider" },
-      proof,
-    }) as Record<string, unknown>;
-    expect(kept.proof).toEqual(proof);
-    expect(kept.pr).toBeUndefined();
-    expect(kept.completion).toBeUndefined();
-    expect(kept.merge).toBeUndefined();
-  });
 
 });
 
@@ -4530,73 +4483,6 @@ describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to run
     expect(await workflowFootprint(active.context)).toEqual(pausedBefore);
   });
 
-  test("a pre-\u00A74f completed snapshot recovers through reopen, a rebuilt checkout and the ordinary close", async () => {
-    const fixture = await workflowFixture("merge-legacy-rebuild");
-    setRowStatus(fixture.context, PLAN_ID, "Done");
-    await workflowMutation(fixture, "op-legacy-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
-    await workflowMutation(fixture, "op-legacy-close", {
-      kind: "lifecycle",
-      status: "completed",
-      reason: "delivery tail verified",
-    });
-
-    // Simulate the pre-\u00A74f history (no stored proof) plus routine cleanup.
-    withRaw(fixture.context, (db) => {
-      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
-      const state = JSON.parse(row.state_json) as Record<string, unknown>;
-      const delivery = state.delivery as Record<string, unknown> | undefined;
-      if (delivery !== undefined) delete delivery.proof;
-      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
-    });
-    runGit(["worktree", "remove", "--force", fixture.planPath], fixture.repoRoot);
-
-    // The gate refusal names the repair chain: rebuild the checkout, reopen.
-    const before = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
-    const fix = before.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN")?.fix ?? "";
-    expect(fix).toContain("git worktree add");
-    expect(fix).toContain("mstar workflow reopen");
-
-    // The reopen admits exactly this unproven history and nothing else.
-    const reopened = await reopenWorkflow(fixture, {
-      operationId: "op-legacy-reopen",
-      reason: "the pre-proof close must be re-proven",
-      attestation: attestation([]),
-    });
-    expect(reopened.replayed).toBe(false);
-    expect(storedHeader(fixture.context)).toMatchObject({ registered: 1, status: "running", ended_at: null });
-
-    // A completed lifecycle WITHOUT the unproven shape stays closed.
-    const stillClosed = await refusalOf(() => reopenWorkflow(fixture, {
-      operationId: "op-legacy-reopen-again",
-      reason: "a running lifecycle is not terminal",
-      attestation: attestation([]),
-    }));
-    expect(stillClosed.code).toBe("workflow.reopen-not-terminal");
-
-    // The smaller recovery first: rebuilding the recorded checkout is enough
-    // for the read-only gate, with no reopen and no new state.
-    runGit(["worktree", "add", fixture.planPath, SOURCE_BRANCH], fixture.repoRoot);
-    const minGate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
-    expect(minGate.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN")).toBeUndefined();
-
-    // The durable recovery: the ordinary close re-proves and persists the proof.
-    const reclosed = await workflowMutation(fixture, "op-legacy-reclose", {
-      kind: "lifecycle",
-      status: "completed",
-      reason: "the merge was re-proven",
-    });
-    expect(reclosed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
-    withRaw(fixture.context, (db) => {
-      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
-      const delivery = (JSON.parse(row.state_json) as { delivery?: Record<string, unknown> }).delivery ?? {};
-      expect(delivery.proof).toBeDefined();
-    });
-
-    // The persisted proof carries the gate with no checkout at all.
-    rmSync(fixture.planPath, { recursive: true, force: true });
-    const gate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
-    expect(gate.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN")).toBeUndefined();
-  });
 
   test("a stale terminal CAS refuses without a footprint, while an omitted authorization document is generated", async () => {
     const fixture = await workflowFixture("reopen-refusals");

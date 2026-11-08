@@ -741,10 +741,9 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
         }
       }
       if (shapeOk && terminal && snapshot?.type === "plan" && snapshot.status === "completed") {
-        // The SAME function the ACTIVE close consults: the pure evidence rules
-        // plus the local Git merge proof, so the read-only gate and the close
-        // can never report different verdicts for the same stored state.
-        violations.push(...verifyDeliveryEvidence(snapshot));
+        // The close proved the merge before it wrote this state; the gate reads
+        // the stored lifecycle facts and never re-litigates the proof a routine
+        // cleanup can no longer reproduce.
         for (const plan of snapshot.plans ?? []) {
           if (isPlainObject(plan) && plan.status !== PLAN_STATUS_DONE) {
             violations.push(

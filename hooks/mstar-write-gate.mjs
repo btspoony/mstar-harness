@@ -10774,7 +10774,6 @@ var init_iteration = __esm(() => {
   init_catalog();
   init_store_db();
   init_status();
-  init_coordination();
   init_workflow();
   COMPASS_STATUSES = ["active", "locked", "completed"];
   DATE_RE2 = /^\d{4}-\d{2}-\d{2}$/;
@@ -15003,7 +15002,7 @@ function validateWorktreePathValue(violations, value, field) {
     violations.push(violation8("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
   }
 }
-function deliveryEvidenceViolations(value, what, options) {
+function deliveryEvidenceViolations(value, what) {
   const violations = [];
   const invalid3 = (message) => {
     violations.push(violation8("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
@@ -15012,30 +15011,10 @@ function deliveryEvidenceViolations(value, what, options) {
     invalid3("must be an object");
     return violations;
   }
-  const allowProof = options?.allowProof === true;
-  const members = allowProof ? ["compound", "merge", "proof"] : ["compound", "merge"];
+  const members = ["compound", "merge"];
   const unknownMembers = Object.keys(value).filter((key) => !members.includes(key));
   if (unknownMembers.length > 0)
     invalid3(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
-  if (allowProof && value.proof !== undefined) {
-    const proof = value.proof;
-    if (!isPlainObject(proof))
-      invalid3("proof must be an object");
-    else {
-      const unknown = Object.keys(proof).filter((key) => !["target", "tip", "at", "commit"].includes(key));
-      if (unknown.length > 0)
-        invalid3(`proof has unknown key(s) ${unknown.join(", ")}`);
-      if (typeof proof.target !== "string" || proof.target.trim() === "")
-        invalid3("proof.target must be a non-empty string");
-      if (typeof proof.tip !== "string" || proof.tip.trim() === "")
-        invalid3("proof.tip must be a non-empty string");
-      if (typeof proof.at !== "string" || proof.at.trim() === "")
-        invalid3("proof.at must be a non-empty string");
-      if (proof.commit !== undefined && (typeof proof.commit !== "string" || !DELIVERY_COMMIT_RE.test(proof.commit))) {
-        invalid3("proof.commit must be a full lowercase 40- or 64-hex commit id when recorded");
-      }
-    }
-  }
   const compound = value.compound;
   if (compound !== undefined) {
     if (!isPlainObject(compound))
@@ -15181,7 +15160,7 @@ function validateWorkflowSnapshot(doc) {
     validateNonEmptyString4(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
   }
   if (doc.delivery !== undefined) {
-    violations.push(...deliveryEvidenceViolations(storedDeliveryEvidence(doc.delivery), "delivery", { allowProof: true }));
+    violations.push(...deliveryEvidenceViolations(storedDeliveryEvidence(doc.delivery), "delivery"));
   }
   const terminal = typeof doc.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
   if (terminal) {

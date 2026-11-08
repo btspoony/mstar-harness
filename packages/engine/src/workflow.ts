@@ -100,8 +100,6 @@ export type WorkflowCompoundOutcome = (typeof WORKFLOW_COMPOUND_OUTCOMES)[number
 export type WorkflowDeliveryEvidence = {
   compound?: { outcome: WorkflowCompoundOutcome; reason?: string };
   merge?: { commit?: string };
-  /** Written only by a completed close in its own transaction; never by a caller. */
-  proof?: { target: string; tip: string; at: string; commit?: string };
 };
 
 export type WorkflowLifecycleStatus = (typeof WORKFLOW_LIFECYCLE_STATUSES)[number];
@@ -479,11 +477,7 @@ const DELIVERY_COMMIT_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
  * transition. The transport applies this shared structural rule before recording
  * evidence, preventing the accepted evidence shape from drifting.
  */
-export function deliveryEvidenceViolations(
-  value: unknown,
-  what: string,
-  options?: { /** Persisted-state reads accept the close-owned proof; every write path refuses it. */ allowProof?: boolean },
-): ValidationResult[] {
+export function deliveryEvidenceViolations(value: unknown, what: string): ValidationResult[] {
   const violations: ValidationResult[] = [];
   const invalid = (message: string): void => {
     violations.push(violation("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
@@ -492,28 +486,10 @@ export function deliveryEvidenceViolations(
     invalid("must be an object");
     return violations;
   }
-  const allowProof = options?.allowProof === true;
-  const members = allowProof ? (["compound", "merge", "proof"] as const) : (["compound", "merge"] as const);
+  const members = ["compound", "merge"] as const;
   const unknownMembers = Object.keys(value).filter((key) => !(members as readonly string[]).includes(key));
   if (unknownMembers.length > 0) invalid(`unknown member(s) ${unknownMembers.join(", ")} \u2014 expected ${members.join(" | ")}`);
 
-  // `proof` is written only by a close that proved the merge, in the same
-  // transaction as the terminal state. No caller can supply it: every write path
-  // uses the strict member set above, so accepting it here cannot widen them.
-  if (allowProof && value.proof !== undefined) {
-    const proof = value.proof;
-    if (!isPlainObject(proof)) invalid("proof must be an object");
-    else {
-      const unknown = Object.keys(proof).filter((key) => !["target", "tip", "at", "commit"].includes(key));
-      if (unknown.length > 0) invalid(`proof has unknown key(s) ${unknown.join(", ")}`);
-      if (typeof proof.target !== "string" || proof.target.trim() === "") invalid("proof.target must be a non-empty string");
-      if (typeof proof.tip !== "string" || proof.tip.trim() === "") invalid("proof.tip must be a non-empty string");
-      if (typeof proof.at !== "string" || proof.at.trim() === "") invalid("proof.at must be a non-empty string");
-      if (proof.commit !== undefined && (typeof proof.commit !== "string" || !DELIVERY_COMMIT_RE.test(proof.commit))) {
-        invalid("proof.commit must be a full lowercase 40- or 64-hex commit id when recorded");
-      }
-    }
-  }
 
   const compound = value.compound;
   if (compound !== undefined) {
@@ -792,7 +768,7 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
   // per-kind completeness rule lives in `consultDeliveryEvidence`, shared by
   // the close path and the read-only phase-6 gate.
   if (doc.delivery !== undefined) {
-    violations.push(...deliveryEvidenceViolations(storedDeliveryEvidence(doc.delivery), "delivery", { allowProof: true }));
+    violations.push(...deliveryEvidenceViolations(storedDeliveryEvidence(doc.delivery), "delivery"));
   }
 
   // Terminal invariants (): ended_at present, no dangling leases.
