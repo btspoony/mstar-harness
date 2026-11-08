@@ -101,6 +101,10 @@ Agents 按 **skill 名** 发现 skill；文档若给出完整仓内相对路径�
 
 三层分工：frontmatter 只写触发，`SKILL.md` 只写主执行路径，`references/` / `templates/` / `scripts/` 放变体细节、长示例与 schema 并按需加载；每份额外资源都要在 body 写明「何时打开哪一份」。
 
+写 / 评审 skill body **以外**的模型可见文本——tool 与参数定义、Assignment 字段、拒绝与诊断字符串、CLI 帮助——时加载 skill **`mstar-skill-authoring`** → `references/context-economy.md`（六条原则、三条 tool 定义规则、测量规则）。
+
+skill body 自身的经济性归本 skill 判断；其散文是否在 HEAD 可解析归 **`mstar-prose`**。
+
 ## Engine checks
 
 > **Engine check:** run `mstar skill lint <skill-dir>` to lint the frontmatter contract and the five-question body contract; engine `lintFrontmatter`, `lintFiveQuestion`, `resolveAssetPath` resolves the same contracts plus the skill-relative asset paths above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
@@ -135,3 +139,4 @@ Verdict：`Approve` | `Request Changes` | `Needs Discussion` | `Unconfirmed`—�
 |------|------|
 | 需要完整 skill-writer 循环（writer workflow、authoring devices、压力场景骨架、anti-patterns） | `references/skillsbench-authoring.md` |
 | 需要把「真实产物」固化为可重跑断言（P6 重武器选项） | `references/regression-fixation.md` |
+| 写 / 评审 tool 定义、Assignment 字段、拒绝与诊断字符串等非 skill body 的模型可见文本 | `references/context-economy.md` |

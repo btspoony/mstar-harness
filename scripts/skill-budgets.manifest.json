@@ -115,6 +115,7 @@
   { "file": "skills/mstar-sdd/references/sticky-implementer-session.md", "maxLines": 110 },
   { "file": "skills/mstar-sdd/references/task-reviewer-prompt.md", "maxLines": 100 },
   { "file": "skills/mstar-skill-authoring/SKILL.md", "maxLines": 150 },
+  { "file": "skills/mstar-skill-authoring/references/context-economy.md", "maxLines": 22 },
   { "file": "skills/mstar-skill-authoring/references/regression-fixation.md", "maxLines": 50 },
   { "file": "skills/mstar-skill-authoring/references/skillsbench-authoring.md", "maxLines": 90 },
   { "file": "skills/mstar-use-cli/SKILL.md", "maxLines": 140 },
