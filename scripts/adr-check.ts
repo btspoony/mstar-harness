@@ -148,7 +148,7 @@ function checkRecord(
       code: "adr.fence-unclosed",
       message: `${relPath}:${fences[fences.length - 1]!} unbalanced fences (${fences.length} fence lines) - the record's tail is hidden from every heading check`,
       recovery:
-        "add the closing fence on its own line (the same fence character, at least as long), or indent the quoted example as a four-space code block",
+        "add the closing fence on its own line - the same fence character, as long as the opening one or longer (a four-space indented block is not a fence to this check)",
     });
     return;
   }
