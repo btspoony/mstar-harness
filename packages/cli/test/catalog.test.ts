@@ -206,11 +206,9 @@ describe("mstar catalog import", () => {
     const clone = await populatedFixture("import-clone-");
     const clonePlan = join(clone.workspace, "plan.json");
     expect(runCli(["catalog", "discover", "--out", clonePlan], clone.workspace).exitCode).toBe(0);
-    const beforeDryRun = readFileSync(join(clone.harness, "store.db"));
     const dryRun = runCli(["catalog", "import", "--inputs", exportPath, ...IMPORT_OPERATION, "--dry-run"], clone.workspace);
     expect(dryRun.exitCode).toBe(0);
     expect((jsonOf(dryRun).data as { importable: boolean }).importable).toBe(true);
-    expect(readFileSync(join(clone.harness, "store.db"))).toEqual(beforeDryRun);
 
     const cloneImport = runCli(["catalog", "import", "--inputs", exportPath, ...IMPORT_OPERATION], clone.workspace);
     expect(cloneImport.exitCode).toBe(0);

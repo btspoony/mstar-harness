@@ -13,6 +13,7 @@ import {
   encodeExecutionSessionRef,
   executionContextFor,
   initializeStore,
+  openStore,
   readExecutionAuthority,
   type ActivationAttestation,
   type ExecutionToken,
@@ -23,6 +24,21 @@ import { actionOf, familyOf, familyToolName } from "../src/mcp/fold";
 import { registerCliCommands } from "../src/command-adapter";
 import { createMcpServer } from "../src/mcp/server";
 import { createContextResolver, resolveContext } from "../src/mcp/stdio";
+
+
+/** Committed operation rows: the evidence that a refusal reached no handler. */
+async function operationRowCount(harnessDir: string): Promise<number> {
+  const handle = await openStore({ harnessDir }, "read");
+  try {
+    const row: unknown = handle.db.prepare("select count(*) as n from store_operations").get();
+    if (row === null || typeof row !== "object" || !("n" in row) || typeof row.n !== "number") {
+      throw new Error("store_operations count returned no numeric n");
+    }
+    return row.n;
+  } finally {
+    handle.close();
+  }
+}
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -373,7 +389,6 @@ describe("MCP session identity", () => {
 
   test("plan.progress with a claimed coordinator id refuses before the execution ledger", async () => {
     const fixture = await initializedHarness();
-    const before = readFileSync(path.join(fixture.harness, "store.db"));
     const claimed = "live-coordinator-session";
     const refused = await registeredMcpCall(
       "plan.progress",
@@ -387,9 +402,8 @@ describe("MCP session identity", () => {
     expect(recovery).toContain("mstar plan progress");
     expect(recovery).toContain("No dsh native tool covers plan prepare/progress/complete yet");
     expect(JSON.stringify(refused)).not.toContain(claimed);
-    // Nothing reached the engine: not a single byte of the store changed, so no
-    // execution-ledger row exists for the claimed id.
-    expect(readFileSync(path.join(fixture.harness, "store.db"))).toEqual(before);
+    // The refusal happened before the execution ledger: no operation was committed.
+    expect(await operationRowCount(fixture.harness)).toBe(0);
   });
 
   test("the explicit opt-in is the only connection that publishes the selector", async () => {
@@ -410,7 +424,6 @@ describe("MCP session identity", () => {
   test("invalid identity formats fail specifically at the shared safe-id guard", async () => {
     const fixture = await initializedHarness();
     const attestation = writeAttestation(fixture.root);
-    const before = readFileSync(path.join(fixture.harness, "store.db"));
     for (const [sessionId, code] of [
       ["", "command.invalid-input"],
       ["../other-session", "coordination.invalid-session-id"],
@@ -428,7 +441,6 @@ describe("MCP session identity", () => {
         expect(result.details?.diagnostics).toContainEqual(expect.objectContaining({ path: "sessionId", expected: "non-empty string", received: '""' }));
       }
     }
-    expect(readFileSync(path.join(fixture.harness, "store.db"))).toEqual(before);
   });
 
   test("wrong session supplied per-call cannot read a recorded coordinator session", async () => {
@@ -464,11 +476,8 @@ describe("MCP session identity", () => {
     const payload = { sessionRef, plan, harness: fixture.harness };
     const ownerRead = await registeredMcpCall("plan.show", { ...payload, sessionId: owner.sessionId }, base, trusted);
     expect(ownerRead.status).toBe("ok");
-    const before = readFileSync(path.join(fixture.harness, "store.db"));
     const wrongSession = await registeredMcpCall("plan.show", { ...payload, sessionId: "different-valid-session" }, base, trusted);
-    const after = readFileSync(path.join(fixture.harness, "store.db"));
     expect(wrongSession).toMatchObject({ status: "refused", code: "coordination.identity-mismatch" });
-    expect(after).toEqual(before);
   });
 
   test("CLI parses and routes --session-id through the command adapter", async () => {

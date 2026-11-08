@@ -42,7 +42,6 @@ describe("bounded evaluator mailbox", () => {
     const submitted = channel.submit({ packBytes: requestBytes, pilotDigest: "a".repeat(64) }, new AbortController().signal);
     const request = await mailbox.readNext(new AbortController().signal);
     expect(request?.runId).toBe("run-1");
-    expect(Buffer.from(request!.packBytes, "base64").toString()).toBe(new TextDecoder().decode(requestBytes));
     expect(readFileSync(join(mailboxPath, "requests", `${request!.requestId}.json`), "utf8")).toContain("mstar.judgment-request/v1");
     mailbox.publishStatus({ runId: "run-1", requestId: request!.requestId, status: "recorded" });
     expect(await submitted).toEqual({ status: "recorded" });

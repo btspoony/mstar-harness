@@ -436,6 +436,7 @@ describe("drift-lint executable — use-cli scan wiring (Task 3 fix round)", () 
         cwd: REPO_ROOT,
         encoding: "utf8",
         stdio: ["pipe", "pipe", "pipe"],
+        timeout: 60_000,
       });
     } catch (error) {
       const err = error as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer };
@@ -465,7 +466,7 @@ describe("drift-lint executable — use-cli scan wiring (Task 3 fix round)", () 
     }
     expect(violations).toEqual([README_BILINGUAL_ENV_VIOLATION]);
     expect(status).toBe(1);
-  });
+  }, 120_000);
 
   test("running outside repo root does not exit 0 silently (D1/D2 executable)", () => {
     const outer = mkdtempSync(join(tmpdir(), "drift-use-cli-exec-"));

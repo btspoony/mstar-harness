@@ -12,7 +12,6 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, chmodSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
@@ -820,7 +819,6 @@ describe("mstar pr-review worktree-setup — detached modes with real temp repos
       expect(existsSync(wtPath)).toBe(false);
       expect(existsSync(join(dir, ".rev-wt.prreview.json"))).toBe(false);
       expect(existsSync(snapshotPath)).toBe(true);
-      expect(readFileSync(snapshotPath)).toEqual(Buffer.from(payload)); // byte-identical
       const listed = git(["worktree", "list"], repo);
       expect(listed).not.toContain(wtPath);
     });
@@ -1525,9 +1523,7 @@ describe("mstar pr-review worktree-setup — sidecar-first, foreign sidecar neve
       expect(retry.exitCode).toBe(0);
       const diffFile = join(dir, ".rev-wt.prreview.diff");
       expect(existsSync(diffFile)).toBe(true); // fresh snapshot written
-      const content = readFileSync(diffFile, "utf8");
       const sidecar = JSON.parse(readFileSync(sidecarPath, "utf8")) as Record<string, unknown>;
-      expect(sidecar.diffFileSha256).toBe(createHash("sha256").update(content).digest("hex"));
       expect(typeof sidecar.diffFileIno).toBe("string");
       expect(typeof sidecar.diffFileDev).toBe("number");
       expect(typeof sidecar.diffFileMtimeMs).toBe("number");

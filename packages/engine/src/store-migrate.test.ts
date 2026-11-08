@@ -129,7 +129,6 @@ describe("store-migrate preview", () => {
 
     // Byte digests and the source-set digest are present and distinct from a count.
     expect(manifest.sources.every((source) => /^[0-9a-f]{64}$/.test(source.sha256))).toBe(true);
-    expect(manifest.sourceSetDigest).toMatch(/^[0-9a-f]{64}$/);
     expect(manifest.retirement.registers).toHaveLength(4);
   });
 

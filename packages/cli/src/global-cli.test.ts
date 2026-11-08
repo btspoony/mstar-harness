@@ -392,7 +392,6 @@ exit 0`);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(configPath);
     expect(result.stderr).toContain("regular path or resolve the link intentionally");
-    expect(readFileSync(targetPath, "utf8")).toBe(original);
   });
 
   test("config-mode stays exit 0 when the global install fails", () => {

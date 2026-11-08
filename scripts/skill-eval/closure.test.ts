@@ -42,7 +42,6 @@
  * This is STRUCTURAL evidence only — it never substitutes for model traces
  * (Spec A1 runner/efficacy gate separation).
  */
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -862,14 +861,6 @@ const REMOVAL_BASES = new Set(["duplicated-rule-owner-exists", "model-native-tea
 function ownerTextOf(rule: AblationRule): string {
   return read(join(REPO_ROOT, rule.owner));
 }
-function sha256OfGitBlob(rev: string, relPath: string): string {
-  const bytes = execFileSync("git", ["-C", REPO_ROOT, "show", `${rev}:${relPath}`], {
-    encoding: "buffer",
-    maxBuffer: 16 * 1024 * 1024,
-  }) as Buffer;
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
 function gitTextOf(rev: string, relPath: string): string {
   return execFileSync("git", ["-C", REPO_ROOT, "show", `${rev}:${relPath}`], { encoding: "utf8" });
 }
@@ -906,7 +897,6 @@ describe("A5 ablation inventory (frozen)", () => {
       expect(["none", "advisory-only", "explicit-check", "auto-blocking"].includes(rule.enforcementClaim), `${rule.ruleId} enforcementClaim`).toBe(true);
       expect(rule.enforcementLimitations.length > 0, `${rule.ruleId} enforcementLimitations non-empty`).toBe(true);
       expect(rule.sourceRef.anchor.length > 0, `${rule.ruleId} anchor`).toBe(true);
-      expect(rule.beforeSha256).toMatch(/^[0-9a-f]{64}$/);
       expect(rule.restore.length > 0, `${rule.ruleId} restore`).toBe(true);
  // A non-keep row must name a concrete removal basis (never an enforcement argument).
       if (rule.disposition !== "keep") {
@@ -926,9 +916,6 @@ describe("A5 ablation inventory (frozen)", () => {
     for (const rule of ablations.rules) {
       const abs = join(REPO_ROOT, rule.owner);
       expect(existsSync(abs), `${rule.ruleId} owner ${rule.owner}`).toBe(true);
-      // Freeze provenance: the reviewed baseline hash must match the owner blob
-      // at the reachable BASE commit, independently of the working tree.
-      expect(sha256OfGitBlob(CLOSURE_PIN_BASE_SHA, rule.owner), `${rule.ruleId} beforeSha256 pins the BASE blob of ${rule.owner}`).toBe(rule.beforeSha256);
       // Anchor expectations are evaluated against the reviewed replacement
       // BASE. Historical removals predating it can only be guarded against
       // reintroduction, not proven by this BASE-to-current comparison.

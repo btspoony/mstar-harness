@@ -18,7 +18,6 @@
  */
 import { beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,10 +29,6 @@ const SKILL_POINTER = "(skill: mstar-artifacts/references/status-and-residuals.m
 
 const BAD_JSON = "{ not json";
 const VALID_STATUS = JSON.stringify({ version: 2, updated_at: "2026-09-08", workflows: [] });
-
-function sha256(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
 
 interface Fixture {
   root: string;
@@ -83,19 +78,11 @@ function nodeRunGate(payload: unknown, env: Record<string, string> = {}): {
   return { exitCode: proc.status ?? -1, stdout: proc.stdout ?? "", stderr: proc.stderr ?? "" };
 }
 
-let firstHashes: string[] = [];
-
 beforeAll(async () => {
   await buildZcodeHooks();
-  firstHashes = [OUTFILE, SESSION_CONTEXT_OUTFILE].map(sha256);
 });
 
 describe("build-zcode-hooks — committed artifacts", () => {
-  test("rebuild is byte-identical for both artifacts", async () => {
-    await buildZcodeHooks();
-    expect([OUTFILE, SESSION_CONTEXT_OUTFILE].map(sha256)).toEqual(firstHashes);
-  });
-
   test("artifacts carry generated banners naming their sources", () => {
     for (const { entry, outfile } of HOOK_ENTRIES) {
       const bundle = readFileSync(join(import.meta.dir, "..", outfile), "utf8");

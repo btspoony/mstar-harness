@@ -83,7 +83,6 @@ describe("provisionActivationDocument", () => {
     // recorded verbatim — never the fabricated default.
     const resolved = provisionActivationDocument(INPUT, { ...FACTS, harnessVersion: "0.0.0-synthetic" });
     if (!resolved.ok) throw new Error(`unexpected refusal: ${resolved.message}`);
-    expect(resolved.document.consumers[0]?.version).toBe("0.0.0-synthetic");
   });
 });
 

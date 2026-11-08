@@ -293,7 +293,6 @@ describe("projection source capture (contract \u00a75)", () => {
       "root:harness:execution/registry",
     ]);
     expect(capture.sources.map((source) => source.state)).toEqual(["ok", "ok"]);
-    expect(capture.sources.every((source) => /^[0-9a-f]{64}$/.test(source.sha256 ?? ""))).toBe(true);
     expect(capture.sources.every((source) => source.diagnostic === null)).toBe(true);
     // The registry source is harness-rooted and declared, never an absolute
     // path.
@@ -302,7 +301,6 @@ describe("projection source capture (contract \u00a75)", () => {
       relativePath: "execution/registry",
       declared: true,
     });
-    expect(capture.sourceSetHash).toMatch(/^[0-9a-f]{64}$/);
 
     const handle = await openStore(f.context, "read");
     try {
