@@ -4,7 +4,7 @@ Status: implemented — a bounded seat keeps its reviewed-scope verdict, and the
 
 Date: 2026-09-17
 
-Scope: read-only review, QC and L2 task-review seats, their reports, and the PM gate that consumes them.
+Scope: harness-dispatched read-only review, QC and L2 task-review seats, their reports, and the PM gate that consumes them. PR-review seats use the engine's own tier table and are outside this record's ceiling.
 
 ## Problem
 
@@ -12,7 +12,7 @@ Read-only seats had no stop rule: a reviewer could expand until a human steered,
 
 ## Decision
 
-- Shared core owns the only numeric ceiling: a read-only review, QC or L2 seat is bounded to a default of 12 file opens or 10 minutes. The PM may tighten the Assignment `Budget`, never widen it. A role adds a return obligation, not a second ceiling.
+- Shared core owns the only numeric ceiling for harness-dispatched review, QC and L2 seats: a default of 12 file opens or 10 minutes. The PM may tighten the Assignment `Budget`, never widen it; a role adds a return obligation, not a second ceiling. PR-review seats are governed separately by the engine's `PR_REVIEW_TIER_BUDGETS` table (quick/default/deep: 12/20/30 file opens, plus wall-clock, findings and evidence-token caps); that table is the PR-review authority and does not widen this default.
 - On reaching the bound, the seat stops expanding. It keeps the verdict and findings earned for the reviewed scope and discloses the stop in the report's `## Scope` with exactly `Truncated coverage: <what was not covered>`. The line appears only when the budget actually stopped expansion; a complete run omits it, including any "not truncated" spelling.
 - A budget stop is not `Unconfirmed`. `Unconfirmed` stays reserved for a failed evidence channel. The QC parser keeps rejecting `Unconfirmed` combined with a `Truncated coverage:` label; the PM owns the separate full-coverage judgment.
 - Every completed task under `Execution mode: sdd` has a fresh L2 report at `{SDD_DIR}/task-N-review.md`. The implementer's `{SDD_DIR}/task-N-report.md` is an input and is never overwritten or accepted as independent review. The reviewer writes the report, then returns a compact pointer and assessment to the PM.
