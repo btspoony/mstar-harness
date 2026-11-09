@@ -7,6 +7,8 @@ import {
   assertQcAlignment,
   assertSddTddTriple,
   assertTriIdentity,
+  ADR_BUCKETS,
+  ADR_CLASSES,
   catalogRootDir,
   classifySkillLint,
   activeLifecyclePlanId,
@@ -23,11 +25,14 @@ import {
   l2PreDispatchCheck,
   readMainWorktree,
   probeCheckoutRoot,
+  lintAdrTree,
   lintFiveQuestion,
   lintFrontmatter,
   lintLoadOrder,
   collectLegacyArchiveReferenceTexts,
   mergeLegacyArchiveReferences,
+  lintSpecsDoc,
+  lintSpecsTree,
   lintStrategySections,
   parseAssignmentBranchForms,
   parseAssignmentFields,
@@ -223,7 +228,7 @@ function launchDirectoryPaths(command: (typeof verbs)[number], input: Input, con
 const codeExtensions: Record<string, true> = Object.fromEntries([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".sh", ".bash", ".zsh", ".rb", ".java", ".kt", ".swift"].map((ext) => [ext, true]));
 const provenanceExtensions: Record<string, true> = { ".md": true, ".ts": true };
 const skipDirs: Record<string, true> = { node_modules: true, ".git": true, dist: true, coverage: true, ".turbo": true };
-type LintType = "plan" | "skill" | "strategy" | "report" | "code" | "finding" | "provenance";
+type LintType = "plan" | "skill" | "strategy" | "report" | "code" | "finding" | "provenance" | "specs" | "adr";
 function lintType(file: string): LintType | null {
   const base = path.basename(file);
   if (base === "STRATEGY.md") return "strategy";
@@ -233,6 +238,33 @@ function lintType(file: string): LintType | null {
   if (dir.includes(`${path.sep}plans${path.sep}`) || dir.endsWith(`${path.sep}plans`) || /^\d{8}-[a-z0-9.-]+\.md$/i.test(base)) return "plan";
   return codeExtensions[path.extname(base).toLowerCase()] ? "code" : null;
 }
+/** The ADR root a record file belongs to: walk `{bucket}/{class}/` upward.
+ * A file outside that shape has no root, so no record check applies. */
+function adrRootOf(file: string): string | null {
+  let dir = path.dirname(file);
+  if ((ADR_CLASSES as readonly string[]).includes(path.basename(dir))) dir = path.dirname(dir);
+  return (ADR_BUCKETS as readonly string[]).includes(path.basename(dir)) ? path.dirname(dir) : null;
+}
+
+/** The two document layers (`mstar-artifacts/references/knowledge-and-designs.md`):
+ * a directory is the tree check, a single file is that document's own check. */
+function lintDocLayer(type: "specs" | "adr", target: string, isDir: boolean): Violation[] {
+  if (type === "specs") {
+    return isDir ? lintSpecsTree(target).violations : lintSpecsDoc(readFileSync(target, "utf8"), target).violations;
+  }
+  if (isDir) {
+    return lintAdrTree(target).failures.map((failure) => ({
+      ok: false as const, severity: "medium" as const, code: failure.code, message: failure.message, fix: failure.recovery,
+    }));
+  }
+  const root = adrRootOf(target);
+  if (root === null) throw new SddScriptError(`usage: lint <file> --type adr — ${target} is not under {ADR_DIR}/{bucket}/{class}/`, 2);
+  const rel = path.relative(root, target).split(path.sep).join("/");
+  return lintAdrTree(root).failures
+    .filter((failure) => failure.file === rel)
+    .map((failure) => ({ ok: false as const, severity: "medium" as const, code: failure.code, message: failure.message, fix: failure.recovery }));
+}
+
 function collectTargets(dir: string, accept: (file: string) => boolean = (file) => lintType(file) !== null): string[] {
   const targets: string[] = [];
   const visit = (current: string): void => {
@@ -450,11 +482,16 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
       case "lint": {
         const target = required(input.target, "usage: lint <target> (file or dir)");
         const forced = input.type?.trim().toLowerCase();
-        const known = ["plan", "skill", "strategy", "report", "code", "finding", "provenance"];
+        const known = ["plan", "skill", "strategy", "report", "code", "finding", "provenance", "specs", "adr"];
         if (forced !== undefined && !known.includes(forced)) throw new SddScriptError(`usage: lint --type must be one of ${known.join(" | ")}, got ${JSON.stringify(input.type)}`, 2);
         const abs = absolute(context.cwd, target);
         if (!existsSync(abs)) throw new Error(`lint target not found: ${abs}`);
         const isDir = statSync(abs).isDirectory();
+        if (forced === "specs" || forced === "adr") {
+          // Document layers: a directory is the tree check, a file is one document.
+          const results = [{ file: abs, violations: lintDocLayer(forced, abs, isDir), markers: [] as string[] }];
+          return results.some((result) => result.violations.length) ? refusal(id, results[0]!.violations[0]?.code ?? "lint.violations", "lint violations found", { results }, "Resolve each reported lint violation, then rerun mstar lint <target>.") : ok(id, { results });
+        }
         const targets = !isDir ? [abs] : forced === "provenance" ? collectTargets(abs, (file) => provenanceExtensions[path.extname(file).toLowerCase()] === true) : collectTargets(abs);
         
     const results = targets.map((file) => ({ file, ...lintOne(file, forced as LintType | undefined, input.prVariant === true) }));
@@ -603,7 +640,7 @@ const contract: Record<(typeof verbs)[number], { path: string[]; args: { key: st
   "worktree.check": { path: ["worktree", "check"], args: [{ key: "planId", required: false, variadic: false }], options: [{ key: "plan", flags: "--plan <plan-id>" }, { key: "workflow", flags: "--workflow <id>" }, { key: "entry", flags: "--entry" }, { key: "harness", flags: "--harness <path>" }, { key: "integration", flags: "--integration <path>" }, { key: "mainBranch", flags: "--main-branch <branch>" }, { key: "control", flags: "--control <path>" }, { key: "l2", flags: "--l2" }, { key: "tracks", flags: "--tracks <json>" }], effects: ["read", "validate", "process"], description: "Check engine-enforced workflow-entry facts or the L1/L2 worktree pre-dispatch gate." },
   "worktree.qc-alignment": { path: ["worktree", "qc-alignment"], args: [{ key: "files", required: true, variadic: true }], options: [], effects: ["read", "validate"], description: "Assert QC/QA Assignment alignment." },
   "review.seats": { path: ["review", "seats"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "mode", flags: "--mode <mode>" }, { key: "reviewers", flags: "--reviewers <list>" }], effects: ["read", "validate"], description: "Map execution mode to QC seat count and assert tri identity." },
-  lint: { path: ["lint"], args: [{ key: "target", required: true, variadic: false }], options: [{ key: "type", flags: "--type <type>" }, { key: "prVariant", flags: "--pr-variant" }], effects: ["read", "validate"], description: "Lint harness artifacts by content type." },
+  lint: { path: ["lint"], args: [{ key: "target", required: true, variadic: false }], options: [{ key: "type", flags: "--type <type>" }, { key: "prVariant", flags: "--pr-variant" }], effects: ["read", "validate"], description: "Lint harness artifacts by content type (plan | skill | strategy | report | code | finding | provenance | specs | adr)." },
   "design-md.validate": { path: ["design-md", "validate"], args: [{ key: "dir", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate DESIGN.md token frontmatter, parity and completeness." },
   "compound.validate": { path: ["compound", "validate"], args: [{ key: "docPath", required: true, variadic: false }], options: [{ key: "knowledgeDir", flags: "--knowledge-dir <dir>" }], effects: ["read", "validate"], description: "Validate a knowledge document and optional index scope." },
   "skill.lint": { path: ["skill", "lint"], args: [{ key: "skillDir", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Lint a skill directory." },
