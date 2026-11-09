@@ -1,6 +1,6 @@
 ---
 name: mstar-skill-authoring
-description: "Use when creating/rewriting an agent skill (`SKILL.md`), narrowing a description trigger, compressing a body, reviewing skill structure, or editing model-visible non-body text (schemas, CLI help, refusals, Assignment fields). Not for ordinary app features."
+description: "Use when creating/rewriting a skill (`SKILL.md`), narrowing a description trigger, compressing a body, reviewing skill structure, or editing model-visible non-body text (schemas, CLI help, refusals, Assignment fields). Not for app features."
 ---
 
 # Skill Authoring
