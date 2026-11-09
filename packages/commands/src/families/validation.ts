@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
+import type { AdrLintFailure } from "@mstar-harness/engine";
 import {
   assertDefaultBranchProtected,
   assertKnowledgeCatalogCompleteness,
@@ -253,7 +254,7 @@ function lintDocLayer(type: "specs" | "adr", target: string, isDir: boolean): Vi
     return isDir ? lintSpecsTree(target).violations : lintSpecsDoc(readFileSync(target, "utf8"), target).violations;
   }
   if (isDir) {
-    return lintAdrTree(target).failures.map((failure) => ({
+    return lintAdrTree(target).failures.map((failure: AdrLintFailure) => ({
       ok: false as const, severity: "medium" as const, code: failure.code, message: failure.message, fix: failure.recovery,
     }));
   }
@@ -261,7 +262,7 @@ function lintDocLayer(type: "specs" | "adr", target: string, isDir: boolean): Vi
   if (root === null) throw new SddScriptError(`usage: lint <file> --type adr — ${target} is not under {ADR_DIR}/{bucket}/{class}/`, 2);
   const rel = path.relative(root, target).split(path.sep).join("/");
   return lintAdrTree(root).failures
-    .filter((failure) => failure.file === rel)
+    .filter((failure: AdrLintFailure) => failure.file === rel)
     .map((failure) => ({ ok: false as const, severity: "medium" as const, code: failure.code, message: failure.message, fix: failure.recovery }));
 }
 
