@@ -105,7 +105,7 @@ const SPECS_README = `# Specs\n\n| Page | Topic |\n|---|---|\n| [store](architec
 describe("lint --type specs|adr — known types", () => {
   test("the usage string lists both document layers", async () => {
     const result = await runLint(tmpdir(), { target: "x", type: "nope" });
-    expect(result.status).toBe("usage");
+    if (result.status !== "usage") throw new Error(`expected a usage envelope, got ${result.status}`);
     expect(result.message).toContain("specs");
     expect(result.message).toContain("adr");
   });
