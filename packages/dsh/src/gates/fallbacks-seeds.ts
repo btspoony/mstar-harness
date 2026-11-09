@@ -1,7 +1,7 @@
 /**
  * Zero-config seed declaration for the OPTIONAL `dsh-llm-fallbacks` plugin
  * : when the `llm-fallbacks` service is
- * applied, this module declares the 13 `mode: subagent` mstar roles into the
+ * applied, this module declares every `mode: subagent` mstar role into the
  * fallbacks seed registry — persona = mirror `description` (verbatim, the
  * SSOT stays `mstar-roles`) + one mandatory-load guide line.
  *

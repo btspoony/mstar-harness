@@ -59,7 +59,7 @@
  *      advisory waitFor pattern, polled on the effective readback).
  *   8. Assertions derive the expected id set from the INSTALLED artifact's
  *      `harness-agents` mirror via `subagentRoleIds()` — never a hardcoded
- *      list — and pin the plan's 13-role closure claim as a lower bound.
+ *      list; the seed-convergence steps below assert every derived id.
  *
  * AC-3 evidence: a NON-skip PASS of this spec (recorded in the SDD
  * report); CI runs dsh tests, but this spec SKIPS there — no `dsh` bin
