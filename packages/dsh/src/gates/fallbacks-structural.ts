@@ -63,10 +63,8 @@ export interface EffectiveRoleView {
   id: string
   /** Effective row persona. */
   persona: string
-  /** Passthrough — never touched by seeds. */
-  chain?: string[]
-  /** Passthrough — never touched by seeds (mirrors upstream `FallbackStrategy`). */
-  fallback?: 'inherit-root' | 'none'
+  /** Passthrough — never touched by seeds (upstream v2 named-chain POINTER). */
+  chain?: string
   /** Id is in the live declaration set (trimmed row-id match). */
   seeded: boolean
   /** `seeded` && row persona !== current seed default. */
@@ -83,17 +81,16 @@ export interface EffectiveRolesReadbackView {
 /**
  * Mirror of upstream `FallbacksService` (dist/index.d.ts) — the named
  * cordis service `ctx.get('llm-fallbacks')` exposes while the plugin is
- * applied. The 9 mirrored members are declared in the upstream order; the
+ * applied. The 8 mirrored members are declared in the upstream order; the
  * probe spec's `SERVICE_SURFACE` map asserts their presence and shape at
- * runtime. Upstream 0.6.8 adds `getAgentRole` — unconsumed, so not mirrored.
+ * runtime. Upstream 0.6.8 adds `getAgentRole` — unconsumed, so not mirrored;
+ * 0.8.0 removes `resolveRole` (role rules are retired), so the mirror dropped it.
  */
 export interface FallbacksServiceView {
   /** Matches the plugin `name`. */
   name: 'llm-fallbacks'
   /** Package.json version string (module-load snapshot). */
   version: string
-  /** Presence-typed (unconsumed): role resolution. */
-  resolveRole: (...args: never[]) => unknown
   /** Presence-typed (unconsumed): chain resolution. */
   resolveChain: (...args: never[]) => unknown
   /** Presence-typed (unconsumed): config validation. */

@@ -470,7 +470,7 @@ export class FakeSessionsRegistry extends Service {
 const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
 
 /** The fallbacks profile entry id (the upstream `FALLBACKS_PROFILE_ENTRY` —
- * the settings namespace the seeds writer updates under the 0.6.x model). */
+ * the settings namespace the seeds writer mutates under the 0.8.x model). */
 const FALLBACKS_PROFILE_ENTRY = 'llm-fallbacks'
 
 /**
@@ -484,25 +484,55 @@ interface VolatileConfigRef {
   get(): Record<string, unknown>
 }
 
+/** One path-addressed edit to a namespace's user section (upstream `SettingsPathOp`). */
+type SettingsPathOp =
+  | { op: 'set'; path: readonly string[]; value: unknown }
+  | { op: 'unset'; path: readonly string[] }
+
+/** Apply the path ops to a cloned section; an `unset` on an array index removes that element. */
+function applySettingsOps(section: unknown, ops: readonly SettingsPathOp[]): Record<string, unknown> {
+  const root = (typeof section === 'object' && section !== null && !Array.isArray(section) ? section : {}) as Record<string, unknown>
+  const next = structuredClone(root)
+  for (const { path, ...change } of ops) {
+    if (path.length === 0) continue
+    let cursor: Record<string, unknown> | unknown[] = next
+    let resolved = true
+    for (const key of path.slice(0, -1)) {
+      const child = (cursor as Record<string, unknown>)[key]
+      if (typeof child !== 'object' || child === null) {
+        resolved = false
+        break
+      }
+      cursor = child as Record<string, unknown> | unknown[]
+    }
+    if (!resolved) continue
+    const key = path[path.length - 1]!
+    if (change.op === 'set') (cursor as Record<string, unknown>)[key] = change.value
+    else if (Array.isArray(cursor) && /^\d+$/.test(key)) cursor.splice(Number(key), 1)
+    else delete (cursor as Record<string, unknown>)[key]
+  }
+  return next
+}
+
 /**
  * In-memory `settings` service for the REAL-fallbacks compositions
- * (installed-deployment e2e + the boot-order regression): under the 0.6.x
+ * (installed-deployment e2e + the boot-order regression): under the
  * loader-entry config model the upstream `dsh-llm-fallbacks` plugin keeps its
  * profile config ON the loader entry — the fork hands `apply` a LIVE volatile
  * config ref — and uses the settings service (`SettingsForms`) to edit that
  * entry config and to announce changes. The seeds manager persists declared
- * roles through `sctx.settings.update` on the `llm-fallbacks` profile entry,
- * and re-reads its effective taxonomy from the live config (`source()` →
- * `config.get()`), re-arming the role seam on the `settings/document-updated`
- * event. The real dsh app always provides the service (`dsh-settings-file`
- * row); without it the fallbacks seeds child never binds `writeRoles` and no
- * mstar seed can land.
+ * roles through `sctx.settings.mutate` on the `llm-fallbacks` profile entry
+ * (path-addressed `set`/`unset` ops, 0.8.x contract) and reads the stored
+ * section through `describe()`; it re-reads its effective taxonomy from the
+ * live config (`source()` → `config.get()`), re-arming the role seam on the
+ * `settings/document-updated` event. The real dsh app always provides the
+ * service (`dsh-settings-file` row); without it the fallbacks seeds child
+ * never binds `writeRoles` and no mstar seed can land.
  *
- * This fake models that CONSUMED contract: `update` patch-merges the write
- * into the entry's live volatile cell — resolved per write through
+ * This fake models that CONSUMED contract: `mutate` applies the path ops to
+ * the entry's live volatile cell — resolved per write through
  * {@link FakeSettingsRegistry.entryResolver}, which `bootApp` installs over
- * the mounted fallbacks row's `fiber.effectiveConfig` (the real `SettingsForms.update`
- * edits the entry config through the config editor) — and emits
+ * the mounted fallbacks row's `fiber.effectiveConfig` — and emits
  * `settings/document-updated` (ns first, revision second — the real service's
  * emit shape). Writes whose entry ref is not resolvable (a fallbacks row
  * mounted outside `bootApp`) degrade to the store: recorded and announced,
@@ -543,41 +573,34 @@ export class FakeSettingsRegistry extends Service {
   }
 
   /**
-   * Stored-section descriptors (the `SettingsForms.describe()` contract):
-   * `{ ns, value }` rows over the live entry config plus any store-only
-   * namespaces.
+   * Stored-section descriptors (the `SettingsForms.describe()` contract the
+   * seeds writer reads: `ns` + the `user` section): rows over the live entry
+   * config plus any store-only namespaces.
    */
-  describe(): Array<{ ns: string; value: unknown }> {
-    const rows: Array<{ ns: string; value: unknown }> = []
+  describe(): Array<{ ns: string; user: unknown }> {
+    const rows: Array<{ ns: string; user: unknown }> = []
     const entry = this.entryConfig(FALLBACKS_PROFILE_ENTRY)
-    if (entry !== undefined) rows.push({ ns: FALLBACKS_PROFILE_ENTRY, value: entry.get() })
-    for (const [ns, value] of this.store) {
-      if (ns !== FALLBACKS_PROFILE_ENTRY) rows.push({ ns, value })
+    if (entry !== undefined) rows.push({ ns: FALLBACKS_PROFILE_ENTRY, user: entry.get() })
+    for (const [ns, user] of this.store) {
+      if (ns !== FALLBACKS_PROFILE_ENTRY) rows.push({ ns, user })
     }
     return rows
   }
 
   /**
-   * Merge one namespace patch into the entry config (the real `update`
-   * patch-merge contract, shallow at the section boundary the seeds writer
-   * uses — the `{ roles }` payload replaces wholesale) and notify listeners
+   * Apply field edits to one namespace (the real `mutate` path-op contract;
+   * `unset` on an array index removes that element) and notify listeners
    * through the `settings/document-updated` event. A resolvable entry edits
    * the live volatile cell (the plugin's own config reads observe the write);
    * an unresolvable namespace degrades to the store.
    */
-  update(namespace: string, data: unknown): Promise<void> {
+  mutate(namespace: string, ops: readonly SettingsPathOp[]): Promise<void> {
     const entry = this.entryConfig(namespace)
     if (entry !== undefined) {
-      const current = entry.get()
-      const next =
-        typeof data === 'object' && data !== null
-          ? { ...current, ...(data as Record<string, unknown>) }
-          : current
+      const next = applySettingsOps(entry.get(), ops)
       ;(entry as unknown as Record<symbol, (value: Record<string, unknown>) => void>)[VOLATILE_WRITE](next)
     } else {
-      const stored = this.store.get(namespace)
-      const base = typeof stored === 'object' && stored !== null ? (stored as Record<string, unknown>) : {}
-      this.store.set(namespace, { ...base, ...(typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {}) })
+      this.store.set(namespace, applySettingsOps(this.store.get(namespace), ops))
     }
     this.app.events.emit({}, 'settings/document-updated', namespace, 0)
     return Promise.resolve()
@@ -817,7 +840,7 @@ export interface BootOptions {
    * Mount the {@link FakeSettingsRegistry} as the `settings` service (the
    * `@deepseek-ai/dsh-settings-fake` row + module map): the REAL
    * `dsh-llm-fallbacks` plugin writes its seed registry through
-   * `sctx.settings.update` (the real dsh app always composes the
+   * `sctx.settings.mutate` (the real dsh app always composes the
    * `dsh-settings-file` row), so a fallbacks composition without a
    * settings seam cannot persist seed declarations. Variants:
    * - `'fake'` (default) — mounted BEFORE the plugin layers so `writeRoles`
@@ -1296,8 +1319,8 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
 
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(root).href + '/'
-  // The 0.6.x entry-config seam: the fake settings service edits the
-  // fallbacks row's LIVE volatile config ref on `update` (the real
+  // The entry-config seam: the fake settings service applies path ops to the
+  // fallbacks row's LIVE volatile config ref on `mutate` (the real
   // SettingsForms writes the entry config through the config editor). The
   // resolver is installed BEFORE the rows activate and captures the fallbacks
   // fiber synchronously — the seeds writes fire inside the

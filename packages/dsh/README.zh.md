@@ -211,7 +211,7 @@ engine 自己的路线（`resolveExecutionReadRoute`）决定由哪个权威作�
 - **缺失 mstar 角色**——无有效行的 mstar id（一条告警列出全部；id 集合派生自 `harness-agents/` 镜像——绝不硬编码；无镜像 → 检查跳过并记一条 debug）；
 - **persona 覆盖**——行 persona 与 seed 默认值不同的 mstar 角色（一条告警点名 + revert 入口：`fallbacks/revert-seed` gateway / fallbacks 设置卡片回滚按钮——操作者覆盖在 revert 前保留）；
 - **空 persona**——`persona` 缺失/空白的行，仅限非 seeded 或 overridden-empty（一条告警点名）；
-- **遗留键**——`chains`、`roles.default`、`roles.list[].label`/`.description`、悬空 `roles.rules[].role` 引用，经已应用服务自带的 `detectLegacyKeys`（一条告警引用其语义）；
+- **遗留键**——上游已退役的 v1 配置键（`rootChain`、顶层 `timeSlots`、`enabled`、`roles.default`、`roles.rules`、`roles.list[].label`/`.description`/`.fallback`/数组形式 `chain`、`alwaysModeRetryCap`、`roleAutoMatch`），经已应用服务自带的 `detectLegacyKeys`（一条告警引用其语义；v1 配置在读取时内存升级）；
 - **declare 跳过/冲突**——本地跳过（`interpolation` / `no-persona`）+ 上游跳过/冲突（码 `persona-source`——操作者覆盖保留）合并为**一条**告警；默认已 seeded 静默（一条 debug 点名）。
 
 loader 回退路径（无服务）保留结构化 `roles.list` 读取（缺失 id / 空 persona；无 revert 入口——无 seeds 面；遗留键检查跳过——绝不重新实现）。行配置缺失或非对象、或 `roles.list` 不可读 → 跳过并记一条 debug。该建议**绝不写入** fallbacks 配置——唯一写路径是经已发布 seeds 面的幂等 seeds re-declare（无差异 → 上游零设置写入）——绝不抛出，且 **fallbacks 未挂载时不调用**：它是信号，不是闸门。
