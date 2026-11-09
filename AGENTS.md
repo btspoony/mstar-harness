@@ -29,15 +29,14 @@ This repository contains the Morning Star runtime skills, workflow engine, CLI, 
 
 ## Pull request review and merge
 
-Merging follows the review policy in force for the change: an iteration compass `pr_merge_policy` when one exists (authority: [mstar-review-qc](skills/mstar-review-qc/SKILL.md)), otherwise this baseline rule:
+Merge authorization is not restated here — it is owned by the policy in force:
 
-- Required CI is green (advisory checks may be yellow).
-- Every attached review bot has concluded on the current head: `mstar-inspector review` reports `success`, and a scored bot meets its own confidence gate. A review of an earlier head covers the current one only while the increment between them is empty; once code moved, request a re-review or wait for the next run.
-- Unresolved review threads are resolved or explicitly waived, not merely reported.
+- **Inside an iteration**, the compass `pr_merge_policy` decides, with the three-branch predicate in [phase-4-5-pr-delivery.md §5.3](skills/mstar-iteration/references/phase-4-5-pr-delivery.md) (`reviewed-auto` / `reviewed-bot` / `owner-gated`). A missing `pr_merge_policy` is a STOP; it is never inferred. That section also owns the head reconciliation (the evidence's `head` must equal `gh pr view <n> --json headRefOid`, or satisfy its empty-increment inheritance test).
+- **A maintenance PR with no iteration policy** merges only when all of these hold: required CI is green (advisory checks may be yellow); every attached review bot has concluded on the current head (`mstar-inspector review` = `success`, a scored bot meets its own gate, no blocking finding — an older head qualifies only via the §5.3 empty-increment test); unresolved review threads are resolved or explicitly waived; and the user or PM states the merge for that head.
 
 "CI green and mergeable" alone is not authorization, and a bot stuck in `pending` is not a pass.
 
-A merge that landed without this gate is fixed forward in a follow-up PR — the direction may be right even when the process was not — and the PR says so. Revert only when the merged change itself is wrong.
+A merge that landed without authorization is fixed forward in a follow-up PR — the direction may be right even when the process was not — and the PR says so. Revert only when the merged change itself is wrong.
 
 ## Where to edit
 
