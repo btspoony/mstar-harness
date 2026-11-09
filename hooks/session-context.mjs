@@ -16504,7 +16504,7 @@ function deliveryEvidenceMembers(kind) {
 function storedDeliveryEvidence(value) {
   if (!isPlainObject(value))
     return value;
-  const { pr: _legacyPr, completion: _legacyCompletion, merge, ...members } = value;
+  const { pr: _legacyPr, completion: _legacyCompletion, proof: _legacyProof, merge, ...members } = value;
   if (!isPlainObject(merge))
     return merge === undefined ? members : { ...members, merge };
   return merge.commit === undefined ? members : { ...members, merge: { commit: merge.commit } };
@@ -18248,7 +18248,7 @@ function deliveryMergeViolations(snapshot) {
   const recorded = (snapshot.plans ?? []).map((row) => isPlainObject(row.metadata) ? row.metadata.worktree_path : undefined).filter((path2) => isNonEmptyString(path2));
   const readable = recorded.filter((path2) => isAbsolute10(path2) && existsSync13(path2));
   if (readable.length === 0) {
-    return refuse(recorded.length === 0 ? `Workflow '${workflowId}' records no plan worktree, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in the plan's own checkout` : `Workflow '${workflowId}' records plan worktree(s) ${recorded.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`, `Rebuild the recorded checkout with 'git worktree add ${recorded[0]} ${deliveryBranch}', then re-run this gate — the re-proof is read-only and needs no reopen. To make the proof durable again, reopen with 'mstar workflow reopen --workflow ${workflowId} --reason <text>' and close once more; if the merge was a squash or rebase, ${record}.`);
+    return refuse(recorded.length === 0 ? `Workflow '${workflowId}' records no plan worktree, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in the plan's own checkout` : `Workflow '${workflowId}' records plan worktree(s) ${recorded.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`, `Rebuild the recorded checkout with 'git worktree add ${recorded[0]} ${deliveryBranch}', then retry the close; if the merge was a squash or rebase, ${record}.`);
   }
   const checkouts = readable.filter((path2) => gitRead(path2, ["rev-parse", "--show-toplevel"]) !== undefined);
   if (checkouts.length === 0) {

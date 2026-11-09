@@ -1363,7 +1363,7 @@ export function assertFeatureCheckout(worktreePath: string, sourceSha: string | 
 }
 
 /* ------------------------------------------------------------------------ *
- * §4f the delivery merge proof — ONE rule for the close and the Phase-6 gate
+ * §4f the delivery merge proof — run once, by the terminal close
  * ------------------------------------------------------------------------ */
 
 /**
@@ -1387,11 +1387,12 @@ function deliveryRef(cwd: string, branch: string, remoteFirst: boolean): string 
 }
 
 /**
- * §4f the completion evidence rule both consumers run: the pure consultation
- * (`consultDeliveryEvidence`) plus, for a `development` delivery, the merge
- * proof read from local Git. The ACTIVE close and the read-only Phase-6 gate
- * call THIS function and nothing else, so they cannot disagree about the same
- * stored state.
+ * §4f the completion evidence rule the terminal close runs: the pure
+ * consultation (`consultDeliveryEvidence`) plus, for a `development` delivery,
+ * the merge proof read from local Git. The read-only Phase-6 gate reads the
+ * stored terminal facts instead, so the proof belongs to the close, once —
+ * routine cleanup of the checkout it used cannot turn a passing lifecycle into
+ * a refusal.
  *
  * The proof runs only after the pure rule accepted the evidence, and it reads
  * the repository one of the plan rows' own recorded checkouts belongs to:
@@ -1432,8 +1433,10 @@ export function verifyDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationRe
 function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[] {
   const workflowId = isNonEmptyString(snapshot.id) ? snapshot.id : "<unknown>";
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
-  // Both anchors and the merge member were just proven present by the pure
-  // consultation; the proof itself only has to name what Git could not supply.
+  // The pure consultation just proved both branch anchors present. The merge
+  // member stays OPTIONAL — it is read when recorded, never required — so the
+  // proof below reads it defensively and only has to name what Git could not
+  // supply.
   const deliveryBranch = deliveryBranchOf(branch) as string;
   const targetBranch = branch.target as string;
   const refuse = (message: string, fix: string): ValidationResult[] => [
@@ -1450,7 +1453,7 @@ function deliveryMergeViolations(snapshot: WorkflowSnapshot): ValidationResult[]
       recorded.length === 0
         ? `Workflow '${workflowId}' records no plan worktree, so the delivery merge cannot be proven: ${deliveryBranch} must be contained in ${targetBranch} in the plan's own checkout`
         : `Workflow '${workflowId}' records plan worktree(s) ${recorded.join(", ")}, none of which is a readable checkout, so the delivery merge cannot be proven`,
-      `Rebuild the recorded checkout with 'git worktree add ${recorded[0]} ${deliveryBranch}', then re-run this gate \u2014 the re-proof is read-only and needs no reopen. To make the proof durable again, reopen with 'mstar workflow reopen --workflow ${workflowId} --reason <text>' and close once more; if the merge was a squash or rebase, ${record}.`,
+      `Rebuild the recorded checkout with 'git worktree add ${recorded[0]} ${deliveryBranch}', then retry the close; if the merge was a squash or rebase, ${record}.`,
     );
   }
   const checkouts = readable.filter((path) => gitRead(path, ["rev-parse", "--show-toplevel"]) !== undefined);

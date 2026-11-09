@@ -953,7 +953,13 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
       db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
     });
     const gate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
-    expect(gate.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN")).toBeUndefined();
+    // The contract has two halves, and both are asserted: the gate never
+    // publishes a delivery-evidence verdict for a completed lifecycle, and it
+    // still reads stored facts — this fixture's close was refused, so its
+    // registry row is legitimately still present.
+    const codes = gate.violations.map((entry) => entry.code);
+    expect(codes.filter((code) => code.startsWith("PHASE6_DELIVERY_"))).toEqual([]);
+    expect(codes).toContain("PHASE6_ROOT_ENTRY_PRESENT");
   });
 
   test("a squash merge is proven by its recorded commit, and refused while that commit is not in the target", async () => {
@@ -1184,7 +1190,34 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     runGit(["branch", "-D", SOURCE_BRANCH], fixture.repoRoot);
 
     const gate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
-    expect(gate.violations.find((entry) => entry.code === "PHASE6_DELIVERY_MERGE_UNPROVEN")).toBeUndefined();
+    expect(gate.ok).toBe(true);
+    expect(gate.violations).toEqual([]);
+  });
+
+  test("a store holding the retired delivery.proof validates and gates clean", async () => {
+    const fixture = await workflowFixture("merge-legacy-proof-store");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-proof-store-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    await workflowMutation(fixture, "op-proof-store-close", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "the merge was proven",
+    });
+
+    // The intermediate revision persisted this member, so a store written then
+    // carries it. The gate validates the stored snapshot before reading facts:
+    // an unreadable state is exactly the PHASE6_INVALID_SNAPSHOT this must not be.
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      const delivery = state.delivery !== null && typeof state.delivery === "object" ? (state.delivery as Record<string, unknown>) : {};
+      state.delivery = { ...delivery, proof: { target: "main", tip: "a".repeat(40), at: TS } };
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+    });
+
+    const gate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
+    expect(gate.violations.map((entry) => entry.code)).not.toContain("PHASE6_INVALID_SNAPSHOT");
+    expect(gate.ok).toBe(true);
   });
 
   test("a delivery whose diff exceeds the old 1 MiB buffer still proves itself", async () => {
