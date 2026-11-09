@@ -538,8 +538,19 @@ async function main(): Promise<void> {
   archiveFragments(version, frags);
 
   // The committed hooks bundles inline the engine, so a release must rebuild
-  // them: CI only warns on a stale bundle (the byte diff is version-sensitive),
-  // and shipping the previous engine inside the hooks is not an option.
+  // BOTH: the engine dist first (buildZcodeHooks bundles the existing output,
+  // it does not rebuild it), then the bundles. CI only warns on a stale bundle
+  // (the byte diff is version-sensitive), and shipping the previous engine
+  // inside the hooks is not an option.
+  {
+    const engine = Bun.spawnSync(["bun", "run", "--cwd", "packages/engine", "build"], {
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    if (engine.exitCode !== 0) {
+      throw new Error(`engine build failed (exit ${engine.exitCode}); run \`bun run --cwd packages/engine build\``);
+    }
+  }
   for (const built of await buildZcodeHooks()) {
     console.log(`hooks: ${built.outfile} (${built.bytes} bytes)`);
   }
