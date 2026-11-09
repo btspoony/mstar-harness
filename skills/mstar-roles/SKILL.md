@@ -9,7 +9,7 @@ This hub is the **single load-selection authority** for Morning Star roles (Spec
 
 1. Read this `mstar-roles` skill; resolve role mapping and parameter tables below. This hub bootstrap does not require `mstar-harness-core` first.
 2. Read the corresponding `references/<role>.md` file — **identity-first**: mission, scope, and NEVER rules come before any skill list. Non-PM roles also read the linked minimal leaf boundary (`references/_shared/leaf-executor-core.md` — role-owned, always loads with the reference).
-3. Apply the Assignment **`Skill presets:`** decision — explicit `none` ⇒ no optional topic preset (identity + assignment + role-owned methods only); omitted on a substantive implementation / QC / QA round ⇒ the role's `standard` preset; explicit named preset ⇒ that role's supported members; omitted on a trivial route ⇒ identity only. **Role-owned** QC/QA methods and assigned evidence obligations load regardless of preset. `none` never grants delegation and never waives gates. **Unknown preset** or missing required identity ⇒ return Needs Context / Blocked — never infer `project-manager`.
+3. Apply the Assignment **`Skill presets:`** decision — explicit `none` ⇒ no optional topic preset (identity + assignment + role-owned methods only); omitted on a substantive implementation / QC round ⇒ the role's `standard` preset; explicit named preset ⇒ that role's supported members; omitted on a trivial route ⇒ identity only. **Role-owned** methods and assigned evidence obligations load regardless of preset. `none` never grants delegation and never waives gates. **Unknown preset** or missing required identity ⇒ return Needs Context / Blocked — never infer `project-manager`.
 4. Whenever `mstar-harness-core` is loaded by that decision (PM required reads, `standard` routes, direct lifecycle-topic invocation) it remains the global entry (state machine, gates, routing); if any conflict appears, `mstar-harness-core` remains the authoritative source for lifecycle, gates, routing, and invariants.
 5. Resume: retain loaded identity/contract only when the source hashes are unchanged; read changed / phase-required material; never reinterpret `none` as permission.
 6. Expand placeholders from role parameters before execution.
@@ -29,7 +29,6 @@ Exception: `project-manager` is the core orchestrator and keeps **required readi
 | `fullstack-dev` | `references/fullstack-dev-shared.md` | `role_id`, `track` |
 | `fullstack-dev-2` | `references/fullstack-dev-shared.md` | `role_id`, `track` |
 | `frontend-dev` | `references/frontend-dev.md` | — |
-| `qa-engineer` | `references/qa-engineer.md` | — |
 | `qc-specialist` | `references/qc-specialist-shared.md` | `role_id`, `reviewer_index`, `focus`, `report_suffix` |
 | `qc-specialist-2` | `references/qc-specialist-shared.md` | `role_id`, `reviewer_index`, `focus`, `report_suffix` |
 | `qc-specialist-3` | `references/qc-specialist-shared.md` | `role_id`, `reviewer_index`, `focus`, `report_suffix` |
@@ -39,14 +38,13 @@ Exception: `project-manager` is the core orchestrator and keeps **required readi
 
 ### Role → skill presets (PM-activated)
 
-PM-owned activation; the omission / `none` / named-preset / resume / unknown-preset rule is defined once in **§ Load Order** above — this table only summarizes each role's preset menu (role refs own their named member lists). Role-owned files (e.g. `references/qc-specialist/`, `references/qa-engineer/acceptance-gate.md`) are excluded from presets; they always load with the reference.
+PM-owned activation; the omission / `none` / named-preset / resume / unknown-preset rule is defined once in **§ Load Order** above — this table only summarizes each role's preset menu (role refs own their named member lists). Role-owned files (e.g. `references/qc-specialist/`) are excluded from presets; they always load with the reference.
 
 | Role | Preset menu |
 | --- | --- |
-| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-conventions`, `mstar-roles` ref; + `references/project-manager/qa-trigger-matrix.md` for QA gate tiers; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-artifacts` as the round requires; + `mstar-skill-authoring` for skill work; + `mstar-prose` when a round judges prose resolvability (on demand, never a default load); + `mstar-iteration` for iteration lifecycle (start/drive/close); + `mstar-pr-loop` for the explicitly requested PR quality-gate loop, or when iteration Phase 1 records `pr_merge_policy: reviewed-auto` as that iteration's Phase 5 review path (never under `reviewed-bot`, where the attached bot produces the review); + `mstar-knowledge` for strategic alignment, project-knowledge bootstrap and the iteration-close crystallisation `mstar-iteration` pre-loads; + `mstar-use-cli` when the round runs or interprets CLI commands |
+| `project-manager` | `mstar-dispatch-gates`, `mstar-phase-gates`, `mstar-conventions`, `mstar-roles` ref; + `references/project-manager/acceptance.md` for PM Acceptance; + `mstar-review-qc` before QC; + `mstar-branch-worktree` / `mstar-artifacts` as the round requires; + `mstar-skill-authoring` for skill work; + `mstar-prose` when a round judges prose resolvability (on demand, never a default load); + `mstar-iteration` for iteration lifecycle (start/drive/close); + `mstar-pr-loop` for the explicitly requested PR quality-gate loop, or when iteration Phase 1 records `pr_merge_policy: reviewed-auto` as that iteration's Phase 5 review path (never under `reviewed-bot`, where the attached bot produces the review); + `mstar-knowledge` for strategic alignment, project-knowledge bootstrap and the iteration-close crystallisation `mstar-iteration` pre-loads; + `mstar-use-cli` when the round runs or interprets CLI commands |
 | `fullstack-dev*`, `frontend-dev` | `mstar-coding-behavior`, `mstar-dispatch-gates`, `mstar-branch-worktree` (if repo writes); plan path symbols from `mstar-conventions` (minimal); `mstar-design-md` when implementing styled UI; `mstar-design-system` when the round converges an existing implementation onto a baseline; `mstar-use-cli` when the round runs or interprets CLI commands |
 | `qc-specialist*` | Presets: `mstar-branch-worktree`, `mstar-artifacts` (review bundle paths); `mstar-design-md` when reviewing UI; `mstar-design-system` when judging implementation-vs-baseline differences; `mstar-use-cli` when the round runs or interprets CLI commands. Role-owned (never gated): `references/qc-specialist/` workflow/checklist/template (+ lenses on demand) |
-| `qa-engineer` | Presets: `mstar-branch-worktree`, `mstar-artifacts` (closing R#); `mstar-design-md` when verifying visual output; `mstar-design-system` when the round compares the build against a baseline; `mstar-use-cli` when the round runs or interprets CLI commands. Role-owned (never gated): `references/qa-engineer/acceptance-gate.md` |
 | `architect` | `mstar-phase-gates` (Prepare), `mstar-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-knowledge` (STRATEGY.md creation/maintenance via bootstrap); `mstar-use-cli` when the round runs or interprets CLI commands |
 | `product-manager` | `mstar-phase-gates` (Prepare), `mstar-artifacts` (knowledge/specs); `mstar-design-md` (creator + design intent); `mstar-knowledge` (STRATEGY.md creation/maintenance via bootstrap) |
 | `code-reviewer` | `mstar-sdd` (per-task review mode); `mstar-audit` (audit mode: full workflow); `mstar-conventions` (paths); `mstar-use-cli` when the round runs or interprets CLI commands |
@@ -69,7 +67,7 @@ Role `references/*.md` files include explicit **`NEVER`** sections (anti-recursi
 
 ### QC reviewer (`qc-specialist*` family)
 
-**Job:** Independent **code review** on the plan branch diff (logic, security, contracts, maintainability, reliability). **Not** test execution — suites/builds belong to implementer (L1) and `qa-engineer` (L4). See `mstar-review-qc/references/review-responsibility-boundaries.md`.
+**Job:** Independent **code review** on the plan branch diff (logic, security, contracts, maintainability, reliability). **Not** test execution — implementer/ops provide runtime evidence; PM owns L4 acceptance and its narrow check exception. See `mstar-review-qc/references/review-responsibility-boundaries.md`.
 
 **Default (SDD):** plan QC tri-review — `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` → `{SDD_DIR}/review/qc1.md`…`qc3.md` + `qc-consolidated.md` when **`Execution mode: sdd`**.
 
@@ -103,7 +101,7 @@ Correct structural evidence = `mstar roles validate` reports zero mapping and lo
 
 ## References
 
-- 角色正文 → `references/<role>.md`（本 skill 内；leaf QC / QA 等子目录见 `references/qc-specialist/`、`references/qa-engineer/`）
+- Role bodies → `references/<role>.md`; QC methods → `references/qc-specialist/`; PM Acceptance → `references/project-manager/acceptance.md`
 - 全局角色 → `mstar-harness-core` 加载矩阵与专题 skill 索引
 
-- Explicit independent E2E/browser/device requests → `mstar-e2e` (PM orchestrates; `ops-engineer` executes; routine QA does not trigger it).
+- Explicit independent E2E/browser/device requests → `mstar-e2e` (PM orchestrates; `ops-engineer` executes; development acceptance does not trigger it).

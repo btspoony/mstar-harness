@@ -532,13 +532,13 @@ describe("validateAssignmentFields — review-seat / audit round bounding gate",
   });
 
   test("review seat missing only Return shape → exactly assignment.field.return-shape-missing", () => {
-    const text = assignment({ "Execute as": "qa-engineer", ...COMPLETE_ROUND, "Return shape (review / QC seats)": undefined });
+    const text = assignment({ "Execute as": "code-reviewer", ...COMPLETE_ROUND, "Return shape (review / QC seats)": undefined });
     const r = validateAssignmentFields(text, { writable: false });
     expect(r.ok).toBe(false);
     expect(r.violations.map((v) => v.code)).toEqual(["assignment.field.return-shape-missing"]);
     const violation = r.violations[0]!;
     expect(violation.severity).toBe("high");
-    expect(violation.message).toContain("qa-engineer");
+    expect(violation.message).toContain("code-reviewer");
     expect(violation.message).toContain("the field is absent");
     expect(violation.fix).toContain("Return shape (review / QC seats)");
   });
@@ -607,12 +607,12 @@ describe("validateAssignmentFields — review-seat / audit round bounding gate",
 
   test("N/A never satisfies the gate (case-insensitive) — it is an implement / ops value", () => {
     for (const value of ["N/A", "n/a", "N/a"]) {
-      const text = assignment({ "Execute as": "qa-engineer", ...COMPLETE_ROUND, "Budget (review / QC seats)": value });
+      const text = assignment({ "Execute as": "code-reviewer", ...COMPLETE_ROUND, "Budget (review / QC seats)": value });
       const violations = budgetViolations(text);
       expect(violations).toHaveLength(1);
       expect(violations[0]!.message).toContain("N/A");
     }
-    const returnShape = assignment({ "Execute as": "qa-engineer", ...COMPLETE_ROUND, "Return shape (review / QC seats)": "n/a" });
+    const returnShape = assignment({ "Execute as": "code-reviewer", ...COMPLETE_ROUND, "Return shape (review / QC seats)": "n/a" });
     expect(returnShapeViolations(returnShape)).toHaveLength(1);
     expect(returnShapeViolations(returnShape)[0]!.message).toContain("N/A");
   });
@@ -632,7 +632,7 @@ describe("validateAssignmentFields — review-seat / audit round bounding gate",
   });
 
   test("every review seat is gated; other roles are unaffected", () => {
-    for (const seat of ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer", "qa-engineer"]) {
+    for (const seat of ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer"]) {
       expect(roundFieldViolations(assignment({ "Execute as": seat }))).toHaveLength(2);
     }
     for (const role of ["fullstack-dev", "architect", "ops-engineer", "product-manager", "scout"]) {

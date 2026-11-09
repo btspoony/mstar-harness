@@ -32,7 +32,7 @@ PM 在新迭代启动时执行。
 | **Roadmap 上下文** | 从 store envelope 的 Direction + project milestones 确定 current / next iteration 位置，引用 milestone ID + 关联 issue 证据；缺失明确记录。compass `## Milestones` 是迭代交付节点，区别于 store 的项目 `project_milestones`，互不替代。 |
 | **Delivery branch policy** | `iteration_base_branch`（integration 分支从何处分出）、`spec_integration_branch`、`target_branch`（最终 PR 目标） |
 | **PR merge policy** | `reviewed-auto` — 本地 review 路径：Phase 5 跑 PR 级 review loop（`mstar-pr-loop`），其 `ship it` 结论即 merge 授权（须 settled、已 posted、且 `head` 等于当前 PR head；谓词定义见 `references/phase-4-5-pr-delivery.md` §5.3）。`reviewed-bot` — 外部 bot review 路径：PR 上挂载的自动 review bot（自托管 mstar-inspector，或 Greptile / Bugbot 等价物）跟随每个新 commit 自动产出 review，Phase 5 **不**自起 review loop，只接收并监控它在新 head 上的最新 review 达到其自身门（Inspector 为 `mstar-inspector review` check 的 `success`），其 findings 按普通第三方 reviewer 处理；该面即 merge 授权。`owner-gated` — 不起任何 review loop；Phase 5 停在 merge-ready，等待**人类 owner**（操作者/用户，不是 coordinator 席位）对当前 PR head 的显式 merge 批准。**必须与用户显式确认，绝不默认。** 记入 compass frontmatter `pr_merge_policy`，并在 `## Decisions` 中带 `source` 记录。 |
-| **Scale budget**（可选） | 仅当 caller **显式**给出或选用 **autonomous** 时适用：`S` = 1 **业务** plan；`M` = 2–3；`L` = 3–4（上限 4）；`XL` = **>4**（5+）。**只计实际业务交付 plan**，不计 harness 流程性工作（Review 链 / QC / QA / compound / close / PR 等）。**interactive 默认不强制** S/M/L/XL。计数细则 → **`references/autonomous-direction-lock.md`** § Scale budget |
+| **Scale budget**（可选） | 仅当 caller **显式**给出或选用 **autonomous** 时适用：`S` = 1 **业务** plan；`M` = 2–3；`L` = 3–4（上限 4）；`XL` = **>4**（5+）。**只计实际业务交付 plan**，不计 harness 流程性工作（Review 链 / QC / PM Acceptance / compound / close / PR 等）。**interactive 默认不强制** S/M/L/XL。计数细则 → **`references/autonomous-direction-lock.md`** § Scale budget |
 
 ### Direction lock modes
 
@@ -191,9 +191,9 @@ iteration 正式全流程**必须**经 **`mstar iteration register`** 注册到�
 
 compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与**当前权威 workflow `branch` 一致；缺失处理见 Phase 2 §2.3。不得手工回填受保护状态。
 
-ACTIVE 的中途增减范围先经 `mstar plan bind --execution --workflow <id> --coordinator` 获取 coordinator 身份，再经 `mstar plan prepare` 修订受影响 plan 行的 Prepare 配置（source worktree/branch、QA gate、findings cleanup；形状见 help）：行集在注册期确定，行配置的修订面是 `mstar plan prepare`。
+ACTIVE 的中途增减范围先经 `mstar plan bind --execution --workflow <id> --coordinator` 获取 coordinator 身份，再经 `mstar plan prepare` 修订受影响 plan 行的 Prepare 配置（source worktree/branch、PM Acceptance gate、findings cleanup；形状见 help）：行集在注册期确定，行配置的修订面是 `mstar plan prepare`。
 
-**中途增减范围（已存在且仍在 Prepare 的 workflow）**：用户/产品批准的范围扩张**不得**手改受保护状态。先以**显式获取的身份**取得该 workflow 的 coordinator 席位 —— 本地操作者用 `mstar plan bind --execution --workflow <id> --coordinator`（引擎从不生成 coordinator id，继承的 `MSTAR_HOST_SESSION_ID` 不授权 coordinator bootstrap），托管宿主走其宿主自有入口而**不经** shell；再经 `mstar plan show` 读取当前 plan 行视图、经 `mstar plan prepare` 修订受影响行的 Prepare 配置（QA gate / findings cleanup / source worktree / branch）。行集在注册期确定；integration checkout 与 execution policy 分别经 `mstar workflow integration-worktree` / `mstar workflow execution-policy`。owner 席位丢失时经 `mstar session recover` 恢复（**不是** per-row identity；attestation 由引擎自动生成，`--attestation <path>` 仅为显式覆盖）。字段权威 → **`mstar-artifacts`** `references/status-and-residuals.md`；forms / exit codes → **`mstar-use-cli`** `references/plan-and-workflow.md`。
+**中途增减范围（已存在且仍在 Prepare 的 workflow）**：用户/产品批准的范围扩张**不得**手改受保护状态。先以**显式获取的身份**取得该 workflow 的 coordinator 席位 —— 本地操作者用 `mstar plan bind --execution --workflow <id> --coordinator`（引擎从不生成 coordinator id，继承的 `MSTAR_HOST_SESSION_ID` 不授权 coordinator bootstrap），托管宿主走其宿主自有入口而**不经** shell；再经 `mstar plan show` 读取当前 plan 行视图、经 `mstar plan prepare` 修订受影响行的 Prepare 配置（PM Acceptance gate / findings cleanup / source worktree / branch）。行集在注册期确定；integration checkout 与 execution policy 分别经 `mstar workflow integration-worktree` / `mstar workflow execution-policy`。owner 席位丢失时经 `mstar session recover` 恢复（**不是** per-row identity；attestation 由引擎自动生成，`--attestation <path>` 仅为显式覆盖）。字段权威 → **`mstar-artifacts`** `references/status-and-residuals.md`；forms / exit codes → **`mstar-use-cli`** `references/plan-and-workflow.md`。
 
 ## 1.5.5 产物边界（specs · iterations · knowledge）
 

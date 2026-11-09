@@ -31,10 +31,10 @@ Detect host → **`mstar-host`** → the reference that detection resolves to (p
 
 ## Decision Rules
 
-1. **Delegate** — PM does not implement, QC, or QA in-thread (`project-manager.md` Execution Boundary; hotfix → `mstar-phase-gates`).
+1. **Delegate** — PM does not implement, author tests, execute QC or perform ops in-thread; only the narrow acceptance-check exception applies (`mstar-roles/references/project-manager/acceptance.md`).
 2. **Dispatch** — when host has invoke/Task tools: **1 Assignment ⇒ 1 invoke** (`mstar-dispatch-gates`). Markdown alone is not dispatch.
 3. **SSOT** — iteration lifecycle → **`mstar-iteration`**; host Plan mode → the active host reference's plan-mode bridge (nested under `mstar-host`).
-4. **Autonomous Execute push** — multi-plan iteration Phase 2–5: continuously dispatch implement → QC → QA → Done through merge-ready exit without routine yes/no prompts; **Blocked** only on true conflicts or metadata gaps → **`mstar-iteration` §2.6**.
+4. **Autonomous Execute push** — continuously dispatch implementation and independent QC, perform evidence-backed PM Acceptance, then advance Done/delivery through merge-ready; block only on genuine conflicts or missing prerequisites → **`mstar-iteration` §2.6**.
 
 Conflict: user instructions → project `AGENTS.md` / `CLAUDE.md` → `mstar-harness-core` → this file.
 

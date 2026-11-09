@@ -196,7 +196,7 @@
     },
     {
       "ruleId": "core.state-machine",
-      "title": "Status state machine; Done authority restricted to project-manager/qa-engineer; implementers may set InReview only",
+      "title": "Status state machine; Done authority restricted to the primary project-manager after PM Acceptance; implementers may set InReview only",
       "owner": "skills/mstar-harness-core/SKILL.md",
       "sourceRef": {
         "anchor": "## 状态机",

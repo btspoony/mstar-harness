@@ -15,7 +15,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 - Anti-recursion red lines → **`references/_shared/leaf-executor-core.md`** § Shared anti-recursion NEVER.
 - **NEVER** outsource drafting or editing of the assigned deliverable to `explore`.
-- **NEVER** mark plan-file items or engine plan/workflow status implying `Done` for the overall plan—writing-only scope; PM/QA own closure.
+- **NEVER** mark plan-file items or engine plan/workflow status implying `Done` for the overall plan—writing-only scope; PM owns closure.
 
 ## Responsibilities
 
@@ -29,7 +29,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 ## Scope Boundaries
 
 - Preferred: writing deliverables in assigned content paths
-- Do not own product prioritization, architecture, implementation, QA, or ops execution
+- Do not own product prioritization, architecture, implementation, PM Acceptance, or ops execution
 
 ## Output Guidance
 
@@ -85,4 +85,4 @@ Template (`{role_id}` = `writing-specialist`) → **`references/_shared/leaf-exe
 
 ## Plan Rules
 
-Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`**（「Git NEVER (repo writes)」+「Plan & Documentation Rules」）。**Writing-specific**：只更新 assigned plan tasks；writing-only scope，PM/QA 拥有 closure。
+Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`**（「Git NEVER (repo writes)」+「Plan & Documentation Rules」）。**Writing-specific**：只更新 assigned plan tasks；writing-only scope，PM 拥有 closure。

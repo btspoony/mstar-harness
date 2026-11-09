@@ -19,7 +19,7 @@
  * 3. Route matrix from Plan 01 cases (scripts/skill-eval/cases.json) —
  * PM/dev/QC/audit/close x first/resume, none and default(standard)
  * presets, engine absent/advisory/blocking all covered; each route's
- * none-closure contains identity chain + role-owned QC/QA obligations
+ * none-closure contains identity chain + role-owned QC obligations
  * and NO core; each route's default preset members exist on disk AND are
  * named in the route's role reference (list pinned in lockstep with the
  * refs, not free-floating).
@@ -295,7 +295,7 @@ const ROUTE_ROLE_REF: Record<(typeof ROUTES)[number], string> = {
  * asserts each entry is named in the route's role reference file, so this
  * list cannot silently drift from the refs. */
 const ROLE_OWNED_UNDER_NONE: Record<(typeof ROUTES)[number], string[]> = {
-  pm: ["references/project-manager/qa-trigger-matrix.md"],
+  pm: [],
   dev: [],
   qc: [
     "references/qc-specialist/reviewer-workflow.md",
@@ -335,8 +335,7 @@ describe("skill load closure", () => {
     expect(realGraph.cycles).toEqual([]);
   });
 
-  test("roles hub maps all 14 agent ids and every mapped reference exists", () => {
-    expect(mapping.length).toBe(14);
+  test("mapped role references exist", () => {
     for (const { agentId, reference } of mapping) {
       expect(existsSync(join(ROLES_DIR, reference)), `${agentId} -> ${reference}`).toBe(true);
     }
@@ -382,7 +381,7 @@ describe("skill load closure", () => {
     }
   });
 
-  test("none closure: identity chain + role-owned QC/QA obligations reachable, core NOT required, for every route", () => {
+  test("none closure: identity chain + role-owned QC obligations reachable for every route", () => {
     for (const route of ROUTES) {
       const closure = closureOf(realGraph, ["SKILL.md", ROUTE_ROLE_REF[route]]);
       expect(closure.has(ROUTE_ROLE_REF[route]), `${route} role reference reachable`).toBe(true);

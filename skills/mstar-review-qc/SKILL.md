@@ -7,16 +7,16 @@ description: "QC orchestration: SDD mandatory plan QC tri-review (`qc1`…`qc3` 
 
 **首次 Read 本 skill 时：必须先 Read `mstar-harness-core`。** 同仓检出与派发 → **`mstar-branch-worktree`** · **`mstar-dispatch-gates`**。冲突时 **以 `mstar-harness-core` 为准**。
 
-**摘要**：职责分层 → **`references/review-responsibility-boundaries.md`**（**L3 = code reviewer / diff+logic；不跑 test/build**；运行时验证归 L1/L4）。Leaf QC 执行 → **`mstar-roles/references/qc-specialist/`**。L4 验收 → **`mstar-roles/references/qa-engineer/`**。
+**Layers:** → **`references/review-responsibility-boundaries.md`** (L3 = independent diff/logic review, no test/build execution). Leaf QC → **`mstar-roles/references/qc-specialist/`**. L4 PM Acceptance → **`mstar-roles/references/project-manager/acceptance.md`**.
 
 # Morning Star QC Orchestration（PM · 编排层）
 
 ## L3 是什么（派发前对齐）
 
-- Plan QC seats are **reviewers**: assigned changed **diff / logic / risk** lenses and directly affected interfaces — same family as PR review, not a parallel QA test lane.
+- Plan QC seats are **reviewers**: assigned changed **diff / logic / risk** lenses and directly affected interfaces — same family as PR review, not a parallel PM Acceptance test lane.
 - **Do not** instruct QC in Assignment to “run the suite / build / lint to confirm” on shared tri cwd; that causes peer `Blocked` and collapses L3 into L4.
-- Runtime proof stays with scoped **implementer evidence** and **`QA gate`** (targeted unit evidence only). `full tri-review` describes seats, not full-repository review. Scope SSOT → **`mstar-harness-core`** § 定向执行与验证边界; QC never broadens exploration or repeats unchanged L2 evidence.
-- Retained check logs are review **inputs, not something QC executes**: QC reviews the code and the declared coverage rationale, never re-runs the cited command, and a log's integrity/outcome is not acceptance — coverage stays `review-required` (route → **`mstar-sdd`** `references/file-handoffs.md` § Optional retained output).
+- Runtime proof comes from relevant implementer/CI/ops evidence, consumed by PM Acceptance; only the narrow PM acceptance-check exception permits direct checks. `full tri-review` describes seats, not repository scope. Scope SSOT → **`mstar-harness-core`** § 定向执行与验证边界; QC never broadens exploration or repeats unchanged L2 evidence.
+- Retained check logs are review **inputs, not something QC executes**: QC reviews the code and the declared coverage rationale, never re-runs the cited command, and a log's integrity/outcome is not acceptance — coverage remains reviewer judgment (route → **`mstar-sdd`** `references/file-handoffs.md` § Optional retained output).
 
 ## 分派时机（与 plan / batch 对齐）
 
@@ -39,7 +39,7 @@ description: "QC orchestration: SDD mandatory plan QC tri-review (`qc1`…`qc3` 
 
 ## Findings 留档门禁（PM）
 
-- Use the effective coordinator QA/cleanup configuration; absent cleanup is allow-residual. Leaf Assignments mirror it for evidence duties. Configuration remains revisable through ordinary prepare, never sealed by Assignment bytes → mstar-artifacts/references/status-and-residuals.md.
+- Use the effective coordinator acceptance/cleanup configuration; absent cleanup is allow-residual. Leaf Assignments mirror it for evidence duties. Configuration remains revisable through ordinary prepare, never sealed by Assignment bytes → mstar-artifacts/references/status-and-residuals.md.
 - **捕获契约（唯一权威）→ `mstar-project-governance`「Issue capture」**：QC 的 must-fix / 保留 findings 由**确认其结论的席位**落为 `{HARNESS_DIR}/store.db` 的 issue —— 计划内 `mstar plan issue-add`，计划外 `mstar issue add`；同一 finding 再次出现用 `mstar issue occurrence` 追加 occurrence，**不**新开第二个 issue。PM 席位在 consolidated 决策后捕获；leaf QC 席位**只回证据，不写 store**（本 skill 不复述捕获契约）。
 - **`Findings cleanup: zero-residual`**（显式 opt-in）：可修的 **Warning / Suggestion / Critical** → **fix-now + targeted re-review**，**禁止**把可修项留为 open issue 后用 `Approve with residuals` 收口；**`nit`** 当场修或丢弃（不捕获）。仅**真 blocker-defer**（外部依赖 / 须下轮产品决策 / 用户本轮显式 defer + Durable Roadmap）可留 open，且**不含 `critical`**（不安全后果本次 merge 可达，见「Findings cleanup modes」）；`critical` 当场修复，或走显式 risk acceptance 并按 §4 关闭，**不得**作为批准遗留项。
 - **`Findings cleanup: allow-residual`**（iteration Phase 2 / standalone / hotfix / inline 默认）：阻断项修复后仍有 **Warning / Suggestion** 或技术债 → 必须在离 InReview 前捕获为该 plan 的 **linked open issues**；**`Approve with residuals`** 仅当无 open **Critical**；PM 汇总结论与各报告面须披露 open 清单 —— 每条含 issue id + severity + 跟踪位置（close 面另含 blocker-defer 标记；无 open 时 `N/A — none open`）。
@@ -50,12 +50,12 @@ description: "QC orchestration: SDD mandatory plan QC tri-review (`qc1`…`qc3` 
 
 ### Finding 关闭与验证
 
-- 修复后：审查/QA 结论指向可复核证据；**`project-manager`** 或 **`qa-engineer`**（`QA gate: mandatory`）按 §4 关闭权威带上关闭证据关闭该 issue。
+- After a fix, review/acceptance conclusions cite reproducible evidence; the primary `project-manager` closes the issue with verified disposition evidence under the issue-store contract §4.
 - **`waived` / `duplicate` / `superseded`** 须在关闭证据里写清依据（`waived` 另需 PM + user/architect alignment）。
 
 ## PM consolidated 门禁（摘要）
 
-Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-template.md`**. PM **`{SDD_DIR}/review/qc-consolidated.md`** synthesizes tri (or single-seat `qc.md`) into one gate decision for implement fix waves and QA gate, then records the durable summary in the main plan / store.db-backed plan row through public plan verbs. The consolidated decision also discloses the open-findings situation — the issue list + each severity + tracking location (`N/A — none open` when none) — per the **`Findings cleanup`** duties (`mstar-artifacts`「Findings cleanup modes」); capture itself follows **`mstar-project-governance`「Issue capture」**.
+Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-template.md`**. PM **`{SDD_DIR}/review/qc-consolidated.md`** synthesizes tri (or single-seat `qc.md`) into one gate decision for implement fix waves and PM Acceptance gate, then records the durable summary in the main plan / store.db-backed plan row through public plan verbs. The consolidated decision also discloses the open-findings situation — the issue list + each severity + tracking location (`N/A — none open` when none) — per the **`Findings cleanup`** duties (`mstar-artifacts`「Findings cleanup modes」); capture itself follows **`mstar-project-governance`「Issue capture」**.
 
 ### 覆盖语义（未提及 = 未审查）
 

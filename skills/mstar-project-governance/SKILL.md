@@ -48,7 +48,7 @@ description: 项目治理：roadmap 内容在 `{HARNESS_DIR}/store.db` 的权威
 
 **授权（谁捕获）**
 
-> The seat that owns the confirmed outcome captures it: the PM seat (dispatch/consolidation, QC tri, iteration close) and the main agent of a PR-review round at Stage 3 synthesis. Leaf audit/QC/QA seats **return evidence and never write the store** (survey §7 step 4). Capture goes through the `mstar issue` verbs; flags live in `--help` and are never restated in skill texts.
+> The seat that owns the confirmed outcome captures it: the PM seat (dispatch/consolidation, QC tri, iteration close) and the main agent of a PR-review round at Stage 3 synthesis. Leaf audit/QC seats **return evidence and never write the store** (survey §7 step 4). Capture goes through the `mstar issue` verbs; flags live in `--help` and are never restated in skill texts.
 
 - 计划内捕获走 `mstar plan issue-add`（仍在活跃 plan session 内），计划外确认发现走 `mstar issue add`；同一 finding 再次出现用 `mstar issue occurrence` 追加 occurrence —— **不**新开第二个 issue。所有 `mstar issue` 写动词（包括 `link`）均为 actor-only store write（`--actor` + `--operation-id`）；每个写入都要求 payload（`--payload` 或 `--file`），而 `triage`、终态处置和 `link` 的 row-CAS 均要求 `--expect`（缺失时 `issue.revision-conflict`）；具体选项以各命令组 `--help` 为准。
 - **捕获 ≠ 处置**：关闭是独立授权动作，只由契约 §4 的关闭权威执行（`mstar issue close | waive | duplicate | supersede`，计划内 `mstar plan issue-close`）；捕获席位**不**自授关闭权。`mstar issue link` 的 plan/iteration target 作为来源标签记录，不做目标存在性校验。
@@ -65,7 +65,7 @@ Payload authoring: consult `mstar-harness schema CaptureInput` for `issue add`, 
 
 Register shape, required fields/enums, provenance and historical in-place closure → `references/migration-source-shapes.md`; this is a migration mapping, never a live writer.
 
-Live capture and closure use § Issue capture and the contract §4 closure authority; `QA gate: mandatory` requires QA verification, otherwise PM acceptance. Current severity, cleanup and issue closure → **`mstar-artifacts`** `references/status-and-residuals.md`.
+Live capture and closure use § Issue capture and contract §4 closure authority; PM Acceptance owns verification/disposition for all plans, with specialist evidence as needed. Severity, cleanup and issue closure → **`mstar-artifacts`** `references/status-and-residuals.md`; acceptance → **`mstar-roles/references/project-manager/acceptance.md`**.
 
 
 ### Findings cleanup（与 Assignment 联动）

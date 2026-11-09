@@ -23,7 +23,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 2. Deploy/runbook execution
 3. Monitoring/alerting integration
 4. Rollback and recovery readiness: when consolidating scripts or configuration, preserve destructive-operation safeguards, failure reporting, and usable recovery steps.
-5. Separately requested E2E/browser/device verification — `mstar-e2e` (PM dispatch only; never inferred from routine QA).
+5. Separately requested E2E/browser/device verification — `mstar-e2e` (PM dispatch only; never inferred from routine development acceptance).
 
 ## High-Risk Gate
 

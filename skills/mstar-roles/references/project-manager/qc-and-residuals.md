@@ -4,7 +4,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 
 **Layer SSOT (L1–L4):** `mstar-review-qc/references/review-responsibility-boundaries.md`. Dispatch mechanics → **`mstar-dispatch-gates`**; leaf QC execution → **`references/qc-specialist/`**; PM tri / findings → **`mstar-review-qc`**; capture contract → **`mstar-project-governance`「Issue capture」**.
 
-**L3 reminder:** QC = **code review** (diff + lenses). Do **not** ask seats to run test/build/lint on the shared `Review cwd`. Missing runtime evidence → `QA gate` / L1, not extra QC commands.
+**L3 reminder:** QC is independent diff/lens review, never test/build/lint execution in the shared `Review cwd`. Missing runtime evidence goes to PM Acceptance / L1 for scoped disposition, not extra QC commands.
 
 ## SDD path: mandatory plan QC tri-review (L3)
 
@@ -51,7 +51,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 **Blocking Items**: {list or None}
 **Open findings**: {each open issue: id + severity + tracking location + owner/target date, or `N/A — none open`}
 **Assigned Fix Owners**: {role list}
-**Next Step**: {back to dev fix | to QA verification}
+**Next Step**: {back to dev fix | to PM Acceptance verification}
 ```
 
 ## Quick Decision Rules

@@ -69,14 +69,14 @@ describe('personaFor — the channel single lookup (config → mirror default �
   it('(c) role absent from config and mirror → undefined', async () => {
     await seedShell(ROLE, ['description: some default', 'mode: subagent'])
     // No shell for the role, no config.
-    expect(personaFor('qa-engineer', { agentsDir: mirror })).toBeUndefined()
+    expect(personaFor('unknown-seat', { agentsDir: mirror })).toBeUndefined()
     // Config carries a different role only.
-    expect(personaFor('qa-engineer', { rolePersonas: { [ROLE]: CONFIG_PERSONA }, agentsDir: mirror })).toBeUndefined()
+    expect(personaFor('unknown-seat', { rolePersonas: { [ROLE]: CONFIG_PERSONA }, agentsDir: mirror })).toBeUndefined()
     // No mirror at all → the lookup is config-only.
     expect(personaFor(ROLE, { agentsDir: undefined })).toBeUndefined()
     expect(personaFor(ROLE, { rolePersonas: undefined })).toBeUndefined()
     // An empty-string configured persona is treated as absent (channel parity).
-    expect(personaFor('qa-engineer', { rolePersonas: { 'qa-engineer': '' }, agentsDir: mirror })).toBeUndefined()
+    expect(personaFor('unknown-seat', { rolePersonas: { 'unknown-seat': '' }, agentsDir: mirror })).toBeUndefined()
   })
 
   it('(d) shell description containing the {{...}} hazard → default skipped + one warn, never throws', async () => {
@@ -194,7 +194,7 @@ describe('hostile role ids never reach the filesystem', () => {
 
 describe('ROLE_ID_PATTERN — upstream ROLE_ID_PATTERN semantics, implemented locally', () => {
   it('accepts mirror stems and rejects every hostile shape', () => {
-    for (const id of ['architect', 'code-reviewer', 'fullstack-dev', 'fullstack-dev-2', 'project-manager', 'qa-engineer', 'qc-specialist-2', 'writing-specialist']) {
+    for (const id of ['architect', 'code-reviewer', 'fullstack-dev', 'fullstack-dev-2', 'project-manager', 'qc-specialist-2', 'writing-specialist']) {
       expect(ROLE_ID_PATTERN.test(id)).toBe(true)
     }
     for (const id of ['../evil', 'a/b', '/etc/passwd', 'x'.repeat(33), '', 'FullStack-Dev', '..', 'role with spaces']) {

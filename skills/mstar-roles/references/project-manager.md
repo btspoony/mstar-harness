@@ -9,11 +9,11 @@ Before any non-trivial PM action, read in order:
 5. Plan lifecycle authority — `references/project-manager/plan-management.md` + **`mstar-artifacts`** `references/plan-workflow-lifecycle-contract.md`: primary coordinator row operations, declared completion route and evidence — read before first implement dispatch
 6. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
 7. **`mstar-sdd`** when implement uses **`Execution mode: sdd`**
-8. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-artifacts` (store.db execution/root register and workflow/plan rows, issue capture pointers); `mstar-artifacts` (InReview waves, review bundle naming)
+8. **On demand:** `mstar-branch-worktree` (parallel implement, QC/PM Acceptance checkout); `mstar-artifacts` (store.db execution/root register and workflow/plan rows, issue capture pointers); `mstar-artifacts` (InReview waves, review bundle naming)
 
 **Not required:** `mstar-coding-behavior` (orchestration-only PM work).
 
-**Required reading is not preset-gated.** PM is exempt from `Skill presets` (the `mstar-roles` hub § Load Order keeps PM required reading unconditional): the lifecycle / Done-ownership stop conditions (`mstar-harness-core` § 状态机 — only `project-manager` or `qa-engineer` set `Done`; QA gate required first) and the assigned evidence obligations stay reachable on every PM round — including plan close — under every preset decision.
+**Required reading is not preset-gated.** PM required reading and evidence obligations apply on every PM round, including plan close. Only the primary PM signs off and writes Done after PM Acceptance (`mstar-harness-core` § 状态机); acceptance procedures → `references/project-manager/acceptance.md`.
 
 Full cross-role matrix: `mstar-roles` SKILL.md.
 
@@ -43,13 +43,14 @@ Detailed procedures are moved to `references/project-manager/*.md`.
 - Select route/phase and maintain plan/status progression
 - Consolidate reports and communicate decisions
 - Minimal non-behavioral text edits not requiring specialist role
+- Evidence-backed PM Acceptance, including only the named short bounded checks permitted by `references/project-manager/acceptance.md`
 
 ### PM must delegate
 
 PM must assign specialist subagents for:
 
 - Implementation
-- Test implementation/verification execution
+- Test implementation and verification execution outside the narrow PM acceptance-check exception
 - QC review execution
 - Deployment/ops execution
 - Product/market research output
@@ -65,20 +66,20 @@ Pick one `Primary` route per Assignment; attach additional gates as needed.
 
 | Task type | Default route |
 | --- | --- |
-| Large feature | `explore -> product-manager -> architect -> dev (SDD) -> QC tri-review -> qa-engineer (mandatory) -> ops-engineer` |
-| Medium feature | `explore -> (architect optional) -> dev (SDD) -> QC tri-review -> qa-engineer (mandatory)` |
-| Small feature | `dev (SDD) -> QC tri-review -> pm-acceptance` (non-UI, no open issue, clean QC Approve) **or** `qa-engineer (mandatory)` when UI / open-finding / risk applies |
-| Bug fix | `explore -> RCA brief -> dev (SDD) -> QC tri-review -> qa-engineer (mandatory)` |
-| High-ambiguity bug | `explore -> RCA -> (architect optional) -> dev (SDD) -> QC tri-review -> qa-engineer (mandatory)` |
+| Large feature | `explore -> product-manager -> architect -> dev (SDD) -> QC tri-review -> PM Acceptance -> ops-engineer` |
+| Medium feature | `explore -> (architect optional) -> dev (SDD) -> QC tri-review -> PM Acceptance` |
+| Small feature | `dev (SDD) -> QC tri-review -> PM Acceptance` (including UI / residual-bearing work) |
+| Bug fix | `explore -> RCA brief -> dev (SDD) -> QC tri-review -> PM Acceptance` |
+| High-ambiguity bug | `explore -> RCA -> (architect optional) -> dev (SDD) -> QC tri-review -> PM Acceptance` |
 | Hotfix | `single dev -> QC single-review -> pm-acceptance` |
 | Product docs only | `product-manager` (QC may be skipped with explicit reason) |
 | Tech spec only | `architect` (QC may be skipped with explicit reason) |
 | Prompt/rules/skills | `prompt-engineer` |
 | Market/user research | `product-manager` |
-| QA report-only | `qa-engineer` (`QA gate: report-only`, `QA mode: report-only`) |
-| High-risk ops | `ops-engineer` (+QC/QA by risk) |
+| Report-only investigation / verification | Existing specialist supplies the scoped report -> PM Acceptance against registered fulfilment policy |
+| High-risk ops | `ops-engineer` (+independent QC by risk) -> PM Acceptance |
 
-**QA gate matrix (tier defaults):** `references/project-manager/qa-trigger-matrix.md`.
+**Acceptance authority and evidence procedure:** `references/project-manager/acceptance.md`.
 
 Detailed conflict priority and dev allocation:
 `references/project-manager/routing-and-dev-allocation.md`.
@@ -92,10 +93,10 @@ Detailed conflict priority and dev allocation:
 - Code-development plans with **`Execution mode: sdd`** (default for multi-task): **mandatory plan QC tri-review** (`{SDD_DIR}/review/qc1.md`…`qc3.md` + consolidated) after all task reviewers complete.
 - **`Execution mode: inline`**: hotfix single-seat QC (`{SDD_DIR}/review/qc.md`) or explicit skip rules unchanged.
 - Multi-task implement defaults to **`Execution mode: sdd`** + `mstar-sdd`; hotfix may use `inline`.
-- Runtime/behavior change requires a recorded **`QA gate`** decision by default (`mandatory` or `pm-acceptance` per `qa-trigger-matrix.md`).
-- Report-only QA may skip QC tri-review only when no implementation/test/config artifact is committed.
+- All acceptance uses PM Acceptance (`QA gate: pm-acceptance` is the retained fixed-value carrier); no risk tier selects a dispatched acceptance role.
+- Report-only work may skip QC tri-review only when no implementation/test/config artifact is committed; acceptance under the registered completion policy remains required.
 - Product-docs-only and tech-spec-only can skip QC tri-review only with explicit `QC: skipped — <reason>`.
-- Plan Done sign-off belongs to project-manager or qualified QA evidence, but the actual row write uses the primary coordinator's direct `mstar plan complete` with QC/QA and declared-route proof; leaf agents never write Done.
+- Plan Done sign-off belongs only to the primary PM; its direct `mstar plan complete` requires independent QC, acceptance and declared-route proof. Leaf agents never write Done.
 
 ---
 
@@ -121,12 +122,12 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** under `Findings cleanup: zero-residual`, park fixable Critical/Warning/Suggestion as open issues or use `Approve with residuals` for them — fix-now + re-review; an open issue only for true blocker-defer + Durable Roadmap (`mstar-artifacts` Findings cleanup modes).
 - **NEVER** use `Task category: quick` to skip mandatory Prepare (`specify → clarify → plan`) for substantive work (`mstar-harness-core` hard rule).
 - **NEVER** dispatch same-repo **≥2 concurrent writable implement** tracks without **`references/parallel-writable-pre-dispatch.md`**（per-track worktree + absolute **`Worktree path`**；**N invokes ≠ isolation** — also `mstar-dispatch-gates` dual-gate table).
-- **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-branch-worktree` QC/QA alignment).
-- **NEVER** skip `qa-engineer` on `QA gate: report-only` primary routes—still dispatch with `QA mode: report-only`; QC skip rules are separate and explicit.
-- **NEVER** use `QA gate: pm-acceptance` outside the tiers in `qa-trigger-matrix.md` (an open issue or unclean QC requires QA). Missing real UI evidence is a separately requested `mstar-e2e` concern, not permission for iteration QA to run browser/device tests.
-- **NEVER** mark plan `Done` on runtime/behavior change without `QA gate: mandatory` fulfilled or completed PM acceptance checklist (`qa-trigger-matrix.md`).
-- **NEVER** run tests/repro in the PM orchestration thread to substitute for `QA gate: mandatory` dispatch.
-- **NEVER** let non-PM/non-QA roles mark plan `Done`.
+- **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-branch-worktree` QC/PM Acceptance alignment).
+- **NEVER** dispatch an acceptance role or choose another acceptance route for UI, size, risk, residuals or report-only work.
+- **NEVER** treat QC approval, a clean checked subset, missing proof or failed evidence as whole-scope acceptance; follow `references/project-manager/acceptance.md`.
+- **NEVER** mark plan `Done` without the landed PM acceptance report, required evidence/issue dispositions and declared-route prerequisites.
+- **NEVER** use the narrow acceptance-check exception for product coding, test authoring, long suites, unrestricted verification or specialist ops.
+- **NEVER** let a leaf role sign off or write plan `Done`.
 - **NEVER** dispatch from a leaf or promote a leaf into PM/coordinator scope: PM/iteration-drive wording (or `Delegation: forbidden`) reaching a child is a **boundary**, not an invitation — report the mismatch and stay inside the assigned task (`mstar-dispatch-gates` § 承接方反递归).
 - **NEVER** accept “temporary workaround”, “follow-up later”, “next plan”, or “split into batches” as narrative-only scope management. If work is deferred or staged, write the roadmap/tracking location before implement GO or Done.
 - **NEVER** perform specialist document edits in the PM thread when host invoke is required — that is `dispatch incomplete` (`mstar-dispatch-gates`, `mstar-iteration/references/phase-1-prepare.md` §1.6).
@@ -175,7 +176,7 @@ Use short go/no-go checks before moving phases:
 | Lock `plan` / register `tasks` | If architecture/contracts are in scope, delegated architect output exists or justified exception is recorded; intention gate is explicit. |
 | First `implement` | `Dispatch preconditions (hard block)` hold; owner matches route/task board; invoke exists in invoke-based hosts. |
 | QC dispatch | Tri-review invoke and alignment fields pass hard checks. |
-| QA dispatch / PM acceptance | `QA gate` set per `qa-trigger-matrix.md`; if `mandatory`, QA scope aligns with QC scope; if `pm-acceptance`, checklist complete before `Done`. |
+| PM Acceptance | All required ACs have relevant evidence/results and aligned checkout/scope; apply `references/project-manager/acceptance.md` before `Done`. |
 
 Anti-patterns:
 
@@ -265,8 +266,8 @@ Minimum invariants:
   - `references/project-manager/qc-and-residuals.md`
 - Plan/status initialization + lifecycle:
   - `references/project-manager/plan-management.md`
-- QA gate tier matrix + PM acceptance checklist:
-  - `references/project-manager/qa-trigger-matrix.md`
+- PM Acceptance procedure, report and bounded execution exception:
+  - `references/project-manager/acceptance.md`
 
 Sub-references above include additional **NEVER** rules for PM plan/status sync, routing fairness, and QC/findings consolidation.
 

@@ -7,9 +7,9 @@
 | **L1** Implementer | dev subagent | Per task | Write code + affected unit evidence; non-executable docs/policy may use `scoped-check` | `task-N-brief.md` |
 | **L2** Task reviewer | `code-reviewer` (default; generic fallback when the host agent list lacks it) — PM-dispatched subagent (SDD) | Per task, after implementer | Spec + quality for **one task** (diff-first; no full suite) | brief, report, **task-level** diff |
 | **L3** Plan QC tri (cross-review) | `qc-specialist` + `qc-specialist-2` + `qc-specialist-3` | After **all** tasks on branch | **Code-review seat** — diff, language/logic, security & contract lenses on **the assigned change and directly affected interfaces**; **not** the test-execution path | Branch `review-package` MERGE_BASE..HEAD |
-| **L4** QA | `qa-engineer` when **`QA gate: mandatory`**; else PM acceptance | After QC gate | DoD acceptance, residual verify, named affected **unit-test** verification only, Done recommendation | Review bundle + plan + **L1 evidence** + issue store (`{HARNESS_DIR}/store.db`) |
+| **L4** PM Acceptance | Primary `project-manager` only | After QC gate | Per-AC evidence/result/applicability, issue disposition and sign-off; only named short bounded checks under the PM exception | Review bundle + plan + **L1 evidence** + issue store (`{HARNESS_DIR}/store.db`) |
 
-PM sets **`QA gate`** per `mstar-roles/references/project-manager/qa-trigger-matrix.md`. L4 execution when dispatched → `mstar-roles/references/qa-engineer/acceptance-gate.md`.
+Acceptance procedure, report and narrow execution exception → `mstar-roles/references/project-manager/acceptance.md`. Specialists supply evidence, not another acceptance authority.
 
 ### L3 vs L4 vs L1 — who runs commands?
 
@@ -17,12 +17,12 @@ PM sets **`QA gate`** per `mstar-roles/references/project-manager/qa-trigger-mat
 |------|-------|------------------------|
 | Produce runnable test/build evidence | **L1** implementer | **Does not** own |
 | Diff / logic / vulnerability / contract review | **L3** QC (and L2 task reviewer) | **Primary job** |
-| Map DoD → evidence; re-run gaps; close residuals | **L4** QA (or PM acceptance) | **Does not** own |
-| Affected unit tests / evidence gaps | **L1** and/or **L4** | **NEVER** — consume evidence |
+| Map DoD → evidence; fill named gaps; close residuals | **L4** PM Acceptance | **Does not** own |
+| Affected executable evidence | **L1** implementer/ops; PM only within the narrow acceptance-check exception | **NEVER** — consume evidence |
 | Explicitly user-authorized full local suite | Separate bounded action by implementer/ops; core authorization contract | **NEVER** |
 | Real browser / device / E2E | Explicit independent **`mstar-e2e`** workflow; ops executor | **NEVER**; not an L4 gate |
 
-**Why:** SDD plan QC is **N=3 parallel** on a **shared** `Review cwd`. Build/test/lint toolchains contend for caches and locks and falsely `Blocked` peer reviewers. QC is a **reviewer**, not a second QA lane.
+**Why:** SDD plan QC is **N=3 parallel** on a **shared** `Review cwd`. Build/test/lint toolchains contend for caches and locks and falsely `Blocked` peer reviewers. QC remains independent diff review, not acceptance or runtime-test execution.
 
 **SDD rule:** Layers L1–L2 run **per task**; independent ready tasks use isolated parallel tracks (`mstar-sdd` § Ready-task scheduling). Layer L3 is **mandatory full tri-review** (`N=3`) whenever **`Execution mode: sdd`** — single-plan **and** iteration **and** multi-plan iteration. Layer L3 is **not** optional “final single review”.
 
@@ -57,4 +57,4 @@ L2 independently judges whether affected executable behavior has meaningful prod
 
 Task reviewer Minor → `{SDD_DIR}/progress.md` § Minor. Plan QC Minor → `{SDD_DIR}/review/qcN.md` + optional residual via PM.
 
-QC review and QA gate dispositions must not demand real-environment evidence for development plans: live API/provider receipts, named or authenticated hosts or accounts, installed plugins or deployed artifacts, real browser or device interaction, or deployed-environment output are **not** acceptable gate conditions for code-level deliverables. Each layer proves itself with isolated unit/integration tests and built-command smoke; real-environment verification only occurs in a separately requested `mstar-e2e` workflow.
+QC review and PM Acceptance gate dispositions must not demand real-environment evidence for development plans: live API/provider receipts, named or authenticated hosts or accounts, installed plugins or deployed artifacts, real browser or device interaction, or deployed-environment output are **not** acceptable gate conditions for code-level deliverables. Each layer proves itself with isolated unit/integration tests and built-command smoke; real-environment verification only occurs in a separately requested `mstar-e2e` workflow.

@@ -650,7 +650,7 @@ function withExecutionPlanOperation<T>(
  * ------------------------------------------------------------------------ */
 
 /** Fully defaulted ordinary configuration accepted by coordinator prepare. */
-type PreparedInputs = { config: Required<Pick<PlanPrepareConfig, "qaGate" | "findingsCleanup">> & PlanPrepareConfig };
+type PreparedInputs = { config: Required<Pick<PlanPrepareConfig, "qaGate" | "findingsCleanup">> & PlanPrepareConfig; findingsCleanupSupplied: boolean };
 
 /**
  * The branch one `prepare` claim names. The Assignment's documented forms are a
@@ -702,8 +702,8 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
   if (config.workingBranch !== undefined && !isNonEmptyString(config.workingBranch)) {
     throw invalidPlanInput("Invalid prepare workingBranch: provide a non-empty branch name; retry through mstar plan prepare.");
   }
-  if (config.qaGate !== undefined && !["mandatory", "pm-acceptance"].includes(config.qaGate)) {
-    throw invalidPlanInput("Invalid prepare qaGate: choose mandatory or pm-acceptance; retry through mstar plan prepare.");
+  if (config.qaGate !== undefined && config.qaGate !== "pm-acceptance") {
+    throw invalidPlanInput("The mandatory acceptance gate is retired. Retry mstar plan prepare --workflow <workflow-id> --plan <plan-id> --qa-gate pm-acceptance.");
   }
   if (config.findingsCleanup !== undefined && !["zero-residual", "allow-residual"].includes(config.findingsCleanup)) {
     throw invalidPlanInput("Invalid prepare findingsCleanup: choose zero-residual or allow-residual; retry through mstar plan prepare.");
@@ -713,9 +713,10 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
     config: {
       ...config,
       ...(branch === undefined ? {} : { workingBranch: branch }),
-      qaGate: config.qaGate ?? "mandatory",
+      qaGate: config.qaGate ?? "pm-acceptance",
       findingsCleanup: config.findingsCleanup ?? "allow-residual",
     },
+    findingsCleanupSupplied: config.findingsCleanup !== undefined,
   };
 }
 
@@ -812,7 +813,7 @@ function alreadyPrepared(
 ): ExecutionRead<ExecutionPlanView> | undefined {
   const prior = view.coordination?.prepared;
   if (prior === undefined) return undefined;
-  if (prior.qa_gate !== inputs.config.qaGate || prior.findings_cleanup !== inputs.config.findingsCleanup) {
+  if (prior.qa_gate !== inputs.config.qaGate || (inputs.findingsCleanupSupplied && prior.findings_cleanup !== inputs.config.findingsCleanup)) {
     return undefined;
   }
   const effective = effectiveScope(view, inputs.config);
@@ -877,7 +878,7 @@ function writePreparedConfig(
   if (nextBranch !== undefined) metadata.working_branch = nextBranch;
   const prepared: PreparedCoordination = {
     qa_gate: inputs.config.qaGate,
-    findings_cleanup: inputs.config.findingsCleanup,
+    findings_cleanup: inputs.findingsCleanupSupplied ? inputs.config.findingsCleanup : witness.view.coordination?.prepared?.findings_cleanup ?? inputs.config.findingsCleanup,
     prepared_by: witness.session.sessionId,
     prepared_at: at,
   };
@@ -949,7 +950,7 @@ function validateSuppliedCheckout(worktreePath: string, workingBranch: string | 
  */
 function effectivePrepareConfig(view: ExecutionPlanView): PreparedCoordination {
   return view.coordination?.prepared ?? {
-    qa_gate: "mandatory",
+    qa_gate: "pm-acceptance",
     findings_cleanup: "allow-residual",
     prepared_by: "",
     prepared_at: "",

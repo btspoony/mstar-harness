@@ -1,6 +1,6 @@
 ---
 name: mstar-e2e
-description: Separately requested E2E / real-browser / device / installed-deployment verification. Load only for an explicit request or `amazing-e2e-check`; never from routine QA or missing screenshots.
+description: Separately requested E2E / real-browser / device / installed-deployment verification. Load only for an explicit request or `amazing-e2e-check`; never from routine development acceptance or missing screenshots.
 ---
 
 # Independent E2E Verification
@@ -11,14 +11,14 @@ Read `mstar-harness-core` first. PM follows `mstar-roles` → `references/projec
 
 ## Scope
 
-This is an explicitly requested verification workflow, separate from development iterations and routine QA. Trigger phrases include “run these E2E scenarios”, “verify on this device”, “check the installed deployment”, and `/amazing-e2e-check`. A UI diff, missing screenshot, failed unit test, or reviewer suggestion does not authorize it.
+This is an explicitly requested verification workflow, separate from development iterations and routine development acceptance. Trigger phrases include “run these E2E scenarios”, “verify on this device”, “check the installed deployment”, and `/amazing-e2e-check`. A UI diff, missing screenshot, failed unit test, or reviewer suggestion does not authorize it.
 
 External-dependency language in a development AC (live API, provider receipt, authenticated/named host or account, installed plugin/artifact, real browser/device, deployed environment) does not itself trigger this skill. Prepare rewrites that AC to isolated/local proof; only the user's separate explicit scenario authorization triggers real-environment verification.
 
 ## Workflow
 
 1. **PM scopes the request.** Record the existing user authorization, build/ref, environment/device, named scenarios and expected results, permitted side effects, capability, and report path. Ask only for missing required inputs; never infer production, accounts, or devices. Reuse relevant knowledge without a new global scan.
-2. **PM registers independent work.** Use existing workflow `type: plan`, its own workflow/plan IDs and working context. Workflow states (read through the public workflow view against current authority) are `running | paused | completed | failed | stopped`; plan rows use `Todo → InProgress → InReview → Done/Blocked`. Do not insert an iteration phase, ordinary QA gate, or automatic QC tri-review into a verification-only run. The scenario rows registered here are the legitimate exception to the "never a development plan's task" boundary in `mstar-harness-core` § 定向执行与验证边界 — that boundary governs development plans, not this verification-only workflow.
+2. **PM registers independent work.** Use existing workflow `type: plan`, its own workflow/plan IDs and working context. Workflow states (read through the public workflow view against current authority) are `running | paused | completed | failed | stopped`; plan rows use `Todo → InProgress → InReview → Done/Blocked`. Do not insert an iteration phase, development acceptance gate, or automatic QC tri-review into a verification-only run. The scenario rows registered here are the legitimate exception to the "never a development plan's task" boundary in `mstar-harness-core` § 定向执行与验证边界 — that boundary governs development plans, not this verification-only workflow.
 3. **PM dispatches ops.** Use `Execute as: ops-engineer`, `Task category: ops`, `Delegation: forbidden`, and the existing Scope / Inputs / Constraints / Evidence Required / Acceptance Criteria fields. Pass the concrete report path under `{WORKFLOW_DIR}/<workflow-id>/reports/e2e.md`. Ops executes only the named scenarios and records actual results using `references/report-template.md`.
 4. **Run independent scenarios concurrently** when sessions, devices, data, and writable state are isolated. Serialize shared state. Stop when the assigned scenarios finish; new environments or broader suites need matching user authorization.
 5. **PM reviews the scoped report and closes.** `InReview` means report acceptance against the scenario list, not another broad code review. Ops returns evidence and cannot mark Done. PM owns the final plan/workflow state and any bounded repair handoff; preserve the originating iteration's state and unit-test evidence.
@@ -26,7 +26,7 @@ External-dependency language in a development AC (live API, provider receipt, au
 ## Decision Rules
 
 - Global scope and full-test permission remain in `mstar-harness-core` → `## 定向执行与验证边界`. Explicit E2E permission authorizes only its named scenarios; it does not authorize a full suite. Permission for a full unit suite does not imply E2E permission.
-- QA never executes this workflow or launches its browser/device runner. PM dispatches ops directly; `report-only` and `Skill presets: none` do not change the executor boundary.
+- PM never executes this workflow or launches its browser/device runner. PM dispatches ops directly; `report-only` and `Skill presets: none` do not change the executor boundary.
 - Verification-only work produces the E2E report, not a Deploy Plan. Production changes, installs, restarts, destructive steps, or deployment/rollback actions require scope-specific authorization; the ops role does not create that authorization.
 - A missing capability or input is `blocked` or `not-run`, never a simulated pass. Report the exact missing prerequisite without improvising another environment.
 - A failed product scenario can be a completed verification run when all assigned scenarios have determinate results and findings are handed off. `workflow completed` does not mean `product passed`. Unresolved execution blocks stay explicit.

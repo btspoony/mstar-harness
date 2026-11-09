@@ -623,7 +623,7 @@ function completionRequest(
     review_base: revisions.baseSha,
     review_head: revisions.sourceSha,
     qc: { decision: "Approve", reports: [bodies.qc], consolidated: bodies.consolidated },
-    qa: { gate: "mandatory", decision: "pass", report: bodies.qa },
+    qa: { gate: "pm-acceptance", decision: "pass", report: bodies.qa },
   };
 }
 
@@ -859,7 +859,7 @@ async function retainedCompletionFixture(label: string): Promise<RetainedComplet
     planId: RETAINED_PLAN,
     operation: {
       kind: "prepare",
-      config: { worktreePath, workingBranch: `feature/${RETAINED_PLAN}`, qaGate: "mandatory" },
+      config: { worktreePath, workingBranch: `feature/${RETAINED_PLAN}`, qaGate: "pm-acceptance" },
     },
   });
   for (const status of ["InProgress", "InReview"] as const) {
@@ -927,7 +927,7 @@ describe("retained evidence at the completion consumer", () => {
           decision: "Approve",
           consolidated: { path: bodies.consolidated, sha256: reviewedDigest },
         },
-        qa: { gate: "mandatory", decision: "pass", report: { path: bodies.qa } },
+        qa: { gate: "pm-acceptance", decision: "pass", report: { path: bodies.qa } },
       });
       expect(completion.qc.reports.map((ref) => ref.path)).toEqual([bodies.qc]);
       expect(completion.integration).toBeUndefined();

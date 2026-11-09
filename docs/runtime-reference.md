@@ -29,12 +29,11 @@ The role catalogue:
 
 | Agent ID | Responsibility |
 |----------|----------------|
-| `project-manager` | Routing, assignment, phase progression; owns Done on plan rows |
+| `project-manager` | Routing, assignment, phase progression; sole PM Acceptance and Done sign-off owner |
 | `product-manager` | Requirements, product planning, research |
 | `architect` | Architecture and technical contracts |
 | `fullstack-dev` / `fullstack-dev-2` | Backend-led implementation / second parallel track |
 | `frontend-dev` | UI, interaction, frontend performance |
-| `qa-engineer` | Acceptance verification when the QA gate is `mandatory` |
 | `code-reviewer` | Per-task SDD review; codebase audit runs |
 | `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` | Plan QC trio (architecture / security / performance lenses) |
 | `ops-engineer` | Deploy, monitoring, infrastructure |
@@ -47,6 +46,10 @@ Where the rules live:
 - `mstar-harness-core` is the global lifecycle and authorization entry: state machine, Done ownership, task categories, and the skill index.
 - `mstar-host` owns host detection and per-host entry details, with one reference per host (`dsh`, `omp`, `opencode`, `cursor`, `codex`, `kimi`, `zcode`).
 
+PM Acceptance applies to features of every size, bug fixes, UI/residual-bearing work and report-only deliverables. It maps each required AC to evidence/result/applicability; QC approval is not a runtime log. PM may directly run only a named short bounded acceptance check; implementation, test authoring, long suites and ops stay with specialists. The procedure and report are owned by [`acceptance.md`](../skills/mstar-roles/references/project-manager/acceptance.md), not a dispatched role.
+
+Completion retains `qa: {gate: "pm-acceptance", decision: "pass", report: "<real report>"}`; optional `qaGate` is fixed-value, not a selector. An active historical `mandatory` row uses ordinary `plan prepare` for the same workflow/plan with `--qa-gate pm-acceptance`, then retries completion with PM evidence. This preserves progress, issues, source metadata, unrelated rows and truthful completed QA records. Missing reports or non-pass evidence require closing the named gap before retry; never hand-edit the store.
+
 Topic skills, grouped by what they own:
 
 | Skill | Owns |
@@ -58,7 +61,7 @@ Topic skills, grouped by what they own:
 | `mstar-iteration` | Iteration lifecycle, phases 1–6 |
 | `mstar-dispatch-gates` | Dispatch, delegation boundaries, anti-recursion |
 | `mstar-sdd` | Subagent-driven per-task implementation and review |
-| `mstar-branch-worktree` | Branches, worktrees, QC/QA checkout alignment |
+| `mstar-branch-worktree` | Branches, worktrees, QC / PM Acceptance checkout alignment |
 | `mstar-conventions` | Harness paths, discovery, `.mstarc`, plan conventions |
 | `mstar-artifacts` | Plans, review bundles, registers, issue severity and lifecycle |
 | `mstar-project-governance` | Roadmap content, issue capture, milestone records |

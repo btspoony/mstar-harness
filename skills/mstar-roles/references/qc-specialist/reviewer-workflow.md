@@ -11,7 +11,7 @@ Extension of `references/qc-specialist-shared.md`. Read when dispatched as `qc-s
 | Diff / `git show` / read / grep reasoning | Run test suites or builds |
 | Flag missing or weak tests **in the change** | Re-execute implementer TDD or CI |
 | Structured findings + verdict | Close issues or mark plan `Done` (L4 / PM) |
-| Optional deep lenses (`deep-review-lenses.md`) | Substitute for `qa-engineer` acceptance |
+| Optional deep lenses (`deep-review-lenses.md`) | Substitute for PM Acceptance |
 
 Layer SSOT → `mstar-review-qc/references/review-responsibility-boundaries.md`.
 
@@ -34,12 +34,12 @@ Layer SSOT → `mstar-review-qc/references/review-responsibility-boundaries.md`.
 7. **Write report:** Write `.md` to the Assignment-provided `{SDD_DIR}/review/` report path. Do not commit raw bundle reports unless Assignment explicitly says `Review archive mode: tracked reports`.
 8. **No stall:** When done, emit **Completion Report** in the same turn — no “notify PM?” choosers.
 
-## Evidence gaps (hand to QA — do not self-execute)
+## Evidence gaps (hand to PM Acceptance — do not self-execute)
 
 If Acceptance Criteria or high-risk paths need **runtime** proof and L1 reports leave a gap:
 
 - Record in findings / Summary: `Needs targeted unit evidence: <affected behavior and named case>` with confidence Medium/Low as appropriate.
-- Browser/device/E2E gaps become an explicitly requested independent **`mstar-e2e`** workflow, not QA commands or an automatic iteration gate.
+- Browser/device/E2E gaps become an explicitly requested independent **`mstar-e2e`** workflow, not PM Acceptance commands or an automatic iteration gate.
 - Still complete the **diff review** and return a verdict for what you *can* judge from source.
 - Do **not** run the missing commands yourself to fill the gap.
 

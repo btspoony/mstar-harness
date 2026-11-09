@@ -53,7 +53,7 @@ Count only **business delivery plans** registered in compass / the workflow regi
 | Exclude from scale count | Examples |
 |--------------------------|----------|
 | Phase 1 process | Research, direction lock, retained prototype, Review & Edit, compass/catalog/execution registration |
-| Phase 2 process | Per-task SDD briefs/reviews, plan QC tri, QA gate, branch merge-back |
+| Phase 2 process | Per-task SDD briefs/reviews, plan QC tri, PM Acceptance gate, branch merge-back |
 | Phase 3–5 process | Compound / package promotion, iteration-close, Create PR, merge-ready / CI babysit |
 | Meta “plans” | “run QC”, “do compound”, “open PR”, “setup harness”, “write compass only” |
 
@@ -91,5 +91,5 @@ Resolve `iteration_base_branch` and `target_branch` in order（first hit wins pe
 - Skipping written rationale because “it was obvious”
 - Skipping the retained prototype, calling its autonomous disposition user approval, or using it as a Prepare-gate substitute
 - Forcing S/M/L plan caps on interactive starts that did not request a scale budget
-- Counting harness process (Review chain / QC / QA / compound / close / PR) toward the scale budget
+- Counting harness process (Review chain / QC / PM Acceptance / compound / close / PR) toward the scale budget
 - Creating process-only plans to fill or absorb S/M/L slots

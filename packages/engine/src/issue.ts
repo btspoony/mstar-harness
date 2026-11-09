@@ -1569,8 +1569,7 @@ export function assertClosureAuthority(disposition: TerminalDisposition, evidenc
     if (!evidence.alignmentRef?.trim()) {
       throw new IssueError(
         "issue.invalid-disposition",
-        "resolved requires the acceptance authority in alignmentRef \u2014 the QA gate's acceptance (contract \u00A74 " +
-          "`qa-engineer`, supplied as evidence per \u00a76) or the PM acceptance record the references were verified under",
+        "resolved requires the PM acceptance record in alignmentRef under which the references were verified",
       );
     }
     return;

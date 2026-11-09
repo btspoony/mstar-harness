@@ -16,7 +16,7 @@ For each substantive edit, the local gitignored iteration/process record carries
 
 ## Review bundle（`{SDD_DIR}/review/`）
 
-QC/QA 原始过程报告默认是 **ephemeral review bundle**，置于 `{SDD_DIR}/review/`（即 `{HARNESS_DIR}/sdd/<plan-id>/review/`）。该目录随 `{SDD_DIR}` gitignored，不作为长期 git 审计链。
+QC/PM Acceptance 原始过程报告默认是 **ephemeral review bundle**，置于 `{SDD_DIR}/review/`（即 `{HARNESS_DIR}/sdd/<plan-id>/review/`）。该目录随 `{SDD_DIR}` gitignored，不作为长期 git 审计链。
 
 **QC basename rule**：`{SDD_DIR}` 已含 `<plan-id>` — **do not** repeat it in report filenames. Put `plan_id` in YAML frontmatter only.
 
@@ -25,17 +25,17 @@ QC/QA 原始过程报告默认是 **ephemeral review bundle**，置于 `{SDD_DIR
 | QC 三审报告（**SDD 默认** `Execution mode: sdd`） | `qc1.md`、`qc2.md`、`qc3.md` |
 | QC 单席报告（**`inline` / hotfix 例外**） | `qc.md` |
 | QC 汇总结论（tri 模式） | `qc-consolidated.md` |
-| QA 验收报告（`QA gate: mandatory`） | `qa.md`（或 Assignment 指定的同目录 basename） |
+| PM Acceptance report | `qa.md` (or an explicitly chosen same-directory basename; retained carrier, not a role) |
 | L2 task review 报告（**`Execution mode: sdd`，每个已完成 task**） | `../task-N-review.md` |
 | Implementer 报告（**`Execution mode: sdd`**） | `../task-N-report.md` |
 
 后两行的 `../` 是**必需**前缀：这两份 artifact 落在 `{SDD_DIR}` 根，**不在** review bundle 内。按上表表头解析，`../task-N-review.md` = **`{SDD_DIR}/task-N-review.md`**，`../task-N-report.md` = **`{SDD_DIR}/task-N-report.md`**；漏掉该前缀（即让它们落在 `{SDD_DIR}/review/` 下）就是错误解析。两者由不同角色写、互不覆盖：implementer 始终写 `task-N-report.md` —— 它是 L2 的**输入**，永不被 L2 覆盖，也不能充当独立审查；fresh L2 task reviewer 始终写 `task-N-review.md`（`Execution mode: sdd` 下每个已完成 task 都必有，不是可选、也不是只留在对话里）。**不存在**接受任一 basename 的 fallback。
 
-Mandatory QA always writes `${SDD_DIR}/review/qa.md` (or the Assignment's explicit same-directory basename) with its AC → evidence → result mapping; report-only is a mode, not a condition for mandatory report landing.
+PM Acceptance always lands its AC → evidence → result report; report procedure and template → `mstar-roles/references/project-manager/acceptance.md`. Report-only delivery does not waive landing.
 
 ## SDD 运行时（不入 reports）
 
-Per-task briefs, implementer reports, review diffs, branch review packages, and QC/QA bundle files live under **`{SDD_DIR}`** (`mstar-conventions`). Gitignored. Main plan may index `{SDD_DIR}` / `{SDD_DIR}/review/` paths only — do not paste SDD bodies or raw QC/QA reports into plan markdown.
+Per-task briefs, implementer reports, review diffs, branch review packages, and QC/PM Acceptance bundle files live under **`{SDD_DIR}`** (`mstar-conventions`). Gitignored. Main plan may index `{SDD_DIR}` / `{SDD_DIR}/review/` paths only — do not paste SDD bodies or raw QC/PM Acceptance reports into plan markdown.
 
 Plan template with Global Constraints / Interfaces → **`templates/plan.main.md`**.
 
@@ -55,11 +55,11 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
   - `Task reviews`: compact per completed task — task number + review range + earned `Task quality` + report pointer (`task-N-review.md` → `{SDD_DIR}/task-N-review.md`); required for handoff once `{SDD_DIR}` is unavailable. The L2 report file lives at the SDD root (outside `{SDD_DIR}/review/`); bundle cleanup removes only the ephemeral `review/` artifacts. The pointer names the L2 report, never the implementer's `task-N-report.md`
   - `Blocking result`: fixed / none / deferred with reason
   - `Residual findings`: each open issue — id + short title + issue severity + store tracking location + owner/target + blocker-defer flag (`N/A — none open` when none)
-- Main plan `## QA Gate Summary` when QA applies:
-  - `QA gate` / `QA mode`
-  - acceptance trace: compact AC → evidence → result mapping + coverage/gap disclosure + exact report pointer (`qa.md` → `{SDD_DIR}/review/qa.md`)
-  - evidence reused vs newly run checks
-  - related R# closure recommendations
+- Main plan `## PM Acceptance Summary`:
+  - acceptance owner: primary project-manager; fixed carrier `QA gate: pm-acceptance`
+  - compact per-AC evidence/result/applicability, coverage/gaps and exact report pointer (`qa.md` → `{SDD_DIR}/review/qa.md`)
+  - evidence reused versus newly executed bounded checks, with provenance preserved
+  - related issue dispositions and verification evidence
 - `{HARNESS_DIR}/store.db` linked issues: open-item machine SSOT (`mstar issue list` / `mstar issue show`); `{PROJECT_DIR}/<id>/residuals.json` is migration history only.
 
 The durable summary is not a paste of raw reports. It is a small gate record sufficient for handoff after `{SDD_DIR}` is unavailable.
@@ -87,20 +87,20 @@ Decision rationale that must outlive the plan is not a durable-summary field: it
 
 ### 多 `plan_id` 同时 `InReview`（PM 编排）
 
-- **流程**：实现完成 → 该 **`plan_id`** 进入 **`InReview`** → **QC 三审（仅针对该 plan 的 `Review range`）** → PM consolidated → **QA** → **`Done`**。**禁止**在多个 `plan_id` 已 `InReview` 的情况下，只推进新实现、不派 QC，或把多个 plan 的变更**伪装成**一套三审字段（单一 `plan_id` / 单一 diff 范围覆盖多 plan）。
-- **并行 vs 串行**：不同 `plan_id` **相互独立**时，可 **并行**派发多组三审（每组各自的 Assignment 与 `{SDD_DIR}/review/`）；若有真实依赖需串行，须在 Status Update 写明依赖与顺序——**每组仍须完整三审 + QA**，不是「一个大 QC」混审。
+- **流程**：实现完成 → 该 **`plan_id`** 进入 **`InReview`** → **QC 三审（仅针对该 plan 的 `Review range`）** → PM consolidated → **PM Acceptance** → **`Done`**。**禁止**在多个 `plan_id` 已 `InReview` 的情况下，只推进新实现、不派 QC，或把多个 plan 的变更**伪装成**一套三审字段（单一 `plan_id` / 单一 diff 范围覆盖多 plan）。
+- **并行 vs 串行**：不同 `plan_id` **相互独立**时，可 **并行**派发多组三审（每组各自的 Assignment 与 `{SDD_DIR}/review/`）；若有真实依赖需串行，须在 Status Update 写明依赖与顺序——**每组仍须完整三审 + PM Acceptance**，不是「一个大 QC」混审。
 - **读 skill**：书写或派发 QC 相关 Assignment 前，PM **必须** Read **`mstar-review-qc`**（编排与 residual）；leaf `qc-specialist*` → **`mstar-roles/references/qc-specialist/`**。见 `mstar-conventions` SKILL.md **QC pre-dispatch gate**。
 
 **QC 落盘与宿主权限**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 在支持路径白名单的宿主上，默认 **仅可** 写入或编辑 Assignment 指定的 **`{SDD_DIR}/review/`** 下 **`.md`**。权限范围应按 Assignment 的绝对报告路径配置；worktree 默认根为 `<parent-of-repo-root>/{repo-basename}.worktrees/`（repo root 为 Git top-level 的 realpath），不据此假定任何相对权限 glob 的解析基准或覆盖范围。报告文件**必须**以 YAML **frontmatter** 开头（键见各 QC agent 提示词）。
 
-**QC 报告与 Git**：默认 raw QC/QA bundle **不**执行 `git add` / `git commit`。PM 将 durable gate summary 写入主 plan（authored artifact；默认 gitignored），并在当轮捕获/关闭 store 中的 plan-linked issues。**跨 clone 须持久的** finding 或决策须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 或 `{HARNESS_DIR}/AGENTS.md` — **勿**默认 `git add` `status.json` / `workflows/` / `projects/` / `plans/`。若项目显式 opt-in 跟踪审计报告，在 Assignment 写 `Review archive mode: tracked reports` 并使用项目 allow rules。
+**QC 报告与 Git**：默认 raw QC/PM Acceptance bundle **不**执行 `git add` / `git commit`。PM 将 durable gate summary 写入主 plan（authored artifact；默认 gitignored），并在当轮捕获/关闭 store 中的 plan-linked issues。**跨 clone 须持久的** finding 或决策须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 或 `{HARNESS_DIR}/AGENTS.md` — **勿**默认 `git add` `status.json` / `workflows/` / `projects/` / `plans/`。若项目显式 opt-in 跟踪审计报告，在 Assignment 写 `Review archive mode: tracked reports` 并使用项目 allow rules。
 PM 提交显式 opt-in 的 tracked reports 时仅用已配置身份；身份缺失或失败则 **Blocked**，不得编造或逐次提交覆盖身份 → `mstar-roles/references/_shared/leaf-executor-core.md`「Git NEVER (repo writes)」。
 
 ## 主 plan 内任务清单（Markdown checkbox）
 
-- **谁应更新**：`fullstack-dev` / `frontend-dev` / `fullstack-dev-2`、`qa-engineer`、`ops-engineer`、`architect`、`product-manager` 在**完成本人 Assignment 范围内的工作后**，须在主 plan（`<plan-id>-<plan-name>.md`）中把**对应条目**的 Markdown 任务标记为已完成（常见：`- [ ]` → `- [x]`；若项目用其它清单记号，保持同文件内一致）。与 Completion Report **并列**，作为跨会话可核对的**落盘痕迹**。
+- **Who updates:** implementation/ops/product/architecture/prompt owners update only their delivered task checkboxes when authorized; shared-control assignments return checkbox changes to PM instead of editing shared plans. Completion Reports retain the supporting evidence.
 - **范围**：**只勾选与当前任务直接对应、且已由本角色交付证据支撑的条目**；不得代为勾选他人负责或未完工项。若正文用分段、Owner 或角色标签区分任务，以 Assignment 与文内约定为准。
-- **与执行行 / frontmatter 的关系**：勾选任务**不**等于整条计划收口。store 执行 plan 行及主 plan frontmatter 的 **`Done`** 仍**仅** PM / QA；是否推进 `InReview` 等按状态权限与 Assignment。
+- A task checkbox is not row closure. Only the primary PM signs off and writes plan `Done`; other status changes remain subject to Assignment and lifecycle authority.
 - **`qc-specialist*`**：**不得**修改主 plan（宿主仅允许 Assignment 指定的 review bundle `.md`）；审查结论落在 `{SDD_DIR}/review/` 内。若主 plan 需新增或勾选与审查相关的条目，由 `project-manager` 或 Assignment 明确授权的角色据报告回写。
 - **只读角色**：不直接改主 plan；将建议交给 `project-manager` 代为更新清单。
 

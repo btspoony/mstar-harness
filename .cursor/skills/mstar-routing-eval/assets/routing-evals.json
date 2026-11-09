@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 38,
-  "updated_at": "2026-10-06",
+  "version": 39,
+  "updated_at": "2026-11-08",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -9,19 +9,19 @@
       "expected_route": [
         "@frontend-dev",
         "QC-3-reviewers",
-        "@qa-engineer"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "assignment language contract (EN keys + CN task body)",
         "implementation diff",
         "QC gate decision (qc.md or consolidated)",
-        "QA validation in English"
+        "evidence-backed PM acceptance report in English"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "skip QC",
-        "skip QA without mandatory QA gate or pm-acceptance checklist",
+        "marks Done without evidence-backed PM acceptance for every required AC",
         "assignment uses non-English field keys",
         "report is non-English without user override"
       ]
@@ -46,7 +46,7 @@
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "skip QC",
-        "dispatches qa-engineer without mandatory trigger (UI, residual, medium+, or user override)",
+        "dispatches any dedicated acceptance role instead of primary-PM acceptance",
         "marks Done without QA gate field or PM acceptance checklist",
         "assignment uses non-English field keys",
         "report is non-English without user override"
@@ -59,7 +59,7 @@
         "@explore",
         "@fullstack-dev",
         "QC-3-reviewers",
-        "@qa-engineer"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -85,7 +85,7 @@
         "@fullstack-dev",
         "@frontend-dev",
         "QC-3-reviewers",
-        "@qa-engineer"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -93,7 +93,7 @@
         "plan file path in Context Loaded",
         "API contract",
         "parallel scope split",
-        "QA evidence in English"
+        "per-AC PM acceptance evidence/results/applicability in English"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
@@ -117,14 +117,14 @@
         "hotfix scope",
         "single-review gate",
         "QA gate: pm-acceptance",
-        "QA gate reason: hotfix-inline or equivalent",
+        "acceptance scope and evidence rationale (not a risk-tier selector)",
         "PM acceptance checklist or equivalent Status Update block"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "uses full 3-review path without reason",
         "no rollback note",
-        "dispatches qa-engineer without mandatory trigger",
+        "dispatches any dedicated acceptance role",
         "marks Done without QA gate field or PM acceptance checklist",
         "assignment uses non-English field keys",
         "report is non-English without user override"
@@ -158,7 +158,7 @@
         "@architect",
         "@fullstack-dev",
         "QC-3-reviewers",
-        "@qa-engineer"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -171,7 +171,7 @@
         "missing Context Loaded declaration",
         "no documented root cause or falsifiable hypothesis before fix",
         "skip QC",
-        "skip QA without mandatory QA gate or pm-acceptance checklist",
+        "marks Done without evidence-backed PM acceptance for every required AC",
         "assignment uses non-English field keys",
         "report is non-English without user override"
       ]
@@ -182,20 +182,20 @@
       "expected_route": [
         "@frontend-dev",
         "QC-3-reviewers",
-        "@qa-engineer"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "assignment language contract (EN keys + CN task body)",
         "implementation diff",
         "QC gate decision",
-        "QA validation with user-visible evidence in English"
+        "PM acceptance maps isolated UI unit/component evidence and discloses unverified real-environment behavior"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "skip QC",
-        "skip QA without mandatory QA gate or pm-acceptance checklist",
-        "QA sign-off with no observable UI evidence",
+        "marks Done without evidence-backed PM acceptance for every required AC",
+        "claims real-environment UI pass without separately authorized evidence",
         "assignment uses non-English field keys",
         "report is non-English without user override"
       ]
@@ -207,7 +207,7 @@
         "@ops-engineer",
         "@fullstack-dev",
         "@qc-specialist",
-        "@qa-engineer"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -225,15 +225,16 @@
       ]
     },
     {
-      "id": "qa-report-only",
+      "id": "acceptance-report-only",
       "prompt": "帮我全面测一下登录流程，只出 bug 报告和复现步骤，不要改业务代码",
       "expected_route": [
-        "@qa-engineer"
+        "@fullstack-dev",
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "assignment language contract (EN keys + CN task body)",
-        "QA Report-only completion",
+        "PM acceptance of a bounded specialist report; no full-suite permission inferred",
         "structured findings with repro steps in English"
       ],
       "hard_fail_if": [
@@ -318,7 +319,7 @@
         "@fullstack-dev",
         "@frontend-dev",
         "QC-3-reviewers",
-        "@qa-engineer"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -326,7 +327,7 @@
         "Dev routing or explicit parallel Assignments splitting API vs UI",
         "when both implementers may run concurrently on same business repo: dispatching-parallel-agents (or synonym) plus using-git-worktrees (or synonym) and absolute Worktree path per track before invoke (not Working branch alone)",
         "API contract alignment",
-        "QA evidence in English"
+        "per-AC PM acceptance evidence/results/applicability in English"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
@@ -347,7 +348,7 @@
         "@fullstack-dev",
         "@fullstack-dev-2",
         "QC-3-reviewers",
-        "@qa-engineer"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -356,7 +357,7 @@
         "Status Update or implement Assignments include dispatching-parallel-agents skill ID or synonym phrase when Superpowers workflow applies",
         "using-git-worktrees or synonym plus absolute Worktree path per concurrent writer on same business repo before invoke",
         "distinct Working branch and Worktree path per concurrent writer if same repo",
-        "QA evidence in English"
+        "per-AC PM acceptance evidence/results/applicability in English"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
@@ -377,7 +378,7 @@
         "@fullstack-dev",
         "@fullstack-dev-2",
         "QC-3-reviewers",
-        "@qa-engineer"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -385,7 +386,7 @@
         "PM Task Board with >=2 independent backend units",
         "Execute as alternates between fullstack-dev and fullstack-dev-2 across batches (round-robin) OR `single_stream_justified: yes` with a documented reason recorded against Dispatch preconditions (hard block), dev-unit spread condition",
         "Dev routing documents rotation or parallel intent per batch",
-        "QA evidence in English"
+        "per-AC PM acceptance evidence/results/applicability in English"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
@@ -401,8 +402,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "@qa-engineer"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -464,7 +464,7 @@
         "missing Context Loaded declaration",
         "hotfix path used without post-incident RCA commitment",
         "no branch policy in hotfix assignment",
-        "dispatches qa-engineer without mandatory trigger",
+        "dispatches any dedicated acceptance role",
         "marks Done without QA gate field or PM acceptance checklist",
         "assignment uses non-English field keys",
         "report is non-English without user override"
@@ -476,8 +476,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "@qa-engineer"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -502,8 +501,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "@qa-engineer"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -543,8 +541,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "@qa-engineer"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -569,8 +566,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "@qa-engineer"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -645,7 +641,7 @@
       "id": "iteration-phase2-missing-source-facts",
       "prompt": "One coordinator schedules independent rows A/B, but row B lacks source checkout/branch metadata. No prepared record exists. Describe the ordinary corrective action without recreating claims.",
       "expected_route": ["@project-manager"],
-      "must_have_artifacts": ["configure only genuinely missing source facts through ordinary prepare", "validate actual checkout/branch then progress and leaf dispatch", "mandatory QA and allow-residual default without ceremonial admission"],
+      "must_have_artifacts": ["configure only genuinely missing source facts through ordinary prepare", "validate actual checkout/branch then progress and leaf dispatch", "pm-acceptance and allow-residual default without ceremonial admission"],
       "hard_fail_if": ["per-plan binding, claim or ownership transfer", "requires sealed Assignment or historical holder", "dispatches unknown/shared source checkout", "rewrites workflow anchors or unrelated rows"]
     },
     {
@@ -654,7 +650,7 @@
       "expected_route": [
         "@fullstack-dev",
         "QC-3-reviewers",
-        "@qa-engineer"
+        "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -677,8 +673,7 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "@qa-engineer"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
@@ -773,15 +768,14 @@
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
-        "QC-3-reviewers",
-        "@qa-engineer"
+        "QC-3-reviewers"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "mstar-iteration Phase 2 context",
         "main-worktree control root and separate recorded integration checkout established; branch anchors and integration_worktree_path read through the public workflow view (snapshot only pre-activation)",
         "recorded source metadata and actual checkout verified before dispatch, no per-row claim",
-        "integration_merge_lease serial merge after QC/QA before Done (pre-activation: snapshot field; ACTIVE: store-backed workflow state)"
+        "integration_merge_lease serial merge after QC/PM Acceptance before Done (pre-activation: snapshot field; ACTIVE: store-backed workflow state)"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
@@ -803,8 +797,8 @@
       "id": "iteration-phase2-inprogress-without-lease",
       "prompt": "The current workflow coordinator has an InProgress row with valid recorded source metadata but no per-row lease/prepared Assignment. Continue its independent leaf work with ordinary defaults.",
       "expected_route": ["@project-manager"],
-      "must_have_artifacts": ["valid ordinary progress from current coordinator", "verify actual source checkout and task ownership", "mandatory QA/allow-residual defaults", "no orphan recovery or ceremony"],
-      "hard_fail_if": ["denies solely because execution lease or sealed Assignment is absent", "creates per-plan identity or claim", "skips actual writable isolation or QC/QA"]
+      "must_have_artifacts": ["valid ordinary progress from current coordinator", "verify actual source checkout and task ownership", "pm-acceptance/allow-residual defaults", "no orphan recovery or ceremony"],
+      "hard_fail_if": ["denies solely because execution lease or sealed Assignment is absent", "creates per-plan identity or claim", "skips actual writable isolation or QC/PM Acceptance"]
     },
     {
       "id": "iteration-phase2-parallel-merge-blocked",
@@ -1146,37 +1140,37 @@
     },
     {
       "id": "direct-plan-config-revisable",
-      "prompt": "Current coordinator corrects InProgress/InReview source branch/checkout and QA/cleanup while plan prose changes. Actual corrected facts are valid.",
+      "prompt": "Current coordinator corrects InProgress/InReview source branch/checkout and acceptance/cleanup while plan prose changes. Actual corrected facts are valid.",
       "expected_route": ["@project-manager"],
-      "must_have_artifacts": ["ordinary prepare revises source/configuration", "mandatory/allow-residual defaults", "status/progress preserved", "actual Git and authorization constraints remain"],
+      "must_have_artifacts": ["ordinary prepare revises source/configuration", "pm-acceptance/allow-residual defaults", "status/progress preserved", "actual Git and authorization constraints remain"],
       "hard_fail_if": ["locks prepared config", "reseal/rebind or resets Todo", "ceremonial receipt", "bypasses actual Git/identity"]
     },
     {
       "id": "direct-plan-iteration-completion",
-      "prompt": "QC/QA passed and a real serial two-parent merge is in the clean recorded integration checkout. Actual SHAs known; first complete output was lost.",
+      "prompt": "QC/PM Acceptance passed and a real serial two-parent merge is in the clean recorded integration checkout. Actual SHAs known; first complete output was lost.",
       "expected_route": ["@project-manager"],
-      "must_have_artifacts": ["direct complete with reviewed source/QC/QA and real integration base/result", "commit-time Git witness", "exact replay preserves completed_at, no second merge", "parent compound/PR/merge/close remains; no child PR"],
+      "must_have_artifacts": ["direct complete with reviewed source/QC/PM Acceptance and real integration base/result", "commit-time Git witness", "exact replay preserves completed_at, no second merge", "parent compound/PR/merge/close remains; no child PR"],
       "hard_fail_if": ["ownership-transfer sequence", "second merge or caller success flag", "Done without ancestry/checkout proof", "row Done closes parent"]
     },
     {
       "id": "direct-plan-development-completion",
       "prompt": "Standalone development owns one reviewed row and clean registered source branch/checkout. Complete without iteration integration and describe remaining delivery.",
       "expected_route": ["@project-manager"],
-      "must_have_artifacts": ["direct complete verifies source/ref/commit and QC/QA", "integration input refuses", "own compound/PR/verified merge/terminal close after row Done"],
+      "must_have_artifacts": ["direct complete verifies source/ref/commit and QC/PM Acceptance", "integration input refuses", "own compound/PR/verified merge/terminal close after row Done"],
       "hard_fail_if": ["iteration merge/transfer ceremony", "row Done closes workflow", "skips PR/verified merge"]
     },
     {
       "id": "direct-plan-report-only-completion",
-      "prompt": "Standalone report-only registered completion_policy, QC/QA pass, no Git/PR. Explain absent versus already-recorded matching policy fulfilment.",
+      "prompt": "Standalone report-only has a registered completion_policy and passing QC/PM Acceptance, with no separate fulfilment payload or Git/PR. Explain completion and terminal close under the registered policy.",
       "expected_route": ["@project-manager"],
-      "must_have_artifacts": ["absent fulfilment blocks despite QA pass", "record matching fulfilment before Done", "direct complete consumes policy/QC/QA", "evidence-backed close; no fabricated Git/PR"],
-      "hard_fail_if": ["QA substitutes for policy", "requires Git/integration/compound-before-PR/PR", "row Done closes workflow", "accepts integration input"]
+      "must_have_artifacts": ["registered completion_policy remains the report-only declaration", "direct complete uses independent QC and evidence-backed PM Acceptance without an additional fulfilment payload", "evidence-backed close; no fabricated Git/PR"],
+      "hard_fail_if": ["requires a separate fulfilment payload or blocks solely because it is absent", "skips independent QC or PM Acceptance", "requires Git/integration/compound-before-PR/PR", "row Done closes workflow", "accepts integration input"]
     },
     {
       "id": "direct-plan-noargs",
       "prompt": "/iteration-drive with no arguments on selected locked iteration, multiple rows remain. Continue complete lifecycle.",
-      "expected_route": ["@project-manager", "@fullstack-dev", "QC-3-reviewers", "@qa-engineer"],
-      "must_have_artifacts": ["whole iteration Phase 2 through 6", "one coordinator/native leaves", "SDD/QC/QA/worktrees preserved"],
+      "expected_route": ["@project-manager", "@fullstack-dev", "QC-3-reviewers"],
+      "must_have_artifacts": ["whole iteration Phase 2 through 6", "one coordinator/native leaves", "SDD/QC/PM Acceptance/worktrees preserved"],
       "hard_fail_if": ["requires scoped args/seal", "stops at transfer/row Done", "creates another primary"]
     },
     {
@@ -1327,7 +1321,7 @@
       "prompt": "Prepare a development AC for an external API integration. A teammate asks for a live provider receipt and named authenticated account before accepting it.",
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["reject external-environment AC in Prepare", "replace with isolated fixture and local unit/integration or built CLI/MCP evidence", "real environment separately authorized"],
-      "hard_fail_if": ["requires live provider receipt as development gate", "silently converts this to mandatory QA or E2E"]
+      "hard_fail_if": ["requires live provider receipt as development gate", "silently converts this to a dispatched acceptance role or automatic E2E"]
     },
     {
       "id": "recovery-policy-isolated-proof",
@@ -1366,7 +1360,7 @@
     },
     {
       "id": "hash-record-only-post-prepare",
-      "prompt": "Current coordinator row source/configuration valid; plan/leaf Assignment prose changed. Continue progress. Real source/QA/cleanup corrections use revisable prepare; foreign identity refuses.",
+      "prompt": "Current coordinator row source/configuration valid; plan/leaf Assignment prose changed. Continue progress. Real source/acceptance/cleanup corrections use revisable prepare; foreign identity refuses.",
       "expected_route": ["@project-manager"],
       "must_have_artifacts": [
         "continue the ordinary progress action in the same authorized scope after prose-only edits",
@@ -1376,24 +1370,24 @@
       ],
       "hard_fail_if": [
         "STOP, restore bytes, rebind, orphan-adopt, reseal or re-prepare because a digest changed",
-        "ignore a real holder or recorded scope/QA/cleanup conflict",
+        "ignore a real holder or recorded scope/acceptance/cleanup conflict",
         "invent a bypass or send coordinator credentials to a leaf"
       ]
     },
     {
       "id": "hash-record-only-submitted-evidence",
-      "prompt": "Direct completion QC/QA report gained explanatory prose; coverage/QA/actual Git remain valid. Does it need hash repair? Controls: missing/out-of-area report, unfulfilled QA or invalid actual merge.",
+      "prompt": "Direct completion QC/PM Acceptance report gained explanatory prose; coverage/PM Acceptance/actual Git remain valid. Does it need hash repair? Controls: missing/out-of-area report, unfulfilled PM Acceptance or invalid actual merge.",
       "expected_route": ["@project-manager"],
       "must_have_artifacts": [
         "no hash-freshness refusal for an appended report and no return/re-signing repair",
-        "current semantic review/QA, evidence paths and actual Git delivery facts still required",
+        "current semantic review/PM Acceptance, evidence paths and actual Git delivery facts still required",
         "negative controls remain real path/acceptance/Git refusals",
         "bundle completeness, process outcome, semantic applicability and reviewer coverage judgment stay separate"
       ],
       "hard_fail_if": [
         "requires stale-evidence repair, restoring report bytes, resealing or re-signing",
         "uses evidence hash equality to decide integrity or reuse applicability",
-        "marks Done despite missing path, unfulfilled QA or invalid Git proof"
+        "marks Done despite missing path, unfulfilled PM Acceptance or invalid Git proof"
       ]
     },
     {
@@ -1491,6 +1485,20 @@
         "skips architect despite unresolved technical gaps, omits writer, or invents skip receipts",
         "creates new metadata/schema fields or changes post-Phase-1 flow"
       ]
+    },
+    {
+      "id": "pm-acceptance-residual-ui",
+      "prompt": "A medium UI feature has completed L2 and independent QC tri with Approve with residuals. One non-blocking linked issue remains under allow-residual; relevant unit/component evidence exists. Close acceptance without real browser/device work.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["per-AC evidence/result/input identity/applicability", "issue id/severity/tracking/owner and disposition; waiver authority unchanged", "landed acceptance report and durable PM Acceptance Summary", "same frozen QC scope/checkout and honest real-environment gaps"],
+      "hard_fail_if": ["dispatches an acceptance role or upgrades to mandatory", "uses QC approval alone as runtime proof", "ignores open issues or claims live UI validation", "changes QC seat independence"]
+    },
+    {
+      "id": "pm-acceptance-named-evidence-gap",
+      "prompt": "QC approved a bug fix, but AC2 lacks relevant execution proof. One existing short unit-test selector can fill the gap. Distinguish PM direct acceptance checking from writing tests, running long suites or ops.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["AC2 remains unverified/Blocked until supported", "name exact command/selector, checkout/environment, expected result and stopping bound before the narrow PM check", "record actual outcome and provenance; retain observed failures", "delegate implementation/test-authoring/long-suite/ops work to existing specialists without transferring acceptance authority"],
+      "hard_fail_if": ["whole-scope pass from a clean checked subset or QC approval", "PM authors product/tests or runs unrestricted verification", "new QA mode or role", "reruns unaffected evidence"]
     }
   ]
 }

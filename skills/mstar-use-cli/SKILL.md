@@ -48,9 +48,9 @@ The CLI publishes each command's owning skill itself: a refusal envelope carries
 |---|---|
 | Read selected row state/configuration/evidence and token | `mstar plan show` |
 | Bootstrap/resume the workflow coordinator only | `mstar plan bind` |
-| Revise row source metadata and QA/cleanup configuration (the Prepare view and its amendments) | `mstar plan prepare` |
+| Revise row source metadata and acceptance/cleanup configuration (the Prepare view and its amendments) | `mstar plan prepare` |
 | Update progress; capture findings on this plan as linked issues; close one with its disposition | `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close` |
-| Record Done directly from QC/QA and declared-route proof | `mstar plan complete` |
+| Record Done directly from QC/PM Acceptance and declared-route proof | `mstar plan complete` |
 | Register a standalone plan workflow; record delivery evidence | `mstar workflow register`, `mstar workflow evidence` |
 | Register an iteration workflow | `mstar iteration register` |
 | Close one finished lifecycle (terminal workflow state + root unregister in the current authority) | `mstar status workflow-close` |
@@ -65,7 +65,7 @@ The CLI publishes each command's owning skill itself: a refusal envelope carries
 | Validate an Assignment before dispatch | `mstar dispatch validate` |
 | Map an execution mode to its QC seat count; assert tri identity | `mstar review seats` |
 | Check workflow-entry facts (branch anchors, main residency, integration checkout cleanliness, integration merge lease) or the L1 / L2 pre-dispatch worktree topology | `mstar worktree check` (L1 per-plan gains the lease fact; `--entry` is the workflow-level form) |
-| Assert QC / QA checkout alignment across seat files | `mstar worktree qc-alignment` |
+| Assert QC / PM Acceptance checkout alignment across seat files | `mstar worktree qc-alignment` |
 | Post-merge worktree and branch cleanup (dry-run first) | `mstar worktree cleanup` |
 | SDD helpers: workspace, brief, branch diff package, bound launch | `mstar sdd workspace`, `mstar sdd task-brief`, `mstar sdd review-package`, `mstar sdd check-context`, `mstar sdd exec` |
 | Evaluate a phase-transition gate; probe push cadence | `mstar iteration gate`, `mstar iteration push-cadence` |
@@ -98,7 +98,7 @@ Use `references/preconditions.md` when the intended verb refuses for a required 
 
 ### 3. Lifecycle shape
 
-The primary coordinator's ordinary prepare/progress/complete operations replace ownership-transfer completion. Iteration complete verifies the already-performed serial merge; standalone development verifies registered source without integration inputs; report-only consumes matching fulfilment recorded before Done without fabricated Git. All retain QC/QA and their distinct outer delivery/close obligations. No per-row execution lease or bind exists.
+The primary coordinator's ordinary prepare/progress/complete operations replace ownership-transfer completion. Iteration complete verifies the already-performed serial merge; standalone development verifies registered source without integration inputs; report-only follows its registered policy without fabricated Git or a fulfilment payload. All retain QC/PM Acceptance and their distinct outer delivery/close obligations. No per-row execution lease or bind exists.
 
 Complete writes Done/evidence/ownership atomically and releases applicable integration exclusion; exact replay preserves timestamps. Retry the same intended action with current facts rather than introducing another protocol. Parameters/recovery → references/plan-and-workflow.md.
 
@@ -109,7 +109,7 @@ Complete writes Done/evidence/ownership atomically and releases applicable integ
 - **Exit codes: `0` ok, `1` engine refusal, `2` usage.** `0` includes idempotent no-ops and read-only reads. `1` carries a stable machine code; a refused call's commit state is action-local and stated by its receipt. `2` is a usage error — unknown flag, missing required argument or option, malformed or relative path where an absolute one is required, unreadable payload.
 - **Flags come from the CLI help, never from this skill.** Run the group help, or the verb help, before guessing an option; the group help is also the authority for which verbs exist at all.
 - **Refusal semantics are action-local.** A refusal's commit state belongs to that one action: read the receipt instead of assuming. The engine's coordinated plan-route writes refuse transactionally — a refused operation there writes no row, receipt or counter change, so its recovery is a read of current state, never an undo. Where a verb documents action-local partial application, components already committed stay committed — the receipt names them, and the documented remaining action is replayed as its own operation, not the whole sequence. A stale explicit token is recovered by re-reading the addressed scope and retrying with the fresh token. There is no force, no replace and no takeover flag to escalate to.
-- Evidence digests record provenance, not immutable report bytes. Explanatory report edits need no hash repair or resealing; current semantic QC/QA, source proof and evidence-path requirements still apply. No ownership-transfer repair action remains.
+- Evidence digests record provenance, not immutable report bytes. Explanatory report edits need no hash repair or resealing; current semantic QC/PM Acceptance, source proof and evidence-path requirements still apply. No ownership-transfer repair action remains.
 - **Streams are per command and per mode — observe them, never infer from the family.** A verb's machine surface (the `--json` form, or a verb whose output is a machine object such as `persist get`) writes that object to **stdout**, failure and refusal objects included, so neither the exit code nor the family tells you which stream carried the bytes. On the human surface a success is usually one short line on **stdout** (`<path>: OK`, `host: <id>`), though some verbs leave stdout empty and put the readable summary on **stderr**; usage errors and most refusal diagnostics go to **stderr**, and one command can split inside itself — machine rows on stdout, the human headline on stderr. No split holds for every command and no enumeration is reliable, so never assume a command's failure text is on stderr: where a pipe depends on it, read the actual output or that command's help. The exit code is the verdict; an empty stdout is not by itself a failure signal.
 - **The CLI you run may not be the code you read.** The globally installed binary runs the *published* engine build, and even a workspace entry point resolves the engine's **built output**, which can lag its source until that package is rebuilt — so a fix present in the engine source can be absent from the very command you are testing. Install health, and a healthy setup check, prove neither. When a result contradicts source you just read, rebuild or re-resolve before concluding the source is wrong, and follow the version-alignment path in `mstar-harness-core`. The same caution covers a repository's own generated bundles: a checkout can be mid-flight between source and artifact.
 - **Never write a lifecycle state or a lease by editing a document.** Done and lease release go through the completion verb; the protected coordination documents refuse direct writes by design.

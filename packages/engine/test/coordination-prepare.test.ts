@@ -108,7 +108,7 @@ describe("prepare control checkout branch guard", () => {
         planId: PLAN_ID,
         operation: { kind: "prepare", config: { workingBranch: "feature/plan-a" } },
       }),
-    ).resolves.toMatchObject({ data: { coordination: { prepared: { qa_gate: "mandatory" } } } });
+    ).resolves.toMatchObject({ data: { coordination: { prepared: { qa_gate: "pm-acceptance" } } } });
   });
 
   test("fails closed when the control branch cannot be probed", async () => {

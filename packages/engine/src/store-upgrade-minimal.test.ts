@@ -779,6 +779,8 @@ test("a sealed/completed legacy file snapshot is projected and imported instead 
     expect((coordination.completion as Record<string, unknown>)).toMatchObject({
       source_branch: `feature/${workflowId}`, source_sha: "c".repeat(40),
       worktree_path: join(ROOT, "legacy-worktree"), completed_by: "host-coord",
+      qa: { gate: "mandatory", decision: "pass", report: { path: join(ROOT, "qa.md") } },
+      completed_at: "2026-10-04T03:00:00Z",
     });
     const state = JSON.parse(
       (store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { state_json: string }).state_json,

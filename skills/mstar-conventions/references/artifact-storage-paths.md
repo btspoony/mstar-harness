@@ -13,7 +13,7 @@
 | **知识文档** | `{KNOWLEDGE_DIR}/<category>/<slug>.md`（默认 `.mstar/knowledge/`；`.mstarc` `knowledge_dir` → 默认 → `.agents/knowledge/` 解析，空目录视为不存在） | `mstar-knowledge`（Capture 写；Maintain 读写） |
 | **知识 README（散文）** | `.mstar/knowledge/README.md`（可选导览散文；**不是**登记索引 — 见下） | `mstar-knowledge`（散文指向；**不再**维护索引行） |
 | **主 plan** | `.mstar/plans/<plan-id>-<name>.md`（gitignored；authored artifact，非执行状态权威） | PM / `mstar-artifacts` |
-| **Review bundle（QC/QA 原始过程报告）** | `{HARNESS_DIR}/sdd/<plan-id>/review/`（gitignored；默认 `.mstar/sdd/<plan-id>/review/`） | `mstar-sdd`、`mstar-review-qc`、`qa-engineer` |
+| **Review bundle (QC / PM Acceptance raw reports)** | `{HARNESS_DIR}/sdd/<plan-id>/review/` (gitignored) | `mstar-sdd`, `mstar-review-qc`, primary `project-manager` |
 | **SDD scratch** | `{HARNESS_DIR}/sdd/<plan-id>/`（gitignored；含 per-task handoff 与 `review/` bundle） | `mstar-sdd` |
 | **status.json (legacy root)** | `{HARNESS_DIR}/status.json` (gitignored; read-only history; no live writer) | No live writer |
 | **workflow snapshot (legacy)** | `{WORKFLOW_DIR}/<id>/snapshot.json` (gitignored; read-only history; no live writer) | No live writer |

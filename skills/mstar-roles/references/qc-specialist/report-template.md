@@ -81,8 +81,8 @@ Report **Critical / Warning / Suggestion** sections are human-readable; PM maps 
 ### CI / runtime evidence (read-only notes — do not re-run)
 
 - If Assignment or review-package **already cites** failing CI (build, test, lint, types) for this **`Review range`**, treat as **≥ Warning** (or Critical when security/data) — do **not** re-run CI/build/test to reproduce.
-- If CI status is unknown: judge from the diff; note `Needs L4/QA verification` when runtime proof is required. Absence of a green CI link is **not** itself a Critical finding.
-- Flaky CI disposition belongs to PM / QA after recorded evidence — QC does not chase flakes with local suite runs.
+- If CI status is unknown: judge from the diff; note `Needs L4/PM Acceptance verification` when runtime proof is required. Absence of a green CI link is **not** itself a Critical finding.
+- Flaky CI disposition belongs to PM after recorded evidence — QC does not chase flakes with local suite runs.
 
 ## Evidence rules
 - Independently state any concrete cross-task test-quality gap in Findings with the affected behavior and why cited L1/L2 evidence does not protect it; adequate existing evidence is not a finding. Do not turn absent fresh tests or docs/policy prose into automatic test findings (`mstar-coding-behavior` § Evidence).
@@ -90,5 +90,5 @@ Report **Critical / Warning / Suggestion** sections are human-readable; PM maps 
 - **If you cannot state a verifiable cross-check, do not report the finding** (prefer omission to fabrication)
 - **A failed evidence channel is not "no problem"** — when the review-package is missing, the diff cannot be parsed, or a referenced file is unreadable, mark the affected scope **Unconfirmed**; never default to "no findings"
 - Critical findings: trigger condition, impact scope, fix suggestion (from source reasoning)
-- Low-confidence / runtime-only doubts: follow-up steps for **L4 QA** or implementer — not self-executed suites
+- Low-confidence / runtime-only doubts: follow-up steps for **L4 PM Acceptance** or implementer — not self-executed suites
 - Repeated cross-task patterns: mark as recurring in findings

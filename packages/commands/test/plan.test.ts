@@ -112,7 +112,7 @@ describe("plan command family", () => {
       evidence: {
         evidence_paths: ["/repo/.mstar/plans/plan-a.md"],
         qc: { decision: "Approve", reports: ["qc.md"], consolidated: "qc-consolidated.md", extraEngineField: true },
-        qa: { gate: "mandatory", decision: "pass", report: "qa.md", extraEngineField: true },
+        qa: { gate: "pm-acceptance", decision: "pass", report: "qa.md", extraEngineField: true },
         extraEngineField: true,
       },
     };

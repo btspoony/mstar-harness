@@ -15173,7 +15173,7 @@ function assertClosureAuthority(disposition, evidence) {
       throw new IssueError("issue.invalid-disposition", "resolved requires acceptance evidence in references");
     }
     if (!evidence.alignmentRef?.trim()) {
-      throw new IssueError("issue.invalid-disposition", "resolved requires the acceptance authority in alignmentRef — the QA gate's acceptance (contract §4 " + "`qa-engineer`, supplied as evidence per §6) or the PM acceptance record the references were verified under");
+      throw new IssueError("issue.invalid-disposition", "resolved requires the PM acceptance record in alignmentRef under which the references were verified");
     }
     return;
   }
@@ -16923,10 +16923,10 @@ function readCompletionEvidence(value) {
   if (!isNonEmptyString(qc.consolidated))
     throw new CoordinationError("coordination.invalid-input", "Invalid QC evidence: qc.consolidated must name the plan QC decision report. Inspect workflow state with mstar status validate.");
   if (!isPlainObject(value.qa))
-    throw new CoordinationError("coordination.invalid-input", "Invalid completion evidence: provide a QA or PM acceptance report. Inspect workflow state with mstar status validate.");
+    throw new CoordinationError("coordination.invalid-input", "Invalid completion evidence: provide a PM acceptance report and retry plan complete.");
   assertExactKeys(value.qa, ["gate", "decision", "report"], "completion evidence qa");
-  if (value.qa.gate !== "mandatory" && value.qa.gate !== "pm-acceptance" || value.qa.decision !== "pass" || !isNonEmptyString(value.qa.report)) {
-    throw new CoordinationError("coordination.invalid-input", "qa evidence requires string gate mandatory or pm-acceptance, decision pass and the acceptance report; correct the completion evidence and retry plan complete");
+  if (value.qa.gate !== "pm-acceptance" || value.qa.decision !== "pass" || !isNonEmptyString(value.qa.report)) {
+    throw new CoordinationError("coordination.invalid-input", "qa evidence requires gate pm-acceptance, decision pass and a PM acceptance report; correct the completion evidence and retry plan complete.");
   }
   const qaGate = value.qa.gate;
   const qaReport = value.qa.report;
@@ -16957,7 +16957,7 @@ function readCompletionEvidence(value) {
 }
 function assertCompletionReviewDecision(evidence, planId, qaGate) {
   if (evidence.qa_gate !== qaGate) {
-    throw new CoordinationError("coordination.invalid-transition", "Plan requires the configured QA acceptance evidence; provide the matching QA or PM acceptance report. Inspect workflow state with mstar status validate.", { plan_id: planId, required: qaGate });
+    throw new CoordinationError("coordination.invalid-transition", "The plan retains a retired mandatory acceptance gate. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --qa-gate pm-acceptance for this plan, then retry plan complete with PM acceptance evidence.", { plan_id: planId, required: qaGate });
   }
 }
 function assertNoIntegrationContamination(input) {
@@ -27214,8 +27214,8 @@ function readPrepareInputs(call) {
   if (config.workingBranch !== undefined && !isNonEmptyString(config.workingBranch)) {
     throw invalidPlanInput("Invalid prepare workingBranch: provide a non-empty branch name; retry through mstar plan prepare.");
   }
-  if (config.qaGate !== undefined && !["mandatory", "pm-acceptance"].includes(config.qaGate)) {
-    throw invalidPlanInput("Invalid prepare qaGate: choose mandatory or pm-acceptance; retry through mstar plan prepare.");
+  if (config.qaGate !== undefined && config.qaGate !== "pm-acceptance") {
+    throw invalidPlanInput("The mandatory acceptance gate is retired. Retry mstar plan prepare --workflow <workflow-id> --plan <plan-id> --qa-gate pm-acceptance.");
   }
   if (config.findingsCleanup !== undefined && !["zero-residual", "allow-residual"].includes(config.findingsCleanup)) {
     throw invalidPlanInput("Invalid prepare findingsCleanup: choose zero-residual or allow-residual; retry through mstar plan prepare.");
@@ -27225,9 +27225,10 @@ function readPrepareInputs(call) {
     config: {
       ...config,
       ...branch === undefined ? {} : { workingBranch: branch },
-      qaGate: config.qaGate ?? "mandatory",
+      qaGate: config.qaGate ?? "pm-acceptance",
       findingsCleanup: config.findingsCleanup ?? "allow-residual"
-    }
+    },
+    findingsCleanupSupplied: config.findingsCleanup !== undefined
   };
 }
 function assertWorkingBranchIsFeature(context, workingBranch) {
@@ -27267,7 +27268,7 @@ function alreadyPrepared(view, inputs, token, tx) {
   const prior = view.coordination?.prepared;
   if (prior === undefined)
     return;
-  if (prior.qa_gate !== inputs.config.qaGate || prior.findings_cleanup !== inputs.config.findingsCleanup) {
+  if (prior.qa_gate !== inputs.config.qaGate || inputs.findingsCleanupSupplied && prior.findings_cleanup !== inputs.config.findingsCleanup) {
     return;
   }
   const effective = effectiveScope(view, inputs.config);
@@ -27306,7 +27307,7 @@ function writePreparedConfig(context, read, inputs, witness, tx, at) {
     metadata.working_branch = nextBranch;
   const prepared = {
     qa_gate: inputs.config.qaGate,
-    findings_cleanup: inputs.config.findingsCleanup,
+    findings_cleanup: inputs.findingsCleanupSupplied ? inputs.config.findingsCleanup : witness.view.coordination?.prepared?.findings_cleanup ?? inputs.config.findingsCleanup,
     prepared_by: witness.session.sessionId,
     prepared_at: at
   };
@@ -27352,7 +27353,7 @@ function validateSuppliedCheckout(worktreePath, workingBranch, planId) {
 }
 function effectivePrepareConfig(view) {
   return view.coordination?.prepared ?? {
-    qa_gate: "mandatory",
+    qa_gate: "pm-acceptance",
     findings_cleanup: "allow-residual",
     prepared_by: "",
     prepared_at: ""
@@ -37534,7 +37535,7 @@ var init_engine = __esm(() => {
       { key: "delegation", label: "Delegation", code: "delegation" },
       { key: "taskCategory", label: "Task category", code: "task-category" }
     ];
-    REVIEW_SEAT_ROLES = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer", "qa-engineer"];
+    REVIEW_SEAT_ROLES = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer"];
     BUDGET_LABELS = ["Budget (review / QC seats)", "Budget"];
     RETURN_SHAPE_LABELS = ["Return shape (review / QC seats)", "Return shape"];
     TASK_BUDGET_LABELS = ["Task budget (implement / ops rounds)", "Task budget"];
@@ -38608,7 +38609,6 @@ var init_engine = __esm(() => {
     { agentId: "fullstack-dev", reference: "references/fullstack-dev-shared.md" },
     { agentId: "fullstack-dev-2", reference: "references/fullstack-dev-shared.md" },
     { agentId: "frontend-dev", reference: "references/frontend-dev.md" },
-    { agentId: "qa-engineer", reference: "references/qa-engineer.md" },
     { agentId: "qc-specialist", reference: "references/qc-specialist-shared.md" },
     { agentId: "qc-specialist-2", reference: "references/qc-specialist-shared.md" },
     { agentId: "qc-specialist-3", reference: "references/qc-specialist-shared.md" },

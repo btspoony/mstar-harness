@@ -20,13 +20,13 @@
 | **`{PLAN_DIR}/`** | 单 plan 主文件、durable gate summary、可选 `residuals/` | 计划执行与长期决策留档 |
 
 
-**不应**放入 `docs/` 的内容：迭代 compass 正文、作为**特定 plan 输入/输出**的评审结论、实施笔记、未稳定规格草案、QC/QA 原始过程报告 —— 分别落 `{ITERATION_DIR}`、`{KNOWLEDGE_DIR}`、`{SPECS_DIR}` 或 `{SDD_DIR}/review/`；长期 gate 摘要回写主 plan。
+**不应**放入 `docs/` 的内容：迭代 compass 正文、作为**特定 plan 输入/输出**的评审结论、实施笔记、未稳定规格草案、QC/PM Acceptance 原始过程报告 —— 分别落 `{ITERATION_DIR}`、`{KNOWLEDGE_DIR}`、`{SPECS_DIR}` 或 `{SDD_DIR}/review/`；长期 gate 摘要回写主 plan。
 
 ## `{ITERATION_DIR}`（可选·迭代/版本级 package）
 
 - **物理路径**：`**{ITERATION_DIR}/**`（推荐布局下常为 `**.mstar/iterations/**`，与 `{KNOWLEDGE_DIR}`、`{PLAN_DIR}` 并列；legacy 项目可继续为 `.agents/iterations/`）。
 - **放什么**：**`<iteration-id>/` package** — `delivery-compass.md`（authored 迭代范围输入，非运行状态权威）；`guides/`（探索、过程）；`specs/`（迭代级规格草案）；可选 package `README.md`；遗留规划快照。ACTIVE 运行状态在 store execution_* 行。
-- **不放什么**：已锁定的仓库级规范（→ **`{SPECS_DIR}/`**）；已提升的跨迭代实施 SSOT（→ **`{KNOWLEDGE_DIR}/`**，经 compound）；单 plan QC/QA 原始报告（→ `{SDD_DIR}/review/`）。
+- **不放什么**：已锁定的仓库级规范（→ **`{SPECS_DIR}/`**）；已提升的跨迭代实施 SSOT（→ **`{KNOWLEDGE_DIR}/`**，经 compound）；单 plan QC/PM Acceptance 原始报告（→ `{SDD_DIR}/review/`）。
 - **登记（DB 权威）**：迭代 identity、compass 位置、description、project 归属，以及 package 内文档的 `documents` 关系，都是 `{HARNESS_DIR}/store.db` 的 catalog 行（contract §1/§4）；查询用 `mstar catalog show` / `mstar catalog list`，登记走 reviewed `mstar catalog discover` + `mstar catalog import` 或 `mstar catalog register` / `mstar catalog link`。根 `{ITERATION_DIR}/README.md` 与 package `README.md` 保留为**散文**，**不再**维护「一行 = 一次迭代」的登记行或 Documents 登记表。
 - **维护**：`@product-manager` / `@architect` 起草 package；**`@project-manager`** 维护 catalog 登记（经域边界写入）与 metadata；**iteration-close** 时 **`mstar-knowledge`** 盘点 package 并**提升**至 `{KNOWLEDGE_DIR}/`。
 - **Compass 路径**：canonical `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`（authored 输入）；legacy flat `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 仅兼容读。
@@ -80,8 +80,8 @@
 
 ## 与 review bundle、`{PLAN_DIR}/residuals/` 的区分
 
-- `**{SDD_DIR}/review/`**：偏 **审查流程临时证据**（review package、QC1/2/3、consolidated、QA），gitignored，可在 Done 后丢失。
-- `**主 plan gate summary**`：偏 **长期门禁决策摘要**（verdict、review range、R#、QA gate），随主 plan 追踪。
+- `**{SDD_DIR}/review/`**：偏 **审查流程临时证据**（review package、QC1/2/3、consolidated、PM Acceptance），gitignored，可在 Done 后丢失。
+- `**主 plan gate summary**`：偏 **长期门禁决策摘要**（verdict、review range、R#、PM Acceptance gate），随主 plan 追踪。
 - `**{PLAN_DIR}/residuals/<plan-id>/`**：偏 **仍 open finding 的长文补充**，与 plan-linked store issue 配套；见下文「open residual 散文详情」。
 - `**{KNOWLEDGE_DIR}/**`：偏 **可复用的实现向设计上下文**（架构细则、决策、分析），可被后续 plan 或多会话反复引用。
 - `**{ITERATION_DIR}/**`：偏 **某一迭代/版本** 的 package（compass + guides/specs），通常按版本索引而非按单 plan 长期复用。
@@ -97,7 +97,7 @@
 
 | 与相邻目录的分工                                  | 典型内容                                                                  |
 | ----------------------------------------- | --------------------------------------------------------------------- |
-| `**{SDD_DIR}/review/**`       | QC / QA **流程临时证据**（`qc1.md` … `qc-consolidated.md`、`qa.md` 等），gitignored                  |
+| `**{SDD_DIR}/review/**`       | QC / PM Acceptance **流程临时证据**（`qc1.md` … `qc-consolidated.md`、`qa.md` 等），gitignored                  |
 | **本目录 `{PLAN_DIR}/residuals/<plan-id>/`** | 针对**仍 open** 的某一 R#：defer 背景、遗留原因、代码锚点、后续接手提示等**长文**                  |
 | `**{KNOWLEDGE_DIR}/**` | 可跨 plan 复用的实现向设计上下文、规格修订、gap 分析；顺带提到 finding 时仍以 store issue 为跟踪权威 |
 | `**{ITERATION_DIR}/**`            | 迭代 package（`<id>/delivery-compass.md` 等）；**不**替代 `{KNOWLEDGE_DIR}` 中的跨版本 SSOT |

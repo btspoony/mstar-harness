@@ -1,6 +1,6 @@
 ---
 name: amazing-test-audit
-description: "Read-only test-suite audit — junk patterns, value/retention bars, prioritized delete/repair/consolidate findings, or a whole-subsystem campaign. Use to prune or repair a test suite; not for writing tests, product fixes, or routine QA."
+description: "Read-only test-suite audit — junk patterns, value/retention bars, prioritized delete/repair/consolidate findings, or a whole-subsystem campaign. Use to prune or repair a test suite; not for writing tests, product fixes, or routine acceptance."
 agent: project-manager
 input: "[scope|subsystem] [quick|deep] [campaign]"
 ---

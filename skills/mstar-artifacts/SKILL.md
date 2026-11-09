@@ -1,6 +1,6 @@
 ---
 name: mstar-artifacts
-description: "Plan artifacts: main plans, durable review summaries, QC/QA bundles, workflow state/config/progress/evidence, issue capture, residual severity. Read when authoring or mapping them."
+description: "Plan artifacts: main plans, durable review summaries, QC/PM Acceptance bundles, workflow state/config/progress/evidence, issue capture, residual severity. Read when authoring or mapping them."
 ---
 
 ## Load order
@@ -18,7 +18,7 @@ description: "Plan artifacts: main plans, durable review summaries, QC/QA bundle
 | Plan-level workflow lifecycle: delivery-kind declaration, stages, evidence contracts, engine seams, migration sources | `references/plan-workflow-lifecycle-contract.md` |
 | Open-issue rollup (read-only) | `mstar status tech-debt` (issue-store rollup; see `references/status-and-residuals.md`) |
 
-**Out of scope:** branch and QC/QA checkout alignment → **`mstar-branch-worktree`**; leaf QC checklist and verdict → **`mstar-roles/references/qc-specialist/`**; PM QC orchestration → **`mstar-review-qc`**; `{HARNESS_DIR}` discovery and init → **`mstar-conventions`**.
+**Out of scope:** branch and QC/PM Acceptance checkout alignment → **`mstar-branch-worktree`**; leaf QC checklist and verdict → **`mstar-roles/references/qc-specialist/`**; PM QC orchestration → **`mstar-review-qc`**; `{HARNESS_DIR}` discovery and init → **`mstar-conventions`**.
 
 ## Execution authority, migration sources, and open residual (summary)
 
@@ -49,7 +49,7 @@ Current field semantics, severity mapping, findings cleanup and issue closure �
 
 ## Workflow
 
-Write the main plan under `{PLAN_DIR}` → primary coordinator advances its explicitly selected rows through ordinary domain operations → raw review bundle and durable summaries → capture confirmed findings as linked issues → direct complete with QC/QA and declared-route proof → the workflow's outer delivery/close obligations. ACTIVE identity/session/token defaults may be derived when unambiguous; explicit constraints still validate. Registration/unregistration stays workflow-owned on the ACTIVE store route (lifecycle contract §4a).
+Write the main plan under `{PLAN_DIR}` → primary coordinator advances its explicitly selected rows through ordinary domain operations → raw review bundle and durable summaries → capture confirmed findings as linked issues → direct complete with QC/PM Acceptance and declared-route proof → the workflow's outer delivery/close obligations. ACTIVE identity/session/token defaults may be derived when unambiguous; explicit constraints still validate. Registration/unregistration stays workflow-owned on the ACTIVE store route (lifecycle contract §4a).
 
 ## Decision Rules
 

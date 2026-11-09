@@ -32,7 +32,7 @@ description: "Lifecycle and authorization authority: delivery loop, state machin
 
 ## 最小交付循环
 
-**per-plan**：`specify → clarify → plan` → `plan(locked) → tasks → implement`（多 task 默认 SDD）→ plan QC tri + **QA gate**（`mandatory` 派 QA 或 `pm-acceptance`）→ Done（`inline` 单席例外）。阶段细则 → **`mstar-phase-gates`**；QA 分级 → **`mstar-roles/references/project-manager/qa-trigger-matrix.md`**。独立交付 development plan 在 Done 后继续交付尾段 `compound disposition → submit PR → merge-ready（resumable milestone）→ verify merge → terminal close/unregister/reconcile`（`verification/report-only` 按注册声明的替代完成政策，无强制 PR；注册与尾段语义/失败行为的权威 = 冻结契约 **`mstar-artifacts/references/plan-workflow-lifecycle-contract.md`**，PM 步骤序列 → **`mstar-roles/references/project-manager/plan-management.md`**，`compound disposition` 步骤 → **`mstar-knowledge/references/compound-workflow.md`**）。迭代内 plan 行不各自走尾段，迭代整体走一次（见下行）。
+**Per-plan:** `specify → clarify → plan` → `plan(locked) → tasks → implement` (multi-task defaults to SDD) → independent plan QC tri + **PM Acceptance** → Done (`inline` single-seat exception unchanged). Phase gates → **`mstar-phase-gates`**; acceptance → **`mstar-roles/references/project-manager/acceptance.md`**. Standalone development continues after Done through `compound disposition → submit PR → merge-ready (resumable milestone) → verify merge → terminal close/unregister/reconcile`; `verification/report-only` follows its registered completion policy without a forced PR. Lifecycle authority → **`mstar-artifacts/references/plan-workflow-lifecycle-contract.md`**; PM sequence → **`mstar-roles/references/project-manager/plan-management.md`**; compound → **`mstar-knowledge/references/compound-workflow.md`**. Iteration rows share one outer delivery tail.
 
 **迭代级**：`iteration-start → [per-plan cycle × N] → iteration-close → PR delivery → PR merge-ready loop`。merge 是独立的授权动作：按 compass `pr_merge_policy`（`reviewed-auto` → 本地 PR 级 review 循环的 `ship it` 结论，须 settled、已 posted、且 `head` 等于当前 PR head，**并且**（仅当挂载了外部 review bot 时；无 bot 记 N/A）外部 AI review 在当前 head 达到其通过线、不失败、无 blocking finding；`reviewed-bot` → 不自起 review loop，挂载的自动 review bot（如 mstar-inspector）在当前 head 的最新 review 达到其自身门（mstar-inspector 为 `mstar-inspector review` check `success`）且无 blocking finding，无 bot 属配置失效；`owner-gated` → **人类 owner**（操作者/用户，不是 coordinator 席位）对当前 PR head 的显式书面批准）判定，merge-ready / CI 绿 / QC Approve 各自都不构成授权；`pr_merge_policy` 缺失即停并回到 Phase 1。细则 → **`mstar-iteration`** → `references/phase-4-5-pr-delivery.md` §5.1b/§5.3。
 
@@ -46,7 +46,7 @@ description: "Lifecycle and authorization authority: delivery loop, state machin
 |------|------|-------------------|
 | **All harness roles** | Load selection → **`mstar-roles`** (§ Load Order); this skill owns lifecycle/authorization. The hub bootstraps role selection without requiring core-first. | — |
 | **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 / 项目知识 bootstrap `mstar-knowledge`；`audit` 类请求 `mstar-audit`（执行归 `@code-reviewer`）；跑/解读 CLI 命令时 `mstar-use-cli`。**不**读 `mstar-coding-behavior` |
-| **实现/审查/运维** | 本 skill + `mstar-coding-behavior` + 角色 ref | 有 git 写：`mstar-branch-worktree`；有 plan 路径：`mstar-conventions`；**PM** 派 QC 前：`mstar-review-qc`；**`qc-specialist*`**：`mstar-roles` → `references/qc-specialist/`；`qa-engineer`：`references/qa-engineer/`；改 status/residual：`mstar-artifacts`；UI：`mstar-design-md`；知识库：`mstar-knowledge`（PM）；跑/解读 CLI 命令时（各 leaf 角色按任务）：`mstar-use-cli` |
+| **Implementation / review / ops** | This skill + `mstar-coding-behavior` + role reference | Git writes: `mstar-branch-worktree`; plan paths: `mstar-conventions`; PM before QC: `mstar-review-qc`; QC execution: `mstar-roles/references/qc-specialist/`; status/residuals: `mstar-artifacts`; UI: `mstar-design-md`; knowledge (PM): `mstar-knowledge`; CLI execution/interpretation: `mstar-use-cli` |
 | **leaf 承接方** | 上栏 + **`mstar-dispatch-gates`**（反递归节） | — |
 
 Routing eval（宿主插件内回归用，**非**运行时必读）→ `.cursor/skills/mstar-routing-eval/`。
@@ -55,7 +55,7 @@ Routing eval（宿主插件内回归用，**非**运行时必读）→ `.cursor/
 
 `Todo` → `InProgress` → `InReview` → `Done` | `Blocked`
 
-- Done sign-off belongs to project-manager or qualified QA evidence; the authoritative row write uses the sole primary coordinator's direct complete operation with QC/QA and declared-route proof. Leaf implementers never write Done.
+- Done sign-off belongs solely to the primary project-manager after evidence-backed PM Acceptance; the authoritative row write uses that coordinator's direct complete operation with independent QC, acceptance and declared-route proof. Leaf agents never write Done.
 - The primary coordinator uses revisable prepare, progress and direct complete; no per-row PM identity/bind/claim, sealed Assignment or transfer protocol. Default cleanup is allow-residual. Ordinary metadata/defaults need no ceremonial prepare record.
 
 ACTIVE 状态字段权威在 store.db 的 root register / workflow / plan 行（唯一执行权威）；无 store 的 harness plan 不登记——走对话追踪（no-plan mode）；`status.json` / snapshot 仅迁移源/历史，project register 无条件退役为迁移历史。字段与 issue severity/lifecycle → **`mstar-artifacts`**。
@@ -99,7 +99,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-dispatch-gates` | 派发、Delegation、反递归、依赖与隔离驱动并行、SDD 路径 plan QC 强制 tri |
 | `mstar-engine-legacy` | Engine-absent execution-state boundary; execution state = conversation tracking (no-plan mode); no recreated file execution route |
 | `mstar-sdd` | Subagent-driven development：file handoff、per-task review、ledger |
-| `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
+| `mstar-branch-worktree` | Feature branches, worktrees, QC / PM Acceptance checkout alignment |
 | `mstar-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |
 | `mstar-artifacts` | 主 plan、review bundle / durable summaries、store.db root register/plan 行与 issue severity/lifecycle、notes.jsonl ledger、knowledge；root/snapshot 文件仅迁移源/历史，project register 仅迁移历史 |
 | `mstar-project-governance` | 项目 roadmap 的 store 内容权威（Direction 正文 + 结构化 milestone）与读写/导入/导出规则（legacy `roadmap.md` 仅 transport/history）；issue capture、迁移 register、`_default` 项目归属 |
@@ -112,7 +112,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-prose` | 散文可解性判断（on-demand，不属任何默认加载路径）：HEAD 测试、八类推理转录泄漏、九条 keep 规则、ADR / issue 路由；判断任意表面（Markdown、注释、JSDoc、prompt、诊断、agent 指令）的文字是否只在撰写会话里成立，与 `mstar-skill-authoring` 的 skill 结构判断互补 |
 | `mstar-audit` | Variant carrier：common core（hard rules、recon、vet、variant dispatch）+ SKILL.md `## Output format`（review report 运行目录 `<date>-codebase-<level>-<round>/`、findings、coverage、leads）+ `references/codebase-audit.md`（full-audit 变体：9 类别 fan-out、effort、scope variants、Phase 4 excerpt/reconcile、audit index 模板）+ `references/security-review.md`（security 深查：exploitability 门槛、FP 纪律、LLM/供应链面）+ `references/pr-review.md`（`pr` 变体）；`audit-playbook` + `finding-format` |
 | `mstar-pr-loop` | Opt-in PR review → fix loop until the review verdict is `ship it`; also selectable at iteration Phase 1 as the local `reviewed-auto` review path, whose `ship it` row the iteration merge authorization reads. Never selected under `reviewed-bot` |
-| `mstar-e2e` | 用户显式启动的独立真实浏览器 / 真机 / E2E 验证 workflow；PM 编排、ops 执行，不进入迭代 QA gate |
+| `mstar-e2e` | Explicit independent real-browser/device/E2E workflow; PM orchestrates and ops executes, outside development acceptance gates |
 | `mstar-roles` | 角色正文 hub |
 | `mstar-host` | 宿主适配（自动识别；`references/opencode.md` / `cursor.md` / `codex.md` / `kimi.md` / `parallel-dispatch.md`） |
 
@@ -132,12 +132,12 @@ Read **`mstar-host`** after this skill; it detects the active host and routes to
 本节是全部角色的范围与验证授权 SSOT；角色方法只展开其执行细节，`Skill presets: none` 仍由共享 leaf 边界承接这些限制。
 
 - **本地全量测试默认禁止，完整套件交 CI。** 只有用户明确许可才能例外；Assignment 的 `Constraints` 引用许可，`Evidence Required` 写明命令、范围、环境与次数。PM 字段、风险等级、缺证据、fix wave 和早期探索都不产生许可；不得拆成多个无关“小测试”绕过全量边界。
-- **全域只读调查限早期探索。** 实现、fix、QC、QA 只查本次变更、直接影响接口及相关 knowledge；不重新全仓扫描、测试或审查。通过知识索引只选相关 Active 条目；缺口超出范围时报告具体所缺信息，不自行扩展任务。
+- **Scoped investigation:** implementation, fixes, QC and acceptance inspect only the change, directly affected interfaces and relevant knowledge. Do not restart repository-wide scans, tests or review; report exact missing scope instead of expanding it.
 - **只读审查席位有界。** review / QC / L2 task review 的范围是 Assignment 的 diff pack 加直接影响接口；只在 must-fix 线索上跟进出界。默认 **≤ 12 次文件打开或 ≤ 10 分钟**（PM 按 Assignment `Budget` 收紧，不得放宽）；席位还必须写明 `Return shape`（返回什么、如何在预算内停下），干净轮次显式返回 `findings: []` 而非散文。`Task category: audit` 的轮次同受这两项约束，即使 `Execute as` 不在 QC 席位集内（`audit` 类请求可落在 `@code-reviewer` 之外的执行者上）。触达即停止扩展：返回当前 verdict 与已得 findings，并在报告 `## Scope` 声明 `Truncated coverage:`。**截断 ≠ `Unconfirmed`**——后者仍是证据通道失败态并阻断 `Approve`；未覆盖范围按既有「未提及 = 未审查」由 PM 汇总，且部分覆盖的运行不可作为批准——门禁语义 → `mstar-review-qc`。
 - **验证按变更映射。** 可执行逻辑使用对应单测；非可执行文档与 prompt/skill 策略使用真实定向静态或 before/after 证据，不制造测试文件。SDD 的 `Verification mode: scoped-check` 格式与适用性 → `mstar-sdd/references/file-handoffs.md`。报告结构校验不证明命令执行或 diff 适用性，也不是任意 shell 拦截器。
-- **只使受影响证据失效。** HEAD 或 Review range 改变不等于全部重跑；复用仍有效的 L1/CI/先前 QA 证据，记明原范围及仍适用的理由。fix 只验证相关回归；QC 复审只看归属 finding、fix delta 与直接接口。`full tri-review` 表示席位数量，不授权全仓 review；QC 不运行 test/build/install。
-- **QA 仅定向单元测试与验收证据映射。** 模式仅 `acceptance-only` / `targeted` / `report-only`。用户许可的本地全量由实现 owner 或 ops 另接明确行动，QA 只消费证据。真实浏览器、真机、安装/部署 E2E 仅由用户显式启动独立 `mstar-e2e` workflow，PM 编排、ops 执行；**不作为迭代 QA gate，也不作为开发 plan 的 task 或任何 gate 的证据义务**——各层以自身单测/集成测试自证；真实环境验证只在该独立 workflow 内发生，其命名场景即该 workflow 的 plan rows。未验证的真实环境行为如实记录，不伪称通过。
-- **开发验收禁止外部环境收据。** Prepare 时将开发 plan 的 AC/任务门禁中要求 live API、provider receipt、具名/已认证 host 或 account、已安装 plugin/artifact、真实 browser/device 或 deployed environment 证明的条目退回并在同一轮改为隔离 fixture、单元/组件/集成测试或本地构建 CLI/MCP 的可复现证据。QA/QC 不得重新要求这些收据；缺少真实环境证明只如实记未验证。用户另行授权的独立运维/E2E workflow 不受此开发 AC 禁令取消；不设关键词机器门禁。
+- **Invalidate only affected evidence.** A later HEAD or review range does not require a full rerun. Reuse applicable L1/CI/prior acceptance evidence with original scope and an applicability reason. Fixes verify only their regression; QC re-review covers owned findings, fix delta and direct interfaces. `full tri-review` counts seats, not repository scope; QC runs no test/build/install.
+- **PM Acceptance owns L4.** The primary PM maps every required AC to reproducible evidence and an honest result; independent QC approval is not runtime proof. PM may directly execute only a named short, bounded acceptance check to fill a concrete gap, never product coding, test authoring, long suites, unrestricted verification or ops. Specialist dev/ops supply such evidence under separate assignments; PM retains sole sign-off. Procedure/report/recovery → **`mstar-roles/references/project-manager/acceptance.md`**.
+- **No external-environment receipts for development acceptance.** During Prepare, replace AC/gate demands for live APIs/provider receipts, named/authenticated hosts/accounts, installed plugins/artifacts, real browser/device or deployed environments with isolated fixtures, relevant unit/component/integration checks or locally built CLI/MCP proof. QC/acceptance cannot reinstate these demands; disclose real-environment behavior as unverified. Explicit independent operational/`mstar-e2e` workflows remain authorized separately, with ops execution; their named scenarios are their own plan rows, never development gate duties.
 - **依赖允许即并行。** PM 对无依赖、写所有权及 worktree 隔离的 ready tasks 并行派发；共享写目标、同一 session/ledger、前置接口与 integration merge 才按具体约束串行。leaf 不因并行策略获得派发权限。
 - **恢复走原意图。** 当前引擎可推导的 root、binding、token 与前置 bookkeeping 不要求操作者先复制/修补；先用目标动作并读取 `applied` / `partial` / replay 收据。只有不可推导的身份、目标选择、授权或真实冲突才要求补充事实；partial 保留已提交部分，不能宣称整个动作 mutation-free。leaf 不接收凭据。
 - **完成即交付。** Assignment 给出任务、输入、所有权、允许检查与可观察结果；执行者只解答这些问题，不重复分析已解决内容、不顺手修复或增加“保险”检查。真实范围缺口返回 PM，已有证据充分即停止。

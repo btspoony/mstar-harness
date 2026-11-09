@@ -10255,7 +10255,7 @@ var init_dispatch = __esm(() => {
     { key: "delegation", label: "Delegation", code: "delegation" },
     { key: "taskCategory", label: "Task category", code: "task-category" }
   ];
-  REVIEW_SEAT_ROLES = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer", "qa-engineer"];
+  REVIEW_SEAT_ROLES = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer"];
   BUDGET_LABELS = ["Budget (review / QC seats)", "Budget"];
   RETURN_SHAPE_LABELS = ["Return shape (review / QC seats)", "Return shape"];
   TASK_BUDGET_LABELS = ["Task budget (implement / ops rounds)", "Task budget"];

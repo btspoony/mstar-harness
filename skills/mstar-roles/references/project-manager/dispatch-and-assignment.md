@@ -40,7 +40,6 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
   - **QC reviewers** (`qc-specialist*`): "start review before all QC reviewers are dispatched in parallel"; "treat other reviewers' names in routing text as invoke targets"; "run test/build/lint on shared Review cwd"; "fill missing runtime evidence by executing the suite"
   - **Multi-track implementers** (`fullstack-dev` + `frontend-dev` / `fullstack-dev-2`): "auto-dispatch to the other track mentioned in Dev routing"; "implement in repo root when Assignment names a different `Worktree path`"
   - **`fullstack-dev-2`**: "treat `fullstack-dev` in routing narrative as a handoff or invoke target"
-  - **`qa-engineer`**: "start validation before QC reports are consolidated"; "run anything beyond the assigned unit-test scope, including full suites or browser/device/E2E"; "expect QC reports to contain test logs"; "modify application code" (unless allowed)
   - **`explore`-assigned**: "implement or modify code"
   - **All non-PM**: "dispatch parallel agents"; "spawn a subagent whose `subagent_type` matches your own `Execute as` role id"
 - Anti-patterns must be action-oriented ("auto-dispatch to …", "treat … as invoke", "start … before …") — not abstract descriptions.
@@ -78,7 +77,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **SDD implementer session**: fresh | sticky | N/A — **default `fresh`**; `sticky` reuses same implementer subagent across tasks (reviewers stay fresh). See `mstar-sdd/references/sticky-implementer-session.md`
 **SDD dir**: absolute `<main-repo-root>/{HARNESS_DIR}/sdd/<plan-id>/` (control harness root) when L1 lease gate active | `{HARNESS_DIR}/sdd/<plan-id>/` when waived / single checkout | N/A
 **SDD context file**: absolute `<SDD dir>/context.json` when `Execution mode: sdd` | N/A — destination contract consumed by `mstar sdd exec --context` / `--context` producers (`mstar-sdd/references/file-handoffs.md`)
-**Skill presets**: `standard` | <explicit skill list> | none — activates the `Execute as` role's preset from its `Skill Preset (PM-Activated)` section; default `standard` for implementation / QC / QA rounds unless the route is trivial
+**Skill presets**: `standard` | <explicit skill list> | none — activates the `Execute as` role's preset; default `standard` for substantive implementation / QC rounds unless the route is trivial
 **QC mode**: full tri-review | single | N/A — **default `full tri-review` when `Execution mode: sdd`**; `single` only for `inline` / override
 **Review package path**: <branch-review diff file> | N/A
 **QC report path**: <concrete report file the seat itself writes, e.g. `{SDD_DIR}/review/qc.md`, for ALL QC seats regardless of `Execution mode`> | N/A only when the Assignment explicitly declares conversation-only review with no plan row — a seat must never return its report in conversation for later coordinator transcription.
@@ -102,9 +101,8 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Write domain**: `control` | `work` (absent = `work`) — `control` = writes only under the control root's gitignored process targets (plans/assignments/sdd/iterations/workflows/projects/reviews/`store.db`), may set `Working branch` to the control checkout's currently checked-out branch (e.g. `main` on a default-main repo — that checked-out branch, never a literal `main`, is what the engine compares; all three branch forms stay valid, including `Branch policy: direct on <branch> — <reason>`), and is exempt from default-branch protection; the engine verifies worktree = control root, branch = its checked-out branch, and every `Control write paths` target Git-ignored and inside the control root; the shared host dispatch gate (OpenCode v2 / dsh / omp hard enforcement) runs the same control-write validation, so a declared field cannot bypass a host hard gate, and an unverifiable control root keeps the dispatch refused with its recovery (`mstar-branch-worktree` § 控制域写入)
 **Control write paths**: <required on `Write domain: control`; comma list of the actual process targets this Assignment writes, absolute or resolved against `Worktree path` — each must be Git-ignored and inside the control root; a repo ignoring only `.mstar/plans/` passes for a target under `plans/`, a tracked target like `.mstar/specs/…` is refused. Entries are probed by shape: a trailing `/` declares a directory explicitly (Git directory rules such as `!.mstar/notes/` apply); any other entry is verified under BOTH file and directory ignore rules and must be ignored in both — if either shape would be committable it is refused as `dispatch.control-write.target-committable`, because a file-path-only probe approves a location whose directory contents are still committed (`.mstar/notes` under `.mstar/**` + `!.mstar/notes/` + `!.mstar/notes/**`); `.mstar/plans/run.md` passes under `.mstar/**`>
 **Main worktree branch**: <recorded residency branch of the primary checkout (main worktree), from the main plan header — passed unchanged; never a lifecycle-owned branch>
-**QA gate**: mandatory | pm-acceptance | report-only — see `references/project-manager/qa-trigger-matrix.md`
-**QA gate reason**: <tier label, e.g. hotfix-inline | small-feature-clean-qc | mandatory-medium-feature>
-**QA mode**: acceptance-only | targeted | report-only | N/A — required when `QA gate: mandatory` or `report-only`
+**QA gate**: pm-acceptance — retained fixed-value carrier; procedure → `references/project-manager/acceptance.md`
+**QA gate reason**: <scope/evidence rationale, not a risk-tier selector>
 **Findings cleanup**: zero-residual | allow-residual — mirror effective revisable coordinator configuration; default allow-residual, zero-residual explicit opt-in. No Assignment seal or second mode authority.
 **Why this agent**: <role-fit>
 **PM Task Board coverage**: <task ids>
@@ -128,7 +126,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 - [ ] <AC → exact affected unit-test selector or scoped static check; expected result>
 - [ ] <reused evidence + why unchanged, or new observable proof>
 - [ ] commit proof
-**Constraints**: <no scope expansion; no local full suite without referenced explicit user permission; QA unit-only; no spontaneous browser/device/E2E; review / QC seats stop at the assigned budget and declare truncated coverage instead of expanding; stop on concrete missing inputs and return once acceptance is evidenced>
+**Constraints**: <no scope expansion; no local full suite without referenced explicit user permission; no spontaneous browser/device/E2E; specialists supply evidence, not acceptance sign-off; review / QC seats stop at the assigned budget and declare truncated coverage; stop on concrete missing inputs and return once the assigned result is evidenced>
 **Effort (agent-oriented)**: <XS/S/M/L/XL + session band>
 **Orchestration Guard** (see `**You are a leaf executor. You MUST NOT:**` block at top for primary anti-patterns):
 - No recursive same-role dispatch
@@ -201,7 +199,7 @@ Do **not** waive worktree because default-gitignored `plans/` are missing under 
 **Decisions needed**: ...
 **Evidence Snapshot**: ...
 **Residuals disclosure**: <open R# list — id + severity + tracking location; `N/A — none open` when none>
-**PM Acceptance**: <required block when QA gate: pm-acceptance before Done — see qa-trigger-matrix.md>
+**PM Acceptance**: <required before Done: report pointer, per-AC evidence/results/applicability, coverage/gaps and issue dispositions — see acceptance.md>
 **Effort note (agent-oriented)**: ...
 ```
 
