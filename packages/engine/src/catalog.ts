@@ -33,6 +33,7 @@ import {
   resolvePlanDir,
   resolveProjectDir,
   resolveSpecsDir,
+  resolveTrackedResultDir,
 } from "./path.js";
 import { openStore, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
 
@@ -252,10 +253,16 @@ export function catalogRootDir(context: StoreContext, rootKind: CatalogRootKind)
     case "iterations":
       return resolveIterationDir(harness);
     // `create: false` — resolving a catalog location never creates a dir.
+    // Tracked results follow the caller's checkout; only a context without one
+    // falls back to the process harness.
     case "specs":
-      return resolveSpecsDir(harness, { create: false });
+      return context.checkoutRoot === undefined
+        ? resolveSpecsDir(harness, { create: false })
+        : resolveTrackedResultDir(context.checkoutRoot, harness, "specsDir");
     case "knowledge":
-      return resolveKnowledgeDir(harness, { create: false });
+      return context.checkoutRoot === undefined
+        ? resolveKnowledgeDir(harness, { create: false })
+        : resolveTrackedResultDir(context.checkoutRoot, harness, "knowledgeDir");
     case "projects":
       return resolveProjectDir(harness, { harnessDir: harness });
   }

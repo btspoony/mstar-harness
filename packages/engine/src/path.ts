@@ -70,6 +70,13 @@ export type ResolveHarnessDirOptions = {
  * walk.
  */
   workspaceRoot?: string;
+  /**
+   * Probe only the caller's own checkout: never substitute the main worktree
+   * root. Used by callers that ask about the local probe itself (the `local`
+   * answer of `mstar path resolve`, `path check`'s tracked-result base), not
+   * about process state.
+   */
+  localProbe?: boolean;
 };
 
 /**
@@ -96,12 +103,28 @@ export function resolveHarnessDir(
   const start = resolve(startDir);
   const explicit = opts.harnessDir ?? (opts.ignoreEnvOverride ? undefined : process.env.MSTAR_HARNESS_DIR);
   if (explicit) return resolve(start, explicit);
-  const boundary = resolve(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
-  const rc = loadMstarc(start, boundary);
+  // Harness state is process state: every harness root and every `.mstarc` is
+  // read from the main worktree. A linked worktree carries a tracked copy of
+  // `.mstarc`, and honoring it would make the worktree look like a process
+  // root. Only a path OUTSIDE the main worktree is substituted — a plain
+  // subdirectory keeps its own start so the upward rungs stay unchanged.
+  // `localProbe` asks about the caller's own checkout instead, and an
+  // explicit `opts.workspaceRoot` keeps the caller's own boundary.
+  const mainRoot = gitMainWorktreeRoot(start);
+  const checkoutRoot = mainRoot === null ? null : gitCheckoutRoot(start);
+  const linked =
+    opts.workspaceRoot === undefined &&
+    opts.localProbe !== true &&
+    mainRoot !== null &&
+    checkoutRoot !== null &&
+    checkoutRoot !== mainRoot;
+  const base = linked && mainRoot !== null ? mainRoot : start;
+  const boundary = resolve(base, opts.workspaceRoot ?? defaultWorkspaceRoot(base));
+  const rc = loadMstarc(base, boundary);
   if (rc !== null && rc.config.harnessDir) return resolve(rc.dir, rc.config.harnessDir);
-  let dir = start;
+  let dir = base;
   for (;;) {
- // Stop boundary: never probe a harness dir above the workspace root.
+// Stop boundary: never probe a harness dir above the workspace root.
     if (!isAtOrBelow(dir, boundary)) return null;
     for (const candidate of [join(dir, ".mstar"), join(dir, ".agents"), join(dir, ".plans"), join(dir, "plans")]) {
       if (isDirectory(candidate)) return candidate;
@@ -156,6 +179,108 @@ function isAtOrBelow(dir: string, root: string): boolean {
 }
 
 /**
+ * The main worktree root of the Git checkout containing `startDir`, or `null`
+ * when Git cannot answer. `git worktree list` names the main worktree first in
+ * every checkout (linked worktree, submodule, plain repo), so its first record
+ * is the main root.
+ */
+function gitMainWorktreeRoot(startDir: string): string | null {
+  try {
+    const out = execFileSync("git", ["worktree", "list", "--porcelain"], {
+      cwd: startDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: gitProbeTimeout(),
+    });
+    const line = out.split("\n").find((entry) => entry.startsWith("worktree "));
+    if (line === undefined) return null;
+    return realpathOrResolve(line.slice("worktree ".length).trim());
+  } catch {
+    return null;
+  }
+}
+
+/** The Git checkout root containing `startDir` (a linked worktree answers itself). */
+function gitCheckoutRoot(startDir: string): string | null {
+  try {
+    const out = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: startDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: gitProbeTimeout(),
+    }).trim();
+    return out === "" ? null : realpathOrResolve(out);
+  } catch {
+    return null;
+  }
+}
+
+/** Real path when it exists, lexical resolution otherwise. */
+function realpathOrResolve(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch {
+    return resolve(target);
+  }
+}
+
+/**
+ * Canonical path for a target that may not exist yet: realpath of the nearest
+ * existing ancestor plus the remaining segments. `/var` vs `/private/var` (and
+ * any other symlinked mount) must not make two spellings of one location look
+ * like different repositories.
+ */
+function realpathNearest(target: string): string {
+  let dir = resolve(target);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(dir), ...rest.reverse());
+    } catch {
+      const parent = dirname(dir);
+      if (parent === dir) return resolve(target);
+      rest.push(basename(dir));
+      dir = parent;
+    }
+  }
+}
+
+/**
+ * Timeout for the resolver's git probes. Same env knob and default as
+ * `gitProbeTimeoutMs` in `worktree.ts`; duplicated here because that module
+ * imports `workflow.ts`, which imports this one — a call-time cycle on every
+ * harness resolution is not worth the shared import.
+ */
+function gitProbeTimeout(): number {
+  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+  const parsed = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10_000;
+}
+
+/** Exit status of a failed child process, when the platform reports one. */
+function exitStatusOf(error: unknown): number | undefined {
+  if (typeof error === "object" && error !== null && "status" in error) {
+    const status = error.status;
+    return typeof status === "number" ? status : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * `check-ignore` verdict: `true` (ignored), `false` (not ignored), or `null`
+ * when Git cannot answer. Callers treat `null` as "keep the main checkout" —
+ * a failed probe must never silently choose the caller's checkout.
+ */
+function gitIgnored(root: string, target: string): boolean | null {
+  try {
+    execFileSync("git", ["check-ignore", "-q", "--", target], { cwd: root, stdio: "ignore", timeout: gitProbeTimeout() });
+    return true;
+  } catch (error) {
+    return exitStatusOf(error) === 1 ? false : null;
+  }
+}
+
+/**
  * `.mstarc` sub-directory override for the `{X}_DIR` resolvers: the
  * nearest config at the harness dir or its parent (the repo root — the
  * documented `.mstarc` home) wins; the walk never goes above the harness
@@ -168,6 +293,14 @@ function mstarcDirOverride(harnessDir: string, key: MstarcStringKey): string | n
   const rc = loadMstarc(dir, dirname(dir));
   const declared = rc?.config[key];
   return declared ? resolve(rc.dir, declared) : null;
+}
+
+/** The raw `.mstarc` declaration for `key`: value as written plus config dir. */
+function mstarcDeclared(harnessDir: string, key: MstarcStringKey): { dir: string; value: string } | null {
+  const dir = resolve(harnessDir);
+  const rc = loadMstarc(dir, dirname(dir));
+  const value = rc?.config[key];
+  return value ? { dir: rc.dir, value } : null;
 }
 
 /**
@@ -348,6 +481,50 @@ export function resolveKnowledgeDir(harnessDir: string, opts: ResolveTrackedDirO
  */
 export function resolveAdrDir(harnessDir: string, opts: ResolveTrackedDirOptions = {}): string {
   return resolveTrackedDir(harnessDir, opts, "adrDir", "adr", [".agents", "adr"], ["docs", "adr"]);
+}
+
+/**
+ * Resolve a tracked-result dir (`specs` / `knowledge` / `adr`) for a caller
+ * checkout. Tracked results follow the branch the caller has checked out; a
+ * gitignored result stays in the main checkout.
+ *
+ * The target is first computed as the MAIN checkout sees it — the `.mstarc`
+ * declaration (resolved against its own config dir, wherever that lives) or
+ * the existing candidate chain. That repo-relative target is then applied to
+ * the caller checkout only when the caller belongs to the same repository and
+ * Git does not ignore the path there.
+ */
+export function resolveTrackedResultDir(
+  callerCheckoutRoot: string,
+  harnessDir: string,
+  key: "specsDir" | "knowledgeDir" | "adrDir",
+): string {
+  const harness = resolve(harnessDir);
+  const mainRoot = gitMainWorktreeRoot(harness) ?? dirname(harness);
+  const declared = mstarcDeclared(harness, key);
+  const mainTarget =
+    declared === null
+      ? key === "specsDir"
+        ? resolveSpecsDir(harness, { create: false })
+        : key === "knowledgeDir"
+          ? resolveKnowledgeDir(harness, { create: false })
+          : resolveAdrDir(harness, { create: false })
+      : isAbsolute(declared.value)
+        ? resolve(declared.value)
+        : resolve(declared.dir, declared.value);
+  // `/var` vs `/private/var` spellings must not decide membership.
+  const rel = relative(realpathNearest(mainRoot), realpathNearest(mainTarget));
+  // A target outside the repository (absolute declaration) stays where it is.
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return mainTarget;
+  // Another repository's checkout must never relocate this repository's
+  // results (e.g. `--harness <other-repo>/.mstar` from this checkout).
+  const callerMainRoot = gitMainWorktreeRoot(callerCheckoutRoot);
+  if (callerMainRoot === null || realpathOrResolve(callerMainRoot) !== realpathOrResolve(mainRoot)) return mainTarget;
+  const candidate = join(callerCheckoutRoot, rel);
+  // Probe a child path: a directory that does not exist yet still matches the
+  // parent's ignore rules, and the canonical snippet's re-includes
+  // (`!.mstar/knowledge/**`) only match below the directory itself.
+  return gitIgnored(callerCheckoutRoot, join(candidate, ".tracked-result-probe")) === false ? candidate : mainTarget;
 }
 
 /**

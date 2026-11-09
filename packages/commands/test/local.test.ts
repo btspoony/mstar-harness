@@ -131,7 +131,7 @@ describe("shared host-health helpers", () => {
     });
   });
 
-  test("path resolve reports the control harness from a linked worktree", async () => {
+  test("path resolve splits process state (control harness) from tracked results (caller checkout)", async () => {
     // Real path: mkdtemp answers a /var path on macOS and the Git-derived
     // control root is its /private/var twin, so comparing raw strings would
     // fail on the symlink alone.
@@ -149,6 +149,11 @@ describe("shared host-health helpers", () => {
     git("add", "README.md");
     git("commit", "--quiet", "-m", "fixture");
     mkdirSync(path.join(main, ".mstar"), { recursive: true });
+    // A tracked config: the main worktree is the single config source, and
+    // the declared paths are committable in the caller's checkout.
+    writeText(main, ".mstarc", "[config]\nknowledge_dir=docs/knowledge\nspecs_dir=docs/specs\nadr_dir=docs/adr\n");
+    git("add", ".mstarc");
+    git("commit", "--quiet", "-m", "config");
     git("worktree", "add", "--quiet", "-b", "linked-fixture", linked);
     // A tracked plugin directory, not a harness: the live shape of this
     // repository's worktrees.
@@ -174,14 +179,17 @@ describe("shared host-health helpers", () => {
     expect(fromLinked).toMatchObject({
       status: "ok",
       data: {
-        // Top-level answers are effective: the control harness, not the
-        // worktree's own probe. A reader appending `plans/` lands at the
-        // process documents.
+        // `harnessDir` is the process root: a reader appending `plans/` lands
+        // at the process documents. Tracked results follow the checkout that
+        // carries the branch, so they are answered from the worktree's own
+        // harness (the rule `path check` enforces).
         harnessDir: controlHarness,
         controlRoot: main,
         controlHarnessDir: controlHarness,
         linkedWorktree: true,
-        specsDir: path.join(controlHarness, "specs"),
+        specsDir: path.join(realpathSync(linked), "docs", "specs"),
+        knowledgeDir: path.join(realpathSync(linked), "docs", "knowledge"),
+        adrDir: path.join(realpathSync(linked), "docs", "adr"),
         workflowDir: path.join(controlHarness, "workflows"),
         projectDir: path.join(controlHarness, "projects"),
         reviewDir: path.join(controlHarness, "reviews"),
@@ -195,7 +203,10 @@ describe("shared host-health helpers", () => {
     const data = fromMain.data as Record<string, unknown>;
     expect(data).toMatchObject({
       harnessDir: controlHarness,
-      specsDir: path.join(controlHarness, "specs"),
+      // The same tracked declarations apply to the main checkout.
+      specsDir: path.join(main, "docs", "specs"),
+      knowledgeDir: path.join(main, "docs", "knowledge"),
+      adrDir: path.join(main, "docs", "adr"),
       workflowDir: path.join(controlHarness, "workflows"),
       projectDir: path.join(controlHarness, "projects"),
       reviewDir: path.join(controlHarness, "reviews"),
@@ -220,7 +231,8 @@ describe("shared host-health helpers", () => {
       });
     git("init", "--quiet");
     writeText(main, "README.md", "fixture\n");
-    git("add", "README.md");
+    writeText(main, ".gitignore", ".mstar/\n");
+    git("add", "README.md", ".gitignore");
     git("commit", "--quiet", "-m", "fixture");
     mkdirSync(path.join(main, ".mstar"), { recursive: true });
     git("worktree", "add", "--quiet", "-b", "nested-fixture", nested);
@@ -246,10 +258,93 @@ describe("shared host-health helpers", () => {
         controlRoot: main,
         controlHarnessDir: path.join(main, ".mstar"),
         linkedWorktree: true,
+        // Undeclared and gitignored: the default tracked dirs stay with the
+        // process harness.
+        specsDir: path.join(main, ".mstar", "specs"),
         // The nested checkout carries no harness of its own, so its probe
         // stays null while the top-level answers come from the control root.
         local: { harnessDir: null },
       },
+    });
+  });
+
+  test("path resolve keeps a gitignored declaration on the main checkout", async () => {
+    const root = realpathSync(fixture());
+    const main = path.join(root, "main");
+    const linked = path.join(root, "linked");
+    mkdirSync(main, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", main, "-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    git("init", "--quiet");
+    writeText(main, "README.md", "fixture\n");
+    writeText(main, ".gitignore", ".mstar/\n");
+    writeText(main, ".mstarc", "[config]\nknowledge_dir=.mstar/knowledge\n");
+    mkdirSync(path.join(main, ".mstar"), { recursive: true });
+    git("add", "README.md", ".gitignore", ".mstarc");
+    git("commit", "--quiet", "-m", "fixture");
+    git("worktree", "add", "--quiet", "-b", "linked-fixture", linked);
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const result = await definition.execute({ path: linked }, {
+      cwd: main,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    });
+    // The declaration targets a gitignored path: it stays on the control root.
+    expect(result).toMatchObject({
+      status: "ok",
+      data: { knowledgeDir: path.join(main, ".mstar", "knowledge") },
+    });
+  });
+
+  test("path resolve relocates an undeclared tracked result dir to the caller checkout", async () => {
+    const root = realpathSync(fixture());
+    const main = path.join(root, "main");
+    const linked = path.join(root, "linked");
+    mkdirSync(main, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", main, "-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    git("init", "--quiet");
+    writeText(main, "README.md", "fixture\n");
+    writeText(main, "docs/specs/README.md", "specs\n");
+    mkdirSync(path.join(main, ".mstar"), { recursive: true });
+    git("add", "README.md", "docs/specs/README.md");
+    git("commit", "--quiet", "-m", "fixture");
+    git("worktree", "add", "--quiet", "-b", "linked-fixture", linked);
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const result = await definition.execute({ path: linked }, {
+      cwd: main,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    });
+    // No declaration: the candidate chain finds the tracked docs/specs in the
+    // main checkout, and the same committable path exists in the worktree.
+    expect(result).toMatchObject({
+      status: "ok",
+      data: { specsDir: path.join(realpathSync(linked), "docs", "specs") },
     });
   });
 

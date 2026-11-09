@@ -22,6 +22,7 @@ import {
   l1PreDispatchCheck,
   l2PreDispatchCheck,
   readMainWorktree,
+  probeCheckoutRoot,
   lintFiveQuestion,
   lintFrontmatter,
   lintLoadOrder,
@@ -501,7 +502,9 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             // it reports a different question as if it were the named one's.
             // Only the configured root ITSELF is proven, normalized: a symlinked
             // or `./`-spelled equal path compares equal, a subdirectory does not.
-            const configuredRoot = catalogRootDir({ harnessDir }, "knowledge");
+            const checkoutRoot = probeCheckoutRoot(context.cwd);
+            const storeContext = { harnessDir, ...(checkoutRoot === null ? {} : { checkoutRoot }) };
+            const configuredRoot = catalogRootDir(storeContext, "knowledge");
             const named = canonicalPath(knowledgeDir);
             const root = canonicalPath(configuredRoot);
             if (named !== root) {
@@ -520,7 +523,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
               });
             } else {
               try {
-                violations.push(...(await assertKnowledgeCatalogCompleteness({ harnessDir })).violations);
+                violations.push(...(await assertKnowledgeCatalogCompleteness(storeContext)).violations);
               } catch (error) {
                 const code = (error as { code?: unknown } | null | undefined)?.code;
                 violations.push({

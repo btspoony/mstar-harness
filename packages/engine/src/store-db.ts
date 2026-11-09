@@ -2044,7 +2044,16 @@ function readStoreMeta(db: StoreDb): StoreMeta {
 
 /** Selected harness directory; process callers resolve discovery before
  * constructing this context. FILE guards separately discover from targets. */
-export type StoreContext = { harnessDir: string };
+export type StoreContext = {
+  harnessDir: string;
+  /**
+   * The caller's own checkout root, when known. Tracked results (`specs` /
+   * `knowledge`) follow the branch the caller has checked out; without it the
+   * catalog falls back to the process harness (correct for a primary
+   * checkout, wrong for a linked worktree).
+   */
+  checkoutRoot?: string;
+};
 
 /**
  * Execution-domain authority state (primary spec §2.1). This is its own

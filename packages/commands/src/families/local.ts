@@ -28,6 +28,7 @@ import {
   resolveSddDir,
   resolveSkillRoot,
   resolveSpecsDir,
+  resolveTrackedResultDir,
   resolveWorkflowDir,
   scaffoldHarness,
   setArtifactStore,
@@ -308,7 +309,7 @@ type ControlFacts = {
  * not "not in git", so they carry their own code.
  */
 function controlFacts(startDir: string): ControlFacts {
-  const harnessDir = resolveHarnessDir(startDir);
+  const harnessDir = resolveHarnessDir(startDir, { localProbe: true });
   // The process root comes from Git only: the first `worktree list` record is
   // the main checkout, whatever the start path looks like.
   const controlRoot = readMainWorktree(startDir)?.root ?? null;
@@ -336,6 +337,17 @@ function controlFacts(startDir: string): ControlFacts {
     control: { controlRoot, controlHarnessDir, linkedWorktree, ...(unavailable === undefined ? {} : { controlUnavailable: unavailable.message }) },
     ...(unavailable === undefined ? {} : { unavailable }),
   };
+}
+
+/**
+ * The harness that owns tracked results (`specs` / `knowledge` / `adr`) for a
+ * checkout. Tracked results follow the branch the caller has checked out, so
+ * this is the caller's own checkout — never the control harness, which owns
+ * only gitignored process state. Mirrors the rule `path check` enforces.
+ */
+function trackedHarnessOf(checkoutRoot: string | null): string | null {
+  if (checkoutRoot === null) return null;
+  return resolveHarnessDir(checkoutRoot, { ignoreEnvOverride: true, localProbe: true }) ?? path.join(checkoutRoot, ".mstar");
 }
 
 /**
@@ -592,16 +604,21 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
               startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control, local: { harnessDir },
             } , recovery: "From the main worktree: run mstar harness scaffold; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path resolve."});
           }
+          // Two owners: gitignored process state follows the control harness,
+          // tracked results follow the checkout that carries the branch. The
+          // `.mstarc` declaration is read from the main harness (single config
+          // source) and applied to the caller checkout only where the path is
+          // committable there — the rule `path check` enforces.
+          const trackedBase = probeCheckoutRoot(startDir) ?? controlRoot;
           return ok("path.resolve", {
             startDir,
-            // Top-level members are the EFFECTIVE answers for this run. In a
-            // linked checkout that is the control harness — a caller appending
-            // `plans/` to the worktree's own probe would land in the wrong
-            // checkout. The probe stays under `local`.
+            // `harnessDir` stays the process root: a caller appending
+            // `plans/` lands at the process documents. Tracked results are
+            // answered explicitly below.
             harnessDir: controlHarnessDir,
-            specsDir: resolveSpecsDir(controlHarnessDir, { create: false }),
-            knowledgeDir: resolveKnowledgeDir(controlHarnessDir, { create: false }),
-            adrDir: resolveAdrDir(controlHarnessDir, { create: false }),
+            specsDir: resolveTrackedResultDir(trackedBase, controlHarnessDir, "specsDir"),
+            knowledgeDir: resolveTrackedResultDir(trackedBase, controlHarnessDir, "knowledgeDir"),
+            adrDir: resolveTrackedResultDir(trackedBase, controlHarnessDir, "adrDir"),
             workflowDir: resolveWorkflowDir(controlRoot),
             projectDir: resolveProjectDir(controlRoot),
             reviewDir: resolveReviewDir(controlRoot),
@@ -654,18 +671,23 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           // The anchor is the nearest existing directory — Git and the harness
           // probe both need a real path, and the target may not exist.
           const anchor = nearestExistingDir(startDir);
-          const { controlRoot } = controlFacts(anchor);
+          const facts = controlFacts(anchor);
+          const { controlRoot } = facts;
+          const processHarness = facts.controlHarnessDir ?? facts.harnessDir;
           // The caller is the invoker, not the named target: a committable path
           // checked from a linked checkout that lives in the control checkout
           // belongs to the wrong checkout. Outside Git the target's own
           // checkout is the only identity available.
           const callerCheckoutRoot = probeCheckoutRoot(context.cwd) ?? probeCheckoutRoot(anchor);
-          const trackedHarness = callerCheckoutRoot === null ? null : resolveHarnessDir(callerCheckoutRoot, { ignoreEnvOverride: true }) ?? path.join(callerCheckoutRoot, ".mstar");
-          const resultDirs = trackedHarness === null ? [] : [
-            resolveSpecsDir(trackedHarness, { create: false }),
-            resolveKnowledgeDir(trackedHarness, { create: false }),
-            resolveAdrDir(trackedHarness, { create: false }),
-          ];
+          const trackedHarness = trackedHarnessOf(callerCheckoutRoot);
+          const resultDirs =
+            callerCheckoutRoot === null || processHarness === null
+              ? []
+              : [
+                  resolveTrackedResultDir(callerCheckoutRoot, processHarness, "specsDir"),
+                  resolveTrackedResultDir(callerCheckoutRoot, processHarness, "knowledgeDir"),
+                  resolveTrackedResultDir(callerCheckoutRoot, processHarness, "adrDir"),
+                ];
           const probe = probePathOwnership(
             { path: startDir, result: isResultPath(startDir, resultDirs), ...(input.path.endsWith("/") ? { kind: "directory" as const } : {}) },
             controlRoot,
@@ -701,10 +723,10 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         const callerCheckoutRoot = probeCheckoutRoot(startDir);
         // Without a probed harness the caller checkout still names a result
         // base; it is only a probe base — nothing is created there.
-        const trackedHarness = callerCheckoutRoot === null ? null : resolveHarnessDir(callerCheckoutRoot, { ignoreEnvOverride: true }) ?? path.join(callerCheckoutRoot, ".mstar");
-        const specsDir = trackedHarness === null ? null : resolveSpecsDir(trackedHarness, { create: false });
-        const knowledgeDir = trackedHarness === null ? null : resolveKnowledgeDir(trackedHarness, { create: false });
-        const adrDir = trackedHarness === null ? null : resolveAdrDir(trackedHarness, { create: false });
+        const trackedHarness = trackedHarnessOf(callerCheckoutRoot);
+        const specsDir = callerCheckoutRoot === null ? null : resolveTrackedResultDir(callerCheckoutRoot, processHarness, "specsDir");
+        const knowledgeDir = callerCheckoutRoot === null ? null : resolveTrackedResultDir(callerCheckoutRoot, processHarness, "knowledgeDir");
+        const adrDir = callerCheckoutRoot === null ? null : resolveTrackedResultDir(callerCheckoutRoot, processHarness, "adrDir");
         const targets: PathOwnershipTarget[] = [
           // The result marking only adds the ignored-result warning.
           ...[specsDir, knowledgeDir, adrDir].flatMap((dir) => (dir === null ? [] : [{ path: dir, result: true }])),
