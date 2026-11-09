@@ -27,7 +27,7 @@ Every page follows the same sections in order — `Scope`, `Current state`, `Inv
 - **Disjoint layers.** An experience writeup belongs in `docs/knowledge/`, a snapshot of how the system currently works belongs here, and "we chose X over Y and why" belongs in `docs/adr/` (contract: `docs/adr/README.md`).
 - **Updated in place, no version suffixes.** A spec describes the latest state. Its history lives in Git and, where a change encodes a decision, in an ADR — never in a sibling `-v2` file.
 - **Decisions outlive plans → ADR.** A decision whose rationale must survive the plan or PR that produced it goes to `docs/adr/`, not into these pages; a spec states the resulting current behavior and may link the ADR.
-- **No plan text.** These pages contain no acceptance criteria, local plan/iteration identifiers, merge references, or `.mstar/` paths.
+- **No plan text.** These pages contain no acceptance criteria, local plan/iteration identifiers, merge references, or harness-internal process paths.
 - **English, tracked.** Documents are English Markdown, Git-tracked.
 - **The registry is the store.** The catalog registry of spec documents is `{HARNESS_DIR}/store.db` (`mstar catalog list`); tables in these pages — including this one — are prose navigation, never registries.
 

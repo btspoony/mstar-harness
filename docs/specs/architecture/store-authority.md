@@ -8,7 +8,7 @@ This page describes where the harness keeps durable registry-shaped state, how t
 
 ### Location and resolution
 
-`{HARNESS_DIR}/store.db` is a single SQLite database holding every durable registry-shaped fact the harness keeps. The harness root resolves through `packages/engine/src/path.ts` (`resolveHarnessDir`): explicit override (`opts.harnessDir` / `MSTAR_HARNESS_DIR`) → `.mstarc` `[config] harness_dir` → conventional probes (`.mstar/`, `.agents/`, `plans/`), never crossing the workspace root. The store lives on the **control checkout** — the main worktree reported by `git worktree list --porcelain`; feature worktrees never resolve or create a store of their own. `mstar path resolve` prints the resolved `controlRoot`, `controlHarnessDir`, and linked-worktree facts.
+`{HARNESS_DIR}/store.db` is a single SQLite database holding every durable registry-shaped fact the harness keeps. The harness root resolves through `packages/engine/src/path.ts` (`resolveHarnessDir`): explicit override (`opts.harnessDir` / `MSTAR_HARNESS_DIR`) → `.mstarc` `[config] harness_dir` → conventional probes (`.mstar`, `.agents/`, `plans/`), never crossing the workspace root. The store lives on the **control checkout** — the main worktree reported by `git worktree list --porcelain`; feature worktrees never resolve or create a store of their own. `mstar path resolve` prints the resolved `controlRoot`, `controlHarnessDir`, and linked-worktree facts.
 
 Schema creation and migration are owned by `packages/engine/src/store-db.ts` (versioned migrations plus `schema_version`); `store.ts`, `store-read.ts`, and `store-migrate.ts` layer the read and migration surfaces on it.
 

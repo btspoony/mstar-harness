@@ -35,7 +35,7 @@ Resolved by engine functions; each chain stops at the first non-empty candidate 
 - `{SPECS_DIR}` (`resolveSpecsDir`): `.mstarc` `specs_dir` (authoritative, skips the chain) → `{HARNESS_DIR}/specs/` → `<repo-root>/.agents/specs/` → `docs/specs/` → repo-root `specs/` → legacy `designs/` directories (read-only).
 - `{KNOWLEDGE_DIR}` (`resolveKnowledgeDir`): `.mstarc` `knowledge_dir` → `{HARNESS_DIR}/knowledge/` → `.agents/knowledge/` → fallback create.
 - `{ADR_DIR}` (`resolveAdrDir`): `.mstarc` `adr_dir` → `{HARNESS_DIR}/adr/` → `.agents/adr/` → `docs/adr/`.
-- `{HARNESS_DIR}` itself: explicit override → `.mstarc` `harness_dir` → `.mstar/` → `.agents/` → legacy `plans/` probes; probes never cross the workspace root.
+- `{HARNESS_DIR}` itself: explicit override → `.mstarc` `harness_dir` → `.mstar` → `.agents/` → legacy `plans/` probes; probes never cross the workspace root.
 
 This repository's `.mstarc` declares all three keys — `specs_dir=docs/specs`, `knowledge_dir=docs/knowledge`, `adr_dir=docs/adr` — so each resolution takes the declared value and skips its chain. `mstar path resolve` prints the resolved directories for all three corpora.
 
