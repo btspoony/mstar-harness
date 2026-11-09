@@ -34,6 +34,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
+import { buildZcodeHooks } from "./build-zcode-hooks.ts";
 import {
   CHANGELOGS,
   DEFAULT_VERSION_PATH,
@@ -535,6 +536,13 @@ async function main(): Promise<void> {
   }
 
   archiveFragments(version, frags);
+
+  // The committed hooks bundles inline the engine, so a release must rebuild
+  // them: CI only warns on a stale bundle (the byte diff is version-sensitive),
+  // and shipping the previous engine inside the hooks is not an option.
+  for (const built of await buildZcodeHooks()) {
+    console.log(`hooks: ${built.outfile} (${built.bytes} bytes)`);
+  }
 
   // Both the workspace versions and the root dependency ranges the lockfile
   // mirrors now differ from it, so refresh the lockfile inside the release prep.
