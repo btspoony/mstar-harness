@@ -3,3 +3,4 @@
 [config]
 harness_dir=.mstar
 adr_dir=docs/adr
+knowledge_dir=docs/knowledge
