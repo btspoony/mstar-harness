@@ -121,7 +121,8 @@ export function resolveHarnessDir(
     const probe = checkoutRootOrFailure(start);
     // "Git could not answer" refuses discovery: the worktree's own config must
     // not pass for the process root. The write gate compensates with its own
-    // process-root fallback, so a null answer here never disables enforcement.
+    // process-root fallback, so process documents stay gated; a write the
+    // worktree makes into its own tree is not covered by that fallback.
     if (probe.failed) return null;
     if (probe.root !== null) {
       const main = mainWorktreeRoot(start);

@@ -357,6 +357,16 @@ function gitProbeTimeoutMs() {
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
 }
+function stderrOf(error) {
+  if (typeof error === "object" && error !== null && "stderr" in error) {
+    const stderr = error.stderr;
+    if (typeof stderr === "string")
+      return stderr;
+    if (stderr instanceof Uint8Array)
+      return Buffer.from(stderr).toString("utf8");
+  }
+  return "";
+}
 function exitStatusOf(error) {
   if (typeof error === "object" && error !== null && "status" in error) {
     const status = error.status;
@@ -443,8 +453,8 @@ function checkoutRootOrFailure(startDir, opts = {}) {
       return { root: null, failed: false };
     }
   } catch (error) {
-    const status = exitStatusOf(error);
-    return { root: null, failed: status !== 128 };
+    const notARepository = exitStatusOf(error) === 128 && /not a git repository/i.test(stderrOf(error));
+    return { root: null, failed: !notARepository };
   }
 }
 function gitIgnored(root, target) {

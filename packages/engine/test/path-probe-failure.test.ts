@@ -55,11 +55,15 @@ describe("resolveHarnessDir probe failure", () => {
   test("a local probe asks about the checkout itself and needs no Git", () => {
     const root = dir();
     const savedPath = process.env.PATH;
+    const savedHarness = process.env.MSTAR_HARNESS_DIR;
     process.env.PATH = "/nonexistent";
+    delete process.env.MSTAR_HARNESS_DIR;
     try {
       expect(resolveHarnessDir(root, { localProbe: true })).toBe(join(root, ".mstar"));
     } finally {
       process.env.PATH = savedPath;
+      if (savedHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = savedHarness;
     }
   });
 });

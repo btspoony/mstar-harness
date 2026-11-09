@@ -29,6 +29,16 @@ export function gitProbeTimeoutMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
 }
 
+/** stderr text of a failed child process, when the platform captured one. */
+function stderrOf(error: unknown): string {
+  if (typeof error === "object" && error !== null && "stderr" in error) {
+    const stderr = error.stderr;
+    if (typeof stderr === "string") return stderr;
+    if (stderr instanceof Uint8Array) return Buffer.from(stderr).toString("utf8");
+  }
+  return "";
+}
+
 /** Exit status of a failed child process, when the platform reports one. */
 export function exitStatusOf(error: unknown): number | undefined {
   if (typeof error === "object" && error !== null && "status" in error) {
@@ -157,11 +167,12 @@ export function checkoutRootOrFailure(
       return { root: null, failed: false };
     }
   } catch (error) {
-    // Exit 128 is Git's "not a repository" (the documented non-git start);
-    // a missing executable, a timeout or any other failure is "could not
-    // answer" and must fail closed.
-    const status = exitStatusOf(error);
-    return { root: null, failed: status !== 128 };
+    // Only Git's own "not a repository" refusal (exit 128 with that message)
+    // is the documented non-git start. Every other failure — a missing
+    // executable, a timeout, or a different fatal 128 — is "could not answer"
+    // and fails closed.
+    const notARepository = exitStatusOf(error) === 128 && /not a git repository/i.test(stderrOf(error));
+    return { root: null, failed: !notARepository };
   }
 }
 
