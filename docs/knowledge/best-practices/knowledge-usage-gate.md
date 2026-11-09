@@ -22,7 +22,7 @@ applies_when:
 
 ## Context
 
-`{KNOWLEDGE_DIR}` 是项目经验结晶的 SSOT（iteration-close 经 `mstar-compound` 写入）。但「只结晶不使用」会让知识库沦为死档案：101 篇知识文档若无消费路径，等于没有。
+`{KNOWLEDGE_DIR}` 是项目经验结晶的 SSOT（iteration-close 经 `mstar-knowledge` 写入）。但「只结晶不使用」会让知识库沦为死档案：101 篇知识文档若无消费路径，等于没有。
 
 Audit 2026-08-22 发现：原 harness 中 knowledge 的使用是**条件式**的——implement 前读取依赖 `plans[].metadata` 登记了 `primary_spec`/`spec_refs` 等链接；PM 若忘了登记，implementer 默认不读知识库。核心入口（信息源优先级、iteration-start Research）也没有 knowledge 索引。
 

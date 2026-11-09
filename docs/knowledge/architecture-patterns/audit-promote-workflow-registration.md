@@ -44,7 +44,7 @@ applies_when:
 ## Why This Matters
 
 - 消除「手写 snapshot + register」的脆性路径（字段漂移、顺序错误、并发写冲突）。
-- 让 audit plan 能进入**正常 SDD/QC/QA 生命周期**，而不只是 advisory 文件。
+- 让 audit plan 能进入**正常 SDD/QC/PM Acceptance 生命周期**，而不只是 advisory 文件。
 - 守卫机制保护了「promote 是可重入动作」的可靠性：失败不留残留，重试可收敛。
 
 ## When to Apply
