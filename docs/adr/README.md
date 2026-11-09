@@ -52,7 +52,7 @@ Failing (3) means **delete the record, not archive it**: Git keeps the bytes, an
 
 An archived record is frozen: no body edits, no Status rewrite, and no maintenance of its outbound links, because the pages it cites are free to change without it. `proposed/` and `rejected/` records never archive — a rejected proposal is already a frozen fact, and a proposal that will not be implemented is rejected or deleted instead.
 
-`archived/` is distinct from `superseded`. A superseded record is still a true statement about the system that has a replacement: it stays in its live bucket with both-way `Supersedes:` / `Superseded-by:` header lines, and a supersession search over the tree precedes the new record. An archived record is no longer authority at all; a later decision that needs its rationale restates it rather than linking back.
+`archived/` is distinct from `superseded`. A superseded record is still a true statement about the system that has a replacement: it stays in its live bucket with both-way `Supersedes:` / `Superseded-by:` header lines, and a supersession search over the tree precedes the new record. An archived record is no longer authority at all. Active prose may link into it only to cite history, never as the statement of what the system does now; a later decision that revisits its subject states its own rationale rather than inheriting the old one.
 
 A record never returns to `proposed/`. An `implemented` record is a live statement of the system, not history: the same PR that changes a path, name, or default the record states also updates the record. That is routine maintenance — no transition, no new record, and it stops applying once the record is archived.
 
