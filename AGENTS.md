@@ -31,8 +31,8 @@ This repository contains the Morning Star runtime skills, workflow engine, CLI, 
 
 Merge authorization is not restated here — it is owned by the policy in force:
 
-- **Inside an iteration**, the compass `pr_merge_policy` decides, with the three-branch predicate in [phase-4-5-pr-delivery.md §5.3](skills/mstar-iteration/references/phase-4-5-pr-delivery.md) (`reviewed-auto` / `reviewed-bot` / `owner-gated`). A missing `pr_merge_policy` is a STOP; it is never inferred. That section owns the head reconciliation for its branches — do not restate or extend it here.
-- **A maintenance PR with no iteration policy** merges only when all of these hold: required CI is green (advisory checks may be yellow); every attached review bot has concluded on the current head (`mstar-inspector review` = `success`, a scored bot meets its own gate, no blocking finding, and the review is posted for that head); unresolved review threads are resolved or explicitly waived; and the human owner (operator/user — not the coordinator/PM seat) states the merge for that head.
+- **Inside an iteration**, the compass `pr_merge_policy` decides, with the three-branch predicate in [phase-4-5-pr-delivery.md §5.3](skills/mstar-iteration/references/phase-4-5-pr-delivery.md) (`reviewed-auto` / `reviewed-bot` / `owner-gated`). A missing `pr_merge_policy` is a STOP; it is never inferred. That section owns head reconciliation; do not restate or extend it here.
+- **A maintenance PR with no iteration policy** merges only when all of these hold: required CI is green (advisory checks may be yellow); every attached review bot has concluded on the current head (`mstar-inspector review` = `success`, a scored bot meets its own gate, no blocking finding, and the review is posted for that head — an earlier review qualifies while the increment is empty, by the §5.3 empty-increment test); unresolved review threads are resolved or explicitly waived; and the human owner (operator/user — not the coordinator/PM seat) states the merge for that head.
 
 "CI green and mergeable" alone is not authorization, and a bot stuck in `pending` is not a pass.
 
