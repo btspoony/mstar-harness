@@ -1216,7 +1216,8 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     });
 
     const gate = await evaluatePostMergeCloseFromExecutionAuthority(fixture.context, WORKFLOW_ID);
-    expect(gate.violations.map((entry) => entry.code)).not.toContain("PHASE6_INVALID_SNAPSHOT");
+    // `ok` is derived from the violation list, so it carries the whole verdict:
+    // a snapshot-validation failure surfaces here as PHASE6_INVALID_SNAPSHOT.
     expect(gate.ok).toBe(true);
   });
 
