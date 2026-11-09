@@ -37,6 +37,7 @@ import type { GateResult, ValidationResult } from "./core.js";
 // `scaffoldHarness`, so neither side dereferences the other during module
 // evaluation (same pattern as the project.ts / status.ts cycles below).
 import { CatalogError, getCatalog, registerCatalogEntity, type CatalogOperation } from "./catalog.js";
+import { checkoutRootOrFailure, gitIgnored, gitProbeTimeoutMs, mainWorktreeRoot, realpathNearest } from "./git-probe.js";
 import { loadMstarc, type MstarcConfig, type MstarcStringKey } from "./mstarc.js";
 // `project.ts` and `store-db.ts` are used from scaffold call paths only.
 import { _DEFAULT_PROJECT } from "./project.js";
@@ -106,19 +107,29 @@ export function resolveHarnessDir(
   // Harness state is process state: every harness root and every `.mstarc` is
   // read from the main worktree. A linked worktree carries a tracked copy of
   // `.mstarc`, and honoring it would make the worktree look like a process
-  // root. Only a path OUTSIDE the main worktree is substituted — a plain
-  // subdirectory keeps its own start so the upward rungs stay unchanged.
-  // `localProbe` asks about the caller's own checkout instead, and an
-  // explicit `opts.workspaceRoot` keeps the caller's own boundary.
-  const mainRoot = gitMainWorktreeRoot(start);
-  const checkoutRoot = mainRoot === null ? null : gitCheckoutRoot(start);
-  const linked =
-    opts.workspaceRoot === undefined &&
-    opts.localProbe !== true &&
-    mainRoot !== null &&
-    checkoutRoot !== null &&
-    checkoutRoot !== mainRoot;
-  const base = linked && mainRoot !== null ? mainRoot : start;
+  // root. The probes run only where they can change the answer, and a probe
+  // failure is fail-closed: when the caller's checkout is known but the main
+  // root is unreadable, no harness root is answered instead of silently
+  // adopting the worktree's own. `localProbe` asks about the caller's own
+  // checkout instead, and an explicit `opts.workspaceRoot` keeps the caller's
+  // own boundary.
+  let base = start;
+  if (opts.workspaceRoot === undefined && opts.localProbe !== true) {
+    // A probe failure (missing git, timeout) is not "not a Git repository":
+    // refuse discovery rather than let the worktree's own config pass for the
+    // process root.
+    const probe = checkoutRootOrFailure(start);
+    // "Git could not answer" refuses discovery: the worktree's own config must
+    // not pass for the process root. The write gate compensates with its own
+    // process-root fallback, so process documents stay gated; a write the
+    // worktree makes into its own tree is not covered by that fallback.
+    if (probe.failed) return null;
+    if (probe.root !== null) {
+      const main = mainWorktreeRoot(start);
+      if (main === null) return null;
+      if (probe.root !== main) base = main;
+    }
+  }
   const boundary = resolve(base, opts.workspaceRoot ?? defaultWorkspaceRoot(base));
   const rc = loadMstarc(base, boundary);
   if (rc !== null && rc.config.harnessDir) return resolve(rc.dir, rc.config.harnessDir);
@@ -156,6 +167,7 @@ function defaultWorkspaceRoot(startDir: string): string {
       cwd: startDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: gitProbeTimeoutMs(),
     }).trim();
     if (!cdup) return startDir; // already at the git top-level
     let boundary = startDir;
@@ -176,108 +188,6 @@ function defaultWorkspaceRoot(startDir: string): string {
 function isAtOrBelow(dir: string, root: string): boolean {
   const rel = relative(root, dir);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
-/**
- * The main worktree root of the Git checkout containing `startDir`, or `null`
- * when Git cannot answer. `git worktree list` names the main worktree first in
- * every checkout (linked worktree, submodule, plain repo), so its first record
- * is the main root.
- */
-function gitMainWorktreeRoot(startDir: string): string | null {
-  try {
-    const out = execFileSync("git", ["worktree", "list", "--porcelain"], {
-      cwd: startDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: gitProbeTimeout(),
-    });
-    const line = out.split("\n").find((entry) => entry.startsWith("worktree "));
-    if (line === undefined) return null;
-    return realpathOrResolve(line.slice("worktree ".length).trim());
-  } catch {
-    return null;
-  }
-}
-
-/** The Git checkout root containing `startDir` (a linked worktree answers itself). */
-function gitCheckoutRoot(startDir: string): string | null {
-  try {
-    const out = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd: startDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: gitProbeTimeout(),
-    }).trim();
-    return out === "" ? null : realpathOrResolve(out);
-  } catch {
-    return null;
-  }
-}
-
-/** Real path when it exists, lexical resolution otherwise. */
-function realpathOrResolve(target: string): string {
-  try {
-    return realpathSync(target);
-  } catch {
-    return resolve(target);
-  }
-}
-
-/**
- * Canonical path for a target that may not exist yet: realpath of the nearest
- * existing ancestor plus the remaining segments. `/var` vs `/private/var` (and
- * any other symlinked mount) must not make two spellings of one location look
- * like different repositories.
- */
-function realpathNearest(target: string): string {
-  let dir = resolve(target);
-  const rest: string[] = [];
-  for (;;) {
-    try {
-      return join(realpathSync(dir), ...rest.reverse());
-    } catch {
-      const parent = dirname(dir);
-      if (parent === dir) return resolve(target);
-      rest.push(basename(dir));
-      dir = parent;
-    }
-  }
-}
-
-/**
- * Timeout for the resolver's git probes. Same env knob and default as
- * `gitProbeTimeoutMs` in `worktree.ts`; duplicated here because that module
- * imports `workflow.ts`, which imports this one — a call-time cycle on every
- * harness resolution is not worth the shared import.
- */
-function gitProbeTimeout(): number {
-  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
-  const parsed = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10_000;
-}
-
-/** Exit status of a failed child process, when the platform reports one. */
-function exitStatusOf(error: unknown): number | undefined {
-  if (typeof error === "object" && error !== null && "status" in error) {
-    const status = error.status;
-    return typeof status === "number" ? status : undefined;
-  }
-  return undefined;
-}
-
-/**
- * `check-ignore` verdict: `true` (ignored), `false` (not ignored), or `null`
- * when Git cannot answer. Callers treat `null` as "keep the main checkout" —
- * a failed probe must never silently choose the caller's checkout.
- */
-function gitIgnored(root: string, target: string): boolean | null {
-  try {
-    execFileSync("git", ["check-ignore", "-q", "--", target], { cwd: root, stdio: "ignore", timeout: gitProbeTimeout() });
-    return true;
-  } catch (error) {
-    return exitStatusOf(error) === 1 ? false : null;
-  }
 }
 
 /**
@@ -500,7 +410,7 @@ export function resolveTrackedResultDir(
   key: "specsDir" | "knowledgeDir" | "adrDir",
 ): string {
   const harness = resolve(harnessDir);
-  const mainRoot = gitMainWorktreeRoot(harness) ?? dirname(harness);
+  const mainRoot = mainWorktreeRoot(harness) ?? dirname(harness);
   const declared = mstarcDeclared(harness, key);
   const mainTarget =
     declared === null
@@ -518,8 +428,8 @@ export function resolveTrackedResultDir(
   if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return mainTarget;
   // Another repository's checkout must never relocate this repository's
   // results (e.g. `--harness <other-repo>/.mstar` from this checkout).
-  const callerMainRoot = gitMainWorktreeRoot(callerCheckoutRoot);
-  if (callerMainRoot === null || realpathOrResolve(callerMainRoot) !== realpathOrResolve(mainRoot)) return mainTarget;
+  const callerMainRoot = mainWorktreeRoot(callerCheckoutRoot);
+  if (callerMainRoot === null || realpathNearest(callerMainRoot) !== realpathNearest(mainRoot)) return mainTarget;
   const candidate = join(callerCheckoutRoot, rel);
   // Probe a child path: a directory that does not exist yet still matches the
   // parent's ignore rules, and the canonical snippet's re-includes

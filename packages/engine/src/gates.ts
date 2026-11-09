@@ -24,6 +24,7 @@
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { readJson, type ValidationResult } from "./core.js";
+import { resolveProcessHarnessDir } from "./coordination.js";
 import { resolveHarnessDir, resolveProjectDir, resolveWorkflowDir } from "./path.js";
 import { validateStatus, type StatusV2Doc } from "./status.js";
 import { validateWorkflowSnapshot } from "./workflow.js";
@@ -137,6 +138,15 @@ function resolveHarnessRootOf(target: string): string | null {
  * location the runtime writes. Everything else is not a gated write.
  * Returns the harness dir + doc kind when gated.
  */
+/** Process harness root, or `null` when Git cannot name one (never throws). */
+function processHarnessFallback(startDir: string): string | null {
+  try {
+    return resolveProcessHarnessDir(startDir);
+  } catch {
+    return null;
+  }
+}
+
 export function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind: HarnessDocKind } | null {
   if (typeof targetPath !== "string" || targetPath.trim() === "") return null;
   const resolved = resolve(targetPath);
@@ -163,7 +173,10 @@ export function harnessDocKindOfTarget(targetPath: string): { harnessDir: string
     return null;
   };
   const probeRoot = resolveHarnessRootOf(dirname(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname(resolved));
+  // A failed resolver probe must not leave the write gate without a root:
+  // fall back to the process harness (control root / pinned env), which is
+  // exactly the root the gate exists to protect.
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname(resolved)) ?? processHarnessFallback(dirname(resolved));
   if (harnessDir === null) return null;
   const classified = classify(harnessDir);
   if (classified !== null) return classified;

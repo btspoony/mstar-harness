@@ -44,22 +44,14 @@ import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
 import type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
+import { checkoutRoot, gitProbeTimeoutMs, worktreeList } from "./git-probe.js";
 import { deliveryBranchOf, validateIntegrationMergeLease, type WorkflowBranchAnchors, type WorkflowLifecycleType } from "./workflow.js";
 
-/**
- * Git probe timeout — bounded so a hung git (dead NFS mount, pathological
- * repo, stray hook) cannot block `mstar worktree check` or engine callers
- * indefinitely . Default 10s; override via the
- * `MSTAR_GIT_PROBE_TIMEOUT_MS` env var or a per-call `timeoutMs`.
- */
-const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
-
-export function gitProbeTimeoutMs(): number {
-  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "") return DEFAULT_PROBE_TIMEOUT_MS;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
-}
+// Git probe timeout — bounded so a hung git (dead NFS mount, pathological
+// repo, stray hook) cannot block `mstar worktree check` or engine callers
+// indefinitely. Owned by `git-probe.ts` (default 10s;
+// `MSTAR_GIT_PROBE_TIMEOUT_MS` or a per-call `timeoutMs` overrides it).
+export { gitProbeTimeoutMs };
 
 /** One L2 parallel implement track (mstar-branch-worktree L2 table). */
 export type WorktreeTrack = {
@@ -78,41 +70,6 @@ export type MainWorktreeInfo = {
 };
 
 /**
- * Parse the first record of `git worktree list --porcelain -z` (NUL form —
- * preserves spaces/newlines in paths). The first record is always the MAIN
- * worktree; `refs/heads/` is stripped; `detached` yields `branch: ""`.
- * Bare repositories, malformed output (no worktree/branch attribute), or an
- * inaccessible root yield `null` — never a guess.
- */
-function parseMainWorktree(out: string): MainWorktreeInfo | null {
-  const tokens = out.split("\0");
-  const first = tokens.findIndex((t) => t.startsWith("worktree "));
-  if (first === -1) return null;
-  const rawPath = tokens[first]!.slice("worktree ".length);
-  if (rawPath.trim() === "") return null;
-  let branch: string | null = null;
-  let detached = false;
-  for (let i = first + 1; i < tokens.length; i++) {
-    const token = tokens[i]!;
-    if (token.startsWith("worktree ")) break; // second record begins — the main record ended
-    if (token === "bare") return null;
-    if (token === "detached") detached = true;
-    else if (token.startsWith("branch ")) {
-      const ref = token.slice("branch ".length).trim();
-      if (ref === "") return null;
-      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
-    }
-  }
-  if (detached) branch = "";
-  if (branch === null) return null; // malformed main record — no branch attribute and not detached
-  try {
-    return { root: realpathSync(rawPath), branch };
-  } catch {
-    return null; // inaccessible root
-  }
-}
-
-/**
  * Discover the main worktree of the repository containing `cwd` (default
  * `process.cwd()`): the FIRST record of `git worktree list --porcelain -z`,
  * never the first attached branch or a name-matched path. Bounded by the
@@ -121,17 +78,16 @@ function parseMainWorktree(out: string): MainWorktreeInfo | null {
  * closed (`worktree.main.unresolved`), never fall through.
  */
 export function readMainWorktree(cwd?: string): MainWorktreeInfo | null {
-  const start = cwd ?? process.cwd();
+  const parsed = worktreeList(cwd ?? process.cwd());
+  // A record without a branch attribute and not detached is malformed, and an
+  // inaccessible root is not a proof of identity — both fail closed.
+  if (parsed === null || parsed.branch === null) return null;
   try {
-    const stdout = execFileSync("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs(),
-    });
-    return parseMainWorktree(stdout);
+    realpathSync(parsed.root);
   } catch {
     return null;
   }
+  return { root: parsed.root, branch: parsed.branch };
 }
 
 /**
@@ -452,19 +408,7 @@ export function isDistinctCheckout(controlPath: string, candidatePath: string, o
  * the harness sits directly under the checkout).
  */
 export function probeCheckoutRoot(path: string, opts: BranchProbeOptions = {}): string | null {
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
-  try {
-    const stdout = execFileSync(opts.gitPath ?? "git", ["-C", path, "rev-parse", "--show-toplevel"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout,
-    });
-    const raw = stdout.trim();
-    if (raw === "") return null;
-    return realpathSync(raw);
-  } catch {
-    return null;
-  }
+  return checkoutRoot(path, { gitPath: opts.gitPath, timeoutMs: opts.timeoutMs });
 }
 
 /**
