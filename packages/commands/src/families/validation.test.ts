@@ -180,5 +180,11 @@ describe("lint --type adr", () => {
       (dir) => runLint(dir, { target: "notes/2026-01-04-loose.md", type: "adr" }),
     );
     expect(outside.status).toBe("usage");
+
+    const bucketRoot = await withTree(
+      { "adr/proposed/TEMPLATE.md": ADR },
+      (dir) => runLint(dir, { target: "adr/proposed/TEMPLATE.md", type: "adr" }),
+    );
+    expect(bucketRoot.status).toBe("usage");
   });
 });

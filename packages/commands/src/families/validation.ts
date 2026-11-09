@@ -261,6 +261,15 @@ function lintDocLayer(type: "specs" | "adr", target: string, isDir: boolean): Vi
   const root = adrRootOf(target);
   if (root === null) throw new SddScriptError(`usage: lint <file> --type adr — ${target} is not under {ADR_DIR}/{bucket}/{class}/`, 2);
   const rel = path.relative(root, target).split(path.sep).join("/");
+  const [bucket, kind, ...rest] = rel.split("/");
+  if (
+    bucket === undefined || kind === undefined ||
+    !(ADR_BUCKETS as readonly string[]).includes(bucket) ||
+    !(ADR_CLASSES as readonly string[]).includes(kind) ||
+    rest.length !== 1 || !rest[0]!.endsWith(".md")
+  ) {
+    throw new SddScriptError(`usage: lint <file> --type adr — ${target} is not a record at {ADR_DIR}/{bucket}/{class}/<record>.md`, 2);
+  }
   return lintAdrTree(root).failures
     .filter((failure: AdrLintFailure) => failure.file === rel)
     .map((failure) => ({ ok: false as const, severity: "medium" as const, code: failure.code, message: failure.message, fix: failure.recovery }));

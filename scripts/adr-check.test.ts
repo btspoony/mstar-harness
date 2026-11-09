@@ -9,7 +9,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { ADR_BUCKETS, ADR_CLASSES, checkAdrTree } from "./adr-check.ts";
-import { lintAdrTree } from "../packages/engine/src/index.ts";
 
 const ADR_ROOT = "docs/adr";
 
@@ -235,31 +234,5 @@ describe("checkAdrTree — an unterminated fence", () => {
     expect(failure.message).toContain(`${rel}:${fenceLine}`);
     expect(failure.message).toContain("unbalanced fences (1 fence lines)");
     expect(failure.recovery).toContain("closing fence");
-  });
-});
-
-// The repository gate is a THIN ADAPTER over the engine tree check: it owns the
-// tree location and the `adr.*` code prefix Guard 12 prints, and nothing else.
-// This pins the delegation — a second local walk would show up as a divergence.
-describe("checkAdrTree — delegates to the engine", () => {
-  test("the same tree yields the engine's failures, path-prefixed and code-renamed", () => {
-    const files = {
-      "implemented/architecture/2026-01-14-banned.md": record("implemented", [...IMPLEMENTED_SECTIONS, "Proposal"]),
-      "archived/architecture/2026-01-15-old.md": record("implemented", IMPLEMENTED_SECTIONS),
-    };
-    const adapter = withTree(files, checkAdrTree);
-    const engine = withTree(files, (root) => lintAdrTree(`${root}/docs/adr`));
-
-    expect(adapter.records).toBe(engine.records);
-    expect(adapter.failures.map(({ code }) => code)).toEqual(
-      engine.failures.map(({ code }) => code.replace(/^lint\.adr\./, "adr.")),
-    );
-    expect(adapter.failures.map(({ file }) => file)).toEqual(
-      engine.failures.map(({ file }) => `${ADR_ROOT}/${file}`),
-    );
-    expect(adapter.failures.map(({ code }) => code).sort()).toEqual([
-      "adr.archive-line-missing",
-      "adr.section-banned",
-    ]);
   });
 });

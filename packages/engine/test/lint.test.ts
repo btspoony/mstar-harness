@@ -999,6 +999,16 @@ describe("lintSpecsDoc", () => {
     expect(codes(result)).toEqual(["lint.specs.local-path"]);
   });
 
+  test("a placeholder id example is documentation, not local state", () => {
+    const result = lintSpecsDoc(`${SPEC_COMPLETE}\nInput shape: \`plan_id: <plan-id>\`, \`iteration_id: \${ITERATION_ID}\`.\n`, "architecture/x.md");
+    expect(codes(result)).toEqual([]);
+  });
+
+  test("a four-space indented fence is an indented block, not a toggle", () => {
+    const result = lintSpecsDoc(`${SPEC_COMPLETE}\n    \`\`\`\n    example\n    \`\`\`\n`, "architecture/x.md");
+    expect(codes(result)).toEqual([]);
+  });
+
   test("an unclosed fence fails and stops the section scan", () => {
     const result = lintSpecsDoc(`# Spec\n\n\`\`\`md\n## Scope\n`, "architecture/x.md");
     expect(codes(result)).toEqual(["lint.specs.fence-unclosed"]);
@@ -1020,6 +1030,28 @@ describe("lintSpecsTree", () => {
     );
     expect(result.violations).toEqual([]);
     expect(result.ok).toBe(true);
+  });
+
+  test("a reference-style index link counts as an index link", () => {
+    const result = withTree(
+      {
+        "README.md": `# Specs\n\nSee [store][store].\n\n[store]: architecture/store.md\n`,
+        "architecture/store.md": SPEC_COMPLETE,
+      },
+      lintSpecsTree,
+    );
+    expect(result.violations).toEqual([]);
+  });
+
+  test("a link quoted inside a fence is not a dead link", () => {
+    const result = withTree(
+      {
+        "README.md": `${README}\n\`\`\`md\n[example](architecture/missing.md)\n\`\`\`\n`,
+        "architecture/store.md": SPEC_COMPLETE,
+      },
+      lintSpecsTree,
+    );
+    expect(result.violations).toEqual([]);
   });
 
   test("a missing tree passes (empty corpus)", () => {
@@ -1176,6 +1208,19 @@ describe("lintAdrTree", () => {
     for (const bucket of ["proposed", "implemented", "rejected", "archived"]) {
       expect(bucketFailure.recovery).toContain(`${bucket}/`);
     }
+  });
+
+  test("a stray non-record file in a class directory is ignored", () => {
+    const result = withTree(
+      {
+        "implemented/architecture/2026-01-09-record.md": adrRecord("implemented", ADR_IMPLEMENTED),
+        "implemented/architecture/README.md": "# Notes\n",
+        "implemented/architecture/.DS_Store": "junk",
+      },
+      lintAdrTree,
+    );
+    expect(result.records).toBe(1);
+    expect(result.failures).toEqual([]);
   });
 
   test("an INDEX.md fails as index-forbidden and a wrong filename as name-shape", () => {

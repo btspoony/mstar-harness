@@ -789,8 +789,9 @@ export function lintStrategySections(docText: string): GateResult {
 /* ------------------------------------------------------------------ */
 
 /** A fence toggle line: three or more backticks or tildes, plus its info
- * string (CommonMark). Shared by both document-layer checks. */
-const FENCE_OPEN_RE = /^\s*(`{3,}|~{3,})(.*)$/;
+ * string (CommonMark: at most three leading spaces; four or more is an
+ * indented code block, not a fence). Shared by both document-layer checks. */
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 /** Toggle line numbers (1-based) of every fence open or close. An odd count
  * means one never closed, so the document tail is hidden from every heading
@@ -888,8 +889,8 @@ const SPECS_HISTORY_DIRS: Readonly<Record<string, true>> = {
 const SPECS_LOCAL_PATHS = [
   { re: /\.(?:mstar|agents)\/(?:plans|sdd|workflows|reviews|projects|archived|store\.db|status\.json)/, why: "local harness process-state path" },
   { re: /(?:^|[\s(`])\/(?:Users|home)\/[^\s`)]+/, why: "absolute local path" },
-  { re: /\bplan_id\s*:/i, why: "local plan id field (plan_id:)" },
-  { re: /\biteration_id\s*:/i, why: "local iteration id field (iteration_id:)" },
+  { re: /\bplan_id\s*:\s*(?![<{$])[\w./-]{4,}/i, why: "concrete local plan id (plan_id: <id>)" },
+  { re: /\biteration_id\s*:\s*(?![<{$])[\w./-]{4,}/i, why: "concrete local iteration id (iteration_id: <id>)" },
 ] as const;
 
 /**
@@ -993,15 +994,22 @@ function collectMarkdown(dir: string): TreeDoc[] {
   return out.sort((a, b) => a.rel.localeCompare(b.rel));
 }
 
-/** Relative Markdown link targets in `text` (no scheme, no bare anchor). */
+/** Relative Markdown link targets in `text` (no scheme, no bare anchor).
+ * Reads inline links and reference definitions, and ignores fenced code so a
+ * quoted example is not mistaken for a real link. */
 function relativeLinks(text: string): string[] {
   const out: string[] = [];
-  for (const match of text.matchAll(/\]\(([^)\s]+)/g)) {
-    const target = match[1]!;
-    if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("#") || target.startsWith("/")) continue;
-    out.push(target.split("#")[0]!);
+  const take = (target: string): void => {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("#") || target.startsWith("/")) return;
+    const clean = target.replace(/^<|>$/g, "").split("#")[0]!;
+    if (clean !== "") out.push(clean);
+  };
+  for (const line of unfencedLines(text)) {
+    for (const match of line.matchAll(/\]\(([^)\s]+)/g)) take(match[1]!);
+    const definition = /^\s{0,3}\[[^\]]+\]:\s*(\S+)/.exec(line);
+    if (definition !== null) take(definition[1]!);
   }
-  return out.filter((target) => target !== "");
+  return out;
 }
 
 /**
@@ -1300,7 +1308,7 @@ export function lintAdrTree(dir: string): AdrLintResult {
     });
   }
 
-  for (const bucketEntry of readdirSync(dir, { withFileTypes: true })) {
+  for (const bucketEntry of [...readdirSync(dir, { withFileTypes: true })].sort((a, b) => a.name.localeCompare(b.name))) {
     if (!bucketEntry.isDirectory()) continue;
     const bucketDir = join(dir, bucketEntry.name);
     if (!(ADR_BUCKETS as readonly string[]).includes(bucketEntry.name)) {
@@ -1314,7 +1322,7 @@ export function lintAdrTree(dir: string): AdrLintResult {
     }
     const bucket = bucketEntry.name as AdrBucket;
 
-    for (const classEntry of readdirSync(bucketDir, { withFileTypes: true })) {
+    for (const classEntry of [...readdirSync(bucketDir, { withFileTypes: true })].sort((a, b) => a.name.localeCompare(b.name))) {
       // TEMPLATE.md and strays directly under a bucket are out of scope: the
       // walk covers {bucket}/{class}/ only.
       if (!classEntry.isDirectory()) continue;
@@ -1328,8 +1336,10 @@ export function lintAdrTree(dir: string): AdrLintResult {
         });
         continue;
       }
-      for (const recordEntry of readdirSync(classDir, { withFileTypes: true })) {
-        if (!recordEntry.isFile() || recordEntry.name === ".gitkeep") continue;
+      for (const recordEntry of [...readdirSync(classDir, { withFileTypes: true })].sort((a, b) => a.name.localeCompare(b.name))) {
+        // Only Markdown records are records; README.md, .gitkeep and any other
+        // stray file are not fed to the record contract.
+        if (!recordEntry.isFile() || !recordEntry.name.endsWith(".md") || recordEntry.name === "README.md" || recordEntry.name === ".gitkeep") continue;
         result.records++;
         const path = join(classDir, recordEntry.name);
         checkAdrRecord(path, rel(path), bucket, (failure) => result.failures.push(failure));

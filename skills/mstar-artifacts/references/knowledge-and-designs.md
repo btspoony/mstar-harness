@@ -13,7 +13,7 @@
 | 层 | Job（一句话） | 放什么 | 不放什么 | 更新义务 |
 |----|--------------|--------|----------|----------|
 | **`{KNOWLEDGE_DIR}`** | 从工作中提炼、可跨 plan 复用的**工程经验与方法论** | 模式、教训、how-to、分析手法、被验证的取舍经验 | 当前状态描述、决策过程、实施计划 | iteration-close 经 `mstar-knowledge` 结晶；过时即删除；确需旧经验对照才 `-v<N>` + catalog `superseded` |
-| **`{SPECS_DIR}`** | 项目**当前有效状态**的规范性描述 | 架构分层、边界、契约、数据流、当前路径与命令 | plan 文本、验收清单、本地 plan/iteration ID、决策过程 | 同一 PR 随代码更新；失效即删除或移入 `.mstar/archived/specs/`；latest-only，**无版本后缀** |
+| **`{SPECS_DIR}`** | 项目**当前有效状态**的规范性描述 | 架构分层、边界、契约、数据流、当前路径与命令 | plan 文本、验收清单、本地 plan/iteration ID、决策过程 | 同一 PR 随代码更新；失效即删除或移入 `{HARNESS_DIR}/archived/specs/`；latest-only，**无版本后缀** |
 | **`{ADR_DIR}`** | **单一决策**及其真实备选与代价 | Problem / Decision / Alternatives / Consequences | 现状描述、实施计划、验收清单 | implemented 记录随现状保持为真；决策改变 → 新记录 + 双向 `Supersedes:`；完全失效且不再指导未来 → `archived/` 冻结 |
 
 一句话关系：**`{SPECS_DIR}` 说现在是什么，`{KNOWLEDGE_DIR}` 说怎么做事与学到什么，`{ADR_DIR}` 说当初为什么选这条、放弃了什么。** 唯一交叉规则：specs 可引用 ADR；ADR 不复制现状；knowledge 不描述现状。
@@ -48,7 +48,7 @@
   ```
 
 - **不放什么**：本迭代-only 探索（→ `<iteration-id>/guides/`）；迭代级 spec 草案（→ `<iteration-id>/specs/`）；决策过程（→ `{ADR_DIR}`）；实施踩坑原文（→ plan 素材，close 时 compound 提升）。
-- **退化**：原地更新；失效即删除，需人工比对时移入 `.mstar/archived/specs/`（本地、gitignored）。tracked 层**不保留旧版**——历史在 git 与 ADR，specs 只是当前状态的快速查询层。
+- **退化**：原地更新；失效即删除，需人工比对时移入 `{HARNESS_DIR}/archived/specs/`（本地、gitignored）。tracked 层**不保留旧版**——历史在 git 与 ADR，specs 只是当前状态的快速查询层。
 - **登记**：identity / path / kind 与 provenance 关系是 `{HARNESS_DIR}/store.db` 的 catalog 行（查询 `mstar catalog list` / `show`；登记走 reviewed `catalog discover` + `import` 或 `catalog register` / `link`）。`{SPECS_DIR}/README.md` 只是散文索引（每篇一行链接），**不是**登记表。
 
 > **Engine check:** `mstar lint <{SPECS_DIR}> --type specs` (engine `lintSpecsDoc` / `lintSpecsTree`) — checks the fixed skeleton, ADR-only sections (`## Problem` / `## Decision` / `## Acceptance criteria` …), a `-v<N>` suffix or date prefix in the filename, a history directory, the README index links, and local-path disclosure (`.mstar/`, `plan_id:`). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
@@ -58,7 +58,7 @@
 - **放什么**：从工作中提炼的**工程经验与方法论**——可复用模式、教训、how-to、分析手法；**不**放项目当前状态（→ `{SPECS_DIR}`）与决策史（→ `{ADR_DIR}`）。
 - **写入 SSOT**：**iteration-close** 时经 **`mstar-knowledge`**（`## Workflow — Capture`）；**iteration-start §1.6 禁止** product/architect 新增（→ `mstar-iteration/references/iteration-artifact-boundaries.md`）。
 - **权威**：identity / path / kind / description、provenance 与 catalog 生命周期（`active` / `archived` / `superseded`）是 store.db catalog 行；**不再**要求维护 `README.md` 目录索引行（README 可留作散文导览，表格不构成登记）。查询/登记命令与拒绝语义同 `{SPECS_DIR}`：store 未初始化/未激活时查询**拒绝**（`store.not-initialized` / `store.not-active`），**不**读作「无 knowledge」。
-- **退化**：默认原地更新，过时即删除；确需旧经验作对照才保留 `<topic>-v<N>.md` 并把 catalog 置 `superseded`（或移入 `.mstar/archived/knowledge/`）——保留不是义务，只为对照，不是权威。
+- **退化**：默认原地更新，过时即删除；确需旧经验作对照才保留 `<topic>-v<N>.md` 并把 catalog 置 `superseded`（或移入 `{HARNESS_DIR}/archived/knowledge/`）——保留不是义务，只为对照，不是权威。
 - 可选：目录级 `{KNOWLEDGE_DIR}/AGENTS.md` 承载命名与维护节奏；harness 宽规则仍以 `mstar-conventions` 与本 reference 为准；初始化时由 `mstar harness scaffold` 建目录，**不**预建空表头 README 登记表。
 
 ## `{ADR_DIR}`（可选·决策记录）
