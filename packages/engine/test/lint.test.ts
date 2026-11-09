@@ -989,6 +989,11 @@ describe("lintSpecsDoc", () => {
     expect(codes(result)).toEqual(["lint.specs.local-path"]);
   });
 
+  test("a resolution-chain candidate is product convention, not local state", () => {
+    const result = lintSpecsDoc(`${SPEC_COMPLETE}\nResolution: \`.mstarc\` → \`.mstar\` → \`.agents/specs/\` → \`docs/specs/\`.\n`, "architecture/x.md");
+    expect(codes(result)).toEqual([]);
+  });
+
   test("a plan_id: field fails as local-path disclosure", () => {
     const result = lintSpecsDoc(`${SPEC_COMPLETE}\nplan_id: 20261109-x\n`, "architecture/x.md");
     expect(codes(result)).toEqual(["lint.specs.local-path"]);

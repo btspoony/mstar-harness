@@ -881,10 +881,13 @@ const SPECS_HISTORY_DIRS: Readonly<Record<string, true>> = {
   versions: true,
 };
 
-/** Local-harness disclosure a tracked spec must not carry: the local
- * `{HARNESS_DIR}` deeplink, or a plan/iteration id field. */
+/** Local-harness disclosure a tracked spec must not carry: an absolute local
+ * path, a process-state deep path, or a plan/iteration id field. A bare
+ * `{HARNESS_DIR}` candidate name (`.mstar`, `.agents`, or a resolution-chain
+ * candidate under it) is product convention, not local state. */
 const SPECS_LOCAL_PATHS = [
-  { re: /\.(?:mstar|agents)\//, why: "local harness path (.mstar/ / .agents/)" },
+  { re: /\.(?:mstar|agents)\/(?:plans|sdd|workflows|reviews|projects|archived|store\.db|status\.json)/, why: "local harness process-state path" },
+  { re: /(?:^|[\s(`])\/(?:Users|home)\/[^\s`)]+/, why: "absolute local path" },
   { re: /\bplan_id\s*:/i, why: "local plan id field (plan_id:)" },
   { re: /\biteration_id\s*:/i, why: "local iteration id field (iteration_id:)" },
 ] as const;
