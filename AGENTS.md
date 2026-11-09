@@ -27,6 +27,17 @@ This repository contains the Morning Star runtime skills, workflow engine, CLI, 
 - Run this repository's CLI from its own build, not from a global install: `bun run --cwd packages/cli build`, then invoke `packages/cli/dist/mstar-harness.js` (see `packages/cli/AGENTS.md` for the package commands). A globally installed `mstar`/`mstar-harness` is the released package for other projects; linking this checkout into the global install makes other projects run unreleased code, and invoking the global copy here runs a released CLI against unreleased engine behavior.
 - Tracked code and docs must not depend on local harness artifacts or disclose their provenance (real plan/iteration IDs, QC finding IDs, local merge SHAs, or acceptance labels). Describe the behavior; use synthetic IDs in fixtures and `{HARNESS_DIR}` or a `.mstarc` declaration for layout examples. This section documents the local layout and is the exception to that path-reference restriction.
 
+## Pull request review and merge
+
+A PR merges only when both hold for its CURRENT head:
+
+- Required CI is green (advisory checks may be yellow).
+- Every attached review bot (`mstar-inspector`, Greptile, Bugbot or equivalent) has concluded on that head: `mstar-inspector review` reports `success`, and a scored bot meets its own confidence gate. A review from an earlier head is not a verdict on the current code — request a re-review or wait for the next run.
+
+Report the verdicts and any unresolved findings (with severity) before merging, and merge only after the user or PM confirms, or under an explicit standing authorization for that case. "CI green and mergeable" alone is not authorization, and a bot stuck in `pending` is not a pass.
+
+If a merge already landed without this gate, fix forward in a follow-up PR — the direction may be right even when the process was not — and say so in the PR. Revert only when the merged change itself is wrong.
+
 ## Where to edit
 
 | Concern | Source |
