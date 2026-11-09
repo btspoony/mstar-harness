@@ -16,6 +16,7 @@ import {
   planCatalogImport,
   registerCatalogEntity,
   resolvePlanDir,
+  probeCheckoutRoot,
   resolveProcessHarnessDir,
   updateCatalogEntity,
   verifyCatalogImport,
@@ -113,7 +114,11 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
 }
 function storeContext(input: Input, invocation: InvocationContext): StoreContext {
   const root = resolveProcessHarnessDir(invocation.cwd, input.harness);
-  return { harnessDir: root ?? input.harness ?? invocation.controlRoot ?? invocation.cwd };
+  const checkoutRoot = probeCheckoutRoot(invocation.cwd);
+  return {
+    harnessDir: root ?? input.harness ?? invocation.controlRoot ?? invocation.cwd,
+    ...(checkoutRoot === null ? {} : { checkoutRoot }),
+  };
 }
 function requireValue(value: string | undefined, field: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${field} is required`, 2);

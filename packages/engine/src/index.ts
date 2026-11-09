@@ -104,6 +104,7 @@ export {
   resolveScaffoldDirs,
   resolveSddDir,
   resolveSpecsDir,
+  resolveTrackedResultDir,
   resolveWorkflowDir,
   reviewRunDirName,
   scaffoldHarness,

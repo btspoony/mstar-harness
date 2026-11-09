@@ -439,6 +439,7 @@ __export(exports_engine, {
   resolveSddExecutionContext: () => resolveSddExecutionContext,
   resolveSkillRoot: () => resolveSkillRoot,
   resolveSpecsDir: () => resolveSpecsDir,
+  resolveTrackedResultDir: () => resolveTrackedResultDir,
   resolveWorkflowDir: () => resolveWorkflowDir,
   restoreExecutionBackup: () => restoreExecutionBackup,
   resumeExecutionSession: () => resumeExecutionSession,
@@ -994,9 +995,9 @@ function catalogRootDir(context, rootKind) {
     case "iterations":
       return resolveIterationDir(harness);
     case "specs":
-      return resolveSpecsDir(harness, { create: false });
+      return context.checkoutRoot === undefined ? resolveSpecsDir(harness, { create: false }) : resolveTrackedResultDir(context.checkoutRoot, harness, "specsDir");
     case "knowledge":
-      return resolveKnowledgeDir(harness, { create: false });
+      return context.checkoutRoot === undefined ? resolveKnowledgeDir(harness, { create: false }) : resolveTrackedResultDir(context.checkoutRoot, harness, "knowledgeDir");
     case "projects":
       return resolveProjectDir(harness, { harnessDir: harness });
   }
@@ -15818,11 +15819,15 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
   const explicit = opts.harnessDir ?? (opts.ignoreEnvOverride ? undefined : process.env.MSTAR_HARNESS_DIR);
   if (explicit)
     return resolve11(start, explicit);
-  const boundary = resolve11(start, opts.workspaceRoot ?? defaultWorkspaceRoot(start));
-  const rc = loadMstarc(start, boundary);
+  const mainRoot = gitMainWorktreeRoot(start);
+  const checkoutRoot = mainRoot === null ? null : gitCheckoutRoot(start);
+  const linked = opts.workspaceRoot === undefined && opts.localProbe !== true && mainRoot !== null && checkoutRoot !== null && checkoutRoot !== mainRoot;
+  const base = linked && mainRoot !== null ? mainRoot : start;
+  const boundary = resolve11(base, opts.workspaceRoot ?? defaultWorkspaceRoot(base));
+  const rc = loadMstarc(base, boundary);
   if (rc !== null && rc.config.harnessDir)
     return resolve11(rc.dir, rc.config.harnessDir);
-  let dir = start;
+  let dir = base;
   for (;; ) {
     if (!isAtOrBelow3(dir, boundary))
       return null;
@@ -15860,11 +15865,89 @@ function isAtOrBelow3(dir, root) {
   const rel = relative3(root, dir);
   return rel === "" || !rel.startsWith("..") && !isAbsolute6(rel);
 }
+function gitMainWorktreeRoot(startDir) {
+  try {
+    const out = execFileSync4("git", ["worktree", "list", "--porcelain"], {
+      cwd: startDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: gitProbeTimeout()
+    });
+    const line = out.split(`
+`).find((entry) => entry.startsWith("worktree "));
+    if (line === undefined)
+      return null;
+    return realpathOrResolve(line.slice("worktree ".length).trim());
+  } catch {
+    return null;
+  }
+}
+function gitCheckoutRoot(startDir) {
+  try {
+    const out = execFileSync4("git", ["rev-parse", "--show-toplevel"], {
+      cwd: startDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: gitProbeTimeout()
+    }).trim();
+    return out === "" ? null : realpathOrResolve(out);
+  } catch {
+    return null;
+  }
+}
+function realpathOrResolve(target) {
+  try {
+    return realpathSync6(target);
+  } catch {
+    return resolve11(target);
+  }
+}
+function realpathNearest(target) {
+  let dir = resolve11(target);
+  const rest = [];
+  for (;; ) {
+    try {
+      return join13(realpathSync6(dir), ...rest.reverse());
+    } catch {
+      const parent = dirname9(dir);
+      if (parent === dir)
+        return resolve11(target);
+      rest.push(basename7(dir));
+      dir = parent;
+    }
+  }
+}
+function gitProbeTimeout() {
+  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+  const parsed = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1e4;
+}
+function exitStatusOf(error) {
+  if (typeof error === "object" && error !== null && "status" in error) {
+    const status = error.status;
+    return typeof status === "number" ? status : undefined;
+  }
+  return;
+}
+function gitIgnored(root, target) {
+  try {
+    execFileSync4("git", ["check-ignore", "-q", "--", target], { cwd: root, stdio: "ignore", timeout: gitProbeTimeout() });
+    return true;
+  } catch (error) {
+    return exitStatusOf(error) === 1 ? false : null;
+  }
+}
 function mstarcDirOverride(harnessDir, key) {
   const dir = resolve11(harnessDir);
   const rc = loadMstarc(dir, dirname9(dir));
   const declared = rc?.config[key];
   return declared ? resolve11(rc.dir, declared) : null;
+}
+function mstarcDeclared(harnessDir, key) {
+  const dir = resolve11(harnessDir);
+  const rc = loadMstarc(dir, dirname9(dir));
+  const value = rc?.config[key];
+  return value ? { dir: rc.dir, value } : null;
 }
 function resolveSpecsDir(harnessDir, opts = {}) {
   const declared = mstarcDirOverride(harnessDir, "specsDir");
@@ -15944,6 +16027,20 @@ function resolveKnowledgeDir(harnessDir, opts = {}) {
 }
 function resolveAdrDir(harnessDir, opts = {}) {
   return resolveTrackedDir(harnessDir, opts, "adrDir", "adr", [".agents", "adr"], ["docs", "adr"]);
+}
+function resolveTrackedResultDir(callerCheckoutRoot, harnessDir, key) {
+  const harness = resolve11(harnessDir);
+  const mainRoot = gitMainWorktreeRoot(harness) ?? dirname9(harness);
+  const declared = mstarcDeclared(harness, key);
+  const mainTarget = declared === null ? key === "specsDir" ? resolveSpecsDir(harness, { create: false }) : key === "knowledgeDir" ? resolveKnowledgeDir(harness, { create: false }) : resolveAdrDir(harness, { create: false }) : isAbsolute6(declared.value) ? resolve11(declared.value) : resolve11(declared.dir, declared.value);
+  const rel = relative3(realpathNearest(mainRoot), realpathNearest(mainTarget));
+  if (rel === "" || rel.startsWith("..") || isAbsolute6(rel))
+    return mainTarget;
+  const callerMainRoot = gitMainWorktreeRoot(callerCheckoutRoot);
+  if (callerMainRoot === null || realpathOrResolve(callerMainRoot) !== realpathOrResolve(mainRoot))
+    return mainTarget;
+  const candidate = join13(callerCheckoutRoot, rel);
+  return gitIgnored(callerCheckoutRoot, join13(candidate, ".tracked-result-probe")) === false ? candidate : mainTarget;
 }
 function resolveTrackedDir(harnessDir, opts, key, name, ...extra) {
   const declared = mstarcDirOverride(harnessDir, key);
