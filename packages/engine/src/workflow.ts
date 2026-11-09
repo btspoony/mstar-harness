@@ -535,16 +535,19 @@ export function deliveryEvidenceMembers(kind: WorkflowDeliveryKind): readonly st
 /**
  * The delivery block as a STORED document may carry it. The pre-§4f shape
  * recorded `delivery.pr` and a free-text `merge {provider, evidence}`; the
- * report-only route recorded `delivery.completion`. A stored block is history
- * and is never rewritten, so persisted-state validation reads those legacy
- * members as ABSENT instead of refusing the whole snapshot - the same read
- * tolerance the pre-rename `branch.source` spelling gets. Every WRITE path
- * refuses them (`deliveryEvidenceMembers` plus the strict shape rule), so the
- * tolerated shape can never be recorded again.
+ * report-only route recorded `delivery.completion`; an intermediate revision
+ * recorded the close-owned `delivery.proof`. A stored block is history and is
+ * never rewritten, so persisted-state validation reads those retired members
+ * as ABSENT instead of refusing the whole snapshot - the same read tolerance
+ * the pre-rename `branch.source` spelling gets. The delivery-patch write
+ * (`deliveryEvidenceMembers` plus the strict shape rule) refuses them, so no
+ * verb records one; a whole-document path - a hand-written file, or a legacy
+ * import that carries the header verbatim - may still deliver one, and reading
+ * it back is history preservation rather than a repair.
  */
 export function storedDeliveryEvidence(value: unknown): unknown {
   if (!isPlainObject(value)) return value;
-  const { pr: _legacyPr, completion: _legacyCompletion, merge, ...members } = value;
+  const { pr: _legacyPr, completion: _legacyCompletion, proof: _legacyProof, merge, ...members } = value;
   // A non-object merge is not the retired spelling: leave it for the shape rule
   // to name instead of silently discarding structured state.
   if (!isPlainObject(merge)) return merge === undefined ? members : { ...members, merge };
@@ -953,9 +956,10 @@ export function assertDeliveryRegistrationCoherence(
 }
 
 /**
- * Delivery-kind evidence consultation is the shared pure rule used by ACTIVE
- * workflow completion and the read-only Phase-6 gate; neither consumer may
- * duplicate the registered-kind member map or evidence-shape checks.
+ * Delivery-kind evidence consultation is the pure rule the terminal close runs
+ * (through `verifyDeliveryEvidence`); the read-only Phase-6 gate reads the
+ * stored terminal facts and consults nothing, so this rule has one consumer and
+ * no second copy of the registered-kind member map exists.
  *
  * Only `type: plan` lifecycles consult this rule (an iteration declares no
  * delivery kind — §1). The registered kind, never inferred fields, determines

@@ -244,6 +244,7 @@ describe("gates.validateStatusWriteDoc", () => {
     expect(validateStatusWriteDoc(VALID_REGISTER, tree.register, "register")).toEqual([]);
   });
 
+
   test("kind dispatch routes each kind to its own validator", () => {
     const { tree } = trees[0]!;
     // A register doc validated as snapshot must surface snapshot codes.

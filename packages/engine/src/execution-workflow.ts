@@ -18,9 +18,10 @@
  *   ever read;
  * - the lifecycle transition runs the existing terminal rules: every owned row
  *   `Done`, the existing delivery-evidence consultation for a `completed` close
- *   (the SAME `verifyDeliveryEvidence` the read-only Phase-6 gate consults — pure
- *   evidence rules plus the local Git merge proof), and the existing terminal
- *   invariant that a terminal lifecycle owns no execution or integration lease;
+ *   (`verifyDeliveryEvidence` — pure evidence rules plus the local Git merge
+ *   proof, run HERE and only here; the read-only Phase-6 gate reads the stored
+ *   terminal facts), and the existing terminal invariant that a terminal
+ *   lifecycle owns no execution or integration lease;
  * - the delivery transition runs the existing structural validator only: the
  *   delivery evidence records the compound disposition and the optional provider
  *   merge commit, never a copy of the branch anchors (contract §4c/§4f);
@@ -1677,12 +1678,11 @@ function applyLifecycleTransition(input: {
         "The workflow cannot complete; inspect the workflow with mstar status validate.",
         {
           violations: violations.map((entry) => entry.message),
-          // The recovery each violation names, in the same order, so a caller
-          // reaches the instruction the read-only Phase-6 gate publishes in its
-          // own `fix` channel.
+          // The recovery each violation named, in the same order, so a caller
+          // reads the instruction beside the cause it belongs to.
           recovery: violations.flatMap((entry) => (entry.fix === undefined ? [] : [entry.fix])),
-          // The FIRST violation's machine code, so a caller reaches the same
-          // code the read-only Phase-6 gate publishes for the same state.
+          // The FIRST violation's machine code. The close is the only consumer
+          // of the delivery proof, so this code originates here.
           code: violations[0]?.code,
           workflow_id: workflowId,
         },
