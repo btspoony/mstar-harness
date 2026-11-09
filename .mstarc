@@ -1,0 +1,5 @@
+; Morning Star harness layout for this repository.
+; Values mirror the resolved layout so later candidate-chain drift cannot move them.
+[config]
+harness_dir=.mstar
+adr_dir=docs/adr
