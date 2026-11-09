@@ -34,7 +34,8 @@
  * shapes, plain dates and undated layout lines pass.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   assertSddTddTriple,
@@ -42,7 +43,10 @@ import {
   findProvenanceCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
+  lintAdrTree,
   lintSkillFrontmatter,
+  lintSpecsDoc,
+  lintSpecsTree,
   lintStrategySections,
   planQualityBar,
 } from "../src/lint.js";
@@ -899,5 +903,296 @@ describe("lintStrategySections", () => {
     const result = lintStrategySections("");
     expect(result.ok).toBe(false);
     expect(result.violations).toHaveLength(6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// lintSpecsDoc / lintSpecsTree — knowledge-and-designs.md § `{SPECS_DIR}`
+// ---------------------------------------------------------------------------
+
+/** A spec skeleton in the required shape, one section each. */
+const SPEC_COMPLETE = `# Architecture: store authority
+
+## Scope
+
+The control-root store and its lifecycle.
+
+## Current state
+
+One SQLite file holds the catalog and execution rows.
+
+## Invariants
+
+Writes go through the domain verbs.
+
+## Where it lives
+
+\`packages/engine/src/store.ts\`
+
+## Change obligations
+
+Update this page in the same PR as any schema change.
+`;
+
+/** Write `files` (path under the temp root -> text) and hand the root to `run`. */
+function withTree<T>(files: Record<string, string>, run: (dir: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), "lint-tree-"));
+  try {
+    for (const [rel, text] of Object.entries(files)) {
+      const target = join(dir, rel);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, text);
+    }
+    return run(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function codes(result: { violations: Array<{ code: string }> }): string[] {
+  return result.violations.map((item) => item.code);
+}
+
+describe("lintSpecsDoc", () => {
+  test("a valid skeleton passes", () => {
+    const result = lintSpecsDoc(SPEC_COMPLETE, "architecture/store-authority.md");
+    expect(result.violations).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  test("a -v<N> filename fails as name-shape", () => {
+    const result = lintSpecsDoc(SPEC_COMPLETE, "architecture/store-authority-v2.md");
+    expect(codes(result)).toEqual(["lint.specs.name-shape"]);
+    expect(result.violations[0]!.message).toContain("-v<N>");
+  });
+
+  test("a date-prefixed filename fails as name-shape", () => {
+    expect(codes(lintSpecsDoc(SPEC_COMPLETE, "architecture/2026-11-09-store.md"))).toEqual(["lint.specs.name-shape"]);
+    expect(codes(lintSpecsDoc(SPEC_COMPLETE, "architecture/20261109-store.md"))).toEqual(["lint.specs.name-shape"]);
+  });
+
+  test("a missing ## Scope fails and names every required section", () => {
+    const result = lintSpecsDoc(SPEC_COMPLETE.replace("## Scope", "## Overview"), "architecture/x.md");
+    expect(codes(result)).toEqual(["lint.specs.section-missing"]);
+    expect(result.violations[0]!.message).toContain("## Scope");
+    expect(result.violations[0]!.fix).toContain("Current state");
+  });
+
+  test("a banned ## Decision section fails (the decision belongs in an ADR)", () => {
+    const result = lintSpecsDoc(`${SPEC_COMPLETE}\n## Decision\n\nWe chose SQLite.\n`, "architecture/x.md");
+    expect(codes(result)).toEqual(["lint.specs.section-banned"]);
+    expect(result.violations[0]!.fix).toContain("ADR");
+  });
+
+  test("a .mstar/ mention fails as local-path disclosure", () => {
+    const result = lintSpecsDoc(`${SPEC_COMPLETE}\nSee \`.mstar/plans/x.md\`.\n`, "architecture/x.md");
+    expect(codes(result)).toEqual(["lint.specs.local-path"]);
+  });
+
+  test("a plan_id: field fails as local-path disclosure", () => {
+    const result = lintSpecsDoc(`${SPEC_COMPLETE}\nplan_id: 20261109-x\n`, "architecture/x.md");
+    expect(codes(result)).toEqual(["lint.specs.local-path"]);
+  });
+
+  test("an unclosed fence fails and stops the section scan", () => {
+    const result = lintSpecsDoc(`# Spec\n\n\`\`\`md\n## Scope\n`, "architecture/x.md");
+    expect(codes(result)).toEqual(["lint.specs.fence-unclosed"]);
+  });
+
+  test("a heading quoted inside a fence is not a section, in either direction", () => {
+    const quotedBanned = SPEC_COMPLETE.replace("## Current state", "```md\n## Decision\n```\n\n## Current state");
+    expect(lintSpecsDoc(quotedBanned, "architecture/x.md").violations).toEqual([]);
+  });
+});
+
+describe("lintSpecsTree", () => {
+  const README = `# Specs\n\n| Page | Topic |\n|---|---|\n| [store](architecture/store.md) | store authority |\n`;
+
+  test("a classed, indexed tree passes", () => {
+    const result = withTree(
+      { "README.md": README, "architecture/store.md": SPEC_COMPLETE },
+      lintSpecsTree,
+    );
+    expect(result.violations).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  test("a missing tree passes (empty corpus)", () => {
+    const result = withTree({}, (dir) => lintSpecsTree(join(dir, "absent")));
+    expect(result.ok).toBe(true);
+  });
+
+  test("a spec at the tree root fails as location-invalid", () => {
+    const result = withTree({ "README.md": README, "store.md": SPEC_COMPLETE }, lintSpecsTree);
+    expect(codes(result)).toContain("lint.specs.location-invalid");
+  });
+
+  test("a history directory fails as location-invalid", () => {
+    const result = withTree(
+      { "README.md": README, "architecture/history/store.md": SPEC_COMPLETE },
+      lintSpecsTree,
+    );
+    expect(codes(result)).toContain("lint.specs.location-invalid");
+  });
+
+  test("an unindexed spec and a dead index link each fail as link-missing", () => {
+    const result = withTree(
+      {
+        "README.md": `${README}| [gone](architecture/gone.md) | removed |\n`,
+        "architecture/store.md": SPEC_COMPLETE,
+        "architecture/other.md": SPEC_COMPLETE,
+      },
+      lintSpecsTree,
+    );
+    expect(codes(result).filter((code) => code === "lint.specs.link-missing")).toHaveLength(2);
+  });
+
+  test("a tree with specs but no README fails as index-missing", () => {
+    const result = withTree({ "architecture/store.md": SPEC_COMPLETE }, lintSpecsTree);
+    expect(codes(result)).toEqual(["lint.specs.index-missing"]);
+  });
+
+  test("per-file violations carry the tree-relative path", () => {
+    const result = withTree(
+      { "README.md": README, "architecture/store.md": "# Spec\n" },
+      lintSpecsTree,
+    );
+    expect(result.violations.every((item) => item.message.startsWith("architecture/store.md:"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// lintAdrTree — docs/adr/README.md contract, four buckets (archived included)
+// ---------------------------------------------------------------------------
+
+/** A record body with `sections`, a Status line, and an optional Archived line. */
+function adrRecord(status: string, sections: string[], archivedLine?: string): string {
+  const body = sections.flatMap((name) => [`## ${name}`, "", "Body text.", ""]);
+  const header = [`# ADR: Example record`, "", `Status: ${status} \u2014 because`];
+  if (archivedLine !== undefined) header.push(archivedLine);
+  return [...header, "", ...body].join("\n");
+}
+
+const ADR_IMPLEMENTED = ["Problem", "Decision", "Alternatives considered", "Consequences"];
+const ADR_PROPOSED = ["Problem", "Proposal", "Alternatives considered", "Acceptance criteria", "Risks"];
+
+describe("lintAdrTree", () => {
+  test("an archived implemented record with a Status and Archived line passes", () => {
+    const result = withTree(
+      {
+        "archived/architecture/2026-01-01-example.md": adrRecord(
+          "implemented",
+          ADR_IMPLEMENTED,
+          "Archived: 2026-02-01 \u2014 the mechanism was removed",
+        ),
+      },
+      lintAdrTree,
+    );
+    expect(result.records).toBe(1);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("an archived record without an Archived: line fails as archive-line-missing", () => {
+    const result = withTree(
+      { "archived/architecture/2026-01-02-old.md": adrRecord("implemented", ADR_IMPLEMENTED) },
+      lintAdrTree,
+    );
+    expect(result.failures.map((failure) => failure.code)).toEqual(["lint.adr.archive-line-missing"]);
+    expect(result.failures[0]!.recovery).toContain("Archived:");
+  });
+
+  test("an archived record with a malformed Archived line fails", () => {
+    const result = withTree(
+      {
+        "archived/architecture/2026-01-03-old.md": adrRecord(
+          "implemented",
+          ADR_IMPLEMENTED,
+          "Archived: 2026-02-01 - the mechanism was removed",
+        ),
+      },
+      lintAdrTree,
+    );
+    expect(result.failures.map((failure) => failure.code)).toEqual(["lint.adr.archive-line-missing"]);
+    expect(result.failures[0]!.recovery).toContain("U+2014");
+  });
+
+  test("a proposed record inside archived/ fails (only implemented records may be archived)", () => {
+    const result = withTree(
+      {
+        "archived/architecture/2026-01-04-proposed.md": adrRecord(
+          "proposed",
+          ADR_PROPOSED,
+          "Archived: 2026-02-01 \u2014 should never have been archived",
+        ),
+      },
+      lintAdrTree,
+    );
+    const failureCodes = result.failures.map((failure) => failure.code);
+    expect(failureCodes).toContain("lint.adr.status-mismatch");
+    expect(failureCodes).toContain("lint.adr.section-missing");
+  });
+
+  test("an archived record keeping a banned ## Proposal section fails", () => {
+    const result = withTree(
+      {
+        "archived/architecture/2026-01-05-half.md": adrRecord(
+          "implemented",
+          [...ADR_IMPLEMENTED, "Proposal"],
+          "Archived: 2026-02-01 \u2014 retired",
+        ),
+      },
+      lintAdrTree,
+    );
+    expect(result.failures.map((failure) => failure.code)).toEqual(["lint.adr.section-banned"]);
+  });
+
+  test("Status disagreeing with the directory fails as status-mismatch naming the move", () => {
+    const result = withTree(
+      { "rejected/architecture/2026-01-06-moved.md": adrRecord("implemented", ADR_PROPOSED) },
+      lintAdrTree,
+    );
+    expect(result.failures.map((failure) => failure.code)).toEqual(["lint.adr.status-mismatch"]);
+    expect(result.failures[0]!.recovery).toContain("implemented/architecture");
+  });
+
+  test("an unknown bucket and an unknown class each fail, naming the legal names", () => {
+    const result = withTree(
+      {
+        "archive/architecture/2026-01-07-old.md": adrRecord("implemented", ADR_IMPLEMENTED),
+        "proposed/refactor/2026-01-08-refactor.md": adrRecord("proposed", ADR_PROPOSED),
+      },
+      lintAdrTree,
+    );
+    expect(result.failures.map((failure) => failure.code).sort()).toEqual([
+      "lint.adr.bucket-unknown",
+      "lint.adr.class-unknown",
+    ]);
+    const bucketFailure = result.failures.find((failure) => failure.code === "lint.adr.bucket-unknown")!;
+    for (const bucket of ["proposed", "implemented", "rejected", "archived"]) {
+      expect(bucketFailure.recovery).toContain(`${bucket}/`);
+    }
+  });
+
+  test("an INDEX.md fails as index-forbidden and a wrong filename as name-shape", () => {
+    const result = withTree(
+      {
+        "INDEX.md": "# Index\n",
+        "implemented/architecture/example.md": adrRecord("implemented", ADR_IMPLEMENTED),
+      },
+      lintAdrTree,
+    );
+    expect(result.failures.map((failure) => failure.code)).toContain("lint.adr.index-forbidden");
+    expect(result.failures.map((failure) => failure.code)).toContain("lint.adr.name-shape");
+  });
+
+  test("an unterminated fence fails the record instead of hiding its tail", () => {
+    const body = adrRecord("implemented", ADR_IMPLEMENTED).replace("## Decision\n", "```md\n## Decision\n");
+    const result = withTree({ "implemented/architecture/2026-01-09-unclosed.md": body }, lintAdrTree);
+    expect(result.failures.map((failure) => failure.code)).toEqual(["lint.adr.fence-unclosed"]);
+  });
+
+  test("a missing tree passes with zero records", () => {
+    const result = withTree({}, (dir) => lintAdrTree(join(dir, "absent")));
+    expect(result).toEqual({ records: 0, failures: [] });
   });
 });

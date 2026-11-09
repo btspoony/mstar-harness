@@ -37,6 +37,8 @@
  * placeholder tokens, TDD-triple gaps, un-tracked temporary markers) are
  * `medium`; style heuristics (pronouns, workflow-summary shape) are `low`.
  */
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { basename, join, relative, sep } from "node:path";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
@@ -780,4 +782,557 @@ export function lintStrategySections(docText: string): GateResult {
     }
   }
   return { ok: violations.length === 0, violations };
+}
+
+/* ------------------------------------------------------------------ */
+/* Document layers: {SPECS_DIR} and {ADR_DIR}                          */
+/* ------------------------------------------------------------------ */
+
+/** A fence toggle line: three or more backticks or tildes, plus its info
+ * string (CommonMark). Shared by both document-layer checks. */
+const FENCE_OPEN_RE = /^\s*(`{3,}|~{3,})(.*)$/;
+
+/** Toggle line numbers (1-based) of every fence open or close. An odd count
+ * means one never closed, so the document tail is hidden from every heading
+ * scan. Closes only on the same character, at least as long, and with nothing
+ * but whitespace after it. */
+function fenceLines(text: string): number[] {
+  const lines: number[] = [];
+  let open: { char: string; length: number } | null = null;
+  text.split(/\r?\n/).forEach((raw, index) => {
+    const match = FENCE_OPEN_RE.exec(raw);
+    if (open === null) {
+      if (match === null) return;
+      open = { char: match[1]![0]!, length: match[1]!.length };
+      lines.push(index + 1);
+      return;
+    }
+    if (match !== null && match[2]!.trim() === "" && match[1]![0] === open.char && match[1]!.length >= open.length) {
+      lines.push(index + 1);
+      open = null;
+    }
+  });
+  return lines;
+}
+
+/** The document's lines outside fenced code blocks: a `## ` line quoted in a
+ * fence is example text, not a section. */
+function unfencedLines(text: string): string[] {
+  const fenced = new Set<number>();
+  const toggles = fenceLines(text);
+  for (let index = 0; index < toggles.length; index += 2) {
+    const from = toggles[index]!;
+    const to = toggles[index + 1] ?? Number.MAX_SAFE_INTEGER;
+    for (let line = from + 1; line < to; line++) fenced.add(line);
+  }
+  return text.split(/\r?\n/).filter((_, index) => !fenced.has(index + 1));
+}
+
+/** `## <Name>` level-2 headings outside fences, bare names. */
+function sectionNames(text: string): string[] {
+  return unfencedLines(text)
+    .filter((line) => line.startsWith("## "))
+    .map((line) => line.slice(3).trim());
+}
+
+/** `^## <Name>` against a required or banned name: the character after the
+ * name is not a word character, so `## Scope: x` counts while `## Scopes`
+ * does not. */
+function hasSectionName(headings: readonly string[], name: string): boolean {
+  return headings.some((heading) => heading.startsWith(name) && !/\w/.test(heading.charAt(name.length)));
+}
+
+/** Required `{SPECS_DIR}` sections (knowledge-and-designs.md: a spec is the
+ * current state, so its shape is fixed and reviewable). */
+export const SPECS_REQUIRED_SECTIONS = [
+  "Scope",
+  "Current state",
+  "Invariants",
+  "Where it lives",
+  "Change obligations",
+] as const;
+
+/** ADR-only sections a spec must not carry: a spec states the current state,
+ * never one decision, its alternatives, its plan or its acceptance list. */
+const SPECS_BANNED_SECTIONS = [
+  "Problem",
+  "Proposal",
+  "Decision",
+  "Alternatives considered",
+  "Acceptance criteria",
+  "Consequences",
+  "Risks",
+] as const;
+
+/** A spec filename carrying a version suffix (`-v2.md`) or a date prefix
+ * (`2026-11-09-…` / `20261109-…`): both mean the layer is keeping history
+ * instead of describing the current state. */
+const SPEC_NAMES = [
+  { re: /-v\d+\.md$/i, why: "version suffix -v<N>" },
+  { re: /^\d{4}-\d{2}-\d{2}-/, why: "date prefix" },
+  { re: /^\d{8}-/, why: "date prefix" },
+] as const;
+
+/** Directory names that make a spec tree a history store (latest-only). */
+const SPECS_HISTORY_DIRS: Readonly<Record<string, true>> = {
+  history: true,
+  archive: true,
+  archived: true,
+  versions: true,
+};
+
+/** Local-harness disclosure a tracked spec must not carry: the local
+ * `{HARNESS_DIR}` deeplink, or a plan/iteration id field. */
+const SPECS_LOCAL_PATHS = [
+  { re: /\.(?:mstar|agents)\//, why: "local harness path (.mstar/ / .agents/)" },
+  { re: /\bplan_id\s*:/i, why: "local plan id field (plan_id:)" },
+  { re: /\biteration_id\s*:/i, why: "local iteration id field (iteration_id:)" },
+] as const;
+
+/**
+ * Lint one `{SPECS_DIR}` document (knowledge-and-designs.md § `{SPECS_DIR}`):
+ * the fixed skeleton, no ADR-only section, no version suffix or date prefix in
+ * the filename, balanced fences, and no local harness path or plan/iteration
+ * id. `name` is the file's basename; omit it for a pasted document.
+ *
+ * Factual accuracy — whether the described state still matches the code — is
+ * not checkable here and stays a same-PR review duty.
+ */
+export function lintSpecsDoc(document: string, name?: string): GateResult {
+  const violations: ValidationResult[] = [];
+
+  if (name !== undefined) {
+    const base = basename(name);
+    for (const shape of SPEC_NAMES) {
+      if (!shape.re.test(base)) continue;
+      violations.push(
+        violation(
+          "medium",
+          "lint.specs.name-shape",
+          `${base}: filename carries a ${shape.why} - a spec describes the current state only, with no version history in the tracked layer`,
+          "rename it to <topic>.md; the old version belongs in .mstar/archived/specs/ (local) or nowhere - history lives in Git and ADRs",
+        ),
+      );
+      break;
+    }
+  }
+
+  const toggles = fenceLines(document);
+  if (toggles.length % 2 === 1) {
+    violations.push(
+      violation(
+        "medium",
+        "lint.specs.fence-unclosed",
+        `${name ?? "document"}:${toggles[toggles.length - 1]} unbalanced fences (${toggles.length} fence lines) - the tail is hidden from every section check`,
+        "add the closing fence on its own line - the same fence character, as long as the opening one or longer",
+      ),
+    );
+    return { ok: false, violations };
+  }
+
+  const headings = sectionNames(document);
+  for (const required of SPECS_REQUIRED_SECTIONS) {
+    if (hasSectionName(headings, required)) continue;
+    violations.push(
+      violation(
+        "medium",
+        "lint.specs.section-missing",
+        `missing required section "## ${required}" (knowledge-and-designs.md, spec skeleton)`,
+        `add the "## ${required}" heading; required: ${SPECS_REQUIRED_SECTIONS.join(" / ")}`,
+      ),
+    );
+  }
+  for (const banned of SPECS_BANNED_SECTIONS) {
+    if (!hasSectionName(headings, banned)) continue;
+    violations.push(
+      violation(
+        "medium",
+        "lint.specs.section-banned",
+        `banned ADR section "## ${banned}" on a spec - a spec states the current state, not one decision, its plan or its acceptance list`,
+        `delete the "## ${banned}" section; the decision and its alternatives belong in an ADR, the plan in {PLAN_DIR}`,
+      ),
+    );
+  }
+
+  for (const { re, why } of SPECS_LOCAL_PATHS) {
+    if (!re.test(document)) continue;
+    violations.push(
+      violation(
+        "medium",
+        "lint.specs.local-path",
+        `spec discloses a ${why} - tracked specs stay repo-relative and carry no local harness state`,
+        "rewrite it as a repo-relative path or a placeholder (e.g. {PLAN_DIR}); local plan and iteration ids are not spec content",
+      ),
+    );
+  }
+
+  return { ok: violations.length === 0, violations };
+}
+
+/** One `.md` file under a tree, as `<dir-relative path>` + text. */
+type TreeDoc = { rel: string; path: string };
+
+/**
+ * Walk `dir` for `.md` files, `rel` using `/` separators. Returns `[]` for a
+ * missing directory (an empty corpus is not a violation).
+ */
+function collectMarkdown(dir: string): TreeDoc[] {
+  if (!existsSync(dir)) return [];
+  const out: TreeDoc[] = [];
+  const visit = (current: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile() && entry.name.endsWith(".md")) out.push({ rel: relative(dir, path).split(sep).join("/"), path });
+    }
+  };
+  visit(dir);
+  return out.sort((a, b) => a.rel.localeCompare(b.rel));
+}
+
+/** Relative Markdown link targets in `text` (no scheme, no bare anchor). */
+function relativeLinks(text: string): string[] {
+  const out: string[] = [];
+  for (const match of text.matchAll(/\]\(([^)\s]+)/g)) {
+    const target = match[1]!;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("#") || target.startsWith("/")) continue;
+    out.push(target.split("#")[0]!);
+  }
+  return out.filter((target) => target !== "");
+}
+
+/**
+ * Lint a `{SPECS_DIR}` tree (knowledge-and-designs.md § `{SPECS_DIR}`):
+ * every spec sits in a `{class}/` subdirectory, the tree is latest-only (no
+ * history directory), a `README.md` index exists and links every spec, and no
+ * index link is dead. Each spec document is then checked by `lintSpecsDoc`.
+ *
+ * A missing or empty directory passes — an empty corpus is not a violation.
+ */
+export function lintSpecsTree(dir: string): GateResult {
+  const violations: ValidationResult[] = [];
+  const docs = collectMarkdown(dir);
+  if (docs.length === 0) return { ok: true, violations };
+
+  const specs = docs.filter((doc) => doc.rel !== "README.md" && !doc.rel.endsWith("/README.md"));
+  for (const doc of specs) {
+    const segments = doc.rel.split("/");
+    const history = segments.slice(0, -1).find((segment) => SPECS_HISTORY_DIRS[segment] === true);
+    if (history !== undefined) {
+      violations.push(
+        violation(
+          "medium",
+          "lint.specs.location-invalid",
+          `${doc.rel}: spec sits under a history directory "${history}" - the tracked layer holds the current state only`,
+          "move it to {SPECS_DIR}/<class>/<topic>.md; an old version belongs in .mstar/archived/specs/ (local) or nowhere",
+        ),
+      );
+    } else if (segments.length < 2) {
+      violations.push(
+        violation(
+          "medium",
+          "lint.specs.location-invalid",
+          `${doc.rel}: spec sits at the root of the specs tree - every spec lives in a {class}/ subdirectory`,
+          "move it to {SPECS_DIR}/<class>/<topic>.md and link it from README.md",
+        ),
+      );
+    }
+    for (const found of lintSpecsDoc(readFileSync(doc.path, "utf8"), doc.rel).violations) {
+      violations.push({ ...found, message: `${doc.rel}: ${found.message}` });
+    }
+  }
+
+  const index = docs.find((doc) => doc.rel === "README.md");
+  if (index === undefined) {
+    if (specs.length > 0) {
+      violations.push(
+        violation(
+          "medium",
+          "lint.specs.index-missing",
+          `no README.md index in the specs tree (${specs.length} spec${specs.length === 1 ? "" : "s"} unindexed)`,
+          "add {SPECS_DIR}/README.md with one relative link per spec; the table is a prose index, the catalog rows remain the registry",
+        ),
+      );
+    }
+    return { ok: violations.length === 0, violations };
+  }
+
+  const indexText = readFileSync(index.path, "utf8");
+  const links = relativeLinks(indexText);
+  const linked = new Set(links.map((link) => link.replace(/^\.\//, "")));
+  for (const link of linked) {
+    if (existsSync(join(dir, link))) continue;
+    violations.push(
+      violation(
+        "medium",
+        "lint.specs.link-missing",
+        `README.md: index link "${link}" does not resolve`,
+        "fix the link target or delete the row - a dead index link is worse than no index",
+      ),
+    );
+  }
+  for (const doc of specs) {
+    if (linked.has(doc.rel)) continue;
+    violations.push(
+      violation(
+        "medium",
+        "lint.specs.link-missing",
+        `${doc.rel}: not linked from README.md`,
+        `add one row linking ${doc.rel}, or delete the spec if it no longer describes the current state`,
+      ),
+    );
+  }
+
+  return { ok: violations.length === 0, violations };
+}
+
+/** ADR lifecycle buckets (`docs/adr/README.md` § Directory shape). `archived`
+ * is the terminal bucket: only an implemented-shaped record may enter it. */
+export const ADR_BUCKETS = ["proposed", "implemented", "rejected", "archived"] as const;
+export type AdrBucket = (typeof ADR_BUCKETS)[number];
+
+/** ADR classes — the record's domain, never its fate. */
+export const ADR_CLASSES = ["feature", "bug-fix", "simplification", "architecture", "process", "testing"] as const;
+
+/** One ADR tree failure: the file relative to the tree root, the stable code,
+ * the message, and a recovery string naming an executable fix. */
+export type AdrLintFailure = {
+  file: string;
+  code:
+    | "lint.adr.bucket-unknown"
+    | "lint.adr.class-unknown"
+    | "lint.adr.status-mismatch"
+    | "lint.adr.archive-line-missing"
+    | "lint.adr.section-missing"
+    | "lint.adr.section-banned"
+    | "lint.adr.index-forbidden"
+    | "lint.adr.name-shape"
+    | "lint.adr.fence-unclosed";
+  message: string;
+  recovery: string;
+};
+
+export type AdrLintResult = { records: number; failures: AdrLintFailure[] };
+
+/** `yyyy-mm-dd-topic.md` — shape only, no calendar math. */
+const ADR_RECORD_NAME = /^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
+
+/** Bare Status line with the U+2014 em dash (ASCII escape: bundle-safe). */
+const ADR_STATUS_LINE = /^Status: (proposed|implemented|rejected) \u2014 .+$/;
+
+/** `Archived: YYYY-MM-DD — <reason>`: the one line that turns a fresh record
+ * into a frozen snapshot. */
+const ADR_ARCHIVED_LINE = /^Archived: \d{4}-\d{2}-\d{2} \u2014 .+$/;
+
+/** Required and banned sections per bucket. `archived` reuses the implemented
+ * shape: it accepts implemented records only. */
+const ADR_SECTIONS: Record<AdrBucket, { required: readonly string[]; banned: readonly string[] }> = {
+  proposed: {
+    required: ["Problem", "Proposal", "Alternatives considered", "Acceptance criteria", "Risks"],
+    banned: [],
+  },
+  implemented: {
+    required: ["Problem", "Decision", "Alternatives considered", "Consequences"],
+    banned: ["Proposal", "Plan", "Migration plan", "Acceptance criteria"],
+  },
+  rejected: {
+    required: ["Problem", "Proposal", "Alternatives considered"],
+    banned: [],
+  },
+  archived: {
+    required: ["Problem", "Decision", "Alternatives considered", "Consequences"],
+    banned: ["Proposal", "Plan", "Migration plan", "Acceptance criteria"],
+  },
+};
+
+/** Where a banned implemented section's content belongs instead. */
+const ADR_BANNED_RECOVERY: Record<string, string> = {
+  Proposal: 'fold its text into "## Decision" in present tense, then delete the "## Proposal" heading',
+  Plan: 'delete the "## Plan" section - plan text dies with the proposal',
+  "Migration plan": 'delete the "## Migration plan" section - plan text dies with the proposal',
+  "Acceptance criteria":
+    'fold it into "## Consequences" (accepted criteria become stated behavior), then delete the "## Acceptance criteria" heading',
+};
+
+/** The status a bucket's records must declare. Only `implemented` records may
+ * be archived, so the archived bucket carries the implemented status. */
+const ADR_BUCKET_STATUS: Record<AdrBucket, string> = {
+  proposed: "proposed",
+  implemented: "implemented",
+  rejected: "rejected",
+  archived: "implemented",
+};
+
+/** Every line before the first level-2 ATX heading. */
+function adrHeaderLines(text: string): string[] {
+  const lines = unfencedLines(text);
+  const end = lines.findIndex((line) => line.startsWith("## "));
+  return end === -1 ? lines : lines.slice(0, end);
+}
+
+function checkAdrRecord(path: string, relPath: string, bucket: AdrBucket, push: (failure: AdrLintFailure) => void): void {
+  if (!ADR_RECORD_NAME.test(basename(path))) {
+    push({
+      file: relPath,
+      code: "lint.adr.name-shape",
+      message: `${relPath}: filename is not yyyy-mm-dd-topic.md`,
+      recovery:
+        "rename it to yyyy-mm-dd-topic.md - a real-shaped date, then a lowercase kebab topic, e.g. 2026-01-01-example-topic.md (the date is the record's original date and never changes across a lifecycle move)",
+    });
+  }
+
+  const text = readFileSync(path, "utf8");
+
+  // An unterminated fence runs to the document end, so every later heading
+  // would vanish from the check below. Refuse the record instead of scanning
+  // a truncated document.
+  const toggles = fenceLines(text);
+  if (toggles.length % 2 === 1) {
+    push({
+      file: relPath,
+      code: "lint.adr.fence-unclosed",
+      message: `${relPath}:${toggles[toggles.length - 1]} unbalanced fences (${toggles.length} fence lines) - the record's tail is hidden from every heading check`,
+      recovery:
+        "add the closing fence on its own line - the same fence character, as long as the opening one or longer (a four-space indented block is not a fence to this check)",
+    });
+    return;
+  }
+
+  const expected = ADR_BUCKET_STATUS[bucket];
+  const header = adrHeaderLines(text);
+  const statusLines = header.filter((line) => line.startsWith("Status:"));
+  if (statusLines.length !== 1) {
+    push({
+      file: relPath,
+      code: "lint.adr.status-mismatch",
+      message: `${relPath}: expected exactly one bare "Status: <bucket> \u2014 <why>" header line, found ${statusLines.length}`,
+      recovery: `add one bare header line "Status: ${expected} \u2014 <one-line why>" before the first "## " heading`,
+    });
+  } else {
+    const match = statusLines[0]!.match(ADR_STATUS_LINE);
+    if (!match) {
+      push({
+        file: relPath,
+        code: "lint.adr.status-mismatch",
+        message: `${relPath}: malformed Status line "${statusLines[0]}"`,
+        recovery: `rewrite it as "Status: ${expected} \u2014 <one-line why>" (bucket, space, U+2014 em dash, space, non-empty single line)`,
+      });
+    } else if (match[1] !== expected) {
+      push({
+        file: relPath,
+        code: "lint.adr.status-mismatch",
+        message: `${relPath}: Status says ${match[1]} but the record sits under ${bucket}/`,
+        recovery: `move the record to docs/adr/${match[1]}/${relPath.split("/").at(-2)}/ or change the Status line to "Status: ${expected} \u2014 <one-line why>"`,
+      });
+    }
+  }
+
+  if (bucket === "archived") {
+    // Archived is a freeze, not a fourth fate: the record keeps its implemented
+    // Status line and gains exactly one Archived line.
+    const archiveLines = header.filter((line) => line.startsWith("Archived:"));
+    if (archiveLines.length !== 1) {
+      push({
+        file: relPath,
+        code: "lint.adr.archive-line-missing",
+        message: `${relPath}: archived record needs exactly one "Archived: YYYY-MM-DD \u2014 <reason>" header line, found ${archiveLines.length}`,
+        recovery:
+          'add one bare header line "Archived: <yyyy-mm-dd> \u2014 <why this record no longer guides future work>" right after the Status line; a record without historical value is deleted, not archived',
+      });
+    } else if (!ADR_ARCHIVED_LINE.test(archiveLines[0]!)) {
+      push({
+        file: relPath,
+        code: "lint.adr.archive-line-missing",
+        message: `${relPath}: malformed Archived line "${archiveLines[0]}"`,
+        recovery: 'rewrite it as "Archived: <yyyy-mm-dd> \u2014 <reason>" (date, space, U+2014 em dash, space, non-empty single line)',
+      });
+    }
+  }
+
+  const headings = sectionNames(text);
+  for (const name of ADR_SECTIONS[bucket].required) {
+    if (hasSectionName(headings, name)) continue;
+    push({
+      file: relPath,
+      code: "lint.adr.section-missing",
+      message: `${relPath}: missing required "## ${name}" section for a ${bucket} record`,
+      recovery: `add the "## ${name}" section (required for every record under ${bucket}/)`,
+    });
+  }
+  for (const name of ADR_SECTIONS[bucket].banned) {
+    if (!hasSectionName(headings, name)) continue;
+    push({
+      file: relPath,
+      code: "lint.adr.section-banned",
+      message: `${relPath}: banned "## ${name}" section on an implemented record`,
+      recovery: ADR_BANNED_RECOVERY[name]!,
+    });
+  }
+}
+
+/**
+ * Lint an ADR tree (`docs/adr/README.md` contract, one walk of the root):
+ * bucket and class membership, `Status` agreeing with the directory, the
+ * required and banned sections per bucket, the `Archived:` line on archived
+ * records, filename shape, fence closure, and no `INDEX.md`.
+ *
+ * `dir` is the ADR root itself; failure paths are relative to it. Sanctioned
+ * non-record files (`README.md`, `{bucket}/TEMPLATE.md`, `.gitkeep`) are
+ * ignored; a missing directory passes with zero records.
+ */
+export function lintAdrTree(dir: string): AdrLintResult {
+  const result: AdrLintResult = { records: 0, failures: [] };
+  if (!existsSync(dir)) return result;
+
+  const rel = (path: string): string => relative(dir, path).split(sep).join("/");
+
+  for (const doc of collectMarkdown(dir)) {
+    if (basename(doc.path) !== "INDEX.md") continue;
+    result.failures.push({
+      file: doc.rel,
+      code: "lint.adr.index-forbidden",
+      message: `${doc.rel}: INDEX.md must not exist under the ADR tree`,
+      recovery:
+        "delete it - path + directory is the index (bucket gives the fate, class gives the domain, date sorts the rest)",
+    });
+  }
+
+  for (const bucketEntry of readdirSync(dir, { withFileTypes: true })) {
+    if (!bucketEntry.isDirectory()) continue;
+    const bucketDir = join(dir, bucketEntry.name);
+    if (!(ADR_BUCKETS as readonly string[]).includes(bucketEntry.name)) {
+      result.failures.push({
+        file: rel(bucketDir),
+        code: "lint.adr.bucket-unknown",
+        message: `${rel(bucketDir)}: directory is not one of the four ADR buckets`,
+        recovery: `move its records into one of the four legal buckets - ${ADR_BUCKETS.map((bucket) => `docs/adr/${bucket}/`).join(", ")} - and delete this directory`,
+      });
+      continue;
+    }
+    const bucket = bucketEntry.name as AdrBucket;
+
+    for (const classEntry of readdirSync(bucketDir, { withFileTypes: true })) {
+      // TEMPLATE.md and strays directly under a bucket are out of scope: the
+      // walk covers {bucket}/{class}/ only.
+      if (!classEntry.isDirectory()) continue;
+      const classDir = join(bucketDir, classEntry.name);
+      if (!(ADR_CLASSES as readonly string[]).includes(classEntry.name)) {
+        result.failures.push({
+          file: rel(classDir),
+          code: "lint.adr.class-unknown",
+          message: `${rel(classDir)}: directory is not one of the six ADR classes`,
+          recovery: `move the record into one of the six legal classes - ${ADR_CLASSES.map((kind) => `${kind}/`).join(", ")} - and delete this directory; adding a class needs a validator change in the same PR`,
+        });
+        continue;
+      }
+      for (const recordEntry of readdirSync(classDir, { withFileTypes: true })) {
+        if (!recordEntry.isFile() || recordEntry.name === ".gitkeep") continue;
+        result.records++;
+        const path = join(classDir, recordEntry.name);
+        checkAdrRecord(path, rel(path), bucket, (failure) => result.failures.push(failure));
+      }
+    }
+  }
+
+  return result;
 }
