@@ -2,7 +2,7 @@
 
 Status: proposed — skill corpus is mechanically green but budget-saturated and carries post-v4.4.0 nomenclature drift that will re-break agent routing without a sequenced correction policy
 Date: 2026-11-10
-Scope: `skills/**` authoring policy, Guard 9–11 maintenance order, and first-wave file targets (no engine semantic change in the proposal itself)
+Scope: `skills/**` authoring policy, Guard 9–11 maintenance order, Wave A `docs/knowledge/**` errata targets, and first-wave file targets (no engine semantic change in the proposal itself)
 
 ## Problem
 
@@ -19,7 +19,7 @@ Without a recorded sequencing policy, future skill PRs will keep raising budgets
 
 ## Proposal
 
-Adopt an **incremental, budget-first corpus optimization and errata policy** owned by `mstar-skill-authoring` Guards 9–11 and enforced by `bun run validation:drift`. Class is **process**: the decision governs how the skill corpus is maintained and corrected; later implementation PRs may change agent-visible surfaces.
+Adopt an **incremental, budget-first corpus optimization and errata policy** owned by `mstar-skill-authoring` Guards 9–11. Class is **process**: the decision governs how the skill corpus is maintained and corrected; later implementation PRs may change agent-visible surfaces. `bun run validation:drift` is the automated floor (current line counts, manifest coverage, HARD duplication, ADR skeleton) — it does **not** prove migrate-before-raise, new headroom targets, Guard 11 reflow, or description/routing minimization; those remain human-review duties on each wave PR.
 
 ### Policy (non-negotiable order)
 
@@ -54,7 +54,7 @@ This ADR lands **policy and sequencing only**. Full skill rewrites ship in follo
 
 Observable once implementation waves land (this proposal PR alone does not satisfy them):
 
-1. Wave A merged: no live-seat `QC/QA` / `mstar-compound`-as-skill-to-load wording remains under `skills/**` for role/topic meaning; Guard 10 allowlist no longer lists the three Git NEVER duplicates; `bun run validation:drift` still exits 0.
+1. Wave A merged: no live-seat `QC/QA` / `mstar-compound`-as-skill-to-load wording remains under `skills/**` or in the Wave A–targeted `docs/knowledge/**` paths for role/topic meaning; intentional historical carriers remain unchanged per policy §3; Guard 10 allowlist no longer lists the three Git NEVER duplicates; `bun run validation:drift` still exits 0.
 2. Wave B merged: each first-wave at-cap `SKILL.md` (`mstar-branch-worktree`, `mstar-conventions`, and any other body edited in that wave) has ≥10% headroom under its Guard 9 cap **without** a cap raise, or a same-PR raise is justified only after migration; new reference files are linked from the body's References table with load-when cues.
 3. Wave C merged: the five long descriptions listed above are trigger contracts (symptoms/exclusions), not workflow summaries; `mstar-harness-core` typical-append / role presets document a minimization rule pointing at principle 3.
 4. Touched skills pass `mstar skill lint <dir>`; behavior-shaping waves leave paired evidence per authoring Guard principles 4 and 6.
