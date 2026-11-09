@@ -1094,18 +1094,6 @@ function gitIgnored(root, target) {
   }
 }
 function catalogRootDir(context, rootKind) {
-  const cached = rootCache.get(context);
-  const hit = cached?.get(rootKind);
-  if (hit !== undefined)
-    return hit;
-  const resolved = resolveCatalogRootDir(context, rootKind);
-  const bucket = cached ?? new Map;
-  bucket.set(rootKind, resolved);
-  if (cached === undefined)
-    rootCache.set(context, bucket);
-  return resolved;
-}
-function resolveCatalogRootDir(context, rootKind) {
   if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
     throw new CatalogError("catalog.path-refused", `"${String(rootKind)}" is not a configured catalog root kind; expected one of ${Object.keys(ROOT_KINDS).join(", ")}`);
   }
@@ -15886,7 +15874,9 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
       return null;
     if (probe.root !== null) {
       const main = mainWorktreeRoot(start);
-      if (main !== null && probe.root !== main)
+      if (main === null)
+        return null;
+      if (probe.root !== main)
         base = main;
     }
   }
@@ -20402,6 +20392,13 @@ function resolveHarnessRootOf(target) {
     dir = parent;
   }
 }
+function processHarnessFallback(startDir) {
+  try {
+    return resolveProcessHarnessDir(startDir);
+  } catch {
+    return null;
+  }
+}
 function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
@@ -20431,7 +20428,7 @@ function harnessDocKindOfTarget(targetPath) {
     return null;
   };
   const probeRoot = resolveHarnessRootOf(dirname14(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved)) ?? processHarnessFallback(dirname14(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -33565,7 +33562,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
       configurable: true,
       set: __exportSetter2.bind(all, name)
     });
-}, __esm2 = (fn, res) => () => (fn && (res = fn(fn = 0)), res), CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, rootCache, ENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at, source_hash", LINK_COLUMNS = "from_kind, from_id, relation, to_kind, to_id, ordinal", LINK_ORDER = "order by from_kind asc, from_id asc, relation asc, to_kind asc, to_id asc", init_catalog, MSTARC_FILE = ".mstarc", MSTARC_SECTION = "config", LINEAR_SECTION = "linear", LINEAR_MAPPING_SECTION = "linear.mapping", MSTARC_HARNESS_DIR_KEY = "harness_dir", MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, convert = function(test) {
+}, __esm2 = (fn, res) => () => (fn && (res = fn(fn = 0)), res), CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, ENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at, source_hash", LINK_COLUMNS = "from_kind, from_id, relation, to_kind, to_id, ordinal", LINK_ORDER = "order by from_kind asc, from_id asc, relation asc, to_kind asc, to_id asc", init_catalog, MSTARC_FILE = ".mstarc", MSTARC_SECTION = "config", LINEAR_SECTION = "linear", LINEAR_MAPPING_SECTION = "linear.mapping", MSTARC_HARNESS_DIR_KEY = "harness_dir", MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, convert = function(test) {
   if (test === null || test === undefined) {
     return ok2;
   }
@@ -34316,7 +34313,6 @@ var init_engine = __esm(() => {
         this.code = code;
       }
     };
-    rootCache = new WeakMap;
   });
   init_mstarc = __esm2(() => {
     CONFIG_KEYS = {
@@ -38513,6 +38509,7 @@ var init_engine = __esm(() => {
   init_iteration();
   init_project();
   init_core();
+  init_coordination();
   init_path();
   init_status();
   init_workflow();

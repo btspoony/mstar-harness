@@ -119,14 +119,14 @@ export function resolveHarnessDir(
     // refuse discovery rather than let the worktree's own config pass for the
     // process root.
     const probe = checkoutRootOrFailure(start);
-    // "Git could not answer" refuses discovery (the worktree's own config must
-    // not pass for the process root). A checkout that answers while the main
-    // worktree does not keeps the pre-change start-local degradation: dropping
-    // the root entirely would leave host gates with no harness to gate against.
+    // "Git could not answer" refuses discovery: the worktree's own config must
+    // not pass for the process root. The write gate compensates with its own
+    // process-root fallback, so a null answer here never disables enforcement.
     if (probe.failed) return null;
     if (probe.root !== null) {
       const main = mainWorktreeRoot(start);
-      if (main !== null && probe.root !== main) base = main;
+      if (main === null) return null;
+      if (probe.root !== main) base = main;
     }
   }
   const boundary = resolve(base, opts.workspaceRoot ?? defaultWorkspaceRoot(base));
