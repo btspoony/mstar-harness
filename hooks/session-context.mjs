@@ -1070,7 +1070,13 @@ function checkoutRootOrFailure(startDir, opts = {}) {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: opts.timeoutMs ?? gitProbeTimeoutMs()
     }).trim();
-    return { root: out === "" ? null : realpathOrResolve(out), failed: false };
+    if (out === "")
+      return { root: null, failed: false };
+    try {
+      return { root: realpathSync2(out), failed: false };
+    } catch {
+      return { root: null, failed: false };
+    }
   } catch (error) {
     const status = exitStatusOf(error);
     return { root: null, failed: status !== 128 };

@@ -47,14 +47,11 @@ import type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
 import { checkoutRoot, gitProbeTimeoutMs, worktreeList } from "./git-probe.js";
 import { deliveryBranchOf, validateIntegrationMergeLease, type WorkflowBranchAnchors, type WorkflowLifecycleType } from "./workflow.js";
 
+// Git probe timeout — bounded so a hung git (dead NFS mount, pathological
+// repo, stray hook) cannot block `mstar worktree check` or engine callers
+// indefinitely. Owned by `git-probe.ts` (default 10s;
+// `MSTAR_GIT_PROBE_TIMEOUT_MS` or a per-call `timeoutMs` overrides it).
 export { gitProbeTimeoutMs };
-
-/**
- * Git probe timeout — bounded so a hung git (dead NFS mount, pathological
- * repo, stray hook) cannot block `mstar worktree check` or engine callers
- * indefinitely. Owned by `git-probe.ts` (default 10s; `MSTAR_GIT_PROBE_TIMEOUT_MS`
- * or a per-call `timeoutMs` overrides it) and re-exported here for callers.
- */
 
 /** One L2 parallel implement track (mstar-branch-worktree L2 table). */
 export type WorktreeTrack = {

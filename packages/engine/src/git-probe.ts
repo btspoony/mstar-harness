@@ -147,8 +147,19 @@ export function checkoutRootOrFailure(
       stdio: ["ignore", "pipe", "pipe"],
       timeout: opts.timeoutMs ?? gitProbeTimeoutMs(),
     }).trim();
-    return { root: out === "" ? null : realpathOrResolve(out), failed: false };
+    if (out === "") return { root: null, failed: false };
+    // Git answered, but an unresolvable toplevel is not a usable checkout:
+    // report no root (the pre-change `probeCheckoutRoot` null) rather than a
+    // probe failure.
+    try {
+      return { root: realpathSync(out), failed: false };
+    } catch {
+      return { root: null, failed: false };
+    }
   } catch (error) {
+    // Exit 128 is Git's "not a repository" (the documented non-git start);
+    // a missing executable, a timeout or any other failure is "could not
+    // answer" and must fail closed.
     const status = exitStatusOf(error);
     return { root: null, failed: status !== 128 };
   }
