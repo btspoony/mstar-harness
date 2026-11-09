@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-11-09
+
+### Harness
+
+- **omp host baseline `18.16.0` → `18.18.3`** in the root and `@mstar-harness/omp` devDependencies. The optional peer stays `^18.3.0` (any 18.x host), so no consumer constraint moves; `bun.lock` re-resolves the `@oh-my-pi/*` stack to `18.18.3` and drops the provider dependencies that line no longer carries.
+- No adapter change was required: the plugin consumes the extension/plugin loader, session manager, event bus, MCP tool bridge and legacy pi-ai shim surfaces, none of which changed shape across `18.16.0` → `18.18.3` (the line's breaking entries are the `ask` tool form, `logoutCredential`, `SessionStorage.hasAssistantTurn` and the Rust SDK types).
+
+- Version alignment with harness **4.4.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.4.0**.
+
 ## [4.3.0] - 2026-11-08
 
 ### Harness

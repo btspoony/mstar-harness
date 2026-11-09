@@ -6,6 +6,72 @@
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-11-09
+
+### Harness
+
+- 在 `docs/adr/implemented/` 新增 **九条架构决策记录**，覆盖那些已超出其工作规格生命周期的决策：standalone 与 iteration 完成路由的区分、单一命令定义生成 CLI/MCP、recovery-first 意图解析、有界评审席位、完整的无分页 dashboard 项目列表、Markdown roadmap 权威、单一静态 store 升级、PR review 分数带，以及基于 marker 的单向 Linear push。
+- 按 fate 与领域（`architecture/`、`feature/`、`process/`）归类，每条记录只保留契约要求的现行 `Problem` / `Decision` / `Alternatives considered` / `Consequences` 结构；不搬运实现期的计划正文与本地过程标识。
+- 新增可选 Assignment 字段 **`Write domain: control`**（取值 `control` | `work`；缺省 `work`）及其配套字段 **`Control write paths`**：列出该 Assignment 实际写入的过程目标（绝对路径，或相对 `Worktree path` 解析；结尾的 `/` 显式声明目录，因此适用 Git 目录规则如 `!.mstar/notes/`；其余条目**同时**按文件与目录两条规则核验，**两种形状都必须被忽略**——只按文件探测会放过目录内容仍会提交的位置，例如 `.mstar/**` + `!.mstar/notes/` + `!.mstar/notes/**` 下的 `.mstar/notes`，因此任一形状会提交即按 `dispatch.control-write.target-committable` 拒绝；`.mstar/plans/run.md` 在 `.mstar/**` 下两种形状都被忽略）。只写控制检出 gitignored 过程目标的 Assignment 可写 `Worktree path` = 控制根、`Working branch` = 该检出**当前检出**的分支（默认 `main` 的仓库即 `main`；`main` 只是示例，不是字面指令），并豁免默认分支保护；三种分支写法仍全部有效，含 `Branch policy: direct on <branch> — <reason>`。`mstar dispatch validate` 核验 worktree 路径等于控制根、声明的分支（三种写法任一）等于其当前检出分支，并**逐个探测声明的目标**：每个目标必须在两种形状下都被 Git 忽略（结尾带 `/` 的只探目录）且位于控制根内——仓库只忽略 `.mstar/plans/` 时，声明 `plans/` 下的目标即通过；声明被跟踪的目标（如 `.mstar/specs/…`）会被拒。拒绝码为 `dispatch.control-write.control-root-unresolved`、`dispatch.control-write.worktree-not-control`、`dispatch.control-write.branch-mismatch`、`dispatch.control-write.target-committable`、`dispatch.control-write.target-outside-control` 与 `dispatch.control-write.target-unverifiable`，各带明确修复路径。同一核验现已进入共享宿主 dispatch 门禁（`composeDispatchGate`，OpenCode v2 / dsh / omp 的 hard enforcement）——宿主硬门禁不能靠声明该字段绕过；控制根不可核验时 dispatch 仍然被拒，并附修复路径。
+- **engine**：`parseAssignmentFields` 用同一 header 语法解析 `Worktree path` / `Write domain` / `Control write paths`；`validateAssignmentFields` 报 `assignment.field.write-domain-unknown`、`assignment.field.control-write-missing-worktree`、`assignment.field.control-write-missing-branch` 与 `assignment.field.control-write-paths-missing`；`dispatch.validate` 与 `composeDispatchGate` 共用 `validateControlWriteAssignment`：通过 `readMainWorktree` 解析控制根、要求 `Worktree path` 等于控制根、把声明的分支（三种写法任一）与控制检出当前分支比对，并用 `probePathOwnership` 逐目标探测（结尾带 `/` 只探目录，其余同时按文件与目录探测，任一形状可提交即拒）；两者都对控制域文本跳过 `assertDefaultBranchProtected`，控制根不可解析或 Git 探测失败仍是带修复路径的拒绝，绝不静默放行。
+- **cli**：`mstar dispatch validate` 接受 `main` 上的控制域 Assignment，并以拒绝码 + 修复路径报出新失败。
+- 更新 `mstar-branch-worktree`（控制域写入小节）、`mstar-dispatch-gates`（Assignment 字段清单）与 `mstar-roles/references/project-manager/dispatch-and-assignment.md`（模板 + 字段表）。
+- **存量 `delivery.proof` 块重新按历史读取。** 中间版本曾持久化这个 close 自有的成员，导致那时写入的 store 在持久状态校验时报 `unknown member(s) proof`，进而变成 gate 的 `PHASE6_INVALID_SNAPSHOT` 与 `mstar status validate` 的 invalid workflow。`storedDeliveryEvidence` 现在在每条读取路径上像 `pr` / `completion` / 自由文本 `merge` 一样丢弃它；delivery patch 写入依旧拒绝这四者。
+- **证明的归属只在一处陈述。** §4f 段落标题、`verifyDeliveryEvidence` 文档注释、生命周期 transition 的头注释与契约 §4(g) 现在都描述代码实际行为：终态 close 只跑一次 merge 证明，只读 Phase-6 gate 读取已存的终态事实。
+- merge 证明的拒绝文案不再建议 `mstar workflow reopen` —— 该命令对这条路径能到达的所有终态都拒绝。
+- **一份容忍，所有读者共用。** store、projection、Phase-6 gate 与各 host 的文件门禁都以同样的方式把退役成员读作历史 —— 手写文件中已存在的成员保持有效可写，因为改写历史不是修复。仍然拒绝它们的是 delivery patch 写入（`deliveryEvidenceMembers` + 严格的 delivery 形状），因此没有任何 verb 会记录它们；整文档路径（手写文件，或原样携带 header 的 legacy import）仍可能带进来，把它读回属于保留历史而非修复。
+- **`plan complete` 从记录的工作树推导 source/review 提交。** `source_sha` 与 `review_head` 原本是引擎在放行完成前就已重读的 checkout `HEAD` 的两个名字：两者在证据文档中改为可选，写入完成记录的是推导出的 `HEAD`。
+- **`review_base` 变为可选出处，不再是必需锚点。** 提供时仍校验其为该 checkout 的提交且为 source 的祖先；省略时记录 `null`，不再凭空生成一个在目标分支合入后就错误的 merge-base。
+- **提供的提交只做校验、不被信任：** `source_sha`/`review_head` 必须等于工作树 `HEAD`，提供的 `review_base` 必须是祖先，否则 complete 以 `coordination.git-proof` 拒绝；任何提供值仍校验格式。迭代与 report-only 路由保持原有的「需证明 / 无需证明」划分。
+- 更新 `mstar-use-cli/references/plan-and-workflow.md`（complete 载荷）与 `mstar-roles/references/project-manager/plan-management.md`（行完成路由）。
+- **交付证据不再携带手工记录的 PR 身份。** `delivery.pr` 成员删除：PR head/target 就是注册的 `branch.work` / `branch.target` 锚点（契约 §4d），记录副本会被当作未使用成员拒绝，修锚点也不会再撞上冻结的身份。
+- **`delivery.merge` 只保留一个可选事实：provider commit。** 形状为 `{ commit?: string }`（小写 40/64 位完整 commit id）。原先只是自由文本、却被用来放行 `completed` 的 `provider` / `evidence` 自述已删除。
+- **merge 由本地 Git 关联证明，close 与 Phase-6 gate 共用同一条规则。** `verifyDeliveryEvidence` 先跑纯证据规则，再在 plan 行记录的 `metadata.worktree_path` 内做关联证明（多个记录中优先能解析目标引用的那个，被重指向别的 clone 的路径无法决定结论）：目标引用**远端优先**（`refs/remotes/origin/<target>`，缺失则取 `refs/heads/<target>`），因为 provider merge 落在远端，`git fetch` 推进的是远端引用而本地 head 可能滞后；`branch.work` tip（本地引用优先）是祖先即通过；否则每个交付提交都已有 patch 等价的上游提交（`git cherry <target> <tip>` 非空且每行 `-`）即通过，无需任何记录值——但仅限不含 merge commit 的交付历史（`<target>..<tip>` 无 merge 提交；`git cherry` 从不上报 merge，只有 merge 引入的内容会被它隐藏）；否则记录的 `merge.commit` 只有在「真实存在 + 被目标包含 + 携带本次交付的 diff（`<commit>^..<commit>` 与 `fork..tip` 的 `git patch-id --stable` 相等）」时才通过。仅“从目标可达”不构成证明。两者不可能给出不同结论；未证明的 merge 在两条路径上都是 `PHASE6_DELIVERY_MERGE_UNPROVEN`。
+- **已存记录保持可读。** 旧形状写入的快照保留其 `delivery.pr` 与自由文本 `merge` 作为历史：持久状态校验把这些成员视为不存在，而不是判整份快照无效（与改名前的 `branch.source` 同一种读兼容）。写路径依旧拒绝它们。
+- **拒绝既说原因也给可执行恢复。** 明确区分失败的那条关联：交付分支无引用、tip 不在目标内、提交在上游没有 patch 等价副本、记录的 commit 不存在、或记录的 commit patch id 与交付 diff 不同；并指向：先在 plan checkout 内 fetch 目标分支、恢复交付分支引用、重试，或通过 `mstar workflow evidence` 记录 provider merge/squash commit。不新增任何网络/provider 调用，Git 读取全部沿用既有 argv 数组 helper。
+- **已知边界写进文档而不是藏起来：** 无 merge commit 的 rebase 与单提交 squash 由 `git cherry` 自证（交付历史一旦含 merge commit，该捷径不适用，需记录 provider commit 或被拒绝）；多提交 squash 无法靠 patch 等价证明（逐提交 patch id 与合并后的单一 patch 不同），必须记录 provider commit；解决冲突后内容改变的 squash 没有本地证明，终态走 `mstar workflow lifecycle --status stopped|failed --reason`；目标在本地与远端都没有引用时是拒绝而非放行（单纯本地 head 滞后不算，因为先读远端引用）。证明只属于 close，且只做一次：只读 Phase-6 gate 读取已存的终态事实，不再重审 checkout 已被常规清理移除的 merge，因此 completed lifecycle 在 `worktree cleanup --apply` 之后仍然通过。
+- `mstar workflow evidence` 发布新形状（`merge { commit? }`：成员可选，但一旦提供就必须带 `commit`，CLI schema 现在同样要求；无 `pr`）与对应 help；随重复身份一起删除的还有锚点/PR 不一致的告警与 close 时的不变性拒绝。
+- 更新 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`（§3 阶段表、§4d/§4f/§4g）、`mstar-iteration/references/phase-6-post-merge-close.md`、`mstar-artifacts/references/status-and-residuals.md`、`mstar-artifacts/templates/plan.main.md`。
+- **report-only 的履行门禁删除。** `verification/report-only` 不再要求在 `plan complete` 或终端 close 之前记录 `delivery.completion`。`completion` 成员从 `WorkflowDeliveryEvidence`、结构校验器与 `mstar workflow evidence` 载荷中删除；记录它会被当作未使用成员拒绝。
+- **`completion_policy` 保留为注册期声明。** 注册的策略声明交付物是什么，而不是一个用无人校验的自述句去履行的运行时产物。该路由的 `verifyDeliveryEvidence` 只返回纯 consult 结果——没有 Git 证明，也没有履行查询。
+- **该路由上 `completed` 的含义现在是明确的：** 所有行 `Done` 加 QC/QA。report-only 的 `completed` 不再声称存在已记录的自述证据；真实环境或外部产物证明不在本路由范围内，也不再被一个字符串模仿。
+- **已存记录保持可读。** 旧形状写入的快照保留其 `delivery.completion` 作为历史：持久状态校验会丢弃它（与 `delivery.pr`、自由文本 `merge` 相同的读兼容），而所有写路径都拒绝它。
+- 更新 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`（§1、§3 路由表、§4g、§7、绑定负面清单）、`mstar-roles/references/project-manager/plan-management.md`、`mstar-iteration/references/phase-6-post-merge-close.md` 与 `mstar-use-cli/references/plan-and-workflow.md`。
+- **harness 根只从主 worktree 解析。** `resolveHarnessDir` 不再采用 linked worktree 里被跟踪的 `.mstarc` 副本：起点所在的 Git checkout 与主 worktree 不同时经主根解析，worktree 不会再被当成进程根。主 checkout 的子目录保持原有向上探测阶梯，`opts.localProbe` 保留"只看调用方 checkout"的本地探测。
+- **tracked 结果跟随调用方 checkout。** `resolveTrackedResultDir`（`mstar path resolve`、`mstar path check` 与 catalog 使用）先按主 checkout 计算目标，再在该路径未被 Git 忽略时映射到调用方 checkout；被忽略的目标、harness 目录内的目标，以及另一仓库的 checkout 都留在主 checkout。`StoreContext` 新增可选 `checkoutRoot` 供 catalog 根使用。
+- **Git 探测收敛为一份实现。** 路径解析器、`path check`、worktree 检查与 host 写入门禁共用 `engine/src/git-probe.ts`，取代三份分歧副本：`mainWorktreeRoot` 解析 `git worktree list --porcelain -z`（C-quote 路径不再产生错误根），`checkoutRoot` 是唯一的 `rev-parse --show-toplevel` 探测，`gitIgnored` 保留明确的"Git 无法回答"状态。所有探测受 `MSTAR_GIT_PROBE_TIMEOUT_MS` 约束。
+- **探测失败 fail-closed。** `resolveHarnessDir` 只在能改变答案时运行主根/checkout 探测（`localProbe`/`workspaceRoot` 短路）；当调用方 checkout 已知而主根不可读时返回无 harness 根，而不是静默采用 worktree 自身。
+- **catalog 的 `repository` 根跟随调用方 checkout。** linked worktree 调用在同仓库时按自己的 checkout 解析 `repository`；`harness`、`plans`、`iterations` 仍在 control checkout，一次 catalog 操作只回答一个 checkout。
+- **知识库迁移到 `docs/knowledge/`。** 仓库在 `.mstarc` 声明 `knowledge_dir=docs/knowledge`，知识语料从被忽略的 harness 产物变为可跟踪结果；13 篇已退役文档仍留在本地（被 Git 忽略）的归档树 `.mstar/archived/knowledge/`。
+- 引用旧 `.mstar/knowledge/` 路径的 live 文档已改指新位置，一处引用该路径的已跟踪 changelog fragment 同步修正。
+- **omp 宿主基线 `18.16.0` → `18.18.3`**（根与 `@mstar-harness/omp` 开发依赖）。可选 peer 保持 `^18.3.0`（任意 18.x 宿主），消费者约束不变；`bun.lock` 将 `@oh-my-pi/*` 栈重新解析到 `18.18.3`，并移除该版本线不再携带的 provider 依赖。
+- 无需适配层改动：插件消费的是扩展/插件加载器、session manager、event bus、MCP 工具桥与 legacy pi-ai shim 面，这些在 `18.16.0` → `18.18.3` 之间未变形（该版本线的破坏性条目是 `ask` 工具形态、`logoutCredential`、`SessionStorage.hasAssistantTurn` 与 Rust SDK 类型）。
+- **保留检查输出重新变为可选。** 任务报告中的命令 + 实测结果即默认证据；仅当 Assignment 要求、或原始文本对评审确实重要（很长、被截断、有争议）时，才值得把检查重定向到 `{SDD_DIR}/evidence/<task-id>.log`。
+- 更新 `mstar-sdd`（`file-handoffs.md` § Optional retained output、两份 implementer prompt、`SKILL.md`）、`mstar-review-qc` 与 `qa-engineer`（含 `acceptance-gate.md`）：评审者与 QA 仅在任务报告引用日志时套用保留日志映射，完整性、覆盖、复用与绝不重跑规则保持不变。
+- 新增 **`mstar path check [path]`**：只读、按 Git 实况判定的路径归属检查（exit `0` 干净、`1` 有 findings）。判定所有者的是「是否被忽略」而非目录名：被忽略的路径落在 control checkout 之外报 `path.process-outside-control`，可提交的路径落在调用方自己的 checkout 之外报 `path.result-outside-worktree`，git 无法给出结论报 `path.unverifiable`——三者都是 finding。tracked 结果域（`specs` / `knowledge` / `adr`）被 Git 忽略时只产生 **warning** 而非失败（`path.result-ignored`，exit `0`）：这类内容永远无法提交或共享，因此被全量 gitignore 的 `.mstar/specs` 只要正确留在 control checkout 就是「干净 + warning」，warning 指向 `.agents/` 或 `.mstarc`。不带参数时 envelope 分别报告 `trackedHarness` 与 `processHarness`，且 `findings` 与 `warnings` 分开；带 `path` 时按同样规则只核该目标。
+- **engine**：`resolveSpecsDir` 在 harness 目录与 `docs/specs` 之间新增 `.agents/specs`（完整链：`.mstarc` `specs_dir` → `{HARNESS_DIR}/specs` → `.agents/specs` → `docs/specs` → 根 `specs` → legacy `designs`）；`resolveKnowledgeDir` 新增 `.agents/knowledge` 候选；新增 `resolveAdrDir`，链为 `.mstarc` `adr_dir` → `{HARNESS_DIR}/adr` → `.agents/adr` → `docs/adr`。`.mstarc` 新增 `adr_dir` 键（`MstarcStringKey` `adrDir`）。`.mstar/` 被全量 gitignore 的仓库因此可在 `.agents/` 下解析 tracked 结果。canonical `.gitignore` snippet 现在与 specs、knowledge 对称地重新包含 `adr/`（`!.mstar/adr/` + `!.mstar/adr/**`，`.agents` 侧同理），scaffold 出的仓库因此可以提交 ADR；已由作者声明的 `.gitignore` 仍保持原样不动。`resolveHarnessDir` 新增 `ignoreEnvOverride` 选项，调用方可解析 checkout 本地的 tracked 结果而不被 `MSTAR_HARNESS_DIR` 重定向。
+- **cli**：`mstar path resolve` 输出新增 `knowledgeDir` 与 `adrDir`。`mstar_path --action check` 在 MCP harness-root 契约中被归类为 root-free（`ROOT_FREE_COMMANDS` 成员，并带 launch-directory 默认 subject），因此在未固定 root 的连接上可调用，且当调用路径会取自宿主 launch directory 时按调用拒绝；`path check` 现在用 `ignoreEnvOverride` 从调用方 checkout 解析 tracked 结果 harness，指向控制 harness 的 `MSTAR_HARNESS_DIR` 不再重定向所报告的 checkout。
+- 更新 `mstar-conventions`（`{ADR_DIR}` 符号、`.mstarc` `adr_dir` 键、specs/knowledge/adr 解析链、harness 根全量忽略时的 `.agents/` 规则与 `mstar path check`）、其 `references/artifact-storage-paths.md`、`mstar-use-cli/references/checks-and-lints.md`、`mstar-artifacts/references/knowledge-and-designs.md` 与 `docs/runtime-reference.md`。
+- **PM Acceptance 替代 QA 角色：**移除专职 `qa-engineer` 与风险分级派发。所有规模功能、缺陷修复、UI／残留问题及 report-only 范围均由主 PM 负责证据驱动验收，L2 review 与独立 QC 保持不变。
+- **有界检查、保留证据：**PM 可为具名验收缺口直接执行短小有界检查，但不得代做实现、编写测试、长套件或运维。每条必需 AC 保留证据、结果、适用性与 issue 处置。沿用 `qa` 完成载体；历史在途 `mandatory` 行通过普通 prepare 的 `--qa-gate pm-acceptance` 恢复，保留旧记录与真实作者。
+- **历史完成回执重放：**对已提交的 `mandatory` 完成请求精确重试时返回原回执；新的 `mandatory` 完成请求仍会被拒绝。
+- **交付策略对齐：**路由标识主 PM 而非验收流程；report-only 按已登记政策与 QC／PM Acceptance 完成，无需额外 fulfilment payload；reprepare 省略 `findingsCleanup` 时保留已记录的清理策略。
+- **安全退役 Codex 角色：**init 将可识别的旧 QA 路由文件备份到 agent 发现范围之外；doctor 提示残留文件，来源不明或自定义的文件保留供用户检查。
+- **删除 `mstar sdd evidence capture|verify`。** 没有任何门禁读取所保留的证据包：记录 schema、输入摘要、工具指纹与复用评估一并移除，CLI capture 运行器及其 MCP effects 同样删除。
+- 保留一次检查的输出现在就是重定向到 `{SDD_DIR}/evidence/` 下的日志文件，并在报告中引用该路径；评审者读取原始日志，绝不重跑命令。
+- 其余 `mstar sdd` 动词（`workspace`、`task-brief`、`review-package`、`check-context`）保持不变。
+- **PR 审查只接纳缺陷，不收润色建议。** Finding 必须指出本次变更新增或加剧的可观察错误后果，唯一例外是本次变更新增、有仓库范例引用且修复不改变行为的约定不一致 `nit`；测试和文档仍须满足错误产物限制。缺失或薄弱测试、覆盖率要求、文档润色、命名、格式或抽象偏好，以及依赖执行才能确定的声明均不接纳。合成阶段对 `may-fix` 和 `nit` 先判断准入，再核对证据。
+- **从 engine、commands 命令族及 CLI 移除 `unverified` 结果通道。** 删除 `--unverified` 参数、报告键、计数桶、扣分及展示行。运行时证明归 CI、QA 和显式请求的 E2E；审查不再保留或计分依赖执行才能确定的声明。
+- **engine-check callout 收敛为单一契约。** `skills/**` 中 46 处 `**Engine check (when available):**` 引用块改为一行式 callout（只写确切命令），契约集中到 `mstar-use-cli/references/checks-and-lints.md` 的 § Engine check callouts。callout 标记与指针形态现由 `scripts/skill-callout-contract.ts` 独占，`drift-lint.ts` 与 `standalone-smoke.ts` 共同消费，因此 Guard 1（CLI 引用与 engine 导出校验）与 Guard 6（重复 body 检测）覆盖 **48** 处而非 46 处——原先两处既有的 `**Engine check:**` 引用块对两个守卫都不可见——且 standalone 检查现在断言 callout 数量非零、每处都带共享契约指针，扫描被改名或损坏时不再可能空转通过。`CONCEPTS.md` 定义已改为受守卫的形态。
+- **PM 派发仪式改为条件清单。** `mstar-roles/references/project-manager.md` 删除可打印的 14 问自检与 16 字段 `Pre-implement Gate Check` 回执，保留的条件合并为一份 `## Dispatch preconditions (hard block)`；Task Board 一节只保留 plan 行没有承载的内容。`mstar-dispatch-gates` 的两节承接方反递归文本折叠为一段，指向 `mstar-roles/references/_shared/leaf-executor-core.md` 中既有的所有者。`.cursor/skills/mstar-routing-eval/assets/routing-evals.json` 重定向四条引用了已删除回执字段的断言，其 `hard_fail_if` 触发条件仍然生效。
+- **证据选择与测试可靠性有了归属。** `mstar-coding-behavior/references/evidence-selection.md` 给出「变更类型 → 最小充分证据」映射；`references/test-reliability.md` 承载执行拓扑、资源原子分配、进程全局状态收容、超时预算、静默销毁、回归证明以及拒绝掩盖 flake——对 `docs/knowledge/testing-patterns/verification-redundancy-and-unholdable-gates.md` 已拥有的主题只做指针，不重复陈述。
+- **上下文经济、散文真实性与删除判据。** `mstar-skill-authoring/references/context-economy.md` 承载面向模型文本的逐轮成本（最小起始、显式可发现、约束前置、有界输出、局部上下文、总工作量核算，外加三条工具定义规则与改动前后度量规则）。`mstar-prose` 新增事实核查规则（关于操作、默认值或错误的断言，只有在当前树上真跑过才可写入；该规则判真实，HEAD 测试判可解）。`mstar-knowledge` Maintain 新增「未来决策价值」判据（删除 / 保留 / 归档 / 活提案永不归档 / 拒绝项仍需有诱惑力才保留），并把原本散在该处的三段碎片合并为一处。
+- **simplify 审计的证明门槛。** `mstar-audit/references/audit-playbook.md` § 5 给出移除候选的六项证明（当前 owner、生产者到消费者路径、消失的部分、保留的部分、放弃的能力或兼容性、最强保留理由），并把每条拒绝判定分级为：移除不可达行为、收窄公开行为并声明损失、或受保护义务。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.4.0**。
+
 ## [4.3.0] - 2026-11-08
 
 ### Harness
