@@ -1,6 +1,6 @@
 ---
 name: mstar-pr-loop
-description: "Opt-in skill loaded when the user explicitly asks for a review → fix loop on an existing ready PR, or when iteration Phase 1 records `pr_merge_policy: reviewed-auto` as that iteration's review path. Never selected under `reviewed-bot`, where an attached review bot owns PR review. It never activates for routine review requests or on its own initiative."
+description: "Use only when the user explicitly starts a review→fix loop on an existing ready PR, or Phase 1 records `pr_merge_policy: reviewed-auto`. Never under `reviewed-bot`, and never for routine one-shot review requests."
 ---
 
 # PR Review-Fix Loop

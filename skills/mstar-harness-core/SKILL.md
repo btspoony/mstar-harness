@@ -40,12 +40,12 @@ description: "Lifecycle and authorization authority: delivery loop, state machin
 
 ## 加载约定（强制）
 
-加载选择 SSOT：**`mstar-roles`** hub § Load Order（Assignment `Skill presets:` 决策；PM required reading 不受 preset 门控）。下表是各角色的**典型追加指引**，不是第二套选择机制；冲突时以 hub 为准。
+加载选择 SSOT：**`mstar-roles`** hub § Load Order（Assignment `Skill presets:` 决策；PM required reading 不受 preset 门控）。下表是各角色的**典型追加指引**，不是第二套选择机制；冲突时以 hub 为准。**路由最小化（`mstar-skill-authoring` 原则 3）：** 单任务目标 **1–3** 个专题 skill（本 skill / hub 身份读除外）；「按任务追加」只选当前任务类真正需要的子集，禁止「以防万一」整表加载。
 
-| 角色 | 始终 | 按任务追加（典型） |
+| 角色 | 始终 | 按任务追加（典型；每回合择 1–3） |
 |------|------|-------------------|
 | **All harness roles** | Load selection → **`mstar-roles`** (§ Load Order); this skill owns lifecycle/authorization. The hub bootstraps role selection without requiring core-first. | — |
-| **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 / 项目知识 bootstrap `mstar-knowledge`；`audit` 类请求 `mstar-audit`（执行归 `@code-reviewer`）；跑/解读 CLI 命令时 `mstar-use-cli`。**不**读 `mstar-coding-behavior` |
+| **`@project-manager`** | 本 skill | 仅当本回合需要时择子集：编排/门禁/路径 → `mstar-dispatch-gates` / `mstar-phase-gates` / `mstar-conventions`（hub 身份仍走 `mstar-roles`）；implement → `mstar-sdd`；派 QC 前 → `mstar-review-qc`；并行/审查检出 → `mstar-branch-worktree`；plan 产物 → `mstar-artifacts`；UI Prepare → `mstar-design-md`；写 skill → `mstar-skill-authoring`；迭代 → `mstar-iteration`；结晶/bootstrap → `mstar-knowledge`；audit → `mstar-audit`；跑 CLI → `mstar-use-cli`。**不**读 `mstar-coding-behavior` |
 | **Implementation / review / ops** | This skill + `mstar-coding-behavior` + role reference | Git writes: `mstar-branch-worktree`; plan paths: `mstar-conventions`; PM before QC: `mstar-review-qc`; QC execution: `mstar-roles/references/qc-specialist/`; status/residuals: `mstar-artifacts`; UI: `mstar-design-md`; knowledge (PM): `mstar-knowledge`; CLI execution/interpretation: `mstar-use-cli` |
 | **leaf 承接方** | 上栏 + **`mstar-dispatch-gates`**（反递归节） | — |
 

@@ -1,6 +1,6 @@
 ---
 name: mstar-prose
-description: "Resolvability judgment for prose that reads like a leaked reasoning transcript — session or PR vantage, change narration and version stamps, reviewer-addressed justification, hedges and planning residue — across Markdown, comments, JSDoc, prompts, diagnostics and agent instructions; use when writing, reviewing or auditing a passage against the HEAD test. Not for skill structure, frontmatter or trigger contracts (that is `mstar-skill-authoring`), and not for implementation behavior."
+description: "Use when prose looks like a leaked reasoning transcript (session/PR vantage, change narration, hedges, planning residue) and needs a HEAD-resolvability check. Not for skill structure/triggers (`mstar-skill-authoring`) or coding behavior."
 ---
 
 # Prose Resolvability

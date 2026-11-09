@@ -1,6 +1,6 @@
 ---
 name: mstar-skill-authoring
-description: Agent skill 撰写 / 重写 / 优化规范（SkillsBench 实验门控）。在新建任意 skill、大改 SKILL.md、改写 description 触发契约、压缩过长 body、评审 skill 结构、判断某段行为塑形文案是否值得保留，或写 / 评审 skill body 之外的模型可见文本（tool 与参数定义、CLI 帮助、诊断与拒绝字符串、Assignment 字段）时读取。适用于任何领域的 skill 与模型可见文本，不限于本仓库专题；不用于普通应用功能实现。
+description: "Use when creating/rewriting an agent skill (`SKILL.md`), narrowing a description trigger, compressing a body, reviewing skill structure, or editing model-visible non-body text (schemas, CLI help, refusals, Assignment fields). Not for ordinary app features."
 ---
 
 # Skill Authoring
