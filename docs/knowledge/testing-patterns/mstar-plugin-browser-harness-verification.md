@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: testing_pattern
 category: testing-patterns
 severity: medium
-plan_id: "20260810-panel-legacy-close, 20260810-panel-canvas-zones, 20260810-panel-agent-flow-zone, 20260811-panel-tabs-shell, 20260811-panel-agent-canvas, 20260811-panel-event-log, 20260811-panel-f4-timeliness"
+plan_id: "<plan-id>, <plan-id>, <plan-id>, <plan-id>, <plan-id>, <plan-id>, <plan-id>"
 tags:
   - "browser-harness"
   - "cdp"
@@ -81,6 +81,6 @@ Static DOM/CSSOM probes cannot prove **interactive** behavior, so the tabs-era p
 
 ## Examples
 
-- `.mstar/iterations/iter-20260810-panel-fix-agentflow/guides/` (css-selector-verification / browser-harness-verification / agentflow-pipeline-verification) + `{SDD_DIR}/review/harness/` (self-contained pages, checklists, static-preverify + gen-harness scripts, browser-run evidence + screenshots).
-- `.mstar/iterations/iter-20260810-panel-zones/guides/` — the three dual-theme verification guides are the zone-dashboard evidence records (kept as iteration snapshots; their methods are consolidated here): `panel-sidebar-dual-theme-verification.md` (sidebar/meta/enforcement, 46 PASS), `canvas-zones-dual-theme-verification.md` (three zones + footer + dock + layout invariants, 79 PASS), `agent-flow-zone-dual-theme-verification.md` (entities/edges + animation + reduced-motion, default ×2 + reduced-motion variant).
+- `{HARNESS_DIR}/iterations/iter-<plan-id>/guides/` (css-selector-verification / browser-harness-verification / agentflow-pipeline-verification) + `{SDD_DIR}/review/harness/` (self-contained pages, checklists, static-preverify + gen-harness scripts, browser-run evidence + screenshots).
+- `{HARNESS_DIR}/iterations/iter-<plan-id>/guides/` — the three dual-theme verification guides are the zone-dashboard evidence records (kept as iteration snapshots; their methods are consolidated here): `panel-sidebar-dual-theme-verification.md` (sidebar/meta/enforcement, 46 PASS), `canvas-zones-dual-theme-verification.md` (three zones + footer + dock + layout invariants, 79 PASS), `agent-flow-zone-dual-theme-verification.md` (entities/edges + animation + reduced-motion, default ×2 + reduced-motion variant).
 - Handle-era lesson (historical): react-flow 12.11.2 silently drops edges whose endpoint nodes expose no `<Handle>` — custom node types had to render invisible `<Handle>` elements; this class of runtime-only failure is why the harness exists. react-flow is now removed from the panel (negative bundle assertion in `scripts/build-client-bundle.ts`), and the zone dashboard's HTML/CSS structure is directly assertable.

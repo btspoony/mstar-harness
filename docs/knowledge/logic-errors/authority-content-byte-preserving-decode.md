@@ -10,7 +10,7 @@ symptoms:
   - "Markdown export from the store differs from the reviewed source file, and two authoring verbs store different bytes for the same file"
 root_cause: "The store hashes raw source bytes for provenance but stores decoded text as content, and the domain decoded the same file at more than one site: the import site used a default `TextDecoder`, whose `ignoreBOM: false` silently consumes a leading U+FEFF, while the other sites already preserved it."
 resolution_type: code_fix
-plan_id: "20260925-roadmap-store-authority"
+plan_id: "<plan-id>"
 tags:
   - bom
   - utf-8-decode
@@ -71,4 +71,4 @@ const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decod
 
 ## Source
 
-Iteration `iter-20260925-v4-phase4`, plan `20260925-roadmap-store-authority`. The decode sites are the roadmap-authority store's `sourceBytes` helper (import preview/apply) and its round-trip content validator, plus the CLI replacement verb that already preserved the BOM; evidence for the defect, the fix, and the BOM round-trip regression is in the plan's QC reports and consolidated decision under `{SDD_DIR}/20260925-roadmap-store-authority/review/` and in its task reports. Related: `architecture-patterns/store-authority-staged-lifecycle.md` (what a store authority owns and what its receipts must carry), `testing-patterns/store-bytes-are-not-a-write-proof.md` (choosing the observable for a store claim), `conventions/authored-harness-ignore-preservation.md` (one shared predicate instead of per-caller copies of the same rule).
+Iteration `iter-<plan-id>`, plan `<plan-id>`. The decode sites are the roadmap-authority store's `sourceBytes` helper (import preview/apply) and its round-trip content validator, plus the CLI replacement verb that already preserved the BOM; evidence for the defect, the fix, and the BOM round-trip regression is in the plan's QC reports and consolidated decision under `{SDD_DIR}/<plan-id>/review/` and in its task reports. Related: `architecture-patterns/store-authority-staged-lifecycle.md` (what a store authority owns and what its receipts must carry), `testing-patterns/store-bytes-are-not-a-write-proof.md` (choosing the observable for a store claim), `conventions/authored-harness-ignore-preservation.md` (one shared predicate instead of per-caller copies of the same rule).

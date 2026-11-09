@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: best_practice
 category: best-practices
 severity: medium
-plan_id: 20260822-skill-pointer-hygiene
+plan_id: <plan-id>
 tags:
   - knowledge-usage
   - knowledge-index
@@ -52,7 +52,7 @@ Audit 2026-08-22 发现：原 harness 中 knowledge 的使用是**条件式**的
 
 ## Examples
 
-- 本迭代（iter-20260822-audit-simplify）实现前，任务 reviewer 与 implementer 通过索引发现 `architecture-patterns/` 既有模式，避免重复设计。
+- 本迭代（iter-<plan-id>）实现前，任务 reviewer 与 implementer 通过索引发现 `architecture-patterns/` 既有模式，避免重复设计。
 - 反例（改造前）：`plans[].metadata` 未登记 knowledge 链接时，implementer 不读 `{KNOWLEDGE_DIR}`，重复了既有坑。
 
 ## 相关

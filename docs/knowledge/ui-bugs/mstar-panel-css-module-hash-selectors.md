@@ -4,7 +4,7 @@ date: 2026-08-10
 problem_type: ui_bug
 category: ui-bugs
 severity: high
-plan_id: "20260810-panel-css-selector-fix"
+plan_id: "<plan-id>"
 symptoms:
   - "MStar workflow panel renders completely unstyled despite full CSS present in the served bundle"
   - "computed styles fall back to block/transparent/empty tokens"

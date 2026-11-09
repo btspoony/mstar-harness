@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: tooling_decision
 category: tooling-decisions
 severity: high
-plan_id: 20261014-severity-vocabulary-nit
+plan_id: <plan-id>
 applies_when:
   - "A vocabulary (severity, status, class) is declared in more than one module"
   - "A SQL CHECK constraint must change in the harness store"
@@ -27,7 +27,7 @@ The harness severity axis is **`critical | high | medium | low | nit`**, owned b
 
 1. **2026-09-18** — the store/issue-capture work introduced a second severity declaration in the issue domain (`packages/engine/src/issue.ts`), the SQL CHECK on `issues.severity`, and a `MIGRATION_VOCABULARY` entry mapping the legacy register literal `nit` to `info`. The legacy files themselves carry `nit` (fixtures: `status.real-shape.json`, `migrate-real/…/00000722-iter-wt-lease.json`).
 2. **PR #478** — the engine SSOT, the residual validator and the skill reference were moved to `info`, because an issue had reported a "documentation says `nit`, engine says `info`" drift and the target was assumed to be `info`. That assumption was wrong: it propagated the issue domain's mistake into the axis that everything else follows.
-3. **2026-10-14** (`20261014-severity-vocabulary-nit`) — the axis was restored to `nit` end to end (engine types, validation tables, ORDER BY ladders, CLI/MCP payloads, dsh view/schema, dashboard map, docs, fragments, generated bundles) and the 9 stored `info` rows were converted.
+3. **2026-10-14** (`<plan-id>`) — the axis was restored to `nit` end to end (engine types, validation tables, ORDER BY ladders, CLI/MCP payloads, dsh view/schema, dashboard map, docs, fragments, generated bundles) and the 9 stored `info` rows were converted.
 
 ## Guidance
 
@@ -44,4 +44,4 @@ The axis is consumed by capture, validation, storage, sorting, counters, refusal
 
 ## Source
 
-Delivery `20261014-severity-vocabulary-nit` (`wf-20261014-severity-vocabulary-nit`). Change list from three read-only surveys (`local://severity-data-migration.md` holds the data/migration one); migration 12 (`MIGRATION_12_SQL`, `store-db.ts:1570`) with its table rebuild and conversion test in `store-db.test.ts`; migration proof on a store copy in `qa-acceptance.md`; the corrected dispositions of the two issues closed under the wrong rationale (store revision records). Related: `worktree-dependency-dist-isolation.md`.
+Delivery `<plan-id>` (`wf-<plan-id>`). Change list from three read-only surveys (`local://severity-data-migration.md` holds the data/migration one); migration 12 (`MIGRATION_12_SQL`, `store-db.ts:1570`) with its table rebuild and conversion test in `store-db.test.ts`; migration proof on a store copy in `qa-acceptance.md`; the corrected dispositions of the two issues closed under the wrong rationale (store revision records). Related: `worktree-dependency-dist-isolation.md`.

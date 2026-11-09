@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: tooling_decision
 category: tooling-decisions
 severity: medium
-plan_id: 20260817-cli-dsh-install
+plan_id: <plan-id>
 applies_when:
   - orchestrating dsh plugin installs from another tool
   - probing a dsh deployment's installed plugin state

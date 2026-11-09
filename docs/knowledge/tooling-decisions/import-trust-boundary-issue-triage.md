@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: tooling_decision
 category: tooling-decisions
 severity: medium
-plan_id: 20261012-remove-directory-locks
+plan_id: <plan-id>
 applies_when:
   - "triage a review finding that asks for directory-descriptor anchoring or another TOCTOU hardening of a local file read"
   - "decide whether an environment-gated production test seam is exploitable or inert"
@@ -294,12 +294,12 @@ of this PR's scope, tracked as `I-000631` and `I-000626`.
   `packages/engine/src/migrate.ts:10-16`, `execution-recovery.test.ts:1154-1158`,
   `packages/engine/src/index.ts:122-141`, `packages/cli/src/command-adapter.ts:874`.
 - Decision inputs recorded in this round: issue capture receipts and the four scoped fact
-  sweeps referenced by `.mstar/sdd/20261012-remove-directory-locks/`, plus the Darwin
+  sweeps referenced by `{HARNESS_DIR}/sdd/<plan-id>/`, plus the Darwin
   directory-fd probe retained there.
 - Review threads that produced #472: `pull/471#discussion_r4255142667`,
   `#discussion_r4255440975`.
 
-## Outcome (2026-10-14, delivery `20261013-pr471-residual-findings`)
+## Outcome (2026-10-14, delivery `<plan-id>`)
 
 All seven tracked items are delivered; dispositions below are the applied versions of the
 verdicts above, and the two rules at the end were learned while applying them.

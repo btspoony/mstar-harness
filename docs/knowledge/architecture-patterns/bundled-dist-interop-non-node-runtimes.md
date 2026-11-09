@@ -7,7 +7,7 @@ severity: high
 applies_when:
   - "A bundled dist must load where import.meta.url is undefined (workerd/edge, or a browser-platform bundler that strips import.meta)"
   - "Choosing the build guard for a published artifact whose failure mode is 'does not start', not 'returns wrong data'"
-plan_id: 20261016-engine-esm-dist-interop
+plan_id: <plan-id>
 tags:
   - engine
   - bundler

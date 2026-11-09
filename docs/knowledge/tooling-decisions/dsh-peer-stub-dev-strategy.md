@@ -4,7 +4,7 @@ date: 2026-08-08
 problem_type: tooling_decision
 category: tooling-decisions
 severity: medium
-plan_id: "20260808-dsh-package-core"
+plan_id: "<plan-id>"
 status: superseded
 superseded_by: registry peer resolution (dsh 0.0.1-rc.5+, CHANGELOG.md `dsh plugin` entry); live peer contract now `packages/dsh/tests/peer-deps.spec.ts`
 last_updated: 2026-11-09

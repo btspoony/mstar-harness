@@ -4,7 +4,7 @@ date: 2026-08-08
 problem_type: testing_pattern
 category: testing-patterns
 severity: high
-plan_id: 20260808-slice2-sdd-iteration
+plan_id: <plan-id>
 applies_when:
   - porting bash scripts to a typed language (TS) while keeping output identical
   - retiring legacy shell tooling after a port
@@ -39,7 +39,7 @@ Once the bash oracle is gone, freeze its output as golden fixtures checked into 
 
 ### 4. Intentional divergences must be pinned, not silent
 
-The port is allowed to *harden* behavior, but only when the divergence is deliberate and documented. Example from the port: the bash `sdd-workspace` probed `status.json` first, so a linked feature worktree with a stray `.mstar/status.json` resolved and created a second SDD tree under the feature checkout. The TS port refuses that case (fail-closed) — a correct hardening, but a **divergence**. Pin it with a dedicated test ("stray status.json in a linked worktree") and a comment explaining the divergence and why bash's behavior was the hazard.
+The port is allowed to *harden* behavior, but only when the divergence is deliberate and documented. Example from the port: the bash `sdd-workspace` probed `status.json` first, so a linked feature worktree with a stray `{HARNESS_DIR}/status.json` resolved and created a second SDD tree under the feature checkout. The TS port refuses that case (fail-closed) — a correct hardening, but a **divergence**. Pin it with a dedicated test ("stray status.json in a linked worktree") and a comment explaining the divergence and why bash's behavior was the hazard.
 
 ### 5. Fail-closed-first ordering
 

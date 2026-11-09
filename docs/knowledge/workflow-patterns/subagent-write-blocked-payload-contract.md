@@ -8,7 +8,7 @@ applies_when:
   - "Dispatching any subagent fan-out (audit, review, research) whose seats must produce evidence or findings"
   - "Designing a contract that assumes a subagent can write files"
   - "Running the amazing-pr-review pipeline (quick/default/deep tiers)"
-plan_id: 20260826-pr-review-skill-sync
+plan_id: <plan-id>
 tags:
   - subagent
   - write-blocked

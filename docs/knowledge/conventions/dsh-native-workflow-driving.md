@@ -56,6 +56,6 @@ The safety half matters just as much: as long as mstar writes no goal state, a h
 
 ## Examples
 
-- Contracts and evidence: `.mstar/iterations/iter-20260911-dsh-ledger-goal-discipline/specs/dsh-progress-driver.md` (the locked driving contract, C1–C4) and `.mstar/plans/20260911-dsh-goal-discipline.md` (the zero-write removal inventory, the red-first paused + drifted pin, and the four deferred upstream rows).
+- Contracts and evidence: `{HARNESS_DIR}/iterations/iter-<plan-id>/specs/dsh-progress-driver.md` (the locked driving contract, C1–C4) and `{HARNESS_DIR}/plans/<plan-id>.md` (the zero-write removal inventory, the red-first paused + drifted pin, and the four deferred upstream rows).
 - Host semantics relied on: `deepseek-harness` `goal/src/index.ts` (`create` / `resume` arm; `edit` preserves activation; `pause` / `complete` / `block` disarm), `goal-round-driver/src/index.ts` (active + armed + idle readiness with no subagent awareness).
 - Deferred upstream work: the `dsh-integration` project roadmap in `{HARNESS_DIR}/store.db` (owner `project-manager`; read with `mstar roadmap export --project dsh-integration`).

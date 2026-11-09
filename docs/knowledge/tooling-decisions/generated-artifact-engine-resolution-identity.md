@@ -4,7 +4,7 @@ date: 2026-09-23
 problem_type: tooling_decision
 category: tooling-decisions
 severity: high
-plan_id: "20260921-execution-consumer-readiness"
+plan_id: "<plan-id>"
 last_updated: 2026-11-09
 applies_when:
   - "Regenerating a committed bundle that inlines another workspace package"
@@ -61,4 +61,4 @@ Materialise the worktree's own engine dependency, regenerate, re-record the cons
 
 ## Source
 
-Iteration `iter-20260921-execution-2b-cutover`, plan `20260921-execution-consumer-readiness` (R3/R17 packaging task). Evidence: the task report's wrong-engine root-cause round and the plan QC consolidated + L4 QA reports in `{SDD_DIR}/review/` for that plan, including the identified CI freshness gate. Related: `tooling-decisions/worktree-dependency-dist-isolation.md`, `tooling-decisions/consumer-path-isolation-smoke.md`, `tooling-decisions/worktree-cleanup-ignored-artifact-gate.md` (archived).
+Iteration `iter-<plan-id>`, plan `<plan-id>` (R3/R17 packaging task). Evidence: the task report's wrong-engine root-cause round and the plan QC consolidated + L4 QA reports in `{SDD_DIR}/review/` for that plan, including the identified CI freshness gate. Related: `tooling-decisions/worktree-dependency-dist-isolation.md`, `tooling-decisions/consumer-path-isolation-smoke.md`, `tooling-decisions/worktree-cleanup-ignored-artifact-gate.md` (archived).

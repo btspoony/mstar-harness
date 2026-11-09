@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: tooling_decision
 category: tooling-decisions
 severity: high
-plan_id: "20260810-dsh-upstream-adapter"
+plan_id: "<plan-id>"
 tags:
   - "dsh"
   - "manifest"
@@ -37,7 +37,7 @@ This doc records the fix decision (migrate + contract test + boot-manifest verif
 
 ## Solution
 
-1. **Manifest migration** (plan `20260810-dsh-upstream-adapter` T1, commit `0fcb4803`): remove the top-level `dshClient` key; add nested `"dsh": { "bundle": { "patch": … }, "client": { "inject": […原样…], "platform": "web" } }`. `dsh.bundle.patch` (cordis patch path) and `exports["./client"]` (→ `dist/client.js`) stay untouched.
+1. **Manifest migration** (plan `<plan-id>` T1, commit `0fcb4803`): remove the top-level `dshClient` key; add nested `"dsh": { "bundle": { "patch": … }, "client": { "inject": […原样…], "platform": "web" } }`. `dsh.bundle.patch` (cordis patch path) and `exports["./client"]` (→ `dist/client.js`) stay untouched.
 2. **Contract regression test** (`packages/dsh/tests/manifest-contract.spec.ts`, 6 cases / 12 expect()): `dsh.client.platform === 'web'`; `inject` is an exact string array and every row is a declared peerDependency; the legacy top-level `dshClient` key is REMOVED; `dsh.bundle.patch` unchanged; `exports["./client"]` resolves to an existing build artifact. Any future upstream rename or manifest regression → this test fails first, before runtime symptoms.
 3. **Doc sync** (T3): `packages/dsh/README.md` / `README.zh.md` / `bundle/README.md` + `skills/mstar-host/references/dsh.md` (source + mirrored copy via `bundle-assets`, byte-identical) `dshClient` wording → `dsh.client`, including the discovery-mechanism description; changelog fragment (`.changes/unreleased/dsh-upstream-client-manifest.md`).
 
@@ -72,4 +72,4 @@ Upstream discovery reads exactly one contract shape (`pkg.dsh.client` + `exports
 ## Examples
 
 - Evidence (2026-08-11 state): migration commit `0fcb4803`; `packages/dsh/tests/manifest-contract.spec.ts` has since grown to 6 cases / 12 expect(); full-suite 516 pass / 0 fail at that commit; rebuilt `dist/client.js` sha1 `7b5831c24d03…` (467,726 B) with `dsh.client` manifest. The current manifest still carries `dsh.client` (`platform: "web"` + 5-row `inject`) and no `dshClient` key.
-- Verification guide: `.mstar/iterations/iter-20260810-panel-zones/guides/upstream-dsh-adapter.md` (per-plan evidence record with the full reproduce/verify command list; this doc is the durable knowledge).
+- Verification guide: `{HARNESS_DIR}/iterations/iter-<plan-id>/guides/upstream-dsh-adapter.md` (per-plan evidence record with the full reproduce/verify command list; this doc is the durable knowledge).

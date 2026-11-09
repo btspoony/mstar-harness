@@ -4,7 +4,7 @@ date: 2026-09-21
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
-plan_id: 20260918-issue-governance-cutover
+plan_id: <plan-id>
 applies_when:
   - "protecting a new authority (store, future execution writes) from direct host-level writes"
   - "adding a host entry that must enforce or disclose authority refusals"

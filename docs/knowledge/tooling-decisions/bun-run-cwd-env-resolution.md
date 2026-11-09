@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: tooling_decision
 category: tooling-decisions
 severity: medium
-plan_id: 20260816-audit-002-cli-root-paths
+plan_id: <plan-id>
 tags:
   - bun
   - init-cwd

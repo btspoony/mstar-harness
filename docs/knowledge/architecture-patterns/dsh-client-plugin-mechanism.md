@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: medium
-plan_id: "20260809-dsh-workflow-viz-panel, 20260810-dsh-upstream-adapter"
+plan_id: "<plan-id>, <plan-id>"
 tags:
   - "dsh"
   - "client-plugin"
@@ -28,7 +28,7 @@ tags:
 
 **Entry shape.** A client plugin mirrors the server function-plugin shape on the client: named `inject` (service names) + `apply(ctx: ClientContext)`. `ClientContext` is the cordis Context merged with client services (`slots`, `sessions`, `locale`, `layout`, …). The bundle must be a **closure-factory CJS** (`window.__ModuleLoader__.load({ id, factory: (require) => … })`), externals kept to platform modules + `react/jsx-runtime`; CSS modules are inlined with `data-plugin` hashing (mirror the snapshot `tsdown.client.ts` recipe).
 
-**UI contribution = slot registry.** `ctx.slots.register({ name, key, locale, store?, inject? }, Component)` — registering into an **undeclared slot throws**, so use a declared slot, and the modern form is `ctx.slots.inject('<slot>', () => ctx.slots.register(...))` so the registration unwinds with your fiber. Since the sidebar migration (plan `20260910-dsh-panel-sidebar`) the session panel is NOT in `conversation.view`: it is a two-stage right-sidebar seat — a page-type definition (`ctx.sidebarRightTabs.register`) plus keyed `sidebar.right.pane.tab` body and `sidebar.right.pane.tab.title` chip registrations under `MSTAR_PANEL_ID`. Registering NOTHING into `conversation.view` is now an asserted contract (`packages/dsh/tests/client-seat.spec.ts`). See `architecture-patterns/dsh-right-sidebar-seat-migration.md`.
+**UI contribution = slot registry.** `ctx.slots.register({ name, key, locale, store?, inject? }, Component)` — registering into an **undeclared slot throws**, so use a declared slot, and the modern form is `ctx.slots.inject('<slot>', () => ctx.slots.register(...))` so the registration unwinds with your fiber. Since the sidebar migration (plan `<plan-id>`) the session panel is NOT in `conversation.view`: it is a two-stage right-sidebar seat — a page-type definition (`ctx.sidebarRightTabs.register`) plus keyed `sidebar.right.pane.tab` body and `sidebar.right.pane.tab.title` chip registrations under `MSTAR_PANEL_ID`. Registering NOTHING into `conversation.view` is now an asserted contract (`packages/dsh/tests/client-seat.spec.ts`). See `architecture-patterns/dsh-right-sidebar-seat-migration.md`.
 
 **Browser data channel = the host's typert gateway, plus the session log.** The browser cannot read the host filesystem. Two channels exist and the panel now uses the first: the plugin's own `mstarPanelSnapshot` typert invocation over the shared `/api` gateway (`panel-snapshot-client.ts`: one-shot `readDigest`/`readView`, no poll, no subscription), and the session log (`ContextMessageNode` with `form === 'catalog'` + a plugin `source`) that the digest/`engine-status` rows ride. The retired 5-second poll is gone — a mounted seat asks once per session identity and on an explicit `reload()`.
 

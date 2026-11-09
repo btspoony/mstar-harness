@@ -4,7 +4,7 @@ date: 2026-09-21
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
-plan_id: 20260920-activation-migration-recovery
+plan_id: <plan-id>
 applies_when:
   - "a destructive action must be justified by a condition that a concurrent writer can change"
   - "a check and the rename/replace it guards live in the same function"

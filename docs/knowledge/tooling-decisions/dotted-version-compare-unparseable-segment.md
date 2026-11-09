@@ -4,7 +4,7 @@ date: 2026-09-23
 problem_type: tooling_decision
 category: tooling-decisions
 severity: medium
-plan_id: "20260921-execution-session-core"
+plan_id: "<plan-id>"
 last_updated: 2026-11-09
 applies_when:
   - "Comparing a version string that arrives from an operator, an attestation or a transport"
@@ -66,4 +66,4 @@ The same field supplied as the bare runtime version compares as intended and the
 
 ## Source
 
-Iteration `iter-20260921-execution-2b-cutover`: the refusal was observed while executing the store activation barrier recorded in the iteration compass closure record, and the framing rules live in the execution/store specs of the same iteration package. Source anchors: `packages/engine/src/store-db.ts` (`compareVersions` at :133 and the runtime support check), `packages/engine/src/store-activation.ts:1080-1097` (the attestation consumer check: `runtimeVersion` → `compareVersions(runtimeVersion, readDeclaredNodeFloor())`), `packages/cli/test/issue.test.ts:563` (below-floor refusal asserting the manifest-declared floor), `packages/commands/src/host-health/mcp.ts:65` (the strip-the-`v` probe). Related: `tooling-decisions/dsh-llm-fallbacks-version-ssot.md` (version pins that must stay in lockstep).
+Iteration `iter-<plan-id>`: the refusal was observed while executing the store activation barrier recorded in the iteration compass closure record, and the framing rules live in the execution/store specs of the same iteration package. Source anchors: `packages/engine/src/store-db.ts` (`compareVersions` at :133 and the runtime support check), `packages/engine/src/store-activation.ts:1080-1097` (the attestation consumer check: `runtimeVersion` → `compareVersions(runtimeVersion, readDeclaredNodeFloor())`), `packages/cli/test/issue.test.ts:563` (below-floor refusal asserting the manifest-declared floor), `packages/commands/src/host-health/mcp.ts:65` (the strip-the-`v` probe). Related: `tooling-decisions/dsh-llm-fallbacks-version-ssot.md` (version pins that must stay in lockstep).

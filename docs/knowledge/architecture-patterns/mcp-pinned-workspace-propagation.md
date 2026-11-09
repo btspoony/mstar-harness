@@ -4,7 +4,7 @@ date: 2026-10-19
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
-plan_id: 20261018-dsh-identity-batch1
+plan_id: <plan-id>
 applies_when:
   - "adding a connection-level pin (--harness, --identity-env) to a host adapter"
   - "a command family resolves its own root from cwd, an input field, or a discovery helper"

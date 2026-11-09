@@ -5,7 +5,7 @@ problem_type: architecture_pattern
 category: architecture-patterns
 last_updated: 2026-11-09
 severity: high
-plan_id: 20260808-slice1-engine-foundation
+plan_id: <plan-id>
 applies_when:
   - splitting a prompt-harness (skills, role prompts) into deterministic rules vs judgment
   - adding machine-checkable gates to prose-only workflow docs without breaking standalone use

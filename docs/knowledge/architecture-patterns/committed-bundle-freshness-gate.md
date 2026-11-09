@@ -5,7 +5,7 @@ status: active
 tags: [packaging, ci, freshness-gate, config-only-targets]
 created: 2026-09-26
 last_updated: 2026-11-09
-source: iter-20260926-v4-phase5
+source: iter-<plan-id>
 ---
 
 # Committed bundles with CI freshness gate for checkout-root plugins

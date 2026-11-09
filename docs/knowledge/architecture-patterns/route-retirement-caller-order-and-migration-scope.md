@@ -8,7 +8,7 @@ applies_when:
   - "Planning or reviewing the retirement of a transport, route, or module family whose symbols have callers outside the owning module"
   - "Deciding whether a retired document kind, reader, writer, or guard may survive the cutover"
   - "Sequencing deletion waves across parallel tracks, host packages, or a terminal sweep"
-plan_id: 20261009-issue428-coordination-residuals
+plan_id: <plan-id>
 tags:
   - route-retirement
   - caller-inventory
@@ -73,4 +73,4 @@ Routing a retirement by module ownership produces two expensive failure modes an
 
 ## Source
 
-Plan `20261009-issue428-coordination-residuals` (standalone development workflow; file-route retirement R1 across engine, commands, CLI, host packages and the skills corpus) — its design annex module rows and the terminal sweep receipt in the plan's review bundle. Related: `architecture-patterns/store-authority-staged-lifecycle.md` (authority-capable retired readers are deleted, not converted), `conventions/skill-thinning-sink-convention.md` (the corpus-side retire/keep inventory discipline), `architecture-patterns/host-write-gate-store-authority-route.md` (the host seams that consumed the now-retired file-route guards).
+Plan `<plan-id>` (standalone development workflow; file-route retirement R1 across engine, commands, CLI, host packages and the skills corpus) — its design annex module rows and the terminal sweep receipt in the plan's review bundle. Related: `architecture-patterns/store-authority-staged-lifecycle.md` (authority-capable retired readers are deleted, not converted), `conventions/skill-thinning-sink-convention.md` (the corpus-side retire/keep inventory discipline), `architecture-patterns/host-write-gate-store-authority-route.md` (the host seams that consumed the now-retired file-route guards).

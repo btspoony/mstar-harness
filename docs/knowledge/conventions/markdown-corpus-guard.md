@@ -4,7 +4,7 @@ date: 2026-09-25
 problem_type: convention
 category: conventions
 severity: high
-plan_id: "20260925-markdown-anchor-guard"
+plan_id: "<plan-id>"
 applies_when:
   - "Adding a guard that checks the repository's own document corpus rather than one producer/consumer pair"
   - "Reviewing a proposal to exclude a file or directory from a corpus check, or to narrow its input set"
@@ -75,4 +75,4 @@ Excluding the failing document, narrowing the corpus to changed files, or writin
 
 ## Source
 
-Iteration `iter-20260925-v4-phase4`, plan `20260925-markdown-anchor-guard`; the frozen implementation contract is `{ITERATION_DIR}/iter-20260925-v4-phase4/specs/markdown-anchor-contract.md`, and the production wiring is `scripts/markdown-links.ts` plus Guard 8 in `scripts/drift-lint.ts` with its CI job. Evidence: that plan's task reports and its review bundle (scanner diagnostics, the red/green fragment-resolution fix, and the unchanged-corpus proof) under `{SDD_DIR}/20260925-markdown-anchor-guard/`. Related: `testing-patterns/mechanical-check-corpus-honesty.md` (fence-aware checks, canonical fixtures, load-bearing proof), `tooling-decisions/generated-artifact-engine-resolution-identity.md` (generated copies and their canonical sources), `conventions/document-label-exact-match.md` (mechanical recognition instead of interpretation).
+Iteration `iter-<plan-id>`, plan `<plan-id>`; the frozen implementation contract is `{ITERATION_DIR}/iter-<plan-id>/specs/markdown-anchor-contract.md`, and the production wiring is `scripts/markdown-links.ts` plus Guard 8 in `scripts/drift-lint.ts` with its CI job. Evidence: that plan's task reports and its review bundle (scanner diagnostics, the red/green fragment-resolution fix, and the unchanged-corpus proof) under `{SDD_DIR}/<plan-id>/`. Related: `testing-patterns/mechanical-check-corpus-honesty.md` (fence-aware checks, canonical fixtures, load-bearing proof), `tooling-decisions/generated-artifact-engine-resolution-identity.md` (generated copies and their canonical sources), `conventions/document-label-exact-match.md` (mechanical recognition instead of interpretation).

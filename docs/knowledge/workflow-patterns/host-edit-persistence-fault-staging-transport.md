@@ -8,7 +8,7 @@ applies_when:
   - "An edit to a tracked file reports success but the change is not observable on disk"
   - "A repo-relative write may resolve against a different checkout than the assigned worktree"
   - "Choosing an authoring transport for a round that must produce tracked-file changes"
-plan_id: 20261009-issue428-coordination-residuals
+plan_id: <plan-id>
 tags:
   - host-fault
   - edit-persistence
@@ -64,4 +64,4 @@ The failure is silent in the worst direction: a round can report a completed cha
 
 ## Source
 
-Plan `20261009-issue428-coordination-residuals` — per-round fault/recovery receipts in the plan's review bundle (the acknowledged-but-empty edits, the control-root stray modification, the corrupt generated patches, and the staging-copy transports that landed the rounds). Related: `workflow-patterns/subagent-write-blocked-payload-contract.md` (the read-only-sandbox variant: a seat that cannot write returns its deliverable in the payload), `best-practices/host-tool-call-revision-idempotency.md` (the adjacent host-channel discipline: revisions must be re-entrant and marker-guarded).
+Plan `<plan-id>` — per-round fault/recovery receipts in the plan's review bundle (the acknowledged-but-empty edits, the control-root stray modification, the corrupt generated patches, and the staging-copy transports that landed the rounds). Related: `workflow-patterns/subagent-write-blocked-payload-contract.md` (the read-only-sandbox variant: a seat that cannot write returns its deliverable in the payload), `best-practices/host-tool-call-revision-idempotency.md` (the adjacent host-channel discipline: revisions must be re-entrant and marker-guarded).

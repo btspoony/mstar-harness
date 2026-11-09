@@ -26,7 +26,7 @@ applies_when:
 
 ## Context
 
-W-B3 (iter-20260815-fallbacks-personas-workflow, plan `20260815-dsh-workflow-gate`) implemented the four-tier `workflowGate` (off/warn/ask/hard) with P-a name allowlist, P-b lease attribution, P-c first-seen ask. Three composed-behavior defects survived task review and were only caught at plan QC — each is a pattern-level lesson. Capability model (what channels exist): `architecture-patterns/dsh-workflow-composition-gate-coverage.md`; this doc is the implementation-pattern companion.
+W-B3 (iter-<plan-id>, plan `<plan-id>`) implemented the four-tier `workflowGate` (off/warn/ask/hard) with P-a name allowlist, P-b lease attribution, P-c first-seen ask. Three composed-behavior defects survived task review and were only caught at plan QC — each is a pattern-level lesson. Capability model (what channels exist): `architecture-patterns/dsh-workflow-composition-gate-coverage.md`; this doc is the implementation-pattern companion.
 
 ## Guidance
 
@@ -58,4 +58,4 @@ Defects 1 and 2 are structurally invisible: single-seam tests pass, positive con
 
 - `packages/dsh/src/gates/workflow-policy.ts` (four-tier policy, `WorkflowAskCache` with `markAsked`/`wasAsked`/normalized record, `WORKFLOW_LEASE_UNCOVERED_CODE` / `WORKFLOW_NAME_UNKNOWN_CODE`).
 - `packages/dsh/tests/workflow-gate.spec.ts` (tests 13-18: control-char congruence, uncapped identity, ask-deny fail-closed, un-asked-run no-bypass).
-- QC evidence: `.mstar/sdd/20260815-dsh-workflow-gate/review/qc2.md` (W-1/W-2) + `qc-consolidated.md`.
+- QC evidence: `{HARNESS_DIR}/sdd/<plan-id>/review/qc2.md` (W-1/W-2) + `qc-consolidated.md`.

@@ -5,7 +5,7 @@ date: 2026-10-24
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: medium
-source: iter-20261023-authz-recovery-v2 (plans 20261023-invocation-path-unity, 20261023-recovery-audit-reopen)
+source: iter-<plan-id> (plans <plan-id>, <plan-id>)
 status: active
 tags:
   - authority-anchors
@@ -20,7 +20,7 @@ tags:
 
 Two seams in this harness share one failure shape: a *derived read* re-derives meaning from a stored anchor, and the two sides disagree about what the anchor means. The damage is silent because both sides succeed.
 
-1. **Registration pointers.** An iteration's `compass_ref` is stored as a harness-relative pointer. Registration accepted a repository-relative spelling (`.mstar/iterations/<id>/delivery-compass.md`) because containment was checked after lexical joining, which produced a path that looked contained but did not exist. Native Phase-1 readiness joined the same value under the harness root, saw `.mstar/.mstar/...`, and refused with a bare `binding-invalid`. No public verb could rewrite the anchor, so a correctly registered workflow became unusable.
+1. **Registration pointers.** An iteration's `compass_ref` is stored as a harness-relative pointer. Registration accepted a repository-relative spelling (`{HARNESS_DIR}/iterations/<id>/delivery-compass.md`) because containment was checked after lexical joining, which produced a path that looked contained but did not exist. Native Phase-1 readiness joined the same value under the harness root, saw `{HARNESS_DIR}/{HARNESS_DIR}/...`, and refused with a bare `binding-invalid`. No public verb could rewrite the anchor, so a correctly registered workflow became unusable.
 2. **Terminal projections.** The projection read the *newest* operation receipt by rowid. A legitimate post-close terminal lease release writes its own receipt without attribution, so after that release the close's `actor_session_id`, `reason` and `holder_live` warning silently disappeared from `status validate` — the exact surface the attribution work existed to provide.
 
 ## Practice

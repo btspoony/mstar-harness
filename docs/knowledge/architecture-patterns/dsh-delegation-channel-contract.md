@@ -25,7 +25,7 @@ applies_when:
   - routing MStar delegation on a dsh session
   - designing a gate, ledger, or panel surface that must cover every delegation channel
   - reviewing a profile composition that mounts the Agent Teams bundle
-plan_id: "20261019-dsh-channel-skill-contract, 20261019-team-ledger-panel-closeout, 20261019-dsh-delegation-channels"
+plan_id: "<plan-id>, <plan-id>, <plan-id>"
 ---
 
 # dsh delegation channels: one contract, three transports
@@ -38,7 +38,7 @@ dsh ships three model-facing delegation surfaces, and a profile can expose sever
 children), and `workflow` (a JS script over fresh one-shot `agent()` calls). MStar originally keyed
 host detection, the Assignment dispatch gate, and the agent-flow ledger on the `subagent` tool
 alone — so a team-only profile was invisible, ungated, and unrecorded. The contract that now holds
-(PR #538 + the iter-20261019-dsh-channel-adoption plans):
+(PR #538 + the iter-<plan-id> plans):
 
 - **Selection is by work shape, not by tool preference.** One self-contained Assignment →
   `subagent`. Multi-seat / role-persistent / multi-round → Agent Teams. Read-only N≥3 fan-out →

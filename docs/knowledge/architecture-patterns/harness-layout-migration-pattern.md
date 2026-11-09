@@ -5,7 +5,7 @@ problem_type: architecture_pattern
 category: architecture-patterns
 last_updated: 2026-11-09
 severity: high
-plan_id: 20260819-workflow-engine-core
+plan_id: <plan-id>
 applies_when:
   - "one-shot layout/schema migration with hard cutover (no dual-read)"
   - "the legacy root file must survive the migration for forensics"
@@ -73,7 +73,7 @@ With hard cutover, an operator's only recovery from a botched migration is the m
 ```json
 {
   "version": 1,
-  "plans": [ { "id": "20260808-slice1-engine-foundation", "status": "Done", "notes": ["…"] } ],
+  "plans": [ { "id": "<plan-id>", "status": "Done", "notes": ["…"] } ],
   "metadata": { "plan_parallelism": "serial", "iteration_base_branch": "main", "program_roadmap": { "…": "…" } },
   "residual_findings": {}
 }

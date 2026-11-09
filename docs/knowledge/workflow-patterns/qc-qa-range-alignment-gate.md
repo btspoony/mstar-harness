@@ -4,7 +4,7 @@ date: 2026-09-25
 problem_type: workflow_issue
 category: workflow-patterns
 severity: high
-plan_id: "20260925-roadmap-store-authority"
+plan_id: "<plan-id>"
 last_updated: 2026-11-09
 applies_when:
   - "A plan QC round returns Request Changes and a fix wave lands on the plan branch before the PM Acceptance round"
@@ -34,7 +34,7 @@ The two declarations therefore diverge **by construction**, and the divergence i
 
 An acceptance reader of that pair returns `Blocked` on the alignment rule. That is the gate working as designed: it exists so that a signed-off range cannot silently absorb commits nobody reviewed.
 
-Observed in plan `20260925-roadmap-store-authority`: QC round 1 returned `Request Changes` from all three seats on one blocking finding; the fix wave landed (`c4b47819..91661aa0`, plus a comment-only nit `eda4c5cd`); each seat revalidated in place and moved to `Approve`; the acceptance record declared `ecdf67b3..79d01a00` while the reports still declared `ecdf67b3..c4b47819`. The first acceptance dispatch returned `Blocked` for the metadata mismatch alone, with no product evidence in question. The mechanism is role-independent: that round ran under the retired L4 QA seat, and the same gate now checks QC reports against the PM Acceptance record.
+Observed in plan `<plan-id>`: QC round 1 returned `Request Changes` from all three seats on one blocking finding; the fix wave landed (`c4b47819..91661aa0`, plus a comment-only nit `eda4c5cd`); each seat revalidated in place and moved to `Approve`; the acceptance record declared `ecdf67b3..79d01a00` while the reports still declared `ecdf67b3..c4b47819`. The first acceptance dispatch returned `Blocked` for the metadata mismatch alone, with no product evidence in question. The mechanism is role-independent: that round ran under the retired L4 QA seat, and the same gate now checks QC reports against the PM Acceptance record.
 
 ## Guidance
 
@@ -81,4 +81,4 @@ Each seat appends `## Final range alignment`, declaring `A..C` with the coverage
 
 ## Source
 
-Iteration `iter-20260925-v4-phase4`, plan `20260925-roadmap-store-authority`. Evidence: the seat `## Final range alignment` sections and the consolidated range-alignment and QA-retry record under `{SDD_DIR}/20260925-roadmap-store-authority/review/`, plus that plan's acceptance report (written under the then-current QA route). Related: `workflow-patterns/plan-branch-sibling-increment-ancestry.md` (the review basis is refreshed after every merge, and ancestry is checked at dispatch), `workflow-patterns/merge-state-seam-review.md` (the tri and the acceptance round must share tip and range), `testing-patterns/mechanical-check-corpus-honesty.md` (`worktree qc-alignment` and the canonical combined label).
+Iteration `iter-<plan-id>`, plan `<plan-id>`. Evidence: the seat `## Final range alignment` sections and the consolidated range-alignment and QA-retry record under `{SDD_DIR}/<plan-id>/review/`, plus that plan's acceptance report (written under the then-current QA route). Related: `workflow-patterns/plan-branch-sibling-increment-ancestry.md` (the review basis is refreshed after every merge, and ancestry is checked at dispatch), `workflow-patterns/merge-state-seam-review.md` (the tri and the acceptance round must share tip and range), `testing-patterns/mechanical-check-corpus-honesty.md` (`worktree qc-alignment` and the canonical combined label).

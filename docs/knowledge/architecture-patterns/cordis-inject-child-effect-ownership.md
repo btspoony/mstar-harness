@@ -18,14 +18,14 @@ applies_when:
   - registering anything through ctx.inject(['<service>']) in a cordis plugin
   - designing one-shot latch or cache state that must survive or reset across service re-apply
   - reviewing HMR/fiber-swap behavior claims for plugin registrations
-plan_id: iter-20260816-dsh-seeds-bridges
+plan_id: iter-<plan-id>
 ---
 
 # cordis inject-child does not own service-fiber effects — disposer capture and latch re-arm
 
 ## Context
 
-Two independent QC findings in `iter-20260816-dsh-seeds-bridges` converged on the same cordis lifecycle fact:
+Two independent QC findings in `iter-<plan-id>` converged on the same cordis lifecycle fact:
 
 - **P1 QC3-W1** (`fallbacks-advisory`): a one-shot advisory latch armed at the first decision point never re-armed after `dsh-llm-fallbacks` HMR re-apply — the "re-fires on every apply" inject child did re-declare, but convergence (the advisory pass) was permanently stale.
 - **P2 QC3-W1** (`system-prompt`): a module doc claimed "a re-apply disposes the old registrations before registering fresh ones" — false. `section()`/`context()` effects land on the **systemPrompt service fiber** (`ScopedLayers.effect(this.ctx)`), not the caller's inject child; re-apply produced a contained duplicate-name throw, new registrations lost, old closure (stale `harnessDir`) alive.
@@ -49,5 +49,5 @@ Every "wire into a dsh service via `ctx.inject`" feature (seeds declare, prompt 
 
 ## Source
 
-- QC evidence: `.mstar/sdd/20260816-dsh-b4-seeds/review/qc3.md` (W-1), `.mstar/sdd/20260816-dsh-nb1-systemprompt/review/qc3.md` (W1) + fix-wave reports (`cadd416`, `fa641c7`).
-- API anchors: `.mstar/iterations/iter-20260816-dsh-seeds-bridges/specs/systemprompt-api-findings.md`, `architect-api-verification-20260816.md`.
+- QC evidence: `{HARNESS_DIR}/sdd/<plan-id>/review/qc3.md` (W-1), `{HARNESS_DIR}/sdd/<plan-id>/review/qc3.md` (W1) + fix-wave reports (`cadd416`, `fa641c7`).
+- API anchors: `{HARNESS_DIR}/iterations/iter-<plan-id>/specs/systemprompt-api-findings.md`, `architect-api-verification-20260816.md`.

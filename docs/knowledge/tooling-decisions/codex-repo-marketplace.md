@@ -21,7 +21,7 @@ tags:
 
 ## Context
 
-The harness repo ships a portable Agent Plugins package at its root (`.codex-plugin/plugin.json` + `skills/`). The CLI's codex install flow previously wrote a **personal marketplace** entry into `~/.agents/plugins/marketplace.json` (name `personal`, `source: local`, path pointing at a CLI-maintained `~/.mstar/harness` checkout). The user asked whether the repo could instead ship its own marketplace catalog at `.agents/plugins/marketplace.json` so the CLI stops maintaining personal JSON. Verified on codex-cli 0.144.1 (2026-08-31) and cut over (PR #172).
+The harness repo ships a portable Agent Plugins package at its root (`.codex-plugin/plugin.json` + `skills/`). The CLI's codex install flow previously wrote a **personal marketplace** entry into `~/.agents/plugins/marketplace.json` (name `personal`, `source: local`, path pointing at a CLI-maintained `~/{HARNESS_DIR}/harness` checkout). The user asked whether the repo could instead ship its own marketplace catalog at `.agents/plugins/marketplace.json` so the CLI stops maintaining personal JSON. Verified on codex-cli 0.144.1 (2026-08-31) and cut over (PR #172).
 
 ## Guidance
 
@@ -30,7 +30,7 @@ The harness repo ships a portable Agent Plugins package at its root (`.codex-plu
 - **`--ref` is only accepted for git sources** — passing it with a local path errors (`--ref is only supported for git marketplace sources`). The full `.git` URL form (`https://github.com/owner/repo.git --ref <ref>`) is a valid git source and resolves the marketplace name from the repo's file.
 - **Marketplace name resolution**: for git/local sources the registered name comes from the marketplace file's `name` field, not the source path. `codex plugin marketplace remove <name>` uses the resolved name (a raw `owner/repo` string is rejected as an invalid name).
 - **Idempotency**: re-adding an already-configured marketplace is a no-op (`alreadyAdded: true`, exit 0) — the CLI checks `codex plugin marketplace list --json` first and skips.
-- **Install**: `codex plugin add morning-star-harness@mstar-repo` copies the plugin into `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`. Codex discovers custom agents only from `~/.codex/agents/` (not from plugin packages) — agent `.toml` symlinks from the shared `~/.mstar/harness` checkout remain a separate CLI step.
+- **Install**: `codex plugin add morning-star-harness@mstar-repo` copies the plugin into `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`. Codex discovers custom agents only from `~/.codex/agents/` (not from plugin packages) — agent `.toml` symlinks from the shared `~/{HARNESS_DIR}/harness` checkout remain a separate CLI step.
 - **CLI adapter shape** (packages/cli/src/adapters/codex.ts): fail-loud probe for the `codex` binary (`codex --version`, install hint on absence — same pattern as the dsh adapter); `init` runs `codex plugin marketplace add <REPO_URL> --ref main`; `doctor` validates via `codex plugin marketplace list --json` + `codex plugin list --json`; a legacy `personal` entry in `~/.agents/plugins/marketplace.json` is a migration **note**, not an error.
 
 ## Why This Matters

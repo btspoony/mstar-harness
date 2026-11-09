@@ -1,7 +1,7 @@
 ---
 title: Derive session authority from host facts, never tool input
 category: architecture-patterns
-source: iter-20260916-omp-model-handoff (model row Task 3, Critical fix 298339c9)
+source: iter-<plan-id> (model row Task 3, Critical fix 298339c9)
 status: active
 ---
 

@@ -8,7 +8,7 @@ applies_when:
   - "Running /amazing-pr-review on a single PR and needing multi-seat coverage with one verdict"
   - "Designing any multi-subagent review/audit pipeline that must not depend on seat write access"
   - "Handling a batch of PR numbers in one session"
-plan_id: 20260826-pr-review-scout-pipeline
+plan_id: <plan-id>
 last_updated: 2026-11-09
 tags:
   - pr-review
@@ -23,7 +23,7 @@ tags:
 
 ## Context
 
-`/pr-deep-review` (now `/amazing-pr-review`) originally dispatched a single `code-reviewer` to review a PR end-to-end. Practice showed one seat cannot hold both code and security depth on a real PR, and a batch of PR numbers in one session diluted depth and multiplied concurrency cost. `iter-20260826-pr-deep-review` rebuilt the flow as a three-stage pipeline with a one-session-one-PR policy.
+`/pr-deep-review` (now `/amazing-pr-review`) originally dispatched a single `code-reviewer` to review a PR end-to-end. Practice showed one seat cannot hold both code and security depth on a real PR, and a batch of PR numbers in one session diluted depth and multiplied concurrency cost. `iter-<plan-id>` rebuilt the flow as a three-stage pipeline with a one-session-one-PR policy.
 
 ## Guidance
 
@@ -50,4 +50,4 @@ A single-seat review under-covers security on real PRs; a batch session over-com
 
 ## Result
 
-Three plans (`20260826-pr-review-scout-pipeline`, `20260826-pr-review-batch-session`, `20260826-pr-review-skill-sync`) — QC tri + QA Pass each; residuals R-W001/R-W002 closed in place; fragments under `.changes/unreleased/pr-review-*.md`.
+Three plans (`<plan-id>`, `<plan-id>`, `<plan-id>`) — QC tri + QA Pass each; residuals R-W001/R-W002 closed in place; fragments under `.changes/unreleased/pr-review-*.md`.

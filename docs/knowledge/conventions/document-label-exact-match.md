@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: convention
 category: conventions
 severity: high
-plan_id: "20260921-handoff-identity-recovery"
+plan_id: "<plan-id>"
 applies_when:
   - "Parsing keyed labels out of harness-authored Markdown (plans, Assignments, compasses, review reports)"
   - "Adding a descriptive sibling label next to a contractual one"
@@ -25,7 +25,7 @@ tags:
 Plan admission reads a reviewed plan Markdown's keyed labels and refuses when a declaration disagrees with the metadata being registered or appended. Real plans carry **descriptive siblings that share a prefix** with the labels the contract consults — the dominant example is
 
 ```markdown
-**Working branch:** feature/20260921-execution-session-core
+**Working branch:** feature/<plan-id>
 **Working branch policy:** Feature branch from iteration/...; merge target ...; delivery target main.
 ```
 
@@ -79,4 +79,4 @@ Exact lookup in the consulted set: a plan carrying both labels records the value
 
 ## Source
 
-Iteration `iter-20260921-execution-2b-cutover`, plan `20260921-handoff-identity-recovery` (P7 regression task), over the parser in `packages/engine/src/plan-path.ts` with its amendment consumer in `packages/engine/src/coordination.ts`. Evidence: the plan QC consolidated and the L4 QA report under `{SDD_DIR}/review/` for that plan, and the L2 review of the P7 fixture in the same bundle. Related: `architecture-patterns/guarded-self-amendment-bootstrap.md` (the writer whose admission this parser feeds), `workflow-patterns/scoped-plan-gate-pinning.md` (archived) (the Assignment header seal and the bare-`Working branch` rule).
+Iteration `iter-<plan-id>`, plan `<plan-id>` (P7 regression task), over the parser in `packages/engine/src/plan-path.ts` with its amendment consumer in `packages/engine/src/coordination.ts`. Evidence: the plan QC consolidated and the L4 QA report under `{SDD_DIR}/review/` for that plan, and the L2 review of the P7 fixture in the same bundle. Related: `architecture-patterns/guarded-self-amendment-bootstrap.md` (the writer whose admission this parser feeds), `workflow-patterns/scoped-plan-gate-pinning.md` (archived) (the Assignment header seal and the bare-`Working branch` rule).

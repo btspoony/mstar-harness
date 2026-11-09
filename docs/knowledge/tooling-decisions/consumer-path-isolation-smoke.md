@@ -4,7 +4,7 @@ date: 2026-09-18
 problem_type: tooling_decision
 category: tooling-decisions
 severity: low
-plan_id: 20260918-iteration-register-cli
+plan_id: <plan-id>
 last_updated: 2026-11-09
 applies_when:
   - proving a bundled CLI runs with no dependency on a package it normally resolves from
@@ -21,7 +21,7 @@ tags:
 
 ## Context
 
-`mstar iteration register` (plan `20260918-iteration-register-cli`) must register an iteration from a consumer checkout **with no engine import**: the built CLI bundle inlines its dependencies (68 modules / 1.28 MB when measured; 4.5 MB at 4.3.0), so at runtime nothing should resolve outside the single file. But bundling makes "the consumer needs no `@mstar-harness/engine`" a claim that must be **actively proven**, not asserted — a naive verification can pass while ambient resolution is silently supplying the package. The command still exists (`mstar iteration register`, `iteration.register`, write effect). Evidence recorded in `.mstar/sdd/20260918-iteration-register-cli/task-2-consumer-smoke.md`.
+`mstar iteration register` (plan `<plan-id>`) must register an iteration from a consumer checkout **with no engine import**: the built CLI bundle inlines its dependencies (68 modules / 1.28 MB when measured; 4.5 MB at 4.3.0), so at runtime nothing should resolve outside the single file. But bundling makes "the consumer needs no `@mstar-harness/engine`" a claim that must be **actively proven**, not asserted — a naive verification can pass while ambient resolution is silently supplying the package. The command still exists (`mstar iteration register`, `iteration.register`, write effect). Evidence recorded in `{HARNESS_DIR}/sdd/<plan-id>/task-2-consumer-smoke.md`.
 
 ## Guidance
 
@@ -74,4 +74,4 @@ node -e "try { require.resolve('@mstar-harness/engine', { paths: ['$PWD','$SMOKE
 # → RESOLVE FAILED (expected): MODULE_NOT_FOUND
 ```
 
-Full verbatim transcript: `.mstar/sdd/20260918-iteration-register-cli/task-2-consumer-smoke.md`.
+Full verbatim transcript: `{HARNESS_DIR}/sdd/<plan-id>/task-2-consumer-smoke.md`.

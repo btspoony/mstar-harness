@@ -4,7 +4,7 @@ date: 2026-09-23
 problem_type: testing_pattern
 category: testing-patterns
 severity: high
-plan_id: "20260921-execution-consumer-readiness"
+plan_id: "<plan-id>"
 applies_when:
   - "Asserting that a refused operation wrote nothing to a WAL-mode SQLite store"
   - "Choosing the observable for a no-write or artifact-unchanged claim"
@@ -22,7 +22,7 @@ tags:
 
 ## Context
 
-The populated-store recovery fixture in plan `20260921-execution-consumer-readiness` proved "the refused preview wrote nothing" by hashing the main `store.db` file before and after the refusal. Two refusal assertions in the populated fixture and two in the recovery suites used that form, and one recorded run showed 8 pass / 0 fail, which the plan carried as acceptance evidence.
+The populated-store recovery fixture in plan `<plan-id>` proved "the refused preview wrote nothing" by hashing the main `store.db` file before and after the refusal. Two refusal assertions in the populated fixture and two in the recovery suites used that form, and one recorded run showed 8 pass / 0 fail, which the plan carried as acceptance evidence.
 
 That single run was not stable. A re-measurement taken during plan QC observed 6–7 pass with 1–2 failures across twelve runs, always in the same assertions. The cause is a runtime property of SQLite in WAL mode: the checkpoint that folds the journal into the main database file, and the removal of the now-empty `-wal`/`-shm` sidecars, happens when the **last connection handle is collected** — not at `close()`. So a store file can be rewritten between the two hashes with no engine write at all. The assertion was not wrong about the engine; it was asserting a proposition the runtime does not guarantee.
 
@@ -74,4 +74,4 @@ A byte-as-proof assertion fails in both directions of credibility. Intermittentl
 
 ## Source
 
-Iteration `iter-20260921-execution-2b-cutover`, plan `20260921-execution-consumer-readiness`. Evidence: the plan QC consolidated and the L4 QA report in `{SDD_DIR}/review/` for that plan (the flakiness measurement, the assertion rewrite, and the retained non-WAL byte comparisons), and `{SDD_DIR}/review/qa.md` for the repeated stability runs. Related: `testing-patterns/load-bearing-regression-proof.md`, `testing-patterns/mechanical-check-corpus-honesty.md`.
+Iteration `iter-<plan-id>`, plan `<plan-id>`. Evidence: the plan QC consolidated and the L4 QA report in `{SDD_DIR}/review/` for that plan (the flakiness measurement, the assertion rewrite, and the retained non-WAL byte comparisons), and `{SDD_DIR}/review/qa.md` for the repeated stability runs. Related: `testing-patterns/load-bearing-regression-proof.md`, `testing-patterns/mechanical-check-corpus-honesty.md`.

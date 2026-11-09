@@ -8,7 +8,7 @@ applies_when:
   - "Designing or tuning any multi-subagent pipeline (review/audit/QC) whose wall-clock duration must be predictable rather than input-shape-dependent"
   - "Adding per-seat output/read caps that cannot be mechanically enforced because seats are host-managed subagent sessions"
   - "Instrumenting an orchestrated workflow so its duration targets become falsifiable instead of aspirational"
-plan_id: 20260905-prreview-tier-budget
+plan_id: <plan-id>
 tags:
   - pr-review
   - time-budget
@@ -50,4 +50,4 @@ Any mstar workflow with host-dispatched seats and a duration expectation: PR rev
 
 ## Source
 
-Iteration `iter-20260905-pr-review-time-budget` (plans 20260905-prreview-tier-budget / -context-pack / -synthesis-slim); design rationale and external research: iteration package `guides/research-notes.md`.
+Iteration `iter-<plan-id>` (plans <plan-id> / -context-pack / -synthesis-slim); design rationale and external research: iteration package `guides/research-notes.md`.

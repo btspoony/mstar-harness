@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: workflow_issue
 category: workflow-patterns
 severity: high
-plan_id: 20260915-plan-coordination
+plan_id: <plan-id>
 applies_when:
   - Separate implementation tracks are composed before plan QC
   - Tasks touch opposite halves of one contract
@@ -28,7 +28,7 @@ When a plan task proves too large for one implementer turn, it is split into sli
 
 That sequence leaves a gap with no owner. A slice review answers "is this slice correct against the frozen contract?" It cannot answer "do any two slices contradict each other now that they are merged?" — the reviewer never sees the composite, and each slice's tests exercise its own half of the contract with the other half stubbed or imported as-is.
 
-In `20260915-plan-coordination` the gap produced a measurable result: three engine slices (core/binding, row verbs + exports, protected-writer switchover) plus a CLI task each passed their own review — including one slice whose own L2 closed two Critical findings with red→green evidence — and a review of the *merged* engine diff then found **12 defects, 8 of them Critical and 4 Important**.
+In `<plan-id>` the gap produced a measurable result: three engine slices (core/binding, row verbs + exports, protected-writer switchover) plus a CLI task each passed their own review — including one slice whose own L2 closed two Critical findings with red→green evidence — and a review of the *merged* engine diff then found **12 defects, 8 of them Critical and 4 Important**.
 
 The same gap exists without parallel branches or executable code. A documentation task can satisfy its additions while deleting an unchanged obligation, or introduce an exclusion that conflicts with an older rule elsewhere in the file. The full plan's normative contract is the composite. For an SDD documentation plan, the existing L3 tri-review is the place to check that composite; this does not create another mandatory review layer or replace L2.
 
@@ -110,15 +110,15 @@ Composition defects are silent by construction: every slice's suite is green, ev
 
 ## Source
 
-Iteration `iter-20260915-scoped-plan-pm`, plan `20260915-plan-coordination` (one plan task, three engine slices + a CLI task, two concurrent tracks). Seam-review evidence lives in the plan's SDD bundle: the merged-state review brief (`task-1-fix2-brief.md` — the finding list with `path:line` and violated contract), the fix report (`task-1-fix2-report.md`), and the consolidated gate summary (`review/qc-consolidated.md`). Related: `workflow-patterns/multi-agent-time-budgeting.md` (cross-plan gloss sweep over a shared SSOT file — the same "later plan invalidates an earlier surface" failure one level up).
+Iteration `iter-<plan-id>`, plan `<plan-id>` (one plan task, three engine slices + a CLI task, two concurrent tracks). Seam-review evidence lives in the plan's SDD bundle: the merged-state review brief (`task-1-fix2-brief.md` — the finding list with `path:line` and violated contract), the fix report (`task-1-fix2-report.md`), and the consolidated gate summary (`review/qc-consolidated.md`). Related: `workflow-patterns/multi-agent-time-budgeting.md` (cross-plan gloss sweep over a shared SSOT file — the same "later plan invalidates an earlier surface" failure one level up).
 
-Additional local evidence for `iter-20260918-audit-distillation`:
+Additional local evidence for `iter-<plan-id>`:
 
-- [Plan B QC consolidated](../../sdd/20260918-audit-finding-identity-and-coverage/review/qc-consolidated.md): the dropped carry-over clauses, coverage-status invariant, and closure.
-- [Plan C QC consolidated](../../sdd/20260918-security-review-domain-expansion/review/qc-consolidated.md): independent evidence-rule discovery, exclusion contradiction, and fix acceptance.
-- [Plan C task-1 L2 review](../../sdd/20260918-security-review-domain-expansion/task-1-review.md): severity-contract mismatch and its targeted correction. [Task-3 L2 review](../../sdd/20260918-security-review-domain-expansion/task-3-review.md) and [task-4 L2 review](../../sdd/20260918-security-review-domain-expansion/task-4-review.md) show the bounded local reviews preceding the plan-level preserved-rule discovery.
-- [Plan A QC consolidated](../../sdd/20260918-audit-scaffold-field-fidelity/review/qc-consolidated.md): the executable field-contract counterexample.
+- Plan B QC consolidated（{SDD_DIR}/review/）: the dropped carry-over clauses, coverage-status invariant, and closure.
+- Plan C QC consolidated（{SDD_DIR}/review/）: independent evidence-rule discovery, exclusion contradiction, and fix acceptance.
+- Plan C task-1 L2 review（{SDD_DIR}/review/）: severity-contract mismatch and its targeted correction. Task-3 L2 review（{SDD_DIR}/review/） and task-4 L2 review（{SDD_DIR}/review/） show the bounded local reviews preceding the plan-level preserved-rule discovery.
+- Plan A QC consolidated（{SDD_DIR}/review/）: the executable field-contract counterexample.
 
-These are local process-evidence links; `.mstar/` is ignored wholesale in this repository. The tracked audit contracts remain in `skills/mstar-audit/**`; this knowledge update is not a PR artifact. Finding identifiers stay in their review bundles rather than becoming vocabulary here.
+These are local process-evidence links; `{HARNESS_DIR}/` is ignored wholesale in this repository. The tracked audit contracts remain in `skills/mstar-audit/**`; this knowledge update is not a PR artifact. Finding identifiers stay in their review bundles rather than becoming vocabulary here.
 
 Related: [provenance hygiene](provenance-hygiene-tracked-comments.md) covers the narrower local-reference leak class; `skills/mstar-use-cli/references/plan-and-workflow.md` covers the current plan/workflow transport and store pinning. The conceptual vocabulary already exists in root `CONCEPTS.md` under “Review seat layers (L1–L4)” and “Three-domain write model”; no new term is introduced.

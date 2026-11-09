@@ -15,8 +15,8 @@ related_components:
   - packages/dsh
   - skills/mstar-host
 source_plans:
-  - 20260911-dsh-native-workflow-authoring
-  - 20260911-dsh-workflow-ledger-coldread
+  - <plan-id>
+  - <plan-id>
 status: active
 last_updated: 2026-11-09
 ---

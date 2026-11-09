@@ -26,7 +26,7 @@ applies_when:
 
 ## Context
 
-W-B2 (iter-20260815-fallbacks-personas-workflow, plan `20260815-dsh-workflow-ledger`) built the workflow ledger over durable `tool-workflow/*` session events. The seam has four non-obvious properties, each of which cost debugging or a QC finding to discover; the durable-watermark dedupe also produced one real data-loss regression (R-401) during review. Companion capability doc: `architecture-patterns/dsh-workflow-composition-gate-coverage.md` (WHAT exists); this doc captures HOW to consume it correctly.
+W-B2 (iter-<plan-id>, plan `<plan-id>`) built the workflow ledger over durable `tool-workflow/*` session events. The seam has four non-obvious properties, each of which cost debugging or a QC finding to discover; the durable-watermark dedupe also produced one real data-loss regression (R-401) during review. Companion capability doc: `architecture-patterns/dsh-workflow-composition-gate-coverage.md` (WHAT exists); this doc captures HOW to consume it correctly.
 
 ## Guidance
 
@@ -58,4 +58,4 @@ Every one of these five seam facts is silent when violated: mis-routed listeners
 
 - `packages/dsh/src/gates/workflow-ledger.ts` (consumer; `registerWorkflowLedger` wiring, `readDshScanBound`/`advanceDshScanBound` cursor, `sessionForkCutOf`, contained hooks).
 - `packages/dsh/tests/agent-flow-workflow.spec.ts` (FakeSessionRegistry, EISDIR failing-append regression, re-apply dedupe, created-backfill).
-- Evidence SSOT: `.mstar/sdd/20260815-dsh-workflow-ledger/notes/session-events-seam.md` (file:line index).
+- Evidence SSOT: `{HARNESS_DIR}/sdd/<plan-id>/notes/session-events-seam.md` (file:line index).

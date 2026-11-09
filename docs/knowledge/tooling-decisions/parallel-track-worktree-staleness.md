@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: tooling_decision
 category: tooling-decisions
 severity: high
-plan_id: 20261014-release-readiness-fixes
+plan_id: <plan-id>
 applies_when:
   - "Dispatching leaf implementers across several concurrent track worktrees"
   - "A dispatched task edits a package whose contract another track has already changed"
@@ -23,7 +23,7 @@ tags:
 
 ## Context
 
-Three separate failures hit the same delivery (`20261014-release-readiness-fixes`, four track worktrees, five tasks), and each was first read as the implementer's mistake:
+Three separate failures hit the same delivery (`<plan-id>`, four track worktrees, five tasks), and each was first read as the implementer's mistake:
 
 1. **A leaf wrote to the primary checkout.** One implementer's `write`/`edit` calls resolved **relative** paths against `/Users/bibi/workspace/ai/mstar-harness` even though its shell `cd`ed into its track worktree. The three intended edits landed as uncommitted modifications in the primary checkout while its own worktree stayed clean. The agent's own `git status` in the worktree showed nothing, so its self-check passed while the change went to the wrong tree. PM saved the diff, applied it into the track worktree, restored the primary, and the implementer committed from there. A second implementer on the same host did the same thing for a different task.
 
@@ -45,4 +45,4 @@ All three failures are silent at the point they occur and expensive later: the p
 
 ## Source
 
-Delivery `20261014-release-readiness-fixes` (workflow `wf-20261014-release-readiness`). Incident evidence: `.tmp/incident-20261014-trackD-primary-write.diff` and the `progress.md` incident entry; the stale-base exchange is in the track D implementer transcript; the evidence-path refusal is reproduced by any `plan complete` with relative `qc.reports`. Related: `worktree-dependency-dist-isolation.md` (the same isolation gap, for `node_modules` and `dist`).
+Delivery `<plan-id>` (workflow `wf-<plan-id>`). Incident evidence: `.tmp/incident-<plan-id>D-primary-write.diff` and the `progress.md` incident entry; the stale-base exchange is in the track D implementer transcript; the evidence-path refusal is reproduced by any `plan complete` with relative `qc.reports`. Related: `worktree-dependency-dist-isolation.md` (the same isolation gap, for `node_modules` and `dist`).

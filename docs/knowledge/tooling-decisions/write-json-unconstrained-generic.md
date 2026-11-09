@@ -8,7 +8,7 @@ severity: medium
 applies_when:
   - "Typing an engine persistence boundary whose doc types lack an index signature"
   - "Removing `as unknown as Record<string, unknown>` casts at writeJson call sites"
-plan_id: 20260822-engine-cleanup
+plan_id: <plan-id>
 tags:
   - writeJson
   - generics

@@ -1,6 +1,6 @@
 # Frozen-invariant lints must land CI-wired, and calibrate before narrowing
 
-Source: plan 20261008-overdesign-lint-judge (#341); incidents I-000451, I-000434, I-000435.
+Source: plan <plan-id> (#341); incidents I-000451, I-000434, I-000435.
 
 ## Lessons
 

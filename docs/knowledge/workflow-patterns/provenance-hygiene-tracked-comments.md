@@ -5,7 +5,7 @@ last_updated: 2026-09-16
 problem_type: workflow_issue
 category: workflow-patterns
 severity: medium
-plan_id: "iter-20260912-worktree-lifecycle-closure (plans 20260912-cleanup-tool-sweep, 20260912-sdd-test-evidence-reuse); machine-guard layer: iter-20260914-provenance-guard (plans 20260914-provenance-finder, 20260914-provenance-guard-adoption); citation-resolvability class: 20260916-prepare-amendment-bootstrap"
+plan_id: "iter-<plan-id> (plans <plan-id>, <plan-id>); machine-guard layer: iter-<plan-id> (plans <plan-id>, <plan-id>); citation-resolvability class: <plan-id>"
 tags:
   - provenance
   - code-review
@@ -42,19 +42,19 @@ At plan QC dispatch (add the range-wide grep to the QC assignment), at fix-wave 
 
 The recurring case: a fresh CLI module commented "consumes the plan's engine block" with the local plan id; a second module's header used phase shorthands for the plans that landed its dependencies. Both passed three review layers before a QC seat grep caught them; both fixed in-wave with range-wide grep evidence, and the pre-existing lines were ledgered for the pre-PR sweep.
 
-## Machine-guard layer (added 2026-09-14, iter-20260914-provenance-guard)
+## Machine-guard layer (added 2026-09-14, iter-<plan-id>)
 
 The prose + QC-grep process layers above are now backed by a three-layer machine defense, generic to any harness consumer repo (this repo is only the first adopter):
 
-1. **Engine finder** (`findProvenanceCitations` in engine `lint.ts`, exported): discovery-only content scanner, single text arg, isomorphic with `findEphemeralCitations`. Two kinds: `plan-id` (dated-slug token `20\d{6}-<slug>`) and `harness-path` (`.mstar/`/`.agents/` deeplink containing a dated token). Zero-false-positive hard gate with per-exclusion negative regressions: `example`-slug synthetic forms, `.digits` version continuations, placeholder chars/letters-not-digits; trailing sentence punctuation trimmed from the reported match only.
-2. **Attribution dedupe (single decision point)**: `.mstar/sdd/…` / `.agents/sdd/…` deeplinks belong to the skill-lint ephemeral check exclusively (whose corpus is skills-only — so dated sdd deeplinks on the general repo face are a documented, conservative blind spot); dated tokens inside a harness path report once as `harness-path`, never also as `plan-id`. Non-dated specific local paths, merge SHAs, and acceptance labels stay prose-enforced (shape-ambiguous, FP-prone).
+1. **Engine finder** (`findProvenanceCitations` in engine `lint.ts`, exported): discovery-only content scanner, single text arg, isomorphic with `findEphemeralCitations`. Two kinds: `plan-id` (dated-slug token `20\d{6}-<slug>`) and `harness-path` (`{HARNESS_DIR}/`/`.agents/` deeplink containing a dated token). Zero-false-positive hard gate with per-exclusion negative regressions: `example`-slug synthetic forms, `.digits` version continuations, placeholder chars/letters-not-digits; trailing sentence punctuation trimmed from the reported match only.
+2. **Attribution dedupe (single decision point)**: `{HARNESS_DIR}/sdd/…` / `.agents/sdd/…` deeplinks belong to the skill-lint ephemeral check exclusively (whose corpus is skills-only — so dated sdd deeplinks on the general repo face are a documented, conservative blind spot); dated tokens inside a harness path report once as `harness-path`, never also as `plan-id`. Non-dated specific local paths, merge SHAs, and acceptance labels stay prose-enforced (shape-ambiguous, FP-prone).
 3. **Consumer guard** (this repo: drift-lint Guard 7; other repos: same pattern): scans the tracked text face — `.md` full text + `.ts` comment lines only (line-level comment-introducer prefilter; test fixture STRINGS are deliberately out of face — they are test data); exemption set single-homed with why-comments: assembled `CHANGELOG*.md` release surfaces (immutable history), `.changes/archive/`, gitignored scratch (`.tmp` etc.), lockfiles excluded by the extension whitelist. CLI face: `mstar lint --type provenance <target>` (explicit-only, exit 1/2).
 
 Process disciplines that made it work, reusable for any lint-of-prose guard:
 
 - **Guard-green is defined by the guard's own scan face**, not by an absolute count — the Phase 1 probe found 4 verified citations, the live guard found 37; plan scope tracked the face, not the number.
 - **Red-probe before implementation** with real-shaped fixtures: a `git grep -E '\b…'` pattern silently matches nothing under POSIX ERE (no `\b` support) — JS RegExp at line level + true-hit regression tests are the only safe detection idiom (seconded: the jaq/jq dialect lesson).
-- **Synthetic-token vocabulary**: fixtures and doc examples use `20991231-example-*` future-dated forms; doc sentences that illustrate REPORTED tokens keep `<slug>` placeholders (converting them to exempt example forms would make one sentence self-contradictory).
+- **Synthetic-token vocabulary**: fixtures and doc examples use `<plan-id>*` future-dated forms; doc sentences that illustrate REPORTED tokens keep `<slug>` placeholders (converting them to exempt example forms would make one sentence self-contradictory).
 - **Cleanup rewrites preserve attribution**: guard/behavior motive stays as a behavior description; only dated identifiers and local labels ("Task N", "batch N", "P1") are removed — reviewers audit no-information-loss, not just absence.
 - **Known unsolved neighbor** (not this iteration's defect): dev-local `scripts/skill-eval/closure.test.ts` frozen-hash pins go stale when `skills/` files change after a freeze — needs its own scoped re-freeze change; CI does not run that suite.
 

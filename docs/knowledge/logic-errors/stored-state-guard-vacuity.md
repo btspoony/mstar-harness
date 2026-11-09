@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: logic_error
 category: logic-errors
 severity: critical
-plan_id: "20260922-report-only-completion"
+plan_id: "<plan-id>"
 symptoms:
   - "A workflow whose stored handoff was rewritten to a non-completed state still closes to a terminal status"
   - "The phase gate accepts the same document that the coherence checks were supposed to reject"
@@ -87,4 +87,4 @@ Stored state is an input the reader does not control, so "I only validate the sh
 
 ## Source
 
-Iteration `iter-20260921-execution-2b-cutover`, plan `20260922-report-only-completion` (#270). Evidence: the plan QC consolidated, the security/correctness seat's round-1 reproduction and round-2 revalidation, the closure-round report, and the L4 QA report — all under `{SDD_DIR}/review/` for that plan. Related: `architecture-patterns/route-specific-completion-and-identity-repair.md` (route-specific completion predicates), `architecture-patterns/indivisible-verdict-action-window.md` (the refusal-before-mutation window the close path preserves).
+Iteration `iter-<plan-id>`, plan `<plan-id>` (#270). Evidence: the plan QC consolidated, the security/correctness seat's round-1 reproduction and round-2 revalidation, the closure-round report, and the L4 QA report — all under `{SDD_DIR}/review/` for that plan. Related: `architecture-patterns/route-specific-completion-and-identity-repair.md` (route-specific completion predicates), `architecture-patterns/indivisible-verdict-action-window.md` (the refusal-before-mutation window the close path preserves).

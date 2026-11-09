@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: medium
-plan_id: "20260820-dsh-engine-status-slim"
+plan_id: "<plan-id>"
 tags:
   - system-prompt
   - digest

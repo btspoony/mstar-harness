@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: testing_pattern
 category: testing-patterns
 severity: medium
-plan_id: 20260816-audit-001-five-question-lint
+plan_id: <plan-id>
 tags:
   - fence-aware-lint
   - false-green
@@ -26,7 +26,7 @@ applies_when:
 
 ## Context
 
-During iter-20260816-audit-mechanical-alignment, two independent false-confidence mechanisms surfaced in freshly-shipped mechanical checks — both caught only by adversarial QC, both invisible to green test suites:
+During iter-<plan-id>, two independent false-confidence mechanisms surfaced in freshly-shipped mechanical checks — both caught only by adversarial QC, both invisible to green test suites:
 
 1. **Fence false-green (plan 001, F-001a/b/c).** `lintFiveQuestion` passed `mstar-skill-authoring` (the standard's own skill) and `mstar-plan-conventions`'s Workflow question — but the "covering" headings lived inside ` ``` ` fenced template/example blocks (the `## 默认 Body 结构` template body; a gitignore comment line). The heading regex matched template *examples of headings*, not the document's own sections. Making the scanner fence-aware flipped both to RED — proving the corpus had never honestly satisfied the check.
 2. **Non-canonical fixture form (plan 004, F-001).** `worktree qc-alignment` parsed `**Review range**:` / `**Diff basis**:` as *separate* labels and its fixtures used that form — all green. The PM Assignment template's canonical label is the *combined* `**Review range / Diff basis**:`; real tri packs (the tool's entire purpose) false-FAILed with `qc.alignment.field.missing` ×2. Tests passed while the primary real-world input shape failed.
@@ -73,4 +73,4 @@ Guards that pass on template echoes or variant fixtures don't just miss defects 
 - `packages/engine/src/skill-authoring.ts` `collectHeadings` — fence toggle scan shared by both lint modes; unit tests pin the gitignore-comment false-positive shape.
 - `packages/commands/src/families/validation.ts` `parseHeaderField` over the combined `**Review range / Diff basis**:` label (the parser moved out of the retired monolithic `packages/cli/src/index.ts`) — the combined label fills both `reviewRange` and `diffBasis`, separate labels win per-field, and the fixture set is the canonical tri-pack (3 assignments, combined label) + separate-form pass + missing-field fail (`qc.alignment.field.missing`).
 - Fence-aware fix that exposed `mstar-skill-authoring`'s own missing sections (fixed with real `## Workflow` + annotated Decision Rules/Evidence — commit `04a4f97`).
-- `scripts/dsh-contract-lint.ts` (plan `20261024-dsh-contract-gates`) — the whole gate after its fix wave: each `## Assignment` segment goes to the engine's `validateAssignmentFields`, carrier citations are matched by snake_case tool shape and then checked against the map, an unparsed map line is a named row, `checkFenceParity` rows on an odd fence count, and a duplicate `README.i18n.yaml` record is named. Six seeded cases pin one seam each.
+- `scripts/dsh-contract-lint.ts` (plan `<plan-id>`) — the whole gate after its fix wave: each `## Assignment` segment goes to the engine's `validateAssignmentFields`, carrier citations are matched by snake_case tool shape and then checked against the map, an unparsed map line is a named row, `checkFenceParity` rows on an odd fence count, and a duplicate `README.i18n.yaml` record is named. Six seeded cases pin one seam each.

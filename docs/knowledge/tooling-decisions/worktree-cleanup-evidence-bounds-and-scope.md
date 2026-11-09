@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: tooling_decision
 category: tooling-decisions
 severity: medium
-plan_id: 20260917-cleanup-probe-cost
+plan_id: <plan-id>
 applies_when:
   - "Changing the worktree-cleanup probe, its evidence rows, or its candidate universe"
   - "Diagnosing a slow `mstar worktree cleanup` dry run in a repository with many lifecycle snapshots or remote refs"

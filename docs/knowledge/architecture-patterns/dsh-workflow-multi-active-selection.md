@@ -13,7 +13,7 @@ tags:
 related_components:
   - packages/dsh
 source_plans:
-  - 20260911-dsh-multi-active-selection
+  - <plan-id>
 status: active
 last_updated: 2026-11-09
 ---
@@ -51,4 +51,4 @@ Any "pick the active X" code over a register that permits multiple actives. The 
 - `packages/dsh/src/gates/agent-flow.ts` (the ledger writer resolves its target dir through `resolveExecutionLedgerTarget` and skips on unbound)
 - `packages/dsh/tests/catalog.spec.ts` (two-actives fixture: the unbound error, `activeWorkflowIds`, and the empty `plans`/`direction` that follow from it). `workflow-selection.spec.ts` now only retains the retired file-route refusals.
 
-Promoted from: `iterations/iter-20260911-dsh-native-workflow/specs/multi-active-binding.md`.
+Promoted from: `iterations/iter-<plan-id>/specs/multi-active-binding.md`.

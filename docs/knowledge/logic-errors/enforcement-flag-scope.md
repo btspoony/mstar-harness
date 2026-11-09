@@ -4,7 +4,7 @@ date: 2026-08-08
 problem_type: logic_error
 category: logic-errors
 severity: high
-plan_id: 20260808-slice5-hardgates-close
+plan_id: <plan-id>
 symptoms:
   - "an example line '**Enforcement**: hard' quoted in an Assignment body false-hardened the dispatch"
   - "a COMPLETED iteration's delivery-compass with enforcement: hard kept the repo hardened forever"

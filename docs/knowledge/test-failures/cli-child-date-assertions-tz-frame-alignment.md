@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: test_failure
 category: test-failures
 severity: medium
-plan_id: 20260916-plan-leftover-sweep
+plan_id: <plan-id>
 symptoms:
   - "Date-string assertions on CLI child output fail only in full-suite or certain runs, pass in file isolation"
   - "Failures cluster on frames straddling the local 00:00–08:00 (+8) boundary"
@@ -26,7 +26,7 @@ tags:
 
 # Problem
 
-`slice4-cli` backlog date assertions failed in the full suite during PR #243 CI-adjacent runs and locally near the +8 midnight boundary, while passing in isolation — first misdiagnosed as test order dependence. `sdd-evidence.test.ts` carried four more cases of the same class (register residual R5 of plan 20260916-plan-leftover-sweep). Both files are gone today (`mstar sdd evidence capture|verify` was deleted; the CLI suites consolidated onto `packages/cli/test/harness.ts`), so read this as the mechanism, not a live file list.
+`slice4-cli` backlog date assertions failed in the full suite during PR #243 CI-adjacent runs and locally near the +8 midnight boundary, while passing in isolation — first misdiagnosed as test order dependence. `sdd-evidence.test.ts` carried four more cases of the same class (register residual R5 of plan <plan-id>). Both files are gone today (`mstar sdd evidence capture|verify` was deleted; the CLI suites consolidated onto `packages/cli/test/harness.ts`), so read this as the mechanism, not a live file list.
 
 # What Didn't Work
 

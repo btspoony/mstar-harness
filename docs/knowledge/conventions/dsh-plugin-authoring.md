@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: convention
 category: conventions
 severity: medium
-plan_id: "20260808-dsh-package-core, 20260808-dsh-host-adapter, 20260808-dsh-seams-bundle"
+plan_id: "<plan-id>, <plan-id>, <plan-id>"
 tags:
   - dsh
   - cordis

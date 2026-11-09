@@ -7,7 +7,7 @@ severity: medium
 applies_when:
   - "A residual/audit finding is registered as open but the fix already landed in a prior iteration"
   - "Planning an iteration whose direction is a list of deferred residuals"
-plan_id: 20260822-validator-closure
+plan_id: <plan-id>
 last_updated: 2026-11-09
 tags:
   - residual
@@ -22,7 +22,7 @@ tags:
 
 ## Context
 
-`iter-20260822-residual-cleanup` opened with 7 `decision: defer` residuals. One — audit-004 ("5 validators lack a `mstar …` CLI command") — had actually been **resolved a prior iteration**: `iter-20260816-audit-mechanical-alignment` landed all five commands (`status tech-debt`, `status findings-cleanup`, `lease verify-integration`, `worktree qc-alignment`, `host skill-root`), with `docs/cli.md` sections and skill callouts updated. The residual register lagged the code: `decision: defer, target: next iteration` persisted even though the work was done.
+`iter-<plan-id>` opened with 7 `decision: defer` residuals. One — audit-004 ("5 validators lack a `mstar …` CLI command") — had actually been **resolved a prior iteration**: `iter-<plan-id>` landed all five commands (`status tech-debt`, `status findings-cleanup`, `lease verify-integration`, `worktree qc-alignment`, `host skill-root`), with `docs/cli.md` sections and skill callouts updated. The residual register lagged the code: `decision: defer, target: next iteration` persisted even though the work was done.
 
 The compass originally planned audit-004 as a **re-implementation** (5-command fixture plan). A pre-plan grep (`packages/cli/src/index.ts` + `docs/cli.md` + skill callouts) showed all 5 already present, so the plan was re-scoped mid-Phase-1 to a **closure-verification plan** — smoke each command runnable from the dist build, confirm no stale import-only callouts, add a `.changes` fragment only if missing, close the residual in-place. No command code was written.
 
@@ -45,11 +45,11 @@ Audits and residuals are snapshots at a point in time; the register is a lagging
 ### Plan re-scope (compass diff)
 ```
 - **audit-004** 5 个 validator 的 CLI 命令面缺 mstar … CLI（import-only）— 本迭代实现
-+ **audit-004** 5 个 validator 的 CLI 命令面 —— 已确认全部落地（iter-20260816-audit-mechanical-alignment）——本迭代闭环验证（smoke + changeset + residual close）
++ **audit-004** 5 个 validator 的 CLI 命令面 —— 已确认全部落地（iter-<plan-id>）——本迭代闭环验证（smoke + changeset + residual close）
 ```
 ### Smoke evidence (partial)
 ```
-$ node packages/cli/dist/mstar-harness.js status tech-debt .mstar/projects
+$ node packages/cli/dist/mstar-harness.js status tech-debt {HARNESS_DIR}/projects
 total_open: 0
 EXIT=0
 $ node packages/cli/dist/mstar-harness.js worktree qc-alignment ...   # mismatch probe
@@ -57,4 +57,4 @@ FAIL (2 violations) ... EXIT=1   # documented exit semantics per docs/cli.md
 ```
 
 ## Result
-Plan `20260822-validator-closure` (inline, verification-only, no command code) — QC tri 3/3 Approve (qc2 Request Changes → evidence reconcile → Approve), acceptance pass under the then-current QA route, audit-004 residual closed, register now 0 open. Fragment: `.changes/unreleased/validator-closure.md`.
+Plan `<plan-id>` (inline, verification-only, no command code) — QC tri 3/3 Approve (qc2 Request Changes → evidence reconcile → Approve), acceptance pass under the then-current QA route, audit-004 residual closed, register now 0 open. Fragment: `.changes/unreleased/validator-closure.md`.

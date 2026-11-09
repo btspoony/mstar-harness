@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
-plan_id: "20261022-panel-store-backed-reads"
+plan_id: "<plan-id>"
 tags:
   - "dsh"
   - "panel"
@@ -21,7 +21,7 @@ tags:
 
 ## Context
 
-The dsh workflow panel used to read a per-session EMISSION snapshot: an agent hook persisted the catalog payload on every step, the browser fetched it from a per-session store, and the panel was therefore only as fresh as the last step. Plan `20261022-panel-store-backed-reads` replaced that with a direct read of the harness's store authorities over one typert method, `mstar/panelSnapshot`. The panel now reads the same `DashboardView` layer the CLI's HTTP API reads, and the emission path is retired.
+The dsh workflow panel used to read a per-session EMISSION snapshot: an agent hook persisted the catalog payload on every step, the browser fetched it from a per-session store, and the panel was therefore only as fresh as the last step. Plan `<plan-id>` replaced that with a direct read of the harness's store authorities over one typert method, `mstar/panelSnapshot`. The panel now reads the same `DashboardView` layer the CLI's HTTP API reads, and the emission path is retired.
 
 The pattern is small but every rule in it was earned by a review finding, and each one is a trap that reads as harmless until it is not. This document keeps the reusable lessons; the panel surface contract and projection moved to the unified dashboard (`packages/ui/`, root `DESIGN.md`), and the two panel-era docs that described them are archived.
 

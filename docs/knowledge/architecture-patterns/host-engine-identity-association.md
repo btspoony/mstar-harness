@@ -6,7 +6,7 @@ problem_type: architecture_pattern
 category: architecture-patterns
 last_updated: 2026-11-09
 severity: medium
-source: plan 20260918-omp-model-handoff-session-identity (fix for the OMP Phase-1 handoff refusal)
+source: plan <plan-id> (fix for the OMP Phase-1 handoff refusal)
 status: active
 tags:
   - session-identity

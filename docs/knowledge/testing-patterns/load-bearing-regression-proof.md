@@ -4,7 +4,7 @@ date: 2026-09-15
 problem_type: testing_pattern
 category: testing-patterns
 severity: high
-plan_id: 20260915-plan-coordination
+plan_id: <plan-id>
 applies_when:
   - "A fix's acceptance criteria require a named regression case"
   - "A case's red is being used as proof that the fix is what makes it pass"
@@ -68,4 +68,4 @@ A non-load-bearing case is worse than no case. It certifies the contract while p
 
 ## Source
 
-Iteration `iter-20260915-scoped-plan-pm`, plan `20260915-plan-coordination`. Proof rounds are recorded in the plan's SDD bundle: the bounded test-hardening brief (`test-hardening-brief.md`) and the appended `## Verification round: test hardening` sections of `task-1-fix2-report.md` / `task-2-report.md`; the invalid whole-file revert and the valid proof-path-only revert are documented in the same fix report's integration-HEAD proof round. Related: `testing-patterns/mechanical-check-corpus-honesty.md` (red-probe for corpus guards — the same obligation applied to markdown-corpus lints).
+Iteration `iter-<plan-id>`, plan `<plan-id>`. Proof rounds are recorded in the plan's SDD bundle: the bounded test-hardening brief (`test-hardening-brief.md`) and the appended `## Verification round: test hardening` sections of `task-1-fix2-report.md` / `task-2-report.md`; the invalid whole-file revert and the valid proof-path-only revert are documented in the same fix report's integration-HEAD proof round. Related: `testing-patterns/mechanical-check-corpus-honesty.md` (red-probe for corpus guards — the same obligation applied to markdown-corpus lints).

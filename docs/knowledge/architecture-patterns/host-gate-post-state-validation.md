@@ -8,7 +8,7 @@ applies_when:
   - "Adding or fixing a host-plugin gate (tool.execute.before / status-gate / cache) that validates coordination documents"
   - "Designing repair-vs-degraded observability for enforcement gates"
   - "Deciding what a pre-tool hook may read vs what it can compute from tool args"
-plan_id: 20260822-gate-fixes
+plan_id: <plan-id>
 tags:
   - host-gate
   - opencode
@@ -67,4 +67,4 @@ const gate = await validateStatusWrite(filePath, { doc: patchedDoc });
 ## Verification
 
 - Regressions: `packages/opencode/test/status-write-hook.test.ts` (ACTIVE-only authority) and `packages/opencode/test/store-cutover.test.ts` (the `edit` branch synthesizes the patched doc from a literal `oldString`/`newString` pair and refuses a retired-target edit); the dsh three-state matrix lives in `packages/dsh/tests/misc-seams.spec.ts` (hard + broken on-disk → allow with `hard: true, repair: true`; valid doc has no `repair`), `packages/dsh/tests/dispatch-gate.spec.ts` (internal failure → `degraded: true`), and `packages/dsh/tests/store-cutover.spec.ts` (authority-class refusal gets neither `repair` nor `degraded`). `packages/dsh/tests/workflow-selection.spec.ts` covers only the retired file-route selection branches; the cache-eviction half (`_terminalStatusCacheHas`, `workflow-selection.ts`) currently has no test caller.
-- All three landed in `iter-20260822-residual-cleanup` plan `20260822-gate-fixes` (commits 11156ef, dbbca8b, 9cae4c7, 04ccd84), QC Approve 3/3, QA Pass.
+- All three landed in `iter-<plan-id>` plan `<plan-id>` (commits 11156ef, dbbca8b, 9cae4c7, 04ccd84), QC Approve 3/3, QA Pass.

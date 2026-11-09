@@ -4,7 +4,7 @@ date: 2026-08-15
 problem_type: convention
 category: conventions
 severity: medium
-plan_id: 20260815-mstar-knowledge-prose-folds
+plan_id: <plan-id>
 tags:
   - skill-porting
   - standalone
@@ -20,7 +20,7 @@ applies_when:
 
 ## Context
 
-Iteration iter-20260815-dsh-skills-adoption folded one external dev-skills survey into seven mstar-* skill files across three plans. The process surfaced four recurring failure modes that a porter must check explicitly — none are caught by tests.
+Iteration iter-<plan-id> folded one external dev-skills survey into seven mstar-* skill files across three plans. The process surfaced four recurring failure modes that a porter must check explicitly — none are caught by tests.
 
 ## Guidance
 

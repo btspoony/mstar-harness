@@ -4,7 +4,7 @@ date: 2026-09-21
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
-plan_id: 20260920-consumer-surfaces-catalog
+plan_id: <plan-id>
 applies_when:
   - "composing two domains' writes into one transaction on the DB authority"
   - "a helper that used to own its own transaction is called from inside a larger one"

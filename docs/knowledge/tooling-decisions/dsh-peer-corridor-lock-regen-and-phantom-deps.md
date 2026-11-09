@@ -4,7 +4,7 @@ date: 2026-09-24
 problem_type: tooling_decision
 category: tooling-decisions
 severity: medium
-plan_id: "20260924-dsh-rc2-upgrade"
+plan_id: "<plan-id>"
 last_updated: 2026-11-09
 tags:
   - dsh
@@ -20,7 +20,7 @@ tags:
 
 ## Context
 
-Every dsh corridor upgrade (`^0.1.5-rc.2 → ^0.1.7-rc.1 → ^0.1.7-rc.2`, measured in iteration `iter-20260924-dsh-rc2-upgrade`) hits the same two hazards, both caused by upstream dsh's prerelease publishing model: (a) a peer-range bump that is only **partially** reflected in `bun.lock` leaves a stale, self-pinning resolution graph that a plain `bun install` cannot heal; (b) upstream client packages runtime-import packages they declare only in their own `devDependencies`, so external consumers must compensate or their test/runtime module graph fails to load.
+Every dsh corridor upgrade (`^0.1.5-rc.2 → ^0.1.7-rc.1 → ^0.1.7-rc.2`, measured in iteration `iter-<plan-id>`) hits the same two hazards, both caused by upstream dsh's prerelease publishing model: (a) a peer-range bump that is only **partially** reflected in `bun.lock` leaves a stale, self-pinning resolution graph that a plain `bun install` cannot heal; (b) upstream client packages runtime-import packages they declare only in their own `devDependencies`, so external consumers must compensate or their test/runtime module graph fails to load.
 
 ## Guidance
 
@@ -45,5 +45,5 @@ The half-open-corridor state (peers bumped in `package.json`, lock stale) is exa
 
 ## Examples
 
-- Iteration `iter-20260924-dsh-rc2-upgrade` (plan `20260924-dsh-rc2-upgrade`): Task 1 recorded the mixed-lock baseline, regenerated the lock (commit `d2bab157`); Task 2 fix rounds F1–F3 added the three phantom-import shims (`bd7e161c`, `091cc2b8`) and a test-double stub (`7d308666`); full suite went 1212 tests / 5 unhandled load errors → 1394 / 0.
+- Iteration `iter-<plan-id>` (plan `<plan-id>`): Task 1 recorded the mixed-lock baseline, regenerated the lock (commit `d2bab157`); Task 2 fix rounds F1–F3 added the three phantom-import shims (`bd7e161c`, `091cc2b8`) and a test-double stub (`7d308666`); full suite went 1212 tests / 5 unhandled load errors → 1394 / 0.
 - Related knowledge: `tooling-decisions/dsh-peer-stub-dev-strategy.md` (superseded link-farm history; registry peer resolution is the current baseline), `tooling-decisions/dsh-llm-fallbacks-version-ssot.md` (exact-pin SSOT pattern for versioned literals).

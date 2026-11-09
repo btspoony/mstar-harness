@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: tooling_decision
 category: tooling-decisions
 severity: high
-plan_id: 20260816-inspect-fixround-failloud
+plan_id: <plan-id>
 tags:
   - bun-build
   - bundling
@@ -68,5 +68,5 @@ related_components:
 
 ## Examples
 
-- 修复 commit `8d81112`（20 文件转义 + escaper + lint + smoke）与守门加固 `bd7adeb`（scripts 25 测试 + commentMask 根因修复 + en-dash/渲染断言）；证据链：iteration `iter-20260816-dsh-inspect-adoption` spec §7（复现矩阵）/ §7.5（两层结构）、`.mstar/sdd/20260816-inspect-fixround-failloud/`（TDD FAIL→PASS + QC/QA 报告）。
+- 修复 commit `8d81112`（20 文件转义 + escaper + lint + smoke）与守门加固 `bd7adeb`（scripts 25 测试 + commentMask 根因修复 + en-dash/渲染断言）；证据链：iteration `iter-<plan-id>` spec §7（复现矩阵）/ §7.5（两层结构）、`{HARNESS_DIR}/sdd/<plan-id>/`（TDD FAIL→PASS + QC/QA 报告）。
 - 判定「数据面 UTF-8 合法且必要 vs 代码字面量 ASCII-only」的裁决记录：spec §7.4——全面 ASCII 化防不到此 bug 类（数据文件解码正常），只伤双语文档。

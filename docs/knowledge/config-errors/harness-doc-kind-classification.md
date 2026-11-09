@@ -5,10 +5,10 @@ last_updated: 2026-11-09
 problem_type: config_error
 category: config-errors
 severity: high
-plan_id: 20260819-workflow-migrate-cli
+plan_id: <plan-id>
 symptoms:
   - "default .mstar root layout: coordination-document writes silently ungated (fail-open) despite a hard compass"
-  - "harnessDocKindOfTarget resolved the NESTED .mstar/plans subdir as the harness root"
+  - "harnessDocKindOfTarget resolved the NESTED {HARNESS_DIR}/plans subdir as the harness root"
   - "pathological double harness: an inner sparse harness below an outer full-marker root left inner docs ungated"
 root_cause: "harness root for doc classification came from resolveHarnessDir's rung-3 plans/ probe, which matches the nested {HARNESS_DIR}/plans subdir of the default .mstar layout and returns it as the root — coordination docs then fall outside the canonical harness-relative set, classification returns null, and the write passes silently (fail-open)"
 resolution_type: code_fix
@@ -25,17 +25,17 @@ tags:
 
 ## Problem
 
-The v3 write-gate classifies a target path as one of the three coordination documents — root `status.json`, `workflows/<id>/snapshot.json`, `projects/<id>/residuals.json` — and validates it with the matching engine validator; everything else is not a gated write (silent pass). Under the DEFAULT `.mstar` layout (where `plans/` lives INSIDE the harness root), classification resolved the harness root via `resolveHarnessDir`'s rung-3 `plans/` probe. The probe matched the NESTED `.mstar/plans` subdir and returned it as the root, so all three coordination docs fell outside the canonical harness-relative set, classification returned `null`, and every write passed silently — the gate failed OPEN exactly when the layout was the most common one. A second defect (W-REV-3) surfaced in the same fix wave: with a nested SPARSE harness (a `.mstar/` missing one of the three full markers) below an outer FULL-marker root, the probe returned the outer root and the inner docs were silently ungated.
+The v3 write-gate classifies a target path as one of the three coordination documents — root `status.json`, `workflows/<id>/snapshot.json`, `projects/<id>/residuals.json` — and validates it with the matching engine validator; everything else is not a gated write (silent pass). Under the DEFAULT `.mstar` layout (where `plans/` lives INSIDE the harness root), classification resolved the harness root via `resolveHarnessDir`'s rung-3 `plans/` probe. The probe matched the NESTED `{HARNESS_DIR}/plans` subdir and returned it as the root, so all three coordination docs fell outside the canonical harness-relative set, classification returned `null`, and every write passed silently — the gate failed OPEN exactly when the layout was the most common one. A second defect (W-REV-3) surfaced in the same fix wave: with a nested SPARSE harness (a `{HARNESS_DIR}/` missing one of the three full markers) below an outer FULL-marker root, the probe returned the outer root and the inner docs were silently ungated.
 
 ## Symptoms
 
 - Invalid `status.json` / `snapshot.json` / `residuals.json` writes pass the omp hook and tools on a default-layout repo, even with a hard compass (silent pass — no error, no warning).
-- The classification probe returns `.mstar/plans` (a directory that contains no coordination documents) as the harness root.
+- The classification probe returns `{HARNESS_DIR}/plans` (a directory that contains no coordination documents) as the harness root.
 - Inner-harness coordination docs under a double-harness tree are never validated.
 
 ## What Didn't Work
 
-- **`resolveHarnessDir`'s rung-3 `plans/` probe as the classification root**: inside a default `.mstar` root the probe matched the NESTED `.mstar/plans` subdir — the root mis-resolution that caused the fail-open. The probe was designed for root DISCOVERY (name candidates), not for classifying a specific document against an already-known root.
+- **`resolveHarnessDir`'s rung-3 `plans/` probe as the classification root**: inside a default `.mstar` root the probe matched the NESTED `{HARNESS_DIR}/plans` subdir — the root mis-resolution that caused the fail-open. The probe was designed for root DISCOVERY (name candidates), not for classifying a specific document against an already-known root.
 - **Single-path fallback without a rebuild**: when the marker probe hit an ancestor root but the document's relative path was non-canonical, giving up left inner sparse-harness docs ungated. The fix had to REBUILD the relation against the declared-root resolution before returning null.
 - **Silent pass as the classification default**: returning `null` (ungated) for anything outside the canonical set is correct for non-coordination files but must never apply to a document that IS a coordination document under a mis-resolved root — the fail-open made the whole gate advisory on default layouts.
 

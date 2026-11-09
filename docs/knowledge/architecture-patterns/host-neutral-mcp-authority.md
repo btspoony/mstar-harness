@@ -14,7 +14,7 @@ tags:
   - d19
   - host-neutral
 created: 2026-09-26
-source: iter-20260926-v4-phase5
+source: iter-<plan-id>
 ---
 
 # Host-neutral MCP surface with main-session authority
@@ -35,7 +35,7 @@ Single canonical `packages/commands` definitions → generated CLI adapter + MCP
 
 ## Evidence
 
-iter-20260926-v4-phase5: M3 invocation tests (wrong-session refusals carry shared-handler codes; main-session bind succeeds), H3 opencode cutover (context-only `workflow.recover-coordinator`), plan QC fix waves C-1/C-2 (bind identity + selector pipeline), compass D19.
+iter-<plan-id>: M3 invocation tests (wrong-session refusals carry shared-handler codes; main-session bind succeeds), H3 opencode cutover (context-only `workflow.recover-coordinator`), plan QC fix waves C-1/C-2 (bind identity + selector pipeline), compass D19.
 
 ## Amendment — identity as a declared per-call input (2026-09-30)
 
@@ -43,7 +43,7 @@ Issue owner ruling (2026-09-30), recorded via plan 004-mcp-session-identity-per-
 
 ## Amendment — the ENV identity axis is acceptable exactly where a token CAS authorizes the write (2026-10-03)
 
-Recorded via plan 20261003-issue-373-register-identity (GitHub #373). The CLI collects session identity once, with source attribution (`sessionIdSource: "flag" | "env"`; `MSTAR_HOST_SESSION_ID` is the env axis, produced host-side — omp's model-handoff extension injects it per bash call; empty/whitespace counts as unset). Policy is branch-local, not adapter-global:
+Recorded via plan <plan-id> (GitHub #373). The CLI collects session identity once, with source attribution (`sessionIdSource: "flag" | "env"`; `MSTAR_HOST_SESSION_ID` is the env axis, produced host-side — omp's model-handoff extension injects it per bash call; empty/whitespace counts as unset). Policy is branch-local, not adapter-global:
 
 - **Token-CAS-authorized writes accept env-sourced identity** — all ACTIVE execution forms (`workflow.register`/`workflow.evidence`/`iteration.register` active routes, `plan bind --execution` both roles): the full execution token is the authorization; the sessionId is attribution. This is what makes the MCP/CLI 1:1 tuple hold with the sessionId input axis as the only difference (CLI = flag/env, MCP = host per-call param).
 - **Where identity itself is the authorization, env never suffices** — the legacy (pre-activation) `plan bind --coordinator` bootstrap requires an explicit `--session-id` (no CAS exists there; pinned by plan-coordination env-refusal regression), and the legacy `--resume` form ignores ambient env while refusing a DECLARED (flag/host) identity — resume must not re-identify the caller.
@@ -54,7 +54,7 @@ Anti-pattern this replaces: a single unconditional adapter-level env fallback, w
 
 ## Amendment — ACTIVE-only identities: the acquired binding authorizes, a reference is a checked constraint (2026-10-10)
 
-Recorded via plan `20261009-issue428-coordination-residuals`, which retired the file execution route end to end. The two route-scoped clauses of the 2026-10-03 amendment — the pre-activation `plan bind --coordinator` bootstrap and the legacy `plan bind --resume` — describe a route that no longer exists: `plan bind` now accepts only `--execution` (bind the coordinator seat) or `--resume-ref` (resume through an active session reference), both on the ACTIVE store. What survives, now that every route is ACTIVE-only:
+Recorded via plan `<plan-id>`, which retired the file execution route end to end. The two route-scoped clauses of the 2026-10-03 amendment — the pre-activation `plan bind --coordinator` bootstrap and the legacy `plan bind --resume` — describe a route that no longer exists: `plan bind` now accepts only `--execution` (bind the coordinator seat) or `--resume-ref` (resume through an active session reference), both on the ACTIVE store. What survives, now that every route is ACTIVE-only:
 
 - **Identity-bound privileged mutations resolve an ACQUIRED execution identity; a caller-supplied reference is a checked constraint, never the authority.** `milestone assign` acquires the coordinator identity in the command layer (`--session-id` supplies attribution only; the execution tuple comes from the launched session's minted `MSTAR_EXECUTION_IDENTITY`), refuses when no acquired identity is present or its seat is not the workflow's coordinator, and passes an optional `--session-ref` (decoded wire) into the mutation context. The engine checks that reference against the ACTIVE coordinator-session binding — store id/epoch plus the active session row — and re-checks it inside the write transaction before replay or mutation, so a stale reference cannot authorize a later write.
 - **creator == binder.** `bindExecutionSession` refuses `coordination.identity-mismatch` when the trusted caller differs from the workflow header's recorded creator. First-bind adoption exists only for a creator-less lifecycle that records no coordinator rows (the adopting bind stamps its own identity as the creator); every other mismatch routes to `recoverExecutionCoordinator` naming the recorded coordinator instead of silently adopting the lifecycle. Fixtures and smokes that need a lawful ACTIVE binding must register and bind under one identity.

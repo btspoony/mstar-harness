@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: tooling_decision
 category: tooling-decisions
 severity: high
-plan_id: 20260907-skill-eval-baseline
+plan_id: <plan-id>
 tags:
   - skill-eval
   - evaluation-baseline
@@ -41,5 +41,5 @@ Before adopting skill-text changes; when interpreting eval reports (exit 1 = com
 
 ## Examples
 
-- RUNBOOK for the pending SP6 heldout completion: control `.mstar/sdd/20260907-iteration-progressive-disclosure/eval/RUNBOOK.md`.
-- Round-2 corpus re-version provenance: control `.mstar/sdd/20260907-skill-eval-baseline/eval/r2/r2-corpus-reversion.md`.
+- RUNBOOK for the pending SP6 heldout completion: control `{HARNESS_DIR}/sdd/<plan-id>/eval/RUNBOOK.md`.
+- Round-2 corpus re-version provenance: control `{HARNESS_DIR}/sdd/<plan-id>/eval/r2/r2-corpus-reversion.md`.

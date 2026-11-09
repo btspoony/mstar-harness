@@ -5,7 +5,7 @@ last_updated: 2026-09-16
 problem_type: tooling_decision
 category: tooling-decisions
 severity: medium
-plan_id: 20260916-prepare-amendment-bootstrap (plan QC tri wave of 2026-09-16)
+plan_id: <plan-id> (plan QC tri wave of 2026-09-16)
 applies_when:
   - "a dispatched seat returns no report and the failure is a provider-level error"
   - "a seat's configured primary account is exhausted during a review wave"
@@ -70,7 +70,7 @@ The cost of misclassifying a dead seat is asymmetric. Counting it as a reviewer 
 
 ## Source
 
-Plan QC tri-review availability note plus the plan and compass gate summaries for plan `20260916-prepare-amendment-bootstrap`; evidence under `{SDD_DIR}/20260916-prepare-amendment-bootstrap/review/`. Facts quoted: the configured-primary account at 100% used in the usage read, two no-report invocations (one after substantial reads, one immediately), a probe plus the real invocation both serving through the configured chain, a different serving model reported by the seat, no host config change, and three distinct serving families in the consolidated wave.
+Plan QC tri-review availability note plus the plan and compass gate summaries for plan `<plan-id>`; evidence under `{SDD_DIR}/<plan-id>/review/`. Facts quoted: the configured-primary account at 100% used in the usage read, two no-report invocations (one after substantial reads, one immediately), a probe plus the real invocation both serving through the configured chain, a different serving model reported by the seat, no host config change, and three distinct serving families in the consolidated wave.
 
 ## Related
 

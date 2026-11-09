@@ -5,7 +5,7 @@ last_updated: 2026-09-25
 problem_type: tooling_decision
 category: tooling-decisions
 severity: high
-plan_id: 20260915-plan-coordination
+plan_id: <plan-id>
 applies_when:
   - "Verifying a package that consumes another package's built dist"
   - "Running typecheck or tests in a freshly created (or long-lived) git worktree"
@@ -79,6 +79,6 @@ The same staleness in the false-alarm direction costs a round differently: the f
 
 ## Source
 
-Iteration `iter-20260915-scoped-plan-pm`, plan `20260915-plan-coordination`. Evidence in the plan's SDD bundle: the CLI task report `task-2-report.md` (§Verification round: fixture catch-up — the 768/0 vs 764/4 table, the dist fingerprints, and the masked-failure census) and `task-1-fix2-report.md` (§Verification round: integration-HEAD proof case — the worktree whose `node_modules` and `dist` were absent). The plan's own Cross-package evidence freshness clause records the rule at planning time.
+Iteration `iter-<plan-id>`, plan `<plan-id>`. Evidence in the plan's SDD bundle: the CLI task report `task-2-report.md` (§Verification round: fixture catch-up — the 768/0 vs 764/4 table, the dist fingerprints, and the masked-failure census) and `task-1-fix2-report.md` (§Verification round: integration-HEAD proof case — the worktree whose `node_modules` and `dist` were absent). The plan's own Cross-package evidence freshness clause records the rule at planning time.
 
-The false-alarm direction comes from iteration `iter-20260925-v4-phase4`, plan `20260925-roadmap-store-authority`: the pre-rebuild failure count, the post-rebuild 564 pass / 0 fail over 12 files, and the rebuilt package set are recorded in that plan's integration progress note and its consolidated review, under `{SDD_DIR}/20260925-roadmap-store-authority/`.
+The false-alarm direction comes from iteration `iter-<plan-id>`, plan `<plan-id>`: the pre-rebuild failure count, the post-rebuild 564 pass / 0 fail over 12 files, and the rebuilt package set are recorded in that plan's integration progress note and its consolidated review, under `{SDD_DIR}/<plan-id>/`.

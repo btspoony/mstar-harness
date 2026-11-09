@@ -4,7 +4,7 @@ date: 2026-08-30
 problem_type: tooling_decision
 category: tooling-decisions
 severity: low
-plan_id: 20260830-install-residual-close
+plan_id: <plan-id>
 last_updated: 2026-11-09
 tags:
   - bun-lock
@@ -70,5 +70,5 @@ CI 与 release workflow 现钉 **bun 1.4.0**（`.github/workflows/ci.yml`、`rel
 
 ## Examples
 
-- iter-20260830 SP3（plan 20260830-install-residual-close）：r2 residual 关闭 commit `c5f87f79`（4 hunks stamps-only + fail-closed timeout 断言加固 `db844038`）；机制证据与四路径矩阵在 `.mstar/sdd/20260830-install-residual-close/task-2-report.md`；QC tri 复核确认手编辑无 resolution hazard（path-protocol keys + lockfileVersion 不变）。**注**：该轮的手编辑是 bun 1.2.17 时代的兜底，不是现在的推荐路径。
+- iter-20260830 SP3（plan <plan-id>）：r2 residual 关闭 commit `c5f87f79`（4 hunks stamps-only + fail-closed timeout 断言加固 `db844038`）；机制证据与四路径矩阵在 `{HARNESS_DIR}/sdd/<plan-id>/task-2-report.md`；QC tri 复核确认手编辑无 resolution hazard（path-protocol keys + lockfileVersion 不变）。**注**：该轮的手编辑是 bun 1.2.17 时代的兜底，不是现在的推荐路径。
 - bun 1.4.x 时代的真实形态：`11c3a8f7`（v4.3.0）、`570d0adf`（v4.2.1）、`dac1c781`（v4.2.0）三个 `chore(release): prepare` commit 各 9+/9−，全部是 8 个 workspace stamp + 1 条 root range，无 graph churn。owner 是 `scripts/prepare-release.ts:427` `syncLockfile`。

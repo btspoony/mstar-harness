@@ -4,7 +4,7 @@ date: 2026-11-05
 problem_type: developer_experience
 category: best-practices
 severity: low
-plan_id: 20261105-pr-review-657-followups
+plan_id: <plan-id>
 applies_when:
   - Re-measuring the published MCP surface before changing PUBLISHED_SURFACE_CEILING_CHARS
   - Any probe that imports @mstar-harness/* from the primary checkout to measure built behavior

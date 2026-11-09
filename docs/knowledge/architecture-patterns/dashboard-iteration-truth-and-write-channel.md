@@ -1,7 +1,7 @@
 # Dashboard read truth and the milestone write channel
 
 Status: active · Scope: dashboard read model + dsh panel write surface · Derived from iteration
-`iter-20261029-dashboard-store-correctness`
+`iter-<plan-id>`
 
 ## Problem
 

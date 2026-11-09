@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: low
-plan_id: "20260910-dsh-panel-sidebar"
+plan_id: "<plan-id>"
 tags:
   - dsh
   - client-plugin
@@ -25,7 +25,7 @@ definition** (`ctx.sidebarRightTabs.register(definition)`) plus **keyed body/tit
 (`ctx.slots.inject('sidebar.right.pane.tab' | 'sidebar.right.pane.tab.title', () =>
 ctx.slots.register({ name, key: <definition id>, … }, Component))`) under the same `id`. This
 migrated the MStar workflow panel out of the `conversation.view` view ring (plan
-`20260910-dsh-panel-sidebar`).
+`<plan-id>`).
 
 ## Guidance
 

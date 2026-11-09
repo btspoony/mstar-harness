@@ -4,7 +4,7 @@ date: 2026-08-08
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
-plan_id: "20260808-dsh-package-core, 20260808-dsh-host-adapter, 20260808-dsh-seams-bundle"
+plan_id: "<plan-id>, <plan-id>, <plan-id>"
 tags:
   - dsh
   - mstar-engine

@@ -27,7 +27,7 @@ applies_when:
   - listening to a dsh event that an upstream emitter dispatches with scopeTarget
   - writing tests for a cordis-scoped event listener
   - debugging "the handler's extra argument is always undefined"
-plan_id: "20261019-team-ledger-panel-closeout"
+plan_id: "<plan-id>"
 ---
 
 # cordis scoped dispatch: the scope target is `this`, never a callback argument

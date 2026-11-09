@@ -16,7 +16,7 @@ related_components:
   - packages/cli
   - packages/engine
 source_plans:
-  - 20260911-dsh-fallbacks-0-5-2
+  - <plan-id>
 status: active
 last_updated: 2026-11-09
 ---

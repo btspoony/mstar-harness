@@ -4,7 +4,7 @@ date: 2026-09-23
 problem_type: convention
 category: conventions
 severity: high
-plan_id: "20260922-harness-ignore-policy"
+plan_id: "<plan-id>"
 applies_when:
   - "Changing harness bootstrap, doctor or a .gitignore fence in any install adapter"
   - "Deciding whether the harness may rewrite a user-authored ignore file"
@@ -58,4 +58,4 @@ Install computes the canonical entry set, appends every missing entry and re-sor
 
 ## Source
 
-Iteration `iter-20260921-execution-2b-cutover`, plan `20260922-harness-ignore-policy` (#248), from the issues-amendment contract's ignore-policy decision (`specs/issues-amendment-contract.md` §2) and its implementation in `packages/engine/src/path.ts` / `packages/engine/src/index.ts`, `packages/cli/src/index.ts` and the `packages/cli/src/adapters/*` doctor consumers. Evidence: the plan QC consolidated report, the retained scoped `verification.md` records and the L4 QA report under `{SDD_DIR}/review/` for that plan (source acceptance; the persisted-findings gate stayed open behind the missing control store, which is a separate operational matter). Related: `workflow-patterns/gitignored-harness-iteration-driving.md` (archived under `.mstar/archived/knowledge/workflow-patterns/`) (how the harness directory's ignore policy interacts with iteration driving), `tooling-decisions/worktree-cleanup-ignored-artifact-gate.md` (archived).
+Iteration `iter-<plan-id>`, plan `<plan-id>` (#248), from the issues-amendment contract's ignore-policy decision (`specs/issues-amendment-contract.md` §2) and its implementation in `packages/engine/src/path.ts` / `packages/engine/src/index.ts`, `packages/cli/src/index.ts` and the `packages/cli/src/adapters/*` doctor consumers. Evidence: the plan QC consolidated report, the retained scoped `verification.md` records and the L4 QA report under `{SDD_DIR}/review/` for that plan (source acceptance; the persisted-findings gate stayed open behind the missing control store, which is a separate operational matter). Related: `workflow-patterns/gitignored-harness-iteration-driving.md` (archived under `{HARNESS_DIR}/archived/knowledge/workflow-patterns/`) (how the harness directory's ignore policy interacts with iteration driving), `tooling-decisions/worktree-cleanup-ignored-artifact-gate.md` (archived).

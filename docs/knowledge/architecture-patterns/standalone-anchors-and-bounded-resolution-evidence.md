@@ -13,7 +13,7 @@ tags:
   - bounded-resolution
   - mcp
 title: Standalone plan workflow registration anchors and bounded-resolution evidence mechanics
-source: plan 20261008-bounded-resolution-guess-path (wf-20261008-bounded-resolution-guess-path-2, issue #368)
+source: plan <plan-id> (wf-<plan-id>, issue #368)
 status: active
 last_updated: 2026-10-16
 ---
@@ -50,7 +50,7 @@ Evidence-chain mechanics that made the run trustworthy:
 
 The stopped-superseded-registration recovery (§1) leaves both workflows' plan rows pointing at the same `metadata.worktree_path` / `working_branch`. The terminal-owner ambiguity is fixed upstream: cleanup resolves the retained claim to the completed owner and no longer refuses the eligible worktree as foreign. Ordinary dry-run cleanup now plans the merged worktree for `remove` (`cleanup.remove.merged`). It may still report the associated branch as `refuse(checked-out)` in that same dry-run because the worktree must be removed first; per the cleanup contract, rerun the dry-run after worktree removal to plan branch deletion. Do not hand-delete past the guard.
 
-[local ignored record: 2026-10-08T10:10:04Z | fullstack-dev | openai-codex/gpt-6-luna | 20261008-cleanup-terminal-claims | docs/knowledge/architecture-patterns/standalone-anchors-and-bounded-resolution-evidence.md§1b]
+[local ignored record: 2026-10-08T10:10:04Z | fullstack-dev | openai-codex/gpt-6-luna | <plan-id> | docs/knowledge/architecture-patterns/standalone-anchors-and-bounded-resolution-evidence.md§1b]
 
 ## Non-lessons
 

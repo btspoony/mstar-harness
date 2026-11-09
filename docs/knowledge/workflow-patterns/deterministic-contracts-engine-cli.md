@@ -8,7 +8,7 @@ severity: medium
 applies_when:
   - "Deciding whether a skill-document rule belongs in engine/CLI code"
   - "Reviewing a skill (or PR against one) where deterministic arithmetic, naming, validation or external-effect guards live in prose"
-plan_id: 20260826-prreview-core
+plan_id: <plan-id>
 tags:
   - engine-cli-boundary
   - determinism

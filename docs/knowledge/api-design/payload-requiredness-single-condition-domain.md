@@ -5,7 +5,7 @@ date: 2026-10-09
 problem_type: api_design
 category: api-design
 severity: high
-plan_id: 20261009-issue420-payload-help-fields
+plan_id: <plan-id>
 status: active
 tags:
   - payload-schemas
@@ -17,7 +17,7 @@ tags:
 
 # Payload requiredness must share one condition domain across registry, decode, and static descriptors
 
-Source: plan 20261009-issue420-payload-help-fields (#420); QC finding F-001; QA AC2.
+Source: plan <plan-id> (#420); QC finding F-001; QA AC2.
 
 ## Context
 

@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: medium
-plan_id: 20261030-engine-ledger-retention
+plan_id: <plan-id>
 tags:
   - append-only
   - retention

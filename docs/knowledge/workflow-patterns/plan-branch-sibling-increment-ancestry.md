@@ -5,7 +5,7 @@ date: 2026-09-23
 problem_type: workflow_issue
 category: workflow-patterns
 severity: high
-plan_id: "20260921-execution-session-core, 20260921-execution-file-ledgers, 20260921-execution-host-ledgers"
+plan_id: "<plan-id>, <plan-id>, <plan-id>"
 applies_when:
   - "A plan splits a task into an isolated sibling track (its own branch/worktree) that must land before that plan's gate"
   - "Preparing a plan QC or PM Acceptance round for a multi-track plan"
@@ -62,4 +62,4 @@ The plan records "sibling track → plan branch before this plan's gate" as a se
 
 ## Source
 
-Iteration `iter-20260921-execution-2b-cutover`, plans `20260921-execution-session-core`, `20260921-execution-file-ledgers` and `20260921-execution-host-ledgers`. Evidence: the plan QC consolidated reports and the L4 acceptance reports (then the QA route) under each plan's `{SDD_DIR}/review/` (the Blocked round, the sibling-worktree grading disclosure and the post-merge revalidation). Related: `workflow-patterns/merge-state-seam-review.md` (the composite is reviewed as its own artifact once landed), `skills/mstar-branch-worktree/SKILL.md` § QC / PM Acceptance 检出对齐与多 worktree 门禁衔接 (the single-review-snapshot precondition the ancestry check feeds).
+Iteration `iter-<plan-id>`, plans `<plan-id>`, `<plan-id>` and `<plan-id>`. Evidence: the plan QC consolidated reports and the L4 acceptance reports (then the QA route) under each plan's `{SDD_DIR}/review/` (the Blocked round, the sibling-worktree grading disclosure and the post-merge revalidation). Related: `workflow-patterns/merge-state-seam-review.md` (the composite is reviewed as its own artifact once landed), `skills/mstar-branch-worktree/SKILL.md` § QC / PM Acceptance 检出对齐与多 worktree 门禁衔接 (the single-review-snapshot precondition the ancestry check feeds).

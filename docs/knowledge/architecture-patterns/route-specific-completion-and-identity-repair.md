@@ -9,7 +9,7 @@ applies_when:
   - "Deciding whether a blocking guard should be relaxed or a missing path should be added"
   - "Persisted state records an identity that contradicts the Git facts it was derived from"
   - "Verifying a gate-class change with a tool that predates it"
-plan_id: 20260917-plan-lifecycle-unblock
+plan_id: <plan-id>
 tags:
   - route-predicate
   - completion-path

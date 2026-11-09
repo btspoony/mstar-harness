@@ -22,7 +22,7 @@ applies_when:
   - registering a ctx.goals or ctx.planMode consumer in a dsh plugin
   - deciding whether a plugin may write host goal state
   - walking agent lineage to find root-like agents
-plan_id: "20260816-dsh-nb2-goal-bridge, 20260911-dsh-goal-discipline"
+plan_id: "<plan-id>, <plan-id>"
 ---
 
 # dsh planMode mirror + advisory-only goal bridge: host goal semantics, root-agent walks, and the Prepare-window flag
@@ -68,5 +68,5 @@ These bridges are the first mstar surfaces where host session state outlives a s
 ## Examples
 
 - Source of record: `packages/dsh/src/gates/goal-bridge.ts` (advisory), `packages/dsh/src/gates/plan-mode-bridge.ts` (mirror), `packages/dsh/src/gates/steering.ts` (shared helpers); entry wiring in `packages/dsh/src/index.ts`.
-- Iteration contracts: `.mstar/plans/20260911-dsh-goal-discipline.md` (zero-write removal inventory, helper relocation, three reading sites, four deferred upstream rows) and `.mstar/iterations/iter-20260911-dsh-ledger-goal-discipline/specs/dsh-progress-driver.md` (the driving discipline); the earlier mirror design and its QC findings: `.mstar/sdd/20260816-dsh-nb2-goal-bridge/review/qc2.md` (W-1/W-2), `qc3.md` (F-001/F-003).
+- Iteration contracts: `{HARNESS_DIR}/plans/<plan-id>.md` (zero-write removal inventory, helper relocation, three reading sites, four deferred upstream rows) and `{HARNESS_DIR}/iterations/iter-<plan-id>/specs/dsh-progress-driver.md` (the driving discipline); the earlier mirror design and its QC findings: `{HARNESS_DIR}/sdd/<plan-id>/review/qc2.md` (W-1/W-2), `qc3.md` (F-001/F-003).
 - Upstream semantics: `deepseek-harness` `goal/src/index.ts` (`create` / `resume` arm, `edit` preserves activation and `roundsStarted`, `pause`/`complete`/`block` disarm), `goal-round-driver/src/index.ts` (active + armed + idle readiness).

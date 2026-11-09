@@ -5,7 +5,7 @@ date: 2026-09-26
 problem_type: best_practice
 category: best-practices
 severity: high
-source: plan 20260925-omp-session-id-prefix-stack (fix for the unbounded `export MSTAR_HOST_SESSION_ID` prefix stacking)
+source: plan <plan-id> (fix for the unbounded `export MSTAR_HOST_SESSION_ID` prefix stacking)
 status: active
 tags:
   - host-adapter

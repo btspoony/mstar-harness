@@ -4,7 +4,7 @@ date: 2026-08-22
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: medium
-plan_id: 20260822-audit-promote-workflow
+plan_id: <plan-id>
 last_updated: 2026-11-09
 tags:
   - audit

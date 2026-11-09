@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: convention
 category: conventions
 severity: medium
-plan_id: 20260819-workflow-skills-thinning
+plan_id: <plan-id>
 applies_when:
   - "thinning or retiring skills whose contract prose is engine-enforced"
   - "moving displaced prose out of runtime skills"

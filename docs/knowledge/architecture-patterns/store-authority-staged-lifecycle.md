@@ -4,7 +4,7 @@ date: 2026-09-19
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
-plan_id: 20260918-issue-governance-cutover
+plan_id: <plan-id>
 applies_when:
   - "adding a store verb, migration source family, or activation/retirement step for the harness governance store"
   - "building v4 phase 2 (execution write authority) or phase 3 (roadmap authority) on the same store"
@@ -21,7 +21,7 @@ tags:
 
 ## Context
 
-Iteration `iter-20260918-issue-store-dashboard` (plans `20260918-issue-store-core`, `20260918-state-projection`, `20260918-issue-governance-cutover`) replaced the per-project JSON registers with one local SQLite store (`{HARNESS_DIR}/store.db`) as the sole issue/catalog write authority, plus a read-only execution-state projection that stays JSON. The lifecycle has three distinct irreversible-in-scope acts — **apply** (staged import), **activate** (authority flip), **retire** (archive the exact legacy sources) — and the QC round of the cutover plan surfaced four independent ways the code initially violated the invariants around them.
+Iteration `iter-<plan-id>` (plans `<plan-id>`, `<plan-id>`, `<plan-id>`) replaced the per-project JSON registers with one local SQLite store (`{HARNESS_DIR}/store.db`) as the sole issue/catalog write authority, plus a read-only execution-state projection that stays JSON. The lifecycle has three distinct irreversible-in-scope acts — **apply** (staged import), **activate** (authority flip), **retire** (archive the exact legacy sources) — and the QC round of the cutover plan surfaced four independent ways the code initially violated the invariants around them.
 
 ## Guidance
 

@@ -5,7 +5,7 @@ last_updated: 2026-08-20
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: medium
-plan_id: "20260820-project-research-corpus"
+plan_id: "<plan-id>"
 tags:
   - project
   - references
@@ -21,13 +21,13 @@ applies_when:
 
 ## Context
 
-v3.0.0 shipped projects as `roadmap.md` + `residuals.json` only. Theme-scoped research sat in a harness-root dump `.mstar/references/`. User lock (v3.1.0): surveyed references belong under the **project** that owns the theme — not `{SPECS_DIR}`, `{KNOWLEDGE_DIR}`, or harness-root dump.
+v3.0.0 shipped projects as `roadmap.md` + `residuals.json` only. Theme-scoped research sat in a harness-root dump `{HARNESS_DIR}/references/`. User lock (v3.1.0): surveyed references belong under the **project** that owns the theme — not `{SPECS_DIR}`, `{KNOWLEDGE_DIR}`, or harness-root dump.
 
 ## Guidance
 
 - Canonical tree: `{PROJECT_DIR}/<id>/references/` (one-level files + one-level subdir files).
 - Engine: `PROJECT_REFERENCES_DIR = "references"` and `listProjectReferenceFiles(projectDir)` — **filenames only**, never markdown schema, never throws; missing dir → `[]`; skip `roadmap.md` / `residuals.json` at the references **root**.
-- Dual-home is forbidden after dogfood: dump directory **absent** or a **one-line README redirect**. This repo dogfood: `.mstar/projects/_default/references/` with no harness-root dump (the redirect was removed).
+- Dual-home is forbidden after dogfood: dump directory **absent** or a **one-line README redirect**. This repo dogfood: `{HARNESS_DIR}/projects/_default/references/` with no harness-root dump (the redirect was removed).
 - Distinct from specs/knowledge/iteration package guides.
 
 ## What Didn't Work
@@ -36,7 +36,7 @@ Putting research in `{KNOWLEDGE_DIR}` or `{SPECS_DIR}` mixes operator surveys wi
 
 ## Why This Matters
 
-Future agents searching `.mstar/references/` for write/read home are wrong. List via engine helper; do not parse research bodies.
+Future agents searching `{HARNESS_DIR}/references/` for write/read home are wrong. List via engine helper; do not parse research bodies.
 
 ## When to Apply
 

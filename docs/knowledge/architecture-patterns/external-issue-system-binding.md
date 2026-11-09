@@ -4,7 +4,7 @@ category: architecture-patterns
 status: active
 created: 2026-11-01
 last_updated: 2026-11-09
-source_iteration: iter-20261031-issue-system-binding
+source_iteration: iter-<plan-id>
 ---
 
 # Binding a local store to an external issue system over MCP

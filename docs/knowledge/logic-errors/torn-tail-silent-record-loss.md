@@ -5,7 +5,7 @@ last_updated: 2026-11-09
 problem_type: logic_error
 category: logic-errors
 severity: high
-plan_id: "20260921-execution-file-ledgers"
+plan_id: "<plan-id>"
 symptoms:
   - "An accepted ledger record exists on disk but no reader ever returns it"
   - "No error is raised at write time and the append reports success"
@@ -73,4 +73,4 @@ The invariant "a torn tail can never consume a subsequent accepted record" can o
 
 ## Source
 
-Iteration `iter-20260921-execution-2b-cutover`, plan `20260921-execution-file-ledgers`: the defect surfaced during the plan QC revalidation of the DSh ledger track and was fixed on the plan branch (commit `15e00cfc`), with the regression exercised by the DSh `agent-flow-workflow` suite (`packages/dsh/tests/agent-flow-workflow.spec.ts`). Evidence: `{SDD_DIR}/review/qc.md` (the new-defect disposition) and `{SDD_DIR}/review/qc2.md` (the dedicated torn-tail assessment and the two cut-position fixtures), plus `{SDD_DIR}/review/qa.md` for the closed defect-fix focus. The repair outlived the JSONL file: the durable form today is the unconditional leading LF in `packages/engine/src/execution-ledgers.ts` `commitLedgerFrame`. Related: `architecture-patterns/append-only-ledger-bounds.md` (the retention/compaction rules over the same file), `architecture-patterns/dsh-agent-flow-ledger.md` (the ledger's write/read contract — now SQLite).
+Iteration `iter-<plan-id>`, plan `<plan-id>`: the defect surfaced during the plan QC revalidation of the DSh ledger track and was fixed on the plan branch (commit `15e00cfc`), with the regression exercised by the DSh `agent-flow-workflow` suite (`packages/dsh/tests/agent-flow-workflow.spec.ts`). Evidence: `{SDD_DIR}/review/qc.md` (the new-defect disposition) and `{SDD_DIR}/review/qc2.md` (the dedicated torn-tail assessment and the two cut-position fixtures), plus `{SDD_DIR}/review/qa.md` for the closed defect-fix focus. The repair outlived the JSONL file: the durable form today is the unconditional leading LF in `packages/engine/src/execution-ledgers.ts` `commitLedgerFrame`. Related: `architecture-patterns/append-only-ledger-bounds.md` (the retention/compaction rules over the same file), `architecture-patterns/dsh-agent-flow-ledger.md` (the ledger's write/read contract — now SQLite).
