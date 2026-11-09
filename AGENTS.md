@@ -29,14 +29,15 @@ This repository contains the Morning Star runtime skills, workflow engine, CLI, 
 
 ## Pull request review and merge
 
-A PR merges only when both hold for its CURRENT head:
+Merging follows the review policy in force for the change: an iteration compass `pr_merge_policy` when one exists (authority: [mstar-review-qc](skills/mstar-review-qc/SKILL.md)), otherwise this baseline rule:
 
 - Required CI is green (advisory checks may be yellow).
-- Every attached review bot (`mstar-inspector`, Greptile, Bugbot or equivalent) has concluded on that head: `mstar-inspector review` reports `success`, and a scored bot meets its own confidence gate. A review from an earlier head is not a verdict on the current code — request a re-review or wait for the next run.
+- Every attached review bot has concluded on the current head: `mstar-inspector review` reports `success`, and a scored bot meets its own confidence gate. A review of an earlier head covers the current one only while the increment between them is empty; once code moved, request a re-review or wait for the next run.
+- Unresolved review threads are resolved or explicitly waived, not merely reported.
 
-Report the verdicts and any unresolved findings (with severity) before merging, and merge only after the user or PM confirms, or under an explicit standing authorization for that case. "CI green and mergeable" alone is not authorization, and a bot stuck in `pending` is not a pass.
+"CI green and mergeable" alone is not authorization, and a bot stuck in `pending` is not a pass.
 
-If a merge already landed without this gate, fix forward in a follow-up PR — the direction may be right even when the process was not — and say so in the PR. Revert only when the merged change itself is wrong.
+A merge that landed without this gate is fixed forward in a follow-up PR — the direction may be right even when the process was not — and the PR says so. Revert only when the merged change itself is wrong.
 
 ## Where to edit
 
