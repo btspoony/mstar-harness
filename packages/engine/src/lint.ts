@@ -910,7 +910,7 @@ export function lintSpecsDoc(document: string, name?: string): GateResult {
           "medium",
           "lint.specs.name-shape",
           `${base}: filename carries a ${shape.why} - a spec describes the current state only, with no version history in the tracked layer`,
-          "rename it to <topic>.md; the old version belongs in .mstar/archived/specs/ (local) or nowhere - history lives in Git and ADRs",
+          "rename it to <topic>.md; the old version belongs in {HARNESS_DIR}/archived/specs/ (local) or nowhere - history lives in Git and ADRs",
         ),
       );
       break;
@@ -1024,7 +1024,7 @@ export function lintSpecsTree(dir: string): GateResult {
           "medium",
           "lint.specs.location-invalid",
           `${doc.rel}: spec sits under a history directory "${history}" - the tracked layer holds the current state only`,
-          "move it to {SPECS_DIR}/<class>/<topic>.md; an old version belongs in .mstar/archived/specs/ (local) or nowhere",
+          "move it to {SPECS_DIR}/<class>/<topic>.md; an old version belongs in {HARNESS_DIR}/archived/specs/ (local) or nowhere",
         ),
       );
     } else if (segments.length < 2) {
