@@ -513,32 +513,34 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { realpathSync as realpathSync2 } from "node:fs";
+import { basename as basename2, dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync2, lstatSync, realpathSync as realpathSync2 } from "node:fs";
-import { dirname as dirname2, join as join2, sep } from "node:path";
+import { existsSync as existsSync2, lstatSync, realpathSync as realpathSync3 } from "node:fs";
+import { dirname as dirname3, join as join3, sep } from "node:path";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2 } from "node:path";
+import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
 import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { basename as basename2, dirname as dirname4, join as join4, resolve as resolve3 } from "node:path";
+import { basename as basename3, dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "node:child_process";
-import { existsSync as existsSync4, realpathSync as realpathSync3 } from "node:fs";
-import { isAbsolute as isAbsolute3, join as join5, resolve as resolve4 } from "node:path";
 import { execFileSync as execFileSync2 } from "node:child_process";
+import { existsSync as existsSync4, realpathSync as realpathSync4 } from "node:fs";
+import { isAbsolute as isAbsolute3, join as join6, resolve as resolve5 } from "node:path";
 import { statSync as statSync2 } from "node:fs";
-import { dirname as dirname5, isAbsolute as isAbsolute4, relative as relative2, resolve as resolve5, sep as sep2 } from "node:path";
-import { isAbsolute as isAbsolute5, resolve as resolve6 } from "node:path";
-import { existsSync as existsSync5, readFileSync as readFileSync4, readdirSync, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname6, join as join6, resolve as resolve7, sep as sep3 } from "node:path";
+import { dirname as dirname6, isAbsolute as isAbsolute4, relative as relative2, resolve as resolve6, sep as sep2 } from "node:path";
+import { isAbsolute as isAbsolute5, resolve as resolve7 } from "node:path";
+import { existsSync as existsSync5, readFileSync as readFileSync4, readdirSync, realpathSync as realpathSync5 } from "node:fs";
+import { dirname as dirname7, join as join7, resolve as resolve8, sep as sep3 } from "node:path";
 import { existsSync as existsSync6, readdirSync as readdirSync2, readFileSync as readFileSync5 } from "node:fs";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync7, mkdirSync as mkdirSync2, readdirSync as readdirSync3, readFileSync as readFileSync6, writeFileSync as writeFileSync2 } from "node:fs";
-import { basename as basename3, join as join8, resolve as resolve8 } from "node:path";
+import { basename as basename4, join as join9, resolve as resolve9 } from "node:path";
 import { createHash as createHash3, randomUUID as randomUUID2 } from "node:crypto";
 import { lstatSync as lstatSync2, readFileSync as readFileSync7, readdirSync as readdirSync4 } from "node:fs";
-import { basename as basename4, join as join9, resolve as resolve9, sep as sep4 } from "node:path";
+import { basename as basename5, join as join10, resolve as resolve10, sep as sep4 } from "node:path";
 import { createHash as createHash4 } from "node:crypto";
 import {
   copyFileSync,
@@ -547,7 +549,7 @@ import {
   mkdirSync as mkdirSync3,
   readFileSync as readFileSync8,
   readdirSync as readdirSync5,
-  realpathSync as realpathSync5,
+  realpathSync as realpathSync6,
   renameSync as renameSync2,
   rmSync,
   statSync as statSync3,
@@ -555,75 +557,75 @@ import {
   writeFileSync as writeFileSync3
 } from "node:fs";
 import { createRequire } from "node:module";
-import { basename as basename6, dirname as dirname7, join as join10, resolve as resolve10, sep as sep5 } from "node:path";
+import { basename as basename7, dirname as dirname8, join as join11, resolve as resolve11, sep as sep5 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { createHash as createHash5 } from "node:crypto";
 import { lstatSync as lstatSync4, readdirSync as readdirSync6 } from "node:fs";
-import { dirname as dirname8, join as join11 } from "node:path";
+import { dirname as dirname9, join as join12 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 import { createHash as createHash6 } from "node:crypto";
 import { readFileSync as readFileSync9, readdirSync as readdirSync7 } from "node:fs";
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 import { createHash as createHash7 } from "node:crypto";
-import { existsSync as existsSync10, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync6, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync10, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync7, statSync as statSync4 } from "node:fs";
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute6, join as join13, relative as relative3, resolve as resolve11 } from "node:path";
+import { basename as basename8, dirname as dirname10, isAbsolute as isAbsolute6, join as join14, relative as relative3, resolve as resolve12 } from "node:path";
 import { existsSync as existsSync11, readFileSync as readFileSync11, statSync as statSync5 } from "node:fs";
-import { isAbsolute as isAbsolute7, join as join14, normalize, sep as sep6 } from "node:path";
+import { isAbsolute as isAbsolute7, join as join15, normalize, sep as sep6 } from "node:path";
 import { existsSync as existsSync12, readFileSync as readFileSync12, statSync as statSync6 } from "node:fs";
-import { basename as basename8, isAbsolute as isAbsolute8, join as join15, relative as relative4, resolve as resolve12, sep as sep7 } from "node:path";
+import { basename as basename9, isAbsolute as isAbsolute8, join as join16, relative as relative4, resolve as resolve13, sep as sep7 } from "node:path";
 import { createHash as createHash8 } from "node:crypto";
-import { isAbsolute as isAbsolute9, join as join16, resolve as resolve13, sep as sep8 } from "node:path";
+import { isAbsolute as isAbsolute9, join as join17, resolve as resolve14, sep as sep8 } from "node:path";
 import { readFileSync as readFileSync13 } from "node:fs";
 import { execFileSync as execFileSync5, spawnSync } from "node:child_process";
 import { createHash as createHash9, randomUUID as randomUUID4 } from "node:crypto";
 import { closeSync, existsSync as existsSync13, fstatSync, openSync, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname as dirname10, isAbsolute as isAbsolute10, join as join17, resolve as resolve14, sep as sep9 } from "node:path";
+import { dirname as dirname11, isAbsolute as isAbsolute10, join as join18, resolve as resolve15, sep as sep9 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
 import { createHash as createHash10, randomUUID as randomUUID5 } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync as closeSync2, existsSync as existsSync14, fstatSync as fstatSync2, fsyncSync, linkSync, lstatSync as lstatSync6, openSync as openSync2, readSync, statSync as statSync8, unlinkSync as unlinkSync4 } from "node:fs";
-import { basename as basename9, dirname as dirname11, join as join18, resolve as resolve15 } from "node:path";
+import { basename as basename10, dirname as dirname12, join as join19, resolve as resolve16 } from "node:path";
 import { createHash as createHash11 } from "node:crypto";
-import { lstatSync as lstatSync7, readFileSync as readFileSync15, realpathSync as realpathSync7 } from "node:fs";
+import { lstatSync as lstatSync7, readFileSync as readFileSync15, realpathSync as realpathSync8 } from "node:fs";
 import { execFileSync as execFileSync6, spawn } from "node:child_process";
-import { mkdirSync as mkdirSync6, readFileSync as readFileSync16, realpathSync as realpathSync8, statSync as statSync9, writeFileSync as writeFileSync4 } from "node:fs";
+import { mkdirSync as mkdirSync6, readFileSync as readFileSync16, realpathSync as realpathSync9, statSync as statSync9, writeFileSync as writeFileSync4 } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { basename as basename10, dirname as dirname12, isAbsolute as isAbsolute11, join as join19, relative as relative6, resolve as resolve16 } from "node:path";
+import { basename as basename11, dirname as dirname13, isAbsolute as isAbsolute11, join as join20, relative as relative6, resolve as resolve17 } from "node:path";
 import { existsSync as existsSync15, statSync as statSync10 } from "node:fs";
-import { basename as basename11, dirname as dirname13, join as join20, relative as relative7, resolve as resolve17 } from "node:path";
-import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
-import { basename as basename12, dirname as dirname14, relative as relative8, resolve as resolve18 } from "node:path";
+import { basename as basename12, dirname as dirname14, join as join21, relative as relative7, resolve as resolve18 } from "node:path";
+import { readlinkSync, realpathSync as realpathSync10 } from "node:fs";
+import { basename as basename13, dirname as dirname15, relative as relative8, resolve as resolve19 } from "node:path";
 import { createHash as createHash12 } from "node:crypto";
 import { closeSync as closeSync3, constants as constants2, fstatSync as fstatSync3, lstatSync as lstatSync8, openSync as openSync3, readFileSync as readFileSync17, readdirSync as readdirSync10 } from "node:fs";
-import { join as join21, relative as relative9 } from "node:path";
+import { join as join22, relative as relative9 } from "node:path";
 import { existsSync as existsSync16, readdirSync as readdirSync11 } from "node:fs";
-import { basename as basename13, isAbsolute as isAbsolute12, join as join22, resolve as resolve19, sep as sep10 } from "node:path";
+import { basename as basename14, isAbsolute as isAbsolute12, join as join23, resolve as resolve20, sep as sep10 } from "node:path";
 import { existsSync as existsSync17, readFileSync as readFileSync19, readdirSync as readdirSync12 } from "node:fs";
-import { join as join23 } from "node:path";
+import { join as join24 } from "node:path";
 import { lstatSync as lstatSync9, readdirSync as readdirSync13 } from "node:fs";
-import { isAbsolute as isAbsolute13, join as join24 } from "node:path";
+import { isAbsolute as isAbsolute13, join as join25 } from "node:path";
 import { existsSync as existsSync18, readdirSync as readdirSync14, unlinkSync as unlinkSync5 } from "node:fs";
-import { basename as basename14, isAbsolute as isAbsolute14, join as join25, resolve as resolve20, sep as sep11 } from "node:path";
+import { basename as basename15, isAbsolute as isAbsolute14, join as join26, resolve as resolve21, sep as sep11 } from "node:path";
 import { existsSync as existsSync19, readFileSync as readFileSync20 } from "node:fs";
-import { isAbsolute as isAbsolute15, join as join26, resolve as resolve21 } from "node:path";
+import { isAbsolute as isAbsolute15, join as join27, resolve as resolve22 } from "node:path";
 import { closeSync as closeSync5, constants as constants4, existsSync as existsSync20, fstatSync as fstatSync5, lstatSync as lstatSync11, mkdirSync as mkdirSync7, openSync as openSync5, readFileSync as readFileSync22, readdirSync as readdirSync16 } from "node:fs";
-import { dirname as dirname16, isAbsolute as isAbsolute16, join as join28, relative as relative10, resolve as resolve22, sep as sep12 } from "node:path";
+import { dirname as dirname17, isAbsolute as isAbsolute16, join as join29, relative as relative10, resolve as resolve23, sep as sep12 } from "node:path";
 import { createHash as createHash14 } from "node:crypto";
 import { createHash as createHash13 } from "node:crypto";
 import { closeSync as closeSync4, constants as constants3, fstatSync as fstatSync4, lstatSync as lstatSync10, openSync as openSync4, readFileSync as readFileSync21, readdirSync as readdirSync15 } from "node:fs";
-import { dirname as dirname15, join as join27 } from "node:path";
-import { dirname as dirname18, isAbsolute as isAbsolute17 } from "node:path";
+import { dirname as dirname16, join as join28 } from "node:path";
+import { dirname as dirname19, isAbsolute as isAbsolute17 } from "node:path";
 import { createHash as createHash15, randomUUID as randomUUID6 } from "node:crypto";
 import { createHash as createHash16 } from "node:crypto";
 import { readFileSync as readFileSync23 } from "node:fs";
-import { join as join29 } from "node:path";
+import { join as join30 } from "node:path";
 import { existsSync as existsSync21 } from "node:fs";
-import { dirname as dirname17, join as join30, resolve as resolve23 } from "node:path";
+import { dirname as dirname18, join as join31, resolve as resolve24 } from "node:path";
 import { createHash as createHash17 } from "node:crypto";
 import { existsSync as existsSync22, readFileSync as readFileSync24, statSync as statSync11 } from "node:fs";
-import { dirname as dirname19, isAbsolute as isAbsolute18, join as join31 } from "node:path";
+import { dirname as dirname20, isAbsolute as isAbsolute18, join as join32 } from "node:path";
 import { createHash as createHash18 } from "node:crypto";
 import { createHash as createHash19 } from "node:crypto";
 import { createHash as createHash20 } from "node:crypto";
@@ -631,7 +633,7 @@ import { relative as relative11, sep as sep13 } from "node:path";
 import { createHash as createHash21 } from "node:crypto";
 import { createHash as createHash22 } from "node:crypto";
 import { existsSync as existsSync23, lstatSync as lstatSync12, readFileSync as readFileSync25, readdirSync as readdirSync17 } from "node:fs";
-import { join as join32, resolve as resolve24 } from "node:path";
+import { join as join33, resolve as resolve25 } from "node:path";
 import { randomUUID as randomUUID7 } from "node:crypto";
 import {
   closeSync as closeSync6,
@@ -646,7 +648,7 @@ import {
   unlinkSync as unlinkSync6,
   writeSync
 } from "node:fs";
-import { basename as basename15, dirname as dirname20, join as join33 } from "node:path";
+import { basename as basename16, dirname as dirname21, join as join34 } from "node:path";
 import { createHash as createHash23, randomUUID as randomUUID8 } from "node:crypto";
 import {
   closeSync as closeSync7,
@@ -663,10 +665,10 @@ import {
 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
 import { tmpdir as tmpdir2 } from "node:os";
-import { dirname as dirname21, join as join34, relative as relative12, resolve as resolve25, sep as sep14 } from "node:path";
+import { dirname as dirname22, join as join35, relative as relative12, resolve as resolve26, sep as sep14 } from "node:path";
 import { chmodSync, existsSync as existsSync25, mkdirSync as mkdirSync9, readFileSync as readFileSync28, renameSync as renameSync4, rmSync as rmSync3, writeFileSync as writeFileSync6 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname as dirname22, join as join35 } from "node:path";
+import { dirname as dirname23, join as join36 } from "node:path";
 import { createHash as createHash24 } from "node:crypto";
 import { createServer } from "node:http";
 function __exportSetter2(name, newValue) {
@@ -980,14 +982,93 @@ function validateSnapshotCoordination(value, what = "coordination") {
 function evidenceRefOf(filePath) {
   return { path: canonicalTarget(filePath), sha256: sha256Bytes(readFileSync(filePath)) };
 }
+function gitProbeTimeoutMs() {
+  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "")
+    return DEFAULT_PROBE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
+}
+function exitStatusOf(error) {
+  if (typeof error === "object" && error !== null && "status" in error) {
+    const status = error.status;
+    return typeof status === "number" ? status : undefined;
+  }
+  return;
+}
+function realpathOrResolve(target) {
+  try {
+    return realpathSync2(target);
+  } catch {
+    return resolve2(target);
+  }
+}
+function realpathNearest(target) {
+  let dir = resolve2(target);
+  const rest = [];
+  for (;; ) {
+    try {
+      return join2(realpathSync2(dir), ...rest.reverse());
+    } catch {
+      const parent = dirname2(dir);
+      if (parent === dir)
+        return resolve2(target);
+      rest.push(basename2(dir));
+      dir = parent;
+    }
+  }
+}
+function mainWorktreeRoot(startDir) {
+  try {
+    const out = execFileSync("git", ["-C", startDir, "worktree", "list", "--porcelain", "-z"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: gitProbeTimeoutMs()
+    });
+    const first = out.split("\x00").find((entry) => entry.startsWith("worktree "));
+    if (first === undefined)
+      return null;
+    return realpathOrResolve(first.slice("worktree ".length));
+  } catch {
+    return null;
+  }
+}
+function checkoutRoot(startDir) {
+  try {
+    const out = execFileSync("git", ["-C", startDir, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: gitProbeTimeoutMs()
+    }).trim();
+    return out === "" ? null : realpathOrResolve(out);
+  } catch {
+    return null;
+  }
+}
+function gitIgnored(root, target) {
+  try {
+    execFileSync("git", ["-C", root, "check-ignore", "-q", "--", target], {
+      stdio: ["ignore", "ignore", "ignore"],
+      timeout: gitProbeTimeoutMs()
+    });
+    return true;
+  } catch (error) {
+    return exitStatusOf(error) === 1 ? false : null;
+  }
+}
 function catalogRootDir(context, rootKind) {
   if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
     throw new CatalogError("catalog.path-refused", `"${String(rootKind)}" is not a configured catalog root kind; expected one of ${Object.keys(ROOT_KINDS).join(", ")}`);
   }
-  const harness = dirname2(storeDbPath(context));
+  const harness = dirname3(storeDbPath(context));
+  const mainRoot = dirname3(harness);
   switch (rootKind) {
-    case "repository":
-      return dirname2(harness);
+    case "repository": {
+      if (context.checkoutRoot === undefined)
+        return mainRoot;
+      const callerMain = mainWorktreeRoot(context.checkoutRoot);
+      return callerMain !== null && realpathNearest(callerMain) === realpathNearest(mainRoot) ? context.checkoutRoot : mainRoot;
+    }
     case "harness":
       return harness;
     case "plans":
@@ -1045,7 +1126,7 @@ function assertPathContained(root, relativePath) {
   const canonicalRoot = canonicalizeNearestExisting(root);
   let walked = root;
   for (const segment of relativePath.split("/")) {
-    walked = join2(walked, segment);
+    walked = join3(walked, segment);
     let stats;
     try {
       stats = lstatSync(walked);
@@ -1059,7 +1140,7 @@ function assertPathContained(root, relativePath) {
       continue;
     let resolved;
     try {
-      resolved = realpathSync2(walked);
+      resolved = realpathSync3(walked);
     } catch {
       throw pathRefused(`relativePath crosses ${walked}, a dangling symlink, so its destination is not inside ${canonicalRoot}`);
     }
@@ -1068,7 +1149,7 @@ function assertPathContained(root, relativePath) {
     }
     walked = resolved;
   }
-  const canonicalTarget2 = canonicalizeNearestExisting(join2(root, relativePath));
+  const canonicalTarget2 = canonicalizeNearestExisting(join3(root, relativePath));
   if (canonicalTarget2 !== canonicalRoot && !canonicalTarget2.startsWith(`${canonicalRoot}${sep}`)) {
     throw pathRefused(`relativePath resolves to ${canonicalTarget2}, outside ${canonicalRoot}`);
   }
@@ -1232,7 +1313,7 @@ function normalizeOrdinal(ordinal) {
   return ordinal;
 }
 function toCatalogEntity(row, roots) {
-  const absolutePath = join2(roots[row.root_kind], row.relative_path);
+  const absolutePath = join3(roots[row.root_kind], row.relative_path);
   return {
     kind: row.kind,
     id: row.id,
@@ -1635,17 +1716,17 @@ function isFile(file) {
   }
 }
 function findMstarc(startDir, boundary) {
-  let dir = resolve2(startDir);
-  const bound = resolve2(boundary);
+  let dir = resolve3(startDir);
+  const bound = resolve3(boundary);
   for (;; ) {
     if (!isAtOrBelow(dir, bound))
       return null;
-    const candidate = join3(dir, MSTARC_FILE);
+    const candidate = join4(dir, MSTARC_FILE);
     if (isFile(candidate))
       return candidate;
     if (dir === bound)
       return null;
-    const parent = dirname3(dir);
+    const parent = dirname4(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -1655,25 +1736,25 @@ function loadMstarc(startDir, boundary) {
   const file = findMstarc(startDir, boundary);
   if (file === null)
     return null;
-  return { file, dir: dirname3(file), config: parseMstarc(readFileSync2(file, "utf8")) };
+  return { file, dir: dirname4(file), config: parseMstarc(readFileSync2(file, "utf8")) };
 }
 function isAtOrBelow(dir, root) {
   const rel = relative(root, dir);
   return rel === "" || !rel.startsWith("..") && !isAbsolute2(rel);
 }
 function resolveRepoRoot(startDir) {
-  let dir = resolve2(startDir);
+  let dir = resolve3(startDir);
   for (;; ) {
-    if (isFile(join3(dir, ".git")) || isDirectory(join3(dir, ".git")))
+    if (isFile(join4(dir, ".git")) || isDirectory(join4(dir, ".git")))
       return dir;
-    const parent = dirname3(dir);
+    const parent = dirname4(dir);
     if (parent === dir)
       return null;
     dir = parent;
   }
 }
 function readRepoLinearBinding(repoRoot) {
-  const file = join3(resolve2(repoRoot), MSTARC_FILE);
+  const file = join4(resolve3(repoRoot), MSTARC_FILE);
   if (!isFile(file)) {
     return {
       kind: "absent",
@@ -2181,10 +2262,10 @@ function resolveAll(constructs2, events, context) {
   const called = [];
   let index = -1;
   while (++index < constructs2.length) {
-    const resolve32 = constructs2[index].resolveAll;
-    if (resolve32 && !called.includes(resolve32)) {
-      events = resolve32(events, context);
-      called.push(resolve32);
+    const resolve42 = constructs2[index].resolveAll;
+    if (resolve42 && !called.includes(resolve42)) {
+      events = resolve42(events, context);
+      called.push(resolve42);
     }
   }
   return events;
@@ -7827,9 +7908,9 @@ function readJson(filePath) {
   }
 }
 function writeJson(filePath, value) {
-  const parent = dirname4(filePath);
+  const parent = dirname5(filePath);
   mkdirSync(parent, { recursive: true });
-  const tmp = join4(parent, `.${basename2(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  const tmp = join5(parent, `.${basename3(filePath)}.${process.pid}.${randomUUID()}.tmp`);
   try {
     writeFileSync(tmp, `${JSON.stringify(value, null, 2)}
 `, "utf8");
@@ -7842,12 +7923,12 @@ function writeJson(filePath, value) {
   }
 }
 function resolveProjectRoot(startDir = process.cwd()) {
-  const start = resolve3(startDir);
+  const start = resolve4(startDir);
   let dir = start;
   for (;; ) {
-    if (existsSync3(join4(dir, "package.json")) || existsSync3(join4(dir, "bun.lock")))
+    if (existsSync3(join5(dir, "package.json")) || existsSync3(join5(dir, "bun.lock")))
       return dir;
-    const parent = dirname4(dir);
+    const parent = dirname5(dir);
     if (parent === dir)
       return start;
     dir = parent;
@@ -7856,13 +7937,13 @@ function resolveProjectRoot(startDir = process.cwd()) {
 function findRootPackageJson(startDir) {
   let dir = startDir;
   for (;; ) {
-    const candidate = resolve3(dir, "package.json");
+    const candidate = resolve4(dir, "package.json");
     try {
       const pkg = JSON.parse(readFileSync3(candidate, "utf8"));
       if (pkg.name === "morning-star")
         return candidate;
     } catch {}
-    const parent = dirname4(dir);
+    const parent = dirname5(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -7872,7 +7953,7 @@ function harnessVersionFrom(moduleDir) {
   return harnessVersionOrNullFrom(moduleDir) ?? "0.0.0";
 }
 function harnessVersionOrNullFrom(moduleDir) {
-  const ownManifest = join4(moduleDir, "..", "package.json");
+  const ownManifest = join5(moduleDir, "..", "package.json");
   try {
     const pkg = JSON.parse(readFileSync3(ownManifest, "utf8"));
     if (typeof pkg.version === "string" && pkg.version !== "")
@@ -7889,24 +7970,24 @@ function harnessVersionOrNullFrom(moduleDir) {
   }
 }
 function readHarnessVersion() {
-  return harnessVersionFrom(dirname4(fileURLToPath(import.meta.url)));
+  return harnessVersionFrom(dirname5(fileURLToPath(import.meta.url)));
 }
 function readHarnessVersionOrNull() {
-  return harnessVersionOrNullFrom(dirname4(fileURLToPath(import.meta.url)));
+  return harnessVersionOrNullFrom(dirname5(fileURLToPath(import.meta.url)));
 }
 function warnUncheckableNodeFloor() {
   process.stderr.write("mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " + "so the Node version is not compared (the native node:sqlite capability check still applies). " + "Recovery: run this from an installed package or a full checkout so the manifest that declares the floor is reachable " + "(`npm i -g @mstar-harness/cli` for the CLI; the harness checkout, not a copied bundle, for a hook entrypoint).\n");
 }
 function readDeclaredNodeFloor() {
-  const moduleDir = dirname4(fileURLToPath(import.meta.url));
+  const moduleDir = dirname5(fileURLToPath(import.meta.url));
   const root = findRootPackageJson(moduleDir);
   const candidates = [];
   let dir = moduleDir;
   for (let depth = 0;depth < 6; depth += 1) {
-    candidates.push(join4(dir, "..", "package.json"), join4(dir, "package.json"));
+    candidates.push(join5(dir, "..", "package.json"), join5(dir, "package.json"));
     if (depth === 1)
-      candidates.push(join4(dir, "packages", "engine", "package.json"));
-    const parent = dirname4(dir);
+      candidates.push(join5(dir, "packages", "engine", "package.json"));
+    const parent = dirname5(dir);
     if (parent === dir)
       break;
     dir = parent;
@@ -7936,12 +8017,12 @@ function readDeclaredNodeFloor() {
   }
   return null;
 }
-function gitProbeTimeoutMs() {
+function gitProbeTimeoutMs2() {
   const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
   if (raw === undefined || raw.trim() === "")
-    return DEFAULT_PROBE_TIMEOUT_MS;
+    return DEFAULT_PROBE_TIMEOUT_MS2;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS2;
 }
 function parseMainWorktree(out) {
   const tokens = out.split("\x00");
@@ -7973,7 +8054,7 @@ function parseMainWorktree(out) {
   if (branch === null)
     return null;
   try {
-    return { root: realpathSync3(rawPath), branch };
+    return { root: realpathSync4(rawPath), branch };
   } catch {
     return null;
   }
@@ -7981,10 +8062,10 @@ function parseMainWorktree(out) {
 function readMainWorktree(cwd) {
   const start = cwd ?? process.cwd();
   try {
-    const stdout = execFileSync("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
+    const stdout = execFileSync2("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs()
+      timeout: gitProbeTimeoutMs2()
     });
     return parseMainWorktree(stdout);
   } catch {
@@ -8004,9 +8085,9 @@ function probeStatus(worktreePath, opts) {
   const precomputed = opts.statusOf?.(worktreePath);
   if (precomputed !== undefined)
     return { status: precomputed };
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs2();
   try {
-    return { status: execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "status", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout }) };
+    return { status: execFileSync2(opts.gitPath ?? "git", ["-C", worktreePath, "status", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout }) };
   } catch (error) {
     return { error: error.message ?? "git status probe failed" };
   }
@@ -8075,9 +8156,9 @@ function probeBranch(worktreePath, opts) {
   const precomputed = opts.branchOf?.(worktreePath);
   if (precomputed !== undefined)
     return { branch: precomputed };
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs2();
   try {
-    const stdout = execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "branch", "--show-current"], {
+    const stdout = execFileSync2(opts.gitPath ?? "git", ["-C", worktreePath, "branch", "--show-current"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout
@@ -8096,9 +8177,9 @@ function probeBranch(worktreePath, opts) {
   }
 }
 function probeCheckout(worktreePath, opts) {
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs2();
   try {
-    const stdout = execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "rev-parse", "--git-dir"], {
+    const stdout = execFileSync2(opts.gitPath ?? "git", ["-C", worktreePath, "rev-parse", "--git-dir"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout
@@ -8106,8 +8187,8 @@ function probeCheckout(worktreePath, opts) {
     const raw = stdout.trim();
     if (raw === "")
       return { error: `no git dir reported at "${worktreePath}"` };
-    const abs = isAbsolute3(raw) ? raw : join5(worktreePath, raw);
-    return { gitDir: realpathSync3(abs) };
+    const abs = isAbsolute3(raw) ? raw : join6(worktreePath, raw);
+    return { gitDir: realpathSync4(abs) };
   } catch (err) {
     const e = err;
     if (e.killed === true || e.signal !== undefined) {
@@ -8125,9 +8206,9 @@ function isDistinctCheckout(controlPath, candidatePath, opts = {}) {
   return control.gitDir !== candidate.gitDir;
 }
 function probeCheckoutRoot(path2, opts = {}) {
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs2();
   try {
-    const stdout = execFileSync(opts.gitPath ?? "git", ["-C", path2, "rev-parse", "--show-toplevel"], {
+    const stdout = execFileSync2(opts.gitPath ?? "git", ["-C", path2, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout
@@ -8135,7 +8216,7 @@ function probeCheckoutRoot(path2, opts = {}) {
     const raw = stdout.trim();
     if (raw === "")
       return null;
-    return realpathSync3(raw);
+    return realpathSync4(raw);
   } catch {
     return null;
   }
@@ -8144,7 +8225,7 @@ function l1PreDispatchCheck(input, opts = {}) {
   const violations = [];
   const checkoutCache = new Map;
   const checkout = (path2) => {
-    const key = resolve4(path2);
+    const key = resolve5(path2);
     if (!checkoutCache.has(key))
       checkoutCache.set(key, probeCheckout(path2, opts));
     return checkoutCache.get(key);
@@ -8198,7 +8279,7 @@ function l1PreDispatchCheck(input, opts = {}) {
     }
   }
   const identityViolation = (aPath, bPath, code2, describe, fix) => {
-    if (resolve4(aPath) === resolve4(bPath)) {
+    if (resolve5(aPath) === resolve5(bPath)) {
       return violation("critical", code2, `${describe} — the same checkout (normalized path equality) is not isolation`, fix);
     }
     if (!existsSync4(aPath) || !existsSync4(bPath))
@@ -8259,7 +8340,7 @@ function l2PreDispatchCheck(input, opts = {}) {
       violations.push(violation("high", "worktree.l2.track-path-relative", `track ${index2 + 1} worktreePath "${track.worktreePath}" is not an absolute path — L2 tracks MUST use absolute worktree checkout paths (consistent with the lease validator's absolute worktree_path enforcement)`, `use an absolute path for track ${index2 + 1} (e.g. /Users/<you>/worktrees/<branch>)`));
       return;
     }
-    const normalized = resolve4(track.worktreePath);
+    const normalized = resolve5(track.worktreePath);
     if (seenPaths.has(normalized)) {
       violations.push(violation("high", "worktree.l2.track-path-collision", `duplicate worktreePath "${track.worktreePath}" across parallel tracks — L2 parallel-writable isolation requires a distinct absolute Worktree path per track (N parallel invokes ≠ isolation)`, "give every parallel track its own git worktree checkout"));
       return;
@@ -8331,7 +8412,7 @@ function shellQuote(value) {
   return "'" + value.replaceAll("'", `'"'"'`) + "'";
 }
 function isResultPath(target, resultDirs) {
-  const path2 = resolve5(target);
+  const path2 = resolve6(target);
   return resultDirs.some((dir) => isAtOrBelow2(path2, dir));
 }
 function isAtOrBelow2(dir, root) {
@@ -8346,51 +8427,37 @@ function isDirectoryEntry(candidate) {
   }
 }
 function nearestExistingDir(target) {
-  let dir = resolve5(target);
+  let dir = resolve6(target);
   for (;; ) {
     if (isDirectoryEntry(dir))
       return dir;
-    const parent = dirname5(dir);
+    const parent = dirname6(dir);
     if (parent === dir)
       return dir;
     dir = parent;
   }
 }
 function probePathFor(target) {
-  const resolved = resolve5(target.path);
+  const resolved = resolve6(target.path);
   const directory = target.kind === "directory" || target.kind === undefined && isDirectoryEntry(resolved);
   return directory && !resolved.endsWith(sep2) ? resolved + sep2 : resolved;
 }
-function exitStatus(error) {
-  if (error !== null && typeof error === "object" && "status" in error && typeof error.status === "number") {
-    return error.status;
-  }
-  return null;
-}
-function ignoreVerdict(checkoutRoot, probePath) {
-  if (checkoutRoot === null)
+function ignoreVerdict(checkoutRoot2, probePath) {
+  if (checkoutRoot2 === null)
     return null;
-  try {
-    execFileSync2("git", ["-C", checkoutRoot, "check-ignore", "-q", "--", probePath], {
-      stdio: ["ignore", "ignore", "ignore"],
-      timeout: gitProbeTimeoutMs()
-    });
-    return true;
-  } catch (error) {
-    return exitStatus(error) === 1 ? false : null;
-  }
+  return gitIgnored(checkoutRoot2, probePath);
 }
 function probePathOwnership(target, controlRoot, callerCheckoutRoot = null) {
   const anchor = nearestExistingDir(target.path);
-  const checkoutRoot = probeCheckoutRoot(anchor);
+  const checkoutRoot2 = probeCheckoutRoot(anchor);
   const probePath = probePathFor(target);
-  const ignored = ignoreVerdict(checkoutRoot, probePath);
-  const processRoot = controlRoot ?? (checkoutRoot === null ? null : readMainWorktree(checkoutRoot)?.root ?? null);
+  const ignored = ignoreVerdict(checkoutRoot2, probePath);
+  const processRoot = controlRoot ?? (checkoutRoot2 === null ? null : readMainWorktree(checkoutRoot2)?.root ?? null);
   const facts = {
     path: target.path,
     result: target.result === true,
     ignored,
-    checkoutRoot,
+    checkoutRoot: checkoutRoot2,
     controlRoot: processRoot
   };
   if (ignored === null) {
@@ -8402,21 +8469,21 @@ function probePathOwnership(target, controlRoot, callerCheckoutRoot = null) {
       fix: `Confirm the path sits inside a readable Git checkout: run \`git -C ${anchor} check-ignore -v -- ${probePath}\`. Run mstar path check.`
     };
   }
-  if (ignored && checkoutRoot !== processRoot) {
+  if (ignored && checkoutRoot2 !== processRoot) {
     return {
       ...facts,
       code: "path.process-outside-control",
       severity: "high",
-      message: `${target.path} is Git-ignored in the checkout ${checkoutRoot ?? "unknown"}, but ignored harness files belong to the control checkout ${processRoot ?? "unreadable"}`,
+      message: `${target.path} is Git-ignored in the checkout ${checkoutRoot2 ?? "unknown"}, but ignored harness files belong to the control checkout ${processRoot ?? "unreadable"}`,
       fix: `Keep ignored harness files in the control checkout: run mstar path check from ${processRoot ?? "the main worktree"}, or declare harness_dir in .mstarc.`
     };
   }
-  if (!ignored && callerCheckoutRoot !== null && checkoutRoot !== null && checkoutRoot !== callerCheckoutRoot) {
+  if (!ignored && callerCheckoutRoot !== null && checkoutRoot2 !== null && checkoutRoot2 !== callerCheckoutRoot) {
     return {
       ...facts,
       code: "path.result-outside-worktree",
       severity: "high",
-      message: `${target.path} is committable in the checkout ${checkoutRoot}, but the caller works in ${callerCheckoutRoot}`,
+      message: `${target.path} is committable in the checkout ${checkoutRoot2}, but the caller works in ${callerCheckoutRoot}`,
       fix: `Write tracked results in the checkout that carries the target branch (the work/integration worktree), not the control checkout. Run mstar path check.`
     };
   }
@@ -8648,7 +8715,7 @@ function validateControlWriteAssignment(text4, opts = {}) {
     const forms = parseAssignmentBranchForms(text4);
     const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch;
     const violations = [];
-    const worktree = fields.worktreePath && fields.worktreePath !== "N/A" ? resolve6(opts.assignmentDir ?? cwd, fields.worktreePath) : undefined;
+    const worktree = fields.worktreePath && fields.worktreePath !== "N/A" ? resolve7(opts.assignmentDir ?? cwd, fields.worktreePath) : undefined;
     if (worktree !== undefined && canonicalizeNearestExisting(worktree) !== controlRoot) {
       violations.push(violation2("high", "dispatch.control-write.worktree-not-control", `Worktree path "${fields.worktreePath}" is not the control checkout ${controlRoot}`, `set "Worktree path: ${controlRoot}" in the Assignment`));
     }
@@ -8658,7 +8725,7 @@ function validateControlWriteAssignment(text4, opts = {}) {
     for (const declared of fields.controlWritePaths ?? []) {
       if (/[*?[\]{}]/.test(declared) || !isAbsolute5(declared) && worktree === undefined)
         continue;
-      const target = resolve6(worktree ?? controlRoot, declared);
+      const target = resolve7(worktree ?? controlRoot, declared);
       const directoryOnly = declared.endsWith("/");
       const ownership = probePathOwnership({ path: target, kind: directoryOnly ? "directory" : "file" }, controlRoot);
       const directory = directoryOnly ? ownership : probePathOwnership({ path: target, kind: "directory" }, controlRoot);
@@ -8938,7 +9005,7 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (typeof docOrPath === "string") {
     try {
       doc = readJson(docOrPath);
-      harnessDir = dirname6(resolve7(docOrPath));
+      harnessDir = dirname7(resolve8(docOrPath));
     } catch (error) {
       return {
         ok: false,
@@ -9001,17 +9068,17 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (harnessDir !== undefined && Array.isArray(doc.workflows)) {
     let realHarnessDir = null;
     try {
-      realHarnessDir = realpathSync4(harnessDir);
+      realHarnessDir = realpathSync5(harnessDir);
     } catch {}
     for (const entry of doc.workflows) {
       if (!isPlainObject(entry) || typeof entry.dir !== "string")
         continue;
-      const relSnapshot = join6(entry.dir, WORKFLOW_SNAPSHOT_FILE);
-      const snapshotPath = join6(harnessDir, relSnapshot);
+      const relSnapshot = join7(entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join7(harnessDir, relSnapshot);
       const label = typeof entry.id === "string" ? entry.id : relSnapshot;
       let physical;
       try {
-        physical = realpathSync4(snapshotPath);
+        physical = realpathSync5(snapshotPath);
       } catch {
         violations.push(violation3("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
         continue;
@@ -9053,7 +9120,7 @@ function resolveCompassEnforcement(harnessDir) {
   for (const entry of entries) {
     if (!entry.isDirectory())
       continue;
-    const compassPath = join6(iterationsDir, entry.name, "delivery-compass.md");
+    const compassPath = join7(iterationsDir, entry.name, "delivery-compass.md");
     if (!existsSync5(compassPath))
       continue;
     let content3;
@@ -9073,8 +9140,8 @@ function resolveCompassEnforcement(harnessDir) {
   return { hard: false, source: "none" };
 }
 function resolveMstarcEnforcement(harnessDir) {
-  const dir = resolve7(harnessDir);
-  const rc = loadMstarc(dir, dirname6(dir));
+  const dir = resolve8(harnessDir);
+  const rc = loadMstarc(dir, dirname7(dir));
   const value = rc?.config.enforcement;
   if (value === "hard")
     return { hard: true, source: "mstarc" };
@@ -9508,7 +9575,7 @@ function listDocumentBodies(dir, base = "") {
       continue;
     const relativePath = base === "" ? entry.name : `${base}/${entry.name}`;
     if (entry.isDirectory()) {
-      bodies.push(...listDocumentBodies(join7(dir, entry.name), relativePath));
+      bodies.push(...listDocumentBodies(join8(dir, entry.name), relativePath));
     } else if (entry.name.endsWith(".md") && entry.name !== "README.md" && entry.name !== "index.md") {
       bodies.push(relativePath);
     }
@@ -9522,7 +9589,7 @@ function discoverCatalogLocations(context, roots) {
     switch (rootKind) {
       case "iterations": {
         for (const id of listChildDirectories(dir)) {
-          if (existsSync6(join7(dir, id, COMPASS_FILE))) {
+          if (existsSync6(join8(dir, id, COMPASS_FILE))) {
             locations.push({ rootKind, kind: "iteration", id, relativePath: `${id}/${COMPASS_FILE}` });
           }
         }
@@ -9530,7 +9597,7 @@ function discoverCatalogLocations(context, roots) {
       }
       case "projects": {
         for (const id of listChildDirectories(dir)) {
-          if (existsSync6(join7(dir, id, ROADMAP_FILE))) {
+          if (existsSync6(join8(dir, id, ROADMAP_FILE))) {
             locations.push({ rootKind, kind: "project", id, relativePath: `${id}/${ROADMAP_FILE}` });
           }
         }
@@ -10021,7 +10088,7 @@ function scanSecrets(files) {
       unreadableFiles++;
       continue;
     }
-    const base = basename3(file);
+    const base = basename4(file);
     for (const entry of NEVER_COMMIT_FILENAMES) {
       if (entry.re.test(base))
         findings.push({ file, line: 1, type: entry.type });
@@ -10066,7 +10133,7 @@ function rootLockfiles(root) {
     return [];
   }
   const names = new Set(LOCKFILE_NAMES);
-  const present = entries.filter((entry) => entry.isFile() && names.has(entry.name)).map((entry) => join8(root, entry.name));
+  const present = entries.filter((entry) => entry.isFile() && names.has(entry.name)).map((entry) => join9(root, entry.name));
   if (present.length === 0)
     return [];
   try {
@@ -10075,7 +10142,7 @@ function rootLockfiles(root) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
     }).split("\x00").filter((f) => f !== ""));
-    return present.filter((p) => tracked.has(basename3(p)));
+    return present.filter((p) => tracked.has(basename4(p)));
   } catch {
     return present;
   }
@@ -10091,7 +10158,7 @@ function supplyChainChecks(repoRoot) {
     findings.push({ kind: "lockfile-duplicate", file: lockfiles.map((f) => f.replace(`${repoRoot}/`, "")).join(", ") });
     violations.push(violation6("medium", "audit.supply.lockfile-duplicate", `multiple lockfiles at ${repoRoot}: ${lockfiles.join(", ")}`, "keep exactly one lockfile per package manager"));
   }
-  const workflowsDir = join8(repoRoot, ".github", "workflows");
+  const workflowsDir = join9(repoRoot, ".github", "workflows");
   let wfEntries = [];
   try {
     wfEntries = readdirSync3(workflowsDir, { withFileTypes: true });
@@ -10101,7 +10168,7 @@ function supplyChainChecks(repoRoot) {
   for (const entry of wfEntries) {
     if (!entry.isFile() || !/\.(?:ya?ml)$/.test(entry.name))
       continue;
-    const wfPath = join8(workflowsDir, entry.name);
+    const wfPath = join9(workflowsDir, entry.name);
     const relPath = `.github/workflows/${entry.name}`;
     let text4;
     try {
@@ -10427,7 +10494,7 @@ function scaffoldAuditReport(findings, options) {
   }
   let outDir;
   if (options.dir !== undefined) {
-    outDir = resolve8(options.dir);
+    outDir = resolve9(options.dir);
     mkdirSync2(outDir, { recursive: true });
   } else if (options.round !== undefined) {
     outDir = resolveReviewRunDir({ reviewsDir: options.reviewsDir, date, spec: { kind: "codebase", level, round: options.round } });
@@ -10446,8 +10513,8 @@ function scaffoldAuditReport(findings, options) {
       }
     }
   }
-  const round = options.round ?? (options.dir !== undefined ? 1 : Number(basename3(outDir).split("-").pop()));
-  const file = join8(outDir, "README.md");
+  const round = options.round ?? (options.dir !== undefined ? 1 : Number(basename4(outDir).split("-").pop()));
+  const file = join9(outDir, "README.md");
   const carried = existsSync7(file) ? extractSecurityDispositionSections(readFileSync6(file, "utf8")) : { needsVerification: [], hardeningChecked: [] };
   const redacted = findings.map(redactFinding);
   const details = redacted.map((finding, index2) => renderFindingDetail(String(index2 + 1).padStart(3, "0"), finding));
@@ -10541,8 +10608,8 @@ function resolveRelativePath(raw, label) {
   return { ok: true, relativePath: parts.join("/") };
 }
 function sourcePath(context, rootKind, relativePath) {
-  const root = resolve9(catalogRootDir(context, rootKind));
-  const absolute = resolve9(join9(root, relativePath));
+  const root = resolve10(catalogRootDir(context, rootKind));
+  const absolute = resolve10(join10(root, relativePath));
   if (absolute !== root && !absolute.startsWith(root + sep4)) {
     throw invalidPlan(`"${relativePath}" escapes the ${rootKind} catalog root`);
   }
@@ -10611,7 +10678,7 @@ function titleFromBody(text4, label) {
   return { title: null, field: "none" };
 }
 function fallbackTitle(relativePath) {
-  const name = basename4(relativePath);
+  const name = basename5(relativePath);
   return name.replace(/\.md$/i, "") || relativePath;
 }
 function cellsOf(line) {
@@ -10861,14 +10928,14 @@ function listDirectories(root) {
 }
 function hasFile(root, name) {
   try {
-    const info = lstatSync2(join9(root, name));
+    const info = lstatSync2(join10(root, name));
     return info.isFile() && !info.isSymbolicLink();
   } catch {
     return false;
   }
 }
 function collectBodies(root, relativeDir = "") {
-  const dir = relativeDir === "" ? root : join9(root, relativeDir);
+  const dir = relativeDir === "" ? root : join10(root, relativeDir);
   let entries;
   try {
     entries = readdirSync4(dir, { withFileTypes: true });
@@ -11054,7 +11121,7 @@ function parseIterationRow(acc, context, source, sourceKey, row, header) {
       sourceKey
     });
   }
-  if (!hasFile(join9(catalogRootDir(context, source.rootKind), location), COMPASS_FILE2)) {
+  if (!hasFile(join10(catalogRootDir(context, source.rootKind), location), COMPASS_FILE2)) {
     acc.unknowns.push({
       code: "reference-missing",
       key: `iteration:${id}`,
@@ -11199,8 +11266,8 @@ async function discoverCatalog(context) {
   const knowledgeRoot = catalogRootDir(context, "knowledge");
   const plansRoot = catalogRootDir(context, "plans");
   const projectsRoot = catalogRootDir(context, "projects");
-  const iterationIds = listDirectories(iterationsRoot).filter((id) => hasFile(join9(iterationsRoot, id), COMPASS_FILE2));
-  const projectIds = listDirectories(projectsRoot).filter((id) => hasFile(join9(projectsRoot, id), ROADMAP_FILE2));
+  const iterationIds = listDirectories(iterationsRoot).filter((id) => hasFile(join10(iterationsRoot, id), COMPASS_FILE2));
+  const projectIds = listDirectories(projectsRoot).filter((id) => hasFile(join10(projectsRoot, id), ROADMAP_FILE2));
   for (const id of projectIds) {
     bodyProposal(acc, context, "projects", id, "project", null, {
       value: id,
@@ -11570,7 +11637,7 @@ function provisionActivationDocument(input, facts = currentProcessFacts()) {
       operator: { actor: input.actor, authorizationRef: input.authorizationRef },
       consumers: [
         {
-          entryId: basename5(facts.entrypoint),
+          entryId: basename6(facts.entrypoint),
           kind: "coordinator",
           entrypoint: facts.entrypoint,
           runtime: "node",
@@ -11593,7 +11660,7 @@ function provisionRecoveryDocument(input) {
     stoppedSessions: [...input.stoppedSessions]
   };
 }
-function basename5(entrypoint) {
+function basename6(entrypoint) {
   const normalized = entrypoint.replaceAll("\\", "/");
   const last = normalized.lastIndexOf("/");
   return last === -1 ? normalized : normalized.slice(last + 1);
@@ -11613,8 +11680,8 @@ function scalar2(db, sql) {
   return typeof row?.n === "number" ? row.n : 0;
 }
 function writeTextAtomic(path2, text4) {
-  mkdirSync3(dirname7(path2), { recursive: true });
-  const tmp = join10(dirname7(path2), `.${basename6(path2)}.${process.pid}.tmp`);
+  mkdirSync3(dirname8(path2), { recursive: true });
+  const tmp = join11(dirname8(path2), `.${basename7(path2)}.${process.pid}.tmp`);
   try {
     writeFileSync3(tmp, text4, "utf8");
     renameSync2(tmp, path2);
@@ -11691,16 +11758,16 @@ function sameExecution(a, b) {
   return a.protocolVersion === b.protocolVersion && a.authorityState === b.authorityState && a.revision === b.revision && a.rootUpdatedAt === b.rootUpdatedAt && a.manifestId === b.manifestId && a.activatedAt === b.activatedAt;
 }
 function canonicalPath(value) {
-  let current = resolve10(value);
+  let current = resolve11(value);
   const trailing = [];
   for (;; ) {
     try {
-      return join10(realpathSync5(current), ...[...trailing].reverse());
+      return join11(realpathSync6(current), ...[...trailing].reverse());
     } catch {
-      const parent = dirname7(current);
+      const parent = dirname8(current);
       if (parent === current)
-        return resolve10(value);
-      trailing.push(basename6(current));
+        return resolve11(value);
+      trailing.push(basename7(current));
       current = parent;
     }
   }
@@ -11782,7 +11849,7 @@ function sameCounts(a, b) {
 }
 function defaultBackupPath(context, meta, label) {
   const name = label === undefined ? `${meta.storeId.slice(0, 8)}-e${meta.epoch}-r${meta.revision}.db` : `${label}.db`;
-  return join10(dirname7(storeDbPath(context)), "archived", "store-migration", "backups", name);
+  return join11(dirname8(storeDbPath(context)), "archived", "store-migration", "backups", name);
 }
 async function takeVerifiedBackup(context, options) {
   const dbPath = storeDbPath(context);
@@ -11795,7 +11862,7 @@ async function takeVerifiedBackup(context, options) {
     } catch {
       walPending = false;
     }
-    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve10(options.out);
+    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve11(options.out);
     if (existsSync8(targetPath)) {
       if (!options.reuseMatchingIdentity) {
         throw new StoreActivationError("store.activation-stale", `a backup already exists at ${targetPath}; pass --out <path> for a different target instead of overwriting a ` + `recorded recovery point.`);
@@ -11816,7 +11883,7 @@ async function takeVerifiedBackup(context, options) {
         takenAt: new Date().toISOString()
       };
     }
-    mkdirSync3(dirname7(targetPath), { recursive: true });
+    mkdirSync3(dirname8(targetPath), { recursive: true });
     handle.db.prepare("vacuum into ?").run(targetPath);
     const verified = await inspectBackupCopy(targetPath).catch((error) => {
       rmSync(targetPath, { force: true });
@@ -11848,7 +11915,7 @@ async function assertBackupDescribesStore(context, receipt, reviewed) {
   if (!receipt || receipt.receiptVersion !== ACTIVATION_PROTOCOL_VERSION && receipt.receiptVersion !== BACKUP_RECEIPT_VERSION || typeof receipt.backupPath !== "string" || receipt.backupPath.trim() === "") {
     stale("the supplied recovery point is not a backup receipt of this protocol version; take one with `backupStore` and " + "apply the manifest that names it.");
   }
-  const controlRoot = dirname7(storeDbPath(context));
+  const controlRoot = dirname8(storeDbPath(context));
   if (!isPathWithin(controlRoot, receipt.backupPath)) {
     stale(`the recovery point ${receipt.backupPath} is outside the authorized control root ${controlRoot}; a migration ` + `recovery point must live inside the root it protects.`);
   }
@@ -12018,7 +12085,7 @@ function currentRegisterSources(context) {
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isSymbolicLink() || !entry.isDirectory())
       continue;
-    const absolutePath = join10(projectsRoot, entry.name, "residuals.json");
+    const absolutePath = join11(projectsRoot, entry.name, "residuals.json");
     let info;
     try {
       info = lstatSync3(absolutePath);
@@ -12043,7 +12110,7 @@ function revalidateSources(context, manifest, mode) {
     }
   }
   for (const reviewedSource of manifest.sources) {
-    const live = readIfExists(join10(catalogRootDir(context, "projects"), reviewedSource.relativePath));
+    const live = readIfExists(join11(catalogRootDir(context, "projects"), reviewedSource.relativePath));
     if (live === undefined && !retired.has(reviewedSource.relativePath)) {
       changed(`register ${reviewedSource.relativePath} is gone.`);
     }
@@ -12056,7 +12123,7 @@ function readReceiptRows(db, where, param) {
 async function appliedReceiptFor(context, manifest) {
   const handle = await openStore(context, "read");
   try {
-    if (resolve10(manifest.controlRoot) !== resolve10(context.harnessDir)) {
+    if (resolve11(manifest.controlRoot) !== resolve11(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`);
     }
     const row = readReceiptRows(handle.db, "phase = 'applied'").at(-1);
@@ -12178,7 +12245,7 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
       throw new StoreActivationError("store.activation-stale", `the supplied receipt is not the FINAL applied manifest (a later apply, receipt #${applied.at(-1).id}, is recorded); ` + `revalidate the final manifest, re-apply it and re-attest. Nothing was activated.`);
     }
     manifest = JSON.parse(appliedRow.manifest_json);
-    if (resolve10(manifest.controlRoot) !== resolve10(context.harnessDir)) {
+    if (resolve11(manifest.controlRoot) !== resolve11(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the applied manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}. Nothing was activated.`);
     }
     if (meta.revision !== receipt.storeRevision) {
@@ -12311,13 +12378,13 @@ function retirementReceiptOfRow(row, replayed) {
 }
 function finalizeDisclosure(ledgerPath, ledger, receipt) {
   writeLedger(ledgerPath, ledger);
-  writeTextAtomic(join10(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
+  writeTextAtomic(join11(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
 }
 function retireRegister(context, ledgerPath, ledger, item) {
-  const livePath = join10(catalogRootDir(context, "projects"), item.relativePath);
+  const livePath = join11(catalogRootDir(context, "projects"), item.relativePath);
   const liveBytes = readIfExists(livePath);
   if (liveBytes !== undefined) {
-    mkdirSync3(dirname7(item.archivePath), { recursive: true });
+    mkdirSync3(dirname8(item.archivePath), { recursive: true });
     rmSync(item.archivePath, { force: true });
     copyFileSync(livePath, item.archivePath);
     item.state = "archived";
@@ -12363,7 +12430,7 @@ function selectReviewedSection(live, item) {
   return best;
 }
 function retireSection(context, ledgerPath, ledger, item, hooks) {
-  const livePath = join10(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
+  const livePath = join11(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
   const live = readIfExists(livePath)?.toString("utf8");
   if (live === undefined) {
     throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; the reviewed section cannot be retired truthfully. ` + `Nothing was retired.`);
@@ -12389,7 +12456,7 @@ function retireSection(context, ledgerPath, ledger, item, hooks) {
   const excised = live.split(`
 `).filter((_line, index2) => !dropped.has(index2 + 1)).join(`
 `);
-  mkdirSync3(dirname7(item.archivePath), { recursive: true });
+  mkdirSync3(dirname8(item.archivePath), { recursive: true });
   rmSync(item.archivePath, { force: true });
   copyFileSync(livePath, item.archivePath);
   item.retiredRows = [...new Set(selection.hits.map((hit) => hit.identity))].sort();
@@ -12440,8 +12507,8 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
     const manifest = JSON.parse(appliedRow.manifest_json);
     const registers = manifest.retirement.registers;
     const sections = manifest.catalog.retirementSections;
-    const archiveDir = join10(dirname7(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
-    const ledgerPath = join10(archiveDir, "ledger.json");
+    const archiveDir = join11(dirname8(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
+    const ledgerPath = join11(archiveDir, "ledger.json");
     const retirementHash = sha256Bytes2(Buffer.from(`retirement\x00${JSON.stringify({
       activationReceiptId: activationReceipt.receiptId,
       activationHash: activationReceipt.activationHash,
@@ -12486,7 +12553,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
         project: register.project,
         relativePath: register.relativePath,
         sha256: register.sha256,
-        archivePath: join10(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
+        archivePath: join11(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
       sections: sections.map((section) => ({
@@ -12501,7 +12568,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
         reviewedRows: section.rows,
         retiredRows: null,
         removedLines: null,
-        archivePath: join10(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
+        archivePath: join11(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
         expectedLiveSha256: null,
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine)
@@ -12562,7 +12629,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
         storeId: meta.storeId,
         epoch: meta.epoch,
         archiveDir,
-        markerPath: join10(archiveDir, "MARKER.md"),
+        markerPath: join11(archiveDir, "MARKER.md"),
         registers: retiredRegisters,
         sections: retiredSections,
         resumed
@@ -12593,7 +12660,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
       storeId: meta.storeId,
       epoch: meta.epoch,
       archiveDir,
-      markerPath: join10(archiveDir, "MARKER.md"),
+      markerPath: join11(archiveDir, "MARKER.md"),
       registers: retiredRegisters,
       sections: retiredSections,
       resumed,
@@ -13283,10 +13350,10 @@ function readExecutionStateGraph(tx) {
   };
 }
 function assertNoLegacyExecutionSources(context) {
-  const harnessDir = dirname8(storeDbPath(context));
+  const harnessDir = dirname9(storeDbPath(context));
   const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
   const sources = [];
-  const statusPath = join11(harnessDir, "status.json");
+  const statusPath = join12(harnessDir, "status.json");
   try {
     lstatSync4(statusPath);
     sources.push(statusPath);
@@ -13313,14 +13380,14 @@ function assertNoLegacyExecutionSources(context) {
       sources.push(`${workflowDir} (unreadable)`);
     }
     for (const entry of entries) {
-      const dir = join11(workflowDir, entry.name);
+      const dir = join12(workflowDir, entry.name);
       if (entry.isSymbolicLink()) {
         sources.push(dir);
         continue;
       }
       if (!entry.isDirectory())
         continue;
-      const path2 = join11(dir, WORKFLOW_SNAPSHOT_FILE);
+      const path2 = join12(dir, WORKFLOW_SNAPSHOT_FILE);
       try {
         lstatSync4(path2);
         sources.push(path2);
@@ -13328,7 +13395,7 @@ function assertNoLegacyExecutionSources(context) {
         if (error.code !== "ENOENT")
           sources.push(`${path2} (unreadable)`);
       }
-      const sessionsDir = join11(dir, "sessions");
+      const sessionsDir = join12(dir, "sessions");
       try {
         const info = lstatSync4(sessionsDir);
         if (info.isSymbolicLink() || !info.isDirectory()) {
@@ -13343,7 +13410,7 @@ function assertNoLegacyExecutionSources(context) {
           }
           for (const session of sessions) {
             if (session.name.endsWith(".json"))
-              sources.push(join11(sessionsDir, session.name));
+              sources.push(join12(sessionsDir, session.name));
           }
         }
       } catch (error) {
@@ -15664,7 +15731,7 @@ async function findingsCleanupGate(context, planId, opts) {
   }
 }
 function listProjectReferenceFiles(projectDir) {
-  const root = join12(projectDir, PROJECT_REFERENCES_DIR);
+  const root = join13(projectDir, PROJECT_REFERENCES_DIR);
   let entries;
   try {
     entries = readdirSync7(root, { withFileTypes: true });
@@ -15680,7 +15747,7 @@ function listProjectReferenceFiles(projectDir) {
     } else if (entry.isDirectory()) {
       let nested;
       try {
-        nested = readdirSync7(join12(root, entry.name), { withFileTypes: true });
+        nested = readdirSync7(join13(root, entry.name), { withFileTypes: true });
       } catch {
         continue;
       }
@@ -15815,29 +15882,36 @@ function bindProject(context, projectId, target, mutation) {
   });
 }
 function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
-  const start = resolve11(startDir);
+  const start = resolve12(startDir);
   const explicit = opts.harnessDir ?? (opts.ignoreEnvOverride ? undefined : process.env.MSTAR_HARNESS_DIR);
   if (explicit)
-    return resolve11(start, explicit);
-  const mainRoot = gitMainWorktreeRoot(start);
-  const checkoutRoot = mainRoot === null ? null : gitCheckoutRoot(start);
-  const linked = opts.workspaceRoot === undefined && opts.localProbe !== true && mainRoot !== null && checkoutRoot !== null && checkoutRoot !== mainRoot;
-  const base = linked && mainRoot !== null ? mainRoot : start;
-  const boundary = resolve11(base, opts.workspaceRoot ?? defaultWorkspaceRoot(base));
+    return resolve12(start, explicit);
+  let base = start;
+  if (opts.workspaceRoot === undefined && opts.localProbe !== true) {
+    const caller = checkoutRoot(start);
+    if (caller !== null) {
+      const main = mainWorktreeRoot(start);
+      if (main === null)
+        return null;
+      if (caller !== main)
+        base = main;
+    }
+  }
+  const boundary = resolve12(base, opts.workspaceRoot ?? defaultWorkspaceRoot(base));
   const rc = loadMstarc(base, boundary);
   if (rc !== null && rc.config.harnessDir)
-    return resolve11(rc.dir, rc.config.harnessDir);
+    return resolve12(rc.dir, rc.config.harnessDir);
   let dir = base;
   for (;; ) {
     if (!isAtOrBelow3(dir, boundary))
       return null;
-    for (const candidate of [join13(dir, ".mstar"), join13(dir, ".agents"), join13(dir, ".plans"), join13(dir, "plans")]) {
+    for (const candidate of [join14(dir, ".mstar"), join14(dir, ".agents"), join14(dir, ".plans"), join14(dir, "plans")]) {
       if (isDirectory2(candidate))
         return candidate;
     }
     if (dir === boundary)
       return null;
-    const parent = dirname9(dir);
+    const parent = dirname10(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -15848,16 +15922,17 @@ function defaultWorkspaceRoot(startDir) {
     const cdup = execFileSync4("git", ["rev-parse", "--show-cdup"], {
       cwd: startDir,
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: gitProbeTimeoutMs()
     }).trim();
     if (!cdup)
       return startDir;
     let boundary = startDir;
     for (const segment of cdup.split(/[\\/]/)) {
       if (segment && segment !== ".")
-        boundary = dirname9(boundary);
+        boundary = dirname10(boundary);
     }
-    return resolve11(boundary);
+    return resolve12(boundary);
   } catch {}
   return startDir;
 }
@@ -15865,87 +15940,15 @@ function isAtOrBelow3(dir, root) {
   const rel = relative3(root, dir);
   return rel === "" || !rel.startsWith("..") && !isAbsolute6(rel);
 }
-function gitMainWorktreeRoot(startDir) {
-  try {
-    const out = execFileSync4("git", ["worktree", "list", "--porcelain"], {
-      cwd: startDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: gitProbeTimeout()
-    });
-    const line = out.split(`
-`).find((entry) => entry.startsWith("worktree "));
-    if (line === undefined)
-      return null;
-    return realpathOrResolve(line.slice("worktree ".length).trim());
-  } catch {
-    return null;
-  }
-}
-function gitCheckoutRoot(startDir) {
-  try {
-    const out = execFileSync4("git", ["rev-parse", "--show-toplevel"], {
-      cwd: startDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: gitProbeTimeout()
-    }).trim();
-    return out === "" ? null : realpathOrResolve(out);
-  } catch {
-    return null;
-  }
-}
-function realpathOrResolve(target) {
-  try {
-    return realpathSync6(target);
-  } catch {
-    return resolve11(target);
-  }
-}
-function realpathNearest(target) {
-  let dir = resolve11(target);
-  const rest = [];
-  for (;; ) {
-    try {
-      return join13(realpathSync6(dir), ...rest.reverse());
-    } catch {
-      const parent = dirname9(dir);
-      if (parent === dir)
-        return resolve11(target);
-      rest.push(basename7(dir));
-      dir = parent;
-    }
-  }
-}
-function gitProbeTimeout() {
-  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
-  const parsed = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1e4;
-}
-function exitStatusOf(error) {
-  if (typeof error === "object" && error !== null && "status" in error) {
-    const status = error.status;
-    return typeof status === "number" ? status : undefined;
-  }
-  return;
-}
-function gitIgnored(root, target) {
-  try {
-    execFileSync4("git", ["check-ignore", "-q", "--", target], { cwd: root, stdio: "ignore", timeout: gitProbeTimeout() });
-    return true;
-  } catch (error) {
-    return exitStatusOf(error) === 1 ? false : null;
-  }
-}
 function mstarcDirOverride(harnessDir, key) {
-  const dir = resolve11(harnessDir);
-  const rc = loadMstarc(dir, dirname9(dir));
+  const dir = resolve12(harnessDir);
+  const rc = loadMstarc(dir, dirname10(dir));
   const declared = rc?.config[key];
-  return declared ? resolve11(rc.dir, declared) : null;
+  return declared ? resolve12(rc.dir, declared) : null;
 }
 function mstarcDeclared(harnessDir, key) {
-  const dir = resolve11(harnessDir);
-  const rc = loadMstarc(dir, dirname9(dir));
+  const dir = resolve12(harnessDir);
+  const rc = loadMstarc(dir, dirname10(dir));
   const value = rc?.config[key];
   return value ? { dir: rc.dir, value } : null;
 }
@@ -15956,21 +15959,21 @@ function resolveSpecsDir(harnessDir, opts = {}) {
       mkdirSync4(declared, { recursive: true });
     return declared;
   }
-  const harness = resolve11(harnessDir);
-  const repoRoot = dirname9(harness);
+  const harness = resolve12(harnessDir);
+  const repoRoot = dirname10(harness);
   const candidates = [
-    join13(harness, "specs"),
-    join13(repoRoot, ".agents", "specs"),
-    join13(repoRoot, "docs", "specs"),
-    join13(repoRoot, "specs"),
-    join13(harness, "designs"),
-    join13(repoRoot, "designs")
+    join14(harness, "specs"),
+    join14(repoRoot, ".agents", "specs"),
+    join14(repoRoot, "docs", "specs"),
+    join14(repoRoot, "specs"),
+    join14(harness, "designs"),
+    join14(repoRoot, "designs")
   ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory2(candidate) && hasFiles(candidate))
       return candidate;
   }
-  const fallback = join13(harness, "specs");
+  const fallback = join14(harness, "specs");
   if (opts.create !== false)
     mkdirSync4(fallback, { recursive: true });
   return fallback;
@@ -15979,11 +15982,11 @@ function resolvePlanDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "planDir");
   if (declared !== null)
     return declared;
-  const dir = resolve11(harnessDir);
-  const name = basename7(dir);
+  const dir = resolve12(harnessDir);
+  const name = basename8(dir);
   if (name === ".plans" || name === "plans")
     return dir;
-  return join13(dir, "plans");
+  return join14(dir, "plans");
 }
 function assertSafePathComponent(value, what) {
   if (value === "" || value === "." || value === ".." || !/^[A-Za-z0-9._-]+$/.test(value)) {
@@ -15991,36 +15994,36 @@ function assertSafePathComponent(value, what) {
   }
 }
 function canonicalizeNearestExisting(path2) {
-  const abs = resolve11(path2);
+  const abs = resolve12(path2);
   let dir = abs;
   const tail = [];
   for (;; ) {
     if (existsSync10(dir)) {
       try {
-        return join13(realpathSync6(dir), ...tail);
+        return join14(realpathSync7(dir), ...tail);
       } catch {
         return abs;
       }
     }
-    const parent = dirname9(dir);
+    const parent = dirname10(dir);
     if (parent === dir)
       return abs;
-    tail.unshift(basename7(dir));
+    tail.unshift(basename8(dir));
     dir = parent;
   }
 }
 function resolveSddDir(harnessDir, planId) {
   assertSafePathComponent(planId, "planId");
-  const base = resolve11(harnessDir);
+  const base = resolve12(harnessDir);
   const declared = mstarcDirOverride(base, "sddDir");
-  const sddBase = declared !== null ? declared : join13(base, "sdd");
-  return join13(sddBase, planId);
+  const sddBase = declared !== null ? declared : join14(base, "sdd");
+  return join14(sddBase, planId);
 }
 function resolveIterationDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "iterationDir");
   if (declared !== null)
     return declared;
-  return join13(resolve11(harnessDir), "iterations");
+  return join14(resolve12(harnessDir), "iterations");
 }
 function resolveKnowledgeDir(harnessDir, opts = {}) {
   return resolveTrackedDir(harnessDir, opts, "knowledgeDir", "knowledge", [".agents", "knowledge"]);
@@ -16029,31 +16032,31 @@ function resolveAdrDir(harnessDir, opts = {}) {
   return resolveTrackedDir(harnessDir, opts, "adrDir", "adr", [".agents", "adr"], ["docs", "adr"]);
 }
 function resolveTrackedResultDir(callerCheckoutRoot, harnessDir, key) {
-  const harness = resolve11(harnessDir);
-  const mainRoot = gitMainWorktreeRoot(harness) ?? dirname9(harness);
+  const harness = resolve12(harnessDir);
+  const mainRoot = mainWorktreeRoot(harness) ?? dirname10(harness);
   const declared = mstarcDeclared(harness, key);
-  const mainTarget = declared === null ? key === "specsDir" ? resolveSpecsDir(harness, { create: false }) : key === "knowledgeDir" ? resolveKnowledgeDir(harness, { create: false }) : resolveAdrDir(harness, { create: false }) : isAbsolute6(declared.value) ? resolve11(declared.value) : resolve11(declared.dir, declared.value);
+  const mainTarget = declared === null ? key === "specsDir" ? resolveSpecsDir(harness, { create: false }) : key === "knowledgeDir" ? resolveKnowledgeDir(harness, { create: false }) : resolveAdrDir(harness, { create: false }) : isAbsolute6(declared.value) ? resolve12(declared.value) : resolve12(declared.dir, declared.value);
   const rel = relative3(realpathNearest(mainRoot), realpathNearest(mainTarget));
   if (rel === "" || rel.startsWith("..") || isAbsolute6(rel))
     return mainTarget;
-  const callerMainRoot = gitMainWorktreeRoot(callerCheckoutRoot);
-  if (callerMainRoot === null || realpathOrResolve(callerMainRoot) !== realpathOrResolve(mainRoot))
+  const callerMainRoot = mainWorktreeRoot(callerCheckoutRoot);
+  if (callerMainRoot === null || realpathNearest(callerMainRoot) !== realpathNearest(mainRoot))
     return mainTarget;
-  const candidate = join13(callerCheckoutRoot, rel);
-  return gitIgnored(callerCheckoutRoot, join13(candidate, ".tracked-result-probe")) === false ? candidate : mainTarget;
+  const candidate = join14(callerCheckoutRoot, rel);
+  return gitIgnored(callerCheckoutRoot, join14(candidate, ".tracked-result-probe")) === false ? candidate : mainTarget;
 }
 function resolveTrackedDir(harnessDir, opts, key, name, ...extra) {
   const declared = mstarcDirOverride(harnessDir, key);
   if (declared !== null)
     return declared;
-  const harness = resolve11(harnessDir);
-  const repoRoot = dirname9(harness);
-  const candidates = [join13(harness, name), ...extra.map((segments) => join13(repoRoot, ...segments))];
+  const harness = resolve12(harnessDir);
+  const repoRoot = dirname10(harness);
+  const candidates = [join14(harness, name), ...extra.map((segments) => join14(repoRoot, ...segments))];
   for (const candidate of new Set(candidates)) {
     if (isDirectory2(candidate) && hasFiles(candidate))
       return candidate;
   }
-  const fallback = join13(harness, name);
+  const fallback = join14(harness, name);
   if (opts.create !== false)
     mkdirSync4(fallback, { recursive: true });
   return fallback;
@@ -16061,10 +16064,10 @@ function resolveTrackedDir(harnessDir, opts, key, name, ...extra) {
 function resolveHarnessSubdir(startDir, opts, key, fallback) {
   const harness = resolveHarnessDir(startDir, opts);
   if (harness === null) {
-    throw new Error(`harness dir not found from ${resolve11(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
+    throw new Error(`harness dir not found from ${resolve12(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
   }
   const declared = mstarcDirOverride(harness, key);
-  return declared !== null ? declared : join13(resolve11(harness), fallback);
+  return declared !== null ? declared : join14(resolve12(harness), fallback);
 }
 function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
   return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
@@ -16134,28 +16137,28 @@ function resolveReviewRunDir(opts) {
   assertReviewDate(date);
   const spec = opts.spec;
   const resolved = spec.kind === "codebase" ? { kind: "codebase", level: spec.level, round: spec.round ?? nextCodebaseRound(opts.reviewsDir, date, spec.level) } : spec;
-  return join13(opts.reviewsDir, reviewRunDirName(date, resolved));
+  return join14(opts.reviewsDir, reviewRunDirName(date, resolved));
 }
 function resolveScaffoldDirs(root, options = {}) {
-  const start = resolve11(root);
+  const start = resolve12(root);
   if (options.harnessDir !== undefined) {
     const harnessDir2 = options.harnessDir;
-    const projectDir2 = mstarcDirOverride(harnessDir2, "projectDir") ?? join13(harnessDir2, "projects");
+    const projectDir2 = mstarcDirOverride(harnessDir2, "projectDir") ?? join14(harnessDir2, "projects");
     return { harnessDir: harnessDir2, projectDir: projectDir2 };
   }
-  const boundary = resolve11(start, defaultWorkspaceRoot(start));
+  const boundary = resolve12(start, defaultWorkspaceRoot(start));
   const rc = loadMstarc(start, boundary);
   const explicit = process.env.MSTAR_HARNESS_DIR;
-  const harnessDir = explicit ? resolve11(start, explicit) : rc !== null && rc.config.harnessDir ? resolve11(rc.dir, rc.config.harnessDir) : join13(start, ".mstar");
+  const harnessDir = explicit ? resolve12(start, explicit) : rc !== null && rc.config.harnessDir ? resolve12(rc.dir, rc.config.harnessDir) : join14(start, ".mstar");
   const declaredProjectDir = mstarcDirOverride(harnessDir, "projectDir");
-  const projectDir = declaredProjectDir !== null ? declaredProjectDir : join13(harnessDir, "projects");
+  const projectDir = declaredProjectDir !== null ? declaredProjectDir : join14(harnessDir, "projects");
   return { harnessDir, projectDir };
 }
 async function scaffoldHarness(root, options = {}) {
   const { harnessDir, projectDir } = resolveScaffoldDirs(root, options);
   for (const dir of SCAFFOLD_DIRS)
-    mkdirSync4(join13(harnessDir, dir), { recursive: true });
-  const defaultProjectDir = join13(projectDir, _DEFAULT_PROJECT);
+    mkdirSync4(join14(harnessDir, dir), { recursive: true });
+  const defaultProjectDir = join14(projectDir, _DEFAULT_PROJECT);
   mkdirSync4(defaultProjectDir, { recursive: true });
   await registerScaffoldCatalog(harnessDir);
   return harnessDir;
@@ -16208,7 +16211,7 @@ function hasHarnessRootDeclaration(content3) {
   });
 }
 function validateGitignore(root) {
-  const gitignorePath = join13(resolve11(root), ".gitignore");
+  const gitignorePath = join14(resolve12(root), ".gitignore");
   const kind = detectHarnessKind(resolveHarnessDir(root));
   let content3;
   try {
@@ -16245,7 +16248,7 @@ function validateGitignore(root) {
 function detectHarnessKind(harnessDir) {
   if (!harnessDir)
     return null;
-  const name = basename7(resolve11(harnessDir));
+  const name = basename8(resolve12(harnessDir));
   if (name === ".mstar")
     return "mstar";
   if (name === ".agents")
@@ -16253,7 +16256,7 @@ function detectHarnessKind(harnessDir) {
   return null;
 }
 function assertPlanWritingPath(planPath, harnessDir) {
-  const planAbs = resolve11(planPath);
+  const planAbs = resolve12(planPath);
   if (!harnessDir) {
     return {
       ok: false,
@@ -16277,8 +16280,8 @@ function assertPlanWritingPath(planPath, harnessDir) {
   }
   if (existsSync10(planAbs)) {
     try {
-      const canonicalPlan = realpathSync6(planAbs);
-      const canonicalPlanDir = existsSync10(planDir) ? realpathSync6(planDir) : resolve11(planDir);
+      const canonicalPlan = realpathSync7(planAbs);
+      const canonicalPlanDir = existsSync10(planDir) ? realpathSync7(planDir) : resolve12(planDir);
       const canonicalRel = relative3(canonicalPlanDir, canonicalPlan);
       const canonicalInside = canonicalRel === "" || !canonicalRel.startsWith("..") && !isAbsolute6(canonicalRel);
       if (!canonicalInside) {
@@ -16310,7 +16313,7 @@ function hasFiles(dir) {
   try {
     for (const entry of readdirSync8(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        if (hasFiles(join13(dir, entry.name)))
+        if (hasFiles(join14(dir, entry.name)))
           return true;
       } else if (entry.isFile()) {
         return true;
@@ -16385,7 +16388,7 @@ function planPointerContext(input) {
   }
   const base = canonicalizeNearestExisting(harnessRoot);
   const planDir = canonicalizeNearestExisting(resolvePlanDir(harnessRoot));
-  const expected = join14(planDir, `${planId}.md`);
+  const expected = join15(planDir, `${planId}.md`);
   const form = isAbsolute7(file) ? "canonical-absolute" : "harness-relative";
   const permitted = [
     `canonical absolute path ${expected}`,
@@ -16403,7 +16406,7 @@ function planPointerContext(input) {
   if (file.trim() === "") {
     throw refusal("plan-path.invalid-pointer", `plan ${planId} file must not be empty`);
   }
-  const candidate = canonicalTarget(form === "canonical-absolute" ? file : join14(base, file));
+  const candidate = canonicalTarget(form === "canonical-absolute" ? file : join15(base, file));
   const normalized = normalize(file);
   if (normalized !== file) {
     throw refusal("plan-path.invalid-pointer", `plan ${planId} file ${JSON.stringify(file)} is not a normalized ${form === "canonical-absolute" ? "absolute" : "harness-relative"} spelling (${JSON.stringify(normalized)}); permitted forms are ${permitted.join(" or ")}`, { plan_id: planId, actual: candidate, normalized });
@@ -16723,7 +16726,7 @@ function validateWorkflowSnapshot(doc) {
   return { ok: violations.length === 0, violations };
 }
 function readWorkflowSnapshot(dir) {
-  const snapshotPath = join15(dir, WORKFLOW_SNAPSHOT_FILE);
+  const snapshotPath = join16(dir, WORKFLOW_SNAPSHOT_FILE);
   if (!existsSync12(snapshotPath)) {
     throw new Error(`workflow snapshot not found: ${snapshotPath}`);
   }
@@ -16826,8 +16829,8 @@ function derivePlanRegistration(input) {
   if (typeof file !== "string" || file.trim() === "") {
     throw new Error("derivePlanRegistration: the selected plan document is required - supply plan.file as the registered plan pointer " + "(`{PLAN_DIR}/<id>.md` or its canonical absolute path)");
   }
-  const harnessRoot = resolve12(input.harnessDir);
-  const planId = declaredId ?? basename8(file).replace(/\.md$/, "");
+  const harnessRoot = resolve13(input.harnessDir);
+  const planId = declaredId ?? basename9(file).replace(/\.md$/, "");
   const resolved = resolveRegisteredPlanFile({ harnessRoot, planId, file });
   const heading = /^# (.+)$/m.exec(readFileSync12(resolved.planPath, "utf8"))?.[1]?.trim();
   const documentTitle = heading === undefined || heading === "" ? undefined : heading;
@@ -16882,7 +16885,7 @@ function planWorkflowSnapshot(workflowId, options, startedAt) {
 }
 function normalizeIterationCompassRef(ref, harnessRoot, refuse) {
   const canonical2 = canonicalIterationCompassRef(ref, harnessRoot, refuse);
-  const path2 = canonicalizeNearestExisting(resolve12(harnessRoot, canonical2));
+  const path2 = canonicalizeNearestExisting(resolve13(harnessRoot, canonical2));
   if (!existsSync12(path2) || !statSync6(path2).isFile()) {
     throw refuse(reviewedCompassMissing(ref, harnessRoot));
   }
@@ -16892,13 +16895,13 @@ function canonicalIterationCompassRef(ref, harnessRoot, refuse) {
   const rootCanon = canonicalizeNearestExisting(harnessRoot);
   const prefix = rootCanon.endsWith("/") ? rootCanon : `${rootCanon}/`;
   if (isAbsolute8(ref)) {
-    const canon2 = canonicalizeNearestExisting(resolve12(ref));
+    const canon2 = canonicalizeNearestExisting(resolve13(ref));
     if (canon2 !== rootCanon && !canon2.startsWith(prefix)) {
       throw refuse(`options.compassRef resolves outside the harness root - the reviewed compass_ref must address a ` + `document inside ${harnessRoot}; store the harness-relative pointer of that compass instead`);
     }
     return relative4(rootCanon, canon2).split(sep7).join("/");
   }
-  const canon = canonicalizeNearestExisting(resolve12(harnessRoot, ref));
+  const canon = canonicalizeNearestExisting(resolve13(harnessRoot, ref));
   if (canon !== rootCanon && !canon.startsWith(prefix)) {
     throw refuse(`options.compassRef escapes the harness root - the reviewed compass_ref must address a document inside ` + `${harnessRoot}; store the harness-relative pointer of that compass instead`);
   }
@@ -16922,7 +16925,7 @@ function iterationWorkflowSnapshot(workflowId, options, startedAt) {
     plans: options.rows.map((r) => ({
       id: r.id,
       title: r.title,
-      file: canonicalRegisteredPlanPath({ harnessRoot: resolve12(options.harnessDir), planId: r.id, file: r.file }).planPath,
+      file: canonicalRegisteredPlanPath({ harnessRoot: resolve13(options.harnessDir), planId: r.id, file: r.file }).planPath,
       status: "Todo",
       metadata: {
         iteration_refs: [options.compassRef],
@@ -17284,7 +17287,7 @@ function validateCatalogExecutionRequest(request) {
   };
 }
 function assertReviewedCompassDocument(workflowId, harnessDir, compassRef) {
-  const path2 = canonicalizeNearestExisting(join16(harnessDir, compassRef));
+  const path2 = canonicalizeNearestExisting(join17(harnessDir, compassRef));
   const invalid4 = (detail) => new CatalogRegistrationError("catalog.registration-invalid", detail);
   let text4;
   try {
@@ -17317,7 +17320,7 @@ function assertRegisteredPlanDocuments(workflow) {
   if (workflow.kind !== "iteration")
     return;
   for (const row of workflow.options.rows) {
-    resolveRegisteredPlanFile({ harnessRoot: resolve13(workflow.options.harnessDir), planId: row.id, file: row.file });
+    resolveRegisteredPlanFile({ harnessRoot: resolve14(workflow.options.harnessDir), planId: row.id, file: row.file });
   }
 }
 function normalizeIterationRowFiles(workflow) {
@@ -17399,9 +17402,9 @@ function assertDeliveryRegistrationFor(options, at) {
 }
 function executionPlanFor(context, request) {
   const workflow = request.workflow;
-  const harnessDir = resolve13(workflow.options.harnessDir);
-  if (resolve13(context.harnessDir) !== harnessDir) {
-    invalid3(`the store context harness dir (${resolve13(context.harnessDir)}) and the producer's harnessDir (${harnessDir}) must be the same root: ` + "one execution registration, one catalog root");
+  const harnessDir = resolve14(workflow.options.harnessDir);
+  if (resolve14(context.harnessDir) !== harnessDir) {
+    invalid3(`the store context harness dir (${resolve14(context.harnessDir)}) and the producer's harnessDir (${harnessDir}) must be the same root: ` + "one execution registration, one catalog root");
   }
   const workflowId = workflow.workflowId;
   assertSafePathComponent(workflowId, "workflow id");
@@ -17409,7 +17412,7 @@ function executionPlanFor(context, request) {
   const snapshot = workflow.kind === "plan" ? planWorkflowSnapshot(workflowId, workflow.options, startedAt) : iterationWorkflowSnapshot(workflowId, workflow.options, startedAt);
   for (const entity of request.delta.entities) {
     const root = catalogRootDir(context, entity.rootKind);
-    const target = resolve13(root, entity.relativePath);
+    const target = resolve14(root, entity.relativePath);
     if (target !== root && !target.startsWith(`${root}${sep8}`)) {
       invalid3(`request.delta entity ${entity.kind} ${JSON.stringify(entity.id)} resolves to ${target}, outside its ${entity.rootKind} root`);
     }
@@ -17625,8 +17628,8 @@ async function purgeCatalogRegistration(context, input) {
     if (!isPlainObject(failure) || failure.workflow_id !== workflowId || typeof failure.snapshot_path !== "string" || typeof failure.snapshot_content_sha256 !== "string" || typeof failure.reviewed_identity !== "string") {
       throw new CatalogRegistrationError("catalog.purge-not-found", `operation ${JSON.stringify(operationId)} has no identity-failure record for this workflow; if it is pending and unregistered, abandon it without file changes using \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
     }
-    const snapshotPath = resolve13(failure.snapshot_path);
-    const harnessDir = resolve13(context.harnessDir);
+    const snapshotPath = resolve14(failure.snapshot_path);
+    const harnessDir = resolve14(context.harnessDir);
     if (!snapshotPath.startsWith(`${harnessDir}${sep8}`)) {
       throw new CatalogRegistrationError("catalog.purge-identity-mismatch", `recorded snapshot path is outside the canonical harness root; original bytes were retained; settle the pending journal with \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
     }
@@ -17713,22 +17716,22 @@ function assertViolationFree(violations, what) {
   }
 }
 function snapshotPathOf(harnessRoot, workflowId) {
-  return join17(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), workflowId, SNAPSHOT_FILE);
+  return join18(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), workflowId, SNAPSHOT_FILE);
 }
 function isWithin(parent, child) {
   return child === parent || child.startsWith(parent.endsWith(sep9) ? parent : `${parent}${sep9}`);
 }
 function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   if (isNonEmptyString(harnessDir))
-    return resolve14(cwd, harnessDir);
-  const start = resolve14(cwd);
+    return resolve15(cwd, harnessDir);
+  const start = resolve15(cwd);
   const main = readMainWorktree(start);
   if (main !== null)
     return resolveHarnessDir(main.root);
   for (let dir = start;; ) {
     let linked = false;
     try {
-      const marker = statSync7(join17(dir, ".git"));
+      const marker = statSync7(join18(dir, ".git"));
       if (marker.isDirectory())
         return resolveHarnessDir(start, { workspaceRoot: dir });
       linked = marker.isFile();
@@ -17741,9 +17744,9 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
       const envRoot = process.env.MSTAR_HARNESS_DIR;
       if (typeof envRoot === "string" && envRoot.trim() !== "")
         return resolveHarnessDir(start);
-      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join17(dir, ".git") });
+      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join18(dir, ".git") });
     }
-    const parent = dirname10(dir);
+    const parent = dirname11(dir);
     if (parent === dir)
       break;
     dir = parent;
@@ -17763,12 +17766,12 @@ function probeProcessRoot(cwd) {
 function resolveIntentRoot(context, association) {
   const resolvedFrom = [];
   const warnings = [];
-  const cwd = resolve14(context.cwd);
+  const cwd = resolve15(context.cwd);
   if (isNonEmptyString(context.controlRoot)) {
     resolvedFrom.push({ path: "controlRoot", source: "intent.explicit" });
     return {
       ok: true,
-      root: canonicalizeNearestExisting(resolve14(cwd, context.controlRoot)),
+      root: canonicalizeNearestExisting(resolve15(cwd, context.controlRoot)),
       resolvedFrom,
       warnings
     };
@@ -17842,7 +17845,7 @@ function workflowIdsAt(root) {
   const dir = resolveWorkflowDir(root, { harnessDir: root });
   if (!existsSync13(dir))
     return [];
-  return readdirSync9(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && existsSync13(join17(dir, entry.name, SNAPSHOT_FILE))).map((entry) => entry.name).sort();
+  return readdirSync9(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && existsSync13(join18(dir, entry.name, SNAPSHOT_FILE))).map((entry) => entry.name).sort();
 }
 function unresolvedTarget(input) {
   return {
@@ -17899,7 +17902,7 @@ function resolveIntentTarget(input) {
     return { ok: true, workflowId: id, resolvedFrom };
   const plan = safePlanId(planId, "planId");
   resolvedFrom.push({ path: "planId", source: explicitPlan !== undefined ? "intent.explicit" : "target.association" });
-  const snapshot = readSnapshot(dirname10(snapshotFile));
+  const snapshot = readSnapshot(dirname11(snapshotFile));
   if (!snapshot.plans.some((row) => rowPlanIds(row).includes(plan))) {
     return unresolvedTarget({
       code: "coordination.plan-not-found",
@@ -17927,7 +17930,7 @@ function readSnapshot(dir) {
   return readSnapshotWithPhase(dir).snapshot;
 }
 function readSnapshotWithPhase(dir) {
-  const snapshotPath = join17(dir, SNAPSHOT_FILE);
+  const snapshotPath = join18(dir, SNAPSHOT_FILE);
   if (!existsSync13(snapshotPath)) {
     throw new CoordinationError("coordination.workflow-not-found", "Workflow snapshot was not found. Inspect the harness with mstar status validate.", {
       path: snapshotPath
@@ -18164,7 +18167,7 @@ function gitIsAncestor(cwd, ancestor, descendant) {
   return gitRead(cwd, ["merge-base", "--is-ancestor", ancestor, descendant]) !== undefined;
 }
 function gitPatchId(cwd, from, to) {
-  const scratch = join17(tmpdir(), `mstar-patchid-${process.pid}-${randomUUID4()}`);
+  const scratch = join18(tmpdir(), `mstar-patchid-${process.pid}-${randomUUID4()}`);
   let diffFd;
   try {
     diffFd = openSync(scratch, "w+");
@@ -18220,7 +18223,7 @@ function gitCheckout(path2) {
   let operation;
   for (const [marker, label] of UNFINISHED_GIT_OPERATIONS) {
     const markerPath = gitRead(path2, ["rev-parse", "--git-path", marker]);
-    if (markerPath !== undefined && markerPath.length > 0 && existsSync13(resolve14(path2, markerPath))) {
+    if (markerPath !== undefined && markerPath.length > 0 && existsSync13(resolve15(path2, markerPath))) {
       operation = label;
       break;
     }
@@ -18232,29 +18235,29 @@ function gitDirectoryIdentity(path2) {
   return [Number(stat.dev), Number(stat.ino)];
 }
 function currentGitHead(gitDir, commonDir) {
-  const head = readFileSync14(join17(gitDir, "HEAD"), "utf8").trim();
+  const head = readFileSync14(join18(gitDir, "HEAD"), "utf8").trim();
   if (!head.startsWith("ref: "))
     return { head, ref: null };
   const ref = head.slice(5);
   for (const root of [gitDir, commonDir]) {
-    const path2 = join17(root, ref);
+    const path2 = join18(root, ref);
     if (existsSync13(path2))
       return { head: readFileSync14(path2, "utf8").trim(), ref };
   }
-  const packed = join17(commonDir, "packed-refs");
+  const packed = join18(commonDir, "packed-refs");
   const entry = existsSync13(packed) ? readFileSync14(packed, "utf8").split(`
 `).find((line) => line.split(" ")[1] === ref) : undefined;
   return { head: entry?.split(" ")[0] ?? "", ref };
 }
 function captureGitProofWitness(cwd, refusal = "coordination.git-proof") {
-  const repository = canonicalTarget(resolve14(cwd));
+  const repository = canonicalTarget(resolve15(cwd));
   const gitDir = gitRead(repository, ["rev-parse", "--absolute-git-dir"]);
   const common = gitRead(repository, ["rev-parse", "--git-common-dir"]);
   const head = gitRead(repository, ["rev-parse", "HEAD"]);
   if (gitDir === undefined || common === undefined || head === undefined) {
     throw new CoordinationError(refusal, "Cannot read the Git checkout. Inspect registered scope with mstar plan show. Pass the plan id registered in the workflow row.", { repository });
   }
-  const commonDir = canonicalTarget(resolve14(repository, common));
+  const commonDir = canonicalTarget(resolve15(repository, common));
   const current = currentGitHead(gitDir, commonDir);
   if (current.head !== head) {
     throw new CoordinationError(refusal, "Git HEAD changed between reads. Inspect registered scope with mstar plan show. Pass the plan id registered in the workflow row.", { repository, expected: head, actual: current.head });
@@ -18287,7 +18290,7 @@ function revalidateGitProofWitness(witness) {
     const gitIdentity = gitDirectoryIdentity(witness.gitDir);
     const commonIdentity = gitDirectoryIdentity(witness.commonDir);
     current = currentGitHead(witness.gitDir, witness.commonDir);
-    if (gitIdentity[0] === witness.gitIdentity[0] && gitIdentity[1] === witness.gitIdentity[1] && commonIdentity[0] === witness.commonIdentity[0] && commonIdentity[1] === witness.commonIdentity[1] && current.ref === witness.ref && current.head === witness.head && gitRead(witness.repository, ["--no-optional-locks", "status", "--porcelain"]) === "" && !UNFINISHED_GIT_OPERATIONS.some(([marker]) => existsSync13(join17(witness.gitDir, marker)) || existsSync13(join17(witness.commonDir, marker))))
+    if (gitIdentity[0] === witness.gitIdentity[0] && gitIdentity[1] === witness.gitIdentity[1] && commonIdentity[0] === witness.commonIdentity[0] && commonIdentity[1] === witness.commonIdentity[1] && current.ref === witness.ref && current.head === witness.head && gitRead(witness.repository, ["--no-optional-locks", "status", "--porcelain"]) === "" && !UNFINISHED_GIT_OPERATIONS.some(([marker]) => existsSync13(join18(witness.gitDir, marker)) || existsSync13(join18(witness.commonDir, marker))))
       return;
   } catch (error) {
     if (error instanceof CoordinationError)
@@ -18479,8 +18482,8 @@ function loadSqliteDriverSync() {
 function storeDbPath(context) {
   if (!context?.harnessDir)
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  const root = resolve15(context.harnessDir);
-  return join18(resolveProcessHarnessDir(root, root) ?? root, "store.db");
+  const root = resolve16(context.harnessDir);
+  return join19(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS) {
   const floored = Math.floor(value);
@@ -19074,7 +19077,7 @@ function withDshWriteTransaction(context, body, selectedGeneration) {
   assertStoreRuntimeSupported();
   assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync14(dbPath)) {
-    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}. Run "mstar harness scaffold" and "mstar store init", or "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" when legacy state must be imported; nothing was written.`);
+    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}. Run "mstar harness scaffold" and "mstar store init", or "mstar store upgrade --harness ${JSON.stringify(resolve16(context.harnessDir))} --operator <name>" when legacy state must be imported; nothing was written.`);
   }
   dshTransactions.add(dbPath);
   let db;
@@ -19088,7 +19091,7 @@ function withDshWriteTransaction(context, body, selectedGeneration) {
     const initial = readStoreMeta(db);
     const execution = readExecutionMeta(db, schemaVersion);
     if (!execution || execution.authorityState !== "active") {
-      const recovery = execution?.authorityState === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : `Run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
+      const recovery = execution?.authorityState === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : `Run "mstar store upgrade --harness ${JSON.stringify(resolve16(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
       throw new StoreError("store.not-active", `The execution authority is ${execution?.authorityState ?? "missing"}. ${recovery} Nothing was written.`);
     }
     db.exec("begin immediate");
@@ -19100,7 +19103,7 @@ function withDshWriteTransaction(context, body, selectedGeneration) {
       const current = readStoreMeta(db);
       const currentExecution = readExecutionMeta(db, schemaVersion);
       if (!currentExecution || currentExecution.authorityState !== "active") {
-        const recovery = currentExecution?.authorityState === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : `Run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
+        const recovery = currentExecution?.authorityState === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : `Run "mstar store upgrade --harness ${JSON.stringify(resolve16(context.harnessDir))} --operator <name>" to import legacy state and activate the authority.`;
         throw new StoreError("store.not-active", `The execution authority is ${currentExecution?.authorityState ?? "missing"}. ${recovery} Nothing was written.`);
       }
       if (current.storeId !== initial.storeId || current.epoch !== initial.epoch || selectedGeneration !== undefined && (current.storeId !== selectedGeneration.storeId || current.epoch !== selectedGeneration.epoch)) {
@@ -19137,7 +19140,7 @@ async function openStore(context, mode, options = {}) {
   const timeout = busyTimeoutMs(options.busyTimeoutMs);
   assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync14(dbPath)) {
-    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
+    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve16(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
   }
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
   for (let attempt = 1;; attempt++) {
@@ -19216,7 +19219,7 @@ async function initializeStore(context, options = {}) {
   await loadSqliteDriver();
   if (existsSync14(dbPath))
     throw alreadyExists();
-  const stagingPath = join18(dirname11(dbPath), `.${basename9(dbPath)}.init-${process.pid}-${randomUUID5()}.tmp`);
+  const stagingPath = join19(dirname12(dbPath), `.${basename10(dbPath)}.init-${process.pid}-${randomUUID5()}.tmp`);
   let claim;
   try {
     claim = openSync2(stagingPath, "wx");
@@ -19274,7 +19277,7 @@ async function initializeStore(context, options = {}) {
     throw publicationRefusal("linked into place at its canonical path", error, dbPath);
   }
   try {
-    syncDirectoryEntry(dirname11(dbPath));
+    syncDirectoryEntry(dirname12(dbPath));
   } catch (error) {
     throw publicationBarrierRefusal(error, dbPath, "creation");
   }
@@ -19319,7 +19322,7 @@ async function upgradeStore(context, options = {}) {
     db.close();
   }
   try {
-    syncDirectoryEntry(dirname11(dbPath));
+    syncDirectoryEntry(dirname12(dbPath));
   } catch (error) {
     throw publicationBarrierRefusal(error, dbPath, "upgrade");
   }
@@ -19447,7 +19450,7 @@ function canonicalSource(sourcePath2) {
     const stat = lstatSync7(sourcePath2);
     if (!stat.isFile() && !stat.isSymbolicLink())
       throw new Error("not a regular file");
-    const resolved = realpathSync7(sourcePath2);
+    const resolved = realpathSync8(sourcePath2);
     if (!lstatSync7(resolved).isFile())
       throw new Error("not a regular file");
     return resolved;
@@ -19764,23 +19767,23 @@ function gitOut(cwd, args) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: GIT_CAPTURE_MAX_BYTES,
-      timeout: gitProbeTimeoutMs()
+      timeout: gitProbeTimeoutMs2()
     }).trim();
   } catch {
     return null;
   }
 }
 function checkoutRootNearestExisting(dir, boundary) {
-  const stop = resolve16(boundary);
-  const startInside = isInside(resolve16(dir), stop);
-  let current = resolve16(dir);
+  const stop = resolve17(boundary);
+  const startInside = isInside(resolve17(dir), stop);
+  let current = resolve17(dir);
   for (;; ) {
     const probed = probeCheckoutRoot(current);
     if (probed !== null)
       return probed;
     if (startInside && current === stop)
       return null;
-    const parent = dirname12(current);
+    const parent = dirname13(current);
     if (parent === current)
       return null;
     if (startInside && !isInside(parent, stop))
@@ -19800,7 +19803,7 @@ function sddWorkspace(planId, opts = {}) {
     if (!isDirectory3(controlRoot)) {
       throw new SddScriptError(`mstar sdd workspace: CONTROL_ROOT / MSTAR_CONTROL_ROOT is not a directory: ${controlRoot}`, 1);
     }
-    const supplied = realpathSync8(controlRoot);
+    const supplied = realpathSync9(controlRoot);
     const main = readMainWorktree(supplied);
     if (main !== null) {
       if (main.root !== supplied) {
@@ -19809,7 +19812,7 @@ function sddWorkspace(planId, opts = {}) {
 ` + `  Re-run with MSTAR_CONTROL_ROOT=${main.root}`, 1);
       }
       root = main.root;
-    } else if (isFile2(join19(supplied, ".git")) || gitOut(supplied, ["rev-parse", "--is-inside-work-tree"]) === "true") {
+    } else if (isFile2(join20(supplied, ".git")) || gitOut(supplied, ["rev-parse", "--is-inside-work-tree"]) === "true") {
       throw new SddScriptError(`mstar sdd workspace: cannot verify the main worktree for CONTROL_ROOT "${supplied}" (git worktree discovery failed).
 ` + `  Refusing to resolve or create any SDD tree without a verified main worktree.`, 1);
     } else {
@@ -19827,19 +19830,19 @@ function sddWorkspace(planId, opts = {}) {
   const harnessOverride = opts.harnessDir ?? (process.env.MSTAR_HARNESS_DIR || undefined);
   let harnessDir;
   if (harnessOverride) {
-    harnessDir = resolve16(root, harnessOverride);
+    harnessDir = resolve17(root, harnessOverride);
   } else {
     const rc = findMstarc(root, root);
     const rcHarnessDir = rc !== null ? parseMstarc(readFileSync16(rc, "utf8")).harnessDir : undefined;
     if (rcHarnessDir) {
-      harnessDir = resolve16(rc !== null ? dirname12(rc) : root, rcHarnessDir);
+      harnessDir = resolve17(rc !== null ? dirname13(rc) : root, rcHarnessDir);
     } else {
-      if (isDirectory3(join19(root, ".mstar"))) {
-        harnessDir = join19(root, ".mstar");
-      } else if (isDirectory3(join19(root, ".agents"))) {
-        harnessDir = join19(root, ".agents");
+      if (isDirectory3(join20(root, ".mstar"))) {
+        harnessDir = join20(root, ".mstar");
+      } else if (isDirectory3(join20(root, ".agents"))) {
+        harnessDir = join20(root, ".agents");
       } else {
-        harnessDir = join19(root, ".mstar");
+        harnessDir = join20(root, ".mstar");
       }
     }
   }
@@ -19850,9 +19853,9 @@ function sddWorkspace(planId, opts = {}) {
   }
   const sddDir = resolveSddDir(harnessDir, planId);
   mkdirSync6(sddDir, { recursive: true });
-  writeFileSync4(join19(sddDir, ".gitignore"), `*
+  writeFileSync4(join20(sddDir, ".gitignore"), `*
 `);
-  return realpathSync8(sddDir);
+  return realpathSync9(sddDir);
 }
 function taskBrief(planFile, taskN, outFile, opts = {}) {
   if (!planFile || !Number.isInteger(taskN) || taskN < 1) {
@@ -19861,7 +19864,7 @@ function taskBrief(planFile, taskN, outFile, opts = {}) {
   const bound = opts.context;
   const observedCwd = opts.cwd ?? process.cwd();
   if (bound) {
-    const inputPlan = canonicalizeNearestExisting(resolve16(observedCwd, planFile));
+    const inputPlan = canonicalizeNearestExisting(resolve17(observedCwd, planFile));
     if (inputPlan !== canonicalizeNearestExisting(bound.planFile)) {
       throwGateFail([
         contextViolation("high", "sdd.context.plan-file-mismatch", `plan file "${planFile}" does not match the bound context plan file "${bound.planFile}" — ` + "bound mode extracts only the resolved context's plan; refused before any read or write")
@@ -19877,16 +19880,16 @@ function taskBrief(planFile, taskN, outFile, opts = {}) {
   let out;
   let mkdirAfterGate = null;
   if (outFile) {
-    out = bound ? resolve16(observedCwd, outFile) : outFile;
+    out = bound ? resolve17(observedCwd, outFile) : outFile;
   } else if (bound) {
-    out = join19(bound.sddDir, `task-${taskN}-brief.md`);
+    out = join20(bound.sddDir, `task-${taskN}-brief.md`);
     mkdirAfterGate = bound.sddDir;
   } else {
     const sddDir = opts.sddDir ?? process.env.SDD_DIR;
     if (!sddDir) {
       throw new SddScriptError("mstar sdd task-brief: set SDD_DIR or pass OUTFILE (run mstar sdd workspace PLAN_ID first)", 2);
     }
-    out = join19(sddDir, `task-${taskN}-brief.md`);
+    out = join20(sddDir, `task-${taskN}-brief.md`);
   }
   if (bound) {
     const gate2 = checkSddAction(bound, { kind: "artifact", cwd: observedCwd, target: out });
@@ -19919,7 +19922,7 @@ function taskBrief(planFile, taskN, outFile, opts = {}) {
   writeFileSync4(out, `${printed.join(`
 `)}
 `);
-  return bound ? resolve16(observedCwd, out) : out;
+  return bound ? resolve17(observedCwd, out) : out;
 }
 function reviewPackage(base, head, outFile, opts = {}) {
   if (!base || !head) {
@@ -19930,7 +19933,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
   const observedCwd = opts.cwd ?? process.cwd();
   const verifyRef = (ref, what) => {
     try {
-      execFileSync6("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, stdio: ["ignore", "pipe", "pipe"], timeout: gitProbeTimeoutMs() });
+      execFileSync6("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, stdio: ["ignore", "pipe", "pipe"], timeout: gitProbeTimeoutMs2() });
     } catch {
       throw new SddScriptError(`bad ${what}: ${ref}`, 2);
     }
@@ -19940,11 +19943,11 @@ function reviewPackage(base, head, outFile, opts = {}) {
   let out;
   let mkdirAfterGate = null;
   if (outFile) {
-    out = bound ? resolve16(observedCwd, outFile) : outFile;
+    out = bound ? resolve17(observedCwd, outFile) : outFile;
   } else if (bound) {
     const shortBase = gitOut(cwd, ["rev-parse", "--short", base]) ?? base;
     const shortHead = gitOut(cwd, ["rev-parse", "--short", head]) ?? head;
-    out = join19(bound.sddDir, `review-${shortBase}..${shortHead}.diff`);
+    out = join20(bound.sddDir, `review-${shortBase}..${shortHead}.diff`);
     mkdirAfterGate = bound.sddDir;
   } else {
     const sddDir = opts.sddDir ?? process.env.SDD_DIR;
@@ -19954,7 +19957,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
     mkdirSync6(sddDir, { recursive: true });
     const shortBase = gitOut(cwd, ["rev-parse", "--short", base]) ?? base;
     const shortHead = gitOut(cwd, ["rev-parse", "--short", head]) ?? head;
-    out = join19(sddDir, `review-${shortBase}..${shortHead}.diff`);
+    out = join20(sddDir, `review-${shortBase}..${shortHead}.diff`);
   }
   if (bound) {
     const gate2 = checkSddAction(bound, { kind: "artifact", cwd: observedCwd, target: out });
@@ -19963,7 +19966,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
     if (mkdirAfterGate !== null)
       mkdirSync6(mkdirAfterGate, { recursive: true });
   }
-  const run = (args) => execFileSync6("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES, timeout: gitProbeTimeoutMs() });
+  const run = (args) => execFileSync6("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES, timeout: gitProbeTimeoutMs2() });
   const commits = run(["log", "--oneline", `${base}..${head}`]);
   if (commits.length === 0) {
     throw new SddScriptError(`review package range ${base}..${head} is empty in ${cwd} — refusing to write an empty package ` + `(run the command from the branch worktree, not the control checkout)`, 1);
@@ -19984,7 +19987,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
     run(["diff", "-U10", `${base}..${head}`])
   ];
   writeFileSync4(out, Buffer.concat(parts));
-  return bound ? resolve16(observedCwd, out) : out;
+  return bound ? resolve17(observedCwd, out) : out;
 }
 function assertBaseSha(ref, opts = {}) {
   if (typeof ref !== "string" || !/^[0-9a-f]{4,40}$/i.test(ref)) {
@@ -19993,7 +19996,7 @@ function assertBaseSha(ref, opts = {}) {
   try {
     execFileSync6("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
       cwd: opts.cwd,
-      timeout: gitProbeTimeoutMs(),
+      timeout: gitProbeTimeoutMs2(),
       stdio: ["ignore", "pipe", "pipe"]
     });
   } catch {
@@ -20002,7 +20005,7 @@ function assertBaseSha(ref, opts = {}) {
 }
 function taskReportExists(sddDir, taskN) {
   try {
-    const st = statSync9(join19(sddDir, `task-${taskN}-report.md`));
+    const st = statSync9(join20(sddDir, `task-${taskN}-report.md`));
     return st.isFile() && st.size > 0;
   } catch {
     return false;
@@ -20011,7 +20014,7 @@ function taskReportExists(sddDir, taskN) {
 function readProgressLedger(sddDir) {
   let content3;
   try {
-    content3 = readFileSync16(join19(sddDir, "progress.md"), "utf8");
+    content3 = readFileSync16(join20(sddDir, "progress.md"), "utf8");
   } catch {
     return [];
   }
@@ -20052,7 +20055,7 @@ function isInside(child, ancestor) {
 }
 function canonicalDir(path2) {
   try {
-    return statSync9(path2).isDirectory() ? realpathSync8(path2) : null;
+    return statSync9(path2).isDirectory() ? realpathSync9(path2) : null;
   } catch {
     return null;
   }
@@ -20112,7 +20115,7 @@ async function resolveSddExecutionContext(input) {
       contextViolation("high", "sdd.context.control-root-missing", `controlHarnessRoot "${input.controlHarnessRoot}" does not exist or is not a directory — a declared control root is authoritative and is never re-inferred from the feature cwd (A3)`)
     ]);
   }
-  const stem = basename10(input.planFile).replace(/\.md$/, "");
+  const stem = basename11(input.planFile).replace(/\.md$/, "");
   if (stem !== planId) {
     throwUsage(`SddExecutionContext.planFile "${input.planFile}" does not match plan "${planId}" — the plan file must be {PLAN_DIR}/<plan-id>.md under the declared control harness`);
   }
@@ -20214,7 +20217,7 @@ async function resolveSddExecutionContext(input) {
     controlHarnessRoot: canonicalControlHarnessRoot,
     featureCwd: canonicalFeatureCwd,
     workingBranch,
-    planFile: realpathSync8(input.planFile),
+    planFile: realpathSync9(input.planFile),
     sddDir: canonicalSddDir
   }, SDD_CONTEXT_SEMANTICS);
 }
@@ -20234,11 +20237,11 @@ function checkSddAction(context, action) {
   const featureReal = canonicalDir(context.featureCwd);
   const canonicalSddDir = canonicalizeNearestExisting(context.sddDir);
   const canonicalPlanFile = canonicalizeNearestExisting(context.planFile);
-  const cwdResolved = resolve16(action.cwd);
+  const cwdResolved = resolve17(action.cwd);
   const checkTarget = (baseDir, target, kind) => {
     if (featureReal === null)
       return;
-    const targetAbs = resolve16(baseDir, target);
+    const targetAbs = resolve17(baseDir, target);
     const canonical2 = canonicalizeNearestExisting(targetAbs);
     if (!isInside(canonical2, featureReal)) {
       const declaredPrefix = targetAbs === featureReal || targetAbs.startsWith(`${featureReal}/`);
@@ -20266,10 +20269,10 @@ function checkSddAction(context, action) {
       add("sdd.context.target-missing", "artifact checks require the destination target");
       return { ok: false, violations };
     }
-    const targetAbs = resolve16(cwdResolved, action.target);
+    const targetAbs = resolve17(cwdResolved, action.target);
     const canonical2 = canonicalizeNearestExisting(targetAbs);
     if (!isInside(canonical2, canonicalSddDir) && canonical2 !== canonicalPlanFile) {
-      const rawSddDir = resolve16(context.sddDir);
+      const rawSddDir = resolve17(context.sddDir);
       const declaredPrefix = targetAbs === rawSddDir || targetAbs.startsWith(`${rawSddDir}/`) || targetAbs === canonicalSddDir || targetAbs.startsWith(`${canonicalSddDir}/`) || targetAbs === canonicalPlanFile;
       if (declaredPrefix) {
         add("sdd.context.artifact-symlink-escape", `artifact target "${targetAbs}" canonicalizes to "${canonical2}", outside the plan's control sddDir — symlink escape refused before write`);
@@ -20372,7 +20375,7 @@ function eventTargetPaths(input) {
 }
 function hasEntry(dir, name) {
   try {
-    statSync10(join20(dir, name));
+    statSync10(join21(dir, name));
     return true;
   } catch {
     return false;
@@ -20392,15 +20395,15 @@ function hasHarnessRootMarkers(dir) {
 function isHarnessRootDir(dir) {
   if (hasHarnessRootMarkers(dir))
     return true;
-  const parentResolved = resolveHarnessDir(dirname13(dir));
-  return parentResolved !== null && resolve17(parentResolved) === dir;
+  const parentResolved = resolveHarnessDir(dirname14(dir));
+  return parentResolved !== null && resolve18(parentResolved) === dir;
 }
 function resolveHarnessRootOf(target) {
-  let dir = resolve17(target);
+  let dir = resolve18(target);
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
-    const parent = dirname13(dir);
+    const parent = dirname14(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -20409,8 +20412,8 @@ function resolveHarnessRootOf(target) {
 function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
-  const resolved = resolve17(targetPath);
-  const name = basename11(resolved);
+  const resolved = resolve18(targetPath);
+  const name = basename12(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
@@ -20423,8 +20426,8 @@ function harnessDocKindOfTarget(targetPath) {
       workflowDir = resolveWorkflowDir(harnessDir2, { harnessDir: harnessDir2 });
       projectDir = resolveProjectDir(harnessDir2, { harnessDir: harnessDir2 });
     } catch {
-      workflowDir = join20(harnessDir2, "workflows");
-      projectDir = join20(harnessDir2, "projects");
+      workflowDir = join21(harnessDir2, "workflows");
+      projectDir = join21(harnessDir2, "projects");
     }
     if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative7(workflowDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "snapshot" };
@@ -20434,8 +20437,8 @@ function harnessDocKindOfTarget(targetPath) {
     }
     return null;
   };
-  const probeRoot = resolveHarnessRootOf(dirname13(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname13(resolved));
+  const probeRoot = resolveHarnessRootOf(dirname14(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -20443,7 +20446,7 @@ function harnessDocKindOfTarget(targetPath) {
     return classified;
   if (probeRoot === null)
     return null;
-  const fallbackDir = resolveHarnessDir(dirname13(resolved));
+  const fallbackDir = resolveHarnessDir(dirname14(resolved));
   if (fallbackDir === null || fallbackDir === probeRoot)
     return null;
   return classify(fallbackDir);
@@ -20456,7 +20459,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename11(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename12(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
@@ -20484,7 +20487,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename11(filePath)} content must be a JSON object`
+          message: `${basename12(filePath)} content must be a JSON object`
         }
       ];
     }
@@ -20541,43 +20544,43 @@ function caseFoldedKindOf(name) {
   return null;
 }
 function landedPathOf(filePath) {
-  let probe = resolve18(filePath);
+  let probe = resolve19(filePath);
   const suffix = [];
   let symlinkHops = 0;
   for (;; ) {
     try {
-      return resolve18(realpathSync9(probe), ...suffix);
+      return resolve19(realpathSync10(probe), ...suffix);
     } catch {
       let linkTarget;
       try {
         linkTarget = readlinkSync(probe);
       } catch {
-        const parent = dirname14(probe);
+        const parent = dirname15(probe);
         if (parent === probe)
-          return resolve18(filePath);
-        suffix.unshift(basename12(probe));
+          return resolve19(filePath);
+        suffix.unshift(basename13(probe));
         probe = parent;
         continue;
       }
       if (symlinkHops >= MAX_SYMLINK_HOPS)
         throw new SymlinkResolutionError;
       symlinkHops++;
-      probe = resolve18(dirname14(probe), linkTarget);
+      probe = resolve19(dirname15(probe), linkTarget);
     }
   }
 }
 function isStoreAuthorityTarget(target) {
-  if (!isStoreAuthorityName(basename12(target)))
+  if (!isStoreAuthorityName(basename13(target)))
     return false;
-  return isHarnessRootDir(dirname14(target));
+  return isHarnessRootDir(dirname15(target));
 }
 function caseFoldedDocKind(candidate) {
-  const target = resolve18(candidate);
-  const name = basename12(target);
+  const target = resolve19(candidate);
+  const name = basename13(target);
   const kind = caseFoldedKindOf(name);
   if (kind === null)
     return null;
-  let dir = dirname14(target);
+  let dir = dirname15(target);
   for (;; ) {
     if (isHarnessRootDir(dir)) {
       let base = dir;
@@ -20585,13 +20588,13 @@ function caseFoldedDocKind(candidate) {
         try {
           base = kind === "snapshot" ? resolveWorkflowDir(dir, { harnessDir: dir }) : resolveProjectDir(dir, { harnessDir: dir });
         } catch {
-          base = resolve18(dir, kind === "snapshot" ? "workflows" : "projects");
+          base = resolve19(dir, kind === "snapshot" ? "workflows" : "projects");
         }
       }
       if (CASE_FOLDED_SHAPES[kind].test(relative8(base, target)))
         return { harnessDir: dir, kind };
     }
-    const parent = dirname14(dir);
+    const parent = dirname15(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -20618,7 +20621,7 @@ function compareIds(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 function scanCompasses(harnessDir, acknowledgedCompassSkips) {
-  const iterationsDir = join21(harnessDir, "iterations");
+  const iterationsDir = join22(harnessDir, "iterations");
   const out = [];
   const skipped = [];
   const refusals = [];
@@ -20632,7 +20635,7 @@ function scanCompasses(harnessDir, acknowledgedCompassSkips) {
   for (const entry of entries) {
     if (!entry.isDirectory())
       continue;
-    const compassPath = join21(iterationsDir, entry.name, "delivery-compass.md");
+    const compassPath = join22(iterationsDir, entry.name, "delivery-compass.md");
     let bytes;
     let info;
     try {
@@ -20755,8 +20758,8 @@ function buildIterationSnapshot(compass, rowById, rootUpdatedAt) {
     id: compass.id,
     type: "iteration",
     status,
-    file: join21("workflows", compass.id, WORKFLOW_SNAPSHOT_FILE),
-    source: join21("iterations", compass.id, "delivery-compass.md"),
+    file: join22("workflows", compass.id, WORKFLOW_SNAPSHOT_FILE),
+    source: join22("iterations", compass.id, "delivery-compass.md"),
     data: snapshot
   };
 }
@@ -20827,7 +20830,7 @@ function buildStandaloneSnapshot(row, rootUpdatedAt, dispositions) {
     id,
     type: "plan",
     status,
-    file: join21("workflows", id, WORKFLOW_SNAPSHOT_FILE),
+    file: join22("workflows", id, WORKFLOW_SNAPSHOT_FILE),
     source: "status.json plans[] row",
     data: snapshot
   };
@@ -20875,7 +20878,7 @@ function applyRootMetadataLift(snapshot, metadata, dispositions, activeIteration
   }
 }
 function convertLegacyV1Tree(root, declarations = [], verifiedStatusBytes, acknowledgedCompassSkips = []) {
-  const statusPath = join21(root, MIGRATE_STATUS_FILE);
+  const statusPath = join22(root, MIGRATE_STATUS_FILE);
   const source = verifiedStatusBytes === undefined ? readArtifactBytes(statusPath) : { payload: JSON.parse(verifiedStatusBytes.toString("utf8")), version: artifactVersion(verifiedStatusBytes) };
   if (source === undefined) {
     throw new Error(`refusing to convert: no legacy ${MIGRATE_STATUS_FILE} at ${statusPath}; a workspace without a legacy root has nothing to import`);
@@ -21570,7 +21573,7 @@ function referenceExists(repoRoot, docText) {
           break;
         if (entry.isDirectory()) {
           if (!WALK_SKIP_DIRS.has(entry.name))
-            stack.push(join22(dir, entry.name));
+            stack.push(join23(dir, entry.name));
         } else if (!entry.isSymbolicLink()) {
           const base = entry.name.replace(/\.(?:ts|tsx|js|jsx|mjs|cjs)$/, "");
           if (moduleNames.has(base))
@@ -21582,7 +21585,7 @@ function referenceExists(repoRoot, docText) {
   for (const { ref, isSymbol, module } of refs) {
     if (!isSymbol || module === undefined) {
       const candidate = ref.replace(LINE_SUFFIX_RE, "").replace(ANCHOR_RE, "");
-      if (existsSync16(resolve19(repoRoot, candidate))) {
+      if (existsSync16(resolve20(repoRoot, candidate))) {
         checked++;
       } else {
         violations.push(violation10("medium", "compound.reference.missing-file", `referenced path \`${ref}\` does not exist under ${repoRoot} (Maintain Phase 2: referenced code still exists?)`, "update the doc to reference an existing path, or delete the stale reference"));
@@ -21599,7 +21602,7 @@ function assertIndexRows(knowledgeDir) {
   return {
     ok: false,
     violations: [
-      violation10("medium", "compound.index.retired", `${join22(knowledgeDir, "README.md")} is no longer a register — knowledge catalog completeness is a store.db query (state-projection contract §4)`, "call assertKnowledgeCatalogCompleteness(context), or run `mstar catalog discover` + `mstar catalog import`")
+      violation10("medium", "compound.index.retired", `${join23(knowledgeDir, "README.md")} is no longer a register — knowledge catalog completeness is a store.db query (state-projection contract §4)`, "call assertKnowledgeCatalogCompleteness(context), or run `mstar catalog discover` + `mstar catalog import`")
     ]
   };
 }
@@ -21608,18 +21611,18 @@ async function assertKnowledgeCatalogCompleteness(context) {
 }
 function compoundRefreshScope(harnessDir, projectRoot) {
   return [
-    join22(harnessDir, "knowledge"),
-    join22(harnessDir, "knowledge", "README.md"),
-    join22(projectRoot, "CONCEPTS.md")
+    join23(harnessDir, "knowledge"),
+    join23(harnessDir, "knowledge", "README.md"),
+    join23(projectRoot, "CONCEPTS.md")
   ];
 }
 function isFileLikeRoot(root) {
-  return /^[^.]*\.[A-Za-z0-9]{1,10}$/.test(basename13(root));
+  return /^[^.]*\.[A-Za-z0-9]{1,10}$/.test(basename14(root));
 }
 function scopeGuard(path2, allowedRoots) {
-  const resolved = resolve19(path2);
+  const resolved = resolve20(path2);
   for (const root of allowedRoots) {
-    const r = resolve19(root);
+    const r = resolve20(root);
     if (isFileLikeRoot(r)) {
       if (resolved === r)
         return { ok: true, violations: [] };
@@ -21913,8 +21916,8 @@ function validateRoleMapping(rolesDir, options = {}) {
   const violations = [];
   const referenceById = new Map(mapping.map((m) => [m.agentId, m.reference]));
   for (const { agentId, reference } of mapping) {
-    if (!existsSync17(join23(rolesDir, reference))) {
-      violations.push(violation12("medium", "roles.mapping.reference.missing", `role "${agentId}" maps to ${reference} which does not exist under ${rolesDir} (mstar-roles § Role Reference Mapping)`, `create ${join23(rolesDir, reference)} or fix the mapping row`));
+    if (!existsSync17(join24(rolesDir, reference))) {
+      violations.push(violation12("medium", "roles.mapping.reference.missing", `role "${agentId}" maps to ${reference} which does not exist under ${rolesDir} (mstar-roles § Role Reference Mapping)`, `create ${join24(rolesDir, reference)} or fix the mapping row`));
     }
   }
   for (const { family, memberIds } of families) {
@@ -22002,7 +22005,7 @@ function mergeLegacyArchiveReferences(skillTexts, referenceTexts) {
   };
 }
 function collectLegacyArchiveReferenceTexts(skillsRoot) {
-  const dir = join23(skillsRoot, LEGACY_ARCHIVE_SKILL, "references");
+  const dir = join24(skillsRoot, LEGACY_ARCHIVE_SKILL, "references");
   let names;
   try {
     names = readdirSync12(dir).filter((name) => name.endsWith(".md")).sort();
@@ -22012,7 +22015,7 @@ function collectLegacyArchiveReferenceTexts(skillsRoot) {
   const texts = [];
   for (const name of names) {
     try {
-      texts.push(readFileSync19(join23(dir, name), "utf8"));
+      texts.push(readFileSync19(join24(dir, name), "utf8"));
     } catch {}
   }
   return texts;
@@ -22642,7 +22645,7 @@ function nextReportName(runDir) {
   return maxRevision === 0 ? "report.md" : `report-r${maxRevision + 1}.md`;
 }
 function requireWritableEvidencePath(runDir, name) {
-  const target = join24(runDir, name);
+  const target = join25(runDir, name);
   let entry;
   try {
     entry = lstatSync9(target);
@@ -22671,7 +22674,7 @@ function prReviewReportPath(opts) {
   const runDir = resolveReviewRunDir({ reviewsDir: opts.reviewsDir, date, spec: opts.target });
   if (hasStage)
     return requireWritableEvidencePath(runDir, `stage${opts.stage}-${requireSafeComponent(opts.slug ?? "", "slug")}.md`);
-  return join24(runDir, nextReportName(runDir));
+  return join25(runDir, nextReportName(runDir));
 }
 function violation14(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
@@ -22991,7 +22994,7 @@ function prReviewSeatPrompt(opts) {
   lines.push("");
   lines.push("## Read first");
   lines.push("");
-  const prReviewRef = join24(skillRoot, "references", "pr-review.md");
+  const prReviewRef = join25(skillRoot, "references", "pr-review.md");
   const sections = opts.stage === 1 ? tier === "quick" ? "Scoping, Evidence rules" : "Review pipeline, Worktree isolation, Scoping, Evidence rules" : "Scoping, Concern lenses, Merge class, Attack and vet, Evidence rules, Sizing & change shape";
   lines.push(`1. \`${prReviewRef}\` — read at least these sections: ${sections}.`);
   lines.push(`2. The review worktree: \`${worktreePath}\` — your ONLY working directory this session; read-only (no edits, no fixes, no stash, no commits, no posts).`);
@@ -22999,11 +23002,11 @@ function prReviewSeatPrompt(opts) {
     lines.push(`- Read the pinned diff snapshot FIRST: \`${opts.diffFile}\` — it is the review's diff basis (already computed at setup); read it before opening files.`);
   }
   if (opts.stage === 2) {
-    lines.push(`3. \`${join24(skillRoot, "SKILL.md")}\` — read \`## Hard Rules (Read-Only)\`, \`### Phase 1 — Recon (always)\`, and \`### Phase 2 — Audit (per variant)\` only for the scoped shared investigation boundaries. Do not run the root workflow, start a recon survey, or decline the assigned review.`);
-    lines.push(`4. \`${join24(skillRoot, "references", "audit-playbook.md")}\` — read \`## 1. Correctness / Bugs\`, \`## 4. Test Coverage\`, \`## 5. Tech Debt & Architecture\`, and \`## Finding format\` for relevant investigation lenses and the shared evidence/reporting contract.`);
-    lines.push(`5. \`${join24(skillRoot, "references", "finding-format.md")}\` — the template every finding follows.`);
+    lines.push(`3. \`${join25(skillRoot, "SKILL.md")}\` — read \`## Hard Rules (Read-Only)\`, \`### Phase 1 — Recon (always)\`, and \`### Phase 2 — Audit (per variant)\` only for the scoped shared investigation boundaries. Do not run the root workflow, start a recon survey, or decline the assigned review.`);
+    lines.push(`4. \`${join25(skillRoot, "references", "audit-playbook.md")}\` — read \`## 1. Correctness / Bugs\`, \`## 4. Test Coverage\`, \`## 5. Tech Debt & Architecture\`, and \`## Finding format\` for relevant investigation lenses and the shared evidence/reporting contract.`);
+    lines.push(`5. \`${join25(skillRoot, "references", "finding-format.md")}\` — the template every finding follows.`);
     if (opts.securitySeat === true) {
-      lines.push(`6. \`${join24(skillRoot, "references", "security-review.md")}\` — the security lens.`);
+      lines.push(`6. \`${join25(skillRoot, "references", "security-review.md")}\` — the security lens.`);
     }
   }
   const budget = PR_REVIEW_TIER_BUDGETS[tier];
@@ -23359,7 +23362,7 @@ function validateQcReport(text4) {
   return { ok: violations.length === 0, violations };
 }
 function legacyStatusDocPath(harnessRoot) {
-  return join25(harnessRoot, "status.json");
+  return join26(harnessRoot, "status.json");
 }
 function assertKindAdmitted(kind) {
   if (kind === "residuals") {
@@ -23383,9 +23386,9 @@ function resolveArtifactPath(harnessRoot, ref) {
   }
   assertSafePathComponent(key, "ArtifactStore key");
   if (PLAN_SHAPED_KEY_RE.test(key)) {
-    return join25(harnessRoot, "sdd", key, "review", "report.json");
+    return join26(harnessRoot, "sdd", key, "review", "report.json");
   }
-  return join25(harnessRoot, "sdd", "_reviews", `${key}.json`);
+  return join26(harnessRoot, "sdd", "_reviews", `${key}.json`);
 }
 function listDirNames(dir) {
   return readDirEntries(dir).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
@@ -23406,7 +23409,7 @@ function readDirEntries(dir) {
 function assertNotRetiredRegisterTarget(root, ref, filePath) {
   if (ref.kind === "json") {
     const canonical2 = canonicalTarget(filePath);
-    if (basename14(canonical2) !== "residuals.json")
+    if (basename15(canonical2) !== "residuals.json")
       return;
     const projectDir = canonicalTarget(resolveProjectDir(root, { harnessDir: root }));
     if (canonical2.startsWith(`${projectDir}${sep11}`)) {
@@ -23421,7 +23424,7 @@ function protectedKindOf(root, ref, filePath) {
   if (canonical2 === canonicalTarget(legacyStatusDocPath(root)))
     return "root";
   const workflowDir = canonicalTarget(resolveWorkflowDir(root, { harnessDir: root }));
-  if (basename14(canonical2) === "snapshot.json" && canonical2.startsWith(`${workflowDir}${sep11}`))
+  if (basename15(canonical2) === "snapshot.json" && canonical2.startsWith(`${workflowDir}${sep11}`))
     return "snapshot";
   return null;
 }
@@ -23433,7 +23436,7 @@ function tryResolveGetPath(root, kind, key) {
   }
 }
 function createFsStore(harnessRoot) {
-  const root = resolve20(harnessRoot);
+  const root = resolve21(harnessRoot);
   const store = {
     root,
     async put(doc) {
@@ -23471,8 +23474,8 @@ function createFsStore(harnessRoot) {
       }
       resolveArtifactPath(root, { kind, key: "root" });
       const keys = [];
-      const sddDir = join25(root, "sdd");
-      for (const key of listJsonKeys(join25(sddDir, "_reviews"))) {
+      const sddDir = join26(root, "sdd");
+      for (const key of listJsonKeys(join26(sddDir, "_reviews"))) {
         if (!PLAN_SHAPED_KEY_RE.test(key) && tryResolveGetPath(root, kind, key) !== undefined) {
           keys.push(key);
         }
@@ -23491,7 +23494,7 @@ function createFsStore(harnessRoot) {
   return store;
 }
 function processControlRoot() {
-  return resolveProcessHarnessDir(process.cwd()) ?? resolve20(process.cwd());
+  return resolveProcessHarnessDir(process.cwd()) ?? resolve21(process.cwd());
 }
 function assertInjectedAccessAllowed(ref) {
   assertKindAdmitted(ref.kind);
@@ -23534,7 +23537,7 @@ function getArtifactStore() {
     return injectedStore;
   const root = resolveHarnessDir(process.cwd());
   if (root === null) {
-    throw new Error(`harness dir not found from ${resolve20(process.cwd())} — cannot create the default FsStore (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
+    throw new Error(`harness dir not found from ${resolve21(process.cwd())} — cannot create the default FsStore (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
   }
   return createFsStore(root);
 }
@@ -23548,7 +23551,7 @@ async function loadStoreModule(modulePath) {
   if (URI_SCHEME_RE.test(modulePath)) {
     throw new Error(`loadStoreModule: only filesystem paths are allowed — got ${JSON.stringify(modulePath)} (URI schemes such as http:/https:/file: are rejected)`);
   }
-  const resolved = resolve20(modulePath);
+  const resolved = resolve21(modulePath);
   if (!existsSync18(resolved)) {
     throw new Error(`loadStoreModule: module file not found — ${JSON.stringify(resolved)}`);
   }
@@ -23564,7 +23567,7 @@ function readSessionEnvelope(sessionPath) {
   if (!isNonEmptyString(sessionPath) || !isAbsolute15(sessionPath)) {
     throw new CoordinationError("coordination.invalid-input", "sessionPath must be an absolute path. Inspect the harness authority with mstar status validate.");
   }
-  const abs = resolve21(sessionPath);
+  const abs = resolve22(sessionPath);
   if (!existsSync19(abs)) {
     throw new CoordinationError("coordination.session-not-found", "Session envelope was not found. Inspect the harness authority with mstar status validate.", { path: abs });
   }
@@ -23583,7 +23586,7 @@ function parseSessionEnvelope(parsed, sessionPath) {
   if (!isNonEmptyString(sessionPath) || !isAbsolute15(sessionPath)) {
     throw new CoordinationError("coordination.invalid-input", "sessionPath must be an absolute path. Inspect the harness authority with mstar status validate.");
   }
-  const abs = resolve21(sessionPath);
+  const abs = resolve22(sessionPath);
   if (!isPlainObject(parsed)) {
     throw new CoordinationError("coordination.store", "Session envelope must be an object. Inspect the harness authority with mstar status validate.", { path: abs });
   }
@@ -24093,15 +24096,15 @@ function readInside(parent, child) {
   const st = lstatSync10(parent);
   if (st.isSymbolicLink() || !st.isDirectory())
     throw new Error(`unsafe ancestor directory: ${parent}`);
-  return readBytes(join27(parent, child));
+  return readBytes(join28(parent, child));
 }
 function evaluate(context, now2) {
-  const root = dirname15(storeDbPath(context));
+  const root = dirname16(storeDbPath(context));
   const allFiles = [];
   const workflows = [];
   const findings = [];
   const refusals = [];
-  const dirs = join27(root, "workflows");
+  const dirs = join28(root, "workflows");
   try {
     const rootInfo = lstatSync10(dirs);
     if (rootInfo.isSymbolicLink())
@@ -24117,7 +24120,7 @@ function evaluate(context, now2) {
       findings.push({ source: "workflows", kind: "ignored" });
     else
       for (const entry of readdirSync15(dirs, { withFileTypes: true })) {
-        const dir = join27(dirs, entry.name), source = `workflows/${entry.name}`;
+        const dir = join28(dirs, entry.name), source = `workflows/${entry.name}`;
         if (entry.isSymbolicLink()) {
           refusals.push({
             selector: `dsh-ledger:${entry.name}`,
@@ -24138,7 +24141,7 @@ function evaluate(context, now2) {
         const unreadable = new Set;
         for (const name of names) {
           try {
-            const b = readBytes(join27(dir, name));
+            const b = readBytes(join28(dir, name));
             present[name] = b;
             allFiles.push([`${source}/${name}`, hash(b)]);
           } catch (e) {
@@ -24183,7 +24186,7 @@ function evaluate(context, now2) {
         }
         const historyIdentities = new Map;
         let historySafe = true;
-        const historyDir = join27(dir, HISTORY);
+        const historyDir = join28(dir, HISTORY);
         let historyEnumerated = false;
         try {
           const hs = lstatSync10(historyDir);
@@ -24193,7 +24196,7 @@ function evaluate(context, now2) {
           }
           historyEnumerated = true;
           for (const h of readdirSync15(historyDir).filter((n) => n.startsWith("chunk-") && n.endsWith(".jsonl")).sort()) {
-            const b = readBytes(join27(historyDir, h));
+            const b = readBytes(join28(historyDir, h));
             allFiles.push([`${source}/${HISTORY}/${h}`, hash(b)]);
             for (const line of b.toString("utf8").split(`
 `))
@@ -24322,7 +24325,7 @@ function evaluate(context, now2) {
               if (!historySafe)
                 tailRefusal = "the journal's archive proof is unavailable because the retained history directory is not a safe source";
               else {
-                const archived = readBytes(join27(historyDir, archive.chunk));
+                const archived = readBytes(join28(historyDir, archive.chunk));
                 allFiles.push([`${source}/${HISTORY}/${archive.chunk}`, hash(archived)]);
                 const range = archived.subarray(archive.offset, archive.offset + archive.bytes);
                 if (archived.length === archive.offset + archive.bytes && hash(range) === archive.sha256)
@@ -24413,7 +24416,7 @@ function evaluate(context, now2) {
   }
   const bindings = [];
   const emissions = [];
-  const snapshotsDir = join27(root, SNAPSHOTS);
+  const snapshotsDir = join28(root, SNAPSHOTS);
   try {
     const b = readInside(snapshotsDir, STATUS);
     allFiles.push([`${SNAPSHOTS}/${STATUS}`, hash(b)]);
@@ -24554,7 +24557,7 @@ function conflict2(message) {
   throw new ExecutionError("execution.migration-conflict", message);
 }
 function rootOf(context) {
-  return canonicalPath(dirname16(storeDbPath(context)));
+  return canonicalPath(dirname17(storeDbPath(context)));
 }
 function conversionInputDigest(declarations, acknowledgedCompassSkips) {
   const deliveryDeclarations = [...declarations].map((entry) => ({
@@ -24598,7 +24601,7 @@ function provenReplayIds(db, sourceDigest, inputDigest, carriesInput) {
   return { proven, inputUnproven };
 }
 function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, acknowledgedWorkflowSkips) {
-  const workflowsDir = join28(root, "workflows");
+  const workflowsDir = join29(root, "workflows");
   const workflowsPrefix = workflowsDir.endsWith(sep12) ? workflowsDir : `${workflowsDir}${sep12}`;
   const registeredUnderRoot = registeredExecution.filter(({ dir }) => dir !== workflowsDir && dir.startsWith(workflowsPrefix));
   let info;
@@ -24621,7 +24624,7 @@ function assertWorkflowTreeIsReal(root, acknowledgedSkips, registeredExecution, 
     for (const dirent of readdirSync16(workflowsDir, { withFileTypes: true })) {
       if (!dirent.isSymbolicLink())
         continue;
-      const path2 = join28(workflowsDir, dirent.name);
+      const path2 = join29(workflowsDir, dirent.name);
       if (registeredExecution.some((entry) => entry.dir === path2))
         continue;
       if (acknowledgedSkips.includes(`dsh-ledger:${dirent.name}`))
@@ -24698,8 +24701,8 @@ function readRegularJson(path2, label, read = readSourceBytes) {
   }
 }
 function verifyBinding(value, source, read = readSourceBytes) {
-  const sessionsDir = join28(source.dir, "sessions");
-  const path2 = resolve22(value.session_file);
+  const sessionsDir = join29(source.dir, "sessions");
+  const path2 = resolve23(value.session_file);
   if (!isPathWithin(canonicalPath(sessionsDir), path2) || path2 === canonicalPath(sessionsDir)) {
     throw new UnsafeSourceError(`coordinator binding ${value.session_id} points outside ${sessionsDir}; move its envelope into that workflow's sessions directory or remove the binding.`);
   }
@@ -24776,17 +24779,17 @@ function discoverV1(root, legacy, operator, verifiedStatusBytes, acknowledgedWor
         id: converted.id,
         type: converted.type,
         started_at: snapshot.started_at,
-        dir: join28("workflows", converted.id)
+        dir: join29("workflows", converted.id)
       };
       const registered = converted.status === "running" || converted.status === "paused";
       if (registered)
         entries.push(entry);
-      rows.push({ entry: registered ? entry : null, id: converted.id, dir: join28(root, "workflows", converted.id), snapshot, coordinator: null, plans });
+      rows.push({ entry: registered ? entry : null, id: converted.id, dir: join29(root, "workflows", converted.id), snapshot, coordinator: null, plans });
     } catch (error) {
       if (!(error instanceof UnsafeSourceError))
         throw error;
       refusedSourceIds.add(converted.id);
-      const path2 = join28("workflows", converted.id).split(/[\\/]+/).join("/");
+      const path2 = join29("workflows", converted.id).split(/[\\/]+/).join("/");
       if (acknowledgedWorkflowSkips.has(converted.id)) {
         skipped.push({ path: path2, reason: `workflow ${converted.id} skipped by --ack-skip-workflow; its converted legacy row could not be imported and no execution row was registered for it` });
         skippedWorkflowAcknowledgements.push({ id: converted.id, path: path2 });
@@ -24804,7 +24807,7 @@ function discoverV1(root, legacy, operator, verifiedStatusBytes, acknowledgedWor
 }
 function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkips, declarations, acknowledgedCompassSkips) {
   const root = rootOf(context);
-  const statusPath = join28(root, "status.json");
+  const statusPath = join29(root, "status.json");
   const skipped = [];
   const sourceHashes = new Map;
   const relOf = (path2) => relative10(root, path2).split(/[\\/]+/).join("/");
@@ -24829,7 +24832,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
     }
   }
   const entries = isPlainObject(parsed) && Array.isArray(parsed.workflows) ? parsed.workflows : null;
-  const registeredExecution = (entries ?? []).flatMap((entry) => isPlainObject(entry) && typeof entry.dir === "string" && typeof entry.id === "string" ? [{ id: entry.id, dir: join28(root, entry.dir) }] : []);
+  const registeredExecution = (entries ?? []).flatMap((entry) => isPlainObject(entry) && typeof entry.dir === "string" && typeof entry.id === "string" ? [{ id: entry.id, dir: join29(root, entry.dir) }] : []);
   const skippableRegistered = isPlainObject(parsed) && parsed.version === 1 ? [] : registeredExecution;
   const tree = assertWorkflowTreeIsReal(root, acknowledgedSkips, skippableRegistered, acknowledgedWorkflowSkips);
   const isRealWorkflowTree = tree.enumerable;
@@ -24859,7 +24862,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
   const safeEntries = [];
   for (const entry of entries ?? []) {
     if (isPlainObject(entry) && typeof entry.id === "string" && typeof entry.dir === "string") {
-      const dir = join28(root, entry.dir);
+      const dir = join29(root, entry.dir);
       const prefix = root.endsWith(sep12) ? root : `${root}${sep12}`;
       if (!dir.startsWith(prefix) || dir === root)
         conflict2(`workflow ${entry.id} records dir ${JSON.stringify(entry.dir)} outside control root ${root}; correct or remove that status.json entry, then rerun store upgrade.`);
@@ -24870,13 +24873,13 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       skipped.push({ path: `status.json#${entry.id}`, reason: "unrecognizable workflow entry; left in place" });
   }
   const registeredIds = new Set(safeEntries.flatMap((entry) => isPlainObject(entry) && typeof entry.id === "string" ? [entry.id] : []));
-  const workflowsDir = join28(root, "workflows");
+  const workflowsDir = join29(root, "workflows");
   if (isRealWorkflowTree) {
     for (const dirent of readdirSync16(workflowsDir, { withFileTypes: true })) {
-      const dir = join28(workflowsDir, dirent.name);
+      const dir = join29(workflowsDir, dirent.name);
       if (!dirent.isDirectory() || registeredIds.has(dirent.name))
         continue;
-      const snapshotPath = join28(dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join29(dir, WORKFLOW_SNAPSHOT_FILE);
       if (!existsSync20(snapshotPath))
         continue;
       const snapshotValue = readRegularJson(snapshotPath, `unregistered snapshot at ${snapshotPath}`, readTracked);
@@ -24912,7 +24915,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
     if (seen.has(entry.id))
       conflict2(`status.json lists workflow ${entry.id} more than once; remove the duplicate registration and rerun store upgrade.`);
     seen.add(entry.id);
-    const dir = join28(root, entry.dir);
+    const dir = join29(root, entry.dir);
     const refusedRegistered = tree.refusedRegisteredIds.has(entry.id);
     if (refusedRegistered && acknowledgedWorkflowSkips.has(entry.id)) {
       const path2 = relative10(root, dir).split(/[\\/]+/).join("/");
@@ -24939,8 +24942,8 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
     try {
       if (!isPathWithin(root, dir) || dir === root)
         throw new UnsafeSourceError(`workflow ${entry.id} directory ${dir} resolves outside control root ${root}; replace it with a real in-root directory or remove its registration.`);
-      const sessionsDir = join28(dir, "sessions");
-      const snapshotPath = join28(dir, WORKFLOW_SNAPSHOT_FILE);
+      const sessionsDir = join29(dir, "sessions");
+      const snapshotPath = join29(dir, WORKFLOW_SNAPSHOT_FILE);
       if (info === null || !existsSync20(snapshotPath)) {
         skipped.push({ path: relative10(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "registered workflow snapshot is missing; left in place" });
         continue;
@@ -24962,7 +24965,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
         if (sessionsInfo.isSymbolicLink() || !sessionsInfo.isDirectory())
           throw new UnsafeSourceError(`workflow ${entry.id} sessions path is not a real directory.`);
         for (const sessionEntry of readdirSync16(sessionsDir, { withFileTypes: true })) {
-          const sessionPath = join28(sessionsDir, sessionEntry.name);
+          const sessionPath = join29(sessionsDir, sessionEntry.name);
           if (!sessionEntry.isFile() || sessionEntry.isSymbolicLink()) {
             skipped.push({ path: relative10(root, sessionPath).split(/[\\/]+/).join("/"), reason: "unrecognized session entry; left in place" });
             continue;
@@ -25021,7 +25024,7 @@ function discover(context, operator, acknowledgedSkips, acknowledgedWorkflowSkip
       for (const dirent of readdirSync16(dir, { withFileTypes: true })) {
         if (dirent.name === WORKFLOW_SNAPSHOT_FILE || dirent.name === "sessions")
           continue;
-        const path2 = join28(dir, dirent.name);
+        const path2 = join29(dir, dirent.name);
         if (dirent.isSymbolicLink())
           throw new UnsafeSourceError(`workflow entry ${path2} is a symlink.`);
         if (dirent.isFile()) {
@@ -25170,7 +25173,7 @@ async function upgradeStoreMinimal(input) {
   const attestation = input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
   const dbPath = storeDbPath(context);
   let schemaVersion;
-  mkdirSync7(dirname16(dbPath), { recursive: true });
+  mkdirSync7(dirname17(dbPath), { recursive: true });
   const run = (resolved) => !existsSync20(dbPath) ? initializeStore(context, { attestation: resolved, operator: input.operator, processFacts: input.processFacts, now: input.now, raiseSettlementSignal: true }).then((initialized) => {
     initialized.close();
     return initialized.schemaVersion;
@@ -25848,7 +25851,7 @@ async function captureExecutionProjectionSources(context) {
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text4(authorityPlanView.plan.status), progress: text4(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text4(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
     for (const doc of inputs.compassDocs) {
-      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join29(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join30(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readCompassSource(fspec);
       if (read.state !== "ok" || read.content === null) {
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
@@ -26346,8 +26349,8 @@ function queryIssueFlow(projectId) {
   };
 }
 function parentThatDeclares(harnessDir) {
-  const parent = dirname17(resolve23(harnessDir));
-  return existsSync21(join30(parent, MSTARC_FILE)) ? parent : null;
+  const parent = dirname18(resolve24(harnessDir));
+  return existsSync21(join31(parent, MSTARC_FILE)) ? parent : null;
 }
 function readSyncBindingProjects(handle) {
   try {
@@ -26361,7 +26364,7 @@ function readSyncBindingProjects(handle) {
   }
 }
 function querySyncBinding(harnessDir, filters) {
-  const repo = readRepoLinearBinding(resolveRepoRoot(harnessDir) ?? parentThatDeclares(harnessDir) ?? resolve23(harnessDir));
+  const repo = readRepoLinearBinding(resolveRepoRoot(harnessDir) ?? parentThatDeclares(harnessDir) ?? resolve24(harnessDir));
   const binding2 = repo.kind === "bound" ? { enabled: repo.binding.enabled, mode: repo.binding.mode, workspace: repo.binding.workspace, team: repo.binding.team } : null;
   const bindingError = repo.kind === "bound" ? null : repo.message;
   if (filters.probeState !== undefined && (filters.probeCause ?? "").trim() === "") {
@@ -27095,7 +27098,7 @@ function resolvePlanAddress(stated, kind) {
   });
 }
 function controlHarnessRoot(context) {
-  return canonicalizeNearestExisting(dirname18(storeDbPath(context)));
+  return canonicalizeNearestExisting(dirname19(storeDbPath(context)));
 }
 async function assertSparseExecutionAuthority(context, what) {
   const authority = await resolveCurrentAuthority(context);
@@ -28188,7 +28191,7 @@ function describeValue(value) {
   }
 }
 function controlHarnessRoot2(context) {
-  return canonicalizeNearestExisting(dirname19(storeDbPath(context)));
+  return canonicalizeNearestExisting(dirname20(storeDbPath(context)));
 }
 async function readWorkflowHeaderBefore(context, workflowId) {
   const state = await readExecutionState(context);
@@ -28206,7 +28209,7 @@ async function readPhaseEvidence(context, workflowId, operation) {
   }
   const harnessRoot = controlHarnessRoot2(context);
   const canonical2 = canonicalTarget(operation.compassPath);
-  const expected = canonicalTarget(join31(harnessRoot, registered));
+  const expected = canonicalTarget(join32(harnessRoot, registered));
   if (canonical2 !== expected) {
     throw new CoordinationError("coordination.scope-mismatch", "Phase transition must use the workflow's registered compass; inspect the workflow with mstar status validate.", { workflow_id: workflowId, expected, actual: canonical2 });
   }
@@ -28294,7 +28297,7 @@ async function readCompassRefEvidence(context, workflowId, operation) {
   }
   const harnessRoot = controlHarnessRoot2(context);
   const relative112 = normalizeIterationCompassRef(operation.compassPath, harnessRoot, (detail) => invalidWorkflowInput(detail));
-  const path2 = canonicalizeNearestExisting(isAbsolute18(operation.compassPath) ? operation.compassPath : join31(harnessRoot, operation.compassPath));
+  const path2 = canonicalizeNearestExisting(isAbsolute18(operation.compassPath) ? operation.compassPath : join32(harnessRoot, operation.compassPath));
   const text6 = readFileSync24(path2, "utf8");
   if (text6.trim() === "") {
     throw invalidWorkflowTransition("The named compass document is empty; name the reviewed delivery compass, then retry through mstar workflow compass-ref.", {
@@ -31288,7 +31291,7 @@ function registerSources(context) {
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isSymbolicLink() || !entry.isDirectory())
       continue;
-    const registerPath = join32(projectsRoot, entry.name, "residuals.json");
+    const registerPath = join33(projectsRoot, entry.name, "residuals.json");
     let info;
     try {
       info = lstatSync12(registerPath);
@@ -31686,7 +31689,7 @@ async function applyStoreMigration(context, manifest, hooks = {}) {
   if (!manifest || manifest.version !== MIGRATION_MANIFEST_VERSION || typeof manifest.controlRoot !== "string") {
     throw new StoreMigrationError("store.migration-manifest-invalid", "the manifest is missing or carries an unsupported version; re-run the preview");
   }
-  if (resolve24(manifest.controlRoot) !== resolve24(context.harnessDir)) {
+  if (resolve25(manifest.controlRoot) !== resolve25(context.harnessDir)) {
     throw new StoreMigrationError("store.migration-manifest-invalid", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was written.`);
   }
   if (manifest.unresolved.length > 0 || manifest.catalog.conflicts.length > 0 || manifest.blocksApply) {
@@ -31823,7 +31826,7 @@ async function applyStoreMigration(context, manifest, hooks = {}) {
   }
 }
 function controlRootOf(context) {
-  return canonicalTarget(dirname20(storeDbPath(context)));
+  return canonicalTarget(dirname21(storeDbPath(context)));
 }
 function assertWorkflowId(workflowId, what = "workflow id") {
   try {
@@ -31835,7 +31838,7 @@ function assertWorkflowId(workflowId, what = "workflow id") {
 function workflowNotesLedgerPath(context, workflowId) {
   assertWorkflowId(workflowId);
   const root = controlRootOf(context);
-  return join33(resolveWorkflowDir(root, { harnessDir: root }), workflowId, NOTES_LEDGER_FILE);
+  return join34(resolveWorkflowDir(root, { harnessDir: root }), workflowId, NOTES_LEDGER_FILE);
 }
 function parseWorkflowNote(value) {
   if (!isPlainObject(value))
@@ -32006,7 +32009,7 @@ function commitLedgerFrame(path2, frame) {
     closeSync6(fd);
   }
   if (created)
-    fsyncDirectory(dirname20(path2));
+    fsyncDirectory(dirname21(path2));
   assertLedgerPathIdentity(path2, opened, "before success receipt");
 }
 function ledgerSpans(bytes) {
@@ -32034,7 +32037,7 @@ function markerReserveBytes(totalBytes, workflowId) {
   return reserve + 5 * String(totalBytes).length + 2;
 }
 function writeLedgerTempFile(path2, content3) {
-  const temp = join33(dirname20(path2), `${basename15(path2)}.compaction-${randomUUID7()}.tmp`);
+  const temp = join34(dirname21(path2), `${basename16(path2)}.compaction-${randomUUID7()}.tmp`);
   try {
     const fd = openWithoutFollowing(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 420);
     try {
@@ -32147,7 +32150,7 @@ function compactWorkflowNotesLedger(path2, workflowId, trigger) {
     return;
   }
   renameSync3(temp, path2);
-  fsyncDirectory(dirname20(path2));
+  fsyncDirectory(dirname21(path2));
 }
 function withWorkflowNotesMaintenanceLock(context, body) {
   return withExecutionTransaction(context, () => body());
@@ -32190,7 +32193,7 @@ function prepareWorkflowBodyDir(context, session, dir) {
   }
   assertExecutionSessionCurrent(context, session);
   mkdirSync8(dir, { recursive: true });
-  fsyncDirectory(dirname20(dir));
+  fsyncDirectory(dirname21(dir));
 }
 function assertNoteScope(session, note) {
   assertWorkflowId(session.workflowId, "execution session workflow id");
@@ -32206,7 +32209,7 @@ async function appendWorkflowNote(context, session, note) {
   assertNoteScope(session, note);
   assertRealDirectory(controlRootOf(context), "the control root");
   const ledgerPath = workflowNotesLedgerPath(context, session.workflowId);
-  prepareWorkflowBodyDir(context, session, dirname20(ledgerPath));
+  prepareWorkflowBodyDir(context, session, dirname21(ledgerPath));
   const frame = Buffer.from(`${canonicalNoteLine({ ...note, ts: note.ts ?? new Date().toISOString() })}
 `, "utf8");
   assertExecutionSessionCurrent(context, session);
@@ -32319,7 +32322,7 @@ function normalizeWorkflowNotesCoverage(input) {
   };
 }
 function controlRootOf2(context) {
-  return canonicalPath(dirname21(storeDbPath(context)));
+  return canonicalPath(dirname22(storeDbPath(context)));
 }
 function sha256Of(bytes) {
   return createHash23("sha256").update(bytes).digest("hex");
@@ -32520,9 +32523,9 @@ async function openWalWithoutJournalReadSnapshot(context) {
   const walWithoutJournal = walStoreShapeOf(context);
   if (walWithoutJournal === null || walWithoutJournal.wal)
     return null;
-  const scratch = mkdtempSync(join34(tmpdir2(), "mstar-store-read-"));
+  const scratch = mkdtempSync(join35(tmpdir2(), "mstar-store-read-"));
   try {
-    const image = join34(scratch, "store.db");
+    const image = join35(scratch, "store.db");
     copyFileSync2(storeDbPath(context), image);
     writeFileSync5(`${image}-wal`, "");
     const handle = await openStore({ harnessDir: scratch }, "read");
@@ -32738,7 +32741,7 @@ function recoveryPointPath(context, root, backupPath) {
   if (!isNonEmptyString(backupPath)) {
     throw conflict3("a restore preview needs the recovery point path it is previewed against");
   }
-  const point3 = canonicalPath(resolve25(backupPath));
+  const point3 = canonicalPath(resolve26(backupPath));
   if (!isPathWithin(root, point3)) {
     throw new StoreActivationError("store.activation-stale", `the recovery point ${backupPath} is outside the authorized control root ${root}; a recovery point must live inside the root it protects.`);
   }
@@ -32932,7 +32935,7 @@ function requiredRebind() {
   return "Every reference that was valid before the replacement is invalid: the restore advances the store-wide epoch above both the live store and the recovery point, so a pre-restore handle refuses `store.stale-epoch`, the restored session rows are below the new epoch and authorize nothing, and any restored held lease keeps its old `owner_epoch`. Recover each workflow's coordinator with `recoverExecutionCoordinator` (naming the recorded prior holder and attesting it stopped), rebind its plans with `bindExecutionSession`, and reconcile any restored lease explicitly before reuse. A database image does not roll back the append-only logs and documents beside the store: notes, agent-flow history and the launch journal keep every byte they had, so their history is never resurrected or truncated by a restore.";
 }
 function recoveryReceiptPathOf(root, attemptId) {
-  return join34(root, "archived", "store-migration", "recovery", `restore-${Date.now().toString().padStart(16, "0")}-${attemptId}.json`);
+  return join35(root, "archived", "store-migration", "recovery", `restore-${Date.now().toString().padStart(16, "0")}-${attemptId}.json`);
 }
 function reclaimAbandonedRestoreScratch(root, currentAttemptId, committed) {
   if (committed === null)
@@ -32950,7 +32953,7 @@ function reclaimAbandonedRestoreScratch(root, currentAttemptId, committed) {
     if (attemptId === currentAttemptId || !committed.has(attemptId))
       continue;
     try {
-      const imagePath = join34(root, `.store-restore-${attemptId}.db`);
+      const imagePath = join35(root, `.store-restore-${attemptId}.db`);
       for (const suffix of RESTORE_SCRATCH_SIDECARS)
         rmSync2(`${imagePath}${suffix}`, { force: true });
       rmSync2(imagePath, { force: true });
@@ -33081,7 +33084,7 @@ async function readCommittedRestoreAttempts(context) {
 async function runRestore(context, root, input) {
   const point3 = recoveryPointPath(context, root, input.preview.backupPath);
   const attemptId = randomUUID8();
-  const imagePath = join34(root, `.store-restore-${attemptId}.db`);
+  const imagePath = join35(root, `.store-restore-${attemptId}.db`);
   try {
     try {
       copyFileSync2(point3, imagePath);
@@ -33093,7 +33096,7 @@ async function runRestore(context, root, input) {
       throw new StoreActivationError("store.activation-stale", `the recovery point at ${point3} belongs to store ${image.storeId}, not to the live store ${input.preview.liveStoreId}; a point of another store is never restored over this one.`);
     }
     const safety = await backupStore(context, {
-      out: join34(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID8()}.db`)
+      out: join35(root, "archived", "store-migration", "backups", `pre-restore-e${input.preview.liveEpoch}-${randomUUID8()}.db`)
     });
     try {
       const liveStoreSha256 = await sha256OfFile(storeDbPath(context));
@@ -33273,8 +33276,8 @@ function linearCredentialPath() {
   const explicit = process.env.MSTAR_LINEAR_CREDENTIAL;
   if (explicit !== undefined && explicit.trim() !== "")
     return explicit;
-  const base = process.env.XDG_CONFIG_HOME?.trim() || join35(homedir(), ".config");
-  return join35(base, "mstar", "linear", "credential.json");
+  const base = process.env.XDG_CONFIG_HOME?.trim() || join36(homedir(), ".config");
+  return join36(base, "mstar", "linear", "credential.json");
 }
 function parse2(raw) {
   let data;
@@ -33314,7 +33317,7 @@ function readLinearCredential(now2 = Date.now()) {
 }
 function writeLinearCredential(credential) {
   const path2 = linearCredentialPath();
-  mkdirSync9(dirname22(path2), { recursive: true, mode: 448 });
+  mkdirSync9(dirname23(path2), { recursive: true, mode: 448 });
   const payload = {
     access_token: credential.accessToken,
     refresh_token: credential.refreshToken,
@@ -33569,7 +33572,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
       configurable: true,
       set: __exportSetter2.bind(all, name)
     });
-}, __esm2 = (fn, res) => () => (fn && (res = fn(fn = 0)), res), CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, ENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at, source_hash", LINK_COLUMNS = "from_kind, from_id, relation, to_kind, to_id, ordinal", LINK_ORDER = "order by from_kind asc, from_id asc, relation asc, to_kind asc, to_id asc", init_catalog, MSTARC_FILE = ".mstarc", MSTARC_SECTION = "config", LINEAR_SECTION = "linear", LINEAR_MAPPING_SECTION = "linear.mapping", MSTARC_HARNESS_DIR_KEY = "harness_dir", MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, convert = function(test) {
+}, __esm2 = (fn, res) => () => (fn && (res = fn(fn = 0)), res), CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, ENTITY_COLUMNS = "kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at, updated_at, source_hash", LINK_COLUMNS = "from_kind, from_id, relation, to_kind, to_id, ordinal", LINK_ORDER = "order by from_kind asc, from_id asc, relation asc, to_kind asc, to_id asc", init_catalog, MSTARC_FILE = ".mstarc", MSTARC_SECTION = "config", LINEAR_SECTION = "linear", LINEAR_MAPPING_SECTION = "linear.mapping", MSTARC_HARNESS_DIR_KEY = "harness_dir", MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, convert = function(test) {
   if (test === null || test === undefined) {
     return ok2;
   }
@@ -33583,7 +33586,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
     return typeFactory(test);
   }
   throw new Error("Expected function, string, or object as test");
-}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, ACTIVATION_PROTOCOL_VERSION = 1, init_core, DEFAULT_PROBE_TIMEOUT_MS = 1e4, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, init_activation_provisioning, exports_store_activation, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
+}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, ACTIVATION_PROTOCOL_VERSION = 1, init_core, DEFAULT_PROBE_TIMEOUT_MS2 = 1e4, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, init_activation_provisioning, exports_store_activation, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
@@ -34272,6 +34275,7 @@ var init_engine = __esm(() => {
   });
   init_catalog = __esm2(() => {
     init_path();
+    init_git_probe();
     init_store_db();
     ENTITY_KINDS = {
       project: true,
@@ -37620,6 +37624,7 @@ var init_engine = __esm(() => {
     ];
   });
   init_path_check = __esm2(() => {
+    init_git_probe();
     init_worktree();
   });
   init_dispatch = __esm2(() => {
@@ -38208,6 +38213,7 @@ var init_engine = __esm(() => {
   });
   init_path = __esm2(() => {
     init_catalog();
+    init_git_probe();
     init_mstarc();
     init_project();
     init_store_db();

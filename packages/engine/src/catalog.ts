@@ -35,6 +35,7 @@ import {
   resolveSpecsDir,
   resolveTrackedResultDir,
 } from "./path.js";
+import { mainWorktreeRoot, realpathNearest } from "./git-probe.js";
 import { openStore, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
@@ -243,9 +244,17 @@ export function catalogRootDir(context: StoreContext, rootKind: CatalogRootKind)
     );
   }
   const harness = dirname(storeDbPath(context));
+  const mainRoot = dirname(harness);
   switch (rootKind) {
-    case "repository":
-      return dirname(harness);
+    case "repository": {
+      // The repository root follows the caller's checkout for the same reason
+      // tracked results do; another repository's checkout keeps its own root.
+      if (context.checkoutRoot === undefined) return mainRoot;
+      const callerMain = mainWorktreeRoot(context.checkoutRoot);
+      return callerMain !== null && realpathNearest(callerMain) === realpathNearest(mainRoot)
+        ? context.checkoutRoot
+        : mainRoot;
+    }
     case "harness":
       return harness;
     case "plans":

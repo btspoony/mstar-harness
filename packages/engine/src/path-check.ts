@@ -30,6 +30,7 @@ import { execFileSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Severity } from "./core.js";
+import { gitIgnored } from "./git-probe.js";
 import { gitProbeTimeoutMs, probeCheckoutRoot, readMainWorktree } from "./worktree.js";
 
 /** Refusal/severity vocabulary of the ownership check. */
@@ -143,28 +144,12 @@ function probePathFor(target: PathOwnershipTarget): string {
   const directory = target.kind === "directory" || (target.kind === undefined && isDirectoryEntry(resolved));
   return directory && !resolved.endsWith(sep) ? resolved + sep : resolved;
 }
-/** Exit status of a failed `execFileSync` call, or `null` when it never ran. */
-function exitStatus(error: unknown): number | null {
-  if (error !== null && typeof error === "object" && "status" in error && typeof error.status === "number") {
-    return error.status;
-  }
-  return null;
-}
-
 /** `check-ignore` verdict inside `checkoutRoot`: `null` when Git cannot answer. */
 function ignoreVerdict(checkoutRoot: string | null, probePath: string): boolean | null {
   if (checkoutRoot === null) return null;
-  try {
-    execFileSync("git", ["-C", checkoutRoot, "check-ignore", "-q", "--", probePath], {
-      stdio: ["ignore", "ignore", "ignore"],
-      timeout: gitProbeTimeoutMs(),
-    });
-    return true;
-  } catch (error) {
-    // Exit 1 is Git's "not ignored"; 128 (outside the repository) or a failed
-    // spawn leaves the verdict unread — never a silent "ok".
-    return exitStatus(error) === 1 ? false : null;
-  }
+  // Shared probe: exit 1 is Git's "not ignored"; 128 (outside the repository)
+  // or a failed spawn leaves the verdict unread — never a silent "ok".
+  return gitIgnored(checkoutRoot, probePath);
 }
 
 /**

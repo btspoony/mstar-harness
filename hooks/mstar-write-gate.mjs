@@ -3,22 +3,25 @@
 
 // hooks/src/mstar-write-gate.ts
 import { readFileSync, statSync as statSync2, writeSync } from "node:fs";
-import { dirname as dirname5, isAbsolute as isAbsolute3, join as join5, relative as relative2, resolve as resolve4 } from "node:path";
+import { dirname as dirname6, isAbsolute as isAbsolute3, join as join6, relative as relative2, resolve as resolve5 } from "node:path";
 
 // packages/engine/dist/engine.js
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { dirname as dirname2, join as join2, sep } from "node:path";
+import { execFileSync } from "node:child_process";
+import { realpathSync as realpathSync2 } from "node:fs";
+import { basename as basename2, dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
+import { dirname as dirname3, join as join3, sep } from "node:path";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2 } from "node:path";
+import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
 import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { basename as basename2, dirname as dirname4, join as join4, resolve as resolve3 } from "node:path";
+import { basename as basename3, dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "node:child_process";
-import { existsSync as existsSync4, realpathSync as realpathSync3 } from "node:fs";
-import { existsSync as existsSync5, readFileSync as readFileSync4, readdirSync, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname6, join as join6, resolve as resolve7, sep as sep3 } from "node:path";
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { existsSync as existsSync4, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync4, readdirSync, realpathSync as realpathSync5 } from "node:fs";
+import { dirname as dirname7, join as join7, resolve as resolve8, sep as sep3 } from "node:path";
 import { createHash as createHash4 } from "node:crypto";
 import {
   copyFileSync,
@@ -27,7 +30,7 @@ import {
   mkdirSync as mkdirSync3,
   readFileSync as readFileSync8,
   readdirSync as readdirSync5,
-  realpathSync as realpathSync5,
+  realpathSync as realpathSync6,
   renameSync as renameSync2,
   rmSync,
   statSync as statSync3,
@@ -35,30 +38,30 @@ import {
   writeFileSync as writeFileSync3
 } from "node:fs";
 import { createRequire } from "node:module";
-import { basename as basename6, dirname as dirname7, join as join10, resolve as resolve10, sep as sep5 } from "node:path";
+import { basename as basename7, dirname as dirname8, join as join11, resolve as resolve11, sep as sep5 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { createHash as createHash5 } from "node:crypto";
 import { lstatSync as lstatSync4, readdirSync as readdirSync6 } from "node:fs";
-import { dirname as dirname8, join as join11 } from "node:path";
+import { dirname as dirname9, join as join12 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
-import { existsSync as existsSync10, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync6, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync10, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync7, statSync as statSync4 } from "node:fs";
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { basename as basename7, dirname as dirname9, isAbsolute as isAbsolute6, join as join13, relative as relative3, resolve as resolve11 } from "node:path";
-import { basename as basename8, isAbsolute as isAbsolute8, join as join15, relative as relative4, resolve as resolve12, sep as sep7 } from "node:path";
+import { basename as basename8, dirname as dirname10, isAbsolute as isAbsolute6, join as join14, relative as relative3, resolve as resolve12 } from "node:path";
+import { basename as basename9, isAbsolute as isAbsolute8, join as join16, relative as relative4, resolve as resolve13, sep as sep7 } from "node:path";
 import { createHash as createHash9, randomUUID as randomUUID4 } from "node:crypto";
 import { closeSync, existsSync as existsSync13, fstatSync, openSync, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
-import { dirname as dirname10, isAbsolute as isAbsolute10, join as join17, resolve as resolve14, sep as sep9 } from "node:path";
+import { dirname as dirname11, isAbsolute as isAbsolute10, join as join18, resolve as resolve15, sep as sep9 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync as closeSync2, existsSync as existsSync14, fstatSync as fstatSync2, fsyncSync, linkSync, lstatSync as lstatSync6, openSync as openSync2, readSync, statSync as statSync8, unlinkSync as unlinkSync4 } from "node:fs";
-import { basename as basename9, dirname as dirname11, join as join18, resolve as resolve15 } from "node:path";
+import { basename as basename10, dirname as dirname12, join as join19, resolve as resolve16 } from "node:path";
 import { existsSync as existsSync15, statSync as statSync10 } from "node:fs";
-import { basename as basename11, dirname as dirname13, join as join20, relative as relative7, resolve as resolve17 } from "node:path";
-import { readlinkSync, realpathSync as realpathSync9 } from "node:fs";
-import { basename as basename12, dirname as dirname14, relative as relative8, resolve as resolve18 } from "node:path";
+import { basename as basename12, dirname as dirname14, join as join21, relative as relative7, resolve as resolve18 } from "node:path";
+import { readlinkSync, realpathSync as realpathSync10 } from "node:fs";
+import { basename as basename13, dirname as dirname15, relative as relative8, resolve as resolve19 } from "node:path";
 import { createHash as createHash16 } from "node:crypto";
 import { readFileSync as readFileSync23 } from "node:fs";
-import { join as join29 } from "node:path";
+import { join as join30 } from "node:path";
 var __defProp = Object.defineProperty;
 var __returnValue = (v) => v;
 function __exportSetter(name, newValue) {
@@ -348,14 +351,95 @@ var init_coordination_write = __esm(() => {
   GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   HASH_RE = /^sha256:[0-9a-f]{64}$/;
 });
+function gitProbeTimeoutMs() {
+  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "")
+    return DEFAULT_PROBE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
+}
+function exitStatusOf(error) {
+  if (typeof error === "object" && error !== null && "status" in error) {
+    const status = error.status;
+    return typeof status === "number" ? status : undefined;
+  }
+  return;
+}
+function realpathOrResolve(target) {
+  try {
+    return realpathSync2(target);
+  } catch {
+    return resolve2(target);
+  }
+}
+function realpathNearest(target) {
+  let dir = resolve2(target);
+  const rest = [];
+  for (;; ) {
+    try {
+      return join2(realpathSync2(dir), ...rest.reverse());
+    } catch {
+      const parent = dirname2(dir);
+      if (parent === dir)
+        return resolve2(target);
+      rest.push(basename2(dir));
+      dir = parent;
+    }
+  }
+}
+function mainWorktreeRoot(startDir) {
+  try {
+    const out = execFileSync("git", ["-C", startDir, "worktree", "list", "--porcelain", "-z"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: gitProbeTimeoutMs()
+    });
+    const first = out.split("\x00").find((entry) => entry.startsWith("worktree "));
+    if (first === undefined)
+      return null;
+    return realpathOrResolve(first.slice("worktree ".length));
+  } catch {
+    return null;
+  }
+}
+function checkoutRoot(startDir) {
+  try {
+    const out = execFileSync("git", ["-C", startDir, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: gitProbeTimeoutMs()
+    }).trim();
+    return out === "" ? null : realpathOrResolve(out);
+  } catch {
+    return null;
+  }
+}
+function gitIgnored(root, target) {
+  try {
+    execFileSync("git", ["-C", root, "check-ignore", "-q", "--", target], {
+      stdio: ["ignore", "ignore", "ignore"],
+      timeout: gitProbeTimeoutMs()
+    });
+    return true;
+  } catch (error) {
+    return exitStatusOf(error) === 1 ? false : null;
+  }
+}
+var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
+var init_git_probe = () => {};
 function catalogRootDir(context, rootKind) {
   if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
     throw new CatalogError("catalog.path-refused", `"${String(rootKind)}" is not a configured catalog root kind; expected one of ${Object.keys(ROOT_KINDS).join(", ")}`);
   }
-  const harness = dirname2(storeDbPath(context));
+  const harness = dirname3(storeDbPath(context));
+  const mainRoot = dirname3(harness);
   switch (rootKind) {
-    case "repository":
-      return dirname2(harness);
+    case "repository": {
+      if (context.checkoutRoot === undefined)
+        return mainRoot;
+      const callerMain = mainWorktreeRoot(context.checkoutRoot);
+      return callerMain !== null && realpathNearest(callerMain) === realpathNearest(mainRoot) ? context.checkoutRoot : mainRoot;
+    }
     case "harness":
       return harness;
     case "plans":
@@ -378,6 +462,7 @@ var RELATIONS;
 var CatalogError;
 var init_catalog = __esm(() => {
   init_path();
+  init_git_probe();
   init_store_db();
   ENTITY_KINDS = {
     project: true,
@@ -483,17 +568,17 @@ function isFile(file) {
   }
 }
 function findMstarc(startDir, boundary) {
-  let dir = resolve2(startDir);
-  const bound = resolve2(boundary);
+  let dir = resolve3(startDir);
+  const bound = resolve3(boundary);
   for (;; ) {
     if (!isAtOrBelow(dir, bound))
       return null;
-    const candidate = join3(dir, MSTARC_FILE);
+    const candidate = join4(dir, MSTARC_FILE);
     if (isFile(candidate))
       return candidate;
     if (dir === bound)
       return null;
-    const parent = dirname3(dir);
+    const parent = dirname4(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -503,7 +588,7 @@ function loadMstarc(startDir, boundary) {
   const file = findMstarc(startDir, boundary);
   if (file === null)
     return null;
-  return { file, dir: dirname3(file), config: parseMstarc(readFileSync2(file, "utf8")) };
+  return { file, dir: dirname4(file), config: parseMstarc(readFileSync2(file, "utf8")) };
 }
 function isAtOrBelow(dir, root) {
   const rel = relative(root, dir);
@@ -3656,10 +3741,10 @@ function resolveAll(constructs2, events, context) {
   const called = [];
   let index = -1;
   while (++index < constructs2.length) {
-    const resolve32 = constructs2[index].resolveAll;
-    if (resolve32 && !called.includes(resolve32)) {
-      events = resolve32(events, context);
-      called.push(resolve32);
+    const resolve42 = constructs2[index].resolveAll;
+    if (resolve42 && !called.includes(resolve42)) {
+      events = resolve42(events, context);
+      called.push(resolve42);
     }
   }
   return events;
@@ -10046,9 +10131,9 @@ function readJson(filePath) {
   }
 }
 function writeJson(filePath, value) {
-  const parent = dirname4(filePath);
+  const parent = dirname5(filePath);
   mkdirSync(parent, { recursive: true });
-  const tmp = join4(parent, `.${basename2(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  const tmp = join5(parent, `.${basename3(filePath)}.${process.pid}.${randomUUID()}.tmp`);
   try {
     writeFileSync(tmp, `${JSON.stringify(value, null, 2)}
 `, "utf8");
@@ -10063,20 +10148,20 @@ function writeJson(filePath, value) {
 function findRootPackageJson(startDir) {
   let dir = startDir;
   for (;; ) {
-    const candidate = resolve3(dir, "package.json");
+    const candidate = resolve4(dir, "package.json");
     try {
       const pkg = JSON.parse(readFileSync3(candidate, "utf8"));
       if (pkg.name === "morning-star")
         return candidate;
     } catch {}
-    const parent = dirname4(dir);
+    const parent = dirname5(dir);
     if (parent === dir)
       return null;
     dir = parent;
   }
 }
 function harnessVersionOrNullFrom(moduleDir) {
-  const ownManifest = join4(moduleDir, "..", "package.json");
+  const ownManifest = join5(moduleDir, "..", "package.json");
   try {
     const pkg = JSON.parse(readFileSync3(ownManifest, "utf8"));
     if (typeof pkg.version === "string" && pkg.version !== "")
@@ -10093,21 +10178,21 @@ function harnessVersionOrNullFrom(moduleDir) {
   }
 }
 function readHarnessVersionOrNull() {
-  return harnessVersionOrNullFrom(dirname4(fileURLToPath(import.meta.url)));
+  return harnessVersionOrNullFrom(dirname5(fileURLToPath(import.meta.url)));
 }
 function warnUncheckableNodeFloor() {
   process.stderr.write("mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " + "so the Node version is not compared (the native node:sqlite capability check still applies). " + "Recovery: run this from an installed package or a full checkout so the manifest that declares the floor is reachable " + "(`npm i -g @mstar-harness/cli` for the CLI; the harness checkout, not a copied bundle, for a hook entrypoint).\n");
 }
 function readDeclaredNodeFloor() {
-  const moduleDir = dirname4(fileURLToPath(import.meta.url));
+  const moduleDir = dirname5(fileURLToPath(import.meta.url));
   const root = findRootPackageJson(moduleDir);
   const candidates = [];
   let dir = moduleDir;
   for (let depth = 0;depth < 6; depth += 1) {
-    candidates.push(join4(dir, "..", "package.json"), join4(dir, "package.json"));
+    candidates.push(join5(dir, "..", "package.json"), join5(dir, "package.json"));
     if (depth === 1)
-      candidates.push(join4(dir, "packages", "engine", "package.json"));
-    const parent = dirname4(dir);
+      candidates.push(join5(dir, "packages", "engine", "package.json"));
+    const parent = dirname5(dir);
     if (parent === dir)
       break;
     dir = parent;
@@ -10142,12 +10227,12 @@ var ACTIVATION_PROTOCOL_VERSION = 1;
 var init_core = __esm(() => {
   SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
 });
-function gitProbeTimeoutMs() {
+function gitProbeTimeoutMs2() {
   const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
   if (raw === undefined || raw.trim() === "")
-    return DEFAULT_PROBE_TIMEOUT_MS;
+    return DEFAULT_PROBE_TIMEOUT_MS2;
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS2;
 }
 function parseMainWorktree(out) {
   const tokens = out.split("\x00");
@@ -10179,7 +10264,7 @@ function parseMainWorktree(out) {
   if (branch === null)
     return null;
   try {
-    return { root: realpathSync3(rawPath), branch };
+    return { root: realpathSync4(rawPath), branch };
   } catch {
     return null;
   }
@@ -10187,17 +10272,17 @@ function parseMainWorktree(out) {
 function readMainWorktree(cwd) {
   const start = cwd ?? process.cwd();
   try {
-    const stdout = execFileSync("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
+    const stdout = execFileSync2("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs()
+      timeout: gitProbeTimeoutMs2()
     });
     return parseMainWorktree(stdout);
   } catch {
     return null;
   }
 }
-var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
+var DEFAULT_PROBE_TIMEOUT_MS2 = 1e4;
 var deliveryAnchorFlags;
 var QC_ALIGNMENT_FIELDS;
 var init_worktree = __esm(() => {
@@ -10215,6 +10300,7 @@ var init_worktree = __esm(() => {
   ];
 });
 var init_path_check = __esm(() => {
+  init_git_probe();
   init_worktree();
 });
 function enforcementValue(raw) {
@@ -10429,7 +10515,7 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (typeof docOrPath === "string") {
     try {
       doc = readJson(docOrPath);
-      harnessDir = dirname6(resolve7(docOrPath));
+      harnessDir = dirname7(resolve8(docOrPath));
     } catch (error) {
       return {
         ok: false,
@@ -10492,17 +10578,17 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (harnessDir !== undefined && Array.isArray(doc.workflows)) {
     let realHarnessDir = null;
     try {
-      realHarnessDir = realpathSync4(harnessDir);
+      realHarnessDir = realpathSync5(harnessDir);
     } catch {}
     for (const entry of doc.workflows) {
       if (!isPlainObject(entry) || typeof entry.dir !== "string")
         continue;
-      const relSnapshot = join6(entry.dir, WORKFLOW_SNAPSHOT_FILE);
-      const snapshotPath = join6(harnessDir, relSnapshot);
+      const relSnapshot = join7(entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join7(harnessDir, relSnapshot);
       const label = typeof entry.id === "string" ? entry.id : relSnapshot;
       let physical;
       try {
-        physical = realpathSync4(snapshotPath);
+        physical = realpathSync5(snapshotPath);
       } catch {
         violations.push(violation3("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
         continue;
@@ -10544,7 +10630,7 @@ function resolveCompassEnforcement(harnessDir) {
   for (const entry of entries) {
     if (!entry.isDirectory())
       continue;
-    const compassPath = join6(iterationsDir, entry.name, "delivery-compass.md");
+    const compassPath = join7(iterationsDir, entry.name, "delivery-compass.md");
     if (!existsSync5(compassPath))
       continue;
     let content3;
@@ -10564,8 +10650,8 @@ function resolveCompassEnforcement(harnessDir) {
   return { hard: false, source: "none" };
 }
 function resolveMstarcEnforcement(harnessDir) {
-  const dir = resolve7(harnessDir);
-  const rc = loadMstarc(dir, dirname6(dir));
+  const dir = resolve8(harnessDir);
+  const rc = loadMstarc(dir, dirname7(dir));
   const value = rc?.config.enforcement;
   if (value === "hard")
     return { hard: true, source: "mstarc" };
@@ -11258,7 +11344,7 @@ function provisionActivationDocument(input, facts = currentProcessFacts()) {
       operator: { actor: input.actor, authorizationRef: input.authorizationRef },
       consumers: [
         {
-          entryId: basename5(facts.entrypoint),
+          entryId: basename6(facts.entrypoint),
           kind: "coordinator",
           entrypoint: facts.entrypoint,
           runtime: "node",
@@ -11281,7 +11367,7 @@ function provisionRecoveryDocument(input) {
     stoppedSessions: [...input.stoppedSessions]
   };
 }
-function basename5(entrypoint) {
+function basename6(entrypoint) {
   const normalized = entrypoint.replaceAll("\\", "/");
   const last = normalized.lastIndexOf("/");
   return last === -1 ? normalized : normalized.slice(last + 1);
@@ -11326,8 +11412,8 @@ function scalar2(db, sql) {
   return typeof row?.n === "number" ? row.n : 0;
 }
 function writeTextAtomic(path2, text4) {
-  mkdirSync3(dirname7(path2), { recursive: true });
-  const tmp = join10(dirname7(path2), `.${basename6(path2)}.${process.pid}.tmp`);
+  mkdirSync3(dirname8(path2), { recursive: true });
+  const tmp = join11(dirname8(path2), `.${basename7(path2)}.${process.pid}.tmp`);
   try {
     writeFileSync3(tmp, text4, "utf8");
     renameSync2(tmp, path2);
@@ -11404,16 +11490,16 @@ function sameExecution(a, b) {
   return a.protocolVersion === b.protocolVersion && a.authorityState === b.authorityState && a.revision === b.revision && a.rootUpdatedAt === b.rootUpdatedAt && a.manifestId === b.manifestId && a.activatedAt === b.activatedAt;
 }
 function canonicalPath(value) {
-  let current = resolve10(value);
+  let current = resolve11(value);
   const trailing = [];
   for (;; ) {
     try {
-      return join10(realpathSync5(current), ...[...trailing].reverse());
+      return join11(realpathSync6(current), ...[...trailing].reverse());
     } catch {
-      const parent = dirname7(current);
+      const parent = dirname8(current);
       if (parent === current)
-        return resolve10(value);
-      trailing.push(basename6(current));
+        return resolve11(value);
+      trailing.push(basename7(current));
       current = parent;
     }
   }
@@ -11495,7 +11581,7 @@ function sameCounts(a, b) {
 }
 function defaultBackupPath(context, meta, label) {
   const name = label === undefined ? `${meta.storeId.slice(0, 8)}-e${meta.epoch}-r${meta.revision}.db` : `${label}.db`;
-  return join10(dirname7(storeDbPath(context)), "archived", "store-migration", "backups", name);
+  return join11(dirname8(storeDbPath(context)), "archived", "store-migration", "backups", name);
 }
 async function takeVerifiedBackup(context, options) {
   const dbPath = storeDbPath(context);
@@ -11508,7 +11594,7 @@ async function takeVerifiedBackup(context, options) {
     } catch {
       walPending = false;
     }
-    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve10(options.out);
+    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve11(options.out);
     if (existsSync8(targetPath)) {
       if (!options.reuseMatchingIdentity) {
         throw new StoreActivationError("store.activation-stale", `a backup already exists at ${targetPath}; pass --out <path> for a different target instead of overwriting a ` + `recorded recovery point.`);
@@ -11529,7 +11615,7 @@ async function takeVerifiedBackup(context, options) {
         takenAt: new Date().toISOString()
       };
     }
-    mkdirSync3(dirname7(targetPath), { recursive: true });
+    mkdirSync3(dirname8(targetPath), { recursive: true });
     handle.db.prepare("vacuum into ?").run(targetPath);
     const verified = await inspectBackupCopy(targetPath).catch((error) => {
       rmSync(targetPath, { force: true });
@@ -11561,7 +11647,7 @@ async function assertBackupDescribesStore(context, receipt, reviewed) {
   if (!receipt || receipt.receiptVersion !== ACTIVATION_PROTOCOL_VERSION && receipt.receiptVersion !== BACKUP_RECEIPT_VERSION || typeof receipt.backupPath !== "string" || receipt.backupPath.trim() === "") {
     stale("the supplied recovery point is not a backup receipt of this protocol version; take one with `backupStore` and " + "apply the manifest that names it.");
   }
-  const controlRoot = dirname7(storeDbPath(context));
+  const controlRoot = dirname8(storeDbPath(context));
   if (!isPathWithin(controlRoot, receipt.backupPath)) {
     stale(`the recovery point ${receipt.backupPath} is outside the authorized control root ${controlRoot}; a migration ` + `recovery point must live inside the root it protects.`);
   }
@@ -11731,7 +11817,7 @@ function currentRegisterSources(context) {
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isSymbolicLink() || !entry.isDirectory())
       continue;
-    const absolutePath = join10(projectsRoot, entry.name, "residuals.json");
+    const absolutePath = join11(projectsRoot, entry.name, "residuals.json");
     let info;
     try {
       info = lstatSync3(absolutePath);
@@ -11756,7 +11842,7 @@ function revalidateSources(context, manifest, mode) {
     }
   }
   for (const reviewedSource of manifest.sources) {
-    const live = readIfExists(join10(catalogRootDir(context, "projects"), reviewedSource.relativePath));
+    const live = readIfExists(join11(catalogRootDir(context, "projects"), reviewedSource.relativePath));
     if (live === undefined && !retired.has(reviewedSource.relativePath)) {
       changed(`register ${reviewedSource.relativePath} is gone.`);
     }
@@ -11769,7 +11855,7 @@ function readReceiptRows(db, where, param) {
 async function appliedReceiptFor(context, manifest) {
   const handle = await openStore(context, "read");
   try {
-    if (resolve10(manifest.controlRoot) !== resolve10(context.harnessDir)) {
+    if (resolve11(manifest.controlRoot) !== resolve11(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`);
     }
     const row = readReceiptRows(handle.db, "phase = 'applied'").at(-1);
@@ -11891,7 +11977,7 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
       throw new StoreActivationError("store.activation-stale", `the supplied receipt is not the FINAL applied manifest (a later apply, receipt #${applied.at(-1).id}, is recorded); ` + `revalidate the final manifest, re-apply it and re-attest. Nothing was activated.`);
     }
     manifest = JSON.parse(appliedRow.manifest_json);
-    if (resolve10(manifest.controlRoot) !== resolve10(context.harnessDir)) {
+    if (resolve11(manifest.controlRoot) !== resolve11(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the applied manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}. Nothing was activated.`);
     }
     if (meta.revision !== receipt.storeRevision) {
@@ -12024,13 +12110,13 @@ function retirementReceiptOfRow(row, replayed) {
 }
 function finalizeDisclosure(ledgerPath, ledger, receipt) {
   writeLedger(ledgerPath, ledger);
-  writeTextAtomic(join10(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
+  writeTextAtomic(join11(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
 }
 function retireRegister(context, ledgerPath, ledger, item) {
-  const livePath = join10(catalogRootDir(context, "projects"), item.relativePath);
+  const livePath = join11(catalogRootDir(context, "projects"), item.relativePath);
   const liveBytes = readIfExists(livePath);
   if (liveBytes !== undefined) {
-    mkdirSync3(dirname7(item.archivePath), { recursive: true });
+    mkdirSync3(dirname8(item.archivePath), { recursive: true });
     rmSync(item.archivePath, { force: true });
     copyFileSync(livePath, item.archivePath);
     item.state = "archived";
@@ -12076,7 +12162,7 @@ function selectReviewedSection(live, item) {
   return best;
 }
 function retireSection(context, ledgerPath, ledger, item, hooks) {
-  const livePath = join10(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
+  const livePath = join11(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
   const live = readIfExists(livePath)?.toString("utf8");
   if (live === undefined) {
     throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; the reviewed section cannot be retired truthfully. ` + `Nothing was retired.`);
@@ -12102,7 +12188,7 @@ function retireSection(context, ledgerPath, ledger, item, hooks) {
   const excised = live.split(`
 `).filter((_line, index2) => !dropped.has(index2 + 1)).join(`
 `);
-  mkdirSync3(dirname7(item.archivePath), { recursive: true });
+  mkdirSync3(dirname8(item.archivePath), { recursive: true });
   rmSync(item.archivePath, { force: true });
   copyFileSync(livePath, item.archivePath);
   item.retiredRows = [...new Set(selection.hits.map((hit) => hit.identity))].sort();
@@ -12153,8 +12239,8 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
     const manifest = JSON.parse(appliedRow.manifest_json);
     const registers = manifest.retirement.registers;
     const sections = manifest.catalog.retirementSections;
-    const archiveDir = join10(dirname7(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
-    const ledgerPath = join10(archiveDir, "ledger.json");
+    const archiveDir = join11(dirname8(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
+    const ledgerPath = join11(archiveDir, "ledger.json");
     const retirementHash = sha256Bytes2(Buffer.from(`retirement\x00${JSON.stringify({
       activationReceiptId: activationReceipt.receiptId,
       activationHash: activationReceipt.activationHash,
@@ -12199,7 +12285,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
         project: register.project,
         relativePath: register.relativePath,
         sha256: register.sha256,
-        archivePath: join10(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
+        archivePath: join11(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
       sections: sections.map((section) => ({
@@ -12214,7 +12300,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
         reviewedRows: section.rows,
         retiredRows: null,
         removedLines: null,
-        archivePath: join10(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
+        archivePath: join11(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
         expectedLiveSha256: null,
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine)
@@ -12275,7 +12361,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
         storeId: meta.storeId,
         epoch: meta.epoch,
         archiveDir,
-        markerPath: join10(archiveDir, "MARKER.md"),
+        markerPath: join11(archiveDir, "MARKER.md"),
         registers: retiredRegisters,
         sections: retiredSections,
         resumed
@@ -12306,7 +12392,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
       storeId: meta.storeId,
       epoch: meta.epoch,
       archiveDir,
-      markerPath: join10(archiveDir, "MARKER.md"),
+      markerPath: join11(archiveDir, "MARKER.md"),
       registers: retiredRegisters,
       sections: retiredSections,
       resumed,
@@ -13083,10 +13169,10 @@ function readExecutionStateGraph(tx) {
   };
 }
 function assertNoLegacyExecutionSources(context) {
-  const harnessDir = dirname8(storeDbPath(context));
+  const harnessDir = dirname9(storeDbPath(context));
   const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
   const sources = [];
-  const statusPath = join11(harnessDir, "status.json");
+  const statusPath = join12(harnessDir, "status.json");
   try {
     lstatSync4(statusPath);
     sources.push(statusPath);
@@ -13113,14 +13199,14 @@ function assertNoLegacyExecutionSources(context) {
       sources.push(`${workflowDir} (unreadable)`);
     }
     for (const entry of entries) {
-      const dir = join11(workflowDir, entry.name);
+      const dir = join12(workflowDir, entry.name);
       if (entry.isSymbolicLink()) {
         sources.push(dir);
         continue;
       }
       if (!entry.isDirectory())
         continue;
-      const path2 = join11(dir, WORKFLOW_SNAPSHOT_FILE);
+      const path2 = join12(dir, WORKFLOW_SNAPSHOT_FILE);
       try {
         lstatSync4(path2);
         sources.push(path2);
@@ -13128,7 +13214,7 @@ function assertNoLegacyExecutionSources(context) {
         if (error.code !== "ENOENT")
           sources.push(`${path2} (unreadable)`);
       }
-      const sessionsDir = join11(dir, "sessions");
+      const sessionsDir = join12(dir, "sessions");
       try {
         const info = lstatSync4(sessionsDir);
         if (info.isSymbolicLink() || !info.isDirectory()) {
@@ -13143,7 +13229,7 @@ function assertNoLegacyExecutionSources(context) {
           }
           for (const session of sessions) {
             if (session.name.endsWith(".json"))
-              sources.push(join11(sessionsDir, session.name));
+              sources.push(join12(sessionsDir, session.name));
           }
         }
       } catch (error) {
@@ -14712,29 +14798,36 @@ var init_project = __esm(() => {
   };
 });
 function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
-  const start = resolve11(startDir);
+  const start = resolve12(startDir);
   const explicit = opts.harnessDir ?? (opts.ignoreEnvOverride ? undefined : process.env.MSTAR_HARNESS_DIR);
   if (explicit)
-    return resolve11(start, explicit);
-  const mainRoot = gitMainWorktreeRoot(start);
-  const checkoutRoot = mainRoot === null ? null : gitCheckoutRoot(start);
-  const linked = opts.workspaceRoot === undefined && opts.localProbe !== true && mainRoot !== null && checkoutRoot !== null && checkoutRoot !== mainRoot;
-  const base = linked && mainRoot !== null ? mainRoot : start;
-  const boundary = resolve11(base, opts.workspaceRoot ?? defaultWorkspaceRoot(base));
+    return resolve12(start, explicit);
+  let base = start;
+  if (opts.workspaceRoot === undefined && opts.localProbe !== true) {
+    const caller = checkoutRoot(start);
+    if (caller !== null) {
+      const main = mainWorktreeRoot(start);
+      if (main === null)
+        return null;
+      if (caller !== main)
+        base = main;
+    }
+  }
+  const boundary = resolve12(base, opts.workspaceRoot ?? defaultWorkspaceRoot(base));
   const rc = loadMstarc(base, boundary);
   if (rc !== null && rc.config.harnessDir)
-    return resolve11(rc.dir, rc.config.harnessDir);
+    return resolve12(rc.dir, rc.config.harnessDir);
   let dir = base;
   for (;; ) {
     if (!isAtOrBelow3(dir, boundary))
       return null;
-    for (const candidate of [join13(dir, ".mstar"), join13(dir, ".agents"), join13(dir, ".plans"), join13(dir, "plans")]) {
+    for (const candidate of [join14(dir, ".mstar"), join14(dir, ".agents"), join14(dir, ".plans"), join14(dir, "plans")]) {
       if (isDirectory2(candidate))
         return candidate;
     }
     if (dir === boundary)
       return null;
-    const parent = dirname9(dir);
+    const parent = dirname10(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -14745,16 +14838,17 @@ function defaultWorkspaceRoot(startDir) {
     const cdup = execFileSync4("git", ["rev-parse", "--show-cdup"], {
       cwd: startDir,
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: gitProbeTimeoutMs()
     }).trim();
     if (!cdup)
       return startDir;
     let boundary = startDir;
     for (const segment of cdup.split(/[\\/]/)) {
       if (segment && segment !== ".")
-        boundary = dirname9(boundary);
+        boundary = dirname10(boundary);
     }
-    return resolve11(boundary);
+    return resolve12(boundary);
   } catch {}
   return startDir;
 }
@@ -14762,87 +14856,15 @@ function isAtOrBelow3(dir, root) {
   const rel = relative3(root, dir);
   return rel === "" || !rel.startsWith("..") && !isAbsolute6(rel);
 }
-function gitMainWorktreeRoot(startDir) {
-  try {
-    const out = execFileSync4("git", ["worktree", "list", "--porcelain"], {
-      cwd: startDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: gitProbeTimeout()
-    });
-    const line = out.split(`
-`).find((entry) => entry.startsWith("worktree "));
-    if (line === undefined)
-      return null;
-    return realpathOrResolve(line.slice("worktree ".length).trim());
-  } catch {
-    return null;
-  }
-}
-function gitCheckoutRoot(startDir) {
-  try {
-    const out = execFileSync4("git", ["rev-parse", "--show-toplevel"], {
-      cwd: startDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: gitProbeTimeout()
-    }).trim();
-    return out === "" ? null : realpathOrResolve(out);
-  } catch {
-    return null;
-  }
-}
-function realpathOrResolve(target) {
-  try {
-    return realpathSync6(target);
-  } catch {
-    return resolve11(target);
-  }
-}
-function realpathNearest(target) {
-  let dir = resolve11(target);
-  const rest = [];
-  for (;; ) {
-    try {
-      return join13(realpathSync6(dir), ...rest.reverse());
-    } catch {
-      const parent = dirname9(dir);
-      if (parent === dir)
-        return resolve11(target);
-      rest.push(basename7(dir));
-      dir = parent;
-    }
-  }
-}
-function gitProbeTimeout() {
-  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
-  const parsed = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1e4;
-}
-function exitStatusOf(error) {
-  if (typeof error === "object" && error !== null && "status" in error) {
-    const status = error.status;
-    return typeof status === "number" ? status : undefined;
-  }
-  return;
-}
-function gitIgnored(root, target) {
-  try {
-    execFileSync4("git", ["check-ignore", "-q", "--", target], { cwd: root, stdio: "ignore", timeout: gitProbeTimeout() });
-    return true;
-  } catch (error) {
-    return exitStatusOf(error) === 1 ? false : null;
-  }
-}
 function mstarcDirOverride(harnessDir, key) {
-  const dir = resolve11(harnessDir);
-  const rc = loadMstarc(dir, dirname9(dir));
+  const dir = resolve12(harnessDir);
+  const rc = loadMstarc(dir, dirname10(dir));
   const declared = rc?.config[key];
-  return declared ? resolve11(rc.dir, declared) : null;
+  return declared ? resolve12(rc.dir, declared) : null;
 }
 function mstarcDeclared(harnessDir, key) {
-  const dir = resolve11(harnessDir);
-  const rc = loadMstarc(dir, dirname9(dir));
+  const dir = resolve12(harnessDir);
+  const rc = loadMstarc(dir, dirname10(dir));
   const value = rc?.config[key];
   return value ? { dir: rc.dir, value } : null;
 }
@@ -14853,21 +14875,21 @@ function resolveSpecsDir(harnessDir, opts = {}) {
       mkdirSync4(declared, { recursive: true });
     return declared;
   }
-  const harness = resolve11(harnessDir);
-  const repoRoot = dirname9(harness);
+  const harness = resolve12(harnessDir);
+  const repoRoot = dirname10(harness);
   const candidates = [
-    join13(harness, "specs"),
-    join13(repoRoot, ".agents", "specs"),
-    join13(repoRoot, "docs", "specs"),
-    join13(repoRoot, "specs"),
-    join13(harness, "designs"),
-    join13(repoRoot, "designs")
+    join14(harness, "specs"),
+    join14(repoRoot, ".agents", "specs"),
+    join14(repoRoot, "docs", "specs"),
+    join14(repoRoot, "specs"),
+    join14(harness, "designs"),
+    join14(repoRoot, "designs")
   ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory2(candidate) && hasFiles(candidate))
       return candidate;
   }
-  const fallback = join13(harness, "specs");
+  const fallback = join14(harness, "specs");
   if (opts.create !== false)
     mkdirSync4(fallback, { recursive: true });
   return fallback;
@@ -14876,11 +14898,11 @@ function resolvePlanDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "planDir");
   if (declared !== null)
     return declared;
-  const dir = resolve11(harnessDir);
-  const name = basename7(dir);
+  const dir = resolve12(harnessDir);
+  const name = basename8(dir);
   if (name === ".plans" || name === "plans")
     return dir;
-  return join13(dir, "plans");
+  return join14(dir, "plans");
 }
 function assertSafePathComponent(value, what) {
   if (value === "" || value === "." || value === ".." || !/^[A-Za-z0-9._-]+$/.test(value)) {
@@ -14891,7 +14913,7 @@ function resolveIterationDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "iterationDir");
   if (declared !== null)
     return declared;
-  return join13(resolve11(harnessDir), "iterations");
+  return join14(resolve12(harnessDir), "iterations");
 }
 function resolveKnowledgeDir(harnessDir, opts = {}) {
   return resolveTrackedDir(harnessDir, opts, "knowledgeDir", "knowledge", [".agents", "knowledge"]);
@@ -14900,31 +14922,31 @@ function resolveAdrDir(harnessDir, opts = {}) {
   return resolveTrackedDir(harnessDir, opts, "adrDir", "adr", [".agents", "adr"], ["docs", "adr"]);
 }
 function resolveTrackedResultDir(callerCheckoutRoot, harnessDir, key) {
-  const harness = resolve11(harnessDir);
-  const mainRoot = gitMainWorktreeRoot(harness) ?? dirname9(harness);
+  const harness = resolve12(harnessDir);
+  const mainRoot = mainWorktreeRoot(harness) ?? dirname10(harness);
   const declared = mstarcDeclared(harness, key);
-  const mainTarget = declared === null ? key === "specsDir" ? resolveSpecsDir(harness, { create: false }) : key === "knowledgeDir" ? resolveKnowledgeDir(harness, { create: false }) : resolveAdrDir(harness, { create: false }) : isAbsolute6(declared.value) ? resolve11(declared.value) : resolve11(declared.dir, declared.value);
+  const mainTarget = declared === null ? key === "specsDir" ? resolveSpecsDir(harness, { create: false }) : key === "knowledgeDir" ? resolveKnowledgeDir(harness, { create: false }) : resolveAdrDir(harness, { create: false }) : isAbsolute6(declared.value) ? resolve12(declared.value) : resolve12(declared.dir, declared.value);
   const rel = relative3(realpathNearest(mainRoot), realpathNearest(mainTarget));
   if (rel === "" || rel.startsWith("..") || isAbsolute6(rel))
     return mainTarget;
-  const callerMainRoot = gitMainWorktreeRoot(callerCheckoutRoot);
-  if (callerMainRoot === null || realpathOrResolve(callerMainRoot) !== realpathOrResolve(mainRoot))
+  const callerMainRoot = mainWorktreeRoot(callerCheckoutRoot);
+  if (callerMainRoot === null || realpathNearest(callerMainRoot) !== realpathNearest(mainRoot))
     return mainTarget;
-  const candidate = join13(callerCheckoutRoot, rel);
-  return gitIgnored(callerCheckoutRoot, join13(candidate, ".tracked-result-probe")) === false ? candidate : mainTarget;
+  const candidate = join14(callerCheckoutRoot, rel);
+  return gitIgnored(callerCheckoutRoot, join14(candidate, ".tracked-result-probe")) === false ? candidate : mainTarget;
 }
 function resolveTrackedDir(harnessDir, opts, key, name, ...extra) {
   const declared = mstarcDirOverride(harnessDir, key);
   if (declared !== null)
     return declared;
-  const harness = resolve11(harnessDir);
-  const repoRoot = dirname9(harness);
-  const candidates = [join13(harness, name), ...extra.map((segments) => join13(repoRoot, ...segments))];
+  const harness = resolve12(harnessDir);
+  const repoRoot = dirname10(harness);
+  const candidates = [join14(harness, name), ...extra.map((segments) => join14(repoRoot, ...segments))];
   for (const candidate of new Set(candidates)) {
     if (isDirectory2(candidate) && hasFiles(candidate))
       return candidate;
   }
-  const fallback = join13(harness, name);
+  const fallback = join14(harness, name);
   if (opts.create !== false)
     mkdirSync4(fallback, { recursive: true });
   return fallback;
@@ -14932,10 +14954,10 @@ function resolveTrackedDir(harnessDir, opts, key, name, ...extra) {
 function resolveHarnessSubdir(startDir, opts, key, fallback) {
   const harness = resolveHarnessDir(startDir, opts);
   if (harness === null) {
-    throw new Error(`harness dir not found from ${resolve11(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
+    throw new Error(`harness dir not found from ${resolve12(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
   }
   const declared = mstarcDirOverride(harness, key);
-  return declared !== null ? declared : join13(resolve11(harness), fallback);
+  return declared !== null ? declared : join14(resolve12(harness), fallback);
 }
 function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
   return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
@@ -14954,7 +14976,7 @@ function hasFiles(dir) {
   try {
     for (const entry of readdirSync8(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        if (hasFiles(join13(dir, entry.name)))
+        if (hasFiles(join14(dir, entry.name)))
           return true;
       } else if (entry.isFile()) {
         return true;
@@ -14998,6 +15020,7 @@ var GITIGNORE_PROCESS_ENTRIES_AGENTS;
 var HARNESS_ROOT_DECLARATION;
 var init_path = __esm(() => {
   init_catalog();
+  init_git_probe();
   init_mstarc();
   init_project();
   init_store_db();
@@ -15418,15 +15441,15 @@ function errorCode(error) {
 }
 function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   if (isNonEmptyString(harnessDir))
-    return resolve14(cwd, harnessDir);
-  const start = resolve14(cwd);
+    return resolve15(cwd, harnessDir);
+  const start = resolve15(cwd);
   const main = readMainWorktree(start);
   if (main !== null)
     return resolveHarnessDir(main.root);
   for (let dir = start;; ) {
     let linked = false;
     try {
-      const marker = statSync7(join17(dir, ".git"));
+      const marker = statSync7(join18(dir, ".git"));
       if (marker.isDirectory())
         return resolveHarnessDir(start, { workspaceRoot: dir });
       linked = marker.isFile();
@@ -15439,9 +15462,9 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
       const envRoot = process.env.MSTAR_HARNESS_DIR;
       if (typeof envRoot === "string" && envRoot.trim() !== "")
         return resolveHarnessDir(start);
-      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join17(dir, ".git") });
+      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join18(dir, ".git") });
     }
-    const parent = dirname10(dir);
+    const parent = dirname11(dir);
     if (parent === dir)
       break;
     dir = parent;
@@ -15577,8 +15600,8 @@ function loadSqliteDriverSync() {
 function storeDbPath(context) {
   if (!context?.harnessDir)
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  const root = resolve15(context.harnessDir);
-  return join18(resolveProcessHarnessDir(root, root) ?? root, "store.db");
+  const root = resolve16(context.harnessDir);
+  return join19(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS) {
   const floored = Math.floor(value);
@@ -16113,7 +16136,7 @@ async function openStore(context, mode, options = {}) {
   const timeout = busyTimeoutMs(options.busyTimeoutMs);
   assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync14(dbPath)) {
-    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
+    throw new StoreError("store.not-initialized", `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; for a workspace holding historical file state, run "mstar store upgrade --harness ${JSON.stringify(resolve16(context.harnessDir))} --operator <name>" to import it and activate the store. Nothing was created.`);
   }
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
   for (let attempt = 1;; attempt++) {
@@ -16986,7 +17009,7 @@ var SNAPSHOT_FILE2 = "snapshot.json";
 var REGISTER_FILE = "residuals.json";
 function hasEntry(dir, name) {
   try {
-    statSync10(join20(dir, name));
+    statSync10(join21(dir, name));
     return true;
   } catch {
     return false;
@@ -17006,15 +17029,15 @@ function hasHarnessRootMarkers(dir) {
 function isHarnessRootDir(dir) {
   if (hasHarnessRootMarkers(dir))
     return true;
-  const parentResolved = resolveHarnessDir(dirname13(dir));
-  return parentResolved !== null && resolve17(parentResolved) === dir;
+  const parentResolved = resolveHarnessDir(dirname14(dir));
+  return parentResolved !== null && resolve18(parentResolved) === dir;
 }
 function resolveHarnessRootOf(target) {
-  let dir = resolve17(target);
+  let dir = resolve18(target);
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
-    const parent = dirname13(dir);
+    const parent = dirname14(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -17023,8 +17046,8 @@ function resolveHarnessRootOf(target) {
 function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
-  const resolved = resolve17(targetPath);
-  const name = basename11(resolved);
+  const resolved = resolve18(targetPath);
+  const name = basename12(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
@@ -17037,8 +17060,8 @@ function harnessDocKindOfTarget(targetPath) {
       workflowDir = resolveWorkflowDir(harnessDir2, { harnessDir: harnessDir2 });
       projectDir = resolveProjectDir(harnessDir2, { harnessDir: harnessDir2 });
     } catch {
-      workflowDir = join20(harnessDir2, "workflows");
-      projectDir = join20(harnessDir2, "projects");
+      workflowDir = join21(harnessDir2, "workflows");
+      projectDir = join21(harnessDir2, "projects");
     }
     if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative7(workflowDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "snapshot" };
@@ -17048,8 +17071,8 @@ function harnessDocKindOfTarget(targetPath) {
     }
     return null;
   };
-  const probeRoot = resolveHarnessRootOf(dirname13(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname13(resolved));
+  const probeRoot = resolveHarnessRootOf(dirname14(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -17057,7 +17080,7 @@ function harnessDocKindOfTarget(targetPath) {
     return classified;
   if (probeRoot === null)
     return null;
-  const fallbackDir = resolveHarnessDir(dirname13(resolved));
+  const fallbackDir = resolveHarnessDir(dirname14(resolved));
   if (fallbackDir === null || fallbackDir === probeRoot)
     return null;
   return classify(fallbackDir);
@@ -17071,7 +17094,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename11(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename12(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
@@ -17099,7 +17122,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename11(filePath)} content must be a JSON object`
+          message: `${basename12(filePath)} content must be a JSON object`
         }
       ];
     }
@@ -17175,43 +17198,43 @@ function caseFoldedKindOf(name) {
   return null;
 }
 function landedPathOf(filePath) {
-  let probe = resolve18(filePath);
+  let probe = resolve19(filePath);
   const suffix = [];
   let symlinkHops = 0;
   for (;; ) {
     try {
-      return resolve18(realpathSync9(probe), ...suffix);
+      return resolve19(realpathSync10(probe), ...suffix);
     } catch {
       let linkTarget;
       try {
         linkTarget = readlinkSync(probe);
       } catch {
-        const parent = dirname14(probe);
+        const parent = dirname15(probe);
         if (parent === probe)
-          return resolve18(filePath);
-        suffix.unshift(basename12(probe));
+          return resolve19(filePath);
+        suffix.unshift(basename13(probe));
         probe = parent;
         continue;
       }
       if (symlinkHops >= MAX_SYMLINK_HOPS)
         throw new SymlinkResolutionError;
       symlinkHops++;
-      probe = resolve18(dirname14(probe), linkTarget);
+      probe = resolve19(dirname15(probe), linkTarget);
     }
   }
 }
 function isStoreAuthorityTarget(target) {
-  if (!isStoreAuthorityName(basename12(target)))
+  if (!isStoreAuthorityName(basename13(target)))
     return false;
-  return isHarnessRootDir(dirname14(target));
+  return isHarnessRootDir(dirname15(target));
 }
 function caseFoldedDocKind(candidate) {
-  const target = resolve18(candidate);
-  const name = basename12(target);
+  const target = resolve19(candidate);
+  const name = basename13(target);
   const kind = caseFoldedKindOf(name);
   if (kind === null)
     return null;
-  let dir = dirname14(target);
+  let dir = dirname15(target);
   for (;; ) {
     if (isHarnessRootDir(dir)) {
       let base = dir;
@@ -17219,13 +17242,13 @@ function caseFoldedDocKind(candidate) {
         try {
           base = kind === "snapshot" ? resolveWorkflowDir(dir, { harnessDir: dir }) : resolveProjectDir(dir, { harnessDir: dir });
         } catch {
-          base = resolve18(dir, kind === "snapshot" ? "workflows" : "projects");
+          base = resolve19(dir, kind === "snapshot" ? "workflows" : "projects");
         }
       }
       if (CASE_FOLDED_SHAPES[kind].test(relative8(base, target)))
         return { harnessDir: dir, kind };
     }
-    const parent = dirname14(dir);
+    const parent = dirname15(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -17767,7 +17790,7 @@ async function captureExecutionProjectionSources(context) {
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text4(authorityPlanView.plan.status), progress: text4(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text4(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
     for (const doc of inputs.compassDocs) {
-      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join29(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join30(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readCompassSource(fspec);
       if (read.state !== "ok" || read.content === null) {
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
@@ -19276,13 +19299,13 @@ try {
   const tool = toolInput;
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   for (const rawPath of writeTargetPaths(tool)) {
-    const targetPath = resolve4(isAbsolute3(rawPath) ? rawPath : join5(cwd, rawPath));
+    const targetPath = resolve5(isAbsolute3(rawPath) ? rawPath : join6(cwd, rawPath));
     let landed;
     try {
       landed = landedPathOf(targetPath);
     } catch (error) {
       if (error instanceof SymlinkResolutionError) {
-        blockAuthorityWrite(toolName, displayTarget(targetPath, dirname5(targetPath)), [
+        blockAuthorityWrite(toolName, displayTarget(targetPath, dirname6(targetPath)), [
           authorityViolation(error.code, error.message)
         ]);
       }
@@ -19290,7 +19313,7 @@ try {
     }
     const storeTarget = isStoreAuthorityTarget(targetPath) ? targetPath : isStoreAuthorityTarget(landed) ? landed : null;
     if (storeTarget !== null) {
-      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname5(storeTarget)), [
+      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname6(storeTarget)), [
         storeDirectWriteRefusal(storeTarget)
       ]);
     }
