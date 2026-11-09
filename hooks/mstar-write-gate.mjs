@@ -455,6 +455,18 @@ function gitIgnored(root, target) {
 var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
 var init_git_probe = () => {};
 function catalogRootDir(context, rootKind) {
+  const cached = rootCache.get(context);
+  const hit = cached?.get(rootKind);
+  if (hit !== undefined)
+    return hit;
+  const resolved = resolveCatalogRootDir(context, rootKind);
+  const bucket = cached ?? new Map;
+  bucket.set(rootKind, resolved);
+  if (cached === undefined)
+    rootCache.set(context, bucket);
+  return resolved;
+}
+function resolveCatalogRootDir(context, rootKind) {
   if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
     throw new CatalogError("catalog.path-refused", `"${String(rootKind)}" is not a configured catalog root kind; expected one of ${Object.keys(ROOT_KINDS).join(", ")}`);
   }
@@ -466,7 +478,7 @@ function catalogRootDir(context, rootKind) {
       if (context.checkoutRoot === undefined)
         return repoRoot;
       const callerMain = mainWorktreeRoot(context.checkoutRoot);
-      return callerMain !== null && realpathNearest(callerMain) === realpathNearest(repoRoot) ? context.checkoutRoot : repoRoot;
+      return callerMain !== null && realpathNearest(callerMain) === realpathNearest(repoRoot) ? realpathNearest(context.checkoutRoot) : repoRoot;
     }
     case "harness":
       return harness;
@@ -488,6 +500,7 @@ var DOCUMENT_KINDS;
 var LIFECYCLES;
 var RELATIONS;
 var CatalogError;
+var rootCache;
 var init_catalog = __esm(() => {
   init_path();
   init_git_probe();
@@ -538,6 +551,7 @@ var init_catalog = __esm(() => {
       this.code = code;
     }
   };
+  rootCache = new WeakMap;
 });
 function parseMstarc(text) {
   let section = null;
@@ -14793,9 +14807,7 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
       return null;
     if (probe.root !== null) {
       const main = mainWorktreeRoot(start);
-      if (main === null)
-        return null;
-      if (probe.root !== main)
+      if (main !== null && probe.root !== main)
         base = main;
     }
   }

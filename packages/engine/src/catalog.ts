@@ -236,7 +236,20 @@ export class CatalogError extends Error {
  * existing convention in `resolveSpecsDir`. `.mstarc` overrides apply through
  * the shared resolvers.
  */
+const rootCache = new WeakMap<StoreContext, Map<CatalogRootKind, string>>();
+
 export function catalogRootDir(context: StoreContext, rootKind: CatalogRootKind): string {
+  const cached = rootCache.get(context);
+  const hit = cached?.get(rootKind);
+  if (hit !== undefined) return hit;
+  const resolved = resolveCatalogRootDir(context, rootKind);
+  const bucket = cached ?? new Map<CatalogRootKind, string>();
+  bucket.set(rootKind, resolved);
+  if (cached === undefined) rootCache.set(context, bucket);
+  return resolved;
+}
+
+function resolveCatalogRootDir(context: StoreContext, rootKind: CatalogRootKind): string {
   if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
     throw new CatalogError(
       "catalog.path-refused",
@@ -255,7 +268,7 @@ export function catalogRootDir(context: StoreContext, rootKind: CatalogRootKind)
       if (context.checkoutRoot === undefined) return repoRoot;
       const callerMain = mainWorktreeRoot(context.checkoutRoot);
       return callerMain !== null && realpathNearest(callerMain) === realpathNearest(repoRoot)
-        ? context.checkoutRoot
+        ? realpathNearest(context.checkoutRoot)
         : repoRoot;
     }
     case "harness":
