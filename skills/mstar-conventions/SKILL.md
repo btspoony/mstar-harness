@@ -103,15 +103,9 @@ enforcement=hard
 
 ## 内容边界（摘要）
 
-| 区域 | 内容 |
-|------|------|
-| `docs/` | 人类文档：安装、贡献 |
-| `{SPECS_DIR}` | 冻结规格 |
-| `{ADR_DIR}` | 决策记录（ADR：proposed / implemented / rejected） |
-| `{ITERATION_DIR}` | Iteration package: retained `prototypes/` design context first, then formal compass + guides/specs; prototype path/disposition → `mstar-iteration` Phase 1 §1.2.5 |
-| `{KNOWLEDGE_DIR}` | 实现 SSOT、可复用设计 |
-| `{PLAN_DIR}/` | 主 plan、durable gate summaries、可选 residual prose |
-| `{REVIEW_DIR}/` | review 运行目录：codebase audit 的 `README.md` 报告 + 证据、PR/branch/diff review 的 `report.md` + `stage<N>-<slug>.md` 证据（进程产物，gitignored；不是 plan 产物，不经 plan 状态机） |
+人类文档在 `docs/`（安装、quickstart、贡献指南）。三层语料——knowledge = 工程经验与方法论、specs = 项目当前状态、ADR = 单一决策及其备选与代价——的 Job / 放什么 / 不放什么 / 更新义务 → **`mstar-artifacts/references/knowledge-and-designs.md`** § 与公开文档目录的分工（产物边界表唯一权威），本文件不复述。
+
+`{ITERATION_DIR}` 保留 `prototypes/` 设计上下文，再到正式 compass + guides/specs（原型路径/处置 → `mstar-iteration` Phase 1 §1.2.5）；`{PLAN_DIR}/` 放主 plan、durable gate summaries、可选 residual prose；`{REVIEW_DIR}/` 是 review 运行目录：codebase audit 的 `README.md` 报告 + 证据、PR/branch/diff review 的 `report.md` + `stage<N>-<slug>.md` 证据（进程产物，gitignored；不是 plan 产物，不经 plan 状态机）。
 
 单 plan 的 QC/PM Acceptance **原始过程报告**默认进入 **`{SDD_DIR}/review/`**（gitignored review bundle），非 `docs/`，也不默认进入 `{PLAN_DIR}`。主 plan 仅保留 durable gate summary；open finding 以 `{HARNESS_DIR}/store.db` 的 linked issues 为 SSOT（`mstar plan issue-add` / `mstar issue add`）；project residual register 无条件退役为迁移历史。细则 → **`mstar-artifacts`**。
 
