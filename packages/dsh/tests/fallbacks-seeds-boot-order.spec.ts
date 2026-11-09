@@ -1,11 +1,11 @@
 /**
  * Boot-order convergence pin for the fallbacks role seeds — the REAL
- * `dsh-llm-fallbacks` devDependency (0.6.x), a SINGLE boot, the REAL profile
+ * `dsh-llm-fallbacks` devDependency, a SINGLE boot, the REAL profile
  * row order (mstar row first, fallbacks row second), and NO dispose/re-apply.
  *
  * Why this test exists: the mstar seeds declaration fires from the
  * `ctx.inject(['llm-fallbacks'])` child the moment the service appears, but
- * under the 0.6.x loader-entry config model the service's effective
+ * under the loader-entry config model the service's effective
  * readback (`getEffectiveRoles`) is driven by the COMPOSED config — the
  * `llm-fallbacks` descriptor the settings service (`SettingsForms.describe`)
  * reports over the row entry, refreshed by the `settings/document-updated`
@@ -26,10 +26,10 @@
  * children (`writeRoles` binding, the service provide, the preset
  * self-declare) settle one tick after its apply, the same observable
  * ordering as the live deployment. The fake settings registry models the
- * real `dsh-settings-file` service's CONSUMED 0.6.x contract
- * (`SettingsForms`: patch-merge `update` with the `settings/document-updated`
- * notification, and `describe()` descriptors over the stored sections — the
- * plugin merges a descriptor's value over its row entry itself), so the
+ * real `dsh-settings-file` service's CONSUMED contract
+ * (`SettingsForms`: path-op `mutate` with the `settings/document-updated`
+ * notification, and `describe()` descriptors over the stored user sections —
+ * the plugin merges a descriptor's user section over its row entry itself), so the
  * composed-config loop the readback depends on CLOSES within the boot.
  *
  * Falsifiability: RED when the readback composition path is broken — the
@@ -133,7 +133,7 @@ export async function waitForStableRoles(service: FallbacksServiceView, timeoutM
 
 /** The narrowed `roles.list` the fallbacks seed manager persisted through
  * the settings seam (the `llm-fallbacks` profile-entry namespace — the
- * 0.6.x `SettingsForms` update target), `undefined` until the first
+ * `SettingsForms` mutate target), `undefined` until the first
  * successful seed write (the install-e2e readback pattern). */
 function settingsRolesList(booted: BootResult): unknown[] | undefined {
   const settings = booted.ctx.get('settings') as FakeSettingsRegistry | undefined

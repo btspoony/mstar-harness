@@ -207,7 +207,7 @@ async function runSeedsAdvisory(
   // independent: runs even without a mirror).
   const legacy = service.detectLegacyKeys(config)
   if (legacy.length > 0) {
-    log('warn', `fallbacks config carries legacy keys (detectLegacyKeys): ${capIdList(legacy)} — migrate to the current shape (role entities use 'persona'; 'chains', 'roles.default', 'label' and 'description' are removed)`)
+    log('warn', `fallbacks config carries legacy keys (detectLegacyKeys): ${capIdList(legacy)} — migrate to the current named-chain shape (upstream v1 keys are removed and upgraded in memory at read)`)
   }
   // The mstar role-id set is mirror-derived (never hardcoded): no mirror →
   // no taxonomy reference → one debug. The re-declare is gated the same way

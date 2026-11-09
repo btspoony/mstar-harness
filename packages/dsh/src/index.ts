@@ -575,7 +575,7 @@ export function apply(ctx: Context, config: Config): void {
   runAdvisoryPass()
 
   // Mstar role seeds : zero-config
-  // declaration of the 13 `mode: subagent` roles into the fallbacks seed
+  // declaration of the `mode: subagent` roles into the fallbacks seed
   // registry. The seed registry is an upstream per-apply in-memory state
   // (the `FallbacksSeedManager` is constructed inside the fallbacks
   // `apply()`; a fiber dispose drops it), so the upstream companion

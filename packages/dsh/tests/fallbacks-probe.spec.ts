@@ -48,7 +48,6 @@ const liveEntry = (): LoaderEntryView => ({ options: { name: FALLBACKS_ENTRY_NAM
 const SERVICE_SURFACE = {
   name: 'string',
   version: 'string',
-  resolveRole: 'function',
   resolveChain: 'function',
   validateFallbacksConfig: 'function',
   detectLegacyKeys: 'function',

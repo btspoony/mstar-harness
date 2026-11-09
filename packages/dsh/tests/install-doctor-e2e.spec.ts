@@ -12,7 +12,7 @@
  * This spec closes the first end to end; the second is pinned by the
  * src-level specs (fallbacks-advisory.spec.ts (f)/(f2),
  * role-persona.spec.ts (c)) and Task 1's installed-deployment e2e
- * (13 mstar roles seeded — the cell-3 runtime half, cited here).
+ * (the mstar roles seeded — the cell-3 runtime half, cited here).
  *
  * Matrix:
  *   Cell 1 (uninstalled): `init --target dsh --no-fallbacks` → doctor exit 1
@@ -27,7 +27,7 @@
  *     disabled`; dsh side — loader entry present (dump carries the disabled
  *     row) but capability off: fallbacksMounted false, advisory false.
  *   Cell 3 (mounted): patch reverted → doctor exit 0, both rows `mounted`,
- *     healthy; runtime seeds = Task 1 e2e (13 roles, cited).
+ *     healthy; runtime seeds = Task 1 e2e (the derived roles, cited).
  *   Cell 4 (drifted): the profile's INSTALLED fallbacks manifest is rewritten
  *     to a synthetic version → doctor exit 1 with
  *     `dsh-llm-fallbacks@<pin>: drifted (installed <synthetic>, pinned <pin>)`
@@ -408,8 +408,8 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
       // `dsh` bin is on PATH, so CI never ran this stale line.
       expect(doctor.stdout).toContain('"code":"doctor.ok"')
       // Runtime half of cell 3 (roles seeded) = Task 1 installed-deployment
-      // e2e (non-skip PASS: 13 mstar ids seeded, personas non-empty) — cited.
-      console.log('install-doctor-e2e: cell3 runtime seeded evidence = Task 1 install-e2e (13 roles seeded, cited)')
+      // e2e (non-skip PASS: every derived mstar id seeded, personas non-empty) — cited.
+      console.log('install-doctor-e2e: cell3 runtime seeded evidence = Task 1 install-e2e (mstar roles seeded, cited)')
     }
 
     // --- CELL 4: the fallbacks row installed at a NON-pinned version (the

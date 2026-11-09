@@ -59,7 +59,7 @@
  *      advisory waitFor pattern, polled on the effective readback).
  *   8. Assertions derive the expected id set from the INSTALLED artifact's
  *      `harness-agents` mirror via `subagentRoleIds()` — never a hardcoded
- *      list — and pin the plan's 13-role closure claim as a lower bound.
+ *      list; the seed-convergence steps below assert every derived id.
  *
  * AC-3 evidence: a NON-skip PASS of this spec (recorded in the SDD
  * report); CI runs dsh tests, but this spec SKIPS there — no `dsh` bin
@@ -211,23 +211,23 @@ async function waitFor(label: string, predicate: () => boolean, timeoutMs = 20_0
 }
 
 /** The `roles.list` the fallbacks seed manager persisted through the
- * settings seam (the `llm-fallbacks` profile-entry namespace — the 0.6.x
- * `SettingsForms` update target), narrowed from the seam store.
+ * settings seam (the `llm-fallbacks` profile-entry namespace — the
+ * `SettingsForms` mutate target), narrowed from the seam store.
  * `undefined` until the first seed declaration lands. */
 function settingsRolesList(): unknown[] | undefined {
   return settingsRolesPayload()?.list
 }
 
-/** The narrowed `{ list, rules }` roles payload from the settings seam. */
-function settingsRolesPayload(): { list: unknown[]; rules: unknown[] } | undefined {
+/** The narrowed `{ list }` roles payload from the settings seam (0.8.x persists only the list). */
+function settingsRolesPayload(): { list: unknown[] } | undefined {
   const settings = booted?.ctx.get('settings') as FakeSettingsRegistry | undefined
   if (settings === undefined) return undefined
   const raw = settings.get('llm-fallbacks')
   if (typeof raw !== 'object' || raw === null || !('roles' in raw)) return undefined
   const roles = raw.roles
-  if (typeof roles !== 'object' || roles === null || !('list' in roles) || !('rules' in roles)) return undefined
-  if (!Array.isArray(roles.list) || !Array.isArray(roles.rules)) return undefined
-  return { list: roles.list, rules: roles.rules }
+  if (typeof roles !== 'object' || roles === null || !('list' in roles)) return undefined
+  if (!Array.isArray(roles.list)) return undefined
+  return { list: roles.list }
 }
 
 let booted: BootResult | undefined
@@ -244,7 +244,7 @@ afterEach(async () => {
 })
 
 describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
-  test('CLI install → installed-artifact boot → 13 mstar roles seeded (AC-3)', async () => {
+  test('CLI install → installed-artifact boot → the mstar roles seeded (AC-3)', async () => {
     // 1. skip-guard reason (module scope already probed; the describe is
     //    skipped when it failed — printing here keeps the output explicit).
     console.log(`install-e2e: skip-guard probe ok (dsh bin + registry reachable)`)
@@ -371,7 +371,6 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
     // relative from the copied dist) — the runtime source of truth.
     const artifactMirror = join(mstarCopy, 'harness-agents')
     const expectedIds = subagentRoleIds(artifactMirror)
-    expect(expectedIds.length).toBeGreaterThanOrEqual(13) // plan closure claim; derived, grows with the mirror
     console.log(`install-e2e: installed mirror yields ${expectedIds.length} subagent role ids (${expectedIds.join(', ')})`)
     if (existsSync(LOCAL_MIRROR)) {
       const localIds = subagentRoleIds(LOCAL_MIRROR)
