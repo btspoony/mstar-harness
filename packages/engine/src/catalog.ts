@@ -249,11 +249,14 @@ export function catalogRootDir(context: StoreContext, rootKind: CatalogRootKind)
     case "repository": {
       // The repository root follows the caller's checkout for the same reason
       // tracked results do; another repository's checkout keeps its own root.
-      if (context.checkoutRoot === undefined) return mainRoot;
+      // The harness may sit below the repository root (a nested `.mstar`), so
+      // the repository root is the main worktree that owns the harness.
+      const repoRoot = mainWorktreeRoot(harness) ?? mainRoot;
+      if (context.checkoutRoot === undefined) return repoRoot;
       const callerMain = mainWorktreeRoot(context.checkoutRoot);
-      return callerMain !== null && realpathNearest(callerMain) === realpathNearest(mainRoot)
+      return callerMain !== null && realpathNearest(callerMain) === realpathNearest(repoRoot)
         ? context.checkoutRoot
-        : mainRoot;
+        : repoRoot;
     }
     case "harness":
       return harness;

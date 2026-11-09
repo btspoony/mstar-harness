@@ -1018,31 +1018,62 @@ function realpathNearest(target) {
     }
   }
 }
-function mainWorktreeRoot(startDir) {
+function parseWorktreeList(out) {
+  const tokens = out.split("\x00");
+  const first = tokens.findIndex((t) => t.startsWith("worktree "));
+  if (first === -1)
+    return null;
+  const rawPath = tokens[first].slice("worktree ".length);
+  if (rawPath.trim() === "")
+    return null;
+  let branch = null;
+  let detached = false;
+  for (let i = first + 1;i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.startsWith("worktree "))
+      break;
+    if (token === "bare")
+      return null;
+    if (token === "detached")
+      detached = true;
+    else if (token.startsWith("branch ")) {
+      const ref = token.slice("branch ".length).trim();
+      branch = ref === "" ? null : ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+    }
+  }
+  if (detached)
+    branch = "";
+  return { root: realpathOrResolve(rawPath), branch };
+}
+function worktreeList(startDir, opts = {}) {
   try {
-    const out = execFileSync("git", ["-C", startDir, "worktree", "list", "--porcelain", "-z"], {
+    const out = execFileSync(opts.gitPath ?? "git", ["-C", startDir, "worktree", "list", "--porcelain", "-z"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs()
+      timeout: opts.timeoutMs ?? gitProbeTimeoutMs()
     });
-    const first = out.split("\x00").find((entry) => entry.startsWith("worktree "));
-    if (first === undefined)
-      return null;
-    return realpathOrResolve(first.slice("worktree ".length));
+    return parseWorktreeList(out);
   } catch {
     return null;
   }
 }
-function checkoutRoot(startDir) {
+function mainWorktreeRoot(startDir, opts = {}) {
+  return worktreeList(startDir, opts)?.root ?? null;
+}
+function checkoutRoot(startDir, opts = {}) {
+  return checkoutRootOrFailure(startDir, opts).root;
+}
+function checkoutRootOrFailure(startDir, opts = {}) {
   try {
-    const out = execFileSync("git", ["-C", startDir, "rev-parse", "--show-toplevel"], {
+    const out = execFileSync(opts.gitPath ?? "git", ["-C", startDir, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs()
+      timeout: opts.timeoutMs ?? gitProbeTimeoutMs()
     }).trim();
-    return out === "" ? null : realpathOrResolve(out);
-  } catch {
-    return null;
+    return { root: out === "" ? null : realpathOrResolve(out), failed: false };
+  } catch (error) {
+    const status = exitStatusOf(error);
+    return { root: null, failed: status !== 128 };
   }
 }
 function gitIgnored(root, target) {
@@ -1064,10 +1095,11 @@ function catalogRootDir(context, rootKind) {
   const mainRoot = dirname3(harness);
   switch (rootKind) {
     case "repository": {
+      const repoRoot = mainWorktreeRoot(harness) ?? mainRoot;
       if (context.checkoutRoot === undefined)
-        return mainRoot;
+        return repoRoot;
       const callerMain = mainWorktreeRoot(context.checkoutRoot);
-      return callerMain !== null && realpathNearest(callerMain) === realpathNearest(mainRoot) ? context.checkoutRoot : mainRoot;
+      return callerMain !== null && realpathNearest(callerMain) === realpathNearest(repoRoot) ? context.checkoutRoot : repoRoot;
     }
     case "harness":
       return harness;
@@ -8017,60 +8049,16 @@ function readDeclaredNodeFloor() {
   }
   return null;
 }
-function gitProbeTimeoutMs2() {
-  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "")
-    return DEFAULT_PROBE_TIMEOUT_MS2;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS2;
-}
-function parseMainWorktree(out) {
-  const tokens = out.split("\x00");
-  const first = tokens.findIndex((t) => t.startsWith("worktree "));
-  if (first === -1)
-    return null;
-  const rawPath = tokens[first].slice("worktree ".length);
-  if (rawPath.trim() === "")
-    return null;
-  let branch = null;
-  let detached = false;
-  for (let i = first + 1;i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token.startsWith("worktree "))
-      break;
-    if (token === "bare")
-      return null;
-    if (token === "detached")
-      detached = true;
-    else if (token.startsWith("branch ")) {
-      const ref = token.slice("branch ".length).trim();
-      if (ref === "")
-        return null;
-      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
-    }
-  }
-  if (detached)
-    branch = "";
-  if (branch === null)
-    return null;
-  try {
-    return { root: realpathSync4(rawPath), branch };
-  } catch {
-    return null;
-  }
-}
 function readMainWorktree(cwd) {
-  const start = cwd ?? process.cwd();
+  const parsed = worktreeList(cwd ?? process.cwd());
+  if (parsed === null || parsed.branch === null)
+    return null;
   try {
-    const stdout = execFileSync2("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs2()
-    });
-    return parseMainWorktree(stdout);
+    realpathSync4(parsed.root);
   } catch {
     return null;
   }
+  return { root: parsed.root, branch: parsed.branch };
 }
 function assertMainWorktreeResidency(main, expectedBranch) {
   const violations = [];
@@ -8085,7 +8073,7 @@ function probeStatus(worktreePath, opts) {
   const precomputed = opts.statusOf?.(worktreePath);
   if (precomputed !== undefined)
     return { status: precomputed };
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs2();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
   try {
     return { status: execFileSync2(opts.gitPath ?? "git", ["-C", worktreePath, "status", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout }) };
   } catch (error) {
@@ -8156,7 +8144,7 @@ function probeBranch(worktreePath, opts) {
   const precomputed = opts.branchOf?.(worktreePath);
   if (precomputed !== undefined)
     return { branch: precomputed };
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs2();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
   try {
     const stdout = execFileSync2(opts.gitPath ?? "git", ["-C", worktreePath, "branch", "--show-current"], {
       encoding: "utf8",
@@ -8177,7 +8165,7 @@ function probeBranch(worktreePath, opts) {
   }
 }
 function probeCheckout(worktreePath, opts) {
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs2();
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
   try {
     const stdout = execFileSync2(opts.gitPath ?? "git", ["-C", worktreePath, "rev-parse", "--git-dir"], {
       encoding: "utf8",
@@ -8206,20 +8194,7 @@ function isDistinctCheckout(controlPath, candidatePath, opts = {}) {
   return control.gitDir !== candidate.gitDir;
 }
 function probeCheckoutRoot(path2, opts = {}) {
-  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs2();
-  try {
-    const stdout = execFileSync2(opts.gitPath ?? "git", ["-C", path2, "rev-parse", "--show-toplevel"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout
-    });
-    const raw = stdout.trim();
-    if (raw === "")
-      return null;
-    return realpathSync4(raw);
-  } catch {
-    return null;
-  }
+  return checkoutRoot(path2, { gitPath: opts.gitPath, timeoutMs: opts.timeoutMs });
 }
 function l1PreDispatchCheck(input, opts = {}) {
   const violations = [];
@@ -15888,12 +15863,14 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
     return resolve12(start, explicit);
   let base = start;
   if (opts.workspaceRoot === undefined && opts.localProbe !== true) {
-    const caller = checkoutRoot(start);
-    if (caller !== null) {
+    const probe = checkoutRootOrFailure(start);
+    if (probe.failed)
+      return null;
+    if (probe.root !== null) {
       const main = mainWorktreeRoot(start);
       if (main === null)
         return null;
-      if (caller !== main)
+      if (probe.root !== main)
         base = main;
     }
   }
@@ -19767,7 +19744,7 @@ function gitOut(cwd, args) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: GIT_CAPTURE_MAX_BYTES,
-      timeout: gitProbeTimeoutMs2()
+      timeout: gitProbeTimeoutMs()
     }).trim();
   } catch {
     return null;
@@ -19933,7 +19910,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
   const observedCwd = opts.cwd ?? process.cwd();
   const verifyRef = (ref, what) => {
     try {
-      execFileSync6("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, stdio: ["ignore", "pipe", "pipe"], timeout: gitProbeTimeoutMs2() });
+      execFileSync6("git", ["rev-parse", "--verify", "--quiet", ref], { cwd, stdio: ["ignore", "pipe", "pipe"], timeout: gitProbeTimeoutMs() });
     } catch {
       throw new SddScriptError(`bad ${what}: ${ref}`, 2);
     }
@@ -19966,7 +19943,7 @@ function reviewPackage(base, head, outFile, opts = {}) {
     if (mkdirAfterGate !== null)
       mkdirSync6(mkdirAfterGate, { recursive: true });
   }
-  const run = (args) => execFileSync6("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES, timeout: gitProbeTimeoutMs2() });
+  const run = (args) => execFileSync6("git", args, { cwd, maxBuffer: GIT_CAPTURE_MAX_BYTES, timeout: gitProbeTimeoutMs() });
   const commits = run(["log", "--oneline", `${base}..${head}`]);
   if (commits.length === 0) {
     throw new SddScriptError(`review package range ${base}..${head} is empty in ${cwd} — refusing to write an empty package ` + `(run the command from the branch worktree, not the control checkout)`, 1);
@@ -19996,7 +19973,7 @@ function assertBaseSha(ref, opts = {}) {
   try {
     execFileSync6("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
       cwd: opts.cwd,
-      timeout: gitProbeTimeoutMs2(),
+      timeout: gitProbeTimeoutMs(),
       stdio: ["ignore", "pipe", "pipe"]
     });
   } catch {
@@ -33586,7 +33563,7 @@ var __defProp2, __returnValue2 = (v) => v, __export2 = (target, all) => {
     return typeFactory(test);
   }
   throw new Error("Expected function, string, or object as test");
-}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, ACTIVATION_PROTOCOL_VERSION = 1, init_core, DEFAULT_PROBE_TIMEOUT_MS2 = 1e4, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, init_activation_provisioning, exports_store_activation, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
+}, init_unist_util_is = () => {}, empty, CONTINUE = true, EXIT = false, SKIP = "skip", init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, ACTIVATION_PROTOCOL_VERSION = 1, init_core, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, BRANCH_FORMS_HINT = '"Working branch: <existing>" | "Working branch: create <new> from <base>" | "Branch policy: direct on <branch> — <reason>"', REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, RESIDUAL_LIFECYCLES, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, PLAN_STATUS_DONE = "Done", COMPASS_FILE = "delivery-compass.md", ROADMAP_FILE = "roadmap.md", COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, escapeCell = (value) => value.replace(/\|/g, "\\|"), truncate = (value, max) => value.length > max ? `${value.slice(0, max)}…` : value, collapseEvidenceWs = (value) => value.replace(/\s*[\r\n]\s*/g, " "), evidenceText = (item) => typeof item === "string" ? item : `${item.file}${item.line !== undefined ? `:${item.line}` : ""} — ${item.description}`, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, isPlainObject3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value), init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, CATALOG_IMPORT_PLAN_VERSION = 1, CATALOG_EXPORT_VERSION = 1, CATALOG_PAGE_LIMIT = 200, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS2, ORDINARY_FILES, COMPASS_FILE2 = "delivery-compass.md", ROADMAP_FILE2 = "roadmap.md", CatalogImportError, init_catalog_import, init_activation_provisioning, exports_store_activation, BACKUP_RECEIPT_VERSION = 2, StoreActivationError, EXECUTION_MIGRATION_VERSION, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at", init_store_activation, exports_execution_store, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow", BIND_SESSION_OPERATION = "bindExecutionSession", EXECUTION_SESSION_STATES, init_execution_store, SESSION_ID_MAX_LENGTH = 128, init_session_identity, exports_execution_session, SESSION_WIRE_PREFIX = "exec-session-v1:", SESSION_DECODER, SESSION_KEYS, init_execution_session, KINDS, SEVERITIES, ISSUE_KIND_VALUES, SEVERITY_VALUES, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, RELATIONS3, PROVENANCE_KINDS, LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
@@ -37610,6 +37587,7 @@ var init_engine = __esm(() => {
     SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
   });
   init_worktree = __esm2(() => {
+    init_git_probe();
     init_workflow();
     deliveryAnchorFlags = {
       base: "--branch-base",

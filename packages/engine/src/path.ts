@@ -37,7 +37,7 @@ import type { GateResult, ValidationResult } from "./core.js";
 // `scaffoldHarness`, so neither side dereferences the other during module
 // evaluation (same pattern as the project.ts / status.ts cycles below).
 import { CatalogError, getCatalog, registerCatalogEntity, type CatalogOperation } from "./catalog.js";
-import { checkoutRoot, gitIgnored, gitProbeTimeoutMs, mainWorktreeRoot, realpathNearest } from "./git-probe.js";
+import { checkoutRootOrFailure, gitIgnored, gitProbeTimeoutMs, mainWorktreeRoot, realpathNearest } from "./git-probe.js";
 import { loadMstarc, type MstarcConfig, type MstarcStringKey } from "./mstarc.js";
 // `project.ts` and `store-db.ts` are used from scaffold call paths only.
 import { _DEFAULT_PROJECT } from "./project.js";
@@ -115,11 +115,15 @@ export function resolveHarnessDir(
   // own boundary.
   let base = start;
   if (opts.workspaceRoot === undefined && opts.localProbe !== true) {
-    const caller = checkoutRoot(start);
-    if (caller !== null) {
+    // A probe failure (missing git, timeout) is not "not a Git repository":
+    // refuse discovery rather than let the worktree's own config pass for the
+    // process root.
+    const probe = checkoutRootOrFailure(start);
+    if (probe.failed) return null;
+    if (probe.root !== null) {
       const main = mainWorktreeRoot(start);
       if (main === null) return null;
-      if (caller !== main) base = main;
+      if (probe.root !== main) base = main;
     }
   }
   const boundary = resolve(base, opts.workspaceRoot ?? defaultWorkspaceRoot(base));

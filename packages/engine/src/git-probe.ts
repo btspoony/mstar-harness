@@ -69,36 +69,88 @@ export function realpathNearest(target: string): string {
 }
 
 /**
- * The main worktree root of the checkout containing `startDir`, or `null` when
- * Git cannot answer. Same `-z` parse as `readMainWorktree`, minus the branch
- * requirement (a detached or branch-less main record still names the root).
+ * Parse the first record of `git worktree list --porcelain -z`. The first
+ * record is always the MAIN worktree; `refs/heads/` is stripped; `detached`
+ * yields `branch: ""`; a record with neither a branch nor `detached` yields
+ * `branch: null` (callers that require a branch treat it as malformed).
  */
-export function mainWorktreeRoot(startDir: string): string | null {
+export function parseWorktreeList(out: string): { root: string; branch: string | null } | null {
+  const tokens = out.split("\0");
+  const first = tokens.findIndex((t) => t.startsWith("worktree "));
+  if (first === -1) return null;
+  const rawPath = tokens[first]!.slice("worktree ".length);
+  if (rawPath.trim() === "") return null;
+  let branch: string | null = null;
+  let detached = false;
+  for (let i = first + 1; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.startsWith("worktree ")) break; // second record begins
+    if (token === "bare") return null;
+    if (token === "detached") detached = true;
+    else if (token.startsWith("branch ")) {
+      const ref = token.slice("branch ".length).trim();
+      branch = ref === "" ? null : ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+    }
+  }
+  if (detached) branch = "";
+  return { root: realpathOrResolve(rawPath), branch };
+}
+
+/** One `git worktree list --porcelain -z` run, parsed. */
+export function worktreeList(startDir: string, opts: GitProbeOptions = {}): { root: string; branch: string | null } | null {
   try {
-    const out = execFileSync("git", ["-C", startDir, "worktree", "list", "--porcelain", "-z"], {
+    const out = execFileSync(opts.gitPath ?? "git", ["-C", startDir, "worktree", "list", "--porcelain", "-z"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs(),
+      timeout: opts.timeoutMs ?? gitProbeTimeoutMs(),
     });
-    const first = out.split("\0").find((entry) => entry.startsWith("worktree "));
-    if (first === undefined) return null;
-    return realpathOrResolve(first.slice("worktree ".length));
+    return parseWorktreeList(out);
   } catch {
     return null;
   }
 }
 
+/**
+ * The main worktree root of the checkout containing `startDir`, or `null` when
+ * Git cannot answer. A detached or branch-less main record still names the root.
+ */
+export function mainWorktreeRoot(startDir: string, opts: GitProbeOptions = {}): string | null {
+  return worktreeList(startDir, opts)?.root ?? null;
+}
+
+export type GitProbeOptions = {
+  /** git executable to invoke (default `git`). */
+  gitPath?: string;
+  /** Override the shared probe timeout. */
+  timeoutMs?: number;
+};
+
 /** The Git checkout root containing `startDir` (a linked worktree answers itself). */
-export function checkoutRoot(startDir: string): string | null {
+export function checkoutRoot(startDir: string, opts: GitProbeOptions = {}): string | null {
+  return checkoutRootOrFailure(startDir, opts).root;
+}
+
+/**
+ * Checkout probe with the failure state kept: `root` is the checkout root,
+ * `failed` is true when Git could not answer at all (missing executable,
+ * timeout, unexpected exit). "Not a Git repository" (exit 128) is not a
+ * failure — it is the documented non-git start, where local discovery is
+ * correct.
+ */
+export function checkoutRootOrFailure(
+  startDir: string,
+  opts: GitProbeOptions = {},
+): { root: string | null; failed: boolean } {
   try {
-    const out = execFileSync("git", ["-C", startDir, "rev-parse", "--show-toplevel"], {
+    const out = execFileSync(opts.gitPath ?? "git", ["-C", startDir, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs(),
+      timeout: opts.timeoutMs ?? gitProbeTimeoutMs(),
     }).trim();
-    return out === "" ? null : realpathOrResolve(out);
-  } catch {
-    return null;
+    return { root: out === "" ? null : realpathOrResolve(out), failed: false };
+  } catch (error) {
+    const status = exitStatusOf(error);
+    return { root: null, failed: status !== 128 };
   }
 }
 

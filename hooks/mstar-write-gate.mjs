@@ -18,7 +18,6 @@ import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, re
 import { randomUUID } from "node:crypto";
 import { basename as basename3, dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync as execFileSync2 } from "node:child_process";
 import { existsSync as existsSync4, realpathSync as realpathSync4 } from "node:fs";
 import { existsSync as existsSync5, readFileSync as readFileSync4, readdirSync, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname7, join as join7, resolve as resolve8, sep as sep3 } from "node:path";
@@ -387,31 +386,59 @@ function realpathNearest(target) {
     }
   }
 }
-function mainWorktreeRoot(startDir) {
+function parseWorktreeList(out) {
+  const tokens = out.split("\x00");
+  const first = tokens.findIndex((t) => t.startsWith("worktree "));
+  if (first === -1)
+    return null;
+  const rawPath = tokens[first].slice("worktree ".length);
+  if (rawPath.trim() === "")
+    return null;
+  let branch = null;
+  let detached = false;
+  for (let i = first + 1;i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.startsWith("worktree "))
+      break;
+    if (token === "bare")
+      return null;
+    if (token === "detached")
+      detached = true;
+    else if (token.startsWith("branch ")) {
+      const ref = token.slice("branch ".length).trim();
+      branch = ref === "" ? null : ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+    }
+  }
+  if (detached)
+    branch = "";
+  return { root: realpathOrResolve(rawPath), branch };
+}
+function worktreeList(startDir, opts = {}) {
   try {
-    const out = execFileSync("git", ["-C", startDir, "worktree", "list", "--porcelain", "-z"], {
+    const out = execFileSync(opts.gitPath ?? "git", ["-C", startDir, "worktree", "list", "--porcelain", "-z"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs()
+      timeout: opts.timeoutMs ?? gitProbeTimeoutMs()
     });
-    const first = out.split("\x00").find((entry) => entry.startsWith("worktree "));
-    if (first === undefined)
-      return null;
-    return realpathOrResolve(first.slice("worktree ".length));
+    return parseWorktreeList(out);
   } catch {
     return null;
   }
 }
-function checkoutRoot(startDir) {
+function mainWorktreeRoot(startDir, opts = {}) {
+  return worktreeList(startDir, opts)?.root ?? null;
+}
+function checkoutRootOrFailure(startDir, opts = {}) {
   try {
-    const out = execFileSync("git", ["-C", startDir, "rev-parse", "--show-toplevel"], {
+    const out = execFileSync(opts.gitPath ?? "git", ["-C", startDir, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs()
+      timeout: opts.timeoutMs ?? gitProbeTimeoutMs()
     }).trim();
-    return out === "" ? null : realpathOrResolve(out);
-  } catch {
-    return null;
+    return { root: out === "" ? null : realpathOrResolve(out), failed: false };
+  } catch (error) {
+    const status = exitStatusOf(error);
+    return { root: null, failed: status !== 128 };
   }
 }
 function gitIgnored(root, target) {
@@ -435,10 +462,11 @@ function catalogRootDir(context, rootKind) {
   const mainRoot = dirname3(harness);
   switch (rootKind) {
     case "repository": {
+      const repoRoot = mainWorktreeRoot(harness) ?? mainRoot;
       if (context.checkoutRoot === undefined)
-        return mainRoot;
+        return repoRoot;
       const callerMain = mainWorktreeRoot(context.checkoutRoot);
-      return callerMain !== null && realpathNearest(callerMain) === realpathNearest(mainRoot) ? context.checkoutRoot : mainRoot;
+      return callerMain !== null && realpathNearest(callerMain) === realpathNearest(repoRoot) ? context.checkoutRoot : repoRoot;
     }
     case "harness":
       return harness;
@@ -10227,65 +10255,21 @@ var ACTIVATION_PROTOCOL_VERSION = 1;
 var init_core = __esm(() => {
   SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
 });
-function gitProbeTimeoutMs2() {
-  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "")
-    return DEFAULT_PROBE_TIMEOUT_MS2;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS2;
-}
-function parseMainWorktree(out) {
-  const tokens = out.split("\x00");
-  const first = tokens.findIndex((t) => t.startsWith("worktree "));
-  if (first === -1)
-    return null;
-  const rawPath = tokens[first].slice("worktree ".length);
-  if (rawPath.trim() === "")
-    return null;
-  let branch = null;
-  let detached = false;
-  for (let i = first + 1;i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token.startsWith("worktree "))
-      break;
-    if (token === "bare")
-      return null;
-    if (token === "detached")
-      detached = true;
-    else if (token.startsWith("branch ")) {
-      const ref = token.slice("branch ".length).trim();
-      if (ref === "")
-        return null;
-      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
-    }
-  }
-  if (detached)
-    branch = "";
-  if (branch === null)
-    return null;
-  try {
-    return { root: realpathSync4(rawPath), branch };
-  } catch {
-    return null;
-  }
-}
 function readMainWorktree(cwd) {
-  const start = cwd ?? process.cwd();
+  const parsed = worktreeList(cwd ?? process.cwd());
+  if (parsed === null || parsed.branch === null)
+    return null;
   try {
-    const stdout = execFileSync2("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs2()
-    });
-    return parseMainWorktree(stdout);
+    realpathSync4(parsed.root);
   } catch {
     return null;
   }
+  return { root: parsed.root, branch: parsed.branch };
 }
-var DEFAULT_PROBE_TIMEOUT_MS2 = 1e4;
 var deliveryAnchorFlags;
 var QC_ALIGNMENT_FIELDS;
 var init_worktree = __esm(() => {
+  init_git_probe();
   init_workflow();
   deliveryAnchorFlags = {
     base: "--branch-base",
@@ -14804,12 +14788,14 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
     return resolve12(start, explicit);
   let base = start;
   if (opts.workspaceRoot === undefined && opts.localProbe !== true) {
-    const caller = checkoutRoot(start);
-    if (caller !== null) {
+    const probe = checkoutRootOrFailure(start);
+    if (probe.failed)
+      return null;
+    if (probe.root !== null) {
       const main = mainWorktreeRoot(start);
       if (main === null)
         return null;
-      if (caller !== main)
+      if (probe.root !== main)
         base = main;
     }
   }
