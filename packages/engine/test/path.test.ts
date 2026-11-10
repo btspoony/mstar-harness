@@ -1221,6 +1221,25 @@ describe("scaffoldHarness", () => {
     }
   });
 
+  // The embedded skeletons claim to be verbatim copies of this repository's
+  // owning templates. The expected bytes come from those files at test time,
+  // so an edit to one side alone names the sync duty it broke.
+  test("scaffolded ADR templates equal their owning docs/adr/*/TEMPLATE.md", async () => {
+    const root = tmpRoot("path-scaffold-adr-template-sync-");
+    try {
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      await scaffoldHarness(root);
+      const repoRoot = findRepoRoot();
+      for (const bucket of ["proposed", "implemented"]) {
+        expect(readFileSync(join(root, ".agents", "adr", bucket, "TEMPLATE.md"), "utf8")).toBe(
+          readFileSync(join(repoRoot, "docs", "adr", bucket, "TEMPLATE.md"), "utf8"),
+        );
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("rerun creates nothing and rewrites nothing", async () => {
     const root = tmpRoot("path-scaffold-rerun-");
     try {

@@ -818,7 +818,13 @@ function writeIfAbsent(file: string, content: string): void {
 /** ADR buckets, in lifecycle order. */
 const ADR_BUCKETS = ["proposed", "implemented", "rejected", "archived"] as const;
 
-/** Consumer ADR tree contract (English; mirrors `docs/adr/README.md`). */
+/**
+ * Consumer ADR tree contract (English). An intentional condensation of this
+ * repository's `docs/adr/README.md` — the runtime copy states the contract a
+ * consumer needs without the authoring detail — so no equality test guards
+ * it: update this text in the same change whenever the README's contract
+ * changes.
+ */
 const ADR_README = `# Architecture decision records
 
 Every record here is one decision made **among real alternatives**, filed so a reader finds it without an index: the bucket gives the fate, the class the domain, the date sorts the rest.
@@ -845,7 +851,12 @@ Every record here is one decision made **among real alternatives**, filed so a r
 Three moves exist, each landed as one change \u2014 move, rewrite and header together: \`proposed \u2192 implemented\`, \`proposed \u2192 rejected\`, \`implemented \u2192 archived\`. The first line of a record is \`# ADR: <title>\`; the header also carries \`Status: <state> \u2014 <why>\`. For \`proposed/\`, \`implemented/\` and \`rejected/\` the state equals the containing bucket; an archived record keeps \`Status: implemented \u2014 <why>\` and carries an additional \`Archived: yyyy-mm-dd \u2014 <reason>\` line below it. An archive records a reversal of the decision, not a fourth status.
 `;
 
-/** Verbatim skeleton from this repository's `docs/adr/proposed/TEMPLATE.md`. */
+/**
+ * Verbatim skeleton from this repository's `docs/adr/proposed/TEMPLATE.md`.
+ * Byte-for-byte equal by contract: `path.test.ts` scaffolds into a temp dir
+ * and compares this output against that owning file, so an edit to the file
+ * must land here in the same change.
+ */
 const ADR_TEMPLATE_PROPOSED = `# ADR: <title>
 
 Status: proposed \u2014 <one-line why this is proposed>
@@ -872,7 +883,12 @@ Date: <yyyy-mm-dd>
 <What it costs or could break, and the mitigation.>
 `;
 
-/** Verbatim skeleton from this repository's `docs/adr/implemented/TEMPLATE.md`. */
+/**
+ * Verbatim skeleton from this repository's `docs/adr/implemented/TEMPLATE.md`.
+ * Byte-for-byte equal by contract: `path.test.ts` scaffolds into a temp dir
+ * and compares this output against that owning file, so an edit to the file
+ * must land here in the same change.
+ */
 const ADR_TEMPLATE_IMPLEMENTED = `# ADR: <title>
 
 Status: implemented \u2014 <one-line why it was accepted>
