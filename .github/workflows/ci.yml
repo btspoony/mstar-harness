@@ -918,7 +918,15 @@ jobs:
       # needed (the rc.7 link farm is gone). The install e2e specs skip
       # themselves when no `dsh` bin is on PATH.
       - name: Test dsh
-        run: bun run --cwd packages/dsh test
+        run: bun run --cwd packages/dsh test --reporter=junit --reporter-outfile=.junit-dsh.xml
+
+      # The gated real-composition cases are `test.if(isCiEnvironment())`: on the
+      # runner they must execute, and a green run cannot tell an executed case
+      # from a skipped one. The same step's JUnit report is checked against the
+      # two gated spec files, so a reverted CI predicate or a dropped spec fails
+      # here instead of passing silently.
+      - name: Verify the gated composition cases executed
+        run: bun run --cwd packages/dsh check:composition-report
 
       # The export-surface type layer (value-namespace identity + type-only
       # probes + cordis augmentation) is enforced by tsc over the tests —

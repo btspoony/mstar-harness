@@ -1526,9 +1526,14 @@ export function restartSeam(medium: Map<string, string>, previous?: () => void):
  * The one CI interpretation every environment-dependent test gate shares. Bun's
  * `test.if(cond)` then reports the gated cases as skips locally and executes them
  * unchanged in CI.
+ *
+ * `GITHUB_ACTIONS` is CI on its own: a child process that unsets `CI` still runs
+ * on a runner, and reading only `CI` would silently demote the gated cases to
+ * skips there. Nonempty-string semantics stay as they were — the literal
+ * `"false"` is a set variable, not an unset one.
  */
 export function isCiEnvironment(): boolean {
-  return process.env.CI !== undefined && process.env.CI !== ''
+  return (process.env.CI ?? '') !== '' || (process.env.GITHUB_ACTIONS ?? '') !== ''
 }
 
 /**
