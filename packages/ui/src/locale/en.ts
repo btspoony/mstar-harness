@@ -148,6 +148,17 @@ export const en = {
       stale: "stale",
       unavailable: "unavailable",
     },
+    /**
+     * The bounded absence notice (I-001078): a count plus a small named sample,
+     * never one concatenated paragraph of internal paths.
+     */
+    projectionNotice: {
+      affected: (sources: number): string => `${sources} ${sources === 1 ? "source" : "sources"} affected`,
+      missing: (sources: number): string => (sources === 1 ? "1 missing" : `${sources} missing`),
+      samples: (samples: readonly string[]): string => samples.join(", "),
+      omitted: (sources: number): string => (sources === 1 ? "1 more" : `${sources} more`),
+      generic: "The projection read reported a problem this page cannot name.",
+    },
     severityLabels: {
       critical: "Critical",
       high: "High",

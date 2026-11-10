@@ -130,6 +130,14 @@ export const zh: Copy = {
       stale: "已过期",
       unavailable: "不可读",
     },
+    /** 有界缺失通知（I-001078）：计数加少量具名来源，绝不拼接成整段内部路径。 */
+    projectionNotice: {
+      affected: (sources: number): string => `影响 ${sources} 个来源`,
+      missing: (sources: number): string => `其中 ${sources} 个缺失`,
+      samples: (samples: readonly string[]): string => samples.join("、"),
+      omitted: (sources: number): string => `另有 ${sources} 个未列出`,
+      generic: "投影读取报告了问题，但未指明具体来源。",
+    },
     severityLabels: {
       critical: "致命",
       high: "高",

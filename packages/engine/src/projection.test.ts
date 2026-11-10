@@ -28,7 +28,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { catalogRootDir, linkCatalogEntities, registerCatalogEntity, type CatalogOperation } from "./catalog.js";
+import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
 import { queryDashboard, withStoreRead } from "./store-read.js";
 import type { ExecutionCaller } from "./execution-store.js";
@@ -137,6 +137,108 @@ function terminalSnapshotDoc(id: string): string {
     null,
     2,
   );
+}
+
+function compassDoc(iterationId: string): string {
+  return `---
+iteration_id: ${iterationId}
+start_date: 2026-09-18
+status: active
+iteration_base_branch: main
+target_branch: main
+plans:
+  - plan-${iterationId}
+---
+
+# ${iterationId} Delivery Compass
+
+## Scope
+
+Narrative summary of ${iterationId}.
+`;
+}
+
+/** One catalog iteration plus the compass document linked to it. `compass: null`
+ * declares the document without writing its file (an absent compass). */
+async function seedIteration(
+  f: Fixture,
+  iterationId: string,
+  options: { lifecycle?: "active" | "archived" | "superseded"; compass?: string | null } = {},
+): Promise<void> {
+  await registerCatalogEntity(
+    f.context,
+    {
+      kind: "iteration",
+      id: iterationId,
+      title: `Iteration ${iterationId}`,
+      rootKind: "iterations",
+      relativePath: iterationId,
+      lifecycle: options.lifecycle ?? "active",
+    },
+    op(`cat-${iterationId}`),
+  );
+  const documentId = `doc-${iterationId}`;
+  await registerCatalogEntity(
+    f.context,
+    {
+      kind: "document",
+      id: documentId,
+      title: "Compass",
+      rootKind: "iterations",
+      relativePath: `${iterationId}/delivery-compass.md`,
+      documentKind: "compass",
+    },
+    op(`cat-${documentId}`),
+  );
+  await linkCatalogEntities(
+    f.context,
+    { from: { kind: "iteration", id: iterationId }, relation: "documents", to: { kind: "document", id: documentId } },
+    op(`link-${iterationId}`),
+  );
+  if (options.compass !== null) {
+    write(join(f.iterationsDir, iterationId, "delivery-compass.md"), options.compass ?? compassDoc(iterationId));
+  }
+}
+
+/**
+ * One iteration workflow, optionally left terminal and unregistered -- the
+ * stored end state the real close writer leaves (terminal header, no registry
+ * row), constructed through the creation API plus one semantic state update.
+ */
+async function seedIterationWorkflow(
+  f: Fixture,
+  workflowId: string,
+  status: "running" | "completed",
+  options: { unregister?: boolean } = {},
+): Promise<void> {
+  const initialized = await readExecutionState(f.context);
+  await createExecutionWorkflow(
+    { ...f.context, caller: { sessionId: `${workflowId}-coordinator`, role: "coordinator", workflowId } },
+    {
+      entry: { id: workflowId, type: "iteration", started_at: STARTED_AT, dir: `workflows/${workflowId}` },
+      snapshot: {
+        schema_version: 1, id: workflowId, type: "iteration", status: "running", started_at: STARTED_AT,
+        updated_at: STARTED_AT, phase: "phase-2-execute",
+        branch: { base: "main", integration: `int/${workflowId}`, target: "main" },
+        plans: [], compass_ref: "delivery-compass.md",
+      } as unknown as WorkflowSnapshot,
+      expected: initialized.token,
+      operationId: `create-${workflowId}`,
+    },
+  );
+  if (status === "running") return;
+  const handle = await openStore(f.context, "write");
+  try {
+    const row = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as {
+      state_json: string;
+    };
+    handle.db
+      .prepare("update execution_workflows set state_json = ? where workflow_id = ?")
+      .run(JSON.stringify({ ...JSON.parse(row.state_json), status, ended_at: STARTED_AT }), workflowId);
+    if (options.unregister !== false) handle.db.prepare("delete from execution_registry where workflow_id = ?").run(workflowId);
+  } finally {
+    handle.close();
+  }
 }
 
 function rootDoc(entries: Array<{ id: string; dir: string; type?: "plan" | "iteration" }>): string {
@@ -1251,3 +1353,94 @@ function dropProjectionTables(db: StoreDb): void {
     db.exec(`drop table ${table}`);
   }
 }
+
+/**
+ * A positively historical iteration's missing compass is not a current failure
+ * (I-001078 / D15). Eligibility is positive evidence only: an archived or
+ * superseded catalog owner, or a terminal iteration workflow the served graph
+ * still carries -- never a directory name, compass age, document lifecycle, or
+ * mere absence from the active registry. An actively registered iteration wins
+ * over stale archived metadata, and invalid/inaccessible documents stay errors.
+ */
+describe("projection -- historical iterations do not require their compass", () => {
+  const compassSource = (iterationId: string): string => `compass:iterations:${iterationId}/delivery-compass.md`;
+
+  test("many archived, superseded and terminal-unregistered compasses neither report nor block publication", async () => {
+    const f = await fixture("historical-absent-");
+    await seedStandard(f);
+    const archived = Array.from({ length: 12 }, (_, index) => `iter-archived-${String(index).padStart(2, "0")}`);
+    for (const iterationId of archived) await seedIteration(f, iterationId, { lifecycle: "archived", compass: null });
+    await seedIteration(f, "iter-superseded", { lifecycle: "superseded", compass: null });
+    await seedIteration(f, "iter-terminal", { compass: null });
+    await seedIterationWorkflow(f, "iter-terminal", "completed");
+    // A historical iteration whose compass still exists keeps its projected row.
+    await seedIteration(f, "iter-archived-readable", { lifecycle: "archived" });
+
+    const report = await refreshProjections(f.context);
+    expect(report).toMatchObject({ freshness: "current", published: true });
+    expect(report.diagnostics).toEqual([]);
+    const rows = await projections(f);
+    expect(rows.compasses.map((row) => row.iteration_id)).toEqual(["iter-a", "iter-archived-readable"]);
+    // An absent historical compass is not even a projected source, and the
+    // readable history above it survives.
+    expect(rows.sources.map((source) => source.source_key)).not.toContain(compassSource("iter-archived-00"));
+    const overview = await withStoreRead(f.context, queryDashboard("overview"));
+    expect(overview.projection).toMatchObject({ freshness: "current", diagnostics: [] });
+  });
+
+  test("an actively registered iteration, a still-registered terminal one, and an unknown one stay required", async () => {
+    const f = await fixture("historical-active-");
+    await seedStandard(f);
+    await refreshProjections(f.context);
+    // Archived catalog metadata over an ACTIVELY registered iteration: the
+    // registration wins, so its missing compass is still a current failure.
+    await seedIteration(f, "iter-live-archived", { lifecycle: "archived", compass: null });
+    await seedIterationWorkflow(f, "iter-live-archived", "running");
+    // Terminal, but still actively registered: not "no longer registered".
+    await seedIteration(f, "iter-terminal-registered", { compass: null });
+    await seedIterationWorkflow(f, "iter-terminal-registered", "completed", { unregister: false });
+    // Nothing proves this catalog iteration historical.
+    await seedIteration(f, "iter-unknown", { compass: null });
+
+    const report = await refreshProjections(f.context);
+    expect(report.freshness).toBe("stale");
+    expect(report.diagnostics).toHaveLength(3);
+    expect(report.diagnostics.map((diagnostic) => diagnostic.sourceKey).sort()).toEqual(
+      [compassSource("iter-live-archived"), compassSource("iter-terminal-registered"), compassSource("iter-unknown")].sort(),
+    );
+    expect(report.diagnostics.every((diagnostic) => diagnostic.reason === "missing")).toBe(true);
+  });
+
+  test("archiving the owning iteration clears the retained missing diagnostic on the next refresh", async () => {
+    const f = await fixture("historical-archive-");
+    await seedStandard(f);
+    await refreshProjections(f.context);
+    await seedIteration(f, "iter-later-archived", { compass: null });
+    const stale = await refreshProjections(f.context);
+    expect(stale).toMatchObject({ freshness: "stale", published: false });
+    expect(stale.diagnostics).toContainEqual(
+      expect.objectContaining({ sourceKey: compassSource("iter-later-archived"), reason: "missing" }),
+    );
+
+    const key = { kind: "iteration" as const, id: "iter-later-archived" };
+    const current = await getCatalog(f.context, key);
+    await updateCatalogEntity(f.context, key, { lifecycle: "archived" }, current.entity.revision, op("cat-archive"));
+
+    const cleared = await refreshProjections(f.context);
+    expect(cleared).toMatchObject({ freshness: "current", published: true, diagnostics: [] });
+    expect((await projections(f)).meta).toMatchObject({ freshness: "current", last_error_json: null });
+  });
+
+  test("an invalid historical compass is still an error", async () => {
+    const f = await fixture("historical-invalid-");
+    await seedStandard(f);
+    await refreshProjections(f.context);
+    await seedIteration(f, "iter-broken-archive", { lifecycle: "archived", compass: "{ not a compass" });
+
+    const report = await refreshProjections(f.context);
+    expect(report.freshness).toBe("stale");
+    expect(report.diagnostics).toContainEqual(
+      expect.objectContaining({ sourceKey: compassSource("iter-broken-archive"), reason: "invalid" }),
+    );
+  });
+});
