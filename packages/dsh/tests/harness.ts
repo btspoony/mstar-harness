@@ -1537,8 +1537,7 @@ export function isCiEnvironment(): boolean {
 }
 
 /**
- * Recorded skip reason for the gated real-composition cases: the local chokidar
- * skill-mount race is not deterministic here (CI is the only execution evidence
- * for those bodies).
+ * Re-exported for the specs; the definition lives in the import-free leaf module
+ * so the CI report gate can read it without loading this harness.
  */
-export const LOCAL_SKILL_MOUNT_SKIP_REASON = 'local chokidar skill-mount timing is not deterministic; these real-composition assertions run unchanged in CI'
+export { LOCAL_SKILL_MOUNT_SKIP_REASON } from './skip-reasons.ts'

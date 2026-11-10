@@ -15,8 +15,9 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { GATED_SPECS, checkCompositionReport } from './check-composition-report.ts'
-import { LOCAL_SKILL_MOUNT_SKIP_REASON } from '../tests/harness.ts'
+import { LOCAL_SKILL_MOUNT_SKIP_REASON } from '../tests/skip-reasons.ts'
 
 const [
   { file: SESSION_SPEC, expectedExecuted: SESSION_CASES },
@@ -187,5 +188,25 @@ describe('composition report gate — script exit status', () => {
     expect(run.stderr).toContain(SESSION_SPEC)
     expect(run.stderr).toContain(`executed ${SESSION_CASES - 1}`)
     expect(run.stderr).toContain(`expected at least ${SESSION_CASES}`)
+  })
+})
+
+describe('composition report gate — build-time purity', () => {
+  test('importing the gate leaves Function.prototype.toString untouched', () => {
+    // A fresh process proves the module's own import graph: importing the test
+    // harness here would have already applied its toString shim before the check.
+    const probe = join(scratch, 'import-gate.ts')
+    writeFileSync(probe, [
+      `const gate = ${JSON.stringify(pathToFileURL(SCRIPT).href)}`,
+      'const intrinsic = Function.prototype.toString',
+      'await import(gate)',
+      'if (Function.prototype.toString !== intrinsic) {',
+      '  console.error("importing the gate replaced Function.prototype.toString")',
+      '  process.exit(1)',
+      '}',
+    ].join('\n'))
+    const proc = Bun.spawnSync(['bun', probe], { cwd: join(import.meta.dir, '..') })
+    expect(proc.stderr.toString()).toBe('')
+    expect(proc.exitCode).toBe(0)
   })
 })

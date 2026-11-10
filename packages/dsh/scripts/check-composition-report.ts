@@ -17,7 +17,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { LOCAL_SKILL_MOUNT_SKIP_REASON } from '../tests/harness.ts'
+import { LOCAL_SKILL_MOUNT_SKIP_REASON } from '../tests/skip-reasons.ts'
 
 /**
  * The gated spec files (relative to this package root) and how many gated cases
@@ -34,7 +34,7 @@ export const GATED_SPECS = [
  * How a gated case is recognized in a report: every gated case in both specs
  * carries the recorded skip reason in its title, and Bun copies the title into
  * the JUnit `name` attribute verbatim. The reason itself is owned by
- * `tests/harness.ts`, so a wording change there needs no second edit here.
+ * `tests/skip-reasons.ts`, so a wording change there needs no second edit here.
  */
 const GATED_CASE_MARKER = `(${LOCAL_SKILL_MOUNT_SKIP_REASON})`
 
