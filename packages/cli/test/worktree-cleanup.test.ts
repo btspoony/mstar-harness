@@ -2506,6 +2506,34 @@ async function storedCleanupCompletion(root: string, workflowId: string, planId:
   return plan?.coordination?.completion;
 }
 
+/**
+ * A completion record derived from a completed handoff. `reviewBase` is the ONE
+ * member the legacy fixtures vary: a Git object id, an explicit null, or
+ * `undefined` to leave the key out (the stored-omission shape a historical
+ * `coordination.completion` block imports verbatim).
+ */
+function legacyCompletion(handoff: ReturnType<typeof completedHandoff>, reviewBase: string | null | undefined): Record<string, unknown> {
+  const completion: Record<string, unknown> = {
+    source_branch: handoff.source_branch,
+    source_sha: handoff.source_sha,
+    worktree_path: handoff.worktree_path,
+    review_head: handoff.review_head,
+    qc: handoff.qc,
+    qa: handoff.qa,
+    integration: {
+      target_branch: handoff.integration.target_branch,
+      worktree_path: handoff.integration.worktree_path,
+      base_sha: handoff.integration.base_sha,
+      result_sha: handoff.integration.result_sha,
+      verified_at: handoff.integration.verified_at,
+    },
+    completed_by: handoff.accepted_by,
+    completed_at: handoff.completed_at,
+  };
+  if (reviewBase !== undefined) completion.review_base = reviewBase;
+  return completion;
+}
+
 /** Rewrite ONLY `completion.review_base` on the stored row, parameterized. */
 function corruptStoredReviewBase(root: string, workflowId: string, planId: string, value: string): void {
   const db = new DatabaseSync(storeDbPath({ harnessDir: root }));
@@ -2538,28 +2566,10 @@ describe("mstar worktree cleanup — a legacy completion without a review base",
     const neutral = tmpRoot("mstar-cleanup-neutral-");
     try {
       const handoff = completedHandoff("feature/done-a", fx.doneWt, fx.intWt);
-      const completion: CompletionRecord = {
-        source_branch: handoff.source_branch,
-        source_sha: handoff.source_sha,
-        worktree_path: handoff.worktree_path,
-        review_base: null,
-        review_head: handoff.review_head,
-        qc: handoff.qc,
-        qa: handoff.qa,
-        integration: {
-          target_branch: handoff.integration.target_branch,
-          worktree_path: handoff.integration.worktree_path,
-          base_sha: handoff.integration.base_sha,
-          result_sha: handoff.integration.result_sha,
-          verified_at: handoff.integration.verified_at,
-        },
-        completed_by: handoff.accepted_by,
-        completed_at: handoff.completed_at,
-      };
       updateWorkflow(fx.root, "wf-1", (snapshot) => {
         const plan = snapshot.plans[0];
         delete plan.metadata;
-        plan.coordination = { revision: 3, completion };
+        plan.coordination = { revision: 3, completion: legacyCompletion(handoff, null) };
       });
       upgradeHistoricalWorkspace(fx.root);
 
@@ -2585,6 +2595,13 @@ describe("mstar worktree cleanup — a legacy completion without a review base",
       expect(envelope(refused).code).toBe("store.corrupt");
       expect(message(refused)).toContain("execution_plans(wf-1,plan-a).coordination_json");
       expect(message(refused)).toContain("review_base");
+      // The refusal names the executable repair, not just the blocker.
+      const refusedRecovery = (JSON.parse(refused.stdout) as { details?: { recovery?: unknown } }).details?.recovery;
+      expect(typeof refusedRecovery).toBe("string");
+      expect(String(refusedRecovery)).toContain("mstar store execution restore-preview --harness");
+      expect(String(refusedRecovery)).toContain("mstar schema --command store.execution.restore");
+      expect(String(refusedRecovery)).toContain("--preview <preview> --operator <name> --authorization <ref>");
+      expect(message(refused)).toContain("mstar store execution restore-preview --harness");
       // Nothing was removed by the refusal.
       expect(git(["worktree", "list", "--porcelain"], fx.root).split("\n")).toContain(`worktree ${fx.doneWt}`);
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).not.toBe("");
@@ -2616,6 +2633,40 @@ describe("mstar worktree cleanup — a legacy completion without a review base",
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).toBe("");
     } finally {
       rmSync(neutral, { recursive: true, force: true });
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  }, 60000);
+
+  test("a stored completion imported without a review_base key is served, and an invalid value still refuses", async () => {
+    const fx = await basicFixture("mstar-cleanup-legacy-review-base-omitted-", true);
+    try {
+      const handoff = completedHandoff("feature/done-a", fx.doneWt, fx.intWt);
+      updateWorkflow(fx.root, "wf-1", (snapshot) => {
+        const plan = snapshot.plans[0];
+        delete plan.metadata;
+        plan.coordination = { revision: 3, completion: legacyCompletion(handoff, undefined) };
+      });
+
+      // The public cutover imports the historical block verbatim: the stored row
+      // keeps the omission and must read as optional provenance. The import gate
+      // validates with the same stored-row validator, so a skipped workflow here
+      // is the pre-fix failure this case exists to catch.
+      const upgraded = upgradeHistoricalWorkspace(fx.root);
+      expect(upgraded.imported, JSON.stringify(upgraded.skipped)).toBe(1);
+      expect(upgraded.skipped).toEqual([]);
+      expect((await storedCleanupCompletion(fx.root, "wf-1", "plan-a")) ?? {}).not.toHaveProperty("review_base");
+      const dry = legacyCleanup(fx.root, "wf-1");
+      expect(dry.exitCode, dry.stdout).toBe(0);
+      expect(decisionRows(dry)).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
+
+      // On the same fixture a genuinely invalid value still refuses.
+      corruptStoredReviewBase(fx.root, "wf-1", "plan-a", "not-a-git-object-id");
+      const refused = legacyCleanup(fx.root, "wf-1", ["--apply"]);
+      expect(refused.exitCode).toBe(1);
+      expect(envelope(refused).code).toBe("store.corrupt");
+      expect(message(refused)).toContain("execution_plans(wf-1,plan-a).coordination_json");
+      expect(message(refused)).toContain("review_base");
+    } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
   }, 60000);

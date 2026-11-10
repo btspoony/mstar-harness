@@ -2738,7 +2738,7 @@ async function completedLegacyPlan(label: string, options: { omitReviewBase?: bo
   return { context, caller, session, sourceSha, baseSha };
 }
 
-type StoredReviewBase = "null" | "invalid";
+type StoredReviewBase = "null" | "absent" | "invalid";
 
 /**
  * Rewrite ONLY `completion.review_base` on the stored row: decode the stored
@@ -2757,7 +2757,8 @@ function rewriteStoredReviewBase(context: StoreContext, planId: string, mode: St
     const coordination = JSON.parse(text) as { completion?: Record<string, unknown> };
     const completion = coordination.completion;
     if (completion === undefined) throw new Error(`fixture: the completed row ${planId} carries no completion record`);
-    completion.review_base = mode === "null" ? null : "not-a-git-object-id";
+    if (mode === "absent") delete completion.review_base;
+    else completion.review_base = mode === "null" ? null : "not-a-git-object-id";
     db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(
       JSON.stringify(coordination),
       LEGACY_WORKFLOW,
@@ -2787,15 +2788,26 @@ describe("execution-domain: the optional review_base of a completed row", () => 
     expect(served).toMatchObject({ source_sha: fixture.sourceSha, review_head: fixture.sourceSha });
   });
 
-  test("an omitted review_base is recorded as an explicit null and served", async () => {
-    // Absence at the trust boundary is valid on every route; the write path
-    // records it as null rather than leaving the key out, so a stored row never
-    // carries an omission and the strict stored-row validator is never asked to
-    // accept one.
+  test("an omitted review_base in the submission is recorded as an explicit null", async () => {
+    // Absence at the submission boundary is valid on every route; the write path
+    // records it as null rather than leaving the key out.
     const fixture = await completedLegacyPlan("legacy-review-base-omitted", { omitReviewBase: true });
 
     const served = await storedCompletion(fixture.context);
     expect(served).toHaveProperty("review_base", null);
+    expect(served).toMatchObject({ source_sha: fixture.sourceSha, review_head: fixture.sourceSha });
+  });
+
+  test("a stored completion whose review_base key is absent is served", async () => {
+    // The stored-omission shape, not the submission boundary: a historical
+    // `coordination.completion` block without the key is imported verbatim
+    // (execution-import-rows.ts `projectLegacyRowCoordination`) and must read as
+    // optional provenance exactly like an explicit null.
+    const fixture = await completedLegacyPlan("legacy-review-base-stored-omission");
+
+    rewriteStoredReviewBase(fixture.context, LEGACY_PLAN, "absent");
+    const served = await storedCompletion(fixture.context);
+    expect(served ?? {}).not.toHaveProperty("review_base");
     expect(served).toMatchObject({ source_sha: fixture.sourceSha, review_head: fixture.sourceSha });
   });
 
