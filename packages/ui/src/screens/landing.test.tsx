@@ -13,6 +13,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { IterationDTO, WorkflowDTO, WorkflowListDTO } from "@mstar-harness/engine";
 
 import type { OverviewDTO } from "@mstar-harness/engine";
+import { copyFor } from "../locale/index.ts";
 import { overviewModel } from "../view-model/overview.ts";
 import { focusModel } from "../view-model/focus.ts";
 import { Overview, type OverviewCopy } from "./Overview.tsx";
@@ -190,6 +191,13 @@ const overviewCopy: OverviewCopy = {
   milestoneOpenCount: (open) => ` · ${open} open`,
   milestoneOpen: (open) => `${open} open`,
   projection: { current: "current", stale: "stale", unavailable: "unavailable" },
+  projectionNotice: {
+    affected: (sources) => `${sources} ${sources === 1 ? "source" : "sources"} affected`,
+    missing: (sources) => (sources === 1 ? "1 missing" : `${sources} missing`),
+    samples: (samples) => samples.join(", "),
+    omitted: (sources) => (sources === 1 ? "1 more" : `${sources} more`),
+    generic: "The projection read reported a problem this page cannot name.",
+  },
   absence: {
     "not-applicable": { labelWord: "n/a", body: "no project resolves" },
     absent: { labelWord: "absent", body: "not declared", pointer: "see the project" },
@@ -412,21 +420,123 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
     expect(html.lastIndexOf("current")).toBeGreaterThan(html.lastIndexOf("Milestone 0"));
   });
 
-  test("a stale projection states its reason", () => {
+  test("a stale projection states a bounded notice, never the raw diagnostic", () => {
     const stale = renderToStaticMarkup(
       <Overview
         model={overviewModel(overviewRead(), {
           projection: {
             ...projection,
             freshness: "stale",
-            diagnostics: [{ sourceKey: "compass", reason: "unreadable", message: "compass could not be parsed" }],
+            diagnostics: [
+              {
+                sourceKey: "compass:iterations:iter-a/delivery-compass.md",
+                reason: "missing",
+                message: "missing: no file at iter-a/delivery-compass.md",
+              },
+            ],
           },
         })}
         copy={overviewCopy}
       />,
     );
     expect(stale).toContain('data-ms-projection="stale"');
-    expect(stale).toContain("compass: compass could not be parsed");
+    expect(stale).toContain("1 source affected");
+    expect(stale).toContain("iter-a");
+    expect(stale).not.toContain("no file at");
+    expect(stale).not.toContain("delivery-compass.md");
+  });
+});
+
+/**
+ * I-001078 / D15: the absence notice is a bounded summary, in both locales.
+ *
+ * Every source below is synthetic and path-shaped on purpose: if a raw source
+ * key, a diagnostic message or a hidden list reaches the render, these strings
+ * appear in the markup.
+ */
+describe("Overview — the absence notice is bounded (I-001078)", () => {
+  const syntheticSource = (index: number) => ({
+    sourceKey: `compass:iterations:iter-synthetic-${index}/delivery-compass.md`,
+    reason: "missing",
+    message: `missing: no file at .mstar/archived/iter-synthetic-${index}/delivery-compass.md`,
+  });
+
+  /** The full Overview copy of one shipped locale, composed as the hosts compose it. */
+  const localizedCopy = (locale: "en" | "zh"): OverviewCopy => {
+    const copy = copyFor(locale);
+    return {
+      ...copy.overview,
+      workflowsEmpty: copy.overview.workflowsHeading,
+      gateStepLabels: copy.iterationDetail.gateStepLabels,
+      absence: {
+        "not-applicable": copy.state["not-applicable"],
+        absent: copy.state.absent,
+        empty: copy.state.empty,
+        unavailable: copy.state.unavailable,
+      },
+    };
+  };
+
+  const renderStale = (count: number, locale: "en" | "zh", diagnostics = Array.from({ length: count }, (_, index) => syntheticSource(index))) =>
+    renderToStaticMarkup(
+      <Overview
+        model={overviewModel(overviewRead(), { projection: { ...projection, freshness: "stale", diagnostics } })}
+        copy={localizedCopy(locale)}
+      />,
+    );
+
+  /** The notice's own text, which is the only place this summary may appear. */
+  const noticeText = (html: string): string => /data-ms-reason="">([\s\S]*?)<\/span>/.exec(html)?.[1] ?? "";
+
+  test("~1,000 distinct sources stay within a fixed semantic ceiling in both locales", () => {
+    for (const locale of ["en", "zh"] as const) {
+      const html = renderStale(1000, locale);
+      const text = noticeText(html);
+      // The count is the actionable fact; it is visible without a full sentence.
+      expect(text).toContain("1000");
+      expect(text).toContain("997");
+      expect(text.length).toBeLessThanOrEqual(1024);
+      // Three samples, and no fourth identity anywhere in the markup.
+      expect(text).toContain("iter-synthetic-0");
+      expect(text).toContain("iter-synthetic-2");
+      expect(text).not.toMatch(/iter-synthetic-(?:[3-9]|[1-9]\d)/);
+      // No internal path, no raw diagnostic, no tooltip or hidden full list.
+      expect(html).not.toContain(".mstar/");
+      expect(html).not.toContain("no file at");
+      expect(html).not.toContain("delivery-compass.md");
+      expect(html.slice(html.lastIndexOf("data-ms-projection"))).not.toContain("title=");
+    }
+  });
+
+  test("ten times the sources moves the count, not the sample bound", () => {
+    const hundred = noticeText(renderStale(100, "en"));
+    const thousand = noticeText(renderStale(1000, "en"));
+    expect(hundred).toContain("100 sources affected");
+    expect(thousand).toContain("1000 sources affected");
+    expect(hundred).toContain("iter-synthetic-0, iter-synthetic-1, iter-synthetic-2");
+    expect(thousand).toContain("iter-synthetic-0, iter-synthetic-1, iter-synthetic-2");
+    expect(hundred).toContain("97 more");
+    expect(thousand).toContain("997 more");
+  });
+
+  test("a mixed set counts distinct sources: one source failing twice is one affected source", () => {
+    const diagnostics = [
+      syntheticSource(0),
+      syntheticSource(0),
+      { sourceKey: "compass:iterations:iter-synthetic-1/delivery-compass.md", reason: "inaccessible", message: "inaccessible: read refused (EACCES) at iter-synthetic-1/delivery-compass.md" },
+      { sourceKey: "compass:iterations:iter-synthetic-2/delivery-compass.md", reason: "invalid", message: "invalid: compass frontmatter is not parseable" },
+    ];
+    const text = noticeText(renderStale(0, "en", diagnostics));
+    expect(text).toContain("3 sources affected");
+    expect(text).toContain("1 missing");
+    expect(text).not.toContain("EACCES");
+    expect(text).not.toContain("frontmatter");
+  });
+
+  test("a degraded read that names no source shows the generic freshness notice", () => {
+    const text = noticeText(renderStale(0, "en", []));
+    expect(text).toBe(overviewCopy.projectionNotice.generic);
+    expect(text).not.toContain("0");
   });
 });
 

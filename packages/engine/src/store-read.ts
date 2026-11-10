@@ -36,10 +36,6 @@ import { ProjectionError, refreshProjections, type ProjectionFreshness, type Sou
 import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
-import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { MSTARC_FILE, readRepoLinearBinding, resolveRepoRoot, type RepoLinearBinding } from "./mstarc.js";
-import type { ProbeState } from "./issue-sync/provider.js";
 import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
 import type { AuthorityVerdict } from "./recovery-intent.js";
@@ -104,8 +100,7 @@ export type DashboardView =
   | "projects"
   | "roadmap"
   | "issue-flow"
-  | "overview"
-  | "sync-binding";
+  | "overview";
 
 /**
  * Request filters. Only the fields a view needs are read: `id` for the three
@@ -118,40 +113,6 @@ export type DashboardFilters = {
   issue?: IssueFilter;
   limit?: number;
   offset?: number;
-  /** `sync-binding` only: a host-supplied probe result (both fields together). */
-  probeState?: SyncProbeState;
-  probeCause?: string;
-};
-
-/** `not-probed` is the engine's own honest default; every other value is the
- * host's `ProbeState` — one union, derived, never restated (F6). */
-export type SyncProbeState = ProbeState | "not-probed";
-
-/** Readiness as the binding panel shows it — never guessed from configuration. */
-export type SyncBindingReadiness = {
-  state: SyncProbeState;
-  cause: string;
-};
-
-/** One stored correspondence row (`project_bindings`, migration 15) as the panel shows it. */
-export type SyncBindingProject = { projectId: string; remoteProject: string };
-
-/** The read-only binding DTO: connection summary + readiness with its cause. */
-export type SyncBindingDTO = {
-  /** The `[linear]` summary, or `null` when no section is declared. */
-  binding: { enabled: boolean; mode: string; workspace: string; team: string } | null;
-  /** The `parseLinearBinding` refusal message when the section is invalid. */
-  bindingError: string | null;
-  /** The stored `project_id` → `remote_project` correspondence, read-only. */
-  projectBindings: SyncBindingProject[];
-  /**
-   * The read's own failure when `project_bindings` could not be read, or `null`
-   * when it could. A store that cannot answer is not a store with no rows: the
-   * panel renders `unavailable` with this message rather than claiming the
-   * correspondence is empty.
-   */
-  projectBindingsError: string | null;
-  readiness: SyncBindingReadiness;
 };
 
 // ---------------------------------------------------------------------------
@@ -408,7 +369,6 @@ export type DashboardViewData = {
   roadmap: RoadmapDTO | null;
   "issue-flow": IssueFlow;
   overview: OverviewDTO;
-  "sync-binding": SyncBindingDTO;
 };
 
 /** Which views refresh projected execution rows (contract §6 refresh rule). */
@@ -425,8 +385,6 @@ const DASHBOARD_VIEWS: Record<DashboardView, { needsProjection: boolean }> = {
   // Joins projected workflow/plan/compass rows with non-projected issue and
   // milestone tables, so it takes the refresh the two iteration views take.
   overview: { needsProjection: true },
-  // Assembled from `.mstarc` + host-supplied probe filters; reads no store rows.
-  "sync-binding": { needsProjection: false },
 };
 // ---------------------------------------------------------------------------
 // Small conversions
@@ -671,9 +629,6 @@ export function queryDashboard<V extends DashboardView>(
   view: V,
   filters: DashboardFilters = {},
 ): StoreReadQuery<DashboardViewData[V]> {
-  if (view === "sync-binding") {
-    usage("the sync-binding view is served by querySyncBinding, not queryDashboard");
-  }
   if (!Object.hasOwn(DASHBOARD_VIEWS, view)) {
     usage(`unknown dashboard view ${JSON.stringify(String(view))}`);
   }
@@ -696,95 +651,6 @@ export function queryIssueFlow(projectId?: string): StoreReadQuery<IssueFlow> {
     view: "issue-flow",
     needsProjection: false,
     run: (handle) => readIssueFlow(handle.db, scoped ?? undefined),
-  };
-}
-
-/**
- * The `sync-binding` view (contract §6): the `.mstarc` `[linear]` summary, the
- * store's read-only `project_bindings` correspondence, and the readiness state
- * with its cause. The summary and readiness are assembled at query-build time
- * from the config file and the host-supplied probe filters; the run reads only
- * the correspondence rows and writes nothing, so the view stays read-only end
- * to end. Readiness is never guessed: with no host-supplied probe result it is
- * honestly `not-probed`.
- */
-/**
- * The parent directory counts as the declaring repository ONLY when it actually
- * holds a `.mstarc`. Used when the harness sits outside any checkout: `<repo>/
- * .mstar` is the normal layout, but `harness_dir = /var/mstar/state` has no
- * declaring repository here, and its parent must not be substituted — that is
- * how another checkout's settings get read.
- */
-function parentThatDeclares(harnessDir: string): string | null {
-  const parent = dirname(resolve(harnessDir));
-  return existsSync(join(parent, MSTARC_FILE)) ? parent : null;
-}
-
-/**
- * The stored correspondence rows, or the read's own failure.
- *
- * A store that cannot answer (it predates migration 15, so there is no
- * `project_bindings` table, or the database refuses the read) has NOT answered
- * "there are no rows", and the two must not render alike. The `.mstarc` summary
- * answers regardless; the failure travels beside the rows in
- * `projectBindingsError` so the panel can render `unavailable` with the
- * reader's reason instead of `empty`. `project_bindings` is never written.
- */
-function readSyncBindingProjects(handle: StoreHandle): {
-  rows: SyncBindingProject[];
-  error: string | null;
-} {
-  try {
-    const rows = handle.db
-      .prepare("select project_id, remote_project from project_bindings order by project_id")
-      .all() as Array<{ project_id: string; remote_project: string }>;
-    return { rows: rows.map((row) => ({ projectId: row.project_id, remoteProject: row.remote_project })), error: null };
-  } catch (cause) {
-    return {
-      rows: [],
-      error: `sync-binding.correspondence-unreadable: ${cause instanceof Error ? cause.message : String(cause)}`,
-    };
-  }
-}
-
-export function querySyncBinding(harnessDir: string, filters: DashboardFilters): StoreReadQuery<SyncBindingDTO> {
-  // The repo's own `.mstarc` is the authority — a parent directory's
-  // configuration never becomes this repo's connection identity (F4). The reader
-  // takes the repository root; this query is given the harness directory, so the
-  // order is: a checkout root above it, then a parent that itself DECLARES a
-  // `.mstarc` (`<repo>/.mstar` is the normal layout), then the harness directory.
-  // That last fallback is why `parentThatDeclares` tests for the file: for
-  // `harness_dir = /var/mstar/state`, `/var/mstar` is used only if it really
-  // holds its own `.mstarc`; a bare parent is never substituted, which is how
-  // another repository's settings would get read.
-  const repo: RepoLinearBinding = readRepoLinearBinding(
-    resolveRepoRoot(harnessDir) ?? parentThatDeclares(harnessDir) ?? resolve(harnessDir),
-  );
-  const binding =
-    repo.kind === "bound"
-      ? { enabled: repo.binding.enabled, mode: repo.binding.mode, workspace: repo.binding.workspace, team: repo.binding.team }
-      : null;
-  const bindingError = repo.kind === "bound" ? null : repo.message;
-  if (filters.probeState !== undefined && (filters.probeCause ?? "").trim() === "") {
-    usage("the sync-binding view requires probe_cause whenever probe_state is supplied");
-  }
-  const readiness: SyncBindingReadiness =
-    filters.probeState === undefined
-      ? { state: "not-probed", cause: "not-probed: readiness is host-owned; no probe result was supplied" }
-      : { state: filters.probeState, cause: filters.probeCause as string };
-  return {
-    view: "sync-binding",
-    needsProjection: false,
-    run: (handle) => {
-      const correspondence = readSyncBindingProjects(handle);
-      return {
-        binding,
-        bindingError,
-        projectBindings: correspondence.rows,
-        projectBindingsError: correspondence.error,
-        readiness,
-      };
-    },
   };
 }
 

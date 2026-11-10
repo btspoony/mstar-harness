@@ -22,11 +22,13 @@ describe("every destination in the table", () => {
     expect(parseRoute("#projects").route).toEqual({ name: "projects" });
   });
 
-  test("the binding panel is an addressable destination", () => {
-    // The regression: the screen and its copy shipped with no route, so nothing
-    // could reach it and `#sync-binding` fell through to the landing page.
-    expect(parseRoute("#sync-binding").route).toEqual({ name: "sync-binding" });
-    expect(routeHash({ name: "sync-binding" })).toBe("#sync-binding");
+  test("a retired destination's address is unrecognised input, not a route", () => {
+    // The binding panel's route was removed with the screen it mounted. A
+    // bookmarked or hand-typed `#sync-binding` is now the same class of input as
+    // any other unknown segment: it lands on the landing destination, which does
+    // not guess a nearest match.
+    expect(parseRoute("#sync-binding").route).toEqual({ name: "overview" });
+    expect(parseRoute("#sync-binding").route).toEqual(parseRoute("#not-a-route").route);
   });
 
   test("details keep a singular resource segment and an id", () => {
