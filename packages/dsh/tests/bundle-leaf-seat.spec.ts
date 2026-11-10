@@ -17,13 +17,13 @@
  */
 import { afterAll, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { CI_MTIME_GUARD_SKIP_REASON, isCiEnvironment } from './harness.ts'
+import { HOST_BUILD_RECOVERY, checkHostBuild } from '../scripts/build-host.ts'
 
 const ROOT = join(import.meta.dir, '..')
 /** The packed entry the source build produced (`package.json` `main`). */
@@ -54,26 +54,17 @@ afterAll(() => {
 })
 
 /**
- * The packed entry must BE the build of the sources in this checkout: a stale
- * `dist` would let this suite prove the refusal of a bundle the build no longer
- * produces. `pretest` builds only the client, so the entry's own currency is
- * asserted here. The inputs are this package's sources plus the
- * `@mstar-harness/commands` sources the build inlines; the engine stays external.
+ * The packed entry must BE the build of its current inputs: a stale `dist` would
+ * let this suite prove the refusal of a bundle the build no longer produces.
+ * `pretest` builds only the client, so the entry's currency is asserted here by
+ * the producer that owns the build — content fingerprints of the reachable input
+ * set it recorded, not a source mtime walk (a mtime carries no build order in a
+ * fresh checkout, and a regenerated-but-identical input is not stale).
  */
-function assertPackedEntryCurrent(): string | null {
-  const entry = join(ROOT, PACKED_ENTRY)
-  if (!existsSync(entry)) throw new Error(`missing ${PACKED_ENTRY} — run \`bun run --cwd packages/dsh build\` first`)
-  // CI checks out sources and builds in a fresh clone, so mtimes say nothing about order there.
-  if (isCiEnvironment()) return CI_MTIME_GUARD_SKIP_REASON
-  const built = statSync(entry).mtimeMs
-  for (const root of [join(ROOT, 'src'), join(ROOT, '..', 'commands', 'src')]) {
-    for (const file of readdirSync(root, { recursive: true, encoding: 'utf8' })) {
-      if (!file.endsWith('.ts')) continue
-      const source = join(root, file)
-      if (statSync(source).mtimeMs > built) throw new Error(`${source} is newer than ${PACKED_ENTRY} — run \`bun run --cwd packages/dsh build\` first`)
-    }
-  }
-  return null
+function assertPackedEntryCurrent(): void {
+  const check = checkHostBuild()
+  if (check.state === 'current') return
+  throw new Error(`${check.input} is ${check.state} for ${PACKED_ENTRY} — run \`${HOST_BUILD_RECOVERY}\` first`)
 }
 
 /**
@@ -116,8 +107,7 @@ const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDeci
 
 describe('packed dsh artifact — leaf-seat refusal without the private commands package', () => {
   test('the isolated consumer cannot resolve @mstar-harness/commands, yet the packed gate still refuses a leaf seat', async () => {
-    const mtimeGuard = assertPackedEntryCurrent()
-    expect(mtimeGuard).toBe(isCiEnvironment() ? CI_MTIME_GUARD_SKIP_REASON : null)
+    assertPackedEntryCurrent()
     const packageRoot = packedPackageRoot()
 
     // (a) The premise: no private-commands module resolution from the packed root.

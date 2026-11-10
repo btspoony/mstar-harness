@@ -27,6 +27,9 @@ packages/cli/src/dashboard/assets.generated.ts
 # JUnit report the dsh test step emits for the composition-report gate
 packages/dsh/.junit-dsh.xml
 
+# Reachable-input stamp the dsh host build writes (source provenance, not a committed fact)
+packages/dsh/.dist-inputs.json
+
 packages/mcp/dist/
 packages/dsh/mcp/
 packages/opencode/mcp/
