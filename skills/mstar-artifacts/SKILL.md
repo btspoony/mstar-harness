@@ -13,7 +13,7 @@ description: "Plan artifacts: main plans, durable review summaries, QC/PM Accept
 |-------|-----|
 | Main plan, review bundle naming, durable summaries, QC waves, residual and plan index order | `references/plan-files-and-reports.md` |
 | Plan template (Global Constraints, Interfaces) | `templates/plan.main.md` |
-| knowledge / iterations / specs boundaries and indexes | `references/knowledge-and-designs.md` |
+| document layers (knowledge / specs / adr) and artifact boundaries | `references/knowledge-and-designs.md` |
 | ACTIVE execution rows, coordinator configuration/progress/completion and CAS, issue capture, residual severity/lifecycle | `references/status-and-residuals.md` |
 | Plan-level workflow lifecycle: delivery-kind declaration, stages, evidence contracts, engine seams, migration sources | `references/plan-workflow-lifecycle-contract.md` |
 | Open-issue rollup (read-only) | `mstar status tech-debt` (issue-store rollup; see `references/status-and-residuals.md`) |
@@ -66,5 +66,5 @@ Write the main plan under `{PLAN_DIR}` → primary coordinator advances its expl
 
 - `references/plan-files-and-reports.md` — 主 plan / review bundle 命名、QC 波次、durable summaries
 - `references/status-and-residuals.md` — ACTIVE execution fields, coordinator configuration/progress/completion, issue capture and current severity/lifecycle; migration-source shapes live in **`mstar-project-governance`** `references/migration-source-shapes.md`
-- `references/knowledge-and-designs.md` — knowledge / iterations / specs 边界与索引
+- `references/knowledge-and-designs.md` — document layers (knowledge / specs / adr) 与过程产物边界、命名与维护
 - `references/plan-workflow-lifecycle-contract.md` — plan-level workflow lifecycle contract: delivery-kind declaration, stages, evidence contracts, engine seams, migration sources

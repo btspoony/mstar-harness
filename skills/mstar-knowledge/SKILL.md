@@ -17,6 +17,8 @@ One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one 
 
 **Storage SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 不重定义路径：知识文档 → `{HARNESS_DIR}/knowledge/<category>/<slug>.md`（`<category>` 取值见 `references/category-mapping.md`）；CONCEPTS.md → `<repo-root>/CONCEPTS.md`；Maintain 另可操作 `{HARNESS_DIR}/knowledge/README.md`（**散文**，见 Maintain Phase 4）。
 
+**层级分工**：本 skill 产出的**工程经验与方法论**不是当前系统状态；三层语料的边界与更新义务 → **`mstar-artifacts/references/knowledge-and-designs.md`** § 与公开文档目录的分工（当前状态属 `{SPECS_DIR}`，决策属 `{ADR_DIR}`）。
+
 ## When to use / Skip
 
 **Capture — use**: 迭代收口（`mstar-iteration` § iteration-close）批量回顾；独立触发（非迭代或紧急，任何非平凡问题解决后）；重大 bug 修复后（`mstar-iteration` 未启用时手动）；独立 development plan 交付前的 disposition review（PR head 定稿前，见「Integration with mstar lifecycle」）。

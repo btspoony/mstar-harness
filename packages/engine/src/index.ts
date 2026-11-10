@@ -422,6 +422,9 @@ export {
 export type { ReferenceCheckResult } from "./compound.js";
 
 export type {
+  AdrBucket,
+  AdrLintFailure,
+  AdrLintResult,
   EphemeralCitation,
   PlanQualityFinding,
   PlanQualityResult,
@@ -431,12 +434,18 @@ export type {
   TemporaryMarkerResult,
 } from "./lint.js";
 export {
+  ADR_BUCKETS,
+  ADR_CLASSES,
+  SPECS_REQUIRED_SECTIONS,
   assertSddTddTriple,
   findEphemeralCitations,
   findProvenanceCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
+  lintAdrTree,
   lintSkillFrontmatter,
+  lintSpecsDoc,
+  lintSpecsTree,
   lintStrategySections,
   planQualityBar,
 } from "./lint.js";
