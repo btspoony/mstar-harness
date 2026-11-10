@@ -23,7 +23,7 @@ tags:
 
 ## Verification scope
 
-Browser, device, real-install and GUI-restart methods below apply only inside an explicitly requested independent `mstar-e2e` workflow, executed by ops under its named environment/scenario scope. They are not iteration or routine QA gates; UI changes and missing screenshots do not activate them. Routine QA remains targeted unit-only. Historical in-loop acceptance describes past evidence, not current authorization. Reuse the technical findings for affected unit checks without rerunning broad scans or real environments.
+Browser, device, real-install and GUI-restart methods below apply only inside an explicitly requested independent `mstar-e2e` workflow, executed by ops under its named environment/scenario scope. They are not iteration or routine Acceptance gates; UI changes and missing screenshots do not activate them. Routine QA remains targeted unit-only. Historical in-loop acceptance describes past evidence, not current authorization. Reuse the technical findings for affected unit checks without rerunning broad scans or real environments.
 
 ## Problem
 

@@ -54,7 +54,7 @@ The same gap exists without parallel branches or executable code. A documentatio
 
 **General rule:** an L2 approval establishes only what that task's review actually covered. It is not evidence that the full document retains all prior obligations or that every new rule agrees with existing owners. A heading count, keyword match, or application example can show additions exist while a normative rule disappears next to them.
 
-The PM's **SDD plan-QC dispatch** therefore needs the three distinct QC role identities on the same branch tip/range and the same review package, even when every changed product file is Markdown. A docs-only `QA gate: pm-acceptance` changes the acceptance route, not the L3 seat count. The inline/hotfix exception remains owned by the runtime QC policy; document format alone does not select it.
+The PM's **SDD plan-QC dispatch** therefore needs the three distinct QC role identities on the same branch tip/range and the same review package, even when every changed product file is Markdown. A docs-only `Acceptance gate: pm-acceptance` changes the acceptance route, not the L3 seat count. The inline/hotfix exception remains owned by the runtime QC policy; document format alone does not select it.
 
 Put these three checks in the shared dispatch, rather than assuming that earlier task approvals cover them:
 
