@@ -29,9 +29,13 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.refused`;
   return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) , recovery: id === "sdd.exec"
         ? "Verify the admitted executable, feature-worktree context, working directory, and child environment. Run mstar sdd exec <command> <args...>."
-        : id === "worktree.cleanup"
-          ? "Correct the reported ownership, merge-evidence, checkout, or worktree-state blocker before cleanup. Run mstar worktree cleanup --workflow <workflow-id>."
-          : "Verify the base ref and source checkout are reachable and correct the worktree setup inputs. Run mstar pr-review worktree-setup --path <worktree-path> --branch <branch>."});
+        : id === "worktree.cleanup" && code === "store.corrupt"
+          // A malformed stored row is repaired from a recovery point, never by
+          // editing the live store.
+          ? "Repair the execution authority from a store recovery point: run mstar store execution restore-preview --harness <absolute-root> --backup <backup> --out <preview>, then apply that preview with --preview <preview> --operator <name> --authorization <ref> --out <receipt> using the verb in mstar schema --command store.execution.restore."
+          : id === "worktree.cleanup"
+            ? "Correct the reported ownership, merge-evidence, checkout, or worktree-state blocker before cleanup. Run mstar worktree cleanup --workflow <workflow-id>."
+            : "Verify the base ref and source checkout are reachable and correct the worktree setup inputs. Run mstar pr-review worktree-setup --path <worktree-path> --branch <branch>."});
 }
 
 function definitions(): readonly CommandDefinition[] {

@@ -80,14 +80,13 @@ describe("the navigation entries are the product's, in the product's language", 
     );
   });
 
-  test("every entry routes to its own destination, the binding panel included", () => {
-    // The regression: the entry was cast to a list destination, so `sync-binding`
-    // and `overview` were emitted as routes named after a list id.
+  test("every entry routes to its own destination", () => {
+    // The regression: the entry was cast to a list destination, so `overview`
+    // was emitted as a route named after a list id.
     for (const id of NAV_DESTINATIONS) {
       expect(navRoute(id).name).toBe(id);
       expect(navItemFor(navRoute(id))).toBe(id);
     }
-    expect(isNavDestination("sync-binding")).toBe(true);
     expect(isNavDestination("not-a-destination")).toBe(false);
   });
 
@@ -137,15 +136,6 @@ describe("a project's Issues feature keeps its own state", () => {
 });
 
 describe("the shell's markup uses those pieces", () => {
-  test("the binding screen is a navigation destination", () => {
-    // The mount that renders it is behaviour — a destination that resolves and
-    // mounts nothing reads fine as text. `web/sync-binding-destination.test.tsx`
-    // asserts the route → rendered read chain on every run, and
-    // `test/render-gate.test.ts` checks it against a real page where a browser
-    // exists. `NAV_DESTINATIONS` is product data and stays here.
-    expect(NAV_DESTINATIONS).toContain("sync-binding");
-  });
-
   test("the skip link has a click handler and the landmark is focusable", () => {
     // The behaviour test above passes even if nothing calls `skipToMain`; this is the
     // half that fails when the markup goes back to a plain `href="#main"`.

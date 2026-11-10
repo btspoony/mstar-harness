@@ -412,7 +412,7 @@ describe("Overview — the fact set of §8.2", () => {
     }
   });
 
-  test("the projection state carries the state, the reasons, and the read's two times", () => {
+  test("the projection state carries the state, the bounded notice, and the read's two times", () => {
     // D30 removed every counter; the built/read times are not counters, they answer
     // "how fresh is this page", which is what the prototype's identity line states.
     expect(model.projection.kind).toBe("current");
@@ -421,14 +421,16 @@ describe("Overview — the fact set of §8.2", () => {
       projection: {
         ...projection,
         freshness: "stale",
-        diagnostics: [{ sourceKey: "compass", reason: "unreadable", message: "compass could not be parsed" }],
+        diagnostics: [
+          { sourceKey: "compass:iterations:iter-a/delivery-compass.md", reason: "missing", message: "missing: no file at iter-a/delivery-compass.md" },
+        ],
       },
     });
-    expect(stale.projection.kind).toBe("stale");
-    expect(stale.projection.builtAt).toBe(projection.builtAt);
-    expect("reasons" in stale.projection ? stale.projection.reasons : []).toEqual([
-      "compass: compass could not be parsed",
-    ]);
+    expect(stale.projection).toMatchObject({
+      kind: "stale",
+      builtAt: projection.builtAt,
+      notice: { affected: 1, missing: 1, samples: ["iter-a"], omitted: 0 },
+    });
   });
 
   test("a roadmap that exists with no milestones is empty, not absent", () => {

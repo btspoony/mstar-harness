@@ -292,6 +292,20 @@ describe("API over a real store", () => {
     expect((JSON.parse(missing.body) as { error: { code: string } }).error.code).toBe("issue.not-found");
   });
 
+  test("the retired binding API is absent while the local store views still answer", async () => {
+    // The binding panel's API was removed with the screen it served. A stale client
+    // or a bookmark is the same class of input as any unknown path: the route table
+    // answers a structured 404, never a view read and never a 500.
+    const retired = await raw(new URL("/api/sync-binding", server.url).href);
+    expect(retired.status).toBe(404);
+    expect((JSON.parse(retired.body) as { error: { code: string } }).error.code).toBe("not-found");
+    // The local `store.db` views the dashboard keeps are untouched by that removal.
+    for (const pathname of ["/api/overview", "/api/issues", "/api/projects"]) {
+      const res = await raw(new URL(pathname, server.url).href);
+      expect([pathname, res.status]).toEqual([pathname, 200]);
+    }
+  });
+
   test("HEAD to the API is refused without executing a store read", async () => {
     const head = await raw(new URL("/api/issues", server.url).href, { method: "HEAD" });
     expect(head.status).toBe(405);

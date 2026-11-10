@@ -1526,20 +1526,18 @@ export function restartSeam(medium: Map<string, string>, previous?: () => void):
  * The one CI interpretation every environment-dependent test gate shares. Bun's
  * `test.if(cond)` then reports the gated cases as skips locally and executes them
  * unchanged in CI.
+ *
+ * `GITHUB_ACTIONS` is CI on its own: a child process that unsets `CI` still runs
+ * on a runner, and reading only `CI` would silently demote the gated cases to
+ * skips there. Nonempty-string semantics stay as they were — the literal
+ * `"false"` is a set variable, not an unset one.
  */
 export function isCiEnvironment(): boolean {
-  return process.env.CI !== undefined && process.env.CI !== ''
+  return (process.env.CI ?? '') !== '' || (process.env.GITHUB_ACTIONS ?? '') !== ''
 }
 
 /**
- * Recorded skip reason for the gated real-composition cases: the local chokidar
- * skill-mount race is not deterministic here (CI is the only execution evidence
- * for those bodies).
+ * Re-exported for the specs; the definition lives in the import-free leaf module
+ * so the CI report gate can read it without loading this harness.
  */
-export const LOCAL_SKILL_MOUNT_SKIP_REASON = 'local chokidar skill-mount timing is not deterministic; these real-composition assertions run unchanged in CI'
-
-/**
- * Recorded skip reason for the packed-entry mtime guard: a CI checkout's mtimes
- * carry no build order, so only the mtime comparison is skipped there.
- */
-export const CI_MTIME_GUARD_SKIP_REASON = 'CI checkout mtimes do not preserve build order; mtime comparison is skipped, and packed-artifact assertions still run'
+export { LOCAL_SKILL_MOUNT_SKIP_REASON } from './skip-reasons.ts'

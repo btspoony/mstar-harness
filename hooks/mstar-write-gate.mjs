@@ -17452,6 +17452,10 @@ var CATALOG_ROOT_KINDS = {
 function asCatalogRootKind(value) {
   return typeof value === "string" && CATALOG_ROOT_KINDS[value] === true ? value : null;
 }
+var CATALOG_LIFECYCLES = { active: true, archived: true, superseded: true };
+function asCatalogLifecycle(value) {
+  return typeof value === "string" && CATALOG_LIFECYCLES[value] === true ? value : "active";
+}
 async function readCatalogInputs(context) {
   const handle = await openStore(context, "read");
   try {
@@ -17483,7 +17487,7 @@ async function readCatalogInputs(context) {
       ];
     });
     const links = db.prepare("select from_kind, from_id, to_kind, to_id from catalog_links where relation = 'documents'").all();
-    const owners = db.prepare("select id from catalog_entities where kind = 'iteration'").all();
+    const owners = db.prepare("select id, lifecycle from catalog_entities where kind = 'iteration'").all();
     const byId = new Map(documents.map((doc) => [doc.id, doc]));
     const pick = (ownerId) => {
       const candidates = links.filter((link) => link.from_kind === "iteration" && link.from_id === ownerId && link.to_kind === "document" && typeof link.to_id === "string").map((link) => byId.get(link.to_id)).filter((doc) => doc !== undefined).sort((a, b) => {
@@ -17501,8 +17505,14 @@ async function readCatalogInputs(context) {
       if (ownerId === null)
         continue;
       const doc = pick(ownerId);
-      if (doc !== null)
-        compassDocs.push({ iterationId: ownerId, rootKind: doc.rootKind, relativePath: doc.relativePath });
+      if (doc !== null) {
+        compassDocs.push({
+          iterationId: ownerId,
+          lifecycle: asCatalogLifecycle(owner.lifecycle),
+          rootKind: doc.rootKind,
+          relativePath: doc.relativePath
+        });
+      }
     }
     return { catalogRevision, bindings, compassDocs };
   } finally {
@@ -17799,10 +17809,15 @@ async function captureExecutionProjectionSources(context) {
       const progressSummary = isPlainObject(mappedCoordination) && isPlainObject(mappedCoordination.progress) ? mappedCoordination.progress.summary : null;
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text4(authorityPlanView.plan.status), progress: text4(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text4(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
+    const registeredIterations = new Set(rows.workflows.filter((workflow) => workflow.type === "iteration" && workflow.activeRegistration).map((workflow) => workflow.id));
+    const terminalIterations = new Set(rows.workflows.filter((workflow) => workflow.type === "iteration" && !workflow.activeRegistration && WORKFLOW_TERMINAL_STATUSES.includes(workflow.status)).map((workflow) => workflow.id));
+    const historicalIteration = (iterationId, lifecycle) => !registeredIterations.has(iterationId) && (lifecycle === "archived" || lifecycle === "superseded" || terminalIterations.has(iterationId));
     for (const doc of inputs.compassDocs) {
       const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join31(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readCompassSource(fspec);
       if (read.state !== "ok" || read.content === null) {
+        if (read.state === "missing" && historicalIteration(doc.iterationId, doc.lifecycle))
+          continue;
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
         diagnostics.push({ sourceKey: fspec.sourceKey, reason: read.state, message: read.diagnostic ?? "compass unavailable" });
         continue;
@@ -18193,7 +18208,6 @@ async function refreshProjections(context, hooks = {}) {
   return attempt.report;
 }
 init_roadmap_content();
-init_mstarc();
 init_store_db();
 init_execution_store();
 init_workflow();
@@ -18216,8 +18230,7 @@ var DASHBOARD_VIEWS = {
   projects: { needsProjection: false },
   roadmap: { needsProjection: false },
   "issue-flow": { needsProjection: false },
-  overview: { needsProjection: true },
-  "sync-binding": { needsProjection: false }
+  overview: { needsProjection: true }
 };
 function text5(value) {
   return typeof value === "string" && value !== "" ? value : null;
@@ -18347,9 +18360,6 @@ async function resolveExecutionReadRoute(context) {
   return (await resolveCurrentAuthority(context)).route;
 }
 function queryDashboard(view, filters = {}) {
-  if (view === "sync-binding") {
-    usage("the sync-binding view is served by querySyncBinding, not queryDashboard");
-  }
   if (!Object.hasOwn(DASHBOARD_VIEWS, view)) {
     usage(`unknown dashboard view ${JSON.stringify(String(view))}`);
   }
@@ -19108,7 +19118,6 @@ init_workflow();
 init_worktree();
 init_status();
 init_issue();
-var PROBE_STATES = ["ready", "service-absent", "unreachable", "access-denied"];
 init_issue();
 init_catalog();
 init_catalog_import();
@@ -19120,7 +19129,6 @@ init_plan_path();
 init_execution_store();
 init_recovery_intent();
 init_workflow();
-var SYNC_PROBE_STATES = new Set(PROBE_STATES);
 init_catalog_import();
 init_catalog();
 init_store_db();

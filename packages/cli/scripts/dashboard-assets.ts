@@ -40,14 +40,15 @@
 // for what is here now.
 // 348 KB: the four screen heads and the issue detail's meta line, all of which the prototype
 // carries and this implementation was missing.
-// 354 KB, and this raise is two measurements rather than one. The delivered `sync-binding`
+// 354 KB, and this raise was two measurements rather than one. The retired `sync-binding`
 // screen and its two locale blocks cost 521 B over the 348 KB ceiling (356,873 B) — the
-// screen shipped without a host mount, so that was the whole of the growth. Mounting it is
+// screen shipped without a host mount, so that was the whole of the growth. Mounting it was
 // the second: the dashboard route, its navigation entry, the destination's own read and the
-// nav id aligned with the copy key are a further 4,638 B, for 361,511 B measured. Both are
+// nav id aligned with the copy key are a further 4,638 B, for 361,511 B measured. Both were
 // content the owner asked for; no unrelated copy was shrunk to fit. The ceiling lands on the
 // next whole KB above the measurement, leaving 985 B rather than a number that has to be
-// edited next round.
+// edited next round. That screen has since been deleted; the ceiling stays where it is
+// because the rest of the bundle did not shrink with it.
 // The previous raise, kept as the measurement it was: 340 → 344 because the footer gained the
 // open-issue count. That bundle came in **71 bytes over** 340 KB, so the raise was what the
 // footer actually cost, not slack.

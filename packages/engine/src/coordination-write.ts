@@ -439,8 +439,13 @@ function validateCompletionRecord(value: unknown, what: string, route: RowValida
     }
   }
   // The reviewed base is optional provenance on every route; the engine never
-  // fabricates a merge-base to fill it.
-  if (value.review_base !== null && (typeof value.review_base !== "string" || !GIT_SHA.test(value.review_base))) {
+  // fabricates a merge-base to fill it. A legacy row may carry no key at all,
+  // so absence is the same fact as an explicit null.
+  if (
+    value.review_base !== undefined &&
+    value.review_base !== null &&
+    (typeof value.review_base !== "string" || !GIT_SHA.test(value.review_base))
+  ) {
     violations.push(invalid("coordination.row.completion-field", `${what}.review_base must be a full Git object id or null`));
   }
   if (!(reportOnly && value.worktree_path === null) && (!isNonEmptyString(value.worktree_path) || !isAbsolute(value.worktree_path))) {

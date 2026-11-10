@@ -22,7 +22,6 @@ import type { IterationsCopy } from "../screens/Iterations.tsx";
 import type { IterationDetailCopy } from "../screens/IterationDetail.tsx";
 import type { ProjectsCopy } from "../screens/Projects.tsx";
 import type { ProjectDetailCopy } from "../screens/ProjectDetail.tsx";
-import type { SyncBindingCopy } from "../screens/SyncBinding.tsx";
 import { en, zh, type Copy } from "./index.ts";
 
 /**
@@ -112,8 +111,7 @@ function screens(copy: Copy) {
       "not-applicable": { ...copy.state["not-applicable"], heading: copy.projectDetail.features.roadmap },
     },
   };
-  const syncBinding: SyncBindingCopy = { ...copy.syncBinding, state: copy.state };
-  return { overview, focus, issues, issueDetail, workflows, workflowDetail, iterations, iterationDetail, projects, projectDetail, syncBinding };
+  return { overview, focus, issues, issueDetail, workflows, workflowDetail, iterations, iterationDetail, projects, projectDetail };
 }
 
 describe("every screen's copy contract is satisfied by both locales", () => {
@@ -122,9 +120,9 @@ describe("every screen's copy contract is satisfied by both locales", () => {
   const english = screens(en);
   const chinese = screens(zh);
 
-  test("eleven screens, two locales, no missing key", () => {
+  test("ten screens, two locales, no missing key", () => {
     for (const [locale, copy] of [["en", english], ["zh", chinese]] as const) {
-      expect(Object.keys(copy)).toHaveLength(11);
+      expect(Object.keys(copy)).toHaveLength(10);
       for (const [name, value] of Object.entries(copy)) {
         expect(`${locale}.${name}: ${Object.keys(value).length}`).not.toMatch(/^(en|zh)\.\w+: 0$/);
       }

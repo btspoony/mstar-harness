@@ -85,17 +85,90 @@ describe("the projection state replaces the removed counters", () => {
     });
   });
 
-  test("stale and unavailable carry their reasons verbatim", () => {
+  test("stale and unavailable carry a bounded, structured summary", () => {
+    // One source may fail more than once; the counts are distinct SOURCES.
     const diagnosed = {
       ...base,
       freshness: "stale" as const,
-      diagnostics: [{ sourceKey: "compass", reason: "unreadable", message: "compass could not be parsed" }],
+      diagnostics: [
+        {
+          sourceKey: "compass:iterations:iter-a/delivery-compass.md",
+          reason: "missing",
+          message: "missing: no file at iter-a/delivery-compass.md",
+        },
+        {
+          sourceKey: "compass:iterations:iter-b/delivery-compass.md",
+          reason: "missing",
+          message: "missing: no file at iter-b/delivery-compass.md",
+        },
+        {
+          sourceKey: "compass:iterations:iter-b/delivery-compass.md",
+          reason: "inaccessible",
+          message: "inaccessible: read refused (EACCES) at iter-b/delivery-compass.md",
+        },
+        {
+          sourceKey: "root:harness:execution/registry",
+          reason: "invalid",
+          message: "invalid: execution registry contains malformed entry JSON",
+        },
+      ],
     };
-    expect(projectionState(diagnosed)).toMatchObject({
+    const state = projectionState(diagnosed);
+    expect(state).toMatchObject({
       kind: "stale",
-      reasons: ["compass: compass could not be parsed"],
+      notice: { affected: 3, missing: 2, samples: ["iter-a", "iter-b", "root"], omitted: 0 },
     });
+    // Neither the raw diagnostic message nor a source path rides along.
+    const serialized = JSON.stringify(state);
+    for (const leaked of ["no file at", "delivery-compass.md", "EACCES", "malformed entry JSON"]) {
+      expect(serialized).not.toContain(leaked);
+    }
     expect(projectionState({ ...diagnosed, freshness: "unavailable" }).kind).toBe("unavailable");
+  });
+
+  test("at most three samples, each at most 64 code points, with exact omitted arithmetic", () => {
+    const diagnostics = Array.from({ length: 40 }, (_, index) => ({
+      sourceKey: `compass:iterations:iter-${String(index).padStart(2, "0")}-${"x".repeat(80)}/delivery-compass.md`,
+      reason: "missing",
+      message: `missing: no file at .mstar/archived/iter-${index}/delivery-compass.md`,
+    }));
+    const state = projectionState({ ...base, freshness: "stale", diagnostics });
+    if (state.kind === "current" || state.notice === null) throw new Error("expected a stale notice");
+    expect(state.notice.affected).toBe(40);
+    expect(state.notice.missing).toBe(40);
+    expect(state.notice.samples).toHaveLength(3);
+    expect(state.notice.samples.every((sample) => Array.from(sample).length <= 64)).toBe(true);
+    expect(state.notice.omitted).toBe(40 - state.notice.samples.length);
+    expect(state.notice.omitted).toBe(37);
+  });
+
+  test("ten times the sources changes only the count, not the sample bound", () => {
+    const source = (index: number) => ({
+      sourceKey: `compass:iterations:iter-synthetic-${index}/delivery-compass.md`,
+      reason: "missing",
+      message: `missing: no file at .mstar/archived/iter-synthetic-${index}/delivery-compass.md`,
+    });
+    const small = projectionState({
+      ...base,
+      freshness: "stale",
+      diagnostics: Array.from({ length: 100 }, (_, index) => source(index)),
+    });
+    const large = projectionState({
+      ...base,
+      freshness: "stale",
+      diagnostics: Array.from({ length: 1000 }, (_, index) => source(index)),
+    });
+    if (small.notice === null || large.notice === null) throw new Error("expected a stale notice");
+    expect(large.notice.samples).toEqual(small.notice.samples);
+    expect(large.notice.affected).toBe(1000);
+    expect(large.notice.omitted).toBe(997);
+  });
+
+  test("a degraded read that names no source carries no fabricated notice", () => {
+    expect(projectionState({ ...base, freshness: "stale", diagnostics: [] })).toMatchObject({
+      kind: "stale",
+      notice: null,
+    });
   });
 
   test("NEGATIVE: no counter rides along (IA §8.1)", () => {
