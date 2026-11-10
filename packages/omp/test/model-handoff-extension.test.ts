@@ -1050,6 +1050,62 @@ describe("host session identity injection", () => {
     }
   }, 30_000);
 
+  // A `#` or a shell operator ends the statement, so an `export` written after
+  // one is comment or argument text to the shell and must never count as this
+  // hook's own marker (Greptile F-002): skipping the fail-closed prefix there
+  // leaves the CLI without `leafSeat` and lets a subagent register as coordinator.
+  test("a comment or operator never suppresses the leaf prefix", async () => {
+    const repo = buildControlRepo();
+    const taskSession = newSession(repo.main);
+    taskSession.appendSessionInit({ systemPrompt: "task", task: "scout", tools: ["bash"], agent: "scout" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: taskSession,
+    });
+    const sessionPrefix = `export MSTAR_HOST_SESSION_ID='${harness.sessionManager.getSessionId()}'; `;
+    const leafPrefix = "export MSTAR_LEAF_SEAT=1; ";
+    for (const [command, expectedPrefix] of [
+      // The Greptile form: the shell reads the second export as a comment, so
+      // `mstar workflow register` runs without the leaf marker. The host export
+      // is unrecognisable too, so both prefixes are injected.
+      [
+        "export MSTAR_HOST_SESSION_ID=x #; export MSTAR_LEAF_SEAT=1; \nmstar workflow register --workflow wf-1",
+        sessionPrefix + leafPrefix,
+      ],
+      // A comment on the leaf export itself: the host export is this hook's own
+      // recognised value, the commented leaf statement is not.
+      [
+        "export MSTAR_HOST_SESSION_ID=x; export MSTAR_LEAF_SEAT=1 #; \nmstar workflow register --workflow wf-1",
+        leafPrefix,
+      ],
+      // An operator ends the host export's value word; the recognised value can
+      // only be a bare word that the `; ` immediately follows.
+      [
+        "export MSTAR_HOST_SESSION_ID=x&&true; export MSTAR_LEAF_SEAT=1; mstar workflow register --workflow wf-1",
+        sessionPrefix + leafPrefix,
+      ],
+    ] as const) {
+      const revised = await harness.emitToolCall({
+        type: "tool_call",
+        toolCallId: "call-leaf-comment",
+        toolName: "bash",
+        input: { command },
+      });
+      if (!isPlainFixtureRecord(revised) || !isPlainFixtureRecord(revised.input)) {
+        throw new Error("expected a revised bash input");
+      }
+      expect(String(revised.input.command)).toBe(expectedPrefix + command);
+      const child = Bun.spawnSync([
+        "sh",
+        "-c",
+        `mstar() { printf %s "$MSTAR_LEAF_SEAT"; }; ${expectedPrefix}${command}`,
+      ]);
+      expect(child.exitCode).toBe(0);
+      expect(child.stdout.toString()).toBe("1");
+    }
+  }, 30_000);
+
   test("a leaf (task) session exports the leaf marker; a coordinator session and a leading injected chain do not", async () => {
     const repo = buildControlRepo();
 

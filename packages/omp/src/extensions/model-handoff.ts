@@ -74,16 +74,16 @@ const LEAF_SEAT_ENV = "MSTAR_LEAF_SEAT";
 /** Single-quote a value for a POSIX shell — the one quoting that never expands. */
 const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 /**
- * One leading `export <name>=<value>; ` statement. The value alternatives are
- * disjoint (`'` starts a quoted chunk, `\` an escape pair, the char class takes
- * the rest and excludes both), so the scan stays linear.
+ * One leading `export <name>=<value>; ` statement, in one of the two value forms
+ * this hook can produce: a `shellSingleQuote` value (`'…'`, with `'\''` as its
+ * only interior quote form) or a restricted bare word. Both alternatives begin
+ * with a disjoint character, so the scan stays linear.
  *
- * The char class also stops at an unquoted `"`, backtick, `$` or `(` —
- * characters this hook never emits outside `shellSingleQuote`. Such a word
- * opens a quoted or substituted value whose inner `; ` is literal, so the scan
- * fails instead of reading a second statement out of command text.
+ * Anything else fails the match: a `#` starts a comment and `& | ; > <` break
+ * the statement, so accepting them as value text would read a commented-out
+ * `export` as an injected one and skip the fail-closed marker.
  */
-const LEADING_EXPORT_RE = /^export ([A-Za-z_][A-Za-z0-9_]*)=((?:'[^']*'|\\.|[^;'\\"`$(])*); /;
+const LEADING_EXPORT_RE = /^export ([A-Za-z_][A-Za-z0-9_]*)=('(?:[^']|'\\'')*'|[A-Za-z0-9_.:@%+,=/-]+); /;
 /**
  * Has this hook's own `export <name>=…; ` prefix already been applied?
  *
