@@ -60,11 +60,16 @@ properties of the host shape the mechanism:
    'export MSTAR_LEAF_SEAT='`, a `grep MSTAR_LEAF_SEAT=` argument), and the leaf
    marker is fail-closed: dropping it lets a subagent register as the
    coordinator. Idempotency must be bought positionally, never by mention.
-4. **Scan value text across shell quoting boundaries.** The value alternation
-   stops at an unquoted `"`, backtick, `$` or `(` — characters this hook never
-   emits outside its single-quote helper. Inside such a word a `; ` is literal,
-   so a scan that ignored the boundary reads a second, caller-authored statement
-   out of a quoted or substituted value and mistakes it for its own prefix.
+4. **Accept only the value forms the producer emits.** The recognised value is
+   either the single-quote helper's `'…'` form — `'\''` is its only interior
+   quote form, so a `; ` inside it stays literal — or a restricted bare word
+   (`[A-Za-z0-9_.:@%+,=/-]+`: no whitespace, no shell metacharacter). Every other
+   form fails the match and the marker is injected: `#` starts a comment and
+   `& | ; > <` break the statement, so an `export` that is commented out or
+   operator-terminated must not read as an already-injected prefix and suppress
+   the leaf marker; an unquoted `"`, backtick or `$(` is likewise not this hook's
+   text. A caller-written export in another shell form is left as written and the
+   marker is added — the hook only re-recognises its own output.
 5. **Gate revisions on the same tool-name set as every other shell classifier.**
    The extension classifies coordinator shell calls against
    `SHELL_TOOL_NAMES = ["bash", "functions.bash"]`; an injection gate that
@@ -75,8 +80,9 @@ properties of the host shape the mechanism:
    (`packages/omp/test/model-handoff-extension.test.ts`): replaying the revised
    output three times leaves exactly one export per marker; a command that only
    mentions a marker still receives the prefix; a quoted and a substituted value
-   are not read as statements; `functions.bash` injects once; a caller-supplied
-   export keeps its value.
+   are not read as statements; a comment or operator never suppresses the leaf
+   prefix; `functions.bash` injects once; a caller-supplied export keeps its
+   value.
 
 ## Consequences
 
