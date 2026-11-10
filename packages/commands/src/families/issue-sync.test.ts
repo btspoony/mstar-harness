@@ -1202,6 +1202,128 @@ describe("push — the credential scope preflight", () => {
     expect(next.data?.items).toEqual([expect.objectContaining({ localId: "I-000807", outcome: "skipped" })]);
   });
 
+  test("a --release push is refused by name while another run is parked inside its create, so the release cannot race an in-flight request", async () => {
+    const f = await fixture("push-release-in-flight", null);
+    storeCredential("read,issues:create");
+    const bindingId = `linear:${PROJECT}`;
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000808', ?, 'In flight', 'bug', 'high', 'i', 'a', 'now', 'now', 'sync-I-000808')",
+      ).run(PROJECT);
+      handle.close();
+    }
+
+    // Run A parks INSIDE the create's provider call: the exact window a
+    // `--release` scan cannot see, because the request has left and landed nowhere.
+    let parking!: () => void;
+    const parked = new Promise<void>((resolve) => {
+      parking = resolve;
+    });
+    let land!: () => void;
+    const landed = new Promise<void>((resolve) => {
+      land = resolve;
+    });
+    const runA = writeProvider(["bug"]);
+    const baseWrite = runA.applyWrite.bind(runA);
+    runA.applyWrite = async (write: unknown) => {
+      parking();
+      await landed;
+      return baseWrite(write);
+    };
+
+    const a = executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, runA));
+    await parked;
+
+    // A holds the run: the holder facts B has to name are readable while it works.
+    const held = await openStore({ harnessDir: f.harnessDir }, "read");
+    const holder = readRun(held.db, { bindingId, direction: PUSH_DIRECTION })!;
+    expect(holder).toMatchObject({ holderPid: process.pid });
+    held.close();
+    // A's create is recorded as an unresolved `pending` row, so B's --release
+    // names a shape that WOULD be releasable — the lease is the only thing that
+    // refuses it.
+    const heldRow = await f.db();
+    expect(heldRow.prepare("select item_state, external_id from issue_sync_state where local_id = 'I-000808'").get()).toEqual({
+      item_state: "pending",
+      external_id: null,
+    });
+    heldRow.close();
+
+    // B is the same ordinary command with --release: refused at acquisition,
+    // before reconciliation, before any release write and before any remote send.
+    const runB = writeProvider(["bug"]);
+    const b = (await executeCommand(
+      "issue-sync.push",
+      { project: PROJECT, release: ["I-000808"] },
+      withProvider(f, runB),
+    )) as { status: string; code: string; message: string; details?: Record<string, unknown> };
+    expect(b.status).toBe("refused");
+    expect(b.code).toBe("sync.run-held");
+    // Not a shape error: the refusal is about the live holder, not about the flag.
+    expect(b.code).not.toBe("sync.illegal-transition");
+    // Holder facts, so an operator can judge whether that holder is alive.
+    expect(b.message).toContain(holder.startedAt);
+    expect(b.message).toContain(String(holder.holderPid));
+    expect(b.message).toContain(holder.holderHost);
+    // Both recoveries: wait-and-re-run, and the explicit dead-holder takeover.
+    expect(b.message).toContain("mstar issue-sync push --project <project-id>");
+    expect(b.message).toContain("--take-run");
+    expect(JSON.stringify(b)).toContain("--take-run");
+    // Zero sends from B: no create, no update, and no listing scan either.
+    expect(runB.writes).toEqual([]);
+    expect(runB.calls).not.toContain("applyWrite");
+    // Refused at acquisition, before any reconciliation scan.
+    expect(runB.calls).not.toContain("listIssues");
+
+    // B released nothing: A's residue is untouched and A still owns the run.
+    const afterB = await f.db();
+    try {
+      expect(afterB.prepare("select item_state, external_id from issue_sync_state where local_id = 'I-000808'").get()).toEqual({
+        item_state: "pending",
+        external_id: null,
+      });
+      expect(readRun(afterB, { bindingId, direction: PUSH_DIRECTION })).toEqual(holder);
+    } finally {
+      afterB.close();
+    }
+
+    // A finishes: exactly ONE semantic create for the item.
+    land();
+    const finished = (await a) as { status: string; data?: { items: Array<{ localId: string; outcome: string; externalId: string | null }> } };
+    expect(finished.status).toBe("ok");
+    expect(finished.data?.items).toEqual([
+      expect.objectContaining({ localId: "I-000808", outcome: "created", externalId: "LIN-1" }),
+    ]);
+    // A sent exactly ONE provider write for the item, and it was the create.
+    expect(runA.calls.filter((call) => call === "applyWrite")).toHaveLength(1);
+
+    const afterA = await f.db();
+    try {
+      expect(afterA.prepare("select item_state, external_id from issue_sync_state where local_id = 'I-000808'").get()).toEqual({
+        item_state: "applied",
+        external_id: "LIN-1",
+      });
+      // A released the run on its own exit, which is what makes "wait, then
+      // re-run" work.
+      expect(readRun(afterA, { bindingId, direction: PUSH_DIRECTION })).toBeNull();
+    } finally {
+      afterA.close();
+    }
+
+    // The recovery the refusal names: the waited-out re-run acquires the run and
+    // sends nothing, because A already landed the item exactly once.
+    const rerun = writeProvider(["bug"]);
+    const again = (await executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, rerun))) as {
+      status: string;
+      data?: { items: Array<{ localId: string; outcome: string }> };
+    };
+    expect(again.status).toBe("ok");
+    expect(again.data?.items).toEqual([expect.objectContaining({ localId: "I-000808", outcome: "skipped" })]);
+    expect(rerun.writes).toEqual([]);
+  });
+
   test("a completed push releases the run, so the next push acquires it instead of being refused", async () => {
     const provider = writeProvider(["bug"]);
     const f = await fixture("push-run-release", null);
