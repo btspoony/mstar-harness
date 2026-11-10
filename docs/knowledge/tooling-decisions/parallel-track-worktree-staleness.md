@@ -29,7 +29,7 @@ Three separate failures hit the same delivery (`<plan-id>`, four track worktrees
 
 2. **A leaf judged a contract from a stale base.** One dsh implementer reported that `packages/engine/src/core.ts` still typed severity as `...|nit` and offered to change the engine — correct for its checkout, wrong for the delivery: the track that owned the engine change (`track-b`) had already converged it, and the dsh track simply had not received that commit yet. Track worktrees isolate *tracked bytes*; they do not carry a sibling track's commits.
 
-3. **`plan complete` rejected relative report paths.** The `qc.reports` / `qc.consolidated` / `qa.report` / `evidence_paths` members are all validated by `assertEvidenceInsidePlanArea` (`packages/engine/src/coordination.ts:1019`): each must be **absolute**, must exist, and must sit under `{PLAN_DIR}` or `{SDD_DIR}/<plan-id>`. A relative `review/qc1.md` is refused with `Evidence path must be absolute…` even though the same string works as a *stored* reference, and the refusal's recovery line suggests `--evidence <evidence-file>` (the flag takes inline JSON; `--file` takes the path).
+3. **`plan complete` rejected relative report paths.** The `qc.reports` / `qc.consolidated` / `acceptance.report` / `evidence_paths` members are all validated by `assertEvidenceInsidePlanArea` (`packages/engine/src/coordination.ts:1019`): each must be **absolute**, must exist, and must sit under `{PLAN_DIR}` or `{SDD_DIR}/<plan-id>`. A relative `review/qc1.md` is refused with `Evidence path must be absolute…` even though the same string works as a *stored* reference, and the refusal's recovery line suggests `--evidence <evidence-file>` (the flag takes inline JSON; `--file` takes the path).
 
 ## Guidance
 

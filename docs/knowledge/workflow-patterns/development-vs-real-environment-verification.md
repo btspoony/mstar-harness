@@ -25,7 +25,7 @@ A development iteration owns **implementation plus unit/component checks**. A co
 - installed-artifact or deployment runs;
 - browser, device or OS-level integration.
 
-A development plan's acceptance criteria, `QA gate` (the fixed `pm-acceptance` carrier) and QC scope must not require that evidence. The verification flow exists for it; pulling it into an iteration both stalls delivery and duplicates the flow.
+A development plan's acceptance criteria, `Acceptance gate` (the fixed `pm-acceptance` value) and QC scope must not require that evidence. The verification flow exists for it; pulling it into an iteration both stalls delivery and duplicates the flow.
 
 ## Why the narrower wording fails
 

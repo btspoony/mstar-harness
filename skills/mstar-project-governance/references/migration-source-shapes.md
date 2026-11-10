@@ -141,7 +141,7 @@ Migration history only: entries are keyed by plan id and each value is an **arra
 ```json
 { "entries": { "plan-id": [
   { "id": "R1", "title": "Finding title", "severity": "critical | high | medium | low | nit",
-    "source": "QC-#1 qc1.md F-001 @ <review-range>, QA qa.md, review, …",
+    "source": "QC-#1 qc1.md F-001 @ <review-range>, acceptance pm-acceptance.md, review, …",
     "scope": "Affected file or component", "decision": "defer | accept | risk-accepted",
     "owner": "@fullstack-dev", "target": "Before plan 02 / YYYY-MM-DD / milestone",
     "tracking": "Issue URL or null",

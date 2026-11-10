@@ -62,6 +62,6 @@ These seams are corridor contracts, not local bugs: upstream moves them on its o
 
 ## Examples
 
-- The `0.2.1-rc.5 → 0.2.2-rc.1` run (plan `<plan-id>.2.2-rc1-upgrade`; QC consolidated and QA reports under `{HARNESS_DIR}/sdd/<plan-id>.2.2-rc1-upgrade/review/`): `cf736c1f` corridor pins + structural `AgentPresetsView`; `6dc1e2d2` executor mounted in both compositions + the `executeToolCall` batch helper; `5ee4fd46` cordis peer `^4.0.5` → `~4.1.0` after QC seats 2/3 flagged the corridor mismatch (F-001) — the one seam no type gate catches.
+- The `0.2.1-rc.5 → 0.2.2-rc.1` run (plan `<plan-id>.2.2-rc1-upgrade`; QC consolidated and acceptance reports under `{HARNESS_DIR}/sdd/<plan-id>.2.2-rc1-upgrade/review/`): `cf736c1f` corridor pins + structural `AgentPresetsView`; `6dc1e2d2` executor mounted in both compositions + the `executeToolCall` batch helper; `5ee4fd46` cordis peer `^4.0.5` → `~4.1.0` after QC seats 2/3 flagged the corridor mismatch (F-001) — the one seam no type gate catches.
 - Consolidation review candidate: this page plus `tooling-decisions/dsh-peer-corridor-lock-regen-and-phantom-deps.md` together form the full corridor-bump checklist (lock + phantom imports + adaptation seams).
 - The `dsh-llm-fallbacks` `0.6.13 → 0.7.0` follow-up (plan `<plan-id>.7.0`; commit `376d2e96`, branch `feat/dsh-fallbacks-0.7.0`): pin-only patch of four files (two manifests, `bun.lock`, `.changes` fragment), zero source edits — the routing rewrite never crossed the consumed service/seeds surface.

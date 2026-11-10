@@ -43,7 +43,7 @@ import { dirname as dirname8, join as join10 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 import { existsSync as existsSync8, readFileSync as readFileSync7, readdirSync as readdirSync5, realpathSync as realpathSync6 } from "node:fs";
 import { dirname as dirname9, join as join11, resolve as resolve11, sep as sep5 } from "node:path";
-import { existsSync as existsSync10, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync7, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync10, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync7, statSync as statSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { execFileSync as execFileSync4 } from "node:child_process";
 import { basename as basename8, dirname as dirname10, isAbsolute as isAbsolute6, join as join14, relative as relative3, resolve as resolve12 } from "node:path";
 import { basename as basename9, isAbsolute as isAbsolute8, join as join16, relative as relative4, resolve as resolve13, sep as sep7 } from "node:path";
@@ -164,10 +164,16 @@ function validatePreparedCoordination(value, what = "coordination.prepared") {
       violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
   return violations;
 }
+function storedAcceptanceOf(record) {
+  if (record.acceptance !== undefined && record.qa !== undefined)
+    return;
+  const member = record.acceptance ?? record.qa;
+  return isPlainObject(member) ? member : undefined;
+}
 function validateCompletionRecord(value, what, route) {
   if (!isPlainObject(value))
     return [invalid("coordination.row.completion-shape", `${what} must be an object`)];
-  const allowed = ["source_branch", "source_sha", "worktree_path", "review_base", "review_head", "qc", "qa", "integration", "completed_by", "completed_at"];
+  const allowed = ["source_branch", "source_sha", "worktree_path", "review_base", "review_head", "qc", "acceptance", "qa", "integration", "completed_by", "completed_at"];
   const violations = Object.keys(value).filter((key) => !allowed.includes(key)).map((key) => invalid("coordination.row.completion-field", `${what} has unexpected key: ${key}`));
   const reportOnly = route === "standalone-report-only";
   if (!(reportOnly && value.source_branch === null) && !isNonEmptyString(value.source_branch)) {
@@ -199,13 +205,14 @@ function validateCompletionRecord(value, what, route) {
       violations.push(...validateEvidenceRef(report, `${what}.qc.reports[${index}]`));
     violations.push(...validateEvidenceRef(value.qc.consolidated, `${what}.qc.consolidated`));
   }
-  if (!isPlainObject(value.qa) || value.qa.gate !== "mandatory" && value.qa.gate !== "pm-acceptance" || value.qa.decision !== "pass") {
-    violations.push(invalid("coordination.row.completion-field", `${what}.qa must record passing acceptance evidence`));
+  const acceptance = storedAcceptanceOf(value);
+  if (acceptance === undefined || acceptance.gate !== "mandatory" && acceptance.gate !== "pm-acceptance" || acceptance.decision !== "pass") {
+    violations.push(invalid("coordination.row.completion-field", `${what}.acceptance must record passing acceptance evidence`));
   } else {
-    for (const key of Object.keys(value.qa))
+    for (const key of Object.keys(acceptance))
       if (!["gate", "decision", "report"].includes(key))
-        violations.push(invalid("coordination.row.completion-field", `${what}.qa has unexpected key: ${key}`));
-    violations.push(...validateEvidenceRef(value.qa.report, `${what}.qa.report`));
+        violations.push(invalid("coordination.row.completion-field", `${what}.acceptance has unexpected key: ${key}`));
+    violations.push(...validateEvidenceRef(acceptance.report, `${what}.acceptance.report`));
   }
   if (route !== "integration" && value.integration !== undefined) {
     violations.push(invalid("coordination.row.completion-field", `${what}.integration is only valid for integration delivery`));
@@ -14992,19 +14999,10 @@ function hasFiles(dir) {
 var REVIEW_RUN_LEVELS;
 var REVIEW_DATE_RE;
 var SCAFFOLD_DIRS;
-var GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
-# Principle: process stays local; results are shared with the team.
-# Default-ignore everything under .mstar/, then re-include the tracked results.
-.mstar/**
-!.mstar/AGENTS.md
-!.mstar/knowledge/
-!.mstar/knowledge/**
-!.mstar/specs/
-!.mstar/specs/**
-!.mstar/adr/
-!.mstar/adr/**
-# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
-.mstarc
+var ADR_BUCKETS;
+var GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
+# Tracked results live under .agents/ and .mstarc declares the layout.
+.mstar/
 `;
 var GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
 # Default-ignore everything under .agents/, then re-include the tracked results.
@@ -15028,7 +15026,8 @@ var init_path = __esm(() => {
   init_store_db();
   REVIEW_RUN_LEVELS = ["quick", "standard", "deep"];
   REVIEW_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-  SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd", "reviews"];
+  SCAFFOLD_DIRS = ["plans", "iterations", "sdd", "reviews"];
+  ADR_BUCKETS = ["proposed", "implemented", "rejected", "archived"];
   GITIGNORE_PROCESS_ENTRIES = GITIGNORE_SNIPPET.split(`
 `).filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/")).map((line) => line.trim());
   GITIGNORE_PROCESS_ENTRIES_AGENTS = GITIGNORE_SNIPPET_AGENTS.split(`
@@ -15789,7 +15788,7 @@ function normalizeLegacyCoordination(legacy) {
   const handoff = legacy.handoff;
   if (isRecord(handoff) && handoff.state === "completed") {
     const qc = handoff.qc;
-    const qa = handoff.qa;
+    const acceptance = handoff.acceptance ?? handoff.qa;
     const integration = handoff.integration;
     const mapped = {
       source_branch: typeof handoff.source_branch === "string" && handoff.source_branch !== "" ? handoff.source_branch : null,
@@ -15798,7 +15797,7 @@ function normalizeLegacyCoordination(legacy) {
       review_base: typeof handoff.review_base === "string" && handoff.review_base !== "" ? handoff.review_base : null,
       review_head: typeof handoff.review_head === "string" && handoff.review_head !== "" ? handoff.review_head : null,
       qc: isRecord(qc) ? qc : { decision: "", reports: [], consolidated: { path: "", sha256: "" } },
-      qa: isRecord(qa) ? qa : { gate: "", decision: "", report: { path: "", sha256: "" } },
+      acceptance: isRecord(acceptance) ? acceptance : { gate: "", decision: "", report: { path: "", sha256: "" } },
       completed_by: typeof handoff.accepted_by === "string" && handoff.accepted_by !== "" ? handoff.accepted_by : "",
       completed_at: typeof handoff.completed_at === "string" && handoff.completed_at !== "" ? handoff.completed_at : ""
     };
