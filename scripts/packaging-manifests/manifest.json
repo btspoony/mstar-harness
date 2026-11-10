@@ -19,7 +19,7 @@
           {
             "root": "packages/cli/scripts",
             "files": 3,
-            "sha256": "714449d5daf728eac8115ae5a0c6586b996d82b96fd2204cf62d3c1ee8dac9eb"
+            "sha256": "5443fd06fbdfead62a516ea1a3ad54acd0e8ef4198a0922da15c28d146a75b56"
           },
           {
             "root": "packages/cli/src",
@@ -51,7 +51,7 @@
           {
             "root": "packages/cli/dist",
             "files": 1,
-            "sha256": "4763a9c77c7324fc2dc0b9f81204606387da1e0d8dc1c81caf3a62429ea384c4",
+            "sha256": "ce8ce7cba953b50dbc547420747301280f54408ae42700806787af7fcd0b1e9c",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -60,7 +60,7 @@
         "files": [
           {
             "path": "packages/cli/dist/mstar-harness.js",
-            "sha256": "65450922e1b9d7ad3842f1876c5a3c2e6c38b96aafd7dc1abb5615549a109662"
+            "sha256": "32cd47aa4eaf45a3d625b83d4e4c13e9cb77958ea6c2758dd2c7df1584fcaf51"
           }
         ]
       },
@@ -81,13 +81,13 @@
         "trees": [
           {
             "root": "packages/dsh/scripts",
-            "files": 2,
-            "sha256": "8564806886d90932ac33fee29af7626901134883a99d501d3f73fc99ba1718e9"
+            "files": 6,
+            "sha256": "63ca87c53dea2fdbf98cd9b1e44b08834c01284ddedc520e405cb6c84c6113a0"
           },
           {
             "root": "packages/dsh/src",
             "files": 64,
-            "sha256": "39578cd2d812cfd5b0970632dbe84444cf4173d53793aaf24a835a1b938e96d3"
+            "sha256": "e11626c78694c40f44bfbdaa4f248330d2ec0451f9bc3f73a395380b60606885"
           },
           {
             "root": "packages/dsh/workflows",
@@ -98,7 +98,7 @@
         "files": [
           {
             "path": "packages/dsh/package.json",
-            "sha256": "2ccda505f8a6bdfc8e4a1bc1b2df7ca8e83e2fb145c3cc0274fef37c25b1ca0e"
+            "sha256": "5b3d423fa976acb86c052f13bae07d91fea8f1fd7f514c047ab5f06bf9552a0a"
           },
           {
             "path": "packages/dsh/tsconfig.json",
@@ -111,7 +111,7 @@
           {
             "root": "packages/dsh/dist",
             "files": 63,
-            "sha256": "2f3c18db45bdf63aa178835ee7189daaee999818150cade9a4667d1715aac99a",
+            "sha256": "906857d8a70f03508d55238ea2e1f02f31798a487373f96c9ce463a34d29a20a",
             "exclude": [
               "client.js",
               "execution-consumer.json"
@@ -121,7 +121,7 @@
         "files": [
           {
             "path": "packages/dsh/dist/index.js",
-            "sha256": "3496d5c936d12b82b12777c7bad4906f6103c42a5ba73dd963b1f24a00ae8efb"
+            "sha256": "e3d6bac8aeaeaeb9939ac93cbd51fa78111d8dec74617733c44c1566349a1fd1"
           },
           {
             "path": "packages/dsh/dist/invariant.js",
@@ -174,7 +174,7 @@
           {
             "root": "packages/engine/src",
             "files": 133,
-            "sha256": "8f9ff6d3c8cc17f57d56db619b84790613fb0fcd3a121ddd815a5bd4020dd036"
+            "sha256": "7a3b887d318142e2f03b2a0e56714212cc29026839315847a7788883efa9a6ef"
           }
         ],
         "files": [
@@ -193,7 +193,7 @@
           {
             "root": "packages/engine/dist",
             "files": 135,
-            "sha256": "bf17c11bb8da9adcac5c2319ef83cd68f3674638e63f342e225405e35317a3b9",
+            "sha256": "23b5f1683016adb5cc2ef0a15ac53ef4324326ade6e919387275d4645fcffd43",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -202,11 +202,11 @@
         "files": [
           {
             "path": "packages/engine/dist/audit.js",
-            "sha256": "701f0ca2e40d1ca101a764cf5708e1930ffe5617248a229dcb2f2501a0aa1a08"
+            "sha256": "a1c1a7dc4dc235ead4ab6433e06d3fc88869897e37d80d82f424f99b969bf234"
           },
           {
             "path": "packages/engine/dist/engine.js",
-            "sha256": "37542e8d4717ab28201d0a360ecc9a3ce5663c9aa4639ec15e95380d8e1439f2"
+            "sha256": "30a90940e2d95c56a5dede1ed95ac8138d21d19875713126a900c5a7f6658025"
           }
         ]
       },
@@ -260,7 +260,7 @@
           {
             "root": "packages/omp/dist",
             "files": 4,
-            "sha256": "acc11a7df8f937945fe31d763b291df12e9031bd13b9beed0c1ce3f5522c7cb6",
+            "sha256": "48f60c0d4d14d24b9ae44e6a402a215fce883ac3ee7c8fa4dc90ee8bee5d8f6e",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -268,7 +268,7 @@
           {
             "root": "packages/omp/extensions",
             "files": 3,
-            "sha256": "adcdb4f006c2489d719c8836516a75170ff00fc3021492dd05fb5f6cfeca4dd8",
+            "sha256": "8de70021f0fc0abaf8181088ef2a70013dad35daa5bd9719c83c05ead5708dc3",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -276,7 +276,7 @@
           {
             "root": "packages/omp/hooks",
             "files": 1,
-            "sha256": "cc74088dfb57d7ef30315e469bd72b27f219bbb7daad9d7ed2f4b1e39629ed92",
+            "sha256": "bedbf0f4b15ab941bef473981cb53bbc1c2c46644440bca5c877652eb2136fd2",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -285,15 +285,15 @@
         "files": [
           {
             "path": "packages/omp/dist/extensions/model-handoff.js",
-            "sha256": "80a5e423a90a20099b54f29b4a7804613d6b1403aa75da39b3aa93a6a6220698"
+            "sha256": "28a983453bf56f140024d578d1c021d8da70a56892537ddba52b590271bfa037"
           },
           {
             "path": "packages/omp/dist/extensions/phase2-orchestration.js",
-            "sha256": "b6a40b395289c4d9048567c8afcdeb3b658d3f12d344d50aa4df0de253e94a94"
+            "sha256": "f9313d5b5d1eb53a4e2ff5cb56e638d0174088b43867fda08a87220c8bf341ca"
           },
           {
             "path": "packages/omp/dist/hooks/pre/mstar-gates.js",
-            "sha256": "4a4bd82a88243749da85cb0609d20f3fc576cb600c558cd7ed1ed8384dd190f3"
+            "sha256": "1a22b2fdb34bfc8739a06fb139594d743dd83c66810cee298ca8332274d1e08c"
           },
           {
             "path": "packages/omp/mcp.json",
@@ -397,7 +397,7 @@
           {
             "root": "packages/opencode/dist",
             "files": 1,
-            "sha256": "2a336225c10b3d97b1cebc4a067ca2b909e895c6c59317570284cef607e1ceb4",
+            "sha256": "278802fb91f407cad3969f03ee9e8a34e9558ebf7b591e9d236b6c909a4d6ad7",
             "exclude": [
               "execution-consumer.json"
             ]
@@ -406,7 +406,7 @@
         "files": [
           {
             "path": "packages/opencode/dist/mstar.js",
-            "sha256": "31956d9a38c689934c830af9f7445534300c70a49c845f660d7873e253cb7646"
+            "sha256": "acf60026418ac042f834913b251b99aeaa740dde64ff0948069e84cbbf7ae73f"
           }
         ]
       },
@@ -462,7 +462,7 @@
           {
             "root": "packages/engine/src",
             "files": 133,
-            "sha256": "8f9ff6d3c8cc17f57d56db619b84790613fb0fcd3a121ddd815a5bd4020dd036"
+            "sha256": "7a3b887d318142e2f03b2a0e56714212cc29026839315847a7788883efa9a6ef"
           }
         ],
         "files": [
@@ -517,7 +517,7 @@
         "files": [
           {
             "path": "hooks/mstar-write-gate.mjs",
-            "sha256": "ac9950591e48b2e354ac8667a9084e172db87c4cc30292da24995e4b74626652"
+            "sha256": "cd03bc9b281922cdabffdb1077510b32f8349a40a4488dd7303d9a0b4c7f2696"
           }
         ]
       },
