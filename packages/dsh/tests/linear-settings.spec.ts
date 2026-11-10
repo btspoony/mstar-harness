@@ -627,8 +627,10 @@ describe('the reload failure classification', () => {
       // Anything that is not the known unload keeps the stale header and must
       // be visible, not classified as benign.
       expect(lines).toEqual(['warn the linear-mcp row failed to reload: the headers expression threw'])
-      // The failure is reported without touching the row's enable bit.
-      expect(h.row.disabled).toBe(false)
+      // The failure is reported without touching the enable bit: `rowState()`
+      // reads it off the live entry, which is the row the reload actually
+      // restarted. `h.row` is the fixture replaced out of `entriesList` above and
+      // would assert on an object the service never touched.
       expect(h.service.rowState()).toEqual({ rowEnabled: true, fiberPhase: 'live' })
     } finally {
       setLinearAuthLogger(restore)
@@ -714,6 +716,34 @@ describe('the credential log safety', () => {
       ]
       // The fresh grant is what the file holds: the assertion below is live.
       expect(forbidden).toContain(rotated.accessToken)
+      for (const line of lines) {
+        for (const secret of forbidden) expect(line).not.toContain(secret)
+      }
+    } finally {
+      setLinearAuthLogger(restore)
+    }
+  })
+
+  it('writes no credential material into the refusal line', async () => {
+    const lines: string[] = []
+    const restore = setLinearAuthLogger((level, message) => lines.push(`${level} ${message}`))
+    try {
+      // The refusal producer (`refuse()` → `warn ${code}: ${message}`) is the third
+      // writer to this log, and the grant it must never carry is on the same file
+      // the service just read. A due grant with no refresh token is the one refusal
+      // the service composes itself, so the line is its own words — no upstream
+      // message can account for credential material appearing in it.
+      const grant = credential({ refreshToken: null, expiresAt: START - 1_000 })
+      const h = harness({ entry: grant })
+      expect((await h.service.refreshIfDue()).kind).toBe('refused')
+      expect(lines).toEqual([
+        'warn linear.reauth-required: the stored credential is due and holds no refresh token to renew it',
+      ])
+
+      const stored = JSON.parse(readFileSync(process.env.MSTAR_LINEAR_CREDENTIAL!, 'utf8')) as Record<string, unknown>
+      const forbidden = Object.values(stored).filter((value): value is string => typeof value === 'string' && value !== '')
+      // The grant is on the file this line's producer can read: the assertion is live.
+      expect(forbidden).toContain(grant.accessToken)
       for (const line of lines) {
         for (const secret of forbidden) expect(line).not.toContain(secret)
       }
