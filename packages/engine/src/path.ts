@@ -27,7 +27,7 @@
  * The canonical `.gitignore` snippet is embedded so the engine never reads
  * skill files at runtime (roadmap §8.5 standalone rule).
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
@@ -38,7 +38,7 @@ import type { GateResult, ValidationResult } from "./core.js";
 // evaluation (same pattern as the project.ts / status.ts cycles below).
 import { CatalogError, getCatalog, registerCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { checkoutRootOrFailure, gitIgnored, gitProbeTimeoutMs, mainWorktreeRoot, realpathNearest } from "./git-probe.js";
-import { loadMstarc, type MstarcConfig, type MstarcStringKey } from "./mstarc.js";
+import { findMstarc, loadMstarc, MSTARC_FILE, type MstarcConfig, type MstarcStringKey } from "./mstarc.js";
 // `project.ts` and `store-db.ts` are used from scaffold call paths only.
 import { _DEFAULT_PROJECT } from "./project.js";
 import { getArtifactStore } from "./store.js";
@@ -432,8 +432,8 @@ export function resolveTrackedResultDir(
   if (callerMainRoot === null || realpathNearest(callerMainRoot) !== realpathNearest(mainRoot)) return mainTarget;
   const candidate = join(callerCheckoutRoot, rel);
   // Probe a child path: a directory that does not exist yet still matches the
-  // parent's ignore rules, and the canonical snippet's re-includes
-  // (`!.mstar/knowledge/**`) only match below the directory itself.
+  // parent's ignore rules, and only the child form reaches rules that match
+  // below a directory's own name.
   return gitIgnored(callerCheckoutRoot, join(candidate, ".tracked-result-probe")) === false ? candidate : mainTarget;
 }
 
@@ -662,8 +662,13 @@ export function resolveReviewRunDir(opts: { reviewsDir: string; date?: string; s
 }
 
 
-/** Subdirectories created under the harness dir by `scaffoldHarness`. */
-const SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd", "reviews"] as const;
+/**
+ * Process subdirectories created under the harness dir by `scaffoldHarness`.
+ * Tracked result corpora are not in this list: they come from the resolvers
+ * (`resolveKnowledgeDir` / `resolveSpecsDir` / `resolveAdrDir`) after the
+ * `.mstarc` write, so a declared layout keeps one creation path.
+ */
+const SCAFFOLD_DIRS = ["plans", "iterations", "sdd", "reviews"] as const;
 
 /** Options for `resolveScaffoldDirs` / `scaffoldHarness`. */
 export type ScaffoldOptions = {
@@ -718,12 +723,18 @@ export function resolveScaffoldDirs(
 }
 
 /**
- * Initialize harness directories and the `_default` project without creating
- * an execution-status file. `mstar store init` separately creates and activates
- * the execution authority.
+ * Initialize harness directories, the tracked result corpora and the
+ * `_default` project without creating an execution-status file.
+ * `mstar store init` separately creates and activates the execution authority.
  *
- * Idempotent: existing project content and catalog identity/location are
- * never rewritten or relocated. Returns the absolute resolved harness dir.
+ * The layout bootstrap produces is the recommended one: `.mstar/` is a fully
+ * local process root, `.mstarc` (tracked) declares the layout, and the
+ * tracked corpora live under `.agents/`. Order matters — the `.mstarc` write
+ * comes first so the resolvers below land on the declared directories instead
+ * of their candidate-chain fallbacks.
+ *
+ * Idempotent: an existing `.mstarc`, directory, template or README is never
+ * rewritten. Returns the absolute resolved harness dir.
  * `options.harnessDir` scaffolds exactly that dir (see `resolveScaffoldDirs`);
  * an omitted override keeps the discovery behavior above.
  * The scaffold does NOT create a legacy `residuals.json` register: the issue
@@ -732,14 +743,173 @@ export function resolveScaffoldDirs(
  */
 export async function scaffoldHarness(root: string, options: ScaffoldOptions = {}): Promise<string> {
   const { harnessDir, projectDir } = resolveScaffoldDirs(root, options);
-  for (const dir of SCAFFOLD_DIRS) mkdirSync(join(harnessDir, dir), { recursive: true });
+  const harness = resolve(harnessDir);
+  writeBootstrapMstarc(resolve(root), harness);
+  for (const dir of SCAFFOLD_DIRS) mkdirSync(join(harness, dir), { recursive: true });
   // `_default` is the fallback project identity; its directory is a location,
   // not a mandate to create or register a Markdown roadmap.
   const defaultProjectDir = join(projectDir, _DEFAULT_PROJECT);
   mkdirSync(defaultProjectDir, { recursive: true });
-  await registerScaffoldCatalog(harnessDir);
+  // Tracked corpora come from the resolvers, never from hardcoded names: a
+  // repository that re-points a `.mstarc` key keeps one creation path. The
+  // knowledge/adr resolvers do not create a declared dir (they only create
+  // their own fallback), so the scaffold creates each resolved dir.
+  const knowledgeDir = resolveKnowledgeDir(harness);
+  const specsDir = resolveSpecsDir(harness);
+  const adrDir = resolveAdrDir(harness);
+  for (const dir of [knowledgeDir, specsDir, adrDir]) mkdirSync(dir, { recursive: true });
+  seedAdrTree(adrDir);
+  await registerScaffoldCatalog(harness);
   return harnessDir;
 }
+
+/**
+ * Write the tracked `.mstarc` at the harness dir's parent (the repository
+ * root) when absent. `harness_dir` is the resolved harness basename relative
+ * to that parent, so the declaration reproduces the layout that was just
+ * resolved instead of re-deriving it.
+ *
+ * A `.mstarc` already in scope from `root` (the file that declared the
+ * layout, e.g. `harness_dir=config/.mstar`) is authoritative and never
+ * edited, second-guessed or duplicated at a nested parent. The destination
+ * is guarded on its own path too: an explicit `harnessDir` whose parent
+ * already holds an author-owned `.mstarc` is not visible from `root`, so the
+ * write is skipped whenever that file exists.
+ */
+function writeBootstrapMstarc(root: string, harnessDir: string): void {
+  const parent = dirname(harnessDir);
+  const rel = relative(root, parent);
+  // A harness outside the scaffold root (e.g. `MSTAR_HARNESS_DIR` elsewhere)
+  // owns its own declaration: writing one next to it would create a file the
+  // caller never named.
+  if (rel.startsWith("..") || isAbsolute(rel)) return;
+  if (findMstarc(root, root) !== null) return;
+  const content =
+    "; Morning Star harness layout for this repository.\n" +
+    "; Values mirror the resolved layout so candidate-chain drift cannot move them.\n" +
+    "[config]\n" +
+    `harness_dir=${relative(parent, harnessDir)}\n` +
+    "knowledge_dir=.agents/knowledge\n" +
+    "specs_dir=.agents/specs\n" +
+    "adr_dir=.agents/adr\n";
+  mkdirSync(parent, { recursive: true });
+  writeIfAbsent(join(parent, MSTARC_FILE), content);
+}
+
+/**
+ * Seed the ADR tree under the resolved `{ADR_DIR}`: the record contract, the
+ * two skeletons and the four bucket directories. Class directories stay
+ * absent until the first record of that class — 24 empty directories are
+ * noise, and Git does not track empty directories.
+ */
+function seedAdrTree(adrDir: string): void {
+  for (const bucket of ADR_BUCKETS) mkdirSync(join(adrDir, bucket), { recursive: true });
+  writeIfAbsent(join(adrDir, "README.md"), ADR_README);
+  writeIfAbsent(join(adrDir, "proposed", "TEMPLATE.md"), ADR_TEMPLATE_PROPOSED);
+  writeIfAbsent(join(adrDir, "implemented", "TEMPLATE.md"), ADR_TEMPLATE_IMPLEMENTED);
+}
+
+/** Write `content` to `file` only when it does not exist yet. */
+function writeIfAbsent(file: string, content: string): void {
+  if (existsSync(file)) return;
+  writeFileSync(file, content, "utf8");
+}
+
+/** ADR buckets, in lifecycle order. */
+const ADR_BUCKETS = ["proposed", "implemented", "rejected", "archived"] as const;
+
+/**
+ * Consumer ADR tree contract (English). An intentional condensation of this
+ * repository's `docs/adr/README.md` — the runtime copy states the contract a
+ * consumer needs without the authoring detail — so no equality test guards
+ * it: update this text in the same change whenever the README's contract
+ * changes.
+ */
+const ADR_README = `# Architecture decision records
+
+Every record here is one decision made **among real alternatives**, filed so a reader finds it without an index: the bucket gives the fate, the class the domain, the date sorts the rest.
+
+## Directory shape
+
+\`\`\`
+{bucket}/{class}/yyyy-mm-dd-topic.md
+\`\`\`
+
+- **Bucket** \u2014 the fate: \`proposed/\`, \`implemented/\`, \`rejected/\`, \`archived/\`.
+- **Class** \u2014 the domain: \`feature/\`, \`bug-fix/\`, \`simplification/\`, \`architecture/\`, \`process/\`, \`testing/\`. There is no \`refactor\`: the judge is mechanical \u2014 observable behavior changes \u2192 \`bug-fix\` or \`feature\`; it does not \u2192 \`simplification\`.
+- **Class directories are created by the first record** of that class. They are deliberately absent from the empty tree: Git does not track empty directories, and 24 of them are noise.
+- **Filename** \u2014 the identity: the record's **original** date plus a lowercase kebab topic. It never changes across a lifecycle move; only the bucket directory moves.
+
+## Skeletons
+
+- \`proposed/TEMPLATE.md\` \u2014 \`Problem\`, \`Proposal\`, \`Alternatives considered\`, \`Acceptance criteria\`, \`Risks\`.
+- \`implemented/TEMPLATE.md\` \u2014 \`Problem\`, \`Decision\`, \`Alternatives considered\`, \`Consequences\`. \`Decision\` is present tense, never "we will".
+- \`rejected/\` has no third template: it reuses the proposed skeleton's shape with a frozen body.
+
+## Lifecycle
+
+Three moves exist, each landed as one change \u2014 move, rewrite and header together: \`proposed \u2192 implemented\`, \`proposed \u2192 rejected\`, \`implemented \u2192 archived\`. The first line of a record is \`# ADR: <title>\`; the header also carries \`Status: <state> \u2014 <why>\`. For \`proposed/\`, \`implemented/\` and \`rejected/\` the state equals the containing bucket; an archived record keeps \`Status: implemented \u2014 <why>\` and carries an additional \`Archived: yyyy-mm-dd \u2014 <reason>\` line below it. An archive records a reversal of the decision, not a fourth status.
+`;
+
+/**
+ * Verbatim skeleton from this repository's `docs/adr/proposed/TEMPLATE.md`.
+ * Byte-for-byte equal by contract: `path.test.ts` scaffolds into a temp dir
+ * and compares this output against that owning file, so an edit to the file
+ * must land here in the same change.
+ */
+const ADR_TEMPLATE_PROPOSED = `# ADR: <title>
+
+Status: proposed \u2014 <one-line why this is proposed>
+Date: <yyyy-mm-dd>
+
+## Problem
+
+<What breaks, or re-breaks, without this decision.>
+
+## Proposal
+
+<The change, in present tense.>
+
+## Alternatives considered
+
+<Each option genuinely weighed, and why it lost.>
+
+## Acceptance criteria
+
+<Observable outcomes that would make this implemented.>
+
+## Risks
+
+<What it costs or could break, and the mitigation.>
+`;
+
+/**
+ * Verbatim skeleton from this repository's `docs/adr/implemented/TEMPLATE.md`.
+ * Byte-for-byte equal by contract: `path.test.ts` scaffolds into a temp dir
+ * and compares this output against that owning file, so an edit to the file
+ * must land here in the same change.
+ */
+const ADR_TEMPLATE_IMPLEMENTED = `# ADR: <title>
+
+Status: implemented \u2014 <one-line why it was accepted>
+Date: <yyyy-mm-dd>
+
+## Problem
+
+<What breaks, or re-breaks, without this decision.>
+
+## Decision
+
+<What the system does now, in present tense.>
+
+## Alternatives considered
+
+<Each option genuinely weighed, and why it lost.>
+
+## Consequences
+
+<What this commits the project to, what it costs, and how each risk is mitigated.>
+`;
 /**
  * Register the scaffolded `_default` project through the catalog domain
  * boundary. The project directory is the canonical location; the roadmap
@@ -794,23 +964,15 @@ async function registerScaffoldCatalog(harnessDir: string): Promise<void> {
  * Canonical `.mstar/` `.gitignore` snippet — verbatim embedded copy of the
  * skill's canonical snippet (plan-conventions § Git 跟踪策略; the skill is
  * the SSOT, this constant exists so the engine never reads skill files at
- * runtime). `mstar-harness harness scaffold` is its only writer: the installer
- * (`init`) never reads or writes `.gitignore`. Ends with a
- * trailing newline so it can be appended directly.
+ * runtime). The process root is fully local: tracked results live under
+ * `.agents/` and the tracked `.mstarc` declares that layout, so no
+ * re-include belongs here. `mstar-harness harness scaffold` is its only
+ * writer: the installer (`init`) never reads or writes `.gitignore`. Ends
+ * with a trailing newline so it can be appended directly.
  */
-const GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
-# Principle: process stays local; results are shared with the team.
-# Default-ignore everything under .mstar/, then re-include the tracked results.
-.mstar/**
-!.mstar/AGENTS.md
-!.mstar/knowledge/
-!.mstar/knowledge/**
-!.mstar/specs/
-!.mstar/specs/**
-!.mstar/adr/
-!.mstar/adr/**
-# .mstarc \u2014 repo-local harness config (may declare [config] harness_dir=<name>)
-.mstarc
+const GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
+# Tracked results live under .agents/ and .mstarc declares the layout.
+.mstar/
 `;
 
 /**
@@ -831,7 +993,7 @@ const GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) \u2014 legac
 !.agents/adr/**
 `;
 
-/** Harness `.gitignore` fence entries (ignore + re-include), derived from the `.mstar/` snippet. */
+/** Harness `.gitignore` fence entries, derived from the `.mstar/` snippet (process root only). */
 const GITIGNORE_PROCESS_ENTRIES: readonly string[] = GITIGNORE_SNIPPET.split("\n")
   .filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/"))
   .map((line) => line.trim());
@@ -850,10 +1012,11 @@ export type HarnessKind = "mstar" | "agents";
 
 /**
  * Emit the canonical `.gitignore` snippet for `kind` (plan-conventions
- * § Git 跟踪策略): default-ignore the whole harness dir (`<dir>/**`) and
- * re-include only the tracked results (AGENTS.md, knowledge/, specs/, adr/).
- * When the kind is unknown (omitted), both snippets are emitted so either
- * fence can be applied.
+ * § Git 跟踪策略). The `.mstar/` kind ignores the whole process root — tracked
+ * results live under `.agents/` and the tracked `.mstarc` declares that
+ * layout, so the snippet carries no re-include; the legacy `.agents/` kind
+ * keeps its re-includes. When the kind is unknown (omitted), both snippets
+ * are emitted so either fence can be applied.
  */
 export function emitGitignoreSnippet(kind?: HarnessKind): string {
   if (kind === "agents") return GITIGNORE_SNIPPET_AGENTS;

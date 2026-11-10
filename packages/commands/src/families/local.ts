@@ -80,14 +80,18 @@ const hostSignals = [
 const hostIds = ["opencode", "omp", "pi", "dsh", "cursor", "codex", "kimi", "zcode"] as const;
 const harnessRepoPath = path.join(os.homedir(), ".mstar", "harness");
 const harnessMarkers = [".codex-plugin/plugin.json", ".zcode-plugin/plugin.json", ".omp-plugin/plugin.json"];
-const agentsTemplate = `# AGENTS.md — .mstar/ (harness layer)
+const agentsTemplate = `# AGENTS.md — .agents/ (harness layer)
 
-- Path symbols: {HARNESS_DIR} = .mstar/; {PLAN_DIR} = plans/; {SDD_DIR} = sdd/<plan-id>/;
-  {ITERATION_DIR} = iterations/; {KNOWLEDGE_DIR} = knowledge/; {SPECS_DIR} = specs/;
-  {WORKFLOW_DIR} = workflows/; {PROJECT_DIR} = projects/ (SSOT: skills/mstar-conventions).
+- Path symbols. The values below are the **bootstrap default** layout — the paths
+  this scaffold creates when the repository declares nothing; a \`.mstarc\` declaration
+  overrides them (resolve the live values with \`mstar path resolve\`):
+  {HARNESS_DIR} = .mstar/; {PLAN_DIR} = .mstar/plans/; {SDD_DIR} = .mstar/sdd/<plan-id>/;
+  {ITERATION_DIR} = .mstar/iterations/; {KNOWLEDGE_DIR} = .agents/knowledge/;
+  {SPECS_DIR} = .agents/specs/; {ADR_DIR} = .agents/adr/; {WORKFLOW_DIR} = .mstar/workflows/;
+  {PROJECT_DIR} = .mstar/projects/ (SSOT: skills/mstar-conventions; .mstarc declares the layout).
 - Process vs results: process artifacts (plans/, iterations/, sdd/, status.json, workflows/,
-  projects/) stay local and gitignored; results (this file, knowledge/, specs/) are tracked
-  and shared across clones.
+  projects/) stay under {HARNESS_DIR} and are gitignored; results (this file, {KNOWLEDGE_DIR},
+  {SPECS_DIR}, {ADR_DIR}) are tracked and shared across clones.
 - Done: only @project-manager may set Done; implementers set InReview.
 `;
 
@@ -422,11 +426,12 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             } else skipped.push(".gitignore (canonical harness snippet already present)");
           }
         } else skipped.push(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
-        const agentsPath = path.join(harnessDir, "AGENTS.md");
+        const agentsPath = path.join(workspaceRoot, ".agents", "AGENTS.md");
         if (!fs.existsSync(agentsPath)) {
+          fs.mkdirSync(path.dirname(agentsPath), { recursive: true });
           fs.writeFileSync(agentsPath, agentsTemplate, "utf8");
-          created.push(`${path.basename(harnessDir)}/AGENTS.md`);
-        } else skipped.push(`${path.basename(harnessDir)}/AGENTS.md (already present)`);
+          created.push(".agents/AGENTS.md");
+        } else skipped.push(".agents/AGENTS.md (already present)");
         return ok("harness.scaffold", { harnessDir, projectDir, created, skipped });
       },
     }),

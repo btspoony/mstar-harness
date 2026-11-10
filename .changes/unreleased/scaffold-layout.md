@@ -1,0 +1,11 @@
+---
+category: Harness
+packages: engine, commands, root
+---
+
+- **Scaffold bootstrap layout:** `mstar harness scaffold` now produces the layout the harness recommends. The canonical `.mstar` snippet ignores the process root as a whole and no longer lists `.mstarc`, so process artifacts stay local while the layout declaration travels with the repository. `scaffoldHarness` writes a tracked `.mstarc` at the harness dir's parent when no declaration is in scope and that parent lies inside the scaffold root (`harness_dir` plus `knowledge_dir` / `specs_dir` / `adr_dir` = `.agents/*`), creates `plans/` `iterations/` `sdd/` `reviews/` `projects/_default/` under the harness dir, creates the resolver-returned `.agents/knowledge|specs|adr` corpora instead of hardcoded `.mstar/knowledge` and `.mstar/specs`, and seeds the ADR tree with `README.md`, both templates and the four bucket directories (class directories are created by the first record). `harness.scaffold` writes the harness rule file at `.agents/AGENTS.md`, the only location tracked in both layouts. Reruns create and rewrite nothing, and an existing author-owned `.gitignore` or `.mstarc` is never touched.
+- Updated `mstar-conventions` (path symbols, initialization steps, git-tracking contract, bootstrap layering), `mstar-roles/references/project-manager/plan-management.md` and the new ADR `docs/adr/implemented/architecture/2026-11-11-scaffold-result-layout.md`.
+
+<!-- CN -->
+- **Scaffold 引导布局：** `mstar harness scaffold` 现在产出 harness 推荐的布局。canonical `.mstar` 片段整体忽略进程根，不再列出 `.mstarc`——进程产物留在本地，布局声明随仓库共享。`scaffoldHarness` 在仓库内无可解析声明、且 harness 目录父目录位于 scaffold 根内时，于该父目录写入 tracked `.mstarc`（`harness_dir` 加 `knowledge_dir` / `specs_dir` / `adr_dir` = `.agents/*`）；在 harness 目录下创建 `plans/` `iterations/` `sdd/` `reviews/` `projects/_default/`；按解析结果（而非硬编码 `.mstar/knowledge` / `.mstar/specs`）创建 `.agents/knowledge|specs|adr` 语料；并为 ADR 树种子 `README.md`、两个模板与四个桶目录（class 目录由首条记录创建）。`harness.scaffold` 将 harness 规则文件写到 `.agents/AGENTS.md`——两种布局下唯一被跟踪的位置。重跑不创建也不改写任何内容；作者所有的既有 `.gitignore` 或 `.mstarc` 永不被改动。
+- 更新 `mstar-conventions`（路径符号、初始化步骤、git 跟踪契约、bootstrap 分层）、`mstar-roles/references/project-manager/plan-management.md`，以及新增 ADR `docs/adr/implemented/architecture/2026-11-11-scaffold-result-layout.md`。

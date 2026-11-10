@@ -52,6 +52,7 @@ import {
 } from "../src/path.js";
 import type { ReviewRunLevel } from "../src/path.js";
 import { readJson } from "../src/core.js";
+import { parseMstarc } from "../src/mstarc.js";
 import { initializeStore, openStore } from "../src/index.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 
@@ -66,19 +67,9 @@ afterEach(() => {
 });
 
 /** Canonical snippet text — verbatim from plan-conventions § Git 跟踪策略. */
-const CANONICAL_SNIPPET = `# Morning Star harness (.mstar/)
-# Principle: process stays local; results are shared with the team.
-# Default-ignore everything under .mstar/, then re-include the tracked results.
-.mstar/**
-!.mstar/AGENTS.md
-!.mstar/knowledge/
-!.mstar/knowledge/**
-!.mstar/specs/
-!.mstar/specs/**
-!.mstar/adr/
-!.mstar/adr/**
-# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
-.mstarc
+const CANONICAL_SNIPPET = `# Morning Star harness: the process root stays local.
+# Tracked results live under .agents/ and .mstarc declares the layout.
+.mstar/
 `;
 
 /** Legacy snippet text — verbatim from plan-conventions § Git 跟踪策略 ("Legacy `.agents/` 等价"). */
@@ -1094,16 +1085,178 @@ describe("resolveAdrDir (tracked-results chain)", () => {
 });
 
 describe("scaffoldHarness", () => {
-  test("creates harness directories without writing status.json", async () => {
+  test("creates the process dirs, the tracked corpora and the .mstarc declaration without writing status.json", async () => {
     const root = tmpRoot("path-scaffold-");
     try {
       setArtifactStore(createFsStore(resolve(root, ".mstar")));
       const harnessDir = await scaffoldHarness(root);
       expect(harnessDir).toBe(resolve(root, ".mstar"));
       expect(readdirSync(harnessDir).sort()).toEqual([
-        "iterations", "knowledge", "plans", "projects", "reviews", "sdd", "specs",
+        "iterations", "plans", "projects", "reviews", "sdd",
       ]);
       expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
+      // Tracked results live outside the process root.
+      for (const dir of ["knowledge", "specs", "adr"]) {
+        expect(existsSync(join(root, ".agents", dir))).toBe(true);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("writes .mstarc at the harness dir's parent with the resolved layout keys", async () => {
+    const root = tmpRoot("path-scaffold-mstarc-write-");
+    try {
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      const harnessDir = await scaffoldHarness(root);
+      const config = parseMstarc(readFileSync(join(root, ".mstarc"), "utf8"));
+      expect(config.harnessDir).toBe(".mstar");
+      expect(config.knowledgeDir).toBe(".agents/knowledge");
+      expect(config.specsDir).toBe(".agents/specs");
+      expect(config.adrDir).toBe(".agents/adr");
+      // The declaration is authoritative: the resolvers land on `.agents/*`.
+      expect(resolveKnowledgeDir(harnessDir, { create: false })).toBe(join(root, ".agents", "knowledge"));
+      expect(resolveSpecsDir(harnessDir, { create: false })).toBe(join(root, ".agents", "specs"));
+      expect(resolveAdrDir(harnessDir, { create: false })).toBe(join(root, ".agents", "adr"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("harness_dir is the resolved harness basename relative to the .mstarc's parent", async () => {
+    const root = tmpRoot("path-scaffold-mstarc-basename-");
+    try {
+      const harnessDir = join(root, "runtime", "harness");
+      setArtifactStore(createFsStore(harnessDir));
+      await scaffoldHarness(root, { harnessDir });
+      const config = parseMstarc(readFileSync(join(root, "runtime", ".mstarc"), "utf8"));
+      expect(config.harnessDir).toBe("harness");
+      // The declaration is not second-guessed at a nested parent either.
+      expect(existsSync(join(root, ".mstarc"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an author-owned .mstarc at an explicit nested harness parent keeps its bytes", async () => {
+    const root = tmpRoot("path-scaffold-mstarc-nested-present-");
+    try {
+      const authored = "[config]\nharness_dir=harness\nknowledge_dir=docs/knowledge\n[linear]\nteam=ABC\n";
+      mkdirSync(join(root, "runtime"), { recursive: true });
+      writeFileSync(join(root, "runtime", ".mstarc"), authored, "utf8");
+      const harnessDir = join(root, "runtime", "harness");
+      setArtifactStore(createFsStore(harnessDir));
+      await scaffoldHarness(root, { harnessDir });
+      // The guard at the destination, not only at the scaffold root, keeps the
+      // author's declaration intact.
+      expect(readFileSync(join(root, "runtime", ".mstarc"), "utf8")).toBe(authored);
+      expect(existsSync(join(root, ".mstarc"))).toBe(false);
+      expect(existsSync(join(root, "runtime", "harness", ".mstarc"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a harness dir outside the scaffold root gets no .mstarc", async () => {
+    const root = tmpRoot("path-scaffold-mstarc-outside-");
+    const outsideParent = tmpRoot("path-scaffold-mstarc-outside-parent-");
+    const outside = join(outsideParent, "harness");
+    try {
+      setArtifactStore(createFsStore(outside));
+      const harnessDir = await scaffoldHarness(root, { harnessDir: outside });
+      expect(harnessDir).toBe(outside);
+      expect(readdirSync(outside).sort()).not.toContain(".mstarc");
+      // The declaration would land at the harness dir's parent, not inside it:
+      // that is the path the outside-root early return protects.
+      expect(existsSync(join(outsideParent, ".mstarc"))).toBe(false);
+      expect(existsSync(join(root, ".mstarc"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outsideParent, { recursive: true, force: true });
+    }
+  });
+
+  test("a rerun with a nested explicit harness dir rewrites and creates nothing", async () => {
+    const root = tmpRoot("path-scaffold-mstarc-nested-rerun-");
+    try {
+      const harnessDir = join(root, "runtime", "harness");
+      setArtifactStore(createFsStore(harnessDir));
+      await scaffoldHarness(root, { harnessDir });
+      const mstarc = readFileSync(join(root, "runtime", ".mstarc"), "utf8");
+      const parentEntries = readdirSync(join(root, "runtime")).sort();
+      await scaffoldHarness(root, { harnessDir });
+      expect(readFileSync(join(root, "runtime", ".mstarc"), "utf8")).toBe(mstarc);
+      expect(readdirSync(join(root, "runtime")).sort()).toEqual(parentEntries);
+      expect(existsSync(join(root, ".mstarc"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an existing .mstarc is authoritative and never rewritten", async () => {
+    const root = tmpRoot("path-scaffold-mstarc-present-");
+    try {
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");
+      setArtifactStore(createFsStore(resolve(root, ".custom")));
+      await scaffoldHarness(root);
+      expect(readFileSync(join(root, ".mstarc"), "utf8")).toBe("[config]\nharness_dir=.custom\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("seeds the ADR tree: README, both templates and the four buckets", async () => {
+    const root = tmpRoot("path-scaffold-adr-");
+    try {
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      await scaffoldHarness(root);
+      const adrDir = join(root, ".agents", "adr");
+      expect(readdirSync(adrDir).sort()).toEqual(["README.md", "archived", "implemented", "proposed", "rejected"]);
+      expect(existsSync(join(adrDir, "proposed", "TEMPLATE.md"))).toBe(true);
+      expect(existsSync(join(adrDir, "implemented", "TEMPLATE.md"))).toBe(true);
+      const readme = readFileSync(join(adrDir, "README.md"), "utf8");
+      for (const bucket of ["proposed/", "implemented/", "rejected/", "archived/"]) {
+        expect(readme).toContain(bucket);
+      }
+      // Class dirs arrive with the first record of that class.
+      expect(readdirSync(join(adrDir, "proposed"))).toEqual(["TEMPLATE.md"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // The embedded skeletons claim to be verbatim copies of this repository's
+  // owning templates. The expected bytes come from those files at test time,
+  // so an edit to one side alone names the sync duty it broke.
+  test("scaffolded ADR templates equal their owning docs/adr/*/TEMPLATE.md", async () => {
+    const root = tmpRoot("path-scaffold-adr-template-sync-");
+    try {
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      await scaffoldHarness(root);
+      const repoRoot = findRepoRoot();
+      for (const bucket of ["proposed", "implemented"]) {
+        expect(readFileSync(join(root, ".agents", "adr", bucket, "TEMPLATE.md"), "utf8")).toBe(
+          readFileSync(join(repoRoot, "docs", "adr", bucket, "TEMPLATE.md"), "utf8"),
+        );
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rerun creates nothing and rewrites nothing", async () => {
+    const root = tmpRoot("path-scaffold-rerun-");
+    try {
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      await scaffoldHarness(root);
+      const mstarc = readFileSync(join(root, ".mstarc"), "utf8");
+      const readme = readFileSync(join(root, ".agents", "adr", "README.md"), "utf8");
+      await scaffoldHarness(root);
+      expect(readFileSync(join(root, ".mstarc"), "utf8")).toBe(mstarc);
+      expect(readFileSync(join(root, ".agents", "adr", "README.md"), "utf8")).toBe(readme);
+      expect(readdirSync(join(root, ".agents", "adr")).sort()).toEqual([
+        "README.md", "archived", "implemented", "proposed", "rejected",
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1330,18 +1483,17 @@ describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟�
     try {
       writeFileSync(
         join(root, ".gitignore"),
-        "# Morning Star harness (.mstar/)\nnode_modules\ndist/\n.mstarc\n",
+        "# Morning Star harness (.mstar/)\nnode_modules\ndist/\n",
       );
       const result = validateGitignore(root);
       expect(result.ok).toBe(false);
       expect(result.code).toBe("gitignore.missing-entries");
       expect(result.severity).toBe("medium");
-      // Unknown kind — the diagnostic reports the default .mstar/ set,
-      // including the tracked-result re-includes (specs / knowledge / adr).
-      expect(result.message).toContain(".mstar/**");
-      expect(result.message).toContain("!.mstar/knowledge/");
-      expect(result.message).toContain("!.mstar/specs/**");
-      expect(result.message).toContain("!.mstar/adr/**");
+      // Unknown kind — the diagnostic reports the default .mstar/ set, which
+      // is the process root alone: tracked results live outside it.
+      expect(result.message).toContain(".mstar/");
+      expect(emitGitignoreSnippet("mstar").split("\n").filter((line) => line.trim() !== "" && !line.startsWith("#")))
+        .toEqual([".mstar/"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

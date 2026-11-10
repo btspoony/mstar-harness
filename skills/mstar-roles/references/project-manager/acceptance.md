@@ -41,7 +41,7 @@ Keep acceptance scoped to the required ACs and directly affected interfaces. A b
 
 ## Report landing and durable summary
 
-Write `{SDD_DIR}/review/qa.md` by default, or an explicitly chosen same-directory basename. The existing `qa.md` name is a report carrier, not a role or QA mode. No named output path is not an exemption: acceptance is never conversation-only. Retain the raw report while the gate is active. Before Done, preserve per-AC evidence/result, applicability, coverage/gaps, reused versus new checks, issue dispositions and the exact report pointer in the main plan's `## PM Acceptance Summary` (`mstar-artifacts/references/plan-files-and-reports.md`). Reuse that summary, not a second archive or manifest.
+Write `{SDD_DIR}/review/pm-acceptance.md` by default, or an explicitly chosen same-directory basename. The report is named after its gate, not a reviewing seat: acceptance is the primary project-manager's duty. No named output path is not an exemption: acceptance is never conversation-only. Retain the raw report while the gate is active. Before Done, preserve per-AC evidence/result, applicability, coverage/gaps, reused versus new checks, issue dispositions and the exact report pointer in the main plan's `## PM Acceptance Summary` (`mstar-artifacts/references/plan-files-and-reports.md`). Reuse that summary, not a second archive or manifest.
 
 ```markdown
 # PM Acceptance Report
