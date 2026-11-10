@@ -779,7 +779,6 @@ select.ctl { cursor: pointer; max-width: 180px; }
     <button class="proto-btn" data-screen="iteration-detail" aria-pressed="false" data-t="screen.iterationDetail">Iteration detail</button>
     <button class="proto-btn" data-screen="projects" aria-pressed="false" data-t="screen.projects">Projects</button>
     <button class="proto-btn" data-screen="project-detail" aria-pressed="false" data-t="screen.projectDetail">Project detail</button>
-    <button class="proto-btn" data-screen="sync-binding" aria-pressed="false" data-t="screen.syncBinding">Sync binding</button>
   </div>
   <div class="proto-group">
     <span class="proto-group-label" data-t="proto.dsh">dsh</span>
@@ -811,7 +810,6 @@ select.ctl { cursor: pointer; max-width: 180px; }
       <button class="nav-btn" data-dest="workflows" data-t="nav.workflows">Workflows</button>
       <button class="nav-btn" data-dest="iterations" data-t="nav.iterations">Iterations</button>
       <button class="nav-btn" data-dest="projects" data-t="nav.projects">Projects</button>
-      <button class="nav-btn" data-dest="sync-binding" data-t="screen.syncBinding">Sync binding</button>
     </nav>
     <div class="header-right">
       <select class="ctl" aria-label="Project scope" data-t-aria="header.scope">
@@ -2252,105 +2250,6 @@ select.ctl { cursor: pointer; max-width: 180px; }
       </div>
     </section>
 
-    <!-- ----------------------------- Sync binding ------------------------- -->
-    <!-- Read-only: the `.mstarc` [linear] summary, the store's binding rows and
-         the probe pair. No issue list, no failure count, no credential field —
-         the credential belongs to the host and never reaches this view. Every
-         block below is an existing primitive; the panel adds no token. -->
-    <section class="screen" data-screen="sync-binding" hidden>
-      <div class="screen-head">
-        <h1 data-t="sb.title">Sync binding</h1>
-        <div class="screen-meta">
-          <span data-t="sb.subtitle">repository → Linear workspace, read-only</span>
-        </div>
-      </div>
-
-      <div class="detail-top">
-        <section class="panel">
-          <div class="panel-head">
-            <h2 class="panel-title" data-t="sb.identity">Binding identity</h2>
-            <span class="panel-meta"><span class="mono" data-t="sb.source">.mstarc [linear]</span></span>
-          </div>
-          <div class="panel-body">
-            <dl class="fields one">
-              <div class="field"><dt data-t="sb.enabled">Enabled</dt><dd class="mono">true</dd></div>
-              <div class="field"><dt data-t="sb.mode">Mode</dt><dd class="mono">mirror</dd></div>
-              <div class="field"><dt data-t="sb.workspace">Workspace</dt><dd class="mono">acme</dd></div>
-              <div class="field"><dt data-t="sb.team">Team</dt><dd class="mono">ENG</dd></div>
-            </dl>
-            <p class="sec-note" data-t="sb.identityNote">The declared connection identity, never a live listing: the panel does not call Linear to confirm it.</p>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
-            <h2 class="panel-title" data-t="sb.readiness">Sync readiness</h2>
-            <span class="panel-meta"><span class="status tone-done"><span class="dot"></span><span class="label mono">ready</span></span></span>
-          </div>
-          <div class="panel-body">
-            <dl class="fields one">
-              <div class="field"><dt data-t="sb.state">State</dt><dd class="mono">ready</dd></div>
-              <div class="field"><dt data-t="sb.cause">Cause</dt><dd class="mono wrap">ready: linear-mcp answered initialize and tools/list</dd></div>
-            </dl>
-            <p class="sec-note" data-t="sb.readinessNote">State and cause are one pair. A state is never rendered without the cause the read supplied, and no cause is ever invented here.</p>
-          </div>
-        </section>
-      </div>
-
-      <section class="panel" style="margin-bottom:12px">
-        <div class="panel-head">
-          <h2 class="panel-title" data-t="sb.correspondence">Project correspondence</h2>
-          <span class="panel-meta"><span class="num mono">2</span> <span data-t="sb.bindings">bindings</span></span>
-        </div>
-        <div class="table-wrap">
-          <table class="table" data-narrow-cols="2">
-            <colgroup><col style="width:280px"><col></colgroup>
-            <thead><tr>
-              <th data-t="sb.projectId">projectId</th><th data-t="sb.remoteProject">remoteProject</th>
-            </tr></thead>
-            <tbody>
-              <tr><td class="mono t-12">_default</td><td class="mono t-12">MST-BACKLOG</td></tr>
-              <tr><td class="mono t-12">engine</td><td class="mono t-12">MST-ENGINE</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="panel-foot">
-          <span data-t="sb.correspondenceNote">The stored binding rows, verbatim from project_bindings — the operator's remote identifier, not a fetched Linear project title.</span>
-        </div>
-      </section>
-
-      <section class="panel" style="margin-bottom:12px">
-        <div class="panel-head">
-          <h2 class="panel-title" data-t="sb.states">Readiness states</h2>
-          <span class="panel-meta" data-t="sb.statesNote">each state owns its cause; the pair is accepted together or not at all</span>
-        </div>
-        <div class="panel-body">
-          <table class="mini-table">
-            <thead><tr><th data-t="sb.state">State</th><th data-t="sb.cause">Cause</th></tr></thead>
-            <tbody>
-              <tr><td><span class="status tone-done"><span class="dot"></span><span class="label mono">ready</span></span></td><td class="mono">ready: linear-mcp answered initialize and tools/list</td></tr>
-              <tr><td><span class="status tone-warning"><span class="dot"></span><span class="label mono">service-absent</span></span></td><td class="mono">service-absent: the host declares no linear-mcp entry</td></tr>
-              <tr><td><span class="status tone-warning"><span class="dot"></span><span class="label mono">unreachable</span></span></td><td class="mono">unreachable: the handshake did not answer within the probe deadline</td></tr>
-              <tr><td><span class="status tone-danger"><span class="dot"></span><span class="label mono">access-denied</span></span></td><td class="mono">access-denied: the credential was rejected or has expired</td></tr>
-              <tr><td><span class="status tone-neutral"><span class="dot"></span><span class="label mono">not-probed</span></span></td><td class="mono">not-probed: readiness is host-owned; no probe result was supplied</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2 class="panel-title" data-t="sb.error">No binding</h2>
-          <span class="panel-meta"><span class="status tone-warning"><span class="dot"></span><span class="label mono">linear.binding-absent</span></span></span>
-        </div>
-        <div class="panel-body">
-          <dl class="fields one">
-            <div class="field"><dt data-t="sb.bindingError">bindingError</dt><dd class="mono wrap">linear.binding-absent: .mstarc declares no [linear] section, so this repository names no workspace or team</dd></div>
-          </dl>
-          <p class="sec-note" data-t="sb.errorNote">When the binding is null the panel renders the reader's refusal verbatim in place of the identity fields. It is not "not probed": a missing declaration and an unasked question are different answers.</p>
-        </div>
-      </section>
-    </section>
-
   </main>
 
   <footer class="app-footer">
@@ -2908,22 +2807,6 @@ select.ctl { cursor: pointer; max-width: 180px; }
       "screen.projects": "Projects", "screen.projectDetail": "Project detail",
       "screen.sidebarFocus": "Sidebar · focus", "screen.sidebarIssues": "Sidebar · issues",
       "screen.sidebarNarrow": "Sidebar · narrow", "screen.sidebarProject": "Sidebar · project",
-      "screen.syncBinding": "Sync binding",
-      "sb.title": "Sync binding",
-      "sb.subtitle": "repository → Linear workspace, read-only",
-      "sb.identity": "Binding identity",
-      "sb.source": ".mstarc [linear]",
-      "sb.enabled": "Enabled", "sb.mode": "Mode", "sb.workspace": "Workspace", "sb.team": "Team",
-      "sb.identityNote": "The declared connection identity, never a live listing: this panel does not call Linear to confirm it.",
-      "sb.readiness": "Sync readiness", "sb.state": "State", "sb.cause": "Cause",
-      "sb.readinessNote": "State and cause are one pair. A state never renders without the cause the read supplied, and no cause is invented here.",
-      "sb.correspondence": "Project correspondence", "sb.bindings": "bindings",
-      "sb.projectId": "projectId", "sb.remoteProject": "remoteProject",
-      "sb.correspondenceNote": "The stored binding rows, verbatim from project_bindings — the operator's remote identifier, not a fetched Linear project title.",
-      "sb.states": "Readiness states",
-      "sb.statesNote": "each state owns its cause; the pair is accepted together or not at all",
-      "sb.error": "No binding", "sb.bindingError": "bindingError",
-      "sb.errorNote": "When the binding is null this panel renders the reader's refusal verbatim in place of the identity fields. It is not \"not probed\": a missing declaration and an unasked question are different answers.",
       "pj.title": "Projects", "pj.count": "projects", "pj.openIssues": "open issues",
       "pj.scopeNote": "a project owns its roadmap, issues and iterations",
       "pj.catalog": "Catalog projects",
@@ -3114,22 +2997,6 @@ select.ctl { cursor: pointer; max-width: 180px; }
       "screen.projects": "项目", "screen.projectDetail": "项目详情",
       "screen.sidebarFocus": "侧边栏 · 焦点", "screen.sidebarIssues": "侧边栏 · 问题",
       "screen.sidebarNarrow": "侧边栏 · 窄栏", "screen.sidebarProject": "侧边栏 · 项目",
-      "screen.syncBinding": "同步绑定",
-      "sb.title": "同步绑定",
-      "sb.subtitle": "本仓库 → Linear 工作区，只读",
-      "sb.identity": "绑定身份",
-      "sb.source": ".mstarc [linear]",
-      "sb.enabled": "已启用", "sb.mode": "模式", "sb.workspace": "工作区", "sb.team": "团队",
-      "sb.identityNote": "这里显示的是声明的连接身份，不是实时列举结果：面板不会调用 Linear 去确认它。",
-      "sb.readiness": "同步就绪状态", "sb.state": "状态", "sb.cause": "原因",
-      "sb.readinessNote": "状态与原因是一对。缺少读取给出的原因时状态不单独渲染，此处也绝不臆造原因。",
-      "sb.correspondence": "项目对应关系", "sb.bindings": "条绑定",
-      "sb.projectId": "projectId", "sb.remoteProject": "remoteProject",
-      "sb.correspondenceNote": "直接来自 project_bindings 的绑定行 —— 操作者写入的远端标识，不是抓取来的 Linear 项目标题。",
-      "sb.states": "就绪状态一览",
-      "sb.statesNote": "每个状态自带原因；这一对要么同时接受，要么都不接受",
-      "sb.error": "无绑定", "sb.bindingError": "bindingError",
-      "sb.errorNote": "绑定为 null 时，面板在身份字段的位置原样显示读取方的拒绝信息。它不是“未探测”：缺少声明与尚未提问是两个不同的答案。",
       "pj.title": "项目", "pj.count": "个项目", "pj.openIssues": "未解决问题",
       "pj.scopeNote": "项目拥有自己的路线图、问题与迭代",
       "pj.catalog": "目录项目",
@@ -3331,12 +3198,12 @@ select.ctl { cursor: pointer; max-width: 180px; }
 
   var state = { screen: "overview", lang: "en", theme: "light", dshDest: "overview" };
   var DASH_SCREENS = ["overview", "issues", "issue-detail", "workflows", "workflow-detail",
-    "iterations", "iteration-detail", "projects", "project-detail", "sync-binding"];
+    "iterations", "iteration-detail", "projects", "project-detail"];
   var PANE_SCREENS = ["sidebar-focus", "sidebar-issues", "sidebar-narrow", "sidebar-project"];
   var SCREEN_DEST = {
     overview: "overview", issues: "issues", "issue-detail": "issues", workflows: "workflows",
     "workflow-detail": "workflows", iterations: "iterations", "iteration-detail": "iterations",
-    projects: "projects", "project-detail": "projects", "sync-binding": "sync-binding", focus: "focus"
+    projects: "projects", "project-detail": "projects", focus: "focus"
   };
 
   function bySelector(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
