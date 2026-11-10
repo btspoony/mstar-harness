@@ -19,17 +19,15 @@ import { randomUUID } from "node:crypto";
 import { basename as basename3, dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync as existsSync4, realpathSync as realpathSync4 } from "node:fs";
-import { existsSync as existsSync5, readFileSync as readFileSync4, readdirSync, realpathSync as realpathSync5 } from "node:fs";
-import { dirname as dirname7, join as join7, resolve as resolve8, sep as sep3 } from "node:path";
 import { createHash as createHash4 } from "node:crypto";
 import {
   copyFileSync,
-  existsSync as existsSync8,
+  existsSync as existsSync6,
   lstatSync as lstatSync3,
   mkdirSync as mkdirSync3,
-  readFileSync as readFileSync8,
-  readdirSync as readdirSync5,
-  realpathSync as realpathSync6,
+  readFileSync as readFileSync6,
+  readdirSync as readdirSync3,
+  realpathSync as realpathSync5,
   renameSync as renameSync2,
   rmSync,
   statSync as statSync3,
@@ -37,12 +35,14 @@ import {
   writeFileSync as writeFileSync3
 } from "node:fs";
 import { createRequire } from "node:module";
-import { basename as basename7, dirname as dirname8, join as join11, resolve as resolve11, sep as sep5 } from "node:path";
+import { basename as basename7, dirname as dirname7, join as join9, resolve as resolve10, sep as sep4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { createHash as createHash5 } from "node:crypto";
-import { lstatSync as lstatSync4, readdirSync as readdirSync6 } from "node:fs";
-import { dirname as dirname9, join as join12 } from "node:path";
+import { lstatSync as lstatSync4, readdirSync as readdirSync4 } from "node:fs";
+import { dirname as dirname8, join as join10 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
+import { existsSync as existsSync8, readFileSync as readFileSync7, readdirSync as readdirSync5, realpathSync as realpathSync6 } from "node:fs";
+import { dirname as dirname9, join as join11, resolve as resolve11, sep as sep5 } from "node:path";
 import { existsSync as existsSync10, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync7, statSync as statSync4 } from "node:fs";
 import { execFileSync as execFileSync4 } from "node:child_process";
 import { basename as basename8, dirname as dirname10, isAbsolute as isAbsolute6, join as join14, relative as relative3, resolve as resolve12 } from "node:path";
@@ -183,7 +183,7 @@ function validateCompletionRecord(value, what, route) {
       violations.push(invalid("coordination.row.completion-field", `${what}.${key} must be a full Git object id${reportOnly ? " or null" : ""}`));
     }
   }
-  if (value.review_base !== null && (typeof value.review_base !== "string" || !GIT_SHA.test(value.review_base))) {
+  if (value.review_base !== undefined && value.review_base !== null && (typeof value.review_base !== "string" || !GIT_SHA.test(value.review_base))) {
     violations.push(invalid("coordination.row.completion-field", `${what}.review_base must be a full Git object id or null`));
   }
   if (!(reportOnly && value.worktree_path === null) && (!isNonEmptyString(value.worktree_path) || !isAbsolute(value.worktree_path))) {
@@ -10352,675 +10352,6 @@ var init_dispatch = __esm(() => {
   ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
   ASSIGNMENT_FIELD_RE = /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
 });
-var WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA;
-var STATUS_V2_PAYLOAD_SCHEMA;
-var init_persist_payload_schemas = __esm(() => {
-  WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA = {
-    version: { required: true, type: "number", description: "Root artifact version." },
-    schema_version: { required: true, type: "number", description: "Snapshot schema version; currently 1." },
-    id: { required: true, type: "string", description: "Workflow id, equal to the persist key." },
-    type: { required: true, type: "string", description: "Workflow lifecycle type: plan or iteration." },
-    status: { required: true, type: "string", description: "Current lifecycle status." },
-    started_at: { required: true, type: "string", description: "Workflow start timestamp." },
-    updated_at: { required: true, type: "string", description: "Last snapshot update timestamp." },
-    plans: { required: false, type: "array", description: "Plan rows, validated by the workflow engine." }
-  };
-  STATUS_V2_PAYLOAD_SCHEMA = {
-    version: { required: true, type: "number", description: "Root schema version; must be 2." },
-    updated_at: { required: true, type: "string", description: "Last status-register update date." },
-    workflows: { required: true, type: "array", description: "Active workflow entries." }
-  };
-});
-function rowPlanIds(row) {
-  if (!isPlainObject(row))
-    return [];
-  const ids = [];
-  for (const value of [row.id, row.plan_id]) {
-    if (isNonEmptyString(value))
-      ids.push(value);
-  }
-  return [...new Set(ids)];
-}
-function rowPlanId(row) {
-  return rowPlanIds(row)[0];
-}
-function violation3(severity, code2, message, fix) {
-  return { ok: false, severity, code: code2, message, fix };
-}
-function validateNonEmptyString(violations, value, field, missingCode, invalidCode) {
-  if (value === undefined) {
-    violations.push(violation3("high", missingCode, `missing required field: ${field}`));
-  } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation3("medium", invalidCode, `${field} must be a non-empty string`));
-  }
-}
-function validatePlanRow(row) {
-  const violations = [];
-  if (!isPlainObject(row)) {
-    return { ok: false, violations: [violation3("high", "status.plan-row.invalid", "plan row must be an object")] };
-  }
-  const { id, plan_id: planId, title, file, status, metadata } = row;
-  if (id === undefined && planId === undefined) {
-    violations.push(violation3("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
-  } else {
-    if (id !== undefined) {
-      validateNonEmptyString(violations, id, "id", "status.plan-row.missing-id", "status.plan-row.invalid-id");
-    }
-    if (planId !== undefined) {
-      validateNonEmptyString(violations, planId, "plan_id", "status.plan-row.missing-plan-id", "status.plan-row.invalid-plan-id");
-    }
-    if (id !== undefined && planId !== undefined && id !== planId) {
-      violations.push(violation3("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
-    }
-  }
-  validateNonEmptyString(violations, title, "title", "status.plan-row.missing-title", "status.plan-row.invalid-title");
-  validateNonEmptyString(violations, file, "file", "status.plan-row.missing-file", "status.plan-row.invalid-file");
-  if (status === undefined) {
-    violations.push(violation3("high", "status.plan-row.missing-status", "missing required field: status"));
-  } else if (typeof status !== "string" || !PLAN_STATUSES.includes(status)) {
-    violations.push(violation3("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
-  }
-  if (metadata !== undefined && !isPlainObject(metadata)) {
-    violations.push(violation3("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
-  }
-  return { ok: violations.length === 0, violations };
-}
-function validateResidual(entry) {
-  const violations = [];
-  if (!isPlainObject(entry)) {
-    return { ok: false, violations: [violation3("high", "status.residual.invalid", "residual entry must be an object")] };
-  }
-  const { id, title, severity, source, scope, decision, owner, target, tracking, detail_doc, lifecycle, closed_at } = entry;
-  validateNonEmptyString(violations, id, "id", "status.residual.missing-id", "status.residual.invalid-id");
-  validateNonEmptyString(violations, title, "title", "status.residual.missing-title", "status.residual.invalid-title");
-  validateNonEmptyString(violations, source, "source", "status.residual.missing-source", "status.residual.invalid-source");
-  validateNonEmptyString(violations, scope, "scope", "status.residual.missing-scope", "status.residual.invalid-scope");
-  validateNonEmptyString(violations, owner, "owner", "status.residual.missing-owner", "status.residual.invalid-owner");
-  if (severity === undefined) {
-    violations.push(violation3("high", "status.residual.missing-severity", "missing required field: severity"));
-  } else if (typeof severity !== "string" || !SEVERITY_ORDER.includes(severity) && severity !== "warning") {
-    violations.push(violation3("medium", "status.residual.invalid-severity", `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`));
-  } else if (severity === "warning") {
-    violations.push(violation3("low", "status.residual.legacy-warning", `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`, `use "low" (normalizeSeverity maps 'warning' → 'low')`));
-  }
-  if (decision === undefined) {
-    violations.push(violation3("high", "status.residual.missing-decision", "missing required field: decision"));
-  } else if (typeof decision !== "string" || !RESIDUAL_DECISIONS.includes(decision)) {
-    violations.push(violation3("medium", "status.residual.invalid-decision", `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`));
-  }
-  if (target === undefined) {
-    violations.push(violation3("high", "status.residual.missing-target", "missing required field: target"));
-  } else if (typeof target !== "string" && target !== null) {
-    violations.push(violation3("medium", "status.residual.invalid-target", "target must be a string or null"));
-  }
-  if (tracking === undefined) {
-    violations.push(violation3("high", "status.residual.missing-tracking", "missing required field: tracking"));
-  } else if (typeof tracking !== "string" && tracking !== null) {
-    violations.push(violation3("medium", "status.residual.invalid-tracking", "tracking must be a string or null"));
-  }
-  if (detail_doc !== undefined && typeof detail_doc !== "string" && detail_doc !== null) {
-    violations.push(violation3("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
-  }
-  if (closed_at !== undefined && (typeof closed_at !== "string" || !DATE_RE.test(closed_at))) {
-    violations.push(violation3("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
-  }
-  if (lifecycle !== undefined) {
-    if (typeof lifecycle !== "string" || !RESIDUAL_LIFECYCLES.includes(lifecycle)) {
-      violations.push(violation3("medium", "status.residual.invalid-lifecycle", `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} — got ${JSON.stringify(lifecycle)}`));
-    } else if (lifecycle !== "open") {
-      if (closed_at === undefined) {
-        violations.push(violation3("high", "status.residual.closed-missing-closed-at", `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`, 'set closed_at (e.g. "2026-08-08")'));
-      }
-      if (entry.closure_note === undefined) {
-        violations.push(violation3("medium", "status.residual.closed-missing-closure-note", `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`, "add closure_note explaining the close"));
-      }
-    }
-  }
-  return { ok: violations.length === 0, violations };
-}
-function isHarnessRelativePath(dir) {
-  if (dir.startsWith("/") || dir.startsWith("\\"))
-    return false;
-  if (/^[A-Za-z]:[\\/]/.test(dir))
-    return false;
-  return !dir.split(/[\\/]+/).includes("..");
-}
-function validateWorkflowEntry(entry) {
-  const violations = [];
-  if (!isPlainObject(entry)) {
-    return {
-      ok: false,
-      violations: [violation3("high", "status.workflow.invalid", "workflow entry must be an object")]
-    };
-  }
-  validateNonEmptyString(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
-  if (entry.type === undefined) {
-    violations.push(violation3("high", "status.workflow.missing-type", "missing required field: type"));
-  } else if (typeof entry.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(entry.type)) {
-    violations.push(violation3("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
-  }
-  validateNonEmptyString(violations, entry.started_at, "started_at", "status.workflow.missing-started-at", "status.workflow.invalid-started-at");
-  if (entry.dir === undefined) {
-    violations.push(violation3("high", "status.workflow.missing-dir", "missing required field: dir"));
-  } else if (typeof entry.dir !== "string" || entry.dir.trim() === "") {
-    violations.push(violation3("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
-  } else if (!isHarnessRelativePath(entry.dir)) {
-    violations.push(violation3("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
-  }
-  return { ok: violations.length === 0, violations };
-}
-function validateStatusV2(docOrPath, opts = {}) {
-  let doc;
-  let harnessDir = opts.harnessDir;
-  if (typeof docOrPath === "string") {
-    try {
-      doc = readJson(docOrPath);
-      harnessDir = dirname7(resolve8(docOrPath));
-    } catch (error) {
-      return {
-        ok: false,
-        violations: [violation3("high", "status.invalid-json", error.message)]
-      };
-    }
-  } else {
-    doc = docOrPath;
-  }
-  if (!isPlainObject(doc)) {
-    return { ok: false, violations: [violation3("high", "status.invalid-doc", "status document must be an object")] };
-  }
-  const upgrade = `mstar store upgrade --operator <name> --harness ${harnessDir === undefined ? "<control-root>" : `'${harnessDir.replace(/'/g, "'\\''")}'`}`;
-  if (doc.version !== 2) {
-    return {
-      ok: false,
-      violations: [
-        violation3("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
-      ]
-    };
-  }
-  if (Array.isArray(doc.plans)) {
-    return {
-      ok: false,
-      violations: [
-        violation3("high", "status.migration-required", `v1-shaped status.json (root plans[]) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
-      ]
-    };
-  }
-  if (doc.residual_findings !== undefined) {
-    return {
-      ok: false,
-      violations: [
-        violation3("high", "status.migration-required", `v1-shaped status.json (root residual_findings) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
-      ]
-    };
-  }
-  const violations = [];
-  if (doc.updated_at === undefined) {
-    violations.push(violation3("high", "status.missing-updated-at", "missing required field: updated_at"));
-  } else if (typeof doc.updated_at !== "string" || !DATE_RE.test(doc.updated_at)) {
-    violations.push(violation3("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
-  }
-  if (doc.workflows === undefined) {
-    violations.push(violation3("high", "status.missing-workflows", "missing required field: workflows"));
-  } else if (!Array.isArray(doc.workflows)) {
-    violations.push(violation3("high", "status.invalid-workflows", "workflows must be an array"));
-  } else {
-    const seen = new Set;
-    for (const entry of doc.workflows) {
-      violations.push(...validateWorkflowEntry(entry).violations);
-      if (isPlainObject(entry) && typeof entry.id === "string") {
-        if (seen.has(entry.id)) {
-          violations.push(violation3("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
-        }
-        seen.add(entry.id);
-      }
-    }
-  }
-  if (harnessDir !== undefined && Array.isArray(doc.workflows)) {
-    let realHarnessDir = null;
-    try {
-      realHarnessDir = realpathSync5(harnessDir);
-    } catch {}
-    for (const entry of doc.workflows) {
-      if (!isPlainObject(entry) || typeof entry.dir !== "string")
-        continue;
-      const relSnapshot = join7(entry.dir, WORKFLOW_SNAPSHOT_FILE);
-      const snapshotPath = join7(harnessDir, relSnapshot);
-      const label = typeof entry.id === "string" ? entry.id : relSnapshot;
-      let physical;
-      try {
-        physical = realpathSync5(snapshotPath);
-      } catch {
-        violations.push(violation3("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
-        continue;
-      }
-      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep3}`)) {
-        violations.push(violation3("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
-        continue;
-      }
-      let snapshot;
-      try {
-        snapshot = readJson(snapshotPath);
-      } catch (error) {
-        violations.push(violation3("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
-        continue;
-      }
-      if (typeof snapshot.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(snapshot.status)) {
-        violations.push(violation3("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
-      }
-      if (typeof entry.type === "string" && typeof snapshot.type === "string" && entry.type !== snapshot.type) {
-        violations.push(violation3("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
-      }
-      if (typeof entry.started_at === "string" && typeof snapshot.started_at === "string" && entry.started_at !== snapshot.started_at) {
-        violations.push(violation3("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`mstar workflow register\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
-      }
-    }
-  }
-  return { ok: violations.length === 0, violations };
-}
-function resolveCompassEnforcement(harnessDir) {
-  const iterationsDir = resolveIterationDir(harnessDir);
-  if (!existsSync5(iterationsDir))
-    return { hard: false, source: "none" };
-  let entries;
-  try {
-    entries = readdirSync(iterationsDir, { withFileTypes: true });
-  } catch {
-    return { hard: false, source: "none" };
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory())
-      continue;
-    const compassPath = join7(iterationsDir, entry.name, "delivery-compass.md");
-    if (!existsSync5(compassPath))
-      continue;
-    let content3;
-    try {
-      content3 = readFileSync4(compassPath, "utf8");
-    } catch {
-      continue;
-    }
-    const frontmatter = content3.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-    const fm = frontmatter !== null ? frontmatter[1] : "";
-    if (!/^status[ \t]*:[ \t]*(?:active|locked)[ \t]*$/m.test(fm))
-      continue;
-    const flag = parseEnforcementFlag(fm);
-    if (flag.hard)
-      return flag;
-  }
-  return { hard: false, source: "none" };
-}
-function resolveMstarcEnforcement(harnessDir) {
-  const dir = resolve8(harnessDir);
-  const rc = loadMstarc(dir, dirname7(dir));
-  const value = rc?.config.enforcement;
-  if (value === "hard")
-    return { hard: true, source: "mstarc" };
-  if (value === "soft")
-    return { hard: false, source: "mstarc" };
-  return { hard: false, source: "none" };
-}
-function resolveRepoEnforcement(harnessDir) {
-  const rc = resolveMstarcEnforcement(harnessDir);
-  if (rc.source !== "none")
-    return rc;
-  return resolveCompassEnforcement(harnessDir);
-}
-var DATE_RE;
-var PLAN_STATUSES;
-var RESIDUAL_DECISIONS;
-var RESIDUAL_LIFECYCLES;
-var validateStatus;
-var init_status = __esm(() => {
-  init_core();
-  init_path();
-  init_coordination_write();
-  init_dispatch();
-  init_mstarc();
-  init_workflow();
-  init_persist_payload_schemas();
-  DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-  PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"];
-  RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"];
-  RESIDUAL_LIFECYCLES = ["open", "resolved", "waived", "superseded", "duplicate"];
-  validateStatus = validateStatusV2;
-});
-function typeName(value) {
-  if (value === null)
-    return "null";
-  if (Array.isArray(value))
-    return "array";
-  return typeof value;
-}
-function validateCompassShape(doc) {
-  const issues = [];
-  const expectString = (key, opts = {}) => {
-    const value = doc[key];
-    if (typeof value !== "string") {
-      issues.push({ path: [key], message: `expected string, received ${typeName(value)}` });
-      return;
-    }
-    if (opts.min !== undefined && value.length < opts.min) {
-      issues.push({ path: [key], message: `string must contain at least ${opts.min} character(s)` });
-      return;
-    }
-    if (opts.regex !== undefined && !opts.regex.test(value)) {
-      issues.push({ path: [key], message: `string must match ${opts.regex}` });
-    }
-  };
-  expectString("iteration_id", { min: 1 });
-  expectString("start_date", { regex: DATE_RE2 });
-  const status = doc.status;
-  if (typeof status !== "string" || !COMPASS_STATUSES.includes(status)) {
-    issues.push({
-      path: ["status"],
-      message: `expected one of ${COMPASS_STATUSES.map((s) => `'${s}'`).join(" | ")}, received ${typeName(status)}`
-    });
-  }
-  expectString("iteration_base_branch", { min: 1 });
-  expectString("target_branch", { min: 1 });
-  const plans = doc.plans;
-  if (plans !== undefined) {
-    if (!Array.isArray(plans)) {
-      issues.push({ path: ["plans"], message: `expected array, received ${typeName(plans)}` });
-    } else {
-      plans.forEach((entry, index2) => {
-        if (typeof entry !== "string") {
-          issues.push({ path: ["plans", index2], message: `expected string, received ${typeName(entry)}` });
-        } else if (entry.length < 1) {
-          issues.push({ path: ["plans", index2], message: "string must contain at least 1 character(s)" });
-        }
-      });
-    }
-  }
-  const end_date = doc.end_date;
-  if (end_date !== undefined) {
-    if (typeof end_date !== "string") {
-      issues.push({ path: ["end_date"], message: `expected string, received ${typeName(end_date)}` });
-    } else if (!DATE_RE2.test(end_date)) {
-      issues.push({ path: ["end_date"], message: `string must match ${DATE_RE2}` });
-    }
-  }
-  if (issues.length > 0)
-    return { ok: false, issues };
-  return {
-    ok: true,
-    data: {
-      iteration_id: doc.iteration_id,
-      start_date: doc.start_date,
-      status,
-      iteration_base_branch: doc.iteration_base_branch,
-      target_branch: doc.target_branch,
-      ...plans !== undefined ? { plans } : {},
-      ...end_date !== undefined ? { end_date } : {}
-    }
-  };
-}
-function violation4(severity, code2, message, fix) {
-  return { ok: false, severity, code: code2, message, fix };
-}
-function isPlainObject2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function validateCompassFrontmatter(doc) {
-  if (!isPlainObject2(doc)) {
-    return {
-      ok: false,
-      violations: [
-        violation4("medium", "COMPASS_INVALID_FIELD", "Compass frontmatter must be a YAML object with iteration_id / start_date / status / iteration_base_branch / target_branch (template: mstar-iteration §1.3)", "Fix the frontmatter of {ITERATION_DIR}/<iteration-id>/delivery-compass.md")
-      ]
-    };
-  }
-  const parsed = validateCompassShape(doc);
-  if (!parsed.ok) {
-    return {
-      ok: false,
-      violations: parsed.issues.map((issue) => {
-        const field = issue.path.join(".") || "(root)";
-        return violation4("medium", "COMPASS_INVALID_FIELD", `Compass frontmatter field '${field}' is invalid: ${issue.message}`, `Fix '${field}' in {ITERATION_DIR}/<iteration-id>/delivery-compass.md frontmatter (template: mstar-iteration §1.3)`);
-      })
-    };
-  }
-  const violations = [];
-  const { status, end_date } = parsed.data;
-  if (status === "completed" && end_date === undefined) {
-    violations.push(violation4("high", "COMPASS_END_DATE_REQUIRED", "Compass frontmatter status is 'completed' but end_date is missing — end_date is required at iteration-close (mstar-iteration §3.4, template Fields guide)", "Add `end_date: YYYY-MM-DD` to the frontmatter"));
-  }
-  if (status !== "completed" && end_date !== undefined) {
-    violations.push(violation4("medium", "COMPASS_END_DATE_NOT_ALLOWED", `Compass frontmatter sets end_date while status is '${status}' — end_date is only written at iteration-close (mstar-iteration §3.4)`, "Remove end_date until iteration-close"));
-  }
-  return { ok: violations.length === 0, violations };
-}
-function parseCompassFrontmatterText(content3, filePath) {
-  const lines = content3.split(/\r?\n/);
-  if (lines[0]?.trim() !== "---") {
-    throw new Error(`no YAML frontmatter fence in ${filePath} (expected first line "---")`);
-  }
-  const end = lines.indexOf("---", 1);
-  if (end === -1) {
-    throw new Error(`unterminated YAML frontmatter in ${filePath} (no closing "---")`);
-  }
-  const doc = {};
-  let listKey = null;
-  for (let i = 1;i < end; i += 1) {
-    const line = lines[i] ?? "";
-    if (!line.trim() || line.trim().startsWith("#"))
-      continue;
-    if (listKey !== null && /^\s*-\s+/.test(line)) {
-      const item = line.replace(/^\s*-\s+/, "").trim().replace(/^["']|["']$/g, "");
-      if (!Array.isArray(doc[listKey]))
-        doc[listKey] = [];
-      doc[listKey].push(item);
-      continue;
-    }
-    listKey = null;
-    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (!kv) {
-      throw new Error(`unsupported frontmatter line in ${filePath}: ${JSON.stringify(line)}`);
-    }
-    const value = kv[2].trim();
-    doc[kv[1]] = value === "" ? null : value.startsWith('"') && value.endsWith('"') && value.length >= 2 ? value.slice(1, -1).replace(/\\(.)/g, (_, ch) => ch === "n" ? `
-` : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`) : /^\[.*\]$/.test(value) ? parseFlowArray(value, filePath) : value.replace(/^["']|["']$/g, "");
-    listKey = value === "" ? kv[1] : null;
-  }
-  return doc;
-}
-function parseFlowArray(raw, filePath) {
-  const inner = raw.slice(1, -1);
-  if (/[[\]]/.test(inner)) {
-    throw new Error(`nested flow-style array in ${filePath}: ${JSON.stringify(raw)} — only flat scalar items are supported (e.g. [a, b])`);
-  }
-  let quote = null;
-  for (const ch of inner) {
-    if (ch === '"' || ch === "'") {
-      if (quote === null)
-        quote = ch;
-      else if (quote === ch)
-        quote = null;
-    } else if (ch === "," && quote !== null) {
-      throw new Error(`ambiguous flow-style array in ${filePath}: ${JSON.stringify(raw)} — quoted item containing comma cannot be split unambiguously (flat scalar items only)`);
-    }
-  }
-  if (quote !== null) {
-    throw new Error(`unterminated ${quote} quote in flow-style array in ${filePath}: ${JSON.stringify(raw)}`);
-  }
-  const items = [];
-  for (const part of inner.split(",")) {
-    const item = part.trim().replace(/^["']|["']$/g, "");
-    if (item === "")
-      continue;
-    items.push(item);
-  }
-  return items;
-}
-var COMPASS_STATUSES;
-var DATE_RE2;
-var COMPLETENESS_ROOTS;
-var GAP_CODE;
-var init_iteration = __esm(() => {
-  init_catalog();
-  init_store_db();
-  init_status();
-  init_workflow();
-  COMPASS_STATUSES = ["active", "locked", "completed"];
-  DATE_RE2 = /^\d{4}-\d{2}-\d{2}$/;
-  COMPLETENESS_ROOTS = ["iterations", "plans", "knowledge", "specs", "projects"];
-  GAP_CODE = {
-    iteration: "catalog.discovery.missing-iteration",
-    plan: "catalog.discovery.missing-plan",
-    project: "catalog.discovery.missing-project",
-    document: "catalog.discovery.missing-document"
-  };
-});
-function violation5(severity, code2, message) {
-  return { ok: false, severity, code: code2, message };
-}
-function validateNonEmptyString2(violations, value, field, missingCode, invalidCode) {
-  if (value === undefined) {
-    violations.push(violation5("high", missingCode, `missing required field: ${field}`));
-  } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation5("medium", invalidCode, `${field} must be a non-empty string`));
-  }
-}
-function frontmatterEnd(content3) {
-  const lines = content3.split(/\r?\n/);
-  if (lines[0]?.trim() !== "---")
-    return 0;
-  let offset = lines[0].length;
-  const newlineWidth = content3.startsWith(`\r
-`, offset) ? 2 : content3[offset] === `
-` ? 1 : 0;
-  offset += newlineWidth;
-  for (let index2 = 1;index2 < lines.length; index2 += 1) {
-    const line = lines[index2];
-    const nextNewline = content3.indexOf(`
-`, offset);
-    const end = nextNewline === -1 ? content3.length : nextNewline;
-    const lineEnd = content3[end - 1] === "\r" ? end - 1 : end;
-    if (content3.slice(offset, lineEnd) === "---") {
-      return nextNewline === -1 ? content3.length : nextNewline + 1;
-    }
-    offset = nextNewline === -1 ? content3.length : nextNewline + 1;
-  }
-  return 0;
-}
-function plainText(node2) {
-  if (node2.type === "text" || node2.type === "inlineCode")
-    return node2.value ?? "";
-  if (node2.type === "break")
-    return " ";
-  return (node2.children ?? []).map(plainText).join("");
-}
-function isPositioned(node2) {
-  return node2.position !== undefined;
-}
-function validateRoadmapContent(content3, sourceLabel) {
-  const violations = [];
-  let doc;
-  try {
-    doc = parseCompassFrontmatterText(content3, sourceLabel);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : `invalid roadmap frontmatter in ${sourceLabel}`;
-    return { ok: false, violations: [violation5("high", "project.roadmap.invalid-frontmatter", message)], warnings: [] };
-  }
-  validateNonEmptyString2(violations, doc.project_id, "project_id", "project.roadmap.missing-project-id", "project.roadmap.invalid-project-id");
-  validateNonEmptyString2(violations, doc.title, "title", "project.roadmap.missing-title", "project.roadmap.invalid-title");
-  if (doc.status === undefined) {
-    violations.push(violation5("high", "project.roadmap.missing-status", "missing required field: status"));
-  } else if (typeof doc.status !== "string" || !ROADMAP_STATUSES.includes(doc.status)) {
-    violations.push(violation5("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
-  }
-  if (doc.created_at === undefined) {
-    violations.push(violation5("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
-  } else if (typeof doc.created_at !== "string" || !DATE_RE3.test(doc.created_at)) {
-    violations.push(violation5("medium", "project.roadmap.invalid-created-at", "created_at must be YYYY-MM-DD"));
-  }
-  if (doc.milestones !== undefined && doc.milestones !== null) {
-    if (!Array.isArray(doc.milestones)) {
-      violations.push(violation5("medium", "project.roadmap.invalid-milestones", "milestones must be a list of milestone names"));
-    } else if (doc.milestones.some((item) => typeof item !== "string" || item.trim() === "")) {
-      violations.push(violation5("medium", "project.roadmap.invalid-milestones", "milestones items must be non-empty strings"));
-    }
-  }
-  if (doc.residuals_ref !== undefined && doc.residuals_ref !== null && (typeof doc.residuals_ref !== "string" || doc.residuals_ref.trim() === "")) {
-    violations.push(violation5("medium", "project.roadmap.invalid-residuals-ref", "residuals_ref must be a non-empty string"));
-  }
-  const warnings = [];
-  const end = frontmatterEnd(content3);
-  const body = content3.slice(end);
-  if (!/^##\s+Direction\s*$/m.test(body)) {
-    warnings.push(violation5("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) — state the project direction there"));
-  }
-  if (!/^\s*[-*]\s+\[[xX ]\]/m.test(body)) {
-    warnings.push(violation5("low", "project.roadmap.body.no-goal-items", "roadmap body has no goal-item task list (documented body convention) — list goals as `- [ ]` / `- [x]` markdown task items"));
-  }
-  return { ok: violations.length === 0, violations, warnings };
-}
-function parseRoadmapContent(contentMarkdown) {
-  const validation = validateRoadmapContent(contentMarkdown, "roadmap content");
-  if (!validation.ok) {
-    throw new Error(`invalid roadmap content: ${validation.violations.map((item) => item.code).join(", ")}`);
-  }
-  const rawFrontmatter = parseCompassFrontmatterText(contentMarkdown, "roadmap content");
-  const frontmatter = rawFrontmatter;
-  const bodyOffset = frontmatterEnd(contentMarkdown);
-  const bodySource = contentMarkdown.slice(bodyOffset);
-  const tree = fromMarkdown(bodySource, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] });
-  const sections = [];
-  const headings = [];
-  const blocks = tree.children ?? [];
-  for (const node2 of blocks) {
-    if (node2.type === "heading" && node2.depth !== undefined && isPositioned(node2))
-      headings.push(node2);
-  }
-  const firstHeadingOffset = headings[0]?.position.start.offset ?? bodySource.length;
-  if (firstHeadingOffset > 0)
-    sections.push({ level: 0, heading: "", body: bodySource.slice(0, firstHeadingOffset) });
-  for (let index2 = 0;index2 < headings.length; index2 += 1) {
-    const headingNode = headings[index2];
-    const nextHeading = headings.slice(index2 + 1).find((candidate) => candidate.depth <= headingNode.depth);
-    const endOffset = nextHeading?.position.start.offset ?? bodySource.length;
-    const heading = (headingNode.children ?? []).map(plainText).join("");
-    sections.push({ level: headingNode.depth, heading, body: bodySource.slice(headingNode.position.end.offset, endOffset) });
-  }
-  const goals = [];
-  const visit = (node2, parentOrdinal) => {
-    if (node2.type === "listItem" && node2.checked !== undefined && node2.checked !== null && isPositioned(node2)) {
-      const ordinal = goals.length;
-      const firstParagraph = (node2.children ?? []).find((child) => child.type === "paragraph");
-      goals.push({
-        ordinal,
-        parentOrdinal,
-        checked: node2.checked,
-        title: firstParagraph ? plainText(firstParagraph).trim() : "",
-        body: bodySource.slice(node2.position.start.offset, node2.position.end.offset)
-      });
-      for (const child of node2.children ?? [])
-        visit(child, ordinal);
-      return;
-    }
-    for (const child of node2.children ?? [])
-      visit(child, parentOrdinal);
-  };
-  visit(tree, null);
-  return {
-    contentMarkdown,
-    frontmatter,
-    direction: sections.find((section) => section.level === 2 && section.heading.trim() === "Direction")?.body ?? null,
-    goals,
-    milestones: Array.isArray(frontmatter.milestones) ? frontmatter.milestones : [],
-    sections
-  };
-}
-var ROADMAP_STATUSES;
-var DATE_RE3;
-var init_roadmap_content = __esm(() => {
-  init_dev15();
-  init_mdast_util_gfm();
-  init_micromark_extension_gfm();
-  init_iteration();
-  ROADMAP_STATUSES = ["active", "paused", "completed"];
-  DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
-});
 var AUDIT_PRIORITIES;
 var AUDIT_EFFORTS;
 var AUDIT_RISKS;
@@ -11402,7 +10733,7 @@ function sha256Bytes2(bytes) {
 }
 function readIfExists(path2) {
   try {
-    return readFileSync8(path2);
+    return readFileSync6(path2);
   } catch {
     return;
   }
@@ -11412,8 +10743,8 @@ function scalar2(db, sql) {
   return typeof row?.n === "number" ? row.n : 0;
 }
 function writeTextAtomic(path2, text4) {
-  mkdirSync3(dirname8(path2), { recursive: true });
-  const tmp = join11(dirname8(path2), `.${basename7(path2)}.${process.pid}.tmp`);
+  mkdirSync3(dirname7(path2), { recursive: true });
+  const tmp = join9(dirname7(path2), `.${basename7(path2)}.${process.pid}.tmp`);
   try {
     writeFileSync3(tmp, text4, "utf8");
     renameSync2(tmp, path2);
@@ -11490,15 +10821,15 @@ function sameExecution(a, b) {
   return a.protocolVersion === b.protocolVersion && a.authorityState === b.authorityState && a.revision === b.revision && a.rootUpdatedAt === b.rootUpdatedAt && a.manifestId === b.manifestId && a.activatedAt === b.activatedAt;
 }
 function canonicalPath(value) {
-  let current = resolve11(value);
+  let current = resolve10(value);
   const trailing = [];
   for (;; ) {
     try {
-      return join11(realpathSync6(current), ...[...trailing].reverse());
+      return join9(realpathSync5(current), ...[...trailing].reverse());
     } catch {
-      const parent = dirname8(current);
+      const parent = dirname7(current);
       if (parent === current)
-        return resolve11(value);
+        return resolve10(value);
       trailing.push(basename7(current));
       current = parent;
     }
@@ -11509,7 +10840,7 @@ function isPathWithin(root, candidate) {
   const child = canonicalPath(candidate);
   if (child === parent)
     return true;
-  return child.startsWith(parent.endsWith(sep5) ? parent : `${parent}${sep5}`);
+  return child.startsWith(parent.endsWith(sep4) ? parent : `${parent}${sep4}`);
 }
 function refuseUnlessSameGeneration(live, expected, what) {
   if (live.storeId !== expected.storeId) {
@@ -11581,7 +10912,7 @@ function sameCounts(a, b) {
 }
 function defaultBackupPath(context, meta, label) {
   const name = label === undefined ? `${meta.storeId.slice(0, 8)}-e${meta.epoch}-r${meta.revision}.db` : `${label}.db`;
-  return join11(dirname8(storeDbPath(context)), "archived", "store-migration", "backups", name);
+  return join9(dirname7(storeDbPath(context)), "archived", "store-migration", "backups", name);
 }
 async function takeVerifiedBackup(context, options) {
   const dbPath = storeDbPath(context);
@@ -11594,8 +10925,8 @@ async function takeVerifiedBackup(context, options) {
     } catch {
       walPending = false;
     }
-    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve11(options.out);
-    if (existsSync8(targetPath)) {
+    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve10(options.out);
+    if (existsSync6(targetPath)) {
       if (!options.reuseMatchingIdentity) {
         throw new StoreActivationError("store.activation-stale", `a backup already exists at ${targetPath}; pass --out <path> for a different target instead of overwriting a ` + `recorded recovery point.`);
       }
@@ -11615,7 +10946,7 @@ async function takeVerifiedBackup(context, options) {
         takenAt: new Date().toISOString()
       };
     }
-    mkdirSync3(dirname8(targetPath), { recursive: true });
+    mkdirSync3(dirname7(targetPath), { recursive: true });
     handle.db.prepare("vacuum into ?").run(targetPath);
     const verified = await inspectBackupCopy(targetPath).catch((error) => {
       rmSync(targetPath, { force: true });
@@ -11647,7 +10978,7 @@ async function assertBackupDescribesStore(context, receipt, reviewed) {
   if (!receipt || receipt.receiptVersion !== ACTIVATION_PROTOCOL_VERSION && receipt.receiptVersion !== BACKUP_RECEIPT_VERSION || typeof receipt.backupPath !== "string" || receipt.backupPath.trim() === "") {
     stale("the supplied recovery point is not a backup receipt of this protocol version; take one with `backupStore` and " + "apply the manifest that names it.");
   }
-  const controlRoot = dirname8(storeDbPath(context));
+  const controlRoot = dirname7(storeDbPath(context));
   if (!isPathWithin(controlRoot, receipt.backupPath)) {
     stale(`the recovery point ${receipt.backupPath} is outside the authorized control root ${controlRoot}; a migration ` + `recovery point must live inside the root it protects.`);
   }
@@ -11809,7 +11140,7 @@ function currentRegisterSources(context) {
   const projectsRoot = catalogRootDir(context, "projects");
   let entries;
   try {
-    entries = readdirSync5(projectsRoot, { withFileTypes: true });
+    entries = readdirSync3(projectsRoot, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -11817,7 +11148,7 @@ function currentRegisterSources(context) {
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isSymbolicLink() || !entry.isDirectory())
       continue;
-    const absolutePath = join11(projectsRoot, entry.name, "residuals.json");
+    const absolutePath = join9(projectsRoot, entry.name, "residuals.json");
     let info;
     try {
       info = lstatSync3(absolutePath);
@@ -11842,7 +11173,7 @@ function revalidateSources(context, manifest, mode) {
     }
   }
   for (const reviewedSource of manifest.sources) {
-    const live = readIfExists(join11(catalogRootDir(context, "projects"), reviewedSource.relativePath));
+    const live = readIfExists(join9(catalogRootDir(context, "projects"), reviewedSource.relativePath));
     if (live === undefined && !retired.has(reviewedSource.relativePath)) {
       changed(`register ${reviewedSource.relativePath} is gone.`);
     }
@@ -11855,7 +11186,7 @@ function readReceiptRows(db, where, param) {
 async function appliedReceiptFor(context, manifest) {
   const handle = await openStore(context, "read");
   try {
-    if (resolve11(manifest.controlRoot) !== resolve11(context.harnessDir)) {
+    if (resolve10(manifest.controlRoot) !== resolve10(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`);
     }
     const row = readReceiptRows(handle.db, "phase = 'applied'").at(-1);
@@ -11977,7 +11308,7 @@ async function activateStore(context, receipt, attestation, hooks = {}, options 
       throw new StoreActivationError("store.activation-stale", `the supplied receipt is not the FINAL applied manifest (a later apply, receipt #${applied.at(-1).id}, is recorded); ` + `revalidate the final manifest, re-apply it and re-attest. Nothing was activated.`);
     }
     manifest = JSON.parse(appliedRow.manifest_json);
-    if (resolve11(manifest.controlRoot) !== resolve11(context.harnessDir)) {
+    if (resolve10(manifest.controlRoot) !== resolve10(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the applied manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}. Nothing was activated.`);
     }
     if (meta.revision !== receipt.storeRevision) {
@@ -12110,13 +11441,13 @@ function retirementReceiptOfRow(row, replayed) {
 }
 function finalizeDisclosure(ledgerPath, ledger, receipt) {
   writeLedger(ledgerPath, ledger);
-  writeTextAtomic(join11(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
+  writeTextAtomic(join9(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
 }
 function retireRegister(context, ledgerPath, ledger, item) {
-  const livePath = join11(catalogRootDir(context, "projects"), item.relativePath);
+  const livePath = join9(catalogRootDir(context, "projects"), item.relativePath);
   const liveBytes = readIfExists(livePath);
   if (liveBytes !== undefined) {
-    mkdirSync3(dirname8(item.archivePath), { recursive: true });
+    mkdirSync3(dirname7(item.archivePath), { recursive: true });
     rmSync(item.archivePath, { force: true });
     copyFileSync(livePath, item.archivePath);
     item.state = "archived";
@@ -12162,7 +11493,7 @@ function selectReviewedSection(live, item) {
   return best;
 }
 function retireSection(context, ledgerPath, ledger, item, hooks) {
-  const livePath = join11(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
+  const livePath = join9(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
   const live = readIfExists(livePath)?.toString("utf8");
   if (live === undefined) {
     throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; the reviewed section cannot be retired truthfully. ` + `Nothing was retired.`);
@@ -12188,7 +11519,7 @@ function retireSection(context, ledgerPath, ledger, item, hooks) {
   const excised = live.split(`
 `).filter((_line, index2) => !dropped.has(index2 + 1)).join(`
 `);
-  mkdirSync3(dirname8(item.archivePath), { recursive: true });
+  mkdirSync3(dirname7(item.archivePath), { recursive: true });
   rmSync(item.archivePath, { force: true });
   copyFileSync(livePath, item.archivePath);
   item.retiredRows = [...new Set(selection.hits.map((hit) => hit.identity))].sort();
@@ -12239,8 +11570,8 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
     const manifest = JSON.parse(appliedRow.manifest_json);
     const registers = manifest.retirement.registers;
     const sections = manifest.catalog.retirementSections;
-    const archiveDir = join11(dirname8(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
-    const ledgerPath = join11(archiveDir, "ledger.json");
+    const archiveDir = join9(dirname7(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
+    const ledgerPath = join9(archiveDir, "ledger.json");
     const retirementHash = sha256Bytes2(Buffer.from(`retirement\x00${JSON.stringify({
       activationReceiptId: activationReceipt.receiptId,
       activationHash: activationReceipt.activationHash,
@@ -12285,7 +11616,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
         project: register.project,
         relativePath: register.relativePath,
         sha256: register.sha256,
-        archivePath: join11(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
+        archivePath: join9(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
       sections: sections.map((section) => ({
@@ -12300,7 +11631,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
         reviewedRows: section.rows,
         retiredRows: null,
         removedLines: null,
-        archivePath: join11(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
+        archivePath: join9(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
         expectedLiveSha256: null,
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine)
@@ -12361,7 +11692,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
         storeId: meta.storeId,
         epoch: meta.epoch,
         archiveDir,
-        markerPath: join11(archiveDir, "MARKER.md"),
+        markerPath: join9(archiveDir, "MARKER.md"),
         registers: retiredRegisters,
         sections: retiredSections,
         resumed
@@ -12392,7 +11723,7 @@ async function retireStoreSources(context, activationReceipt, hooks = {}) {
       storeId: meta.storeId,
       epoch: meta.epoch,
       archiveDir,
-      markerPath: join11(archiveDir, "MARKER.md"),
+      markerPath: join9(archiveDir, "MARKER.md"),
       registers: retiredRegisters,
       sections: retiredSections,
       resumed,
@@ -13169,10 +12500,10 @@ function readExecutionStateGraph(tx) {
   };
 }
 function assertNoLegacyExecutionSources(context) {
-  const harnessDir = dirname9(storeDbPath(context));
+  const harnessDir = dirname8(storeDbPath(context));
   const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
   const sources = [];
-  const statusPath = join12(harnessDir, "status.json");
+  const statusPath = join10(harnessDir, "status.json");
   try {
     lstatSync4(statusPath);
     sources.push(statusPath);
@@ -13193,20 +12524,20 @@ function assertNoLegacyExecutionSources(context) {
   if (workflowRootIsDirectory) {
     let entries;
     try {
-      entries = readdirSync6(workflowDir, { withFileTypes: true });
+      entries = readdirSync4(workflowDir, { withFileTypes: true });
     } catch {
       entries = [];
       sources.push(`${workflowDir} (unreadable)`);
     }
     for (const entry of entries) {
-      const dir = join12(workflowDir, entry.name);
+      const dir = join10(workflowDir, entry.name);
       if (entry.isSymbolicLink()) {
         sources.push(dir);
         continue;
       }
       if (!entry.isDirectory())
         continue;
-      const path2 = join12(dir, WORKFLOW_SNAPSHOT_FILE);
+      const path2 = join10(dir, WORKFLOW_SNAPSHOT_FILE);
       try {
         lstatSync4(path2);
         sources.push(path2);
@@ -13214,7 +12545,7 @@ function assertNoLegacyExecutionSources(context) {
         if (error.code !== "ENOENT")
           sources.push(`${path2} (unreadable)`);
       }
-      const sessionsDir = join12(dir, "sessions");
+      const sessionsDir = join10(dir, "sessions");
       try {
         const info = lstatSync4(sessionsDir);
         if (info.isSymbolicLink() || !info.isDirectory()) {
@@ -13222,14 +12553,14 @@ function assertNoLegacyExecutionSources(context) {
         } else {
           let sessions;
           try {
-            sessions = readdirSync6(sessionsDir, { withFileTypes: true });
+            sessions = readdirSync4(sessionsDir, { withFileTypes: true });
           } catch {
             sessions = [];
             sources.push(`${sessionsDir} (unreadable)`);
           }
           for (const session of sessions) {
             if (session.name.endsWith(".json"))
-              sources.push(join12(sessionsDir, session.name));
+              sources.push(join10(sessionsDir, session.name));
           }
         }
       } catch (error) {
@@ -14541,12 +13872,17 @@ var init_execution_session = __esm(() => {
   SESSION_DECODER = new TextDecoder("utf-8", { fatal: true });
   SESSION_KEYS = ["storeId", "epoch", "workflowId", "role", "sessionId"];
 });
+function vocabularyMap(values2) {
+  return Object.fromEntries(values2.map((value) => [value, true]));
+}
 function assertIssueProvenanceSchema(db) {
   const schema = db.prepare("select max(version) as version from schema_version").get();
   if ((schema?.version ?? 0) < MIGRATIONS.length) {
     throw new IssueError("issue.schema-outdated", `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store upgrade --operator <name>" first.`);
   }
 }
+var TERMINAL_DISPOSITIONS;
+var ISSUE_DISPOSITIONS;
 var KINDS;
 var SEVERITIES;
 var ISSUE_KIND_VALUES;
@@ -14562,6 +13898,8 @@ var TERMINAL;
 var init_issue = __esm(() => {
   init_audit();
   init_store_db();
+  TERMINAL_DISPOSITIONS = ["resolved", "waived", "duplicate", "superseded", "obsolete"];
+  ISSUE_DISPOSITIONS = ["open", ...TERMINAL_DISPOSITIONS];
   KINDS = {
     bug: true,
     risk: true,
@@ -14622,17 +13960,19 @@ var init_issue = __esm(() => {
       reason: { required: true, type: "string", description: "Reason for closure" },
       references: {
         required: false,
-        requiredWhen: ["resolved"],
+        requiredWhen: ["resolved", "obsolete"],
         type: "string[]",
-        description: "Acceptance evidence references; required for resolved closure",
-        minItems: 1
+        description: "Acceptance (resolved) or removal (obsolete) evidence references; at least one nonblank",
+        minItems: 1,
+        itemsNonblank: true
       },
       scope: { required: false, requiredWhen: ["waived"], type: "string", description: "Named closure scope; required for waived closure" },
       canonicalIssueId: {
         required: false,
         requiredWhen: ["duplicate", "superseded"],
-        type: "string",
-        description: "Canonical issue for duplicate/superseded; required for those dispositions"
+        type: "string | null",
+        nullable: true,
+        description: "Canonical issue for duplicate/superseded; required for those dispositions and refused for obsolete"
       },
       alignmentRef: {
         required: false,
@@ -14701,13 +14041,7 @@ var init_issue = __esm(() => {
       this.code = code2;
     }
   };
-  DISPOSITIONS2 = {
-    open: true,
-    resolved: true,
-    waived: true,
-    duplicate: true,
-    superseded: true
-  };
+  DISPOSITIONS2 = vocabularyMap(ISSUE_DISPOSITIONS);
   RELATIONS3 = {
     related: true,
     blocks: true,
@@ -14720,12 +14054,678 @@ var init_issue = __esm(() => {
     pr: true,
     report: true
   };
-  TERMINAL = {
-    resolved: true,
-    waived: true,
-    duplicate: true,
-    superseded: true
+  TERMINAL = vocabularyMap(TERMINAL_DISPOSITIONS);
+});
+var WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA;
+var STATUS_V2_PAYLOAD_SCHEMA;
+var init_persist_payload_schemas = __esm(() => {
+  WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA = {
+    version: { required: true, type: "number", description: "Root artifact version." },
+    schema_version: { required: true, type: "number", description: "Snapshot schema version; currently 1." },
+    id: { required: true, type: "string", description: "Workflow id, equal to the persist key." },
+    type: { required: true, type: "string", description: "Workflow lifecycle type: plan or iteration." },
+    status: { required: true, type: "string", description: "Current lifecycle status." },
+    started_at: { required: true, type: "string", description: "Workflow start timestamp." },
+    updated_at: { required: true, type: "string", description: "Last snapshot update timestamp." },
+    plans: { required: false, type: "array", description: "Plan rows, validated by the workflow engine." }
   };
+  STATUS_V2_PAYLOAD_SCHEMA = {
+    version: { required: true, type: "number", description: "Root schema version; must be 2." },
+    updated_at: { required: true, type: "string", description: "Last status-register update date." },
+    workflows: { required: true, type: "array", description: "Active workflow entries." }
+  };
+});
+function rowPlanIds(row) {
+  if (!isPlainObject(row))
+    return [];
+  const ids = [];
+  for (const value of [row.id, row.plan_id]) {
+    if (isNonEmptyString(value))
+      ids.push(value);
+  }
+  return [...new Set(ids)];
+}
+function rowPlanId(row) {
+  return rowPlanIds(row)[0];
+}
+function residualLifecycles() {
+  return ISSUE_DISPOSITIONS;
+}
+function violation4(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
+}
+function validateNonEmptyString(violations, value, field, missingCode, invalidCode) {
+  if (value === undefined) {
+    violations.push(violation4("high", missingCode, `missing required field: ${field}`));
+  } else if (typeof value !== "string" || value.trim() === "") {
+    violations.push(violation4("medium", invalidCode, `${field} must be a non-empty string`));
+  }
+}
+function validatePlanRow(row) {
+  const violations = [];
+  if (!isPlainObject(row)) {
+    return { ok: false, violations: [violation4("high", "status.plan-row.invalid", "plan row must be an object")] };
+  }
+  const { id, plan_id: planId, title, file, status, metadata } = row;
+  if (id === undefined && planId === undefined) {
+    violations.push(violation4("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
+  } else {
+    if (id !== undefined) {
+      validateNonEmptyString(violations, id, "id", "status.plan-row.missing-id", "status.plan-row.invalid-id");
+    }
+    if (planId !== undefined) {
+      validateNonEmptyString(violations, planId, "plan_id", "status.plan-row.missing-plan-id", "status.plan-row.invalid-plan-id");
+    }
+    if (id !== undefined && planId !== undefined && id !== planId) {
+      violations.push(violation4("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
+    }
+  }
+  validateNonEmptyString(violations, title, "title", "status.plan-row.missing-title", "status.plan-row.invalid-title");
+  validateNonEmptyString(violations, file, "file", "status.plan-row.missing-file", "status.plan-row.invalid-file");
+  if (status === undefined) {
+    violations.push(violation4("high", "status.plan-row.missing-status", "missing required field: status"));
+  } else if (typeof status !== "string" || !PLAN_STATUSES.includes(status)) {
+    violations.push(violation4("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
+  }
+  if (metadata !== undefined && !isPlainObject(metadata)) {
+    violations.push(violation4("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
+  }
+  return { ok: violations.length === 0, violations };
+}
+function validateResidual(entry) {
+  const violations = [];
+  if (!isPlainObject(entry)) {
+    return { ok: false, violations: [violation4("high", "status.residual.invalid", "residual entry must be an object")] };
+  }
+  const { id, title, severity, source, scope, decision, owner, target, tracking, detail_doc, lifecycle, closed_at } = entry;
+  validateNonEmptyString(violations, id, "id", "status.residual.missing-id", "status.residual.invalid-id");
+  validateNonEmptyString(violations, title, "title", "status.residual.missing-title", "status.residual.invalid-title");
+  validateNonEmptyString(violations, source, "source", "status.residual.missing-source", "status.residual.invalid-source");
+  validateNonEmptyString(violations, scope, "scope", "status.residual.missing-scope", "status.residual.invalid-scope");
+  validateNonEmptyString(violations, owner, "owner", "status.residual.missing-owner", "status.residual.invalid-owner");
+  if (severity === undefined) {
+    violations.push(violation4("high", "status.residual.missing-severity", "missing required field: severity"));
+  } else if (typeof severity !== "string" || !SEVERITY_ORDER.includes(severity) && severity !== "warning") {
+    violations.push(violation4("medium", "status.residual.invalid-severity", `severity must be one of ${SEVERITY_ORDER.join(" | ")} — got ${JSON.stringify(severity)}`));
+  } else if (severity === "warning") {
+    violations.push(violation4("low", "status.residual.legacy-warning", `severity "warning" is legacy — forbidden on new entries; read paths normalize it to "low"`, `use "low" (normalizeSeverity maps 'warning' → 'low')`));
+  }
+  if (decision === undefined) {
+    violations.push(violation4("high", "status.residual.missing-decision", "missing required field: decision"));
+  } else if (typeof decision !== "string" || !RESIDUAL_DECISIONS.includes(decision)) {
+    violations.push(violation4("medium", "status.residual.invalid-decision", `decision must be one of ${RESIDUAL_DECISIONS.join(" | ")} — got ${JSON.stringify(decision)}`));
+  }
+  if (target === undefined) {
+    violations.push(violation4("high", "status.residual.missing-target", "missing required field: target"));
+  } else if (typeof target !== "string" && target !== null) {
+    violations.push(violation4("medium", "status.residual.invalid-target", "target must be a string or null"));
+  }
+  if (tracking === undefined) {
+    violations.push(violation4("high", "status.residual.missing-tracking", "missing required field: tracking"));
+  } else if (typeof tracking !== "string" && tracking !== null) {
+    violations.push(violation4("medium", "status.residual.invalid-tracking", "tracking must be a string or null"));
+  }
+  if (detail_doc !== undefined && typeof detail_doc !== "string" && detail_doc !== null) {
+    violations.push(violation4("medium", "status.residual.invalid-detail-doc", "detail_doc must be a string or null"));
+  }
+  if (closed_at !== undefined && (typeof closed_at !== "string" || !DATE_RE.test(closed_at))) {
+    violations.push(violation4("medium", "status.residual.invalid-closed-at", "closed_at must be YYYY-MM-DD"));
+  }
+  if (lifecycle !== undefined) {
+    if (typeof lifecycle !== "string" || !residualLifecycles().includes(lifecycle)) {
+      violations.push(violation4("medium", "status.residual.invalid-lifecycle", `lifecycle must be one of ${residualLifecycles().join(" | ")} — got ${JSON.stringify(lifecycle)}`));
+    } else if (lifecycle !== "open") {
+      if (closed_at === undefined) {
+        violations.push(violation4("high", "status.residual.closed-missing-closed-at", `lifecycle "${lifecycle}" requires closed_at (YYYY-MM-DD)`, 'set closed_at (e.g. "2026-08-08")'));
+      }
+      if (entry.closure_note === undefined) {
+        violations.push(violation4("medium", "status.residual.closed-missing-closure-note", `lifecycle "${lifecycle}" requires closure_note (what changed; how verified)`, "add closure_note explaining the close"));
+      }
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+function isHarnessRelativePath(dir) {
+  if (dir.startsWith("/") || dir.startsWith("\\"))
+    return false;
+  if (/^[A-Za-z]:[\\/]/.test(dir))
+    return false;
+  return !dir.split(/[\\/]+/).includes("..");
+}
+function validateWorkflowEntry(entry) {
+  const violations = [];
+  if (!isPlainObject(entry)) {
+    return {
+      ok: false,
+      violations: [violation4("high", "status.workflow.invalid", "workflow entry must be an object")]
+    };
+  }
+  validateNonEmptyString(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
+  if (entry.type === undefined) {
+    violations.push(violation4("high", "status.workflow.missing-type", "missing required field: type"));
+  } else if (typeof entry.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(entry.type)) {
+    violations.push(violation4("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
+  }
+  validateNonEmptyString(violations, entry.started_at, "started_at", "status.workflow.missing-started-at", "status.workflow.invalid-started-at");
+  if (entry.dir === undefined) {
+    violations.push(violation4("high", "status.workflow.missing-dir", "missing required field: dir"));
+  } else if (typeof entry.dir !== "string" || entry.dir.trim() === "") {
+    violations.push(violation4("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
+  } else if (!isHarnessRelativePath(entry.dir)) {
+    violations.push(violation4("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
+  }
+  return { ok: violations.length === 0, violations };
+}
+function validateStatusV2(docOrPath, opts = {}) {
+  let doc;
+  let harnessDir = opts.harnessDir;
+  if (typeof docOrPath === "string") {
+    try {
+      doc = readJson(docOrPath);
+      harnessDir = dirname9(resolve11(docOrPath));
+    } catch (error) {
+      return {
+        ok: false,
+        violations: [violation4("high", "status.invalid-json", error.message)]
+      };
+    }
+  } else {
+    doc = docOrPath;
+  }
+  if (!isPlainObject(doc)) {
+    return { ok: false, violations: [violation4("high", "status.invalid-doc", "status document must be an object")] };
+  }
+  const upgrade = `mstar store upgrade --operator <name> --harness ${harnessDir === undefined ? "<control-root>" : `'${harnessDir.replace(/'/g, "'\\''")}'`}`;
+  if (doc.version !== 2) {
+    return {
+      ok: false,
+      violations: [
+        violation4("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
+      ]
+    };
+  }
+  if (Array.isArray(doc.plans)) {
+    return {
+      ok: false,
+      violations: [
+        violation4("high", "status.migration-required", `v1-shaped status.json (root plans[]) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
+      ]
+    };
+  }
+  if (doc.residual_findings !== undefined) {
+    return {
+      ok: false,
+      violations: [
+        violation4("high", "status.migration-required", `v1-shaped status.json (root residual_findings) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
+      ]
+    };
+  }
+  const violations = [];
+  if (doc.updated_at === undefined) {
+    violations.push(violation4("high", "status.missing-updated-at", "missing required field: updated_at"));
+  } else if (typeof doc.updated_at !== "string" || !DATE_RE.test(doc.updated_at)) {
+    violations.push(violation4("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
+  }
+  if (doc.workflows === undefined) {
+    violations.push(violation4("high", "status.missing-workflows", "missing required field: workflows"));
+  } else if (!Array.isArray(doc.workflows)) {
+    violations.push(violation4("high", "status.invalid-workflows", "workflows must be an array"));
+  } else {
+    const seen = new Set;
+    for (const entry of doc.workflows) {
+      violations.push(...validateWorkflowEntry(entry).violations);
+      if (isPlainObject(entry) && typeof entry.id === "string") {
+        if (seen.has(entry.id)) {
+          violations.push(violation4("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
+        }
+        seen.add(entry.id);
+      }
+    }
+  }
+  if (harnessDir !== undefined && Array.isArray(doc.workflows)) {
+    let realHarnessDir = null;
+    try {
+      realHarnessDir = realpathSync6(harnessDir);
+    } catch {}
+    for (const entry of doc.workflows) {
+      if (!isPlainObject(entry) || typeof entry.dir !== "string")
+        continue;
+      const relSnapshot = join11(entry.dir, WORKFLOW_SNAPSHOT_FILE);
+      const snapshotPath = join11(harnessDir, relSnapshot);
+      const label = typeof entry.id === "string" ? entry.id : relSnapshot;
+      let physical;
+      try {
+        physical = realpathSync6(snapshotPath);
+      } catch {
+        violations.push(violation4("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
+        continue;
+      }
+      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep5}`)) {
+        violations.push(violation4("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
+        continue;
+      }
+      let snapshot;
+      try {
+        snapshot = readJson(snapshotPath);
+      } catch (error) {
+        violations.push(violation4("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
+        continue;
+      }
+      if (typeof snapshot.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(snapshot.status)) {
+        violations.push(violation4("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
+      }
+      if (typeof entry.type === "string" && typeof snapshot.type === "string" && entry.type !== snapshot.type) {
+        violations.push(violation4("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
+      }
+      if (typeof entry.started_at === "string" && typeof snapshot.started_at === "string" && entry.started_at !== snapshot.started_at) {
+        violations.push(violation4("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`mstar workflow register\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
+      }
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+function resolveCompassEnforcement(harnessDir) {
+  const iterationsDir = resolveIterationDir(harnessDir);
+  if (!existsSync8(iterationsDir))
+    return { hard: false, source: "none" };
+  let entries;
+  try {
+    entries = readdirSync5(iterationsDir, { withFileTypes: true });
+  } catch {
+    return { hard: false, source: "none" };
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory())
+      continue;
+    const compassPath = join11(iterationsDir, entry.name, "delivery-compass.md");
+    if (!existsSync8(compassPath))
+      continue;
+    let content3;
+    try {
+      content3 = readFileSync7(compassPath, "utf8");
+    } catch {
+      continue;
+    }
+    const frontmatter = content3.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    const fm = frontmatter !== null ? frontmatter[1] : "";
+    if (!/^status[ \t]*:[ \t]*(?:active|locked)[ \t]*$/m.test(fm))
+      continue;
+    const flag = parseEnforcementFlag(fm);
+    if (flag.hard)
+      return flag;
+  }
+  return { hard: false, source: "none" };
+}
+function resolveMstarcEnforcement(harnessDir) {
+  const dir = resolve11(harnessDir);
+  const rc = loadMstarc(dir, dirname9(dir));
+  const value = rc?.config.enforcement;
+  if (value === "hard")
+    return { hard: true, source: "mstarc" };
+  if (value === "soft")
+    return { hard: false, source: "mstarc" };
+  return { hard: false, source: "none" };
+}
+function resolveRepoEnforcement(harnessDir) {
+  const rc = resolveMstarcEnforcement(harnessDir);
+  if (rc.source !== "none")
+    return rc;
+  return resolveCompassEnforcement(harnessDir);
+}
+var DATE_RE;
+var PLAN_STATUSES;
+var RESIDUAL_DECISIONS;
+var validateStatus;
+var init_status = __esm(() => {
+  init_core();
+  init_path();
+  init_coordination_write();
+  init_dispatch();
+  init_issue();
+  init_mstarc();
+  init_workflow();
+  init_persist_payload_schemas();
+  DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"];
+  RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"];
+  validateStatus = validateStatusV2;
+});
+function typeName(value) {
+  if (value === null)
+    return "null";
+  if (Array.isArray(value))
+    return "array";
+  return typeof value;
+}
+function validateCompassShape(doc) {
+  const issues = [];
+  const expectString = (key, opts = {}) => {
+    const value = doc[key];
+    if (typeof value !== "string") {
+      issues.push({ path: [key], message: `expected string, received ${typeName(value)}` });
+      return;
+    }
+    if (opts.min !== undefined && value.length < opts.min) {
+      issues.push({ path: [key], message: `string must contain at least ${opts.min} character(s)` });
+      return;
+    }
+    if (opts.regex !== undefined && !opts.regex.test(value)) {
+      issues.push({ path: [key], message: `string must match ${opts.regex}` });
+    }
+  };
+  expectString("iteration_id", { min: 1 });
+  expectString("start_date", { regex: DATE_RE2 });
+  const status = doc.status;
+  if (typeof status !== "string" || !COMPASS_STATUSES.includes(status)) {
+    issues.push({
+      path: ["status"],
+      message: `expected one of ${COMPASS_STATUSES.map((s) => `'${s}'`).join(" | ")}, received ${typeName(status)}`
+    });
+  }
+  expectString("iteration_base_branch", { min: 1 });
+  expectString("target_branch", { min: 1 });
+  const plans = doc.plans;
+  if (plans !== undefined) {
+    if (!Array.isArray(plans)) {
+      issues.push({ path: ["plans"], message: `expected array, received ${typeName(plans)}` });
+    } else {
+      plans.forEach((entry, index2) => {
+        if (typeof entry !== "string") {
+          issues.push({ path: ["plans", index2], message: `expected string, received ${typeName(entry)}` });
+        } else if (entry.length < 1) {
+          issues.push({ path: ["plans", index2], message: "string must contain at least 1 character(s)" });
+        }
+      });
+    }
+  }
+  const end_date = doc.end_date;
+  if (end_date !== undefined) {
+    if (typeof end_date !== "string") {
+      issues.push({ path: ["end_date"], message: `expected string, received ${typeName(end_date)}` });
+    } else if (!DATE_RE2.test(end_date)) {
+      issues.push({ path: ["end_date"], message: `string must match ${DATE_RE2}` });
+    }
+  }
+  if (issues.length > 0)
+    return { ok: false, issues };
+  return {
+    ok: true,
+    data: {
+      iteration_id: doc.iteration_id,
+      start_date: doc.start_date,
+      status,
+      iteration_base_branch: doc.iteration_base_branch,
+      target_branch: doc.target_branch,
+      ...plans !== undefined ? { plans } : {},
+      ...end_date !== undefined ? { end_date } : {}
+    }
+  };
+}
+function violation5(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
+}
+function isPlainObject3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function validateCompassFrontmatter(doc) {
+  if (!isPlainObject3(doc)) {
+    return {
+      ok: false,
+      violations: [
+        violation5("medium", "COMPASS_INVALID_FIELD", "Compass frontmatter must be a YAML object with iteration_id / start_date / status / iteration_base_branch / target_branch (template: mstar-iteration §1.3)", "Fix the frontmatter of {ITERATION_DIR}/<iteration-id>/delivery-compass.md")
+      ]
+    };
+  }
+  const parsed = validateCompassShape(doc);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      violations: parsed.issues.map((issue) => {
+        const field = issue.path.join(".") || "(root)";
+        return violation5("medium", "COMPASS_INVALID_FIELD", `Compass frontmatter field '${field}' is invalid: ${issue.message}`, `Fix '${field}' in {ITERATION_DIR}/<iteration-id>/delivery-compass.md frontmatter (template: mstar-iteration §1.3)`);
+      })
+    };
+  }
+  const violations = [];
+  const { status, end_date } = parsed.data;
+  if (status === "completed" && end_date === undefined) {
+    violations.push(violation5("high", "COMPASS_END_DATE_REQUIRED", "Compass frontmatter status is 'completed' but end_date is missing — end_date is required at iteration-close (mstar-iteration §3.4, template Fields guide)", "Add `end_date: YYYY-MM-DD` to the frontmatter"));
+  }
+  if (status !== "completed" && end_date !== undefined) {
+    violations.push(violation5("medium", "COMPASS_END_DATE_NOT_ALLOWED", `Compass frontmatter sets end_date while status is '${status}' — end_date is only written at iteration-close (mstar-iteration §3.4)`, "Remove end_date until iteration-close"));
+  }
+  return { ok: violations.length === 0, violations };
+}
+function parseCompassFrontmatterText(content3, filePath) {
+  const lines = content3.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") {
+    throw new Error(`no YAML frontmatter fence in ${filePath} (expected first line "---")`);
+  }
+  const end = lines.indexOf("---", 1);
+  if (end === -1) {
+    throw new Error(`unterminated YAML frontmatter in ${filePath} (no closing "---")`);
+  }
+  const doc = {};
+  let listKey = null;
+  for (let i = 1;i < end; i += 1) {
+    const line = lines[i] ?? "";
+    if (!line.trim() || line.trim().startsWith("#"))
+      continue;
+    if (listKey !== null && /^\s*-\s+/.test(line)) {
+      const item = line.replace(/^\s*-\s+/, "").trim().replace(/^["']|["']$/g, "");
+      if (!Array.isArray(doc[listKey]))
+        doc[listKey] = [];
+      doc[listKey].push(item);
+      continue;
+    }
+    listKey = null;
+    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
+    if (!kv) {
+      throw new Error(`unsupported frontmatter line in ${filePath}: ${JSON.stringify(line)}`);
+    }
+    const value = kv[2].trim();
+    doc[kv[1]] = value === "" ? null : value.startsWith('"') && value.endsWith('"') && value.length >= 2 ? value.slice(1, -1).replace(/\\(.)/g, (_, ch) => ch === "n" ? `
+` : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`) : /^\[.*\]$/.test(value) ? parseFlowArray(value, filePath) : value.replace(/^["']|["']$/g, "");
+    listKey = value === "" ? kv[1] : null;
+  }
+  return doc;
+}
+function parseFlowArray(raw, filePath) {
+  const inner = raw.slice(1, -1);
+  if (/[[\]]/.test(inner)) {
+    throw new Error(`nested flow-style array in ${filePath}: ${JSON.stringify(raw)} — only flat scalar items are supported (e.g. [a, b])`);
+  }
+  let quote = null;
+  for (const ch of inner) {
+    if (ch === '"' || ch === "'") {
+      if (quote === null)
+        quote = ch;
+      else if (quote === ch)
+        quote = null;
+    } else if (ch === "," && quote !== null) {
+      throw new Error(`ambiguous flow-style array in ${filePath}: ${JSON.stringify(raw)} — quoted item containing comma cannot be split unambiguously (flat scalar items only)`);
+    }
+  }
+  if (quote !== null) {
+    throw new Error(`unterminated ${quote} quote in flow-style array in ${filePath}: ${JSON.stringify(raw)}`);
+  }
+  const items = [];
+  for (const part of inner.split(",")) {
+    const item = part.trim().replace(/^["']|["']$/g, "");
+    if (item === "")
+      continue;
+    items.push(item);
+  }
+  return items;
+}
+var COMPASS_STATUSES;
+var DATE_RE2;
+var COMPLETENESS_ROOTS;
+var GAP_CODE;
+var init_iteration = __esm(() => {
+  init_catalog();
+  init_store_db();
+  init_status();
+  init_workflow();
+  COMPASS_STATUSES = ["active", "locked", "completed"];
+  DATE_RE2 = /^\d{4}-\d{2}-\d{2}$/;
+  COMPLETENESS_ROOTS = ["iterations", "plans", "knowledge", "specs", "projects"];
+  GAP_CODE = {
+    iteration: "catalog.discovery.missing-iteration",
+    plan: "catalog.discovery.missing-plan",
+    project: "catalog.discovery.missing-project",
+    document: "catalog.discovery.missing-document"
+  };
+});
+function violation6(severity, code2, message) {
+  return { ok: false, severity, code: code2, message };
+}
+function validateNonEmptyString2(violations, value, field, missingCode, invalidCode) {
+  if (value === undefined) {
+    violations.push(violation6("high", missingCode, `missing required field: ${field}`));
+  } else if (typeof value !== "string" || value.trim() === "") {
+    violations.push(violation6("medium", invalidCode, `${field} must be a non-empty string`));
+  }
+}
+function frontmatterEnd(content3) {
+  const lines = content3.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---")
+    return 0;
+  let offset = lines[0].length;
+  const newlineWidth = content3.startsWith(`\r
+`, offset) ? 2 : content3[offset] === `
+` ? 1 : 0;
+  offset += newlineWidth;
+  for (let index2 = 1;index2 < lines.length; index2 += 1) {
+    const line = lines[index2];
+    const nextNewline = content3.indexOf(`
+`, offset);
+    const end = nextNewline === -1 ? content3.length : nextNewline;
+    const lineEnd = content3[end - 1] === "\r" ? end - 1 : end;
+    if (content3.slice(offset, lineEnd) === "---") {
+      return nextNewline === -1 ? content3.length : nextNewline + 1;
+    }
+    offset = nextNewline === -1 ? content3.length : nextNewline + 1;
+  }
+  return 0;
+}
+function plainText(node2) {
+  if (node2.type === "text" || node2.type === "inlineCode")
+    return node2.value ?? "";
+  if (node2.type === "break")
+    return " ";
+  return (node2.children ?? []).map(plainText).join("");
+}
+function isPositioned(node2) {
+  return node2.position !== undefined;
+}
+function validateRoadmapContent(content3, sourceLabel) {
+  const violations = [];
+  let doc;
+  try {
+    doc = parseCompassFrontmatterText(content3, sourceLabel);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : `invalid roadmap frontmatter in ${sourceLabel}`;
+    return { ok: false, violations: [violation6("high", "project.roadmap.invalid-frontmatter", message)], warnings: [] };
+  }
+  validateNonEmptyString2(violations, doc.project_id, "project_id", "project.roadmap.missing-project-id", "project.roadmap.invalid-project-id");
+  validateNonEmptyString2(violations, doc.title, "title", "project.roadmap.missing-title", "project.roadmap.invalid-title");
+  if (doc.status === undefined) {
+    violations.push(violation6("high", "project.roadmap.missing-status", "missing required field: status"));
+  } else if (typeof doc.status !== "string" || !ROADMAP_STATUSES.includes(doc.status)) {
+    violations.push(violation6("medium", "project.roadmap.invalid-status", `status must be one of ${ROADMAP_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
+  }
+  if (doc.created_at === undefined) {
+    violations.push(violation6("high", "project.roadmap.missing-created-at", "missing required field: created_at"));
+  } else if (typeof doc.created_at !== "string" || !DATE_RE3.test(doc.created_at)) {
+    violations.push(violation6("medium", "project.roadmap.invalid-created-at", "created_at must be YYYY-MM-DD"));
+  }
+  if (doc.milestones !== undefined && doc.milestones !== null) {
+    if (!Array.isArray(doc.milestones)) {
+      violations.push(violation6("medium", "project.roadmap.invalid-milestones", "milestones must be a list of milestone names"));
+    } else if (doc.milestones.some((item) => typeof item !== "string" || item.trim() === "")) {
+      violations.push(violation6("medium", "project.roadmap.invalid-milestones", "milestones items must be non-empty strings"));
+    }
+  }
+  if (doc.residuals_ref !== undefined && doc.residuals_ref !== null && (typeof doc.residuals_ref !== "string" || doc.residuals_ref.trim() === "")) {
+    violations.push(violation6("medium", "project.roadmap.invalid-residuals-ref", "residuals_ref must be a non-empty string"));
+  }
+  const warnings = [];
+  const end = frontmatterEnd(content3);
+  const body = content3.slice(end);
+  if (!/^##\s+Direction\s*$/m.test(body)) {
+    warnings.push(violation6("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) — state the project direction there"));
+  }
+  if (!/^\s*[-*]\s+\[[xX ]\]/m.test(body)) {
+    warnings.push(violation6("low", "project.roadmap.body.no-goal-items", "roadmap body has no goal-item task list (documented body convention) — list goals as `- [ ]` / `- [x]` markdown task items"));
+  }
+  return { ok: violations.length === 0, violations, warnings };
+}
+function parseRoadmapContent(contentMarkdown) {
+  const validation = validateRoadmapContent(contentMarkdown, "roadmap content");
+  if (!validation.ok) {
+    throw new Error(`invalid roadmap content: ${validation.violations.map((item) => item.code).join(", ")}`);
+  }
+  const rawFrontmatter = parseCompassFrontmatterText(contentMarkdown, "roadmap content");
+  const frontmatter = rawFrontmatter;
+  const bodyOffset = frontmatterEnd(contentMarkdown);
+  const bodySource = contentMarkdown.slice(bodyOffset);
+  const tree = fromMarkdown(bodySource, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] });
+  const sections = [];
+  const headings = [];
+  const blocks = tree.children ?? [];
+  for (const node2 of blocks) {
+    if (node2.type === "heading" && node2.depth !== undefined && isPositioned(node2))
+      headings.push(node2);
+  }
+  const firstHeadingOffset = headings[0]?.position.start.offset ?? bodySource.length;
+  if (firstHeadingOffset > 0)
+    sections.push({ level: 0, heading: "", body: bodySource.slice(0, firstHeadingOffset) });
+  for (let index2 = 0;index2 < headings.length; index2 += 1) {
+    const headingNode = headings[index2];
+    const nextHeading = headings.slice(index2 + 1).find((candidate) => candidate.depth <= headingNode.depth);
+    const endOffset = nextHeading?.position.start.offset ?? bodySource.length;
+    const heading = (headingNode.children ?? []).map(plainText).join("");
+    sections.push({ level: headingNode.depth, heading, body: bodySource.slice(headingNode.position.end.offset, endOffset) });
+  }
+  const goals = [];
+  const visit = (node2, parentOrdinal) => {
+    if (node2.type === "listItem" && node2.checked !== undefined && node2.checked !== null && isPositioned(node2)) {
+      const ordinal = goals.length;
+      const firstParagraph = (node2.children ?? []).find((child) => child.type === "paragraph");
+      goals.push({
+        ordinal,
+        parentOrdinal,
+        checked: node2.checked,
+        title: firstParagraph ? plainText(firstParagraph).trim() : "",
+        body: bodySource.slice(node2.position.start.offset, node2.position.end.offset)
+      });
+      for (const child of node2.children ?? [])
+        visit(child, ordinal);
+      return;
+    }
+    for (const child of node2.children ?? [])
+      visit(child, parentOrdinal);
+  };
+  visit(tree, null);
+  return {
+    contentMarkdown,
+    frontmatter,
+    direction: sections.find((section) => section.level === 2 && section.heading.trim() === "Direction")?.body ?? null,
+    goals,
+    milestones: Array.isArray(frontmatter.milestones) ? frontmatter.milestones : [],
+    sections
+  };
+}
+var ROADMAP_STATUSES;
+var DATE_RE3;
+var init_roadmap_content = __esm(() => {
+  init_dev15();
+  init_mdast_util_gfm();
+  init_micromark_extension_gfm();
+  init_iteration();
+  ROADMAP_STATUSES = ["active", "paused", "completed"];
+  DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
 });
 function violation7(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
@@ -16838,6 +16838,82 @@ create table sync_runs(
   primary key (binding_id, direction)
 );
 `;
+var MIGRATION_19_SQL = `
+create table occurrences_v19_stage as select * from occurrences;
+create table provenance_v19_stage as select * from provenance;
+create table relations_v19_stage as select * from relations;
+create table issue_transitions_v19_stage as select * from issue_transitions;
+create table issue_project_moves_v19_stage as select * from issue_project_moves;
+create table issue_sync_state_v19_stage as select * from issue_sync_state;
+delete from occurrences;
+delete from provenance;
+delete from relations;
+delete from issue_transitions;
+delete from issue_project_moves;
+delete from issue_sync_state;
+create table issues_obsolete(
+  id text primary key,
+  project_id text not null,
+  title text not null,
+  kind text not null check (kind in ('bug','risk','improvement','request','decision','review-obligation')),
+  severity text not null check (severity in ('critical','high','medium','low','nit')),
+  disposition text not null default 'open' check (disposition in ('open','resolved','waived','duplicate','superseded','obsolete')),
+  impact text not null,
+  acceptance text not null,
+  owner text,
+  registered_at text,
+  closed_at text,
+  closure_note text,
+  created_at text not null,
+  updated_at text not null,
+  revision integer not null default 1,
+  provider text not null default 'local',
+  external_id text,
+  url text,
+  identity_key text not null unique,
+  milestone_id text references project_milestones(milestone_id)
+);
+insert into issues_obsolete(id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id)
+  select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id
+  from issues;
+drop table issues;
+alter table issues_obsolete rename to issues;
+create unique index issues_external_identity on issues(provider, external_id) where external_id is not null;
+create index issues_disposition on issues(project_id, disposition, severity);
+create index issues_milestone_disposition
+  on issues(project_id, milestone_id, disposition)
+  where milestone_id is not null;
+create trigger issues_milestone_project_insert
+before insert on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+create trigger issues_milestone_project_update
+before update of project_id, milestone_id on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+insert into occurrences select * from occurrences_v19_stage;
+insert into provenance select * from provenance_v19_stage;
+insert into relations select * from relations_v19_stage;
+insert into issue_transitions select * from issue_transitions_v19_stage;
+insert into issue_project_moves select * from issue_project_moves_v19_stage;
+insert into issue_sync_state select * from issue_sync_state_v19_stage;
+drop table occurrences_v19_stage;
+drop table provenance_v19_stage;
+drop table relations_v19_stage;
+drop table issue_transitions_v19_stage;
+drop table issue_project_moves_v19_stage;
+drop table issue_sync_state_v19_stage;
+`;
 var MIGRATIONS;
 var DSH_HOST_STATE_MIGRATION;
 var EXECUTION_TABLE_NAMES;
@@ -16891,7 +16967,8 @@ var init_store_db = __esm(() => {
     { version: 15, name: "sync-ledger", sql: MIGRATION_15_SQL },
     { version: 16, name: "sync-pending-target", sql: MIGRATION_16_SQL },
     { version: 17, name: "sync-push-ledger", sql: MIGRATION_17_SQL },
-    { version: 18, name: "sync-run-lease", sql: MIGRATION_18_SQL }
+    { version: 18, name: "sync-run-lease", sql: MIGRATION_18_SQL },
+    { version: 19, name: "issue-obsolete-disposition", sql: MIGRATION_19_SQL }
   ];
   DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
   EXECUTION_TABLE_NAMES = [
@@ -17354,6 +17431,7 @@ init_coordination_write();
 init_execution_store();
 init_issue();
 init_store_db();
+init_issue();
 
 class MilestoneError extends Error {
   code;
@@ -17374,6 +17452,7 @@ function guard(db) {
   if (active?.authority_state !== "active")
     fail("store.not-active", "Milestone access requires an active store.");
 }
+var OTHER_RETIRED_DISPOSITION_SQL = TERMINAL_DISPOSITIONS.filter((value) => value !== "resolved").map((value) => `'${value}'`).join(",");
 function project(db, projectId) {
   if (!db.prepare("select 1 from catalog_entities where kind='project' and id=?").get(projectId))
     fail("milestone.project-not-found", `Project ${projectId} does not exist.`);
@@ -17390,7 +17469,7 @@ function readMilestonesOn(db, projectId, milestoneId) {
   }
   const filter = milestoneId === undefined ? "" : " and m.milestone_id=?";
   const params = milestoneId === undefined ? [projectId] : [projectId, milestoneId];
-  const rows = db.prepare(`select m.milestone_id,m.project_id,m.name,m.target,m.status,m.ordinal,m.revision,m.created_at,m.updated_at,count(i.id) total_issues,sum(case when i.disposition='open' then 1 else 0 end) open_issues,sum(case when i.disposition='resolved' then 1 else 0 end) resolved_issues,sum(case when i.disposition in ('waived','duplicate','superseded') then 1 else 0 end) other_retired_issues from project_milestones m left join issues i on i.milestone_id=m.milestone_id and i.project_id=m.project_id where m.project_id=?${filter} group by m.milestone_id order by m.ordinal,m.milestone_id`).all(...params);
+  const rows = db.prepare(`select m.milestone_id,m.project_id,m.name,m.target,m.status,m.ordinal,m.revision,m.created_at,m.updated_at,count(i.id) total_issues,sum(case when i.disposition='open' then 1 else 0 end) open_issues,sum(case when i.disposition='resolved' then 1 else 0 end) resolved_issues,sum(case when i.disposition in (${OTHER_RETIRED_DISPOSITION_SQL}) then 1 else 0 end) other_retired_issues from project_milestones m left join issues i on i.milestone_id=m.milestone_id and i.project_id=m.project_id where m.project_id=?${filter} group by m.milestone_id order by m.ordinal,m.milestone_id`).all(...params);
   const milestones = rows.map((r) => {
     const resolvedIssues = Number(r.resolved_issues) || 0, otherRetiredIssues = Number(r.other_retired_issues) || 0, openIssues = Number(r.open_issues) || 0;
     return { milestoneId: String(r.milestone_id), projectId: String(r.project_id), name: String(r.name), target: r.target, status: r.status, ordinal: Number(r.ordinal), revision: Number(r.revision), createdAt: String(r.created_at), updatedAt: String(r.updated_at), totalIssues: Number(r.total_issues), openIssues, resolvedIssues, otherRetiredIssues };
@@ -17452,6 +17531,10 @@ var CATALOG_ROOT_KINDS = {
 function asCatalogRootKind(value) {
   return typeof value === "string" && CATALOG_ROOT_KINDS[value] === true ? value : null;
 }
+var CATALOG_LIFECYCLES = { active: true, archived: true, superseded: true };
+function asCatalogLifecycle(value) {
+  return typeof value === "string" && CATALOG_LIFECYCLES[value] === true ? value : "active";
+}
 async function readCatalogInputs(context) {
   const handle = await openStore(context, "read");
   try {
@@ -17483,7 +17566,7 @@ async function readCatalogInputs(context) {
       ];
     });
     const links = db.prepare("select from_kind, from_id, to_kind, to_id from catalog_links where relation = 'documents'").all();
-    const owners = db.prepare("select id from catalog_entities where kind = 'iteration'").all();
+    const owners = db.prepare("select id, lifecycle from catalog_entities where kind = 'iteration'").all();
     const byId = new Map(documents.map((doc) => [doc.id, doc]));
     const pick = (ownerId) => {
       const candidates = links.filter((link) => link.from_kind === "iteration" && link.from_id === ownerId && link.to_kind === "document" && typeof link.to_id === "string").map((link) => byId.get(link.to_id)).filter((doc) => doc !== undefined).sort((a, b) => {
@@ -17501,8 +17584,14 @@ async function readCatalogInputs(context) {
       if (ownerId === null)
         continue;
       const doc = pick(ownerId);
-      if (doc !== null)
-        compassDocs.push({ iterationId: ownerId, rootKind: doc.rootKind, relativePath: doc.relativePath });
+      if (doc !== null) {
+        compassDocs.push({
+          iterationId: ownerId,
+          lifecycle: asCatalogLifecycle(owner.lifecycle),
+          rootKind: doc.rootKind,
+          relativePath: doc.relativePath
+        });
+      }
     }
     return { catalogRevision, bindings, compassDocs };
   } finally {
@@ -17799,10 +17888,15 @@ async function captureExecutionProjectionSources(context) {
       const progressSummary = isPlainObject(mappedCoordination) && isPlainObject(mappedCoordination.progress) ? mappedCoordination.progress.summary : null;
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text4(authorityPlanView.plan.status), progress: text4(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text4(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
+    const registeredIterations = new Set(rows.workflows.filter((workflow) => workflow.type === "iteration" && workflow.activeRegistration).map((workflow) => workflow.id));
+    const terminalIterations = new Set(rows.workflows.filter((workflow) => workflow.type === "iteration" && !workflow.activeRegistration && WORKFLOW_TERMINAL_STATUSES.includes(workflow.status)).map((workflow) => workflow.id));
+    const historicalIteration = (iterationId, lifecycle) => !registeredIterations.has(iterationId) && (lifecycle === "archived" || lifecycle === "superseded" || terminalIterations.has(iterationId));
     for (const doc of inputs.compassDocs) {
       const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join31(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readCompassSource(fspec);
       if (read.state !== "ok" || read.content === null) {
+        if (read.state === "missing" && historicalIteration(doc.iterationId, doc.lifecycle))
+          continue;
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
         diagnostics.push({ sourceKey: fspec.sourceKey, reason: read.state, message: read.diagnostic ?? "compass unavailable" });
         continue;
@@ -18193,7 +18287,6 @@ async function refreshProjections(context, hooks = {}) {
   return attempt.report;
 }
 init_roadmap_content();
-init_mstarc();
 init_store_db();
 init_execution_store();
 init_workflow();
@@ -18216,8 +18309,7 @@ var DASHBOARD_VIEWS = {
   projects: { needsProjection: false },
   roadmap: { needsProjection: false },
   "issue-flow": { needsProjection: false },
-  overview: { needsProjection: true },
-  "sync-binding": { needsProjection: false }
+  overview: { needsProjection: true }
 };
 function text5(value) {
   return typeof value === "string" && value !== "" ? value : null;
@@ -18347,9 +18439,6 @@ async function resolveExecutionReadRoute(context) {
   return (await resolveCurrentAuthority(context)).route;
 }
 function queryDashboard(view, filters = {}) {
-  if (view === "sync-binding") {
-    usage("the sync-binding view is served by querySyncBinding, not queryDashboard");
-  }
   if (!Object.hasOwn(DASHBOARD_VIEWS, view)) {
     usage(`unknown dashboard view ${JSON.stringify(String(view))}`);
   }
@@ -18392,13 +18481,7 @@ var ISSUE_KINDS = {
   "review-obligation": true
 };
 var ISSUE_SEVERITIES = { critical: true, high: true, medium: true, low: true, nit: true };
-var ISSUE_DISPOSITIONS = {
-  open: true,
-  resolved: true,
-  waived: true,
-  duplicate: true,
-  superseded: true
-};
+var ISSUE_DISPOSITION_MAP = vocabularyMap(ISSUE_DISPOSITIONS);
 var ISSUE_LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
@@ -18419,7 +18502,7 @@ function bindIssueFilter(filter) {
     params.push(filter.projectId);
   }
   const disposition = filter.disposition ?? "open";
-  if (!Object.hasOwn(ISSUE_DISPOSITIONS, disposition))
+  if (!Object.hasOwn(ISSUE_DISPOSITION_MAP, disposition))
     usage("disposition is not a contract vocabulary value");
   clauses.push("issues.disposition = ?");
   params.push(disposition);
@@ -18568,7 +18651,7 @@ function readIssueDetail(db, id) {
     projectMoves
   };
 }
-var TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'";
+var TERMINAL_DISPOSITION_SQL = TERMINAL_DISPOSITIONS.map((value) => `'${value}'`).join(", ");
 function utcDay(timestamp) {
   if (timestamp === null || timestamp === "")
     return null;
@@ -18588,7 +18671,7 @@ function readIssueFlow(db, projectId) {
                 select 1 from issue_transitions t
                 where t.issue_id = issues.id and t.imported = 1 and t.to_disposition = issues.disposition
               ) as imported
-       from issues ${scope ? `${scope} and` : "where"} disposition in (${TERMINAL_DISPOSITIONS})`).all(...scopeParams);
+       from issues ${scope ? `${scope} and` : "where"} disposition in (${TERMINAL_DISPOSITION_SQL})`).all(...scopeParams);
   const openRow = db.prepare(`select count(*) as n from issues ${scope ? `${scope} and` : "where"} disposition = 'open'`).get(...scopeParams);
   const days = new Map;
   const dayOf = (date) => {
@@ -19108,7 +19191,6 @@ init_workflow();
 init_worktree();
 init_status();
 init_issue();
-var PROBE_STATES = ["ready", "service-absent", "unreachable", "access-denied"];
 init_issue();
 init_catalog();
 init_catalog_import();
@@ -19120,7 +19202,8 @@ init_plan_path();
 init_execution_store();
 init_recovery_intent();
 init_workflow();
-var SYNC_PROBE_STATES = new Set(PROBE_STATES);
+init_issue();
+var DISPOSITIONS3 = vocabularyMap(ISSUE_DISPOSITIONS);
 init_catalog_import();
 init_catalog();
 init_store_db();

@@ -120,7 +120,9 @@ describe("mstar issue CLI bundle", () => {
     const closureFields = closurePayload.fields;
     expect(closureFields.find((field) => field.name === "references")).toMatchObject({
       required: false,
-      requiredWhen: ["resolved"],
+      requiredWhen: ["resolved", "obsolete"],
+      minItems: 1,
+      itemsNonblank: true,
     });
     expect(closureFields.find((field) => field.name === "canonicalIssueId")).toMatchObject({
       required: false,
@@ -241,7 +243,7 @@ describe("mstar issue CLI bundle", () => {
     expect(jsonOf(openRefusal)).toMatchObject({ status: "refused", code: "issue.invalid-disposition" });
     expect(String(jsonOf(openRefusal).message)).toContain("Only terminal→open is accepted; open cannot transition to open");
     expect(String(jsonOf(openRefusal).message)).toContain("Help: mstar issue reopen --help");
-    expect(String(jsonOf(openRefusal).message)).toContain("Recovery: Run `mstar issue show --id I-000001`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.");
+    expect(String(jsonOf(openRefusal).message)).toContain("Recovery: Run `mstar issue show --id I-000001`; only resolved|waived|duplicate|superseded|obsolete issues can reopen, and open issues stay open.");
 
     const stale = runBundle("node", [
       "issue", "reopen", "--id", created.issueId, "--payload", JSON.stringify({ reason: "stale attempt" }),
@@ -256,6 +258,78 @@ describe("mstar issue CLI bundle", () => {
     const finalShow = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
     expect((jsonOf(finalShow).data as { revision: number }).revision).toBe(detail.revision);
   });
+  test("obsolete closes a removed subject end to end: show, list, export, reopen", async () => {
+    const { root, harness } = await makeHarness();
+    const captureFile = join(root, "obsolete-capture.json");
+    writeJson(captureFile, capturePayload({ occurrenceKey: "obsolete-run", rootCauseKey: "obsolete-cause" }));
+    const added = runBundle("node", [
+      "issue", "add", "--file", captureFile, "--operation-id", "obsolete-seed",
+      "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(added.exitCode).toBe(0);
+    const created = jsonOf(added).data as { issueId: string; revision: number };
+
+    // Removing the subject is not a fix: a missing reference is refused, and the
+    // refusal names the exact command that satisfies it.
+    const noEvidenceFile = join(root, "obsolete-empty.json");
+    writeJson(noEvidenceFile, { reason: "subject removed" });
+    const refused = runBundle("node", [
+      "issue", "close", "--id", created.issueId, "--disposition", "obsolete", "--file", noEvidenceFile,
+      "--expect", String(created.revision), "--operation-id", "obsolete-missing-evidence",
+      "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(refused.exitCode).toBe(1);
+    expect(jsonOf(refused)).toMatchObject({ status: "refused", code: "issue.invalid-disposition" });
+    expect(String(jsonOf(refused).message)).toContain("obsolete requires removal evidence in references");
+    expect(String(jsonOf(refused).message)).toContain(
+      "mstar issue close --id <id> --disposition obsolete --file <closure-evidence.json> --actor project-manager --expect <revision>",
+    );
+
+    const closeFile = join(root, "obsolete-close.json");
+    writeJson(closeFile, {
+      reason: "subject removed from the tree",
+      references: ["commit abc1234 deletes packages/engine/src/gone.ts"],
+    });
+    const closed = runBundle("node", [
+      "issue", "close", "--id", created.issueId, "--disposition", "obsolete", "--file", closeFile,
+      "--expect", String(created.revision), "--operation-id", "obsolete-close",
+      "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(closed.exitCode).toBe(0);
+    const closeReceipt = jsonOf(closed).data as { revision: number };
+
+    // The disposition and its evidence are rendered verbatim.
+    const shown = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
+    const detail = jsonOf(shown).data as {
+      disposition: string; closureNote: string;
+      transitions: Array<{ toDisposition: string; evidence: { references: string[] } }>;
+    };
+    expect(detail.disposition).toBe("obsolete");
+    expect(detail.closureNote).toBe("subject removed from the tree");
+    expect(detail.transitions[0]).toMatchObject({ toDisposition: "obsolete" });
+    expect(detail.transitions[0]?.evidence.references).toEqual(["commit abc1234 deletes packages/engine/src/gone.ts"]);
+
+    // `list --disposition obsolete` answers it; `resolved` does not claim it.
+    const listed = runBundle("node", ["issue", "list", "--disposition", "obsolete", "--harness", harness], root);
+    expect(jsonOf(listed).data).toMatchObject({ items: [expect.objectContaining({ id: created.issueId, disposition: "obsolete" })] });
+    const resolvedList = runBundle("node", ["issue", "list", "--disposition", "resolved", "--harness", harness], root);
+    expect((jsonOf(resolvedList).data as { items: unknown[] }).items).toEqual([]);
+    const exported = runBundle("node", ["issue", "export", "--id", created.issueId, "--harness", harness], root);
+    expect((jsonOf(exported).data as { disposition: string }).disposition).toBe("obsolete");
+
+    // Reopen stays available.
+    const reopenFile = join(root, "obsolete-reopen.json");
+    writeJson(reopenFile, { reason: "the subject returned" });
+    const reopened = runBundle("node", [
+      "issue", "reopen", "--id", created.issueId, "--file", reopenFile,
+      "--expect", String(closeReceipt.revision), "--operation-id", "obsolete-reopen",
+      "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(reopened.exitCode).toBe(0);
+    const afterReopen = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
+    expect((jsonOf(afterReopen).data as { disposition: string }).disposition).toBe("open");
+  });
+
   test("unknown schema type is a usage refusal with available type names", () => {
     const result = runBundle("shebang", ["schema", "HandofffEvidence"], process.cwd());
     expect(result.exitCode).toBe(2);

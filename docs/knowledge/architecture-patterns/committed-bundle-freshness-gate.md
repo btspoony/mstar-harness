@@ -4,7 +4,7 @@ category: architecture-patterns
 status: active
 tags: [packaging, ci, freshness-gate, config-only-targets]
 created: 2026-09-26
-last_updated: 2026-11-09
+last_updated: 2026-11-10
 source: iter-<plan-id>
 ---
 
@@ -23,3 +23,11 @@ Commit generated bundles into the plugin-root-visible path, mark them `@generate
 1. **Registry union regressions recurred three times** (C6b dropped pr-review, C6c dropped process, C6d dropped judgment) because per-task scoped proofs never exercised the composition. Fix: every family round's proof must include the registry/definitions test (whole-directory preferred), not just its own file.
 2. **Smoke must not self-substitute host variables**: the first packaging smoke expanded `${ZCODE_PLUGIN_ROOT}` itself against a synthetic root, hiding the missing-bundle failure. Assemble the layout the manifest declares, assert the resolved executable exists, then launch.
 3. **Environment isolation claims need implementation receipts**: "PATH excludes mstar" was asserted before the smoke actually constructed a sanitized PATH (temp bin dir with only node/bun symlinks + a pre-spawn `mstar` non-resolution assertion).
+
+## Version-pinned rebuild runbook
+
+The advisory gate's tolerance is not a licence to rebuild with whatever `bun` is on `PATH`: the packaging manifests record per-consumer digests of build outputs, so a rebuild under the wrong bundler rewrites the recorded digests to the wrong artifact and the producer's `--check` then vouches for it. The sequence that reproduces the committed state:
+
+1. **Invoke the pinned binary directly.** `bunx bun@1.4.0 run hooks:build` does not pin anything: `bun run` re-execs `bun` from `PATH`, so the script body still runs under the local version. Run the cached binary itself (for example `~/.bun/install/cache/@oven/bun-darwin-aarch64@1.4.0@@@1/bin/bun run hooks:build`) and confirm which prelude the output carries — 1.4.0 emits `var __defProp`/`__exportSetter`, 1.4.4 emits `var __esm = (fn, res, err)`.
+2. **Rebuild the inlined dependency under the same version.** `scripts/build-zcode-hooks.ts` transpiles only the hook; it inlines the gitignored `packages/engine/dist/engine.js`. A hooks-only rebuild inherits whatever engine the last local build left there, so rebuild `engine` first and then `hooks`.
+3. **Regenerate the manifests through the producer, never by hand.** Recorded digests must describe the artifacts that are actually committed. Check the result with the producer's `--check`; treat "it moved 18 of 70 digests" as the expected outcome of a genuine toolchain correction, not as churn to revert. A manifest that records a stale artifact's digest is worse than a missing gate, because it makes every later `--check` pass.

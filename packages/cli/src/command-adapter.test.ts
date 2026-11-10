@@ -10,7 +10,7 @@ test("issue payload help uses registry field requiredness", () => {
   if (close === undefined || reopen === undefined) throw new Error("issue definitions missing");
   const closeHelp = renderCommandContract(close, "cli");
   expect(closeHelp).toContain("reason (required) (string)");
-  expect(closeHelp).toContain("references (requiredWhen: resolved) (string[])");
+  expect(closeHelp).toContain("references (requiredWhen: resolved or obsolete) (string[])");
   expect(closeHelp).toContain("alignmentRef (requiredWhen: resolved or waived) (string)");
   expect(renderCommandContract(reopen, "cli")).toContain("reason (required) (string)");
 });

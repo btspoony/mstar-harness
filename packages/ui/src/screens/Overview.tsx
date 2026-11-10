@@ -25,7 +25,7 @@
 import { Fragment, type KeyboardEvent } from "react";
 
 import { DataTable, type DataTableColumn } from "../components/DataTable.tsx";
-import { formatClock, progressText } from "../view-model/format.ts";
+import { formatClock, progressText, type ProjectionNotice } from "../view-model/format.ts";
 import { EmptyState, type AbsenceArm } from "../components/EmptyState.tsx";
 import { IssueFlowChart } from "../components/IssueFlowChart.tsx";
 import { Notice } from "../components/Notice.tsx";
@@ -117,6 +117,15 @@ export type OverviewCopy = {
   milestoneOpenCount: (open: number) => string;
   milestoneOpen: (open: number) => string;
   projection: { current: string; stale: string; unavailable: string };
+  /** The bounded absence notice: counts, at most three named sources, the rest. */
+  projectionNotice: {
+    affected: (sources: number) => string;
+    missing: (sources: number) => string;
+    samples: (samples: readonly string[]) => string;
+    omitted: (sources: number) => string;
+    /** The degraded read named no source: state the fact, never a zero count. */
+    generic: string;
+  };
   /** The four absence arms' own words and copy families (IA §5). */
   absence: {
     "not-applicable": { labelWord: string; body: string };
@@ -156,6 +165,22 @@ export type OverviewProps = {
    */
   onOpenIssues?: (severity: string) => void;
 };
+
+/**
+ * The bounded absence notice (I-001078 / D15): distinct affected and missing
+ * source counts, at most three named sources, and how many are not named. Raw
+ * diagnostics, paths and an unbounded list never reach this line.
+ */
+function projectionNoticeText(notice: ProjectionNotice | null, copy: OverviewCopy): string {
+  if (notice === null) return copy.projectionNotice.generic;
+  const parts = [
+    copy.projectionNotice.affected(notice.affected),
+    copy.projectionNotice.missing(notice.missing),
+    notice.samples.length === 0 ? null : copy.projectionNotice.samples(notice.samples),
+    notice.omitted === 0 ? null : copy.projectionNotice.omitted(notice.omitted),
+  ];
+  return parts.filter((part): part is string => part !== null).join(" · ");
+}
 
 /** Render one absence arm from the arm the model already resolved. */
 function Absence(props: {
@@ -718,7 +743,7 @@ export function Overview(props: OverviewProps) {
         </span>
       </div>
       {model.projection.kind === "current" ? null : (
-        <Notice reason={model.projection.reasons.join(" · ")} tone="warning" />
+        <Notice reason={projectionNoticeText(model.projection.notice, copy)} tone="warning" />
       )}
     </article>
   );

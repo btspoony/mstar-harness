@@ -26,6 +26,7 @@
 import { build } from 'bun'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { readFileSync, writeFileSync } from 'node:fs'
+import { generateIssueVocabulary } from '../../ui/scripts/generate-issue-vocabulary.ts'
 
 const ID = '@mstar-harness/dsh'
 /** This package's root: every declared input resolves against it, never cwd. */
@@ -344,6 +345,10 @@ export async function buildClientBundle(options: {
   outdir: string
   mode: ClientBundleMode
 }): Promise<{ path: string; kind: string; bytes: number }> {
+  // The panel's disposition filter consumes the UI's generated vocabulary, which
+  // is projected from the engine tuple: regenerate before bundling so this host
+  // can never inline a stale set of dispositions.
+  generateIssueVocabulary()
   const outdir = isAbsolute(options.outdir) ? options.outdir : resolve(PACKAGE_ROOT, options.outdir)
   const priorCwd = process.cwd()
   process.chdir(PACKAGE_ROOT)

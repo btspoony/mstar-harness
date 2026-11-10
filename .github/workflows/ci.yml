@@ -896,13 +896,6 @@ jobs:
       - name: Build commands package
         run: bun run --cwd packages/commands build
 
-      # Runs bundle-assets first, which syncs the harness-skills /
-      # harness-commands mirrors this package's tests read from its own package
-      # root — so one `dsh:build` in a fresh checkout is enough, no sibling
-      # package build is required.
-      - name: Build dsh
-        run: bun run dsh:build
-
       # The install e2e specs spawn the same real CLI entry (`init|doctor
       # --target dsh`). They skip when no `dsh` bin is on PATH, but when they do
       # run (a `dsh` bin on the runner) they load packages/cli/src/index.ts and
@@ -911,6 +904,18 @@ jobs:
       - name: Build CLI (generated dashboard module for the CLI-entry specs)
         run: bun run cli:build
 
+      # Runs bundle-assets first, which syncs the harness-skills /
+      # harness-commands mirrors this package's tests read from its own package
+      # root — so one `dsh:build` in a fresh checkout is enough, no sibling
+      # package build is required.
+      # Order matters: the host build records a content fingerprint of every
+      # reachable input, and `cli:build` is a producer of `commands/dist` (it
+      # regenerates the dashboard module the commands bundle inlines). A dsh
+      # build before it would stamp a `commands/dist` that this step then
+      # rewrites, and the packed-artifact test would read the bundle as stale.
+      - name: Build dsh (last writer of its recorded inputs)
+        run: bun run dsh:build
+
       # The dsh test imports @mstar-harness/engine dist and the
       # harness-skills/harness-commands mirrors built above — use the package
       # script. The @deepseek-ai/dsh-* seam packages are peers resolved from the
@@ -918,7 +923,15 @@ jobs:
       # needed (the rc.7 link farm is gone). The install e2e specs skip
       # themselves when no `dsh` bin is on PATH.
       - name: Test dsh
-        run: bun run --cwd packages/dsh test
+        run: bun run --cwd packages/dsh test --reporter=junit --reporter-outfile=.junit-dsh.xml
+
+      # The gated real-composition cases are `test.if(isCiEnvironment())`: on the
+      # runner they must execute, and a green run cannot tell an executed case
+      # from a skipped one. The same step's JUnit report is checked against the
+      # two gated spec files, so a reverted CI predicate or a dropped spec fails
+      # here instead of passing silently.
+      - name: Verify the gated composition cases executed
+        run: bun run --cwd packages/dsh check:composition-report
 
       # The export-surface type layer (value-namespace identity + type-only
       # probes + cordis augmentation) is enforced by tsc over the tests —

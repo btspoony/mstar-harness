@@ -120,7 +120,6 @@ import {
   shellChrome,
   skipToMain,
 } from "./shell-chrome";
-import { syncBindingDestination } from "./sync-binding-destination";
 
 /**
  * Push a destination, or replace the current entry when only the filters changed.
@@ -987,7 +986,6 @@ function Shell(props: {
           <IterationDetailDestination id={address.route.id} address={address} />
         ) : null}
         {address.route.name === "projects" ? <ProjectsDestination outcome={projects} /> : null}
-        {syncBindingDestination(address.route)}
         {address.route.name === "project" ? (
           <ProjectDetailDestination
             address={address}

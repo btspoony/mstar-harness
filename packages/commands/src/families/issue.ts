@@ -8,7 +8,9 @@ import {
   getIssue,
   ISSUE_ACTION_NAMES,
   ISSUE_ACTIONS,
+  ISSUE_DISPOSITIONS,
   ISSUE_PAYLOAD_SCHEMAS,
+  TERMINAL_DISPOSITIONS,
   linkIssue,
   listIssues,
   moveIssue,
@@ -41,7 +43,7 @@ import { engineErrorFacts } from "./family-refusal.js";
 const inputSchema = z.object({
   id: z.string().optional(),
   project: z.string().optional(),
-  disposition: z.enum(["open", "resolved", "waived", "duplicate", "superseded"]).optional(),
+  disposition: z.enum(ISSUE_DISPOSITIONS).optional(),
   kind: z.enum(["bug", "risk", "improvement", "request", "decision", "review-obligation"]).optional(),
   severity: z.enum(["critical", "high", "medium", "low", "nit"]).optional(),
   query: z.string().optional(),
@@ -95,7 +97,7 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
         : code === "store.operation-conflict"
           ? `Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh \`--operation-id\`.`
           : code === "issue.invalid-disposition"
-            ? `Run \`mstar issue show --id ${issueId}\`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.`
+            ? `Run \`mstar issue show --id ${issueId}\`; only ${TERMINAL_DISPOSITIONS.join("|")} issues can reopen, and open issues stay open.`
             : code === "issue.scope-refused"
               ? `Retry \`mstar issue reopen --id ${issueId}\` with \`--actor project-manager\`; \`--operation-id\` is optional and a fresh replay id is generated when omitted.`
               : code === "issue.invalid-payload"
@@ -248,17 +250,36 @@ const payloadType: Record<string, IssuePayloadName> = Object.fromEntries(
   actions.flatMap(([verb, action]) => (action.payload === null ? [] : [[verb, action.payload] as [string, IssuePayloadName]])),
 );
 const expectedRevisionVerbs: Record<string, true> = Object.fromEntries(actions.filter(([, action]) => action.cas).map(([verb]) => [verb, true]));
+/**
+ * The conditions whose evidence rule the ENGINE owns rather than this admission
+ * schema. `obsolete` must refuse with `issue.invalid-disposition` and name the
+ * removal-evidence recovery; a transport-level required field would shadow that
+ * with a generic `issue.invalid-payload` and lose the actionable repair. The
+ * registry still publishes the requirement (`mstar schema`, the MCP tool), so
+ * the contract is declared even where admission defers.
+ */
+const ENGINE_OWNED_EVIDENCE: ReadonlySet<string> = new Set<string>(["obsolete"]);
+
+/**
+ * The registry condition this transport actually enforces for one admission.
+ * A non-closure verb passes its own name (the registry's `requiredWhen` names
+ * dispositions only), which never matches an engine-owned disposition.
+ */
+function admissionCondition(condition: string | undefined): string | undefined {
+  return condition !== undefined && ENGINE_OWNED_EVIDENCE.has(condition) ? undefined : condition;
+}
+
 function closureInputSchema(input: z.ZodObject<Record<string, z.core.$ZodType>>, defaultDisposition: TerminalDisposition): z.ZodType<IssueInput> {
   const fields = ISSUE_PAYLOAD_SCHEMAS.ClosureEvidence as Record<string, PayloadFieldSchema>;
   const dispositions = [...new Set(Object.values(fields).flatMap((field) => field.requiredWhen ?? []))] as TerminalDisposition[];
   return z.union([
     input.extend({
       disposition: z.never().optional(),
-      payload: payloadSchema("ClosureEvidence", defaultDisposition).optional(),
+      payload: payloadSchema("ClosureEvidence", admissionCondition(defaultDisposition)).optional(),
     }),
     ...dispositions.map((disposition) => input.extend({
       disposition: z.literal(disposition),
-      payload: payloadSchema("ClosureEvidence", disposition).optional(),
+      payload: payloadSchema("ClosureEvidence", admissionCondition(disposition)).optional(),
     })),
   ]) as z.ZodType<IssueInput>;
 }
@@ -277,9 +298,13 @@ function payloadDiagnostics(error: z.ZodError, value: unknown): RefusalDiagnosti
   }));
 }
 
-function validatePayload(input: IssueInput, typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, condition: string): unknown {
+function validatePayload(
+  input: IssueInput,
+  typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS,
+  condition: string | undefined,
+): unknown {
   const value = payload(input);
-  const result = payloadSchema(typeName, condition).safeParse(value);
+  const result = payloadSchema(typeName, admissionCondition(condition)).safeParse(value);
   if (!result.success) {
     const diagnostics = payloadDiagnostics(result.error, value);
     const paths = diagnostics.map((diagnostic) => diagnostic.path ?? "payload");

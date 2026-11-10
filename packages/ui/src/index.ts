@@ -28,7 +28,6 @@ export * from "./view-model/iterations.ts";
 export * from "./view-model/projects.ts";
 export * from "./view-model/overview.ts";
 export * from "./view-model/focus.ts";
-export * from "./view-model/sync-binding.ts";
 
 /**
  * The primitives (Task 3). Each is exported by name, not by a namespace glob:
@@ -99,13 +98,11 @@ export type { WorkflowsCopy, WorkflowsProps } from "./screens/Workflows.tsx";
 export type { WorkflowDetailCopy, WorkflowDetailProps } from "./screens/WorkflowDetail.tsx";
 export { Projects } from "./screens/Projects.tsx";
 export { ASSIGNABLE_ISSUE_LIMIT, ProjectDetail } from "./screens/ProjectDetail.tsx";
-export { SyncBinding } from "./screens/SyncBinding.tsx";
 
 export type { IterationsCopy, IterationsProps } from "./screens/Iterations.tsx";
 export type { IterationDetailCopy, IterationDetailProps } from "./screens/IterationDetail.tsx";
 export type { ProjectsCopy, ProjectsProps } from "./screens/Projects.tsx";
 export type { AssignableIssue, MilestoneWriteSurface, ProjectDetailCopy, ProjectDetailProps } from "./screens/ProjectDetail.tsx";
-export type { SyncBindingCopy, SyncBindingProps } from "./screens/SyncBinding.tsx";
 
 /**
  * The bilingual dictionary and the provider (Task 5).

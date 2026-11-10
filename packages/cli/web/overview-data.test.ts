@@ -337,7 +337,7 @@ describe("what the host must not reintroduce", () => {
     expect(html).toContain('data-ms-projection="current"');
   });
 
-  test("a stale projection says so with the sources' reasons", () => {
+  test("a stale projection says why through the bounded notice, never the raw diagnostics", () => {
     const html = render(
       overviewFromEnvelope(
         envelope(healthy(), {
@@ -348,7 +348,35 @@ describe("what the host must not reintroduce", () => {
       ),
     );
     expect(html).toContain('data-ms-projection="stale"');
-    expect(html).toContain("compass: compass could not be parsed");
+    // The page still states why: the affected source is named.
+    expect(html).toContain("1 source affected");
+    expect(html).toContain("compass");
+    // The bound: a diagnostic's own message never reaches the notice.
+    expect(html).not.toContain("compass could not be parsed");
+  });
+
+  test("a stale projection's notice is bounded: three named sources, the rest counted", () => {
+    const html = render(
+      overviewFromEnvelope(
+        envelope(healthy(), {
+          ...projection,
+          freshness: "stale",
+          diagnostics: [
+            { sourceKey: "compass:control:iter-1/compass.md", reason: "missing", message: "/h/iter-1/compass.md is absent" },
+            { sourceKey: "compass:control:iter-2/compass.md", reason: "missing", message: "/h/iter-2/compass.md is absent" },
+            { sourceKey: "compass:control:iter-3/compass.md", reason: "unreadable", message: "invalid YAML at /h/iter-3/compass.md" },
+            { sourceKey: "compass:control:iter-4/compass.md", reason: "invalid", message: "invalid compass at /h/iter-4/compass.md" },
+            { sourceKey: "compass:control:iter-5/compass.md", reason: "invalid", message: "invalid compass at /h/iter-5/compass.md" },
+          ],
+        }),
+      ),
+    );
+    expect(html).toContain("5 sources affected");
+    expect(html).toContain("2 missing");
+    expect(html).toContain("iter-1, iter-2, iter-3");
+    expect(html).toContain("2 more");
+    // Internal paths and diagnostic prose stay out of the line entirely.
+    expect(html).not.toMatch(/\/h\/iter-|invalid YAML|is absent/);
   });
 });
 

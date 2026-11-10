@@ -104,21 +104,75 @@ export function textOr(value: string | null | undefined, whenAbsent: string): st
 }
 
 /**
+ * A bounded summary of the sources a degraded read named (I-001078 / D15).
+ *
+ * Counts are distinct SOURCES, not diagnostics: one source may fail for more
+ * than one reason and still be one affected source. `samples` are compact
+ * display identities -- never a path, never a diagnostic message -- and
+ * `omitted` is how many affected sources the samples do not name.
+ */
+export type ProjectionNotice = {
+  readonly affected: number;
+  readonly missing: number;
+  readonly samples: readonly string[];
+  readonly omitted: number;
+};
+
+/** At most three named samples, each at most 64 Unicode code points. */
+const NOTICE_SAMPLE_LIMIT = 3;
+const NOTICE_SAMPLE_CODE_POINTS = 64;
+
+/**
+ * One compact display identity from a source key's shape
+ * (`<kind>:<root kind>:<relative path>`): a compass names its iteration, a
+ * workflow its workflow id. Any other shape keeps its generic source-kind word,
+ * so an unknown source is still named without exposing where it lives.
+ */
+function sampleIdentity(sourceKey: string): string {
+  const [kind, , ...rest] = sourceKey.split(":");
+  const path = rest.join(":");
+  const identity = kind === "compass" ? path.split("/")[0] : kind === "workflow" ? path.split("/")[2] : undefined;
+  return Array.from(identity === undefined || identity === "" ? (kind ?? "") : identity)
+    .slice(0, NOTICE_SAMPLE_CODE_POINTS)
+    .join("");
+}
+
+/** The bounded summary of one read's diagnostics, or `null` when it named none. */
+function noticeOf(diagnostics: ReadProjection["diagnostics"]): ProjectionNotice | null {
+  const reasons = new Map<string, string>();
+  for (const diagnostic of diagnostics) {
+    if (!reasons.has(diagnostic.sourceKey)) reasons.set(diagnostic.sourceKey, diagnostic.reason);
+  }
+  if (reasons.size === 0) return null;
+  const samples: string[] = [];
+  for (const sourceKey of reasons.keys()) {
+    const identity = sampleIdentity(sourceKey);
+    if (identity === "" || samples.includes(identity)) continue;
+    samples.push(identity);
+    if (samples.length === NOTICE_SAMPLE_LIMIT) break;
+  }
+  const missing = [...reasons.values()].filter((reason) => reason === "missing").length;
+  return { affected: reasons.size, missing, samples, omitted: reasons.size - samples.length };
+}
+
+/**
  * The projection state, as the one fact the product renders about its own read
  * authority (`Overview`'s footer line; IA §8.2).
  *
  * The timestamps the read carries (`builtAt`, `checkedAt`) and the revision
  * counters are **not** returned: IA §8.1 removes them from the UI, and the
- * state plus the named reasons answer the only question a reader acts on.
+ * state plus the bounded notice answer the only question a reader acts on.
+ * `notice` is `null` when the degraded read named no source: the screen then
+ * states the generic freshness fact instead of inventing a zero-missing cause.
  */
 export type ProjectionState = { readonly builtAt: string | null; readonly checkedAt: string } & (
   | { kind: "current" }
-  | { kind: "stale"; reasons: readonly string[] }
-  | { kind: "unavailable"; reasons: readonly string[] }
+  | { kind: "stale"; notice: ProjectionNotice | null }
+  | { kind: "unavailable"; notice: ProjectionNotice | null }
 );
 
 /**
- * Map one read projection to that state. Reasons are the sources' own messages.
+ * Map one read projection to that state.
  *
  * The parameter IS the engine's `ReadProjection`: a narrower local shape would
  * silently drop the fields the engine adds (it carries `reason` beside
@@ -126,13 +180,13 @@ export type ProjectionState = { readonly builtAt: string | null; readonly checke
  * then fail to type-check against this reader.
  */
 export function projectionState(projection: ReadProjection): ProjectionState {
-  const reasons = projection.diagnostics.map((diagnostic) => `${diagnostic.sourceKey}: ${diagnostic.message}`);
   // The prototype's identity line ends with when the projection was built and when it was
   // read; both come from the read itself, so they ride the same state.
   const times = { builtAt: projection.builtAt, checkedAt: projection.checkedAt };
   if (projection.freshness === "current") return { kind: "current", ...times };
-  if (projection.freshness === "stale") return { kind: "stale", reasons, ...times };
-  return { kind: "unavailable", reasons, ...times };
+  const notice = noticeOf(projection.diagnostics);
+  if (projection.freshness === "stale") return { kind: "stale", notice, ...times };
+  return { kind: "unavailable", notice, ...times };
 }
 
 

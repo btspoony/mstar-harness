@@ -43,6 +43,7 @@ import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type Validati
 import { resolveIterationDir } from "./path.js";
 import { CoordinationError, isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { parseEnforcementFlag, type EnforcementFlag } from "./dispatch.js";
+import { ISSUE_DISPOSITIONS } from "./issue.js";
 import { loadMstarc } from "./mstarc.js";
 // Call-time-only cycle with workflow.ts (workflow.ts imports validatePlanRow
 // from this module): neither module dereferences the other's bindings during
@@ -148,7 +149,15 @@ export function rowPlanId(row: unknown): string | undefined {
 
 const PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"] as const;
 const RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"] as const;
-const RESIDUAL_LIFECYCLES = ["open", "resolved", "waived", "superseded", "duplicate"] as const;
+/**
+ * A historical residual register row's `lifecycle` IS an issue disposition
+ * written in the register era, so it is the one issue vocabulary — read at call
+ * time, never at module evaluation, because this module is reached from
+ * `issue.ts`'s own import graph.
+ */
+function residualLifecycles(): readonly string[] {
+  return ISSUE_DISPOSITIONS;
+}
 const RESIDUAL_REQUIRED_FIELDS = ["id", "title", "severity", "source", "scope", "decision", "owner", "target", "tracking"] as const;
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
@@ -351,12 +360,12 @@ export function validateResidual(entry: unknown): GateResult {
   }
 
   if (lifecycle !== undefined) {
-    if (typeof lifecycle !== "string" || !(RESIDUAL_LIFECYCLES as readonly string[]).includes(lifecycle)) {
+    if (typeof lifecycle !== "string" || !residualLifecycles().includes(lifecycle)) {
       violations.push(
         violation(
           "medium",
           "status.residual.invalid-lifecycle",
-          `lifecycle must be one of ${RESIDUAL_LIFECYCLES.join(" | ")} \u2014 got ${JSON.stringify(lifecycle)}`,
+          `lifecycle must be one of ${residualLifecycles().join(" | ")} \u2014 got ${JSON.stringify(lifecycle)}`,
         ),
       );
     } else if (lifecycle !== "open") {

@@ -36,7 +36,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
-import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
+import { catalogRootDir, type CatalogLifecycle, type CatalogRootKind } from "./catalog.js";
 import { isPlainObject } from "./coordination-write.js";
 import { parseCompassFrontmatterText, validateCompassFrontmatter } from "./iteration.js";
 import { readExecutionState, type ExecutionState } from "./execution-store.js";
@@ -50,6 +50,7 @@ import {
   type IntegrationMergeLease,
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES,
+  WORKFLOW_TERMINAL_STATUSES,
   type WorkflowSnapshot,
 } from "./workflow.js";
 /** Projection payload/format version (contract §5). A bump invalidates every
@@ -261,10 +262,25 @@ function asCatalogRootKind(value: unknown): CatalogRootKind | null {
   return typeof value === "string" && CATALOG_ROOT_KINDS[value] === true ? (value as CatalogRootKind) : null;
 }
 
+/** Lifecycle guard for a catalog owner read back from the store; an unknown
+ *  value degrades to `active`, the required (non-historical) arm. */
+const CATALOG_LIFECYCLES: Record<string, true> = { active: true, archived: true, superseded: true };
+
+function asCatalogLifecycle(value: unknown): CatalogLifecycle {
+  return typeof value === "string" && CATALOG_LIFECYCLES[value] === true ? (value as CatalogLifecycle) : "active";
+}
+
 type CatalogInputs = {
   catalogRevision: number;
   bindings: Array<{ workflowId: string; rootKind: CatalogRootKind; relativePath: string }>;
-  compassDocs: Array<{ iterationId: string; rootKind: CatalogRootKind; relativePath: string }>;
+  compassDocs: Array<{
+    iterationId: string;
+    /** The owner iteration's catalog lifecycle: a positively historical owner
+     *  (archived/superseded) does not require its compass to still exist. */
+    lifecycle: CatalogLifecycle;
+    rootKind: CatalogRootKind;
+    relativePath: string;
+  }>;
 };
 
 type CatalogDocumentRow = { id: string; rootKind: CatalogRootKind; relativePath: string; documentKind: string; lifecycle: string; revision: number };
@@ -333,7 +349,7 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
       .all() as Array<Record<string, unknown>>;
 
     const owners = db
-      .prepare("select id from catalog_entities where kind = 'iteration'")
+      .prepare("select id, lifecycle from catalog_entities where kind = 'iteration'")
       .all() as Array<Record<string, unknown>>;
 
     const byId = new Map(documents.map((doc) => [doc.id, doc]));
@@ -361,7 +377,14 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
       const ownerId = text(owner.id);
       if (ownerId === null) continue;
       const doc = pick(ownerId);
-      if (doc !== null) compassDocs.push({ iterationId: ownerId, rootKind: doc.rootKind, relativePath: doc.relativePath });
+      if (doc !== null) {
+        compassDocs.push({
+          iterationId: ownerId,
+          lifecycle: asCatalogLifecycle(owner.lifecycle),
+          rootKind: doc.rootKind,
+          relativePath: doc.relativePath,
+        });
+      }
     }
 
     return { catalogRevision, bindings, compassDocs };
@@ -707,10 +730,38 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       const progressSummary = isPlainObject(mappedCoordination) && isPlainObject(mappedCoordination.progress) ? mappedCoordination.progress.summary : null;
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text(authorityPlanView.plan.status), progress: text(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
+    // Positive lifecycle evidence for a compass owner comes from rows this
+    // capture already projected: catalog lifecycle, the authoritative registry,
+    // and the terminal iteration workflows the served graph still carries. Mere
+    // absence from the registry is never evidence.
+    const registeredIterations = new Set(
+      rows.workflows
+        .filter((workflow) => workflow.type === "iteration" && workflow.activeRegistration)
+        .map((workflow) => workflow.id),
+    );
+    const terminalIterations = new Set(
+      rows.workflows
+        .filter(
+          (workflow) =>
+            workflow.type === "iteration" &&
+            !workflow.activeRegistration &&
+            (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(workflow.status),
+        )
+        .map((workflow) => workflow.id),
+    );
+    // Historical = not actively registered AND (catalog archived/superseded OR a
+    // terminal iteration workflow). Unknown or not-yet-executing owners stay required.
+    const historicalIteration = (iterationId: string, lifecycle: CatalogLifecycle): boolean =>
+      !registeredIterations.has(iterationId) &&
+      (lifecycle === "archived" || lifecycle === "superseded" || terminalIterations.has(iterationId));
     for (const doc of inputs.compassDocs) {
       const fspec: CompassSourceSpec = { sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readCompassSource(fspec);
       if (read.state !== "ok" || read.content === null) {
+        // A positively historical iteration whose compass is simply gone is not a
+        // current failure and must not block publication. Invalid/inaccessible
+        // documents stay errors even for a historical iteration.
+        if (read.state === "missing" && historicalIteration(doc.iterationId, doc.lifecycle)) continue;
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
         diagnostics.push({ sourceKey: fspec.sourceKey, reason: read.state, message: read.diagnostic ?? "compass unavailable" });
         continue;

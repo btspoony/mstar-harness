@@ -320,6 +320,19 @@ generated_at: 2026-01-02
         name: "mstar_schema", arguments: { action: "schema", command: "issue.add" },
       }));
       expect(JSON.stringify(detail)).toContain("rootCauseKey");
+      // The generated MCP schema publishes the same closure contract the CLI
+      // does: `obsolete` is an offered disposition whose removal references are
+      // required, so an agent reading the tool contract sees the requirement.
+      const closure = envelope(await client.callTool({
+        name: "mstar_schema", arguments: { action: "schema", command: "issue.close" },
+      }));
+      const closureText = JSON.stringify(closure);
+      expect(closureText).toContain("obsolete");
+      expect(closureText).toContain("\"requiredWhen\":[\"resolved\",\"obsolete\"]");
+      const actions = (envelope(await client.callTool({
+        name: "mstar_schema", arguments: { action: "schema", family: "issue" },
+      })) as { data?: { actions?: string[] } }).data?.actions;
+      expect(actions ?? []).not.toContain("obsolete");
       const malformed = envelope(await client.callTool({
         name: "mstar_issue", arguments: { action: "add", payload: {}, operationId: "fixture-capture", actor: "project-manager" },
       }));

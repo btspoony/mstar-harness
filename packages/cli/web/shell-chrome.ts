@@ -19,11 +19,9 @@ import { issueQuery, type Copy, type IssueQuery } from "@mstar-harness/ui";
 import { LIST_DESTINATIONS, type Route } from "./route";
 
 /** The entries the navigation shows, Overview first: it is the landing
- * destination. `sync-binding` closes the row: it is a destination, not a
- * detail, so it belongs in the product's own navigation rather than in a
- * screen-specific affordance nothing else can reach.
+ * destination, and the four lists follow in their own order.
  */
-export const NAV_DESTINATIONS = ["overview", ...LIST_DESTINATIONS, "sync-binding"] as const;
+export const NAV_DESTINATIONS = ["overview", ...LIST_DESTINATIONS] as const;
 export type NavDestination = (typeof NAV_DESTINATIONS)[number];
 
 /**
@@ -70,8 +68,7 @@ export function skipToMain(
 /**
  * The route a navigation entry addresses. Written out rather than cast: the nav
  * union and the route union are two vocabularies, and a cast (`id as …`) is how
- * they drifted — the overview and sync-binding entries were typed as list
- * destinations.
+ * they drifted — the `overview` entry was typed as a list destination.
  */
 const NAV_ROUTE: Record<NavDestination, Route> = {
   overview: { name: "overview" },
@@ -79,7 +76,6 @@ const NAV_ROUTE: Record<NavDestination, Route> = {
   workflows: { name: "workflows" },
   iterations: { name: "iterations" },
   projects: { name: "projects" },
-  "sync-binding": { name: "sync-binding" },
 };
 
 /** The route one navigation entry addresses. */
@@ -104,7 +100,6 @@ export function navItemFor(route: Route | { name: string }): NavDestination | nu
     case "workflows":
     case "iterations":
     case "projects":
-    case "sync-binding":
       return route.name;
     default:
       return null;

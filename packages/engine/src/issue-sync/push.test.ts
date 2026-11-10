@@ -1365,6 +1365,72 @@ describe("(n) an operator release clears a pending create only when reconciliati
     }
   });
 
+  test("a marker match on a LATER page still refuses the release: the scan is whole, not first-page", async () => {
+    const { db, close } = await openedStore("release-found-later-page");
+    try {
+      await residue(db, "I-001088");
+      const marker = correlationMarker({ workspace: "acme", team: "ENG" }, STORE_ID, "I-001088");
+      // Page 1 carries nothing; the identity lives on page 2. A scan that stopped
+      // at its first page would release over a proved identity.
+      const scanning = provider({
+        pages: [
+          { items: [], nextCursor: "c-2" },
+          {
+            items: [
+              {
+                externalId: "LIN-2",
+                title: "Issue I-001088",
+                description: `body\n\n${marker}`,
+                state: "Todo",
+                priority: "High",
+                labels: [],
+                updatedAt: "2026-11-02T00:00:00.000Z",
+                url: "https://linear.app/acme/issue/LIN-2",
+              },
+            ],
+            nextCursor: null,
+          },
+        ],
+      });
+      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001088"]) })).rejects.toThrow(
+        /would discard a proved identity: LIN-2 carries this item's correlation marker/,
+      );
+      // Both pages were read, in order, before the refusal decided anything.
+      expect(scanning.listings).toEqual([null, "c-2"]);
+      expect(scanning.writes).toEqual([]);
+      expect(row(db, "I-001088")).toMatchObject({ itemState: "pending", externalId: null });
+    } finally {
+      close();
+    }
+  });
+
+  test("zero matches across EVERY page releases the residue, and the same run creates exactly one issue", async () => {
+    const { db, close } = await openedStore("release-zero-multi-page");
+    try {
+      await residue(db, "I-001089");
+      // Two empty pages: absence is a fact about the whole scan, so the release
+      // is only reachable once the cursor is exhausted.
+      const fake = provider({
+        pages: [
+          { items: [], nextCursor: "c-2" },
+          { items: [], nextCursor: null },
+        ],
+      });
+      const report = await reconcilePendingCreate(db, fake, context(), { release: new Set(["I-001089"]) });
+      expect(report).toEqual({ adopted: [], unresolved: [] });
+      expect(fake.listings).toEqual([null, "c-2"]);
+      expect(row(db, "I-001089")).toMatchObject({ itemState: "failed", externalId: null });
+      expect(row(db, "I-001089")!.lastError).toContain("released by the operator");
+
+      const created = await pushItem(db, fake, context(), candidates(db)[0]!);
+      expect(created).toMatchObject({ outcome: "created", externalId: "LIN-1" });
+      expect(fake.writes.filter((write) => write.kind === "create")).toHaveLength(1);
+      expect(row(db, "I-001089")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
+    } finally {
+      close();
+    }
+  });
+
   test("a listing that ADOPTS the row mid-scan makes the release throw from applied and keeps the identity", async () => {
     const { db, close } = await openedStore("release-adopted-mid-scan");
     try {

@@ -10,8 +10,10 @@
 import { describe, expect, test } from "bun:test";
 import type { IssueDetail, IssuePage } from "@mstar-harness/engine";
 
+import { DISPOSITIONS } from "./status.ts";
 import {
   DEFAULT_ISSUE_FILTERS,
+  DEFAULT_ISSUE_QUERY,
   PAGE_SIZE,
   activeIssueFilters,
   clearIssueFilter,
@@ -68,6 +70,16 @@ describe("the address-bar pair", () => {
     expect(parsed.filters.disposition).toBe("open");
     expect(parsed.filters.kind).toBe("");
     expect(parsed.filters.severity).toBe("");
+  });
+
+  test("obsolete is an addressable filter, and the vocabulary has no second copy", () => {
+    // The UI's filter values are the generated engine projection, so a
+    // disposition the store accepts is selectable here too.
+    expect(DISPOSITIONS).toContain("obsolete");
+    expect(parseIssueQuery("?disposition=obsolete").filters.disposition).toBe("obsolete");
+    expect(issueQuery({ ...DEFAULT_ISSUE_QUERY, filters: { ...DEFAULT_ISSUE_FILTERS, disposition: "obsolete" } })).toContain(
+      "disposition=obsolete",
+    );
   });
 
   test("a malformed offset falls back to the first page", () => {
