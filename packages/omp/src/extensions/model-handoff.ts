@@ -77,8 +77,13 @@ const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", `'
  * One leading `export <name>=<value>; ` statement. The value alternatives are
  * disjoint (`'` starts a quoted chunk, `\` an escape pair, the char class takes
  * the rest and excludes both), so the scan stays linear.
+ *
+ * The char class also stops at an unquoted `"`, backtick, `$` or `(` —
+ * characters this hook never emits outside `shellSingleQuote`. Such a word
+ * opens a quoted or substituted value whose inner `; ` is literal, so the scan
+ * fails instead of reading a second statement out of command text.
  */
-const LEADING_EXPORT_RE = /^export ([A-Za-z_][A-Za-z0-9_]*)=((?:'[^']*'|\\.|[^;'\\])*); /;
+const LEADING_EXPORT_RE = /^export ([A-Za-z_][A-Za-z0-9_]*)=((?:'[^']*'|\\.|[^;'\\"`$(])*); /;
 /**
  * Has this hook's own `export <name>=…; ` prefix already been applied?
  *

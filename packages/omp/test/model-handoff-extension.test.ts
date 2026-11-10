@@ -993,6 +993,58 @@ describe("host session identity injection", () => {
     expect(child.stdout.toString()).toBe("1");
   }, 30_000);
 
+  // A `; ` inside a quoted or substituted value is literal to POSIX `sh`, so
+  // such command text must not be read as a leading leaf statement — the hook
+  // still injects the fail-closed prefix (QC F-001).
+  test("a quoted or substituted value never suppresses the leaf prefix", async () => {
+    const repo = buildControlRepo();
+    const taskSession = newSession(repo.main);
+    taskSession.appendSessionInit({ systemPrompt: "task", task: "scout", tools: ["bash"], agent: "scout" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: taskSession,
+    });
+    const sessionId = harness.sessionManager.getSessionId();
+    const prefix = `export MSTAR_HOST_SESSION_ID='${sessionId}'; export MSTAR_LEAF_SEAT=1; `;
+    for (const [command, shellValue] of [
+      // The caller's own export wins, so the marker the CLI reads is this
+      // literal — not `1`; the point is that the hook injected it at all.
+      [
+        'export MSTAR_LEAF_SEAT="x; export MSTAR_LEAF_SEAT=1; "; mstar plan prepare --workflow wf-1',
+        "x; export MSTAR_LEAF_SEAT=1; ",
+      ],
+      [
+        "export MSTAR_HOST_SESSION_ID=$(printf x; export MSTAR_LEAF_SEAT=1;); mstar plan prepare --workflow wf-1",
+        "1",
+      ],
+      [
+        "export MSTAR_HOST_SESSION_ID=`false; export MSTAR_LEAF_SEAT=1;`; mstar plan prepare --workflow wf-1",
+        "1",
+      ],
+    ] as const) {
+      const revised = await harness.emitToolCall({
+        type: "tool_call",
+        toolCallId: "call-leaf-quoted",
+        toolName: "bash",
+        input: { command },
+      });
+      if (!isPlainFixtureRecord(revised) || !isPlainFixtureRecord(revised.input)) {
+        throw new Error("expected a revised bash input");
+      }
+      const revisedCommand = String(revised.input.command);
+      // Exactly one leaf export: the injected one.
+      expect(revisedCommand).toBe(prefix + command);
+      const child = Bun.spawnSync([
+        "sh",
+        "-c",
+        `mstar() { printf %s "$MSTAR_LEAF_SEAT"; }; ${revisedCommand}`,
+      ]);
+      expect(child.exitCode).toBe(0);
+      expect(child.stdout.toString()).toBe(shellValue);
+    }
+  }, 30_000);
+
   test("a leaf (task) session exports the leaf marker; a coordinator session and a leading injected chain do not", async () => {
     const repo = buildControlRepo();
 
