@@ -280,12 +280,12 @@ export type PlanProgress = {
 
 /** Hash-pinned reference to a submitted evidence file. */
 export type EvidenceRef = { path: string; sha256: string };
-export type QaGate = "mandatory" | "pm-acceptance";
+export type AcceptanceGate = "mandatory" | "pm-acceptance";
 export type FindingsCleanupMode = "zero-residual" | "allow-residual";
 export type PlanPrepareConfig = {
   worktreePath?: string;
   workingBranch?: string;
-  qaGate?: QaGate;
+  acceptanceGate?: AcceptanceGate;
   findingsCleanup?: FindingsCleanupMode;
 };
 export type CompletionEvidence = {
@@ -293,7 +293,7 @@ export type CompletionEvidence = {
   review_base?: string;
   review_head?: string;
   qc: { decision: "Approve" | "Approve with residuals"; reports: string[]; consolidated: string };
-  qa: { gate: QaGate; decision: "pass"; report: string };
+  acceptance: { gate: AcceptanceGate; decision: "pass"; report: string };
 };
 export type IntegrationResultInput = { base_sha: string; result_sha: string };
 export type CompletionRecord = {
@@ -303,13 +303,14 @@ export type CompletionRecord = {
   review_base: string | null;
   review_head: string | null;
   qc: { decision: string; reports: EvidenceRef[]; consolidated: EvidenceRef };
-  qa: { gate: string; decision: string; report: EvidenceRef };
+  acceptance: { gate: string; decision: string; report: EvidenceRef };
   integration?: { target_branch: string; worktree_path: string; base_sha: string; result_sha: string; verified_at: string };
   completed_by: string;
   completed_at: string;
 };
 export type PreparedCoordination = {
-  qa_gate: QaGate;
+  /** Historical stored name of the acceptance gate; kept so recorded rows stay readable. */
+  qa_gate: AcceptanceGate;
   findings_cleanup: FindingsCleanupMode;
   prepared_by: string;
   prepared_at: string;
@@ -421,9 +422,22 @@ export function validatePreparedCoordination(value: unknown, what = "coordinatio
   return violations;
 }
 
+/**
+ * The acceptance member of one stored completion record, whichever spelling the
+ * row carries: new rows write `acceptance`, rows completed before the carrier
+ * rename carry `qa`. This is the ONE read-side acknowledgement of the legacy
+ * key — writes never emit it, and no stored row is rewritten. Exactly one of the
+ * two keys may be present; carrying both is a malformed record, not a merge.
+ */
+function storedAcceptanceOf(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (record.acceptance !== undefined && record.qa !== undefined) return undefined;
+  const member = record.acceptance ?? record.qa;
+  return isPlainObject(member) ? member : undefined;
+}
+
 function validateCompletionRecord(value: unknown, what: string, route: RowValidationRoute): ValidationResult[] {
   if (!isPlainObject(value)) return [invalid("coordination.row.completion-shape", `${what} must be an object`)];
-  const allowed = ["source_branch", "source_sha", "worktree_path", "review_base", "review_head", "qc", "qa", "integration", "completed_by", "completed_at"];
+  const allowed = ["source_branch", "source_sha", "worktree_path", "review_base", "review_head", "qc", "acceptance", "qa", "integration", "completed_by", "completed_at"];
   const violations = Object.keys(value).filter((key) => !allowed.includes(key)).map((key) => invalid("coordination.row.completion-field", `${what} has unexpected key: ${key}`));
   const reportOnly = route === "standalone-report-only";
   if (!(reportOnly && value.source_branch === null) && !isNonEmptyString(value.source_branch)) {
@@ -458,11 +472,12 @@ function validateCompletionRecord(value: unknown, what: string, route: RowValida
     for (const [index, report] of value.qc.reports.entries()) violations.push(...validateEvidenceRef(report, `${what}.qc.reports[${index}]`));
     violations.push(...validateEvidenceRef(value.qc.consolidated, `${what}.qc.consolidated`));
   }
-  if (!isPlainObject(value.qa) || (value.qa.gate !== "mandatory" && value.qa.gate !== "pm-acceptance") || value.qa.decision !== "pass") {
-    violations.push(invalid("coordination.row.completion-field", `${what}.qa must record passing acceptance evidence`));
+  const acceptance = storedAcceptanceOf(value);
+  if (acceptance === undefined || (acceptance.gate !== "mandatory" && acceptance.gate !== "pm-acceptance") || acceptance.decision !== "pass") {
+    violations.push(invalid("coordination.row.completion-field", `${what}.acceptance must record passing acceptance evidence`));
   } else {
-    for (const key of Object.keys(value.qa)) if (!["gate", "decision", "report"].includes(key)) violations.push(invalid("coordination.row.completion-field", `${what}.qa has unexpected key: ${key}`));
-    violations.push(...validateEvidenceRef(value.qa.report, `${what}.qa.report`));
+    for (const key of Object.keys(acceptance)) if (!["gate", "decision", "report"].includes(key)) violations.push(invalid("coordination.row.completion-field", `${what}.acceptance has unexpected key: ${key}`));
+    violations.push(...validateEvidenceRef(acceptance.report, `${what}.acceptance.report`));
   }
   if (route !== "integration" && value.integration !== undefined) {
     violations.push(invalid("coordination.row.completion-field", `${what}.integration is only valid for integration delivery`));

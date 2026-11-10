@@ -1755,7 +1755,7 @@ describe("execution-export", () => {
           review_base: "a".repeat(40),
           review_head: "a".repeat(40),
           qc: { decision: "Approve", reports: [{ path: join(world.harness, "qc.md"), sha256: "b".repeat(64) }], consolidated: { path: join(world.harness, "qc-s.md"), sha256: "c".repeat(64) } },
-          qa: { gate: "mandatory", decision: "pass", report: { path: join(world.harness, "qa.md"), sha256: "d".repeat(64) } },
+          acceptance: { gate: "mandatory", decision: "pass", report: { path: join(world.harness, "qa.md"), sha256: "d".repeat(64) } },
           completed_by: COORDINATOR,
           completed_at: TS,
         },
@@ -1806,7 +1806,7 @@ describe("execution-export", () => {
     expect(parsed.redactedKeys).toEqual(expect.arrayContaining(["prepared_by", "completed_by"]));
     const projected = workflow.plans[0].coordination as Record<string, any>;
     expect(projected.prepared).not.toHaveProperty("prepared_by");
-    expect(projected.completion).toMatchObject({ qc: { decision: "Approve" }, qa: { decision: "pass" } });
+    expect(projected.completion).toMatchObject({ qc: { decision: "Approve" }, acceptance: { decision: "pass" } });
     expect(projected.completion).not.toHaveProperty("completed_by");
     expect(projected.completion.completed_at).toBe(TS);
 

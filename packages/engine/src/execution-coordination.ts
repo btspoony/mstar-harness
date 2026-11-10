@@ -650,7 +650,7 @@ function withExecutionPlanOperation<T>(
  * ------------------------------------------------------------------------ */
 
 /** Fully defaulted ordinary configuration accepted by coordinator prepare. */
-type PreparedInputs = { config: Required<Pick<PlanPrepareConfig, "qaGate" | "findingsCleanup">> & PlanPrepareConfig; findingsCleanupSupplied: boolean };
+type PreparedInputs = { config: Required<Pick<PlanPrepareConfig, "acceptanceGate" | "findingsCleanup">> & PlanPrepareConfig; findingsCleanupSupplied: boolean };
 
 /**
  * The branch one `prepare` claim names. The Assignment's documented forms are a
@@ -695,15 +695,15 @@ function branchOfClaim(value: string): string {
  */
 function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): PreparedInputs {
   const config = call.operation.config ?? {};
-  assertExactKeys(config as Record<string, unknown>, ["worktreePath", "workingBranch", "qaGate", "findingsCleanup"], "prepare config");
+  assertExactKeys(config as Record<string, unknown>, ["worktreePath", "workingBranch", "acceptanceGate", "findingsCleanup"], "prepare config");
   if (config.worktreePath !== undefined && (!isNonEmptyString(config.worktreePath) || !isAbsolute(config.worktreePath))) {
     throw invalidPlanInput("Invalid prepare worktreePath: provide an absolute path; retry through mstar plan prepare.");
   }
   if (config.workingBranch !== undefined && !isNonEmptyString(config.workingBranch)) {
     throw invalidPlanInput("Invalid prepare workingBranch: provide a non-empty branch name; retry through mstar plan prepare.");
   }
-  if (config.qaGate !== undefined && config.qaGate !== "pm-acceptance") {
-    throw invalidPlanInput("The mandatory acceptance gate is retired. Retry mstar plan prepare --workflow <workflow-id> --plan <plan-id> --qa-gate pm-acceptance.");
+  if (config.acceptanceGate !== undefined && config.acceptanceGate !== "pm-acceptance") {
+    throw invalidPlanInput("The mandatory acceptance gate is retired. Retry mstar plan prepare --workflow <workflow-id> --plan <plan-id> --acceptance-gate pm-acceptance.");
   }
   if (config.findingsCleanup !== undefined && !["zero-residual", "allow-residual"].includes(config.findingsCleanup)) {
     throw invalidPlanInput("Invalid prepare findingsCleanup: choose zero-residual or allow-residual; retry through mstar plan prepare.");
@@ -713,7 +713,7 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
     config: {
       ...config,
       ...(branch === undefined ? {} : { workingBranch: branch }),
-      qaGate: config.qaGate ?? "pm-acceptance",
+      acceptanceGate: config.acceptanceGate ?? "pm-acceptance",
       findingsCleanup: config.findingsCleanup ?? "allow-residual",
     },
     findingsCleanupSupplied: config.findingsCleanup !== undefined,
@@ -750,7 +750,7 @@ function assertWorkingBranchIsFeature(context: ExecutionContext, workingBranch: 
 
 /**
  * §3 `prepare` records the ordinary revisable execution configuration — the
- * explicit scope facts, the QA gate and the findings-cleanup mode — in one
+ * explicit scope facts, the acceptance gate and the findings-cleanup mode — in one
  * transaction, and selects the frozen catalog input the registration pinned. It
  * is OPTIONAL: a row with no prior record completes on the same defaults, so
  * nothing downstream requires a prepare first. A later prepare revises the
@@ -813,7 +813,7 @@ function alreadyPrepared(
 ): ExecutionRead<ExecutionPlanView> | undefined {
   const prior = view.coordination?.prepared;
   if (prior === undefined) return undefined;
-  if (prior.qa_gate !== inputs.config.qaGate || (inputs.findingsCleanupSupplied && prior.findings_cleanup !== inputs.config.findingsCleanup)) {
+  if (prior.qa_gate !== inputs.config.acceptanceGate || (inputs.findingsCleanupSupplied && prior.findings_cleanup !== inputs.config.findingsCleanup)) {
     return undefined;
   }
   const effective = effectiveScope(view, inputs.config);
@@ -877,7 +877,7 @@ function writePreparedConfig(
   if (nextWorktree !== undefined) metadata.worktree_path = nextWorktree;
   if (nextBranch !== undefined) metadata.working_branch = nextBranch;
   const prepared: PreparedCoordination = {
-    qa_gate: inputs.config.qaGate,
+    qa_gate: inputs.config.acceptanceGate,
     findings_cleanup: inputs.findingsCleanupSupplied ? inputs.config.findingsCleanup : witness.view.coordination?.prepared?.findings_cleanup ?? inputs.config.findingsCleanup,
     prepared_by: witness.session.sessionId,
     prepared_at: at,
@@ -1344,7 +1344,7 @@ async function readWorkflowSnapshot(context: ExecutionContext, workflowId: strin
 
 type CompletionEvidenceRefs = {
   qc: CompletionRecord["qc"];
-  qa: CompletionRecord["qa"];
+  acceptance: CompletionRecord["acceptance"];
 };
 
 /**
@@ -1359,7 +1359,7 @@ function completionEvidenceRefs(evidence: ValidatedCompletionEvidence): Completi
       reports: evidence.qc_reports.map(evidenceRefOf),
       consolidated: evidenceRefOf(evidence.qc_consolidated),
     },
-    qa: { gate: evidence.qa_gate, decision: evidence.qa_decision, report: evidenceRefOf(evidence.qa_report) },
+    acceptance: { gate: evidence.acceptance_gate, decision: evidence.acceptance_decision, report: evidenceRefOf(evidence.acceptance_report) },
   };
 }
 
@@ -1625,13 +1625,14 @@ export function setCompleteWitnessGapForTest(callback: (() => void) | undefined)
  * workflow-header write in the window cannot leave completion judged against
  * obsolete anchors:
  *
- * - a single-row `verification/report-only` workflow completes on its QC/QA
+ * - a single-row `verification/report-only` workflow completes on its QC and
  *   evidence under the completion policy declared at registration, needs no
  *   source, integration or merge, records no fulfilment payload, and rejects
  *   integration input;
- * - a single-row `development` workflow completes on its QC/QA evidence and its
- *   registered source branch: the row worktree is clean, on that branch and at
- *   the pinned source commit, with the review range an ancestry;
+ * - a single-row `development` workflow completes on its QC and acceptance
+ *   evidence and its registered source branch: the row worktree is clean, on
+ *   that branch and at the pinned source commit, with the review range an
+ *   ancestry;
  * - every other route additionally requires `integration: { base_sha, result_sha }`
  *   naming the serial merge the coordinator ACTUALLY performed, proven as the
  *   exact two-parent merge of base+source reachable from the observed
@@ -1795,7 +1796,7 @@ function completeInTransaction(
     review_base: evidence.review_base,
     review_head: evidence.review_head,
     qc: refs.qc,
-    qa: refs.qa,
+    acceptance: refs.acceptance,
     completed_by: witness.session.sessionId,
     completed_at: at,
   };

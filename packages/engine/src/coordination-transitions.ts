@@ -168,16 +168,23 @@ export type ValidatedCompletionEvidence = {
   qc_decision: "Approve" | "Approve with residuals";
   qc_reports: string[];
   qc_consolidated: string;
-  qa_gate: "pm-acceptance";
-  qa_decision: "pass";
-  qa_report: string;
+  acceptance_gate: "pm-acceptance";
+  acceptance_decision: "pass";
+  acceptance_report: string;
   /** Every evidence value with its payload field, so a path refusal can name it. */
   evidence_refs: EvidencePathRef[];
 };
 
 export function readCompletionEvidence(value: unknown): ValidatedCompletionEvidence {
   if (!isPlainObject(value)) throw new CoordinationError("coordination.invalid-input", "Invalid completion evidence: provide an evidence object. Inspect workflow state with mstar status validate.");
-  assertExactKeys(value, ["source_sha", "review_base", "review_head", "qc", "qa", "evidence_paths"], "completion evidence");
+  if (value.qa !== undefined) {
+    // A submission still carrying the retired `qa` member is not completion
+    // evidence: it names a seat this system does not have. The refusal points at
+    // the member that is accepted so the retry is mechanical. Stored rows are a
+    // different question — `validateRowCoordination` still reads their legacy key.
+    throw new CoordinationError("coordination.invalid-input", "Completion evidence must carry `acceptance` ({gate, decision, report}), not the retired `qa` member; correct the completion evidence and retry plan complete with the acceptance evidence object.");
+  }
+  assertExactKeys(value, ["source_sha", "review_base", "review_head", "qc", "acceptance", "evidence_paths"], "completion evidence");
   // The commits are provenance the engine derives from the recorded worktree;
   // a supplied value is verified, never trusted. Every route accepts absence,
   // and a present value still has to be a full object id.
@@ -194,13 +201,13 @@ export function readCompletionEvidence(value: unknown): ValidatedCompletionEvide
     throw new CoordinationError("coordination.invalid-input", "Invalid QC evidence: qc.reports must name at least one report. Inspect workflow state with mstar status validate.");
   }
   if (!isNonEmptyString(qc.consolidated)) throw new CoordinationError("coordination.invalid-input", "Invalid QC evidence: qc.consolidated must name the plan QC decision report. Inspect workflow state with mstar status validate.");
-  if (!isPlainObject(value.qa)) throw new CoordinationError("coordination.invalid-input", "Invalid completion evidence: provide a PM acceptance report and retry plan complete.");
-  assertExactKeys(value.qa, ["gate", "decision", "report"], "completion evidence qa");
-  if (value.qa.gate !== "pm-acceptance" || value.qa.decision !== "pass" || !isNonEmptyString(value.qa.report)) {
-    throw new CoordinationError("coordination.invalid-input", "qa evidence requires gate pm-acceptance, decision pass and a PM acceptance report; correct the completion evidence and retry plan complete.");
+  if (!isPlainObject(value.acceptance)) throw new CoordinationError("coordination.invalid-input", "Invalid completion evidence: provide a PM acceptance report and retry plan complete.");
+  assertExactKeys(value.acceptance, ["gate", "decision", "report"], "completion evidence acceptance");
+  if (value.acceptance.gate !== "pm-acceptance" || value.acceptance.decision !== "pass" || !isNonEmptyString(value.acceptance.report)) {
+    throw new CoordinationError("coordination.invalid-input", "Acceptance evidence requires acceptance.gate pm-acceptance, acceptance.decision pass and a PM acceptance report; correct the completion evidence and retry plan complete.");
   }
-  const qaGate = value.qa.gate;
-  const qaReport = value.qa.report;
+  const acceptanceGate = value.acceptance.gate;
+  const acceptanceReport = value.acceptance.report;
   const extra = value.evidence_paths === undefined ? [] : value.evidence_paths;
   if (!Array.isArray(extra) || !extra.every(isNonEmptyString)) {
     // A caller with four paths needs to know WHICH entry is not a path, so the
@@ -221,7 +228,7 @@ export function readCompletionEvidence(value: unknown): ValidatedCompletionEvide
   const evidenceRefs: EvidencePathRef[] = [
     ...(qc.reports as string[]).map((path, index) => ({ field: `qc.reports[${index}]`, path })),
     { field: "qc.consolidated", path: qc.consolidated },
-    { field: "qa.report", path: qaReport },
+    { field: "acceptance.report", path: acceptanceReport },
     ...(extra as string[]).map((path, index) => ({ field: `evidence_paths[${index}]`, path })),
   ];
   return {
@@ -231,9 +238,9 @@ export function readCompletionEvidence(value: unknown): ValidatedCompletionEvide
     qc_decision: qc.decision as ValidatedCompletionEvidence["qc_decision"],
     qc_reports: [...qc.reports] as string[],
     qc_consolidated: qc.consolidated,
-    qa_gate: qaGate,
-    qa_decision: "pass",
-    qa_report: qaReport,
+    acceptance_gate: acceptanceGate,
+    acceptance_decision: "pass",
+    acceptance_report: acceptanceReport,
     evidence_refs: evidenceRefs,
   };
 }
@@ -241,10 +248,10 @@ export function readCompletionEvidence(value: unknown): ValidatedCompletionEvide
 export function assertCompletionReviewDecision(
   evidence: ValidatedCompletionEvidence,
   planId: string,
-  qaGate: "mandatory" | "pm-acceptance",
+  acceptanceGate: "mandatory" | "pm-acceptance",
 ): void {
-  if (evidence.qa_gate !== qaGate) {
-    throw new CoordinationError("coordination.invalid-transition", "The plan retains a retired mandatory acceptance gate. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --qa-gate pm-acceptance for this plan, then retry plan complete with PM acceptance evidence.", { plan_id: planId, required: qaGate });
+  if (evidence.acceptance_gate !== acceptanceGate) {
+    throw new CoordinationError("coordination.invalid-transition", "The plan retains a retired mandatory acceptance gate. Run mstar plan prepare --workflow <workflow-id> --plan <plan-id> --acceptance-gate pm-acceptance for this plan, then retry plan complete with PM acceptance evidence.", { plan_id: planId, required: acceptanceGate });
   }
 }
 

@@ -70,7 +70,7 @@ Without the split, a protected surface's first use is its own delivery, and ever
 - Any prerequisite delivery that must land before the plan it unblocks can be lawfully registered.
 - Adopting an accepted revision into a different workflow/plan identity without importing state or duplicating source.
 - Establishing the merge → terminal close → adoption ordering for a change that widens a protected surface.
-- Reviewing a proposed "small workaround" (execute the row anyway, synthesize a lease, register with the new verb) — the table above is the refusal list.
+- Reviewing a proposed "small workaround" (execute the row anyway, synthesize a lease, register with the new verb) — the table above is the refusal list. The route itself is governed by the shared prepare-amendment contract (`{PROJECT_DIR}/_default/references/prepare-workflow-amendment.md`, § Lawful bootstrap / § Original adoption and final ownership); its guarded operations are reached through the ACTIVE store's `workflow.*` / `plan.*` verbs, so a re-run must not script the retired `show-prepare` / `amend-prepare` / `recover-coordinator` command names, and the gate it names is **PM Acceptance**.
 
 ## Examples
 
@@ -78,12 +78,6 @@ Without the split, a protected surface's first use is its own delivery, and ever
 - Orphan shape: registration fails while the snapshot exists → the workflow is not addressable, a command aiming at it reports the workflow as unknown, and the retry performs registration only, leaving the snapshot bytes untouched.
 - Adoption shape: the original plan's remaining task cites the accepted revision and the prerequisite's review reports; the review of the adoption delta reuses that evidence, finds no new code change to review, and the original rows remain the original workflow's own.
 - Boundary shape: the prerequisite's review records that the original workflow's snapshot, the unrelated active workflow and the root register entry are byte-unchanged by the prerequisite's delivery, and that the original plan's row count is unchanged until adoption.
-
-## Source
-
-Frozen by the shared prepare-amendment contract (`{PROJECT_DIR}/_default/references/prepare-workflow-amendment.md`, § Lawful bootstrap / § Original adoption and final ownership — it was authored under the old `{SPECS_DIR}` location and now lives with the project references) and projected into the bootstrap plan (`{PLAN_DIR}/<plan-id>.md`) and its compass (`{ITERATION_DIR}/iter-<plan-id>/delivery-compass.md`). The create/register/orphan behaviour and the untouched sibling/root bytes are evidenced by the prerequisite's task reports and retained selector bundles under `{SDD_DIR}/<plan-id>/`; the plan's review and QA gate summaries record the route's progress.
-
-Route outcome: the prerequisite landed (PR #245 merged after every CI check was green and review was clean), the bootstrap workflow wrote its terminal snapshot and unregistered, and the original plan adopted the accepted revision through the normal gates. Two cautions survive as the transferable part: the acceptance gate named here is now **PM Acceptance** (the QA role was removed), and `mstar workflow show-prepare` / `amend-prepare` / `recover-coordinator` are retired CLI verbs — the same guarded operations are reached through the ACTIVE store's `workflow.*` / `plan.*` verbs, so a re-run of this route must not script the file-route command names.
 
 ## Related
 

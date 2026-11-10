@@ -1205,7 +1205,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
         review_base: handoff.review_base,
         review_head: handoff.review_head,
         qc: handoff.qc,
-        qa: handoff.qa,
+        acceptance: handoff.qa,
         completed_by: handoff.accepted_by,
         completed_at: handoff.completed_at,
       });
@@ -1237,7 +1237,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
           review_base: historicalB.review_base,
           review_head: historicalB.review_head,
           qc: historicalB.qc,
-          qa: historicalB.qa,
+          acceptance: historicalB.qa,
           integration: {
             target_branch: historicalB.integration.target_branch,
             worktree_path: historicalB.integration.worktree_path,
@@ -1315,7 +1315,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       expect(retained.coordination?.completion).toMatchObject({
         source_sha: handoff.source_sha,
         qc: handoff.qc,
-        qa: handoff.qa,
+        acceptance: handoff.qa,
         completed_at: handoff.completed_at,
       });
       const result = runCli(

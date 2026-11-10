@@ -596,15 +596,15 @@ describe("execution-cross-domain \u2014 an unavailable authority refuses every r
 const RETAINED_PLAN = "20260920-consumers-retained";
 const QC_BODY = "reviewed QC body\n";
 const CONSOLIDATED_BODY = "consolidated QC body\n";
-const QA_BODY = "QA verdict body\n";
+const ACCEPTANCE_BODY = "acceptance verdict body\n";
 
 /** The three completion evidence bodies of one plan, under the CONFIGURED SDD
  * resolution — the same resolution the containment boundary derives its roots
  * from. */
-function retainedBodies(harnessDir: string): { qc: string; consolidated: string; qa: string } {
+function retainedBodies(harnessDir: string): { qc: string; consolidated: string; acceptance: string } {
   const sddDir = resolveSddDir(harnessDir, RETAINED_PLAN);
   mkdirSync(sddDir, { recursive: true });
-  return { qc: join(sddDir, "qc1.md"), consolidated: join(sddDir, "qc.md"), qa: join(sddDir, "qa.md") };
+  return { qc: join(sddDir, "qc1.md"), consolidated: join(sddDir, "qc.md"), acceptance: join(sddDir, "acceptance.md") };
 }
 
 /** Write one evidence body. */
@@ -615,7 +615,7 @@ function writeBody(path: string, text: string): void {
 /** Ordinary completion evidence; helper-only checks use synthetic revisions,
  * while the consumer fixture supplies the actual reviewed Git commits. */
 function completionRequest(
-  bodies: { qc: string; consolidated: string; qa: string },
+  bodies: { qc: string; consolidated: string; acceptance: string },
   revisions: { sourceSha: string; baseSha: string } = { sourceSha: "a".repeat(40), baseSha: "b".repeat(40) },
 ): CompletionEvidence {
   return {
@@ -623,7 +623,7 @@ function completionRequest(
     review_base: revisions.baseSha,
     review_head: revisions.sourceSha,
     qc: { decision: "Approve", reports: [bodies.qc], consolidated: bodies.consolidated },
-    qa: { gate: "pm-acceptance", decision: "pass", report: bodies.qa },
+    acceptance: { gate: "pm-acceptance", decision: "pass", report: bodies.acceptance },
   };
 }
 
@@ -652,7 +652,7 @@ describe("retained evidence path checks across the authority switch", () => {
     const bodies = retainedBodies(context.harnessDir);
     writeBody(bodies.qc, QC_BODY);
     writeBody(bodies.consolidated, CONSOLIDATED_BODY);
-    writeBody(bodies.qa, QA_BODY);
+    writeBody(bodies.acceptance, ACCEPTANCE_BODY);
 
     // The switch: the fixture's execution authority becomes ACTIVE. The store
     // already exists, so the supported activation is the importer (`store
@@ -670,7 +670,7 @@ describe("retained evidence path checks across the authority switch", () => {
     const storedBytes = [join(context.harnessDir, "store.db"), join(context.harnessDir, "store.db-wal")]
       .filter((path) => existsSync(path))
       .map((path) => readFileSync(path));
-    for (const text of [QC_BODY, CONSOLIDATED_BODY, QA_BODY]) {
+    for (const text of [QC_BODY, CONSOLIDATED_BODY, ACCEPTANCE_BODY]) {
       expect(storedBytes.some((bytes) => bytes.includes(Buffer.from(text)))).toBe(false);
     }
   });
@@ -680,7 +680,7 @@ describe("retained evidence path checks across the authority switch", () => {
     const bodies = retainedBodies(context.harnessDir);
     writeBody(bodies.qc, QC_BODY);
     writeBody(bodies.consolidated, CONSOLIDATED_BODY);
-    writeBody(bodies.qa, QA_BODY);
+    writeBody(bodies.acceptance, ACCEPTANCE_BODY);
     const roots = planAreaRoots(context.harnessDir, RETAINED_PLAN);
 
     rmSync(bodies.qc);
@@ -699,7 +699,7 @@ describe("retained evidence path checks across the authority switch", () => {
     const bodies = retainedBodies(context.harnessDir);
     writeBody(bodies.qc, QC_BODY);
     writeBody(bodies.consolidated, CONSOLIDATED_BODY);
-    writeBody(bodies.qa, QA_BODY);
+    writeBody(bodies.acceptance, ACCEPTANCE_BODY);
     const roots = planAreaRoots(context.harnessDir, RETAINED_PLAN);
     // A prose string in qc.consolidated is not a path at all. The refusal has to
     // say WHICH field carried it and WHERE evidence may live, so the caller fixes
@@ -733,7 +733,7 @@ describe("retained evidence path checks across the authority switch", () => {
     const bodies = retainedBodies(context.harnessDir);
     writeBody(bodies.qc, QC_BODY);
     writeBody(bodies.consolidated, CONSOLIDATED_BODY);
-    writeBody(bodies.qa, QA_BODY);
+    writeBody(bodies.acceptance, ACCEPTANCE_BODY);
     const roots = planAreaRoots(context.harnessDir, RETAINED_PLAN);
     // A symlink that resolves outside the plan's own areas is refused by the
     // containment boundary. The escape is real — the bytes read through the
@@ -771,13 +771,13 @@ function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 }
 
-function retainedCompletionBodies(harnessRoot: string): { qc: string; consolidated: string; qa: string } {
+function retainedCompletionBodies(harnessRoot: string): { qc: string; consolidated: string; acceptance: string } {
   const sddDir = resolveSddDir(harnessRoot, RETAINED_PLAN);
   mkdirSync(join(sddDir, "review"), { recursive: true });
   return {
     qc: join(sddDir, "review", "qc1.md"),
     consolidated: join(sddDir, "review", "qc.md"),
-    qa: join(sddDir, "qa.md"),
+    acceptance: join(sddDir, "acceptance.md"),
   };
 }
 
@@ -859,7 +859,7 @@ async function retainedCompletionFixture(label: string): Promise<RetainedComplet
     planId: RETAINED_PLAN,
     operation: {
       kind: "prepare",
-      config: { worktreePath, workingBranch: `feature/${RETAINED_PLAN}`, qaGate: "pm-acceptance" },
+      config: { worktreePath, workingBranch: `feature/${RETAINED_PLAN}`, acceptanceGate: "pm-acceptance" },
     },
   });
   for (const status of ["InProgress", "InReview"] as const) {
@@ -877,7 +877,7 @@ async function retainedCompletionFixture(label: string): Promise<RetainedComplet
 /** Direct completion, with no plan identity or ownership-transfer ceremony. */
 async function retainedComplete(
   fixture: RetainedCompletionFixture,
-  bodies: { qc: string; consolidated: string; qa: string },
+  bodies: { qc: string; consolidated: string; acceptance: string },
   operationId: string,
 ) {
   return retainedCompleteEvidence(
@@ -909,7 +909,7 @@ describe("retained evidence at the completion consumer", () => {
       const bodies = retainedCompletionBodies(fixture.harnessRoot);
       writeBody(bodies.qc, QC_BODY);
       writeBody(bodies.consolidated, `${CONSOLIDATED_BODY}edited before completion\n`);
-      writeBody(bodies.qa, QA_BODY);
+      writeBody(bodies.acceptance, ACCEPTANCE_BODY);
       const reviewedDigest = createHash("sha256").update(readFileSync(bodies.consolidated)).digest("hex");
 
       const completed = await retainedComplete(fixture, bodies, "complete-retained-ok");
@@ -927,7 +927,7 @@ describe("retained evidence at the completion consumer", () => {
           decision: "Approve",
           consolidated: { path: bodies.consolidated, sha256: reviewedDigest },
         },
-        qa: { gate: "pm-acceptance", decision: "pass", report: { path: bodies.qa } },
+        acceptance: { gate: "pm-acceptance", decision: "pass", report: { path: bodies.acceptance } },
       });
       expect(completion.qc.reports.map((ref) => ref.path)).toEqual([bodies.qc]);
       expect(completion.integration).toBeUndefined();
@@ -969,24 +969,24 @@ describe("retained evidence at the completion consumer", () => {
       const bodies = retainedCompletionBodies(fixture.harnessRoot);
       writeBody(bodies.qc, QC_BODY);
       writeBody(bodies.consolidated, CONSOLIDATED_BODY);
-      writeBody(bodies.qa, QA_BODY);
+      writeBody(bodies.acceptance, ACCEPTANCE_BODY);
       const before = await retainedPlanRead(fixture);
       const outside = join(fixture.context.harnessDir, "outside-body.md");
       writeBody(outside, "a body outside every plan area\n");
       const escaped = join(resolveSddDir(fixture.harnessRoot, RETAINED_PLAN), "escaped.md");
       symlinkSync(outside, escaped);
-      expect(await refusalOf(() => retainedComplete(fixture, { ...bodies, qa: escaped }, "complete-retained-escaped")))
+      expect(await refusalOf(() => retainedComplete(fixture, { ...bodies, acceptance: escaped }, "complete-retained-escaped")))
         .toEqual({ code: "coordination.path-mismatch" });
       expect(await retainedPlanRead(fixture)).toEqual(before);
       rmSync(escaped);
-      rmSync(bodies.qa);
+      rmSync(bodies.acceptance);
       expect(await refusalOf(() => retainedComplete(fixture, bodies, "complete-retained-missing")))
         .toEqual({ code: "coordination.invalid-input" });
       expect(await retainedPlanRead(fixture)).toEqual(before);
-      writeBody(bodies.qa, QA_BODY);
+      writeBody(bodies.acceptance, ACCEPTANCE_BODY);
       const completed = await retainedComplete(fixture, bodies, "complete-retained-missing");
       expect(completed.data.plan.status).toBe("Done");
-      expect(completed.data.coordination?.completion?.qa.report.path).toBe(bodies.qa);
+      expect(completed.data.coordination?.completion?.acceptance.report.path).toBe(bodies.acceptance);
     } finally {
       rmSync(fixture.context.harnessDir, { recursive: true, force: true });
     }
@@ -998,25 +998,25 @@ describe("retained evidence at the completion consumer", () => {
       const bodies = retainedCompletionBodies(fixture.harnessRoot);
       writeBody(bodies.qc, QC_BODY);
       writeBody(bodies.consolidated, CONSOLIDATED_BODY);
-      writeBody(bodies.qa, QA_BODY);
+      writeBody(bodies.acceptance, ACCEPTANCE_BODY);
       const outside = join(fixture.context.harnessDir, "outside-gap-body.md");
       writeBody(outside, "outside the declared evidence areas\n");
-      const alias = join(resolveSddDir(fixture.harnessRoot, RETAINED_PLAN), "qa-alias.md");
-      symlinkSync(bodies.qa, alias);
+      const alias = join(resolveSddDir(fixture.harnessRoot, RETAINED_PLAN), "acceptance-alias.md");
+      symlinkSync(bodies.acceptance, alias);
       const before = await retainedPlanRead(fixture);
       setCompleteWitnessGapForTest(() => {
         rmSync(alias);
         symlinkSync(outside, alias);
       });
-      expect(await refusalOf(() => retainedComplete(fixture, { ...bodies, qa: alias }, "complete-retained-gap")))
+      expect(await refusalOf(() => retainedComplete(fixture, { ...bodies, acceptance: alias }, "complete-retained-gap")))
         .toEqual({ code: "coordination.path-mismatch" });
       expect(await retainedPlanRead(fixture)).toEqual(before);
       setCompleteWitnessGapForTest(undefined);
       rmSync(alias);
-      symlinkSync(bodies.qa, alias);
-      const completed = await retainedComplete(fixture, { ...bodies, qa: alias }, "complete-retained-gap");
+      symlinkSync(bodies.acceptance, alias);
+      const completed = await retainedComplete(fixture, { ...bodies, acceptance: alias }, "complete-retained-gap");
       expect(completed.data.plan.status).toBe("Done");
-      expect(completed.data.coordination?.completion?.qa.report.path).toBe(bodies.qa);
+      expect(completed.data.coordination?.completion?.acceptance.report.path).toBe(bodies.acceptance);
     } finally {
       setCompleteWitnessGapForTest(undefined);
       rmSync(fixture.context.harnessDir, { recursive: true, force: true });
@@ -1029,9 +1029,9 @@ describe("retained evidence at the completion consumer", () => {
  * ------------------------------------------------------------------------ */
 
 /** The QC/QA members of ordinary completion evidence, without any commit. */
-function completionBodies(bodies: { qc: string; consolidated: string; qa: string }) {
-  const { qc, qa } = completionRequest(bodies);
-  return { qc, qa };
+function completionBodies(bodies: { qc: string; consolidated: string; acceptance: string }) {
+  const { qc, acceptance } = completionRequest(bodies);
+  return { qc, acceptance };
 }
 
 describe("completion SHAs derive from the recorded worktree", () => {
@@ -1041,7 +1041,7 @@ describe("completion SHAs derive from the recorded worktree", () => {
       const bodies = retainedCompletionBodies(fixture.harnessRoot);
       writeBody(bodies.qc, QC_BODY);
       writeBody(bodies.consolidated, CONSOLIDATED_BODY);
-      writeBody(bodies.qa, QA_BODY);
+      writeBody(bodies.acceptance, ACCEPTANCE_BODY);
       const completed = await retainedCompleteEvidence(fixture, completionBodies(bodies), "complete-derived-shas");
       expect(completed.data.plan.status).toBe("Done");
       expect(completed.data.coordination?.completion).toMatchObject({
@@ -1060,7 +1060,7 @@ describe("completion SHAs derive from the recorded worktree", () => {
       const bodies = retainedCompletionBodies(fixture.harnessRoot);
       writeBody(bodies.qc, QC_BODY);
       writeBody(bodies.consolidated, CONSOLIDATED_BODY);
-      writeBody(bodies.qa, QA_BODY);
+      writeBody(bodies.acceptance, ACCEPTANCE_BODY);
       expect(await refusalOf(() => retainedCompleteEvidence(
         fixture,
         { source_sha: fixture.baseSha, ...completionBodies(bodies) },
@@ -1078,7 +1078,7 @@ describe("completion SHAs derive from the recorded worktree", () => {
       const bodies = retainedCompletionBodies(fixture.harnessRoot);
       writeBody(bodies.qc, QC_BODY);
       writeBody(bodies.consolidated, CONSOLIDATED_BODY);
-      writeBody(bodies.qa, QA_BODY);
+      writeBody(bodies.acceptance, ACCEPTANCE_BODY);
       // Advance the target branch after the source branch was cut: that commit
       // is a real object of this repository but not an ancestor of the source.
       const repoRoot = dirname(fixture.worktreePath);
@@ -1102,7 +1102,7 @@ describe("completion SHAs derive from the recorded worktree", () => {
       const bodies = retainedCompletionBodies(fixture.harnessRoot);
       writeBody(bodies.qc, QC_BODY);
       writeBody(bodies.consolidated, CONSOLIDATED_BODY);
-      writeBody(bodies.qa, QA_BODY);
+      writeBody(bodies.acceptance, ACCEPTANCE_BODY);
       expect(await refusalOf(() => retainedCompleteEvidence(
         fixture,
         { review_head: fixture.baseSha, ...completionBodies(bodies) },

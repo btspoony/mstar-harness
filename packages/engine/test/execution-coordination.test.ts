@@ -231,13 +231,13 @@ function completionEvidence(context: StoreContext, sourceSha: string): {
   review_base: string;
   review_head: string;
   qc: { decision: "Approve"; reports: string[]; consolidated: string };
-  qa: { gate: "pm-acceptance"; decision: "pass"; report: string };
+  acceptance: { gate: "pm-acceptance"; decision: "pass"; report: string };
 } {
   const sdd = join(context.harnessDir, "sdd", OWN_PLAN);
   const reports = [join(sdd, "review", "qc1.md"), join(sdd, "review", "qc2.md")];
   const consolidated = join(sdd, "review", "qc.md");
-  const qa = join(sdd, "qa.md");
-  for (const path of [...reports, consolidated, qa]) {
+  const acceptanceReport = join(sdd, "qa.md");
+  for (const path of [...reports, consolidated, acceptanceReport]) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, "# evidence\n");
   }
@@ -246,7 +246,7 @@ function completionEvidence(context: StoreContext, sourceSha: string): {
     review_base: sourceSha,
     review_head: sourceSha,
     qc: { decision: "Approve", reports, consolidated },
-    qa: { gate: "pm-acceptance", decision: "pass", report: qa },
+    acceptance: { gate: "pm-acceptance", decision: "pass", report: acceptanceReport },
   };
 }
 
@@ -312,17 +312,17 @@ function completionOf2(coordination: { completion?: unknown } | null | undefined
 /** Report-only QC/QA evidence: no source Git fields, the route's own shape. */
 function reportOnlyEvidence(context: StoreContext): {
   qc: { decision: "Approve"; reports: string[]; consolidated: string };
-  qa: { gate: "pm-acceptance"; decision: "pass"; report: string };
+  acceptance: { gate: "pm-acceptance"; decision: "pass"; report: string };
 } {
   const sdd = join(context.harnessDir, "sdd", OWN_PLAN);
   const reports = [join(sdd, "review", "qc1.md")];
   const consolidated = join(sdd, "review", "qc.md");
-  const qa = join(sdd, "qa.md");
-  for (const path of [...reports, consolidated, qa]) {
+  const acceptanceReport = join(sdd, "qa.md");
+  for (const path of [...reports, consolidated, acceptanceReport]) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, "# evidence\n");
   }
-  return { qc: { decision: "Approve", reports, consolidated }, qa: { gate: "pm-acceptance", decision: "pass", report: qa } };
+  return { qc: { decision: "Approve", reports, consolidated }, acceptance: { gate: "pm-acceptance", decision: "pass", report: acceptanceReport } };
 }
 
 /** One coordinator operation on one explicitly addressed plan. */
@@ -968,19 +968,19 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     const fixture = await realStandaloneFixture("acceptance-retry");
     const { context, sourceSha } = fixture;
     const config = { worktreePath: fixture.worktree, workingBranch: `feature/${OWN_PLAN}` };
-    const refused = await refusalOf(() => preparePlan(fixture, OWN_PLAN, "retired-prepare", { ...config, qaGate: "mandatory" }));
+    const refused = await refusalOf(() => preparePlan(fixture, OWN_PLAN, "retired-prepare", { ...config, acceptanceGate: "mandatory" }));
     expect(refused.code).toBe("coordination.invalid-input");
-    expect(refused.message).toContain("--qa-gate pm-acceptance");
+    expect(refused.message).toContain("--acceptance-gate pm-acceptance");
     await preparePlan(fixture, OWN_PLAN, "corrected-prepare", config);
     await progressPlan(fixture, OWN_PLAN, "acceptance-progress", "InProgress");
     const good = completionEvidence(context, sourceSha);
-    for (const qa of [
-      { ...good.qa, gate: "mandatory" },
-      { ...good.qa, report: "" },
-      { ...good.qa, decision: "fail" },
+    for (const acceptance of [
+      { ...good.acceptance, gate: "mandatory" },
+      { ...good.acceptance, report: "" },
+      { ...good.acceptance, decision: "fail" },
     ]) {
       const error = await refusalOf(async () => planCall(fixture, OWN_PLAN, "invalid-acceptance", await planTokenOf(fixture, OWN_PLAN), {
-        kind: "complete", evidence: { ...good, qa },
+        kind: "complete", evidence: { ...good, acceptance },
       } as unknown as CoordinationOperation));
       expect(error.code).toBe("coordination.invalid-input");
     }
@@ -988,7 +988,7 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
       kind: "complete", evidence: good,
     } as CoordinationOperation);
     expect(result.data.plan.status).toBe("Done");
-    expect(result.data.coordination?.completion?.qa.gate).toBe("pm-acceptance");
+    expect(result.data.coordination?.completion?.acceptance.gate).toBe("pm-acceptance");
   }, 30000);
 
   test("an active historical mandatory row recovers through ordinary prepare", async () => {
@@ -1008,8 +1008,8 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
       kind: "complete", evidence,
     } as CoordinationOperation));
     expect(refused.code).toBe("coordination.invalid-transition");
-    expect(refused.message).toContain("--qa-gate pm-acceptance");
-    const prepared = await preparePlan(fixture, OWN_PLAN, "legacy-recover", { qaGate: "pm-acceptance" });
+    expect(refused.message).toContain("--acceptance-gate pm-acceptance");
+    const prepared = await preparePlan(fixture, OWN_PLAN, "legacy-recover", { acceptanceGate: "pm-acceptance" });
     expect(prepared.data.coordination?.prepared?.findings_cleanup).toBe("zero-residual");
     expect(prepared.data.plan.metadata).toEqual(before.plan.metadata);
     expect(prepared.data.coordination?.progress).toEqual(before.coordination?.progress);
@@ -1017,9 +1017,72 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
       kind: "complete", evidence,
     } as CoordinationOperation);
     expect(completed.data.plan.status).toBe("Done");
-    expect(completed.data.coordination?.completion?.qa.gate).toBe("pm-acceptance");
+    expect(completed.data.coordination?.completion?.acceptance.gate).toBe("pm-acceptance");
   }, 30000);
 
+
+  test("a stored completion carrying the legacy qa member still validates and reads", async () => {
+    const fixture = await realStandaloneFixture("legacy-carrier-row");
+    const { context, sourceSha } = fixture;
+    await preparePlan(fixture, OWN_PLAN, "legacy-carrier-source", { worktreePath: fixture.worktree, workingBranch: `feature/${OWN_PLAN}` });
+    await progressPlan(fixture, OWN_PLAN, "legacy-carrier-progress", "InProgress");
+    await planCall(fixture, OWN_PLAN, "legacy-carrier-complete", await planTokenOf(fixture, OWN_PLAN), {
+      kind: "complete", evidence: completionEvidence(context, sourceSha),
+    } as CoordinationOperation);
+    // Rewrite ONLY the stored member name: the row is then exactly what a
+    // pre-rename completion left behind, and every read path must still serve it.
+    withRaw(context, (db) => {
+      const row = db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?").get(WORKFLOW_ID, OWN_PLAN) as { coordination_json: string };
+      const coordination = JSON.parse(row.coordination_json) as { completion: Record<string, unknown> };
+      coordination.completion.qa = coordination.completion.acceptance;
+      delete coordination.completion.acceptance;
+      db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(coordination), WORKFLOW_ID, OWN_PLAN);
+    });
+    const read = await readExecutionPlan(domainContext(context, fixture.coordinatorCaller), fixture.coordinator, OWN_PLAN);
+    expect(read.data.plan.status).toBe("Done");
+    expect(read.data.coordination?.completion).toMatchObject({ qa: { gate: "pm-acceptance", decision: "pass" } });
+    // The row validator itself accepts it (the read above would otherwise refuse).
+    const state = await readExecutionState(context);
+    expect(state.data.workflows.find((workflow) => workflow.state.id === WORKFLOW_ID)?.plans
+      .find((plan) => plan.plan.id === OWN_PLAN)?.plan.status).toBe("Done");
+  }, 30000);
+
+  test("a stored completion carrying both acceptance and qa is refused as malformed", async () => {
+    const fixture = await realStandaloneFixture("dual-carrier-row");
+    const { context, sourceSha } = fixture;
+    await preparePlan(fixture, OWN_PLAN, "dual-carrier-source", { worktreePath: fixture.worktree, workingBranch: `feature/${OWN_PLAN}` });
+    await progressPlan(fixture, OWN_PLAN, "dual-carrier-progress", "InProgress");
+    await planCall(fixture, OWN_PLAN, "dual-carrier-complete", await planTokenOf(fixture, OWN_PLAN), {
+      kind: "complete", evidence: completionEvidence(context, sourceSha),
+    } as CoordinationOperation);
+    // Two acceptance members are a malformed record, never a merge: the legacy
+    // key is acknowledged only when it stands alone.
+    withRaw(context, (db) => {
+      const row = db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?").get(WORKFLOW_ID, OWN_PLAN) as { coordination_json: string };
+      const coordination = JSON.parse(row.coordination_json) as { completion: Record<string, unknown> };
+      coordination.completion.qa = coordination.completion.acceptance;
+      db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(coordination), WORKFLOW_ID, OWN_PLAN);
+    });
+    const refused = await refusalOf(() => readExecutionPlan(domainContext(context, fixture.coordinatorCaller), fixture.coordinator, OWN_PLAN));
+    expect(refused.code).toBe("store.corrupt");
+    expect(refused.message).toContain("coordination.row.completion-field");
+    expect(refused.message).toContain(".completion.acceptance must record passing acceptance evidence");
+  }, 30000);
+
+  test("a completion submitted with only the retired qa member is refused, naming acceptance", async () => {
+    const fixture = await realStandaloneFixture("qa-only-refused");
+    const { context, sourceSha } = fixture;
+    await preparePlan(fixture, OWN_PLAN, "qa-only-source", { worktreePath: fixture.worktree, workingBranch: `feature/${OWN_PLAN}` });
+    await progressPlan(fixture, OWN_PLAN, "qa-only-progress", "InProgress");
+    const good = completionEvidence(context, sourceSha);
+    const { acceptance, ...withoutAcceptance } = good;
+    const refused = await refusalOf(async () => planCall(fixture, OWN_PLAN, "qa-only-complete", await planTokenOf(fixture, OWN_PLAN), {
+      kind: "complete", evidence: { ...withoutAcceptance, qa: acceptance },
+    } as unknown as CoordinationOperation));
+    expect(refused.code).toBe("coordination.invalid-input");
+    expect(refused.message).toContain("acceptance");
+    expect(refused.message).toContain("plan complete");
+  }, 30000);
 
   test("a Todo row refuses on status with otherwise-valid proof, and InProgress completes in one write", async () => {
     const fixture = await realStandaloneFixture("complete-status-window");
@@ -1363,7 +1426,7 @@ describe("execution-concurrency: §3.1 concurrent plan operations", () => {
  * ------------------------------------------------------------------------ */
 
 describe("execution-evidence-scalars: strict enum/field admission", () => {
-  test("a non-scalar qc.decision, an array qa.gate and an unknown nested qc key refuse without mutation", async () => {
+  test("a non-scalar qc.decision, an array acceptance.gate and an unknown nested qc key refuse without mutation", async () => {
     const fixture = await realStandaloneFixture("evidence-strict-scalars");
     const { context, sourceSha } = fixture;
     await preparePlan(fixture, OWN_PLAN, "prepare-strict", {
@@ -1388,8 +1451,8 @@ describe("execution-evidence-scalars: strict enum/field admission", () => {
     ).toMatchObject({ code: "coordination.invalid-input" });
     expect(footprint(context)).toEqual(before);
 
-    // An array QA gate is refused the same way.
-    const arrayGate = { ...good, qa: { ...good.qa, gate: ["pm-acceptance"] as unknown as "pm-acceptance" } };
+    // An array acceptance gate is refused the same way.
+    const arrayGate = { ...good, acceptance: { ...good.acceptance, gate: ["pm-acceptance"] as unknown as "pm-acceptance" } };
     const gateToken = await planTokenOf(fixture, OWN_PLAN);
     expect(
       await refusalOf(() =>

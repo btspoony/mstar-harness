@@ -112,7 +112,7 @@ describe("plan command family", () => {
       evidence: {
         evidence_paths: ["/repo/.mstar/plans/plan-a.md"],
         qc: { decision: "Approve", reports: ["qc.md"], consolidated: "qc-consolidated.md", extraEngineField: true },
-        qa: { gate: "pm-acceptance", decision: "pass", report: "qa.md", extraEngineField: true },
+        acceptance: { gate: "pm-acceptance", decision: "pass", report: "acceptance.md", extraEngineField: true },
         extraEngineField: true,
       },
     };
@@ -126,7 +126,7 @@ describe("plan command family", () => {
       ...valid,
       evidence: { ...valid.evidence, qc: { ...valid.evidence.qc, reports: [] } },
     }).success).toBe(false);
-    expect(definition.input.safeParse({ ...valid, evidence: { qc: {}, qa: {} } }).success).toBe(false);
+    expect(definition.input.safeParse({ ...valid, evidence: { qc: {}, acceptance: {} } }).success).toBe(false);
     expect(contract.input.properties).toHaveProperty("evidence");
     expect(contract.payloadSchemas.evidence).toBeDefined();
 

@@ -1215,7 +1215,7 @@ function normalizeLegacyCoordination(legacy: JsonRecord): JsonRecord {
   const handoff = legacy.handoff;
   if (isRecord(handoff) && handoff.state === "completed") {
     const qc = handoff.qc;
-    const qa = handoff.qa;
+    const acceptance = handoff.acceptance ?? handoff.qa;
     const integration = handoff.integration;
     const mapped: JsonRecord = {
       source_branch: typeof handoff.source_branch === "string" && handoff.source_branch !== "" ? handoff.source_branch : null,
@@ -1224,7 +1224,7 @@ function normalizeLegacyCoordination(legacy: JsonRecord): JsonRecord {
       review_base: typeof handoff.review_base === "string" && handoff.review_base !== "" ? handoff.review_base : null,
       review_head: typeof handoff.review_head === "string" && handoff.review_head !== "" ? handoff.review_head : null,
       qc: isRecord(qc) ? qc : { decision: "", reports: [], consolidated: { path: "", sha256: "" } },
-      qa: isRecord(qa) ? qa : { gate: "", decision: "", report: { path: "", sha256: "" } },
+      acceptance: isRecord(acceptance) ? acceptance : { gate: "", decision: "", report: { path: "", sha256: "" } },
       completed_by: typeof handoff.accepted_by === "string" && handoff.accepted_by !== "" ? handoff.accepted_by : "",
       completed_at: typeof handoff.completed_at === "string" && handoff.completed_at !== "" ? handoff.completed_at : "",
     };

@@ -29,7 +29,7 @@ Three separate failures hit the same delivery (`<plan-id>`, four track worktrees
 
 2. **A leaf judged a contract from a stale base.** One dsh implementer reported that `packages/engine/src/core.ts` still typed severity as `...|nit` and offered to change the engine — correct for its checkout, wrong for the delivery: the track that owned the engine change (`track-b`) had already converged it, and the dsh track simply had not received that commit yet. Track worktrees isolate *tracked bytes*; they do not carry a sibling track's commits.
 
-3. **`plan complete` rejected relative report paths.** The `qc.reports` / `qc.consolidated` / `qa.report` / `evidence_paths` members are all validated by `assertEvidenceInsidePlanArea` (`packages/engine/src/coordination.ts:1019`): each must be **absolute**, must exist, and must sit under `{PLAN_DIR}` or `{SDD_DIR}/<plan-id>`. A relative `review/qc1.md` is refused with `Evidence path must be absolute…` even though the same string works as a *stored* reference, and the refusal's recovery line suggests `--evidence <evidence-file>` (the flag takes inline JSON; `--file` takes the path).
+3. **`plan complete` rejected relative report paths.** The `qc.reports` / `qc.consolidated` / `acceptance.report` / `evidence_paths` members are all validated by `assertEvidenceInsidePlanArea` (`packages/engine/src/coordination.ts:1019`): each must be **absolute**, must exist, and must sit under `{PLAN_DIR}` or `{SDD_DIR}/<plan-id>`. A relative `review/qc1.md` is refused with `Evidence path must be absolute…` even though the same string works as a *stored* reference, and the refusal's recovery line suggests `--evidence <evidence-file>` (the flag takes inline JSON; `--file` takes the path).
 
 ## Guidance
 
@@ -43,6 +43,4 @@ Three separate failures hit the same delivery (`<plan-id>`, four track worktrees
 
 All three failures are silent at the point they occur and expensive later: the primary-checkout write corrupts a tree other work depends on (and can be committed by an unrelated `git add -A`); the stale-base judgement spends a round on code that is already correct; the evidence-path refusal blocks the row's `Done` write at the end of a long delivery, when the operator is least willing to re-derive the layout. None of them is visible from "the tests passed in my worktree".
 
-## Source
-
-Delivery `<plan-id>` (workflow `wf-<plan-id>`). Incident evidence: `.tmp/incident-<plan-id>D-primary-write.diff` and the `progress.md` incident entry; the stale-base exchange is in the track D implementer transcript; the evidence-path refusal is reproduced by any `plan complete` with relative `qc.reports`. Related: `worktree-dependency-dist-isolation.md` (the same isolation gap, for `node_modules` and `dist`).
+The first failure needs only a relative `write`/`edit` path from a worktree shell to reproduce, and the third is reproduced by any `plan complete` with relative `qc.reports`. Related: `worktree-dependency-dist-isolation.md` (the same isolation gap, for `node_modules` and `dist`).

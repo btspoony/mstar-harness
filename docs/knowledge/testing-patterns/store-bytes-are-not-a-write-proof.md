@@ -53,7 +53,7 @@ Two supporting disciplines come from the same episode:
 
 ## Why This Matters
 
-A byte-as-proof assertion fails in both directions of credibility. Intermittently it fails *red* for a reason unrelated to the change, which costs a fix round and teaches future readers to treat the suite as noisy. And even when it passes it binds a shape (the exact bytes of a file the runtime may rewrite) rather than the contract the refusal is supposed to defend, so the next legitimate runtime-side rewrite breaks it again. The same confusion — "the artifact looks unchanged" read as "the operation refused" — is what `testing-patterns/load-bearing-regression-proof.md` calls out from the opposite side: the assertion must discriminate the mechanism the case names, which is here the engine's refusal, not a filesystem side effect of garbage collection.
+A byte-as-proof assertion fails in both directions of credibility. Intermittently it fails *red* for a reason unrelated to the change, which costs a fix round and teaches future readers to treat the suite as noisy. And even when it passes it binds a shape (the exact bytes of a file the runtime may rewrite) rather than the contract the refusal is supposed to defend, so the next legitimate runtime-side rewrite breaks it again. The same confusion — "the artifact looks unchanged" read as "the operation refused" — is what `testing-patterns/load-bearing-regression-proof.md` calls out from the opposite side: the assertion must discriminate the mechanism the case names, which is here the engine's refusal, not a filesystem side effect of garbage collection. The sibling rules `testing-patterns/load-bearing-regression-proof.md` and `testing-patterns/mechanical-check-corpus-honesty.md` cover the assertion-design and count-honesty halves of the same mistake.
 
 ## When to Apply
 
@@ -71,7 +71,3 @@ A byte-as-proof assertion fails in both directions of credibility. Intermittentl
 ### After
 
 `readExecutionState(context)` before and after the refusal, asserting the CAS token and epoch are identical, plus a non-WAL control (the `VACUUM INTO` image) whose bytes are legitimately compared; the populated fixture then ran stable across repeated executions.
-
-## Source
-
-Iteration `iter-<plan-id>`, plan `<plan-id>`. Evidence: the plan QC consolidated and the L4 QA report in `{SDD_DIR}/review/` for that plan (the flakiness measurement, the assertion rewrite, and the retained non-WAL byte comparisons), and `{SDD_DIR}/review/qa.md` for the repeated stability runs. Related: `testing-patterns/load-bearing-regression-proof.md`, `testing-patterns/mechanical-check-corpus-honesty.md`.

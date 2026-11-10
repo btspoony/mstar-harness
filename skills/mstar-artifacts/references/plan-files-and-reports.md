@@ -56,7 +56,7 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
   - `Blocking result`: fixed / none / deferred with reason
   - `Residual findings`: each open issue — id + short title + issue severity + store tracking location + owner/target + blocker-defer flag (`N/A — none open` when none)
 - Main plan `## PM Acceptance Summary`:
-  - acceptance owner: primary project-manager; fixed wire carrier `qa` (gate value `pm-acceptance`; wire spelling, not a report filename)
+  - acceptance owner: primary project-manager; completion carrier `acceptance` (gate value `pm-acceptance`; the member name is the wire spelling, not a report filename)
   - compact per-AC evidence/result/applicability, coverage/gaps and exact report pointer (`pm-acceptance.md` → `{SDD_DIR}/review/pm-acceptance.md`)
   - evidence reused versus newly executed bounded checks, with provenance preserved
   - related issue dispositions and verification evidence

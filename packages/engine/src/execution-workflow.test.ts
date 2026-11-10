@@ -2580,7 +2580,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     const evidence: CompletionEvidence = {
       source_sha: sourceSha, review_base: sourceSha, review_head: sourceSha,
       qc: { decision: "Approve", reports: [reports[0]!], consolidated: reports[1]! },
-      qa: { gate: "pm-acceptance", decision: "pass", report: reports[2]! },
+      acceptance: { gate: "pm-acceptance", decision: "pass", report: reports[2]! },
     };
     const complete = {
       operationId: "op-complete-recovered", planId: PLAN_ID,
@@ -2590,7 +2590,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(completed.data.plan.status).toBe("Done");
     expect(completed.data.coordination?.completion).toMatchObject({
       source_sha: sourceSha, completed_by: RECOVERY_ID,
-      qa: { gate: "pm-acceptance", decision: "pass" },
+      acceptance: { gate: "pm-acceptance", decision: "pass" },
     });
     const completedBeforeReplay = workflowFootprint(fixture.context);
     const completedReplay = await mutateExecutionPlan(domainContext(fixture.context, replacement), complete);
@@ -2624,7 +2624,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     const evidence: CompletionEvidence = {
       source_sha: sourceSha, review_base: baseSha, review_head: sourceSha,
       qc: { decision: "Approve", reports: [reports[0]!], consolidated: reports[1]! },
-      qa: { gate: "pm-acceptance", decision: "pass", report: reports[2]! },
+      acceptance: { gate: "pm-acceptance", decision: "pass", report: reports[2]! },
     };
     const complete = {
       operationId: "op-integration-complete", planId: PLAN_ID,
@@ -4252,7 +4252,7 @@ describe("execution-workflow: \u00A74.1 the prepare claim records source_branch"
         evidence: {
           source_sha: sourceSha, review_base: sourceSha, review_head: sourceSha,
           qc: { decision: "Approve", reports: [reports[0]!], consolidated: reports[1]! },
-          qa: { gate: "pm-acceptance", decision: "pass", report: reports[2]! },
+          acceptance: { gate: "pm-acceptance", decision: "pass", report: reports[2]! },
         },
       },
     });

@@ -29,11 +29,11 @@ AC-3 required proof that "install the mstar dsh plugin + llm-fallbacks ⇒ 13 ms
 
 ## Verification scope
 
-Browser, device, real-install and GUI-restart methods below apply only inside an explicitly requested independent `mstar-e2e` workflow, executed by ops under its named environment/scenario scope. They are not iteration or routine QA gates; UI changes and missing screenshots do not activate them. Routine QA remains targeted unit-only. Historical in-loop acceptance describes past evidence, not current authorization. Reuse the technical findings for affected unit checks without rerunning broad scans or real environments.
+Browser, device, real-install and GUI-restart methods below apply only inside an explicitly requested independent `mstar-e2e` workflow, executed by ops under its named environment/scenario scope. They are not iteration or routine Acceptance gates; UI changes and missing screenshots do not activate them. Routine QA remains targeted unit-only. Historical in-loop acceptance describes past evidence, not current authorization. Reuse the technical findings for affected unit checks without rerunning broad scans or real environments.
 
 ## Guidance
 
-- **Independent authorized install-E2E only — real install loop first**: temp `DSH_HOME` → the CLI (`init --target dsh`, plan `<plan-id>`) → verify rows via `--dump-config`. Skip-guard (no `dsh` bin / no registry) must `describe.skipIf` with a printed reason — a skip is **never** AC evidence; only a non-skip PASS proves that scenario passed; this is not an iteration QA gate.
+- **Independent authorized install-E2E only — real install loop first**: temp `DSH_HOME` → the CLI (`init --target dsh`, plan `<plan-id>`) → verify rows via `--dump-config`. Skip-guard (no `dsh` bin / no registry) must `describe.skipIf` with a printed reason — a skip is **never** AC evidence; only a non-skip PASS proves that scenario passed; this is not an iteration Acceptance gate.
 - **bootApp minimal opt-in extension**: add `pluginModule` / `fallbacksModule` / `settingsService` override params, defaults unchanged (existing spec callers untouched). Row order must match the real profile entry list (mstar before llm-fallbacks).
 - **Single-instance invariant (hard)**: the installed dists' bare imports (`@deepseek-ai/cordis`, `@deepseek-ai/dsh-*`, …) must resolve to the **same physical instances** the test process (host) loaded. Mechanism: **real-directory copies** of the installed packages under the repo `node_modules` tree (`.mstar-e2e/<run>/`), so walk-up resolution lands in the host tree; `Bun.resolveSync` cross-check pins `cordis` equality; `afterEach` cleans up.
   - **Symlinks rejected**: Node/Bun realpath resolves them back into the pnpm store — a **second** cordis instance.

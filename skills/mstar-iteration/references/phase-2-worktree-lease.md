@@ -183,7 +183,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 
 对每个本轮要推进的 active `plan_id`（**可交错 / 并行**是默认读法：非强制 plan A 全 Done 再 plan B，plan 编号或 task 编号本身都不是串行理由）：
 
-1. **Configure/source facts:** show the selected workflow/plan, verify its feature checkout/branch (`mstar worktree check --workflow <id> --plan <plan-id>`), and correct missing facts through ordinary prepare. Defaults are PM Acceptance / `allow-residual`; no ceremonial prepare is needed for valid metadata/defaults. A legacy active `mandatory` row uses ordinary prepare with `--qa-gate pm-acceptance` before completion → `mstar-roles/references/project-manager/acceptance.md`.
+1. **Configure/source facts:** show the selected workflow/plan, verify its feature checkout/branch (`mstar worktree check --workflow <id> --plan <plan-id>`), and correct missing facts through ordinary prepare. Defaults are PM Acceptance / `allow-residual`; no ceremonial prepare is needed for valid metadata/defaults. A legacy active `mandatory` row uses ordinary prepare with `--acceptance-gate pm-acceptance` before completion → `mstar-roles/references/project-manager/acceptance.md`.
 2. **Start:** record `Todo → InProgress` through ordinary `progress` before writable dispatch. Leaf Assignments include absolute Worktree path, Working branch and control-root Plan Path/SDD dir; parallel tracks additionally satisfy L2 isolation.
 3. **Implement → InReview** (product edits in the feature worktree; authored plans, iteration package and SDD use absolute control paths; execution state uses public domain verbs):
    - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。

@@ -62,7 +62,7 @@ Morning Star's SDD loop defines a per-task reviewer (L2) and the `audit` task ca
 
 ## Retired role: `qa-engineer` (PR #681)
 
-`qa-engineer` was removed from this system: the QA role was replaced by **PM Acceptance**, and the engine's `ROLE_MAPPING` / `agents/` / `skills/mstar-roles/references/` no longer carry it (`.changes/unreleased/remove-qa-role.md`). The method above still holds for live roles — the retired 13→14 example below (QA-era counts) is history, not a template: a new role is one `agents/<role>.md` + one `references/<role>.md` + one `ROLE_MAPPING` row, verified against the current corpus rather than against a remembered count. Historical `mandatory` `qa_gate` rows recover through ordinary prepare with `--qa-gate pm-acceptance`; the L2 reviewer (`code-reviewer`) and independent QC seats are unaffected.
+`qa-engineer` was removed from this system: the QA role was replaced by **PM Acceptance**, and the engine's `ROLE_MAPPING` / `agents/` / `skills/mstar-roles/references/` no longer carry it (`.changes/unreleased/remove-qa-role.md`). The method above still holds for live roles — the retired 13→14 example below (QA-era counts) is history, not a template: a new role is one `agents/<role>.md` + one `references/<role>.md` + one `ROLE_MAPPING` row, verified against the current corpus rather than against a remembered count. Historical `mandatory` rows (stored prepare key `qa_gate`) recover through ordinary prepare with `--acceptance-gate pm-acceptance`; the L2 reviewer (`code-reviewer`) and independent QC seats are unaffected.
 
 ## Why This Matters
 

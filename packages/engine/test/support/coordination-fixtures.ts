@@ -309,7 +309,7 @@ export function preparedOf(row: Record<string, unknown>): Record<string, unknown
 }
 
 /**
- * Review/QA evidence inside the plan's own SDD area. It carries the paths a
+ * Review and acceptance evidence inside the plan's own SDD area. It carries the paths a
  * caller submits; the engine hashes them into recorded `EvidenceRef`s.
  */
 export function completionEvidenceOf(
@@ -321,15 +321,15 @@ export function completionEvidenceOf(
   const reports = [join(sddDir, "review", "qc1.md"), join(sddDir, "review", "qc2.md")];
   for (const path of reports) writeText(path, "# qc report\n");
   const consolidated = join(sddDir, "review", "qc.md");
-  const qa = join(sddDir, "qa.md");
+  const acceptanceReport = join(sddDir, "acceptance.md");
   writeText(consolidated, "# consolidated qc\n");
-  writeText(qa, "# qa pass\n");
+  writeText(acceptanceReport, "# acceptance pass\n");
   return {
     source_sha: sourceSha,
     review_base: fixture.baseSha,
     review_head: sourceSha,
     qc: { decision: "Approve", reports, consolidated },
-    qa: { gate: "pm-acceptance", decision: "pass", report: qa },
+    acceptance: { gate: "pm-acceptance", decision: "pass", report: acceptanceReport },
     ...overrides,
   };
 }

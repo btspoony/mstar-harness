@@ -83,7 +83,7 @@ function projectLegacyRowCoordination(row: Record<string, unknown>): Record<stri
     out.completion = legacy.completion;
   } else if (isPlainObject(handoff) && handoff.state === "completed") {
     const qc = handoff.qc;
-    const qa = handoff.qa;
+    const acceptance = handoff.acceptance ?? handoff.qa;
     const integration = handoff.integration;
     const mapped: Record<string, unknown> = {
       source_branch: isNonEmptyString(handoff.source_branch) ? handoff.source_branch : null,
@@ -92,7 +92,7 @@ function projectLegacyRowCoordination(row: Record<string, unknown>): Record<stri
       review_base: isNonEmptyString(handoff.review_base) ? handoff.review_base : null,
       review_head: isNonEmptyString(handoff.review_head) ? handoff.review_head : null,
       qc: isPlainObject(qc) ? qc : { decision: "", reports: [], consolidated: { path: "", sha256: "" } },
-      qa: isPlainObject(qa) ? qa : { gate: "", decision: "", report: { path: "", sha256: "" } },
+      acceptance: isPlainObject(acceptance) ? acceptance : { gate: "", decision: "", report: { path: "", sha256: "" } },
       completed_by: isNonEmptyString(handoff.accepted_by) ? handoff.accepted_by : "",
       completed_at: isNonEmptyString(handoff.completed_at) ? handoff.completed_at : "",
     };
