@@ -29,8 +29,9 @@ const PACKAGE_ROOT = resolve(import.meta.dir, '..')
 /** The two host entrypoints (unchanged from the inline build this replaced). */
 const ENTRIES = ['src/index.ts', 'src/invariant.ts'] as const
 
+// shortcut: the stamp covers reachable input content only — ENTRIES, EXTERNALS and bundler options are not inputs, and outputs are checked for existence but never content, so an externals edit without a rebuild still reads `current`; upgrade to a build-config fingerprint when that must read `stale`.
 /** The build's external bare imports — the shipped bundle inlines everything else. */
-const EXTERNALS = [
+export const EXTERNALS = [
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-scope',

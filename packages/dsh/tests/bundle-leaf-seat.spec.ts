@@ -23,26 +23,11 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { HOST_BUILD_RECOVERY, checkHostBuild } from '../scripts/build-host.ts'
+import { EXTERNALS, HOST_BUILD_RECOVERY, checkHostBuild } from '../scripts/build-host.ts'
 
 const ROOT = join(import.meta.dir, '..')
 /** The packed entry the source build produced (`package.json` `main`). */
 const PACKED_ENTRY = join('dist', 'index.js')
-
-/**
- * The build's external bare imports. `@mstar-harness/commands` is NOT here: it
- * is inlined at build time, and the scratch consumer therefore must not
- * provide it — that absence is the premise this smoke discharges.
- */
-const EXTERNALS = [
-  '@deepseek-ai/cordis',
-  '@deepseek-ai/dsh-llm',
-  '@deepseek-ai/dsh-scope',
-  '@deepseek-ai/dsh-skill-filesystem',
-  '@deepseek-ai/dsh-storage-domain',
-  '@deepseek-ai/dsh-tools',
-  '@mstar-harness/engine',
-] as const
 
 /** The folded plan tool as the shipped bundle's `mstar` server publishes it. */
 const PLAN_TOOL = 'mcp__mstar__mstar_plan'
@@ -82,6 +67,8 @@ function packedPackageRoot(): string {
   mkdirSync(join(consumerRoot, 'node_modules', '@mstar-harness'), { recursive: true })
   execFileSync('tar', ['-xzf', tarball, '-C', consumerRoot])
   renameSync(join(consumerRoot, 'package'), packageRoot)
+  // Only the build's own externals: `@mstar-harness/commands` is inlined and the
+  // consumer must not provide it — that absence is the premise this smoke discharges.
   for (const name of EXTERNALS) {
     const link = join(consumerRoot, 'node_modules', name)
     mkdirSync(join(link, '..'), { recursive: true })
