@@ -32,19 +32,9 @@ Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。*
 **Canonical `.gitignore` snippet**（skills 与 CLI `init` 对齐）：
 
 ```gitignore
-# Morning Star harness (.mstar/)
-# Principle: process stays local; results are shared with the team.
-# Default-ignore everything under .mstar/, then re-include the tracked results.
-.mstar/**
-!.mstar/AGENTS.md
-!.mstar/knowledge/
-!.mstar/knowledge/**
-!.mstar/specs/
-!.mstar/specs/**
-!.mstar/adr/
-!.mstar/adr/**
-# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
-.mstarc
+# Morning Star harness: the process root stays local.
+# Tracked results live under .agents/ and .mstarc declares the layout.
+.mstar/
 ```
 
 Legacy `.agents/` 等价：

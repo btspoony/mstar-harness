@@ -669,7 +669,7 @@ describe("MCP harness root", () => {
       expect(path.resolve(scaffolded.harnessDir)).toBe(path.resolve(fixture.pinnedHarness));
       expect(path.resolve(scaffolded.projectDir)).toBe(path.resolve(fixture.pinnedHarness, "projects"));
       expect(existsSync(path.join(fixture.pinnedHarness, "projects", "_default"))).toBe(true);
-      expect(scaffolded.created).toContain(".mstar/AGENTS.md");
+      expect(scaffolded.created).toContain(".agents/AGENTS.md");
 
       // The launch workspace is untouched: no scaffold content lands in its
       // own `.mstar`, and its `.gitignore` keeps its bytes (a cwd-derived
@@ -711,7 +711,7 @@ describe("MCP harness root", () => {
       expect(path.resolve(scaffolded.harnessDir)).toBe(path.resolve(fixture.pinned));
       expect(path.resolve(scaffolded.projectDir)).toBe(path.resolve(fixture.pinned, "projects"));
       expect(existsSync(path.join(fixture.pinned, "projects", "_default"))).toBe(true);
-      expect(scaffolded.created).toContain("control/AGENTS.md");
+      expect(scaffolded.created).toContain(".agents/AGENTS.md");
 
       // A custom root name takes the custom-layout branch: the parent
       // workspace gets neither a harness dir nor the canonical ignore snippet.
