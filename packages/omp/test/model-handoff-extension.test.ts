@@ -955,7 +955,45 @@ describe("host session identity injection", () => {
     expect(harness.records()).toHaveLength(0);
     expect(harness.notices()).toHaveLength(0);
   }, 30_000);
-  test("a leaf (task) session exports the leaf marker; a coordinator session and an already-exporting command do not", async () => {
+  test("a leaf (task) session exports the leaf marker once across re-fires", async () => {
+    const repo = buildControlRepo();
+    const taskSession = newSession(repo.main);
+    taskSession.appendSessionInit({ systemPrompt: "task", task: "scout", tools: ["bash"], agent: "scout" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: taskSession,
+    });
+    const sessionId = harness.sessionManager.getSessionId();
+    const baseCommand = 'printf %s "$MSTAR_LEAF_SEAT"';
+    // Each fire replays the command the previous fire revised: the persisted
+    // command text of a leaf session must not grow a marker per pass.
+    let input: Record<string, unknown> = { command: baseCommand, timeout: 5 };
+    for (let fire = 0; fire < 3; fire += 1) {
+      const revision = await harness.emitToolCall({
+        type: "tool_call",
+        toolCallId: `call-leaf-bash-${fire}`,
+        toolName: "bash",
+        input,
+      });
+      if (isPlainFixtureRecord(revision) && isPlainFixtureRecord(revision.input)) {
+        input = revision.input;
+      }
+    }
+
+    const command = input.command;
+    if (typeof command !== "string") throw new Error("expected revised bash command");
+    expect(command.match(/export MSTAR_LEAF_SEAT=/g)).toHaveLength(1);
+    expect(command.match(/export MSTAR_HOST_SESSION_ID=/g)).toHaveLength(1);
+    expect(command).toBe(
+      `export MSTAR_HOST_SESSION_ID='${sessionId}'; export MSTAR_LEAF_SEAT=1; ${baseCommand}`,
+    );
+    const child = Bun.spawnSync(["sh", "-c", command]);
+    expect(child.exitCode).toBe(0);
+    expect(child.stdout.toString()).toBe("1");
+  }, 30_000);
+
+  test("a leaf (task) session exports the leaf marker; a coordinator session and a leading injected chain do not", async () => {
     const repo = buildControlRepo();
 
     // A task/subagent session: session_init in its own ledger — the same fact
@@ -968,6 +1006,7 @@ describe("host session identity injection", () => {
       sessionDir: scratchDir("unused-"),
       sessionManager: taskSession,
     });
+    const leafSessionId = leafHarness.sessionManager.getSessionId();
     const leafRevision = await leafHarness.emitToolCall({
       type: "tool_call",
       toolCallId: "call-leaf",
@@ -977,16 +1016,20 @@ describe("host session identity injection", () => {
     if (!isPlainFixtureRecord(leafRevision) || !isPlainFixtureRecord(leafRevision.input)) {
       throw new Error("expected a revised bash input");
     }
-    expect(leafRevision.input.command).toContain("export MSTAR_LEAF_SEAT=1; ");
-    expect((leafRevision.input.command as string).match(/export MSTAR_LEAF_SEAT=/g)).toHaveLength(1);
+    expect(String(leafRevision.input.command)).toBe(
+      `export MSTAR_HOST_SESSION_ID='${leafSessionId}'; export MSTAR_LEAF_SEAT=1; mstar plan prepare --workflow wf-1`,
+    );
 
-    // No "already exported" guard: a bare substring match would let ANY command
-    // text (here an echo of the marker) suppress the fail-closed fact, so the
-    // prefix is applied unconditionally. A duplicate export is harmless.
-    for (const command of [
-      "export MSTAR_LEAF_SEAT=1; mstar plan prepare --workflow wf-1",
-      "echo 'export MSTAR_LEAF_SEAT='; mstar plan prepare --workflow wf-1",
-    ]) {
+    // Recognition is positional, not a substring match: a command already
+    // leading with this hook's own chain is not prefixed twice, while command
+    // text that merely mentions the marker (an echo, a grep argument) still
+    // receives the fail-closed fact.
+    const marker = "export MSTAR_LEAF_SEAT=1; ";
+    for (const [command, alreadyLeading] of [
+      [`${marker}mstar plan prepare --workflow wf-1`, true],
+      ["echo 'export MSTAR_LEAF_SEAT='; mstar plan prepare --workflow wf-1", false],
+      ["grep MSTAR_LEAF_SEAT= transcript.log", false],
+    ] as const) {
       const revised = await leafHarness.emitToolCall({
         type: "tool_call",
         toolCallId: "call-leaf-pre",
@@ -996,9 +1039,10 @@ describe("host session identity injection", () => {
       if (!isPlainFixtureRecord(revised) || !isPlainFixtureRecord(revised.input)) {
         throw new Error("expected a revised bash input");
       }
-      // The host-id prefix may precede it (this session id is present); the
-      // marker is applied once per call, ahead of the caller's command.
-      expect(String(revised.input.command).endsWith(`export MSTAR_LEAF_SEAT=1; ${command}`)).toBe(true);
+      // The host-id prefix precedes the marker (this session id is present).
+      expect(String(revised.input.command)).toBe(
+        `export MSTAR_HOST_SESSION_ID='${leafSessionId}'; ${alreadyLeading ? command : marker + command}`,
+      );
     }
 
     // A coordinator session (no session_init entry) exports no marker.

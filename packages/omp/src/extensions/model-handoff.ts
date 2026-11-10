@@ -73,6 +73,33 @@ const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 const LEAF_SEAT_ENV = "MSTAR_LEAF_SEAT";
 /** Single-quote a value for a POSIX shell — the one quoting that never expands. */
 const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+/**
+ * One leading `export <name>=<value>; ` statement. The value alternatives are
+ * disjoint (`'` starts a quoted chunk, `\` an escape pair, the char class takes
+ * the rest and excludes both), so the scan stays linear.
+ */
+const LEADING_EXPORT_RE = /^export ([A-Za-z_][A-Za-z0-9_]*)=((?:'[^']*'|\\.|[^;'\\])*); /;
+/**
+ * Has this hook's own `export <name>=…; ` prefix already been applied?
+ *
+ * Only the contiguous chain of injected exports that leads the command counts —
+ * the region this hook writes. Scanning stops at the first statement that is not
+ * one of its two exports, so command text that merely MENTIONS a marker (an
+ * `echo` of it, a `grep` argument) never suppresses the fail-closed leaf fact.
+ * `expectedValue` pins a fixed-value export; omitting it accepts a caller's own
+ * value, which the session-id export has always respected.
+ */
+const alreadyInjected = (command: string, name: string, expectedValue?: string): boolean => {
+  let rest = command;
+  for (;;) {
+    const statement = LEADING_EXPORT_RE.exec(rest);
+    if (statement === null) return false;
+    const [, exported, value] = statement;
+    if (exported !== SESSION_ID_ENV && exported !== LEAF_SEAT_ENV) return false;
+    if (exported === name && (expectedValue === undefined || value === expectedValue)) return true;
+    rest = rest.slice(statement[0].length);
+  }
+};
 
 /**
  * Route families read from the host's own `InputEvent`. The two iteration
@@ -1366,15 +1393,16 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     // The leaf fact is the same session_init-entry predicate the coordinator
     // gates read: a task/subagent session exports the marker so the CLI (and
     // the engine behind it) sees the leaf even when this hook's other prefix
-    // does not apply. No "already exported" guard is applied to it: the fact is
-    // fail-closed, and a bare substring match would let any command text
-    // suppress the marker (a duplicate prefix is harmless).
+    // does not apply. Recognition stays fail-closed: only this hook's own
+    // leading export chain counts, so command text that merely mentions the
+    // marker cannot suppress it, while a re-fire of an already-revised command
+    // stops stacking a second prefix onto the persisted command.
     const leaf = ctx.sessionManager.getEntries().some((entry) => entry.type === "session_init");
     let prefix = "";
-    if (sessionId !== "" && !input.command.includes(`export ${SESSION_ID_ENV}=`)) {
+    if (sessionId !== "" && !alreadyInjected(input.command, SESSION_ID_ENV)) {
       prefix += `export ${SESSION_ID_ENV}=${shellSingleQuote(sessionId)}; `;
     }
-    if (leaf) prefix += `export ${LEAF_SEAT_ENV}=1; `;
+    if (leaf && !alreadyInjected(input.command, LEAF_SEAT_ENV, "1")) prefix += `export ${LEAF_SEAT_ENV}=1; `;
     if (prefix === "") return undefined;
     return { input: { ...input, command: prefix + input.command } };
   });
