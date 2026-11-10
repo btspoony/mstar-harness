@@ -17,19 +17,19 @@ Legacy fallbacks:
 
 ## Initialization Checklist (when plan management is required)
 
-1. Create `{HARNESS_DIR}` and `{PLAN_DIR}` when absent.
+1. Bootstrap with `mstar harness scaffold` (it creates `{HARNESS_DIR}` and `{PLAN_DIR}` when absent, plus `iterations/`, `sdd/`, `reviews/` and `projects/_default/`). The scaffold also writes the tracked `.mstarc` at the harness dir's parent — `harness_dir` plus `knowledge_dir` / `specs_dir` / `adr_dir` = `.agents/*` — but only when no `.mstarc` is in scope and that parent lies inside the scaffold root; an existing file is never edited. It creates the resolved `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{ADR_DIR}` (defaults `.agents/knowledge|specs|adr`) and seeds the ADR tree with `README.md`, `proposed/TEMPLATE.md`, `implemented/TEMPLATE.md` and the four bucket directories; class directories are created by the first record. It writes `<workspace-root>/.agents/AGENTS.md` (never `{HARNESS_DIR}/AGENTS.md` — the process root is ignored). Reruns are no-ops.
 2. Activate the execution authority: `mstar store init` (fresh harness) or `mstar store upgrade` (existing or legacy file state). Scaffold writes no `status.json`; a harness without an ACTIVE store has no execution authority.
-3. Ensure Morning Star **process-artifact** gitignore set is present (canonical snippet → `mstar-conventions` SKILL.md「Git 跟踪策略」): `{HARNESS_DIR}/archived/`, `iterations/`, `plans/`, `sdd/`, `status.json`, `workflows/`, `projects/` (legacy `.agents/` equivalents when applicable). Per-plan `{SDD_DIR}/review/` is created by the SDD/review flow when needed.
-4. Optional: `{HARNESS_DIR}/knowledge/README.md`. `workflows/` / `projects/` subdirs are created on demand by engine writers — no pre-creation.
+3. Ensure Morning Star **process-artifact** gitignore set is present (canonical snippet → `mstar-conventions` SKILL.md「Git 跟踪策略」): `{HARNESS_DIR}/` as a whole — `archived/`, `iterations/`, `plans/`, `sdd/`, `reviews/`, `status.json`, `workflows/`, `projects/`, `store.db` (legacy `.agents/` harnesses keep their own default-ignore-then-re-include snippet). `.mstarc` and `.agents/**` are tracked, so they need no ignore rule. Per-plan `{SDD_DIR}/review/` is created by the SDD/review flow when needed.
+4. Optional: `{KNOWLEDGE_DIR}/README.md` (defaults under `.agents/` in a bootstrap layout). `workflows/` / `projects/` subdirs are created on demand by engine writers — no pre-creation.
 
 If legacy plan directories already exist, reuse them; avoid dual-structure duplication.
 
 ## Git Tracking Policy
 
-**Principle:** process stays local; results are shared with the team — the default-tracked and default-gitignored sets, and the canonical snippet, are enumerated once → `mstar-conventions` SKILL.md「Git 跟踪策略」.
+**Principle:** process stays local; results are shared with the team — the default-tracked and default-gitignored sets, and the canonical snippet, are enumerated once → `mstar-conventions` SKILL.md「Git 跟踪策略」. In the bootstrap layout the harness dir is one fully ignored `.mstar/` and declared by a tracked `.mstarc`; tracked results are `.agents/AGENTS.md`, `.agents/knowledge/**`, `.agents/specs/**` and `.agents/adr/**` (the layout declaration is the source of truth, so a re-pointed corpus stays tracked at its declared path).
 
 - Under **ACTIVE** execution authority, root registry, workflow/plan rows, sessions, leases and frozen inputs live in `{HARNESS_DIR}/store.db`; read via `mstar status validate` / `mstar plan show`, mutate only through public workflow/plan verbs. `status.json` / snapshot / session files are refused for reads and writes (`execution.consumer-not-ready` / `execution.direct-write-refused`); they are migration sources only (written engine-internally by the kept `mstar` migration tooling), never execution state. Keep authored main plan markdown current on disk, but do not default `git add` / `git commit` for cross-clone handoff. Open findings are store issues; project registers are migration history, never write targets. Promote durable decisions into tracked knowledge/specs/`AGENTS.md`.
-- If a project explicitly opts into tracking process artifacts, record that policy in `{HARNESS_DIR}/AGENTS.md` and ensure team alignment.
+- If a project explicitly opts into tracking process artifacts, record that policy in `.agents/AGENTS.md` and ensure team alignment.
 
 ## PM Responsibilities
 

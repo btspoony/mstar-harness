@@ -48,7 +48,7 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 
 并存时 **`.mstar/` 优先**；仅当项目已有 `.agents/` 且无 `.mstar/` 时继续沿用 `.agents/`。
 
-#### `.mstarc` 格式（INI 子集；默认 gitignored，→ `references/git-tracking-and-gitignore.md`）
+#### `.mstarc` 格式（INI 子集；仓库内 **tracked**，由 scaffold 在缺失时写入，→ `references/git-tracking-and-gitignore.md`）
 
 ```ini
 [config]
@@ -90,12 +90,14 @@ enforcement=hard
 
 **空目录规则**：候选路径存在但无任何文件 → 视为不存在，继续下一候选；候选按解析后路径去重（harness 根即 `.agents/` 时第 3 项与第 2 项是同一目录）。
 
-**创建默认**：全部缺失或皆空 → 创建并使用 `{HARNESS_DIR}/specs/`（统一落在 `.mstar/` 下）。**禁止**在 greenfield init 时优先创建裸仓库根 `specs/`。
+**创建默认**：全部缺失或皆空 → 创建并使用 `{HARNESS_DIR}/specs/`（统一落在 `.mstar/` 下）。**禁止**在 greenfield init 时优先创建裸仓库根 `specs/`。bootstrap 布局下 scaffold 先写 `.mstarc` 声明 `specs_dir=.agents/specs`，本链第 1 项直接命中，不走到回退创建。
 
 ### `{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析（找到非空目录即停）
 
 - `{KNOWLEDGE_DIR}`：`.mstarc` `knowledge_dir`（权威）→ `{HARNESS_DIR}/knowledge/` → `<repo-root>/.agents/knowledge/`（空目录视为不存在）→ 回退 `{HARNESS_DIR}/knowledge/`，需创建时创建（`resolveKnowledgeDir` 默认创建，`{ create: false }` 关闭）。
 - `{ADR_DIR}`：`.mstarc` `adr_dir`（权威）→ `{HARNESS_DIR}/adr/` → `<repo-root>/.agents/adr/` → `<repo-root>/docs/adr/`（均按空目录规则）→ 回退 `{HARNESS_DIR}/adr/`，创建规则同上（`resolveAdrDir`）。
+
+bootstrap 布局下 `.mstarc` 已声明 `knowledge_dir` / `adr_dir`，两条链的第 1 项直接命中（`scaffoldHarness` 随后为解析结果建目录并种子 ADR 树）；上表 `{HARNESS_DIR}/*` 默认值只描述未声明时的行为。
 
 > **Engine check:** engine `resolveSpecsDir` / `resolveKnowledgeDir` / `resolveAdrDir` — or run `mstar path resolve` (prints all three) — to confirm the candidate order (empty-dir-as-absent included). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
@@ -145,19 +147,19 @@ Store 落在 **control / process harness 根**，不随 feature worktree cwd；H
 
 PM 在需要持久化追踪时：
 
-1. **Bootstrap 唯一路径 = `mstar harness scaffold` + `mstar store init`**（store 分工见步骤 4）：scaffold 建 authored 目录与 `projects/_default/` 登记；`store init` 激活执行权威。**无 ACTIVE store 的 harness 没有执行权威**——用对话追踪（no-plan mode），门禁（QC/PM Acceptance）仍适用；scaffold **不**写 `status.json`。
-2. scaffold 建立 `plans/` / `iterations/` / `knowledge/` / `specs/` / `sdd/` / `reviews/` 空目录；运行时 per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建；`workflows/` 由 engine writers 按需创建，**不**预建。
+1. **Bootstrap 唯一路径 = `mstar harness scaffold` + `mstar store init`**（store 分工见步骤 4）：scaffold 建进程目录、tracked 语料、`projects/_default/` 登记与 `.mstarc` 声明；`store init` 激活执行权威。**无 ACTIVE store 的 harness 没有执行权威**——用对话追踪（no-plan mode），门禁（QC/PM Acceptance）仍适用；scaffold **不**写 `status.json`。
+2. scaffold 在 `{HARNESS_DIR}` 下建 `plans/` / `iterations/` / `sdd/` / `reviews/` 与 `projects/_default/`；tracked 语料按解析后的 `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{ADR_DIR}` 建目录（bootstrap 默认 `.agents/knowledge|specs|adr`），并在 `{ADR_DIR}` 种子 `README.md` + `proposed/TEMPLATE.md` + `implemented/TEMPLATE.md` + 四个桶目录（class 目录由首条记录创建）。运行时 per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建；`workflows/` 由 engine writers 按需创建，**不**预建。
 3. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（→ `references/git-tracking-and-gitignore.md`）— CLI `init` 可自动添加；文件已声明 harness 根规则时属作者所有，fence 不写入（→ `references/git-tracking-and-gitignore.md`）
 4. Store：全新、无 legacy register/catalog 的 harness 用 `mstar store init` 建 active issue/catalog store；已有或 legacy harness 用 `mstar store upgrade`（operator 见 help）导入可识别执行状态、激活 authority 并报告 skipped 项。`store activate` 是 staged `store migrate` apply 后的激活入口（attestation 自动生成，`--attestation <path>` 仅为显式覆盖，`--operator` 必填），不是 init/upgrade 的例行下一步。以回执确认 authority，再用 `mstar status validate` / `mstar plan show` 读执行状态。
-5. Git：**进程本地、结果共享** — 默认跟踪 `{HARNESS_DIR}/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`；store 与运行过程默认 gitignored，plan Markdown 仍是 authored artifact，非状态权威。跨 clone 持久 handoff = knowledge + specs + `{HARNESS_DIR}/AGENTS.md`（及根 `CONCEPTS.md` / `STRATEGY.md` 若使用）；须跨 clone 的 finding 须提升（compound）或写入 tracked results — **勿**默认 `git add` 迁移源 `status.json` / `plans/`。
+5. Git：**进程本地、结果共享** — 默认跟踪 `.mstarc`（布局声明）、`.agents/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`、`{ADR_DIR}/**`（bootstrap 默认即 `.agents/knowledge|specs|adr`）；`{HARNESS_DIR}` 整体（含 store、`plans/`、`iterations/`、`sdd/`、`reviews/`、`workflows/`、`projects/`）gitignored。plan Markdown 仍是 authored artifact，非状态权威。跨 clone 持久 handoff = knowledge + specs + adr + `.agents/AGENTS.md` + `.mstarc`（及根 `CONCEPTS.md` / `STRATEGY.md` 若使用）；须跨 clone 的 finding 须提升（compound）或写入 tracked results — **勿**默认 `git add` 迁移源 `status.json` / `plans/`。
 
-**程序化初始化**：`scaffoldHarness`（engine）与 `mstar harness scaffold [path]`（CLI）完成目录 + **`projects/_default/` 目录及可用 catalog 登记** + canonical gitignore snippet + 最小 `{HARNESS_DIR}/AGENTS.md`；**不**写 `status.json`，也不代替 `mstar store init` / `mstar store upgrade`（执行权威只在 store）。不创建 roadmap Markdown 或 residual register。既有 v1 `roadmap.md` 只作为后续 reviewed import 的候选（→ `mstar-project-governance`）。幂等，重跑只补缺失件；已声明的 `.gitignore` 属作者所有，字节不变。scaffold 遵循 `.mstarc`；解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义布局自行管理 ignore 规则）。
+**程序化初始化**：`scaffoldHarness`（engine）与 `mstar harness scaffold [path]`（CLI）完成目录 + **`projects/_default/` 目录及可用 catalog 登记** + canonical gitignore snippet + `.mstarc` 声明（缺失且父目录在 scaffold 根内时）+ `.agents/AGENTS.md`（已存在则跳过）；**不**写 `status.json`，也不代替 `mstar store init` / `mstar store upgrade`（执行权威只在 store）。不创建 roadmap Markdown 或 residual register。既有 v1 `roadmap.md` 只作为后续 reviewed import 的候选（→ `mstar-project-governance`）。幂等，重跑只补缺失件；已声明的 `.gitignore` 属作者所有，字节不变。scaffold 遵循 `.mstarc`；解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义布局自行管理 ignore 规则）。
 
-步骤与 `{HARNESS_DIR}/AGENTS.md` 分层 → **`references/harness-bootstrap-and-agents-layering.md`**。
+步骤与 `AGENTS.md` 分层（bootstrap 布局的 harness 规则文件是 `.agents/AGENTS.md`）→ **`references/harness-bootstrap-and-agents-layering.md`**。
 
 ## Git 跟踪策略（进程 vs 结果）
 
-**原则**：进程留在本地；结果与团队共享。Tracked defaults（`AGENTS.md` / `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{ADR_DIR}`）、gitignore 面、canonical snippet、author-owned 判定、multi-worktree 可见性与 `mstar path check` 语义 → **`references/git-tracking-and-gitignore.md`**（唯一契约本体）。Bootstrap 步骤里的 ignore 引用指向同一文件。
+**原则**：进程留在本地；结果与团队共享。Tracked defaults（`.mstarc` / `.agents/AGENTS.md` / `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{ADR_DIR}`）、gitignore 面、canonical snippet、author-owned 判定、multi-worktree 可见性与 `mstar path check` 语义 → **`references/git-tracking-and-gitignore.md`**（唯一契约本体）。Bootstrap 步骤里的 ignore 引用指向同一文件。
 
 ## Spec 驱动的分支模型（多 Plan · 同一 Spec）
 
@@ -191,7 +193,7 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 
 ## Evidence
 
-正确结果 = 可复核产物与执行状态：`mstar plan show` / `mstar status validate` 返回 store 的对应 plan 行（状态 + `metadata` 分支字段）与 root register，plan authored 文件存在于 `{PLAN_DIR}`，`{HARNESS_DIR}/AGENTS.md` 分层与 gitignore 与本文约定一致（进程本地 / 结果共享），`mstar path resolve` 输出与路径符号表一致，tracked 正文的 catalog 行（`mstar catalog show` / `mstar catalog list`）与其实际位置一致。迁移源文件面（`status.json` / snapshot）不构成 ACTIVE 证据要求。
+正确结果 = 可复核产物与执行状态：`mstar plan show` / `mstar status validate` 返回 store 的对应 plan 行（状态 + `metadata` 分支字段）与 root register，plan authored 文件存在于 `{PLAN_DIR}`，`AGENTS.md` 分层与 gitignore 与本文约定一致（进程本地 / 结果共享），`mstar path resolve` 输出与路径符号表一致，tracked 正文的 catalog 行（`mstar catalog show` / `mstar catalog list`）与其实际位置一致。迁移源文件面（`status.json` / snapshot）不构成 ACTIVE 证据要求。
 
 ## References
 

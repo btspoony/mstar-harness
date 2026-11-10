@@ -6,7 +6,7 @@
 
 ## Harness 子树内（`{HARNESS_DIR}/` 下）
 
-这些是 agent handoff 用的结构化产物。**Git 跟踪**遵循 `mstar-conventions` SKILL.md「Git 跟踪策略」：**进程本地、结果共享** — `plans/`、`iterations/`、`status.json`、`workflows/`、`projects/`、`sdd/` 等默认 gitignored；`AGENTS.md`、`knowledge/`、`specs/`、`adr/` 默认 tracked（harness 根全量 gitignore 时改解析到 `.agents/`，`mstar path check` 核对）。 Historical execution/register file shapes (`status.json`, workflow `snapshot.json`, project `residuals.json`) are archive-only — no execution route, no live writer → **`mstar-project-governance`** `references/migration-source-shapes.md`.
+这些是 agent handoff 用的结构化产物。**Git 跟踪**遵循 `mstar-conventions` SKILL.md「Git 跟踪策略」：**进程本地、结果共享** — `{HARNESS_DIR}` 整体（`plans/`、`iterations/`、`sdd/`、`reviews/`、`status.json`、`workflows/`、`projects/`、`store.db`）默认 gitignored；tracked 结果在 `.agents/AGENTS.md`、`.agents/knowledge/**`、`.agents/specs/**`、`.agents/adr/**`（bootstrap 默认，由 tracked `.mstarc` 声明；未声明时才回落到 `{HARNESS_DIR}` 下的同名候选链，`mstar path check` 按 Git 实况核对）。 Historical execution/register file shapes (`status.json`, workflow `snapshot.json`, project `residuals.json`) are archive-only — no execution route, no live writer → **`mstar-project-governance`** `references/migration-source-shapes.md`.
 
 | 产物 | 解析后路径（默认 `.mstar/`） | 读写的技能 |
 |------|---------------------------|-----------|
@@ -29,7 +29,7 @@
 | **issue/catalog/roadmap/milestone/execution store** | `.mstar/store.db`（进程/control harness 根；gitignored；issues、catalog、project_roadmaps/project_milestones 与 execution_* 路由/plan/lease/session/冻结输入权威） | `mstar issue …` / `mstar catalog …` / `mstar roadmap …` / `mstar milestone …` / 公共 workflow/plan 动词；读取 `mstar status validate` / `mstar plan show` |
 | **规格** | `{SPECS_DIR}/`（默认 `.mstar/specs/`；解析 `.mstarc` `specs_dir` → `{HARNESS_DIR}/specs` → `.agents/specs` → `docs/specs` → 根 `specs` → legacy `designs`，见 `mstar-conventions`） | `mstar-artifacts` |
 | **ADR** | `{ADR_DIR}/<slug>.md`（默认 `.mstar/adr/`；解析 `.mstarc` `adr_dir` → `{HARNESS_DIR}/adr` → `.agents/adr` → `docs/adr`） | `mstar-artifacts` |
-| **harness AGENTS** | `.mstar/AGENTS.md`（tracked） | PM / init |
+| **harness AGENTS** | `.agents/AGENTS.md`（tracked；`.mstar/` 整体被忽略，其中的规则文件无法共享） | `mstar harness scaffold` 写；PM 维护 |
 | **archived knowledge** | `.mstar/archived/knowledge/`（保留原 `{KNOWLEDGE_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-artifacts` |
 | **archived specs** | `.mstar/archived/specs/`（保留原 `{SPECS_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-artifacts` |
 
