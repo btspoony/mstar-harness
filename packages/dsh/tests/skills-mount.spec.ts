@@ -217,7 +217,7 @@ describe('skills mount via the plugin (real composition)', () => {
     booted = await bootApp({ skillRoots: [MIRROR_SKILLS] })
     const definition = await booted.ctx.skills.get('mstar-conventions')
     expect(definition).toBeDefined()
-    expect(definition!.content).toContain('# Morning Star')
+    expect(definition!.content).toContain('{HARNESS_DIR}')
     expect(definition!.path).toBe(join(MIRROR_SKILLS, 'mstar-conventions', 'SKILL.md'))
   })
 
