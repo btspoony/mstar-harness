@@ -86,4 +86,4 @@ Template (fill `{role_id}` = `{role_id}`) → **`references/_shared/leaf-executo
 
 ## Plan & Documentation Rules
 
-Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`**（「Git NEVER (repo writes)」+「Plan & Documentation Rules」）。
+Repo-write Git discipline + plan/documentation rules → **`references/_shared/leaf-executor-core.md`** § Git-NEVER-(repo-writes)+Plan-Documentation
