@@ -204,6 +204,10 @@ Apply where the repo actually has the surface. Absence is not a finding.
 - Cross-session / cross-tenant context bleed: conversation history, cached context, or workspace state shared across sessions or tenants — the query/retrieval boundary must enforce isolation (§9h applies to the store). **Exclusion:** a retrieval query that enforces session/tenant isolation as a filter (not metadata labels or client-supplied IDs) refutes.
 - **Exclusion:** for every fold above, name the lower-trust author, the execution principal, and the capability gained. "Prompt injection is possible" alone remains insufficient — the existing first bullet governs.
 
+### Agent-facing external artifacts
+
+When the security pass is reviewing a skill, MCP server, third-party repo to clone or install, or a fetched URL or document that could alter agent behavior, load **`references/agent-artifact-review.md`**. Product-code AI/LLM and supply-chain findings stay in this file; that reference does not replace the exploitability bar, dispositions, or severity anchors in §§2/12.
+
 ### Supply chain & CI/CD
 
 - Exactly one authoritative lockfile at the install boundary: missing, gitignored, or bypassed lockfile is a reproducibility + supply-chain hygiene finding — but reporting it as exploitable still requires naming a reachable trust/authority failure (closing exclusion below): reproducibility alone is not authenticity.
