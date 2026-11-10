@@ -15,6 +15,9 @@
 
 import * as React from 'react'
 import {
+  DISPOSITIONS,
+  ISSUE_KINDS,
+  SEVERITIES,
   Issues,
   Iterations,
   Notice,
@@ -61,12 +64,12 @@ function issuesCopy(copy: Copy) {
   }
 }
 
-/** The vocabularies the issue filter offers (the engine's closed sets). */
+/** The vocabularies the issue filter offers (the engine's closed sets, via the shared UI export). */
 const ISSUE_OPTIONS = {
-  disposition: ['open', 'resolved', 'waived', 'duplicate', 'superseded'],
+  disposition: DISPOSITIONS,
   project: [] as string[],
-  kind: ['bug', 'risk', 'improvement', 'request', 'decision', 'review-obligation'],
-  severity: ['critical', 'high', 'medium', 'low', 'nit'],
+  kind: ISSUE_KINDS,
+  severity: SEVERITIES,
 }
 
 /** One destination's props: its read state, the locale and its interactive seat. */

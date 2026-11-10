@@ -73,6 +73,19 @@ describe("milestone store", () => {
     expect(readMilestonesOn(db,projectId,empty.milestoneId).milestones).toHaveLength(1);
     await expect(updateMilestone(context,projectId,full.milestoneId,{name:"x"},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toBeInstanceOf(MilestoneError);
   });
+  test("retiring a subject as obsolete counts as other-retired, never as resolved", async () => {
+    const revision=(db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
+    const retired=await addMilestone(context,{projectId,name:"Retirement",target:null,ordinal:2},{operationId:crypto.randomUUID(),expectedStoreRevision:revision});
+    issue("I-MILESTONE-7","resolved",retired.milestoneId);
+    issue("I-MILESTONE-8","obsolete",retired.milestoneId);
+    issue("I-MILESTONE-9","open",retired.milestoneId);
+    const rollup=readMilestonesOn(db,projectId,retired.milestoneId).milestones[0]!;
+    expect(rollup).toMatchObject({totalIssues:3,openIssues:1,resolvedIssues:1,otherRetiredIssues:1});
+    // The disposition is not rewritten by the aggregate: the row still says obsolete.
+    expect(readMilestonesOn(db,projectId,retired.milestoneId).issues.map(row => [row.id,row.disposition]).sort()).toEqual([
+      ["I-MILESTONE-7","resolved"],["I-MILESTONE-8","obsolete"],["I-MILESTONE-9","open"],
+    ]);
+  });
   test("milestone status rejects missing and cross-project IDs", async () => {
     const revision=(db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
     const own=await addMilestone(context,{projectId,name:"Own",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:revision});

@@ -89,10 +89,12 @@ export function severityOfPriority(priority: string | null, mapping?: LinearFace
 const STATE_OF_DISPOSITION: Record<Disposition, string> = {
   open: "Todo",
   resolved: "Done",
-  // Retired is not completed: it must never read as Done.
+  // Retired is not completed: it must never read as Done, and `obsolete` is a
+  // retirement of a removed subject, not a fix.
   waived: "Canceled",
   duplicate: "Canceled",
   superseded: "Canceled",
+  obsolete: "Canceled",
 };
 
 const PRIORITY_OF_SEVERITY: Record<Severity, number> = {
@@ -119,9 +121,10 @@ export function priorityOfSeverity(severity: Severity, mapping?: LinearFacetMapp
 
 /**
  * The DEFAULT remote state a disposition maps to — the key a
- * `[linear.mapping] disposition.<key>` override must name. `waived`,
- * `duplicate` and `superseded` all collapse onto `Canceled`, so one key
- * redirects all three; per-disposition redirection is not expressible.
+ * `[linear.mapping] disposition.<key>` override must name. Every non-resolved
+ * terminal disposition (`waived`, `duplicate`, `superseded`, `obsolete`)
+ * collapses onto `Canceled`, so one key redirects all of them;
+ * per-disposition redirection is not expressible.
  */
 export function defaultStateOfDisposition(disposition: Disposition): string {
   if (!Object.hasOwn(STATE_OF_DISPOSITION, disposition)) {

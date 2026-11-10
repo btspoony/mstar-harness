@@ -13,10 +13,13 @@ import { historicalStore } from "./store-migration-fixtures.js";
 import {
   assertIssueLinkedToPlanOn,
   assertIssueTriageVocabulary,
+  assertTerminalDisposition,
   IssueError,
   ISSUE_ACTIONS,
   ISSUE_ACTION_NAMES,
+  ISSUE_DISPOSITIONS,
   ISSUE_PAYLOAD_SCHEMAS,
+  TERMINAL_DISPOSITIONS,
   assertCaptureRequest,
   appendOccurrence,
   captureIssue,
@@ -975,6 +978,77 @@ describe("issue dispositions, revisions, and relations", () => {
     expect((await getIssue(context, later.issueId)).disposition).toBe("superseded");
   });
 
+  test("obsolete records a removed subject: evidence required, no canonical id, reopenable", async () => {
+    const context = ctx("obsolete-disposition-");
+    await initializeStore(context).then((handle) => handle.close());
+    const created = await captureIssue(context, baseInput(), mut("cap-obsolete"));
+    const evidence = { reason: "subject removed", references: ["commit abc123 removes packages/engine/src/gone.ts"] };
+
+    // No removal evidence: refused before any write, with the exact recovery.
+    const refusal = await closeIssue(context, created.issueId, "obsolete", { reason: "gone", references: [] }, {
+      operationId: "obsolete-no-refs", actor: "project-manager", expectedRevision: created.revision,
+    }).catch((error: unknown) => error);
+    expect(refusal).toMatchObject({ code: "issue.invalid-disposition" });
+    expect(String((refusal as Error).message)).toContain("obsolete requires removal evidence in references");
+    const recovery =
+      refusal && typeof refusal === "object" && "details" in refusal
+        && typeof refusal.details === "object" && refusal.details !== null && "recovery" in refusal.details
+        ? refusal.details.recovery
+        : undefined;
+    expect(recovery).toContain(
+      "mstar issue close --id <id> --disposition obsolete --file <closure-evidence.json> --actor project-manager --expect <revision>",
+    );
+    // A blank reference is no reference.
+    await expect(
+      closeIssue(context, created.issueId, "obsolete", { reason: "gone", references: ["   "] }, {
+        operationId: "obsolete-blank-ref", actor: "project-manager", expectedRevision: created.revision,
+      }),
+    ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
+    // A canonical issue is a different claim than "the subject is gone". Every
+    // spelling of it — including the empty string — is refused.
+    for (const [operationId, canonicalIssueId] of [
+      ["obsolete-canonical", "I-000001"],
+      ["obsolete-canonical-blank", ""],
+    ] as const) {
+      await expect(
+        closeIssue(context, created.issueId, "obsolete", { ...evidence, canonicalIssueId }, {
+          operationId, actor: "project-manager", expectedRevision: created.revision,
+        }),
+      ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
+    }
+
+    // Nothing above wrote: the issue is still open at its original revision.
+    const untouched = await getIssue(context, created.issueId);
+    expect(untouched.disposition).toBe("open");
+    expect(untouched.revision).toBe(created.revision);
+    expect(untouched.transitions).toEqual([]);
+
+    const closed = await closeIssue(context, created.issueId, "obsolete", evidence, {
+      operationId: "obsolete-ok", actor: "project-manager", expectedRevision: created.revision,
+    });
+    const detail = await getIssue(context, created.issueId);
+    expect(detail.disposition).toBe("obsolete");
+    expect(detail.closureNote).toBe(evidence.reason);
+    // The disposition and its removal evidence are recorded verbatim.
+    expect(detail.transitions).toHaveLength(1);
+    expect(detail.transitions[0]).toMatchObject({
+      fromDisposition: "open",
+      toDisposition: "obsolete",
+      reason: evidence.reason,
+      evidence: { reason: evidence.reason, references: evidence.references, canonicalIssueId: null, alignmentRef: null },
+    });
+    // It is listed as its own disposition and reported (not resolved) in reads.
+    expect((await listIssues(context, { disposition: "obsolete" })).items.map((row) => row.id)).toEqual([created.issueId]);
+    expect((await listIssues(context, { disposition: "resolved" })).items).toEqual([]);
+
+    // Reopen stays available, exactly like the other terminal states.
+    const reopened = await reopenIssue(context, created.issueId, { reason: "the subject came back" }, {
+      operationId: "obsolete-reopen", actor: "project-manager", expectedRevision: closed.revision,
+    });
+    expect((await getIssue(context, created.issueId)).disposition).toBe("open");
+    expect(reopened.revision).toBe(closed.revision + 1);
+  });
+
   test("terminal recurrence records an occurrence without reopening", async () => {
     const authority = await liveAuthority("disposition-recurrence-");
     const context: StoreContext = { harnessDir: authority.harness };
@@ -1264,6 +1338,23 @@ describe("issue dispositions, revisions, and relations", () => {
     expect(typeof triageIssueFromIndex).toBe("function");
     expect(typeof closeIssueFromIndex).toBe("function");
     expect(typeof linkIssueFromIndex).toBe("function");
+  });
+});
+
+describe("the disposition vocabulary is one authored tuple", () => {
+  test("open plus every terminal is the whole set, and obsolete is terminal exactly once", () => {
+    expect([...ISSUE_DISPOSITIONS]).toEqual(["open", ...TERMINAL_DISPOSITIONS]);
+    expect(TERMINAL_DISPOSITIONS.filter((value) => value === "obsolete")).toHaveLength(1);
+    // The published registry and both assert paths read the same tuple, so a new
+    // disposition is accepted the moment it is declared — and an invented one is
+    // refused by the derived maps rather than an independent list.
+    const references = ISSUE_PAYLOAD_SCHEMAS.ClosureEvidence.references;
+    expect(references.requiredWhen).toEqual(expect.arrayContaining(["resolved", "obsolete"]));
+    expect(references.minItems).toBe(1);
+    for (const disposition of TERMINAL_DISPOSITIONS) expect(() => assertTerminalDisposition(disposition)).not.toThrow();
+    expect(() => assertTerminalDisposition("gone" as never)).toThrow(
+      expect.objectContaining({ code: "issue.invalid-disposition", message: expect.stringContaining("obsolete") }),
+    );
   });
 });
 

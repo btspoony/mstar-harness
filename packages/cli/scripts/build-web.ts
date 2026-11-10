@@ -37,6 +37,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { generateIssueVocabulary } from "../../ui/scripts/generate-issue-vocabulary.js";
+
 import {
   CSS_CEILING,
   JS_CEILING,
@@ -61,6 +63,10 @@ const defaultOutPath = path.join(commandsRoot, "src", "dashboard", "assets.gener
 const outPath = process.argv[2] === undefined ? defaultOutPath : path.resolve(process.argv[2]);
 
 async function main(): Promise<void> {
+  // The UI's disposition vocabulary is generated from the engine tuple, and this
+  // browser bundle consumes it: regenerate before bundling so a host build can
+  // never inline a stale vocabulary the store would refuse.
+  generateIssueVocabulary();
   const shellHtml = readFileSync(path.join(webDir, "shell.html"), "utf8");
 
   // `Bun.build` resolves workspace dependencies (and their `react`) relative to the

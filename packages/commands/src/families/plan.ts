@@ -12,6 +12,7 @@ import {
   setArtifactStore,
   type ExecutionIdentity,
   type ExecutionToken,
+  TERMINAL_DISPOSITIONS,
   type PlanCoordinationOperation,
 } from "@mstar-harness/engine";
 import { readFileSync } from "node:fs";
@@ -82,7 +83,7 @@ const inputSchema = z.object({
   progress: progressPayloadSchema.optional(),
   entries: entriesPayloadSchema.optional(),
   issue: z.string().min(1).optional(),
-  disposition: z.enum(["resolved", "waived", "duplicate", "superseded"]).optional(),
+  disposition: z.enum(TERMINAL_DISPOSITIONS).optional(),
   evidence: evidencePayloadSchema.optional(),
   integrationBaseSha: z.string().min(1).optional(),
   integrationResultSha: z.string().min(1).optional(),

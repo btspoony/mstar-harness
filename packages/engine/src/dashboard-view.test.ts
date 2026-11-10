@@ -14,7 +14,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { MAX_DASHBOARD_SEARCH_LENGTH, dashboardFailure, dashboardFilters, readDashboardView } from "./dashboard-view.js";
 import { catalogRootDir, linkCatalogEntities, registerCatalogEntity } from "./catalog.js";
 import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
-import { captureIssue, getIssue } from "./issue.js";
+import { captureIssue, getIssue, ISSUE_DISPOSITIONS } from "./issue.js";
 import { addMilestone } from "./milestone-store.js";
 import { initializeStore, openStore } from "./store-db.js";
 import { queryDashboard, withStoreRead } from "./store-read.js";
@@ -96,6 +96,17 @@ describe("dashboardFilters refusals", () => {
     for (const view of ["issue-detail", "workflow-detail", "iteration-detail"] as const) {
       expect(() => dashboardFilters(view)).toThrow(new RegExp(`the ${view} route requires an id`));
     }
+  });
+
+  test("accepts every declared disposition and refuses an invented one", () => {
+    // The filter vocabulary IS the issue vocabulary: a host cannot offer a value
+    // this refuses, and this cannot silently drop one the store accepts.
+    for (const disposition of ISSUE_DISPOSITIONS) {
+      expect(dashboardFilters("issues", { disposition })).toEqual({ issue: { disposition } });
+    }
+    expect(() => dashboardFilters("issues", { disposition: "gone" })).toThrow(
+      /disposition must be one of .*obsolete/,
+    );
   });
 
   test("maps raw query parameters onto the engine's filter shape", () => {

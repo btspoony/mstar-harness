@@ -10,6 +10,7 @@
  *  - a fact the read could not determine is never rendered as `0` — the gate
  *    step is `null`-able and the plan bucket keeps `Blocked` separate.
  */
+import { ISSUE_DISPOSITION_VALUES } from "../issue-vocabulary.generated.ts";
 
 /**
  * The status tones of `DESIGN.md` § Status treatments, plus `accent`.
@@ -28,8 +29,15 @@ export type Tone = (typeof TONES)[number];
 export const SEVERITIES = ["critical", "high", "medium", "low", "nit"] as const;
 export type SeverityLiteral = (typeof SEVERITIES)[number];
 
-/** Issue disposition vocabulary; everything but `open` is terminal. */
-export const DISPOSITIONS = ["open", "resolved", "waived", "duplicate", "superseded"] as const;
+/**
+ * Issue disposition vocabulary; everything but `open` is terminal.
+ *
+ * Re-exported from the generated browser projection of the engine's own tuple
+ * (`scripts/generate-issue-vocabulary.ts`), so a host filter can never offer a
+ * disposition the store refuses or omit one it accepts. The UI package cannot
+ * import the engine by value (it would pull SQLite into both bundles).
+ */
+export const DISPOSITIONS = ISSUE_DISPOSITION_VALUES;
 export type DispositionLiteral = (typeof DISPOSITIONS)[number];
 
 /** Issue kinds, in the order the filter offers them. */
@@ -88,9 +96,9 @@ export function severityIsEmphasised(severity: string): boolean {
 }
 
 /**
- * Disposition → tone. Green means *resolved only*: `waived`, `duplicate` and
- * `superseded` are terminal but they are not successes, so they get the terminal
- * tone and stay visually distinct.
+ * Disposition → tone. Green means *resolved only*: `waived`, `duplicate`,
+ * `superseded` and `obsolete` are terminal but they are not successes, so they
+ * get the terminal tone and stay visually distinct.
  */
 export function dispositionTone(disposition: string): Tone {
   if (disposition === "resolved") return "success";

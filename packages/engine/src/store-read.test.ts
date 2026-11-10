@@ -895,14 +895,17 @@ describe("issue flow", () => {
         importedOccurrence: true,
         importedTransition: true,
       });
+      // A removed subject retires like any other terminal disposition: it leaves
+      // `open` and joins the retired count without being reported as a fix.
+      seedIssue(db, { id: "I-000006", title: "obsolete", disposition: "obsolete", registeredAt: "2026-09-01", closedAt: "2026-09-04" });
       seedIssue(db, { id: "I-000005", title: "still open", registeredAt: "2026-09-04" });
     });
 
     const flow = await withStoreRead(context, queryIssueFlow());
     const last = flow.data.buckets[flow.data.buckets.length - 1] as IssueFlow["buckets"][number];
-    expect(flow.data.buckets.map((bucket) => bucket.retiredCumulative)).toEqual([0, 2, 4, 4]);
-    expect(last.retiredCumulative).toBe(4);
-    expect(last.capturedCumulative).toBe(5);
+    expect(flow.data.buckets.map((bucket) => bucket.retiredCumulative)).toEqual([0, 2, 4, 5]);
+    expect(last.retiredCumulative).toBe(5);
+    expect(last.capturedCumulative).toBe(6);
     expect(last.openDifference).toBe(1);
     expect(flow.data.currentOpen).toBe(1);
     expect(flow.data.unknownClosureDates).toBe(0);

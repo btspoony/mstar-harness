@@ -14,8 +14,20 @@ import { MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandl
 
 export type IssueKind = "bug" | "risk" | "improvement" | "request" | "decision" | "review-obligation";
 export type Severity = "critical" | "high" | "medium" | "low" | "nit";
-export type TerminalDisposition = "resolved" | "waived" | "duplicate" | "superseded";
-export type Disposition = "open" | TerminalDisposition;
+
+/**
+ * The one authored disposition vocabulary. Every union, validation map, SQL
+ * `in (...)` list and browser projection derives from these tuples; adding a
+ * disposition is one edit here, never a second copy in a consumer.
+ *
+ * `obsolete` is the honest terminal state for a confirmed issue whose subject
+ * (code, document, test) was removed: `resolved` would claim a fix that never
+ * happened and `waived` a risk acceptance nobody made.
+ */
+export const TERMINAL_DISPOSITIONS = ["resolved", "waived", "duplicate", "superseded", "obsolete"] as const;
+export type TerminalDisposition = (typeof TERMINAL_DISPOSITIONS)[number];
+export const ISSUE_DISPOSITIONS = ["open", ...TERMINAL_DISPOSITIONS] as const;
+export type Disposition = (typeof ISSUE_DISPOSITIONS)[number];
 
 const KINDS: Record<IssueKind, true> = {
   bug: true,
@@ -130,17 +142,18 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
     reason: { required: true, type: "string", description: "Reason for closure" },
     references: {
       required: false,
-      requiredWhen: ["resolved"],
+      requiredWhen: ["resolved", "obsolete"],
       type: "string[]",
-      description: "Acceptance evidence references; required for resolved closure",
+      description: "Acceptance (resolved) or removal (obsolete) evidence references; at least one nonblank",
       minItems: 1,
+      itemsNonblank: true,
     },
     scope: { required: false, requiredWhen: ["waived"], type: "string", description: "Named closure scope; required for waived closure" },
     canonicalIssueId: {
       required: false,
       requiredWhen: ["duplicate", "superseded"],
       type: "string",
-      description: "Canonical issue for duplicate/superseded; required for those dispositions",
+      description: "Canonical issue for duplicate/superseded; required for those dispositions and absent for obsolete",
     },
     alignmentRef: {
       required: false,
@@ -456,13 +469,12 @@ export function assertIssueLinkVocabulary(link: IssueLink): void {
 
 
 
-const DISPOSITIONS: Record<Disposition, true> = {
-  open: true,
-  resolved: true,
-  waived: true,
-  duplicate: true,
-  superseded: true,
-};
+/** A lookup map for one declared vocabulary tuple — the only way one is built. */
+export function vocabularyMap<const T extends string>(values: readonly T[]): Record<T, true> {
+  return Object.fromEntries(values.map((value) => [value, true])) as Record<T, true>;
+}
+
+const DISPOSITIONS: Record<Disposition, true> = vocabularyMap(ISSUE_DISPOSITIONS);
 const RELATIONS: Record<"related" | "blocks" | "duplicate-of" | "superseded-by", true> = {
   related: true,
   blocks: true,
@@ -1416,17 +1428,12 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
   }
 }
 
-const TERMINAL: Record<TerminalDisposition, true> = {
-  resolved: true,
-  waived: true,
-  duplicate: true,
-  superseded: true,
-};
+const TERMINAL: Record<TerminalDisposition, true> = vocabularyMap(TERMINAL_DISPOSITIONS);
 
 /** The terminal disposition vocabulary, validated once for both transports. */
 export function assertTerminalDisposition(disposition: TerminalDisposition): void {
   if (!Object.hasOwn(TERMINAL, disposition)) {
-    throw new IssueError("issue.invalid-disposition", "Terminal dispositions are exactly resolved|waived|duplicate|superseded");
+    throw new IssueError("issue.invalid-disposition", `Terminal dispositions are exactly ${TERMINAL_DISPOSITIONS.join("|")}`);
   }
 }
 
@@ -1559,11 +1566,16 @@ function requireExpectedRevision(mutation: MutationContext, current: number): vo
  * `resolved` requires both verification `references` and the acceptance
  * authority in `alignmentRef`, keeping QA-gate-backed closure distinguishable
  * in append-only history from a closure without acceptance evidence.
+ *
+ * `obsolete` is the same evidence discipline with no acceptance claim: at least
+ * one removal reference, a nonblank reason, and no canonical issue — the
+ * subject was removed, not replaced by another tracked issue. Anything else
+ * would smuggle a `resolved` or `duplicate` claim into a retirement.
  */
 export function assertClosureAuthority(disposition: TerminalDisposition, evidence: ClosureEvidence): void {
   requireNonblank("reason", evidence.reason);
   if (disposition === "resolved") {
-    if (!evidence.references || evidence.references.length === 0) {
+    if (!hasReference(evidence.references)) {
       throw new IssueError("issue.invalid-disposition", "resolved requires acceptance evidence in references");
     }
     if (!evidence.alignmentRef?.trim()) {
@@ -1583,9 +1595,46 @@ export function assertClosureAuthority(disposition: TerminalDisposition, evidenc
     }
     return;
   }
+  if (disposition === "obsolete") {
+    // Any supplied canonical id — including null and "" — is a claim this
+    // disposition cannot carry: the subject is gone, not pointing elsewhere.
+    if (evidence.canonicalIssueId !== undefined) {
+      throw obsoleteRefusal(
+        "An obsolete closure takes no canonicalIssueId: the subject was removed, not replaced by a tracked issue. Omit the field.",
+      );
+    }
+    if (!hasReference(evidence.references)) {
+      throw obsoleteRefusal("obsolete requires removal evidence in references");
+    }
+    return;
+  }
   if (!evidence.canonicalIssueId?.trim()) {
     throw new IssueError("issue.invalid-disposition", `${disposition} requires an existing canonical/replacement issue`);
   }
+}
+
+/** At least one reference that is a real, nonblank string. */
+function hasReference(references: unknown): boolean {
+  return (
+    Array.isArray(references) &&
+    references.some((reference) => typeof reference === "string" && reference.trim() !== "")
+  );
+}
+
+/**
+ * The `obsolete` refusal names the exact command that satisfies it, because the
+ * missing fact is two payload members at once — the operator cannot guess both
+ * from a message that only says "evidence required".
+ */
+function obsoleteRefusal(message: string): IssueError {
+  return refusalWithDetails("issue.invalid-disposition", `${message}; nothing was changed.`, {
+    disposition: "obsolete",
+    required: ["reason", "references"],
+    recovery:
+      "Run `mstar issue close --id <id> --disposition obsolete --file <closure-evidence.json> --actor project-manager --expect <revision>` " +
+      "with a nonblank reason and at least one removal reference in references: the traceable removal commit for the named subject plus " +
+      "the check that its symbol/path has no replacement caller at the execution HEAD.",
+  });
 }
 
 function linkedPlanTargets(db: StoreDb, issueId: string): string[] {
@@ -1887,7 +1936,7 @@ export function moveIssueOn(
   }
   const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
   if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 13) {
-    throw moveRefusal("issue.schema-outdated", 'Project moves require schema 13; run "mstar store upgrade --operator <name>" first.', {
+    throw refusalWithDetails("issue.schema-outdated", 'Project moves require schema 13; run "mstar store upgrade --operator <name>" first.', {
       recovery: 'Run `mstar store upgrade --operator <name>` against the selected harness, then rerun the same move.',
     });
   }
@@ -1910,7 +1959,7 @@ export function moveIssueOn(
     | undefined;
   if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
   if (readMeta(db).revision !== mutation.expectedStoreRevision) {
-    throw moveRefusal(
+    throw refusalWithDetails(
       "milestone.revision-conflict",
       `expectedStoreRevision ${mutation.expectedStoreRevision} does not match the current store revision; nothing was changed.`,
       {
@@ -1921,7 +1970,7 @@ export function moveIssueOn(
   }
   requireExpectedRevision(mutation, issue.revision);
   if (!db.prepare("select 1 as ok from catalog_entities where kind = 'project' and id = ?").get(projectId)) {
-    throw moveRefusal("issue.not-found", `Project ${projectId} is not a registered catalog project; nothing was changed.`, {
+    throw refusalWithDetails("issue.not-found", `Project ${projectId} is not a registered catalog project; nothing was changed.`, {
       projectId,
       recovery: `Register the target project with \`mstar catalog register --kind project --id <project-id> --title <title> --root-kind projects --path projects/<project-id> --actor project-manager --operation-id <operation-id>\` (run \`mstar catalog list --kind project\` to read the registered ids), then read the fresh \`storeRevision\` from \`mstar issue list --project <project-id>\` and rerun \`mstar issue move --id ${issueId} --payload '{"projectId":"<target>","reason":"<text>"}' --expect ${issue.revision} --expect-store <current-store-revision> --actor project-manager\`.`,
     });
@@ -1950,7 +1999,7 @@ export function moveIssueOn(
     .prepare("select source_identity, root_cause_key, acceptance_key from occurrences where issue_id = ? order by id asc limit 1")
     .get(issueId) as { source_identity: string; root_cause_key: string; acceptance_key: string } | undefined;
   if (!occurrence) {
-    throw moveRefusal(
+    throw refusalWithDetails(
       "issue.ambiguous-identity",
       `Issue ${issueId} has no recorded occurrence identity, so its project-scoped identity cannot be recomputed; nothing was changed.`,
       {
@@ -1961,7 +2010,7 @@ export function moveIssueOn(
   const identityKey = computeIdentityKey(projectId, occurrence.source_identity, occurrence.root_cause_key, occurrence.acceptance_key);
   const collision = db.prepare("select id from issues where identity_key = ?").get(identityKey) as { id: string } | undefined;
   if (collision) {
-    throw moveRefusal(
+    throw refusalWithDetails(
       "issue.ambiguous-identity",
       `Moving ${issueId} to ${projectId} would reuse the identity held by issue ${collision.id}; nothing was changed.`,
       {
@@ -2004,7 +2053,8 @@ export function moveIssueOn(
   return receipt;
 }
 
-function moveRefusal(code: IssueErrorCode, message: string, details: Record<string, unknown>): IssueError {
+/** A typed refusal carrying structured `details` (recovery, field facts). */
+function refusalWithDetails(code: IssueErrorCode, message: string, details: Record<string, unknown>): IssueError {
   const error = new IssueError(code, message);
   error.details = details;
   return error;

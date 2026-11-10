@@ -19,9 +19,10 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bunx tsc --emitDeclarationOnly",
+    "build": "bun run generate:vocabulary && rm -rf dist && bunx tsc --emitDeclarationOnly",
+    "generate:vocabulary": "bun run scripts/generate-issue-vocabulary.ts",
     "test": "bun test",
-    "typecheck": "bunx tsc --noEmit",
+    "typecheck": "bun run generate:vocabulary && bunx tsc --noEmit",
     "check:classes": "bun run scripts/dead-classes.ts",
     "check:tones": "bun run scripts/tone-table.ts",
     "check:selectors": "bun run scripts/selector-diff.ts",
