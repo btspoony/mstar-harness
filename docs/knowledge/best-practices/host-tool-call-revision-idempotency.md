@@ -2,6 +2,7 @@
 title: Make host tool-call input revisions idempotent; carry identity in the command prefix
 module: omp host adapter / model-handoff extension
 date: 2026-09-26
+last_updated: 2026-11-10
 problem_type: best_practice
 category: best-practices
 severity: high
@@ -13,6 +14,8 @@ tags:
   - idempotency
   - session-identity
   - omp-compat
+  - fail-closed
+  - shell-prefix-recognition
 related:
   - architecture-patterns/host-engine-identity-association.md
 ---
@@ -21,54 +24,70 @@ related:
 
 ## Context
 
-The omp `model-handoff` extension revises every `bash` tool call of its session so
+The omp `model-handoff` extension revises every shell tool call of its session so
 a child `mstar plan bind` (plan/assignment form) inherits the host session id
 via `MSTAR_HOST_SESSION_ID` (see
 [host-engine-identity-association](../architecture-patterns/host-engine-identity-association.md)
-for why the channel exists). Two failures appeared in sequence:
+for why the channel exists), and a leaf (task/subagent) session also exports
+`MSTAR_LEAF_SEAT=1` so the CLI attests `leafSeat` and the engine's
+`coordination.leaf-seat` refusal fires on coordinator registration verbs. Two
+properties of the host shape the mechanism:
 
-1. **`env` field revision (v3.11.1–3.11.2)**: writing the identity into the
-   call's `env` input field broke on omp 18.3.0, which refuses any bash call
-   whose input carries `env` without a service `name`
-   (`ready and env require a service name.`) — every shell call of the session
-   failed before execution.
-2. **Command-prefix revision without a guard (#289 prototype)**: prepending
-   `export MSTAR_HOST_SESSION_ID='<id>'; ` to `input.command` works on 18.3.0,
-   but the host can re-fire the `tool_call` revision for the same call
-   (retry/replay paths). Each re-fire prepended the prefix again, producing
-   unbounded stacking — dozens of identical `export` statements before one
-   command.
+- **Its input schema is validated.** omp 18.3.0 refuses any bash call whose
+  input carries `env` without a service `name`
+  (`ready and env require a service name.`).
+- **It may re-fire the revision.** Retry and replay paths deliver the same tool
+  call to the `tool_call` hook again, carrying the already-revised input, so a
+  non-re-entrant prefix accumulates on the persisted command.
 
 ## Guidance
 
-1. **Treat every input revision as re-entrant.** A host may deliver the same
-   tool call to your revision hook more than once, and later deliveries can
-   carry the already-revised input. Guard on a stable marker of your own
-   revision (here: the command already contains `export MSTAR_HOST_SESSION_ID=`)
-   and return the input unchanged when it matches. Accepted tradeoff: a
-   caller-written export of the same variable is respected instead of
-   overwritten — convenience channels must not be trust boundaries.
-2. **Do not touch validated parameter surfaces.** Fields the host validates
-   against its own schema (omp 18.3.0's `env` requires a service `name`) are
-   closed to ad-hoc revisions. Carry the value through a surface the host does
-   not re-validate — the command string itself — so the child process
-   environment receives it without tripping host checks.
-3. **Gate revisions on the same tool-name set as every other shell
-   classifier.** The extension classifies coordinator shell calls against
+1. **Carry the value on a surface the host does not re-validate.** A validated
+   field is closed to ad-hoc revision; transport the value in the command string
+   itself, ahead of the caller's text, so the child process environment receives
+   it without tripping host checks.
+2. **Recognise only the region the producer writes.** A re-entrancy guard scans
+   the contiguous chain of leading exports and stops at the first statement that
+   is not one of them; a re-fire of an already-revised command then returns the
+   input unchanged. The producer is `LEADING_EXPORT_RE` plus `alreadyInjected` in
+   `packages/omp/src/extensions/model-handoff.ts`: one statement at a time, a
+   name outside the chain ends the scan, and a fixed-value marker additionally
+   requires the expected value. Accepted tradeoff: a caller-written export of the
+   session id is respected instead of overwritten — convenience channels must
+   not be trust boundaries.
+3. **Never recognise a marker by bare substring.** `command.includes(marker)`
+   also matches command text that merely *mentions* the marker (`echo
+   'export MSTAR_LEAF_SEAT='`, a `grep MSTAR_LEAF_SEAT=` argument), and the leaf
+   marker is fail-closed: dropping it lets a subagent register as the
+   coordinator. Idempotency must be bought positionally, never by mention.
+4. **Accept only the value forms the producer emits.** The recognised value is
+   either the single-quote helper's `'…'` form — `'\''` is its only interior
+   quote form, so a `; ` inside it stays literal — or a restricted bare word
+   (`[A-Za-z0-9_.:@%+,=/-]+`: no whitespace, no shell metacharacter). Every other
+   form fails the match and the marker is injected: `#` starts a comment and
+   `& | ; > <` break the statement, so an `export` that is commented out or
+   operator-terminated must not read as an already-injected prefix and suppress
+   the leaf marker; an unquoted `"`, backtick or `$(` is likewise not this hook's
+   text. A caller-written export in another shell form is left as written and the
+   marker is added — the hook only re-recognises its own output.
+5. **Gate revisions on the same tool-name set as every other shell classifier.**
+   The extension classifies coordinator shell calls against
    `SHELL_TOOL_NAMES = ["bash", "functions.bash"]`; an injection gate that
    checks only `=== "bash"` silently skips namespaced shells
-   (`functions.bash`) and diverges from the classifier's notion of a shell
-   call. Derive both gates from one list.
-4. **Pin every named guard path with a regression.** The multi-fire stacking
-   case (feed each revision output back in N times, assert exactly one
-   prefix), the caller-supplied-export skip, and the `functions.bash` variant
-   each caught or would have caught a real defect; behavior named in the plan
-   constraints but untested stayed unpinned until review forced it (F-001).
+   (`functions.bash`) and diverges from the classifier's notion of a shell call.
+   Derive both gates from one list.
+6. **Pin each guard path with a regression**
+   (`packages/omp/test/model-handoff-extension.test.ts`): replaying the revised
+   output three times leaves exactly one export per marker; a command that only
+   mentions a marker still receives the prefix; a quoted and a substituted value
+   are not read as statements; a comment or operator never suppresses the leaf
+   prefix; `functions.bash` injects once; a caller-supplied export keeps its
+   value.
 
 ## Consequences
 
 - The identity channel survives host re-fires and omp 18.x validation without
   touching coordinator authority (`mstar_coordinator` derives coordinator
   identity from host facts and never relies on this channel).
-- Revision cost stays bounded: one classifier call, one substring scan, one
-  shallow copy per call; no accumulation.
+- Revision cost stays bounded: one classifier call, one leading-chain scan of at
+  most the hook's two statements, one shallow copy per call; no accumulation.
