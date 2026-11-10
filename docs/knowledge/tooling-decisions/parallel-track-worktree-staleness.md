@@ -43,6 +43,4 @@ Three separate failures hit the same delivery (`<plan-id>`, four track worktrees
 
 All three failures are silent at the point they occur and expensive later: the primary-checkout write corrupts a tree other work depends on (and can be committed by an unrelated `git add -A`); the stale-base judgement spends a round on code that is already correct; the evidence-path refusal blocks the row's `Done` write at the end of a long delivery, when the operator is least willing to re-derive the layout. None of them is visible from "the tests passed in my worktree".
 
-## Source
-
-Delivery `<plan-id>` (workflow `wf-<plan-id>`). Incident evidence: `.tmp/incident-<plan-id>D-primary-write.diff` and the `progress.md` incident entry; the stale-base exchange is in the track D implementer transcript; the evidence-path refusal is reproduced by any `plan complete` with relative `qc.reports`. Related: `worktree-dependency-dist-isolation.md` (the same isolation gap, for `node_modules` and `dist`).
+The first failure needs only a relative `write`/`edit` path from a worktree shell to reproduce, and the third is reproduced by any `plan complete` with relative `qc.reports`. Related: `worktree-dependency-dist-isolation.md` (the same isolation gap, for `node_modules` and `dist`).

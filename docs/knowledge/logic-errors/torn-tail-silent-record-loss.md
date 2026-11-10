@@ -56,7 +56,7 @@ fsyncSync(fd);
 
 The leading LF is unconditional for three reasons the source states: the leaf is not private between `open` and `write` (a peer can create it or extend it with a partial record in that window), a boundary decided from the open alone would fuse this record to an unterminated line, and a boundary written into a leaf that already ended with LF — or a freshly created empty leaf — is an empty line, which readers skip. Note this is *not* the same repair as reading the last byte and appending a newline: that needs a read plus a stable tail, and it does not survive a peer writing between the read and the append.
 
-The size-gated compaction runs **after** the append, and an over-ceiling append runs its frame and compaction as one critical section under the store's own `BEGIN IMMEDIATE` write lock (`withWorkflowNotesMaintenanceLock`); no filesystem lockdir family participates.
+The size-gated compaction runs **after** the append, and an over-ceiling append runs its frame and compaction as one critical section under the store's own `BEGIN IMMEDIATE` write lock (`withWorkflowNotesMaintenanceLock`); no filesystem lockdir family participates. Retention and compaction bounds for that same ledger are in `architecture-patterns/append-only-ledger-bounds.md`.
 
 ## Why This Works
 
@@ -70,5 +70,3 @@ The invariant "a torn tail can never consume a subsequent accepted record" can o
 - Keep the two properties separate in tests: (a) an unparseable tail refuses rather than being silently dropped, and (b) a replay heals without duplicating an accepted id. The torn-tail case must fail pre-fix — a case that passes with the repair reverted proves nothing (`testing-patterns/load-bearing-regression-proof.md`).
 - Distinguish cut positions: a cut after a complete id is an advisory refusal with nothing durable moved; a cut *inside* the id lets the record land once with the fragment byte-identical.
 - Treat "the reader skips malformed lines" as a display-level guarantee, never as a durability guarantee — the pairing is what makes silent loss impossible.
-
-Related: `architecture-patterns/append-only-ledger-bounds.md` (retention/compaction bounds for the same ledger).

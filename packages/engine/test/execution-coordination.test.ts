@@ -1047,6 +1047,28 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
       .find((plan) => plan.plan.id === OWN_PLAN)?.plan.status).toBe("Done");
   }, 30000);
 
+  test("a stored completion carrying both acceptance and qa is refused as malformed", async () => {
+    const fixture = await realStandaloneFixture("dual-carrier-row");
+    const { context, sourceSha } = fixture;
+    await preparePlan(fixture, OWN_PLAN, "dual-carrier-source", { worktreePath: fixture.worktree, workingBranch: `feature/${OWN_PLAN}` });
+    await progressPlan(fixture, OWN_PLAN, "dual-carrier-progress", "InProgress");
+    await planCall(fixture, OWN_PLAN, "dual-carrier-complete", await planTokenOf(fixture, OWN_PLAN), {
+      kind: "complete", evidence: completionEvidence(context, sourceSha),
+    } as CoordinationOperation);
+    // Two acceptance members are a malformed record, never a merge: the legacy
+    // key is acknowledged only when it stands alone.
+    withRaw(context, (db) => {
+      const row = db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?").get(WORKFLOW_ID, OWN_PLAN) as { coordination_json: string };
+      const coordination = JSON.parse(row.coordination_json) as { completion: Record<string, unknown> };
+      coordination.completion.qa = coordination.completion.acceptance;
+      db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(coordination), WORKFLOW_ID, OWN_PLAN);
+    });
+    const refused = await refusalOf(() => readExecutionPlan(domainContext(context, fixture.coordinatorCaller), fixture.coordinator, OWN_PLAN));
+    expect(refused.code).toBe("store.corrupt");
+    expect(refused.message).toContain("coordination.row.completion-field");
+    expect(refused.message).toContain(".completion.acceptance must record passing acceptance evidence");
+  }, 30000);
+
   test("a completion submitted with only the retired qa member is refused, naming acceptance", async () => {
     const fixture = await realStandaloneFixture("qa-only-refused");
     const { context, sourceSha } = fixture;

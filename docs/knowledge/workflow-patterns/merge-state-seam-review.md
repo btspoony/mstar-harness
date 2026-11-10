@@ -92,7 +92,7 @@ Practical consequence for dispatch: a fix wave gets `file:line` plus the failing
 
 ## Why This Matters
 
-Composition defects are silent by construction: every slice's suite is green, every per-slice verdict is `Approve`, and no single artifact is wrong. The composite is the only place the contradiction exists, so without a merged-state round the plan QC gate starts from defects nobody has seen, and the defects that matter most — a protection bypass, an ownership guard with a key-shaped hole, a state machine that cannot reach a required transition — are exactly the ones a per-slice lens cannot reach. In the measured case, 8 of the 12 findings were Critical, i.e. the difference between "the plan looks done" and "the plan is safe".
+Composition defects are silent by construction: every slice's suite is green, every per-slice verdict is `Approve`, and no single artifact is wrong. The composite is the only place the contradiction exists, so without a merged-state round the plan QC gate starts from defects nobody has seen, and the defects that matter most — a protection bypass, an ownership guard with a key-shaped hole, a state machine that cannot reach a required transition — are exactly the ones a per-slice lens cannot reach. In the measured case, 8 of the 12 findings were Critical, i.e. the difference between "the plan looks done" and "the plan is safe". Related: `workflow-patterns/multi-agent-time-budgeting.md` (cross-plan gloss sweep over a shared SSOT file — the same "later plan invalidates an earlier surface" failure one level up); [provenance hygiene](provenance-hygiene-tracked-comments.md) covers the narrower local-reference leak class, and `skills/mstar-use-cli/references/plan-and-workflow.md` covers the current plan/workflow transport and store pinning. The conceptual vocabulary is root `CONCEPTS.md` under “Review seat layers (L1–L4)” and “Three-domain write model”; no new term is introduced.
 
 ## When to Apply
 
@@ -107,18 +107,3 @@ Composition defects are silent by construction: every slice's suite is green, ev
 - *Seam reviewed as one deliverable:* Task 1's merged engine diff (core + row verbs + switchover) reviewed against the frozen spec §B–§E as one contract, with the seam questions listed above as the stated scope.
 - *Defects found only at the seam:* CAS/authority widening on the snapshot writer; legacy-key ownership hole spanning coordination, status and the register helpers; handoff/return lease pairing; prepare accepting a row that still carries a lease; a lease transfer that no-ops; row binding without a lease; an already-integrated proof blind to a force-moved HEAD; register validation and conflict-code drift; object-identity lock membership; a handoff-evidence key kept mandatory on one side only.
 - *Ordering deviation recorded honestly:* tracks merged before per-plan QC so the composite could be reviewed; the deviation is recorded with its reason and with an explicit statement that it does not shorten the gates, instead of being left implicit.
-
-## Source
-
-Iteration `iter-<plan-id>`, plan `<plan-id>` (one plan task, three engine slices + a CLI task, two concurrent tracks). Seam-review evidence lives in the plan's SDD bundle: the merged-state review brief (`task-1-fix2-brief.md` — the finding list with `path:line` and violated contract), the fix report (`task-1-fix2-report.md`), and the consolidated gate summary (`review/qc-consolidated.md`). Related: `workflow-patterns/multi-agent-time-budgeting.md` (cross-plan gloss sweep over a shared SSOT file — the same "later plan invalidates an earlier surface" failure one level up).
-
-Additional local evidence for `iter-<plan-id>`:
-
-- Plan B QC consolidated（{SDD_DIR}/review/）: the dropped carry-over clauses, coverage-status invariant, and closure.
-- Plan C QC consolidated（{SDD_DIR}/review/）: independent evidence-rule discovery, exclusion contradiction, and fix acceptance.
-- Plan C task-1 L2 review（{SDD_DIR}/review/）: severity-contract mismatch and its targeted correction. Task-3 L2 review（{SDD_DIR}/review/） and task-4 L2 review（{SDD_DIR}/review/） show the bounded local reviews preceding the plan-level preserved-rule discovery.
-- Plan A QC consolidated（{SDD_DIR}/review/）: the executable field-contract counterexample.
-
-These are local process-evidence links; `{HARNESS_DIR}/` is ignored wholesale in this repository. The tracked audit contracts remain in `skills/mstar-audit/**`; this knowledge update is not a PR artifact. Finding identifiers stay in their review bundles rather than becoming vocabulary here.
-
-Related: [provenance hygiene](provenance-hygiene-tracked-comments.md) covers the narrower local-reference leak class; `skills/mstar-use-cli/references/plan-and-workflow.md` covers the current plan/workflow transport and store pinning. The conceptual vocabulary already exists in root `CONCEPTS.md` under “Review seat layers (L1–L4)” and “Three-domain write model”; no new term is introduced.
