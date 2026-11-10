@@ -6,6 +6,29 @@
 
 ## [Unreleased]
 
+## [4.4.1] - 2026-11-10
+
+### Documentation
+
+- **mstar-audit 外部制品审查：** 将 SlowMist Agent Security（MIT，v0.1.2）中的 skill/MCP/仓库/URL 审查透镜，以及 MCP Security Checklist 与 OpenClaw Security Practice Guide（均为 MIT）中的 MCP 共存与再审/完整性要点，蒸馏进 `skills/mstar-audit/references/agent-artifact-review.md`。发现项仍走既有格式与 `informational`…`critical` 锚点；链上 AML、社交分享审查、上游 REJECT 评级、「漏报优先于误报」、OpenClaw 夜间审计剧本，以及利用演示材料均不引入。
+- **ADR（proposed）：** 记录增量式 Guard 9–11 skill 语料优化与勘误策略——预算优先的 migrate→compress→raise、关闭三文件 Git NEVER allowlist、在不改 carrier 拼写的前提下修正 v4.4.0 后的席位/专题命名，并排定 Wave A–C（body→references 与触发契约收窄）（`docs/adr/proposed/process/2026-11-10-skill-corpus-optimization-errata.md`）。
+- **Skills Wave A 勘误：** 计划质量条中的活席位 `QC/QA` 改为 `QC/PM Acceptance`；知识文档中作为写入 skill 的 `mstar-compound` 改为 `mstar-knowledge`；三角色 Git NEVER 引用改写为 Guard 10 可识别的 `→ … § …` 指针并清空 `scripts/rule-duplication.allowlist.json`（`qa.md` / `qa_gate` 等 carrier 不变）。关闭 #699。
+- **Skills Wave B（body→references）：** 将 `mstar-branch-worktree` / `mstar-conventions` / `mstar-use-cli` / `mstar-knowledge` / `mstar-phase-gates` 中顶格的渐进披露块迁入新 `references/`（cleanup / L1 diagnostics / gitignore 跟踪 / task-family 索引 / maintain 流程 / playbook-vs-hotfix），**不**提高 Guard 9 上限；每个被改的 `SKILL.md` 保留 ≥10% 余量。叠在 Wave A 之上。关闭 #700。
+- **Skills Wave C（触发契约 + 路由）：** 收窄 `mstar-prose` / `mstar-pr-loop` / `mstar-design-system` / `mstar-knowledge` / `mstar-skill-authoring` 过长 `description`（症状/排除，不写 workflow 摘要）；在 `mstar-harness-core` 的 `@project-manager` 典型追加表写入单任务 1–3 skill 最小化规则。叠在 Wave B 之上。关闭 #701。
+
+### Harness
+
+- 新增 `mstar lint --type specs` 与 `--type adr`。specs 由 `lintSpecsTree` / `lintSpecsDoc` 校验：`{class}/` 位置、禁止 `-v<N>` 后缀与日期前缀、禁止历史目录、必填 `Scope` / `Current state` / `Invariants` / `Where it lives` / `Change obligations` 骨架、禁用 ADR 小节、README 索引链接与本地路径披露。ADR 树由 `lintAdrTree` 校验：四桶（`proposed` / `implemented` / `rejected` / `archived`）、class 成员、`Status` 与目录一致、archived 记录的 `Archived: YYYY-MM-DD — …` 行、必填/禁用小节、文件名形状与围栏闭合。
+- 将 `scripts/adr-check.ts` 改为 `lintAdrTree` 的薄壳，使仓库的 Guard 12 门禁与产品命令共享同一实现。
+- 在 `mstar-artifacts/references/knowledge-and-designs.md` 定义三层文档：knowledge 为可复用经验与方法论，specs 为随代码保持为真的当前状态，ADR 为单一决策及其真实备选与代价；补充 specs 骨架与准入、ADR 四态生命周期（含 archived 准入与冻结）、按层命名、退化规则（tracked 层不承载版本历史，历史在 Git 与 ADR）以及过程产物表。生命周期规则在此 PR 落地；本仓库自己的 `docs/adr` 合同与归档目录在堆叠 PR 中跟进。
+- 将 `mstar-conventions` 与 `mstar-knowledge` 的边界表述收窄为指针，并更新 `mstar-artifacts` 索引。
+- 新增 tracked `docs/specs/` 语料，描述项目当前架构（分层与数据流、store 作为状态权威、文档语料与边界），并在 `.mstarc` 声明 `specs_dir=docs/specs`。
+- 使本仓库的 ADR 合同与基础变更中定义的四态生命周期一致：`docs/adr/README.md` 现记录 `archived/` 桶、其准入、`Archived:` 行与冻结规则，归档 class 目录随树提交。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.4.1**。
+
 ## [4.4.0] - 2026-11-09
 
 ### Harness

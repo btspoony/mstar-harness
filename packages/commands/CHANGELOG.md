@@ -6,6 +6,19 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.4.1] - 2026-11-10
+
+### Harness
+
+- Added `mstar lint --type specs` and `--type adr`. Specs are checked by `lintSpecsTree` / `lintSpecsDoc`: `{class}/` location, no `-v<N>` suffix or date prefix, no history directory, the required `Scope` / `Current state` / `Invariants` / `Where it lives` / `Change obligations` skeleton, banned ADR sections, README index links and local-path disclosure. ADR trees are checked by `lintAdrTree`: four buckets (`proposed` / `implemented` / `rejected` / `archived`), class membership, `Status` agreeing with the directory, one `Archived: YYYY-MM-DD — …` line on archived records, required and banned sections, filename shape and fence closure.
+- Made `scripts/adr-check.ts` a thin adapter over `lintAdrTree`, so the repository's Guard 12 gate and the product command share one implementation.
+- Defined the three document layers in `mstar-artifacts/references/knowledge-and-designs.md`: knowledge = reusable experience and methodology, specs = the current state kept true to code, ADR = one decision with its real alternatives and cost. Added the spec skeleton and admission, the ADR four-state lifecycle with archived admission and freeze, per-layer naming, the retirement rule (tracked layers hold no version history; history lives in Git and ADRs), and the process-artifact table. The lifecycle rule lands here; the repository's own `docs/adr` contract and archive directories follow in the stacked PR.
+- Narrowed the boundary prose in `mstar-conventions` and `mstar-knowledge` to pointers and updated the `mstar-artifacts` index.
+
+- Version alignment with harness **4.4.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.4.1**.
+
 ## [4.4.0] - 2026-11-09
 
 ### Harness
