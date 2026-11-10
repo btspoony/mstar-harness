@@ -627,6 +627,96 @@ describe('the reload failure classification', () => {
       // Anything that is not the known unload keeps the stale header and must
       // be visible, not classified as benign.
       expect(lines).toEqual(['warn the linear-mcp row failed to reload: the headers expression threw'])
+      // The failure is reported without touching the row's enable bit.
+      expect(h.row.disabled).toBe(false)
+      expect(h.service.rowState()).toEqual({ rowEnabled: true, fiberPhase: 'live' })
+    } finally {
+      setLinearAuthLogger(restore)
+    }
+  })
+
+  it('contains a throwing logger on a failed reload', async () => {
+    const h = harness({ entry: credential() })
+    h.loader.entriesList = [
+      loaderRow('linear-mcp', {
+        uid: 9,
+        restart: async () => {
+          throw new Error('the headers expression threw')
+        },
+      }),
+    ]
+    const restore = setLinearAuthLogger(() => {
+      throw new Error('the logger threw')
+    })
+    try {
+      // `log()` is the guard: a throwing sink must not turn the reload's
+      // answer into a rejection.
+      expect(await h.service.reloadRow()).toBe(false)
+    } finally {
+      setLinearAuthLogger(restore)
+    }
+    expect(h.service.rowState()).toEqual({ rowEnabled: true, fiberPhase: 'live' })
+  })
+})
+
+/**
+ * The other half of `I-000953`: the service's log lines are the one place a
+ * credential could leave the file, so both producers run against a synthetic
+ * grant and every line is checked against the material that grant holds.
+ */
+describe('the credential log safety', () => {
+  it('writes no credential material into the refresh or reload lines', async () => {
+    const lines: string[] = []
+    const restore = setLinearAuthLogger((level, message) => lines.push(`${level} ${message}`))
+    try {
+      const grant = credential({
+        accessToken: tok('leak-access'),
+        refreshToken: ref('leak-refresh'),
+        clientId: 'client-leak',
+        expiresAt: START - 1_000,
+      })
+      const rotated = { accessToken: tok('leak-rotated'), refreshToken: ref('leak-rotated') }
+      const provider = providerFetch(
+        discoveryRoutes(() =>
+          Response.json({
+            access_token: rotated.accessToken,
+            refresh_token: rotated.refreshToken,
+            expires_in: 3600,
+            scope: 'read,issues:create',
+          }),
+        ),
+      )
+      const h = harness({ entry: grant, provider })
+      // The startup attempt is parked on discovery; this makes the reload it
+      // drives after writing the fresh grant fail, so both producers log.
+      h.loader.entriesList = [
+        loaderRow('linear-mcp', {
+          uid: 9,
+          restart: async () => {
+            throw new Error('the headers expression threw')
+          },
+        }),
+      ]
+      expect((await h.service.refreshIfDue()).kind).toBe('refreshed')
+      expect(lines.filter((line) => line.includes('linear credential refreshed'))).toHaveLength(1)
+      expect(lines.filter((line) => line.includes('failed to reload'))).toHaveLength(1)
+
+      // The forbidden set is structural: every string the credential file holds
+      // after the write, plus the rotation this attempt carried. A credential
+      // added to the file is covered without naming its field here.
+      const stored = JSON.parse(readFileSync(process.env.MSTAR_LINEAR_CREDENTIAL!, 'utf8')) as Record<string, unknown>
+      const forbidden = [
+        ...Object.values(stored).filter((value): value is string => typeof value === 'string' && value !== ''),
+        grant.accessToken,
+        grant.refreshToken!,
+        rotated.accessToken,
+        rotated.refreshToken,
+      ]
+      // The fresh grant is what the file holds: the assertion below is live.
+      expect(forbidden).toContain(rotated.accessToken)
+      for (const line of lines) {
+        for (const secret of forbidden) expect(line).not.toContain(secret)
+      }
     } finally {
       setLinearAuthLogger(restore)
     }
