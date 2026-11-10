@@ -152,8 +152,14 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
     canonicalIssueId: {
       required: false,
       requiredWhen: ["duplicate", "superseded"],
-      type: "string",
-      description: "Canonical issue for duplicate/superseded; required for those dispositions and absent for obsolete",
+      type: "string | null",
+      // The disposition rule for a supplied id is the ENGINE's (obsolete refuses
+      // any of them), so the transport must not shadow it with a generic
+      // `issue.invalid-payload` on null. Declaring null admissible is what lets
+      // `null` reach `assertClosureAuthority` and its named recovery; duplicate
+      // and superseded still refuse a blank id there.
+      nullable: true,
+      description: "Canonical issue for duplicate/superseded; required for those dispositions and refused for obsolete",
     },
     alignmentRef: {
       required: false,
@@ -400,7 +406,7 @@ export type ClosureEvidence = {
   reason: string;
   scope?: string;
   references: string[];
-  canonicalIssueId?: string;
+  canonicalIssueId?: string | null;
   alignmentRef?: string;
 };
 export type IssueReopen = { reason: string };
