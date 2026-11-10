@@ -25,7 +25,7 @@ QC/PM Acceptance 原始过程报告默认是 **ephemeral review bundle**，置�
 | QC 三审报告（**SDD 默认** `Execution mode: sdd`） | `qc1.md`、`qc2.md`、`qc3.md` |
 | QC 单席报告（**`inline` / hotfix 例外**） | `qc.md` |
 | QC 汇总结论（tri 模式） | `qc-consolidated.md` |
-| PM Acceptance report | `qa.md` (or an explicitly chosen same-directory basename; retained carrier, not a role) |
+| PM Acceptance report | `pm-acceptance.md` (or an explicitly chosen same-directory basename; named after its gate, not a seat) |
 | L2 task review 报告（**`Execution mode: sdd`，每个已完成 task**） | `../task-N-review.md` |
 | Implementer 报告（**`Execution mode: sdd`**） | `../task-N-report.md` |
 
@@ -57,7 +57,7 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
   - `Residual findings`: each open issue — id + short title + issue severity + store tracking location + owner/target + blocker-defer flag (`N/A — none open` when none)
 - Main plan `## PM Acceptance Summary`:
   - acceptance owner: primary project-manager; fixed carrier `QA gate: pm-acceptance`
-  - compact per-AC evidence/result/applicability, coverage/gaps and exact report pointer (`qa.md` → `{SDD_DIR}/review/qa.md`)
+  - compact per-AC evidence/result/applicability, coverage/gaps and exact report pointer (`pm-acceptance.md` → `{SDD_DIR}/review/pm-acceptance.md`)
   - evidence reused versus newly executed bounded checks, with provenance preserved
   - related issue dispositions and verification evidence
 - `{HARNESS_DIR}/store.db` linked issues: open-item machine SSOT (`mstar issue list` / `mstar issue show`); `{PROJECT_DIR}/<id>/residuals.json` is migration history only.
