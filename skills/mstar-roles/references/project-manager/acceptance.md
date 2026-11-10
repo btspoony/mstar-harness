@@ -48,7 +48,7 @@ Write `{SDD_DIR}/review/pm-acceptance.md` by default, or an explicitly chosen sa
 
 ## Scope
 - Acceptance owner: project-manager
-- QA gate: pm-acceptance
+- Acceptance gate: pm-acceptance
 - plan_id: <plan-id>
 - Review range / Diff basis: <locked scope>
 - Working branch (verified): <branch>
@@ -69,8 +69,8 @@ Map every required AC honestly. `report-only` is a delivery kind, not an accepta
 
 ## Public completion and recovery
 
-The existing completion carrier stays `qa: {gate: "pm-acceptance", decision: "pass", report: "<real report path>"}`. The `qa` spelling is wire/storage history, not role dispatch. Missing report or non-pass evidence cannot complete; supply the real passing report after closing the named evidence gap, then retry the same completion entry. An optional `qaGate` is a checked fixed-value constraint (`pm-acceptance`), never an owner selector; no QA mode is used.
+Completion records the `acceptance: {gate: "pm-acceptance", decision: "pass", report: "<real report path>"}` carrier. A completion stored before the rename carries `qa` in the same position and reads through one read-side acknowledgement; writes emit only `acceptance`, and there is no alias. Missing report or non-pass evidence cannot complete; supply the real passing report after closing the named evidence gap, then retry the same completion entry. The optional `acceptanceGate` prepare input (`--acceptance-gate`) is a checked fixed-value constraint (`pm-acceptance`), never an owner selector; no separate acceptance mode is used.
 
-New/default prepare uses PM Acceptance. Retired `mandatory` submissions must retry with `pm-acceptance`. For an existing active row still configured as `mandatory`, use ordinary `mstar plan prepare --workflow <workflow-id> --plan <plan-id> --qa-gate pm-acceptance`, then resubmit PM acceptance evidence through ordinary completion. Prepare preserves progress, issues, source metadata and unrelated rows; never repair SQL or rewrite completed history. Completed historical QA reports/configurations remain truthful readable evidence, not a live alternative route.
+New/default prepare uses PM Acceptance. Retired `mandatory` submissions must retry with `pm-acceptance`. For an existing active row still configured as `mandatory`, use ordinary `mstar plan prepare --workflow <workflow-id> --plan <plan-id> --acceptance-gate pm-acceptance`, then resubmit PM acceptance evidence through ordinary completion. Prepare preserves progress, issues, source metadata and unrelated rows; never repair SQL or rewrite completed history. Completed historical QA reports/configurations remain truthful readable evidence, not a live alternative route.
 
 An exact retry of an already committed historical `mandatory` completion may replay its original receipt with the same operation ID and payload; it creates no new acceptance and does not change the report's authorship. New `mandatory` completions remain refused.

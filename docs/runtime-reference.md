@@ -48,7 +48,7 @@ Where the rules live:
 
 PM Acceptance applies to features of every size, bug fixes, UI/residual-bearing work and report-only deliverables. It maps each required AC to evidence/result/applicability; QC approval is not a runtime log. PM may directly run only a named short bounded acceptance check; implementation, test authoring, long suites and ops stay with specialists. The procedure and report are owned by [`acceptance.md`](../skills/mstar-roles/references/project-manager/acceptance.md), not a dispatched role.
 
-Completion retains `qa: {gate: "pm-acceptance", decision: "pass", report: "<real report>"}`; optional `qaGate` is fixed-value, not a selector. An active historical `mandatory` row uses ordinary `plan prepare` for the same workflow/plan with `--qa-gate pm-acceptance`, then retries completion with PM evidence. This preserves progress, issues, source metadata, unrelated rows and truthful completed QA records. Missing reports or non-pass evidence require closing the named gap before retry; never hand-edit the store.
+Completion records `acceptance: {gate: "pm-acceptance", decision: "pass", report: "<real report>"}`; optional `acceptanceGate` is fixed-value, not a selector, and a stored completion written before the rename carries `qa`. An active historical `mandatory` row uses ordinary `plan prepare` for the same workflow/plan with `--acceptance-gate pm-acceptance`, then retries completion with PM evidence. This preserves progress, issues, source metadata, unrelated rows and truthful completed acceptance records. Missing reports or non-pass evidence require closing the named gap before retry; never hand-edit the store.
 
 Topic skills, grouped by what they own:
 

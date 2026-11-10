@@ -95,5 +95,5 @@ Document override as `Dev owner tie-break: single id — <reason>`.
 - `Task category` matches route
 - `Dev routing` matches task board ownership
 - Parallel intent and branch/worktree policy align
-- Acceptance is PM-owned for every scope → `references/project-manager/acceptance.md`; `QA gate: pm-acceptance` is a fixed-value carrier.
+- Acceptance is PM-owned for every scope → `references/project-manager/acceptance.md`; `Acceptance gate: pm-acceptance` is the fixed gate value.
 - UI-visible changes require relevant unit/component evidence mapped to ACs; disclose unverified real-environment behavior separately, never dispatch another acceptance role or add an automatic E2E gate.

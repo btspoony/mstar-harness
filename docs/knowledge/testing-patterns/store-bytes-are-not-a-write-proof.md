@@ -72,6 +72,4 @@ A byte-as-proof assertion fails in both directions of credibility. Intermittentl
 
 `readExecutionState(context)` before and after the refusal, asserting the CAS token and epoch are identical, plus a non-WAL control (the `VACUUM INTO` image) whose bytes are legitimately compared; the populated fixture then ran stable across repeated executions.
 
-## Source
-
-Iteration `iter-<plan-id>`, plan `<plan-id>`. Evidence: the plan QC consolidated and the L4 QA report in `{SDD_DIR}/review/` for that plan (the flakiness measurement, the assertion rewrite, and the retained non-WAL byte comparisons), and `{SDD_DIR}/review/qa.md` for the repeated stability runs. Related: `testing-patterns/load-bearing-regression-proof.md`, `testing-patterns/mechanical-check-corpus-honesty.md`.
+Related: `testing-patterns/load-bearing-regression-proof.md`, `testing-patterns/mechanical-check-corpus-honesty.md`.

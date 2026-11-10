@@ -56,7 +56,7 @@ fsyncSync(fd);
 
 The leading LF is unconditional for three reasons the source states: the leaf is not private between `open` and `write` (a peer can create it or extend it with a partial record in that window), a boundary decided from the open alone would fuse this record to an unterminated line, and a boundary written into a leaf that already ended with LF — or a freshly created empty leaf — is an empty line, which readers skip. Note this is *not* the same repair as reading the last byte and appending a newline: that needs a read plus a stable tail, and it does not survive a peer writing between the read and the append.
 
-The size-gated compaction runs **after** the append, and an over-ceiling append runs its frame and compaction as one critical section under the store's own `BEGIN IMMEDIATE` write lock (`withWorkflowNotesMaintenanceLock`) — the retired filesystem lockdir family is gone (commit `df1d02da`).
+The size-gated compaction runs **after** the append, and an over-ceiling append runs its frame and compaction as one critical section under the store's own `BEGIN IMMEDIATE` write lock (`withWorkflowNotesMaintenanceLock`); no filesystem lockdir family participates.
 
 ## Why This Works
 
@@ -71,6 +71,4 @@ The invariant "a torn tail can never consume a subsequent accepted record" can o
 - Distinguish cut positions: a cut after a complete id is an advisory refusal with nothing durable moved; a cut *inside* the id lets the record land once with the fragment byte-identical.
 - Treat "the reader skips malformed lines" as a display-level guarantee, never as a durability guarantee — the pairing is what makes silent loss impossible.
 
-## Source
-
-Iteration `iter-<plan-id>`, plan `<plan-id>`: the defect surfaced during the plan QC revalidation of the DSh ledger track and was fixed on the plan branch (commit `15e00cfc`), with the regression exercised by the DSh `agent-flow-workflow` suite (`packages/dsh/tests/agent-flow-workflow.spec.ts`). Evidence: `{SDD_DIR}/review/qc.md` (the new-defect disposition) and `{SDD_DIR}/review/qc2.md` (the dedicated torn-tail assessment and the two cut-position fixtures), plus `{SDD_DIR}/review/qa.md` for the closed defect-fix focus. The repair outlived the JSONL file: the durable form today is the unconditional leading LF in `packages/engine/src/execution-ledgers.ts` `commitLedgerFrame`. Related: `architecture-patterns/append-only-ledger-bounds.md` (the retention/compaction rules over the same file), `architecture-patterns/dsh-agent-flow-ledger.md` (the ledger's write/read contract — now SQLite).
+Related: `architecture-patterns/append-only-ledger-bounds.md` (retention/compaction bounds for the same ledger).

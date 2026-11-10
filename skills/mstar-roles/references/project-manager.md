@@ -93,7 +93,7 @@ Detailed conflict priority and dev allocation:
 - Code-development plans with **`Execution mode: sdd`** (default for multi-task): **mandatory plan QC tri-review** (`{SDD_DIR}/review/qc1.md`…`qc3.md` + consolidated) after all task reviewers complete.
 - **`Execution mode: inline`**: hotfix single-seat QC (`{SDD_DIR}/review/qc.md`) or explicit skip rules unchanged.
 - Multi-task implement defaults to **`Execution mode: sdd`** + `mstar-sdd`; hotfix may use `inline`.
-- All acceptance uses PM Acceptance (`QA gate: pm-acceptance` is the retained fixed-value carrier); no risk tier selects a dispatched acceptance role.
+- All acceptance uses PM Acceptance (`Acceptance gate: pm-acceptance` is the fixed gate value); no risk tier selects a dispatched acceptance role.
 - Report-only work may skip QC tri-review only when no implementation/test/config artifact is committed; acceptance under the registered completion policy remains required.
 - Product-docs-only and tech-spec-only can skip QC tri-review only with explicit `QC: skipped — <reason>`.
 - Plan Done sign-off belongs only to the primary PM; its direct `mstar plan complete` requires independent QC, acceptance and declared-route proof. Leaf agents never write Done.
@@ -252,7 +252,7 @@ Minimum invariants:
 - User conversation follows user language.
 - PM Assignment body can be Chinese by default.
 - Technical artifacts/reports/code/config/commit messages default to English unless user asks otherwise.
-- Keep **all role references** as plain role id (no `@`) in Assignment body — including `Execute as`, routing narrative, `QA gate`, and anti-pattern examples. On an invoke-based host the Assignment role reaches that host's role-binding field (field name and mention hygiene → the active `mstar-host` reference).
+- Keep **all role references** as plain role id (no `@`) in Assignment body — including `Execute as`, routing narrative, `Acceptance gate`, and anti-pattern examples. On an invoke-based host the Assignment role reaches that host's role-binding field (field name and mention hygiene → the active `mstar-host` reference).
 
 ---
 

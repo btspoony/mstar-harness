@@ -23,7 +23,7 @@ The same coordinator owns all retained plan verbs:
 ```text
 mstar plan bind [--execution] --workflow <id> (--coordinator | --resume-ref <ref>) [--expect <token>] [--operation <id>] [--harness <path>] [--session-id <id>]
 mstar plan show --plan <id> [--session-ref <ref>] [--workflow <id>] [--harness <path>] [--session-id <id>]
-mstar plan prepare --plan <id> [--worktree-path <absolute-path>] [--working-branch <branch>] [--qa-gate pm-acceptance] [--findings-cleanup zero-residual|allow-residual]
+mstar plan prepare --plan <id> [--worktree-path <absolute-path>] [--working-branch <branch>] [--acceptance-gate pm-acceptance] [--findings-cleanup zero-residual|allow-residual]
 mstar plan progress --plan <id> (--progress <json> | --file <json>)
 mstar plan issue-add --plan <id> (--entries <json-array> | --file <json>)
 mstar plan issue-close --plan <id> --issue <id> --disposition resolved|waived|duplicate|superseded (--evidence <json> | --file <json>) --expect-issue <revision>
@@ -34,7 +34,7 @@ Mutation lines also accept their applicable transport context described above, i
 
 `show` needs no preliminary bind when the acquired caller already has a live coordinator binding. `prepare` is revisable configuration and source metadata, not admission sealing: acceptance defaults to pm-acceptance, cleanup to allow-residual; an existing valid source/default configuration needs no ceremonial prepare record. Changes while InProgress/InReview do not reset status or seal plan/Assignment bytes. A missing or corrected source checkout/branch uses ordinary prepare, validated against actual Git. `progress` records start/review/block states; Done is complete-only.
 
-Acceptance procedure and historical evidence duties → `mstar-roles/references/project-manager/acceptance.md`. The optional `qaGate` / `--qa-gate` is a fixed-value constraint, never a route selector. Retired `mandatory` input retries with `pm-acceptance`. An existing active row still configured as `mandatory` uses ordinary `plan prepare` for the same workflow/plan with `--qa-gate pm-acceptance`, then retries completion with PM evidence; progress, issues, source metadata and unrelated rows remain intact. Completed historical QA records are not rewritten.
+Acceptance procedure and historical evidence duties → `mstar-roles/references/project-manager/acceptance.md`. The optional `acceptanceGate` / `--acceptance-gate` is a fixed-value constraint, never a route selector. Retired `mandatory` input retries with `pm-acceptance`. An existing active row still configured as `mandatory` uses ordinary `plan prepare` for the same workflow/plan with `--acceptance-gate pm-acceptance`, then retries completion with PM evidence; progress, issues, source metadata and unrelated rows remain intact. Completed historical acceptance records keep their stored `qa` member and are not rewritten.
 
 ## Direct completion
 
@@ -46,7 +46,7 @@ Supply one complete evidence document:
   "review_base": "<optional review base SHA>",
   "review_head": "<optional checked reviewed head SHA>",
   "qc": {"decision": "Approve", "reports": ["<absolute report path>"], "consolidated": "<absolute summary path>"},
-  "qa": {"gate": "pm-acceptance", "decision": "pass", "report": "<absolute PM acceptance report path>"}
+  "acceptance": {"gate": "pm-acceptance", "decision": "pass", "report": "<absolute PM acceptance report path>"}
 }
 ```
 

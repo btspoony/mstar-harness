@@ -63,7 +63,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 
 **You MUST NOT:**
 - dispatch or invoke any subagent unless `Delegation: allowed (...)` appears below
-- treat plain `role-id` mentions, `Handoff`, `QA gate`, routing tables, or multi-track prose as invoke commands
+- treat plain `role-id` mentions, `Handoff`, `Acceptance gate`, routing tables, or multi-track prose as invoke commands
 - invoke a subagent whose `subagent_type` matches your own `Execute as` role id (recursive dispatch)
 - expand beyond owned files or named checks; restart whole-repository exploration, review or tests
 - repeat settled analysis or add checks after the acceptance criteria are evidenced
@@ -101,8 +101,8 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Write domain**: `control` | `work` (absent = `work`) — `control` = writes only under the control root's gitignored process targets (plans/assignments/sdd/iterations/workflows/projects/reviews/`store.db`), may set `Working branch` to the control checkout's currently checked-out branch (e.g. `main` on a default-main repo — that checked-out branch, never a literal `main`, is what the engine compares; all three branch forms stay valid, including `Branch policy: direct on <branch> — <reason>`), and is exempt from default-branch protection; the engine verifies worktree = control root, branch = its checked-out branch, and every `Control write paths` target Git-ignored and inside the control root; the shared host dispatch gate (OpenCode v2 / dsh / omp hard enforcement) runs the same control-write validation, so a declared field cannot bypass a host hard gate, and an unverifiable control root keeps the dispatch refused with its recovery (`mstar-branch-worktree` § 控制域写入)
 **Control write paths**: <required on `Write domain: control`; comma list of the actual process targets this Assignment writes, absolute or resolved against `Worktree path` — each must be Git-ignored and inside the control root; a repo ignoring only `.mstar/plans/` passes for a target under `plans/`, a tracked target like `.mstar/specs/…` is refused. Entries are probed by shape: a trailing `/` declares a directory explicitly (Git directory rules such as `!.mstar/notes/` apply); any other entry is verified under BOTH file and directory ignore rules and must be ignored in both — if either shape would be committable it is refused as `dispatch.control-write.target-committable`, because a file-path-only probe approves a location whose directory contents are still committed (`.mstar/notes` under `.mstar/**` + `!.mstar/notes/` + `!.mstar/notes/**`); `.mstar/plans/run.md` passes under `.mstar/**`>
 **Main worktree branch**: <recorded residency branch of the primary checkout (main worktree), from the main plan header — passed unchanged; never a lifecycle-owned branch>
-**QA gate**: pm-acceptance — retained fixed-value carrier; procedure → `references/project-manager/acceptance.md`
-**QA gate reason**: <scope/evidence rationale, not a risk-tier selector>
+**Acceptance gate**: pm-acceptance — fixed gate value; procedure → `references/project-manager/acceptance.md`
+**Acceptance gate reason**: <scope/evidence rationale, not a risk-tier selector>
 **Findings cleanup**: zero-residual | allow-residual — mirror effective revisable coordinator configuration; default allow-residual, zero-residual explicit opt-in. No Assignment seal or second mode authority.
 **Why this agent**: <role-fit>
 **PM Task Board coverage**: <task ids>
