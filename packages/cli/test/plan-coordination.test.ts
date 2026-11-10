@@ -57,7 +57,7 @@ async function bind(f: Fixture, who = identity()): Promise<Result> {
     "--operation", `bind-${who.sessionId}`, "--harness", f.harness], f, who);
 }
 function prepareArgs(f: Fixture, id: string, path: string, branch: string, expectToken: string, op: string): string[] {
-  return ["plan", "prepare", "--plan", id, "--worktree-path", path, "--working-branch", branch, "--qa-gate", "pm-acceptance",
+  return ["plan", "prepare", "--plan", id, "--worktree-path", path, "--working-branch", branch, "--acceptance-gate", "pm-acceptance",
     "--findings-cleanup", "allow-residual", "--expect", expectToken, "--operation", op, "--harness", f.harness];
 }
 function issuePayload(key: string): object { return { projectId: "proj-coordination", title: `Finding ${key}`, kind: "bug", severity: "high",

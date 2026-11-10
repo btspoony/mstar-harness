@@ -148,7 +148,7 @@ interface Fixture {
   sourceSha: string;
   qcReport: string;
   qcConsolidated: string;
-  qaReport: string;
+  acceptanceReport: string;
 }
 
 function coordinatorIdentity(): ExecutionIdentity {
@@ -194,11 +194,11 @@ async function activeFixture(label: string): Promise<Fixture> {
   const sdd = join(harness, "sdd", PLAN_ID);
   const qcReport = join(sdd, "review", "qc1.md");
   const qcConsolidated = join(sdd, "review", "qc.md");
-  const qaReport = join(sdd, "qa.md");
+  const acceptanceReport = join(sdd, "acceptance.md");
   writeText(qcReport, "# QC 1\ndecision: Approve\n");
   writeText(qcConsolidated, "# QC consolidated\ndecision: Approve\n");
-  writeText(qaReport, "# QA\nverdict: pass\n");
-  return { root, harness, context, worktree, baseSha, sourceSha, qcReport, qcConsolidated, qaReport };
+  writeText(acceptanceReport, "# PM acceptance\nverdict: pass\n");
+  return { root, harness, context, worktree, baseSha, sourceSha, qcReport, qcConsolidated, acceptanceReport };
 }
 
 /** `register → bind`: the ACTIVE producer chain the close consumes. */
@@ -245,7 +245,7 @@ async function driveToDone(fixture: Fixture): Promise<void> {
     "--plan", PLAN_ID,
     "--worktree-path", fixture.worktree,
     "--working-branch", "feature/close",
-    "--qa-gate", "pm-acceptance",
+    "--acceptance-gate", "pm-acceptance",
     "--findings-cleanup", "allow-residual",
     "--harness", fixture.harness,
   ], fixture.root, identityEnv());
@@ -264,7 +264,7 @@ async function driveToDone(fixture: Fixture): Promise<void> {
     review_base: fixture.baseSha,
     review_head: fixture.sourceSha,
     qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-    qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
+    acceptance: { gate: "pm-acceptance", decision: "pass", report: fixture.acceptanceReport },
   });
   const completed = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
   if (completed.exitCode !== 0) throw new Error(`plan complete failed: ${completed.stdout}${completed.stderr}`);
@@ -497,7 +497,7 @@ describe("mstar status workflow-close — the report-only row reaches Done witho
     const completion = join(fixture.root, "completion-report-only.json");
     writeJson(completion, {
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
+      acceptance: { gate: "pm-acceptance", decision: "pass", report: fixture.acceptanceReport },
     });
 
     // No fulfilment record is written: the registered policy completes the row
@@ -522,7 +522,7 @@ test("historical mandatory completion replays only its exact receipt", async () 
 
   const evidence = {
     qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-    qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+    acceptance: { gate: "mandatory", decision: "pass", report: fixture.acceptanceReport },
   };
   const args = ["plan", "complete", "--plan", PLAN_ID, "--harness", fixture.harness, "--operation", "legacy-complete"];
   const submit = (value: typeof evidence, operationArgs = args) =>
@@ -531,7 +531,7 @@ test("historical mandatory completion replays only its exact receipt", async () 
   expect(refused.exitCode).not.toBe(0);
   expect(envelope(refused).code).toBe("coordination.invalid-input");
 
-  const current = { ...evidence, qa: { ...evidence.qa, gate: "pm-acceptance" } };
+  const current = { ...evidence, acceptance: { ...evidence.acceptance, gate: "pm-acceptance" } };
   expect(submit(current).exitCode).toBe(0);
 
   // Model a pre-cutover receipt and its original completed record in this isolated store.
@@ -546,20 +546,23 @@ test("historical mandatory completion replays only its exact receipt", async () 
   try {
     const row = store.db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?").get(WORKFLOW_ID, PLAN_ID) as { coordination_json: string };
     const coordination = JSON.parse(row.coordination_json);
-    coordination.completion.qa.gate = "mandatory";
+    // A pre-rename row carries the retired `qa` member and no `acceptance`.
+    coordination.completion.qa = { ...coordination.completion.acceptance, gate: "mandatory" };
+    delete coordination.completion.acceptance;
     store.db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(coordination), WORKFLOW_ID, PLAN_ID);
     const receipt = store.db.prepare("select result_json from execution_operations where operation_id = ?").get("legacy-complete") as { result_json: string };
     const historicalReceipt = JSON.parse(receipt.result_json);
-    historicalReceipt.data.coordination.completion.qa.gate = "mandatory";
+    historicalReceipt.data.coordination.completion.qa = { ...historicalReceipt.data.coordination.completion.acceptance, gate: "mandatory" };
+    delete historicalReceipt.data.coordination.completion.acceptance;
     store.db.prepare("update execution_operations set request_hash = ?, result_json = ? where operation_id = ?").run(requestHash, JSON.stringify(historicalReceipt), "legacy-complete");
   } finally {
     store.close();
   }
-  rmSync(fixture.qaReport);
+  rmSync(fixture.acceptanceReport);
   const replay = submit(evidence);
   expect(replay.exitCode, replay.stdout).toBe(0);
   expect(dataOf(replay)).toMatchObject({ replayed: true, data: { coordination: { completion: { qa: { gate: "mandatory" } } } } });
-  const changed = submit({ ...evidence, qa: { ...evidence.qa, report: `${fixture.qaReport}.other` } });
+  const changed = submit({ ...evidence, acceptance: { ...evidence.acceptance, report: `${fixture.acceptanceReport}.other` } });
   expect(envelope(changed).code).toBe("execution.operation-conflict");
   const fresh = submit(evidence, [...args.slice(0, -1), "new-complete"]);
   expect(envelope(fresh).code).toBe("coordination.invalid-input");
@@ -569,10 +572,10 @@ describe("mstar plan complete — a refusal names the verb that actually advance
   test("retired prepare input refuses with a usable PM acceptance retry", async () => {
     const fixture = await activeFixture("mstar-retired-gate");
     await registerAndBind(fixture);
-    const args = ["plan", "prepare", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--harness", fixture.harness, "--qa-gate"];
+    const args = ["plan", "prepare", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--harness", fixture.harness, "--acceptance-gate"];
     const refused = runCli([...args, "mandatory"], fixture.root, identityEnv());
     expect(refused.exitCode).not.toBe(0);
-    expect(message(refused)).toContain("--qa-gate pm-acceptance");
+    expect(message(refused)).toContain("--acceptance-gate pm-acceptance");
     const retried = runCli([...args, "pm-acceptance"], fixture.root, identityEnv());
     expect(retried.exitCode, retried.stdout).toBe(0);
   }, 30_000);
@@ -596,7 +599,7 @@ describe("mstar plan complete — a refusal names the verb that actually advance
     writeJson(completion, {
       source_sha: "abc123",
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
+      acceptance: { gate: "pm-acceptance", decision: "pass", report: fixture.acceptanceReport },
     });
     const refused = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
     expect(refused.exitCode).toBe(1);

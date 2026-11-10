@@ -339,7 +339,7 @@ function prepareConfig(fixture: Fixture, overrides: { worktreePath?: string; wor
   return [
     "--worktree-path", overrides.worktreePath ?? fixture.worktreePath,
     "--working-branch", overrides.workingBranch ?? "feature/exec-session",
-    "--qa-gate", "pm-acceptance",
+    "--acceptance-gate", "pm-acceptance",
     "--findings-cleanup", "allow-residual",
   ];
 }
@@ -1500,7 +1500,7 @@ interface DeliveryFixture extends Fixture {
   baseSha: string;
   qcReport: string;
   qcConsolidated: string;
-  qaReport: string;
+  acceptanceReport: string;
 }
 
 /**
@@ -1536,13 +1536,13 @@ async function activeDeliveryFixture(label: string): Promise<DeliveryFixture> {
 
   const qcReport = join(sddDir, "review", "qc1.md");
   const qcConsolidated = join(sddDir, "review", "qc.md");
-  const qaReport = join(sddDir, "qa.md");
+  const acceptanceReport = join(sddDir, "acceptance.md");
   writeText(qcReport, "# QC 1\ndecision: Approve\n");
   writeText(qcConsolidated, "# QC consolidated\ndecision: Approve\n");
-  writeText(qaReport, "# QA\nverdict: pass\n");
+  writeText(acceptanceReport, "# PM acceptance\nverdict: pass\n");
   return {
     root, harnessDir, context, planMarkdown, worktreePath: featurePath, sddDir, evidencePath,
-    featurePath, sourceSha, baseSha, qcReport, qcConsolidated, qaReport,
+    featurePath, sourceSha, baseSha, qcReport, qcConsolidated, acceptanceReport,
   };
 }
 
@@ -1633,7 +1633,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     // The ordinary start record first: prepare preserves row status, so the
     // first progress report moves Todo -> InProgress.
     const startPath = join(fixture.root, "progress-start.json");
-    writeJson(startPath, { status: "InProgress", summary: "direct coordinator start", evidence_paths: [fixture.qaReport] });
+    writeJson(startPath, { status: "InProgress", summary: "direct coordinator start", evidence_paths: [fixture.acceptanceReport] });
     const started = runCli(
       ["plan", "progress", "--plan", PLAN_ID, "--file", startPath, "--harness", fixture.harnessDir],
       fixture,
@@ -1677,7 +1677,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
 
     // The review record completes the started progression (InProgress → InReview).
     const progressPath = join(fixture.root, "progress-review.json");
-    writeJson(progressPath, { status: "InReview", summary: "direct coordinator InReview", evidence_paths: [fixture.qaReport] });
+    writeJson(progressPath, { status: "InReview", summary: "direct coordinator InReview", evidence_paths: [fixture.acceptanceReport] });
     const progressed = runCli(
       ["plan", "progress", "--plan", PLAN_ID, "--file", progressPath, "--harness", fixture.harnessDir],
       fixture,
@@ -1695,7 +1695,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
       review_base: fixture.baseSha,
       review_head: fixture.sourceSha,
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
+      acceptance: { gate: "pm-acceptance", decision: "pass", report: fixture.acceptanceReport },
     });
     const completed = runCli(
       ["plan", "complete", "--plan", PLAN_ID, "--file", evidencePath, "--harness", fixture.harnessDir],
@@ -1765,7 +1765,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     );
     expect(prepared.exitCode, prepared.stdout).toBe(0);
     const startPath = join(fixture.root, "recovery-start.json");
-    writeJson(startPath, { status: "InProgress", summary: "recovery start", evidence_paths: [fixture.qaReport] });
+    writeJson(startPath, { status: "InProgress", summary: "recovery start", evidence_paths: [fixture.acceptanceReport] });
     expect(runCli(
       ["plan", "progress", "--plan", PLAN_ID, "--file", startPath, "--harness", fixture.harnessDir],
       fixture,
@@ -1778,7 +1778,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
       review_base: fixture.baseSha,
       review_head: fixture.sourceSha,
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
+      acceptance: { gate: "pm-acceptance", decision: "pass", report: fixture.acceptanceReport },
     });
 
     // The refusal an operator sees before the row is review-complete: the text
@@ -1793,7 +1793,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     if (recovery === undefined) throw new Error(`the plan.complete refusal carries no details.recovery: ${refused.stdout}`);
 
     const reviewPath = join(fixture.root, "recovery-review.json");
-    writeJson(reviewPath, { status: "InReview", summary: "recovery review", evidence_paths: [fixture.qaReport] });
+    writeJson(reviewPath, { status: "InReview", summary: "recovery review", evidence_paths: [fixture.acceptanceReport] });
     expect(runCli(
       ["plan", "progress", "--plan", PLAN_ID, "--file", reviewPath, "--harness", fixture.harnessDir],
       fixture,
@@ -1837,7 +1837,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     );
     expect(prepared.exitCode, prepared.stdout).toBe(0);
     const startPath = join(fixture.root, "anchor-mismatch-start.json");
-    writeJson(startPath, { status: "InProgress", summary: "anchor mismatch start", evidence_paths: [fixture.qaReport] });
+    writeJson(startPath, { status: "InProgress", summary: "anchor mismatch start", evidence_paths: [fixture.acceptanceReport] });
     expect(runCli(
       ["plan", "progress", "--plan", PLAN_ID, "--file", startPath, "--harness", fixture.harnessDir],
       fixture,
@@ -1850,7 +1850,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
       review_base: fixture.baseSha,
       review_head: fixture.sourceSha,
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
+      acceptance: { gate: "pm-acceptance", decision: "pass", report: fixture.acceptanceReport },
     });
 
     const refused = runCli(
@@ -1881,7 +1881,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     // refusal is the missing-scope cause of `coordination.scope-mismatch`, whose
     // details carry `worktree_path`/`working_branch` rather than `expected`/`actual`.
     const startPath = join(fixture.root, "no-scope-start.json");
-    writeJson(startPath, { status: "InProgress", summary: "no scope start", evidence_paths: [fixture.qaReport] });
+    writeJson(startPath, { status: "InProgress", summary: "no scope start", evidence_paths: [fixture.acceptanceReport] });
     expect(runCli(
       ["plan", "progress", "--plan", PLAN_ID, "--file", startPath, "--harness", fixture.harnessDir],
       fixture,
@@ -1894,7 +1894,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
       review_base: fixture.baseSha,
       review_head: fixture.sourceSha,
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
+      acceptance: { gate: "pm-acceptance", decision: "pass", report: fixture.acceptanceReport },
     });
 
     const refused = runCli(
@@ -1943,7 +1943,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     expect(prepared.exitCode, prepared.stdout).toBe(0);
     for (const status of ["InProgress", "InReview"]) {
       const progressPath = join(fixture.root, `progress-${status}.json`);
-      writeJson(progressPath, { status, summary: `direct coordinator ${status}`, evidence_paths: [fixture.qaReport] });
+      writeJson(progressPath, { status, summary: `direct coordinator ${status}`, evidence_paths: [fixture.acceptanceReport] });
       const progressed = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", progressPath, "--harness", fixture.harnessDir], fixture, identity);
       expect(progressed.exitCode, progressed.stdout).toBe(0);
     }
@@ -1954,7 +1954,7 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
       review_base: fixture.baseSha,
       review_head: fixture.sourceSha,
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
-      qa: { gate: "pm-acceptance", decision: "pass", report: fixture.qaReport },
+      acceptance: { gate: "pm-acceptance", decision: "pass", report: fixture.acceptanceReport },
     });
     const contaminated = runCli(
       ["plan", "complete", "--plan", PLAN_ID, "--file", evidencePath,
@@ -2043,7 +2043,7 @@ interface ContinuationPlan {
   worktree: string;
   branch: string;
   sddDir: string;
-  qaReport: string;
+  acceptanceReport: string;
   qcReport: string;
   qcConsolidated: string;
   sourceSha: string;
@@ -2121,10 +2121,10 @@ async function continuationFixture(label: string): Promise<ContinuationFixture> 
     execFileSync("git", ["add", `.`], { cwd: worktree });
     execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", `feat: slice ${index + 1}`], { cwd: worktree });
     const sddDir = join(harnessDir, "sdd", planId);
-    const qaReport = join(sddDir, "qa.md");
+    const acceptanceReport = join(sddDir, "acceptance.md");
     const qcReport = join(sddDir, "review", "qc1.md");
     const qcConsolidated = join(sddDir, "review", "qc.md");
-    writeText(qaReport, "# QA\nverdict: pass\n");
+    writeText(acceptanceReport, "# PM acceptance\nverdict: pass\n");
     writeText(qcReport, "# QC 1\ndecision: Approve\n");
     writeText(qcConsolidated, "# QC consolidated\ndecision: Approve\n");
     plans.push({
@@ -2132,7 +2132,7 @@ async function continuationFixture(label: string): Promise<ContinuationFixture> 
       worktree,
       branch,
       sddDir,
-      qaReport,
+      acceptanceReport,
       qcReport,
       qcConsolidated,
       sourceSha: headAt(worktree),
@@ -2148,7 +2148,7 @@ async function continuationFixture(label: string): Promise<ContinuationFixture> 
     planMarkdown: join(harnessDir, "plans", `${CONTINUATION_PLAN_A}.md`),
     worktreePath: plans[0]!.worktree,
     sddDir: plans[0]!.sddDir,
-    evidencePath: plans[0]!.qaReport,
+    evidencePath: plans[0]!.acceptanceReport,
     plans,
     integrationPath,
     rootCommit,
@@ -2257,7 +2257,7 @@ describe("mstar plan — ONE session drives two plans of one workflow (issue #40
           "--plan", plan.id,
           "--worktree-path", plan.worktree,
           "--working-branch", plan.branch,
-          "--qa-gate", "pm-acceptance",
+          "--acceptance-gate", "pm-acceptance",
           "--findings-cleanup", "allow-residual",
           "--expect", await continuationPlanToken(fixture, plan.id),
           "--operation", `prepare-${plan.id}`,
@@ -2273,7 +2273,7 @@ describe("mstar plan — ONE session drives two plans of one workflow (issue #40
       // first report moves Todo -> InProgress and the review report closes it.
       for (const status of ["InProgress", "InReview"] as const) {
         const progressPath = join(fixture.root, `progress-${plan.id}-${status}.json`);
-        writeJson(progressPath, { status, summary: `${plan.id} ${status}`, evidence_paths: [plan.qaReport] });
+        writeJson(progressPath, { status, summary: `${plan.id} ${status}`, evidence_paths: [plan.acceptanceReport] });
         const progressed = step(
           ["plan", "progress", "--plan", plan.id, "--file", progressPath, ...sessionArg, ...workflowArg, ...harnessArg],
           `${label} progress ${status}`,
@@ -2292,7 +2292,7 @@ describe("mstar plan — ONE session drives two plans of one workflow (issue #40
         review_base: fixture.rootCommit,
         review_head: plan.sourceSha,
         qc: { decision: "Approve", reports: [plan.qcReport], consolidated: plan.qcConsolidated },
-        qa: { gate: "pm-acceptance", decision: "pass", report: plan.qaReport },
+        acceptance: { gate: "pm-acceptance", decision: "pass", report: plan.acceptanceReport },
       });
       const completed = step(
         [

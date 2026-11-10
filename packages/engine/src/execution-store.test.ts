@@ -2702,7 +2702,7 @@ async function completedLegacyPlan(label: string, options: { omitReviewBase?: bo
     session,
     expected: await planToken(),
     planId: LEGACY_PLAN,
-    operation: { kind: "prepare", config: { worktreePath, workingBranch: `feature/${LEGACY_PLAN}`, qaGate: "pm-acceptance" } },
+    operation: { kind: "prepare", config: { worktreePath, workingBranch: `feature/${LEGACY_PLAN}`, acceptanceGate: "pm-acceptance" } },
   });
   for (const status of ["InProgress", "InReview"] as const) {
     await progressExecutionPlan(planContext, {
@@ -2715,10 +2715,10 @@ async function completedLegacyPlan(label: string, options: { omitReviewBase?: bo
   }
   const sddDir = resolveSddDir(context.harnessDir, LEGACY_PLAN);
   mkdirSync(sddDir, { recursive: true });
-  const bodies = { qc: join(sddDir, "qc1.md"), consolidated: join(sddDir, "qc.md"), qa: join(sddDir, "qa.md") };
+  const bodies = { qc: join(sddDir, "qc1.md"), consolidated: join(sddDir, "qc.md"), acceptance: join(sddDir, "acceptance.md") };
   writeFileSync(bodies.qc, "reviewed QC body\n");
   writeFileSync(bodies.consolidated, "consolidated QC body\n");
-  writeFileSync(bodies.qa, "QA verdict body\n");
+  writeFileSync(bodies.acceptance, "acceptance verdict body\n");
   await completeExecutionPlan(planContext, {
     operationId: `complete-${label}`,
     session,
@@ -2731,7 +2731,7 @@ async function completedLegacyPlan(label: string, options: { omitReviewBase?: bo
         ...(options.omitReviewBase === true ? {} : { review_base: baseSha }),
         review_head: sourceSha,
         qc: { decision: "Approve", reports: [bodies.qc], consolidated: bodies.consolidated },
-        qa: { gate: "pm-acceptance", decision: "pass", report: bodies.qa },
+        acceptance: { gate: "pm-acceptance", decision: "pass", report: bodies.acceptance },
       },
     },
   });

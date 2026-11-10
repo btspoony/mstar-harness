@@ -696,7 +696,7 @@ export function executionInputSelection(row: unknown, planId: string): Record<st
 
 /**
  * The document half of `catalog_pin`: sha256 over the frozen execution-input
- * selection only. `status`, `progress`, task/QC/QA fields, leases and track
+ * selection only. `status`, `progress`, task/QC/acceptance fields, leases and track
  * branches are execution authority (contract §1) and are deliberately not
  * hashed, so reporting progress never invalidates a pin.
  */
@@ -1009,7 +1009,7 @@ export function planAreaRoots(harnessRoot: string, planId: string): string[] {
  *
  * Each submitted value arrives with the payload field that carried it, so a
  * refusal names the member to correct instead of leaving the caller to guess
- * which of `qc.reports[]` / `qc.consolidated` / `qa.report` / `evidence_paths[]`
+ * which of `qc.reports[]` / `qc.consolidated` / `acceptance.report` / `evidence_paths[]`
  * is wrong. The offending field, its value and the allowed roots are carried in
  * the details AND repeated in the message, because a caller reads the message
  * first. The message advertises no command (Rule #341 class 4 forbids a command

@@ -193,7 +193,7 @@ async function continuePlan(
   const originalInput = (await protectedStore(context)).tables;
   const prepared = await mutateExecutionPlan(caller, {
     session: bound.data, expected: before.token, planId, operationId: `prepare-${workflowId}`,
-    operation: { kind: "prepare", config: { qaGate: "pm-acceptance", findingsCleanup: "allow-residual" } },
+    operation: { kind: "prepare", config: { acceptanceGate: "pm-acceptance", findingsCleanup: "allow-residual" } },
   });
   expect(prepared.data.plan.status).toBe(before.data.plan.status);
   expect(prepared.data.plan.metadata).toEqual(before.data.plan.metadata);
@@ -653,10 +653,13 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     const originalPlan = protectedState.plan as { coordination_json: string };
     const originalCoordination = JSON.parse(originalPlan.coordination_json);
     const { state: _handoffState, id: _handoffId, attempt: _attempt, submitted_by: _submitter,
-      submitted_at: _submittedAt, accepted_by: completedBy, accepted_at: _acceptedAt, ...completion } = originalCoordination.handoff;
+      submitted_at: _submittedAt, accepted_by: completedBy, accepted_at: _acceptedAt, qa: legacyAcceptance,
+      ...completion } = originalCoordination.handoff;
     expect(coordination.prepared).toEqual(migrated?.coordination?.prepared);
     expect(migrated?.coordination?.progress).toEqual(originalCoordination.progress);
-    expect(migrated?.coordination?.completion).toEqual({ ...completion, completed_by: completedBy });
+    // The legacy handoff's `qa` verdict is imported under the acceptance member.
+    expect(migrated?.coordination?.completion).toEqual({ ...completion, acceptance: legacyAcceptance, completed_by: completedBy });
+    expect(migrated?.coordination?.completion).not.toHaveProperty("qa");
     const originalDatabase = protectedState.database as ProtectedDatabase;
     const originalInputs = originalDatabase.tables.execution_inputs!;
     expect(protectedDatabase(store.db).tables.execution_inputs).toEqual(originalInputs);
@@ -779,7 +782,7 @@ test("a sealed/completed legacy file snapshot is projected and imported instead 
     expect((coordination.completion as Record<string, unknown>)).toMatchObject({
       source_branch: `feature/${workflowId}`, source_sha: "c".repeat(40),
       worktree_path: join(ROOT, "legacy-worktree"), completed_by: "host-coord",
-      qa: { gate: "mandatory", decision: "pass", report: { path: join(ROOT, "qa.md") } },
+      acceptance: { gate: "mandatory", decision: "pass", report: { path: join(ROOT, "qa.md") } },
       completed_at: "2026-10-04T03:00:00Z",
     });
     const state = JSON.parse(

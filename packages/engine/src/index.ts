@@ -588,7 +588,7 @@ export type {
   PlanProgress,
   PreparedCoordination,
   RowCoordination,
-  QaGate,
+  AcceptanceGate,
   FindingsCleanupMode,
 } from "./coordination-write.js";
 export type { RootAssociation } from "./coordination.js";
