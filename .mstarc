@@ -4,3 +4,4 @@
 harness_dir=.mstar
 adr_dir=docs/adr
 knowledge_dir=docs/knowledge
+specs_dir=docs/specs
