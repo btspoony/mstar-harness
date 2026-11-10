@@ -5,9 +5,9 @@
  * design, in CI they must EXECUTE. A plain green `bun test` cannot tell the two
  * apart — a reverted CI predicate, or a spec silently dropped from the run, both
  * leave the job green. This check reads the JUnit report the same step emitted
- * and requires, for the two gated spec files only: the file is present, at least
- * one case executed, and no case was skipped. Skips in other files (optional
- * installs and the like) stay permitted.
+ * and requires, for the two gated spec files only: the file is present, no case
+ * was skipped, and at least the pinned number of cases executed. Skips in other
+ * files (optional installs and the like) stay permitted.
  *
  * Usage: `bun run --cwd packages/dsh check:composition-report [report.xml]`
  * (the default report path is this package's `.junit-dsh.xml`).
@@ -15,8 +15,16 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** The gated spec files, relative to this package root. */
-export const GATED_SPECS = ['tests/e2e-session.spec.ts', 'tests/skills-mount.spec.ts'] as const
+/**
+ * The gated spec files (relative to this package root) and how many cases each
+ * must execute. Adding or removing a `test.if(isCiEnvironment())` case means
+ * editing this list in the same change — that is the only place the inventory
+ * lives, so a dropped case cannot leave the gate green.
+ */
+export const GATED_SPECS = [
+  { file: 'tests/e2e-session.spec.ts', expectedExecuted: 2 },
+  { file: 'tests/skills-mount.spec.ts', expectedExecuted: 8 },
+] as const
 
 /** The JUnit report the `test-dsh` CI step writes (`--reporter-outfile`). */
 export const REPORT_FILE = '.junit-dsh.xml'
@@ -56,7 +64,7 @@ export function checkCompositionReport(xml: string): CompositionReportCheck {
     .filter((file): file is string => file !== undefined)
 
   const files: GatedFileReport[] = []
-  for (const spec of GATED_SPECS) {
+  for (const { file: spec, expectedExecuted } of GATED_SPECS) {
     const own = cases.filter((entry) => names(entry.file, spec))
     const skipped = own.filter((entry) => entry.skipped).length
     const executed = own.length - skipped
@@ -76,6 +84,12 @@ export function checkCompositionReport(xml: string): CompositionReportCheck {
       return {
         ok: false,
         reason: `${spec} reported no executed case — an empty suite does not discharge the zero-skip invariant`,
+      }
+    }
+    if (executed < expectedExecuted) {
+      return {
+        ok: false,
+        reason: `${spec} executed ${executed} gated case(s), expected at least ${expectedExecuted} — a gated case was deleted or dropped from the run; update the inventory in scripts/check-composition-report.ts if that removal is deliberate`,
       }
     }
     files.push({ file: spec, executed, skipped })
