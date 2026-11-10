@@ -1,6 +1,6 @@
 ---
 name: mstar-design-system
-description: Use when an implementation must be walked into alignment with an existing baseline — a prototype, a design export, an existing product's markup, or a written design contract — and each difference has to be judged as defect, decision, or phantom. Not for designing from nothing, and not for authoring or auditing `DESIGN.md` itself (that is `mstar-design-md`).
+description: "Use when aligning work to an existing baseline (prototype, design export, product markup, or design contract) and classifying each difference as defect, decision, or phantom. Not for greenfield design or `DESIGN.md` authoring (`mstar-design-md`)."
 ---
 
 ## Load Order

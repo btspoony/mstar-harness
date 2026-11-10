@@ -1,6 +1,6 @@
 ---
 name: mstar-knowledge
-description: Knowledge capture and maintenance for {KNOWLEDGE_DIR}：把已解决问题沉淀为结构化知识文档（双轨 Bug/Knowledge、重叠与可发现性检查、迭代收口提升），并审查/更新/合并/清理既有文档与 CONCEPTS.md 基线 bootstrap。触发：迭代收口结晶、值得沉淀的已解决问题、可合并/stale/需清理的知识文档、显式 bootstrap/refresh。无结晶时以 reasoned skipped 结束。
+description: "Load for `{KNOWLEDGE_DIR}` capture, maintain/refresh/bootstrap, or iteration-close promotion（结晶/清理/显式 bootstrap）；skip with reasoned skipped when nothing to crystallize. Not for ordinary feature coding."
 ---
 
 # mstar-knowledge（知识结晶与维护）
