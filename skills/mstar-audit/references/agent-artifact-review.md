@@ -2,7 +2,7 @@
 
 Method for reviewing **untrusted external artifacts** that could alter agent behavior — a skill or MCP server to install, a third-party repo to clone or install, or a fetched URL or document. Product-code security review stays in **`references/security-review.md`**; this file covers the install and ingest surface that file does not. All findings follow **`references/finding-format.md`** and the exploitability bar, dispositions, and severity anchors in **`references/security-review.md`** §§2/12 (`informational` … `critical`). Do not rate with the upstream four-level LOW/MEDIUM/HIGH/REJECT scale — that scale is provenance only (see root `ATTRIBUTION.md`).
 
-Concepts are distilled from SlowMist Agent Security (MIT, v0.1.2) and rewritten in Morning Star voice. Upstream report templates, marketplace-specific install paths, and rating labels are not ours.
+Concepts are distilled from SlowMist Agent Security (MIT, v0.1.2), with MCP coexistence and re-review lenses from the SlowMist MCP Security Checklist and OpenClaw Security Practice Guide (both MIT), and rewritten in Morning Star voice. Upstream report templates, marketplace-specific or host-specific install paths, nightly-audit playbooks, and rating labels are not ours. Full provenance is in root `ATTRIBUTION.md`.
 
 ---
 
@@ -76,11 +76,11 @@ Each lens is a reading question, not an automatic finding. One signal is not con
 
 ### 4.4 Agent identity, memory, and config access
 
-**Signal:** a third-party skill or MCP reading or copying host identity, memory, or session files (`MEMORY.md`, `USER.md`, `SOUL.md`, `AGENTS.md`, `IDENTITY.md`, session or identity stores, agent config under the host's home).
+**Signal:** a third-party skill or MCP reading, copying, or writing host identity, memory, session, or standing-policy files (`MEMORY.md`, `USER.md`, `SOUL.md`, `AGENTS.md`, `IDENTITY.md`, session or identity stores, agent config under the host's home).
 
-**Key question:** Why would a third-party artifact need the host agent's identity or memory?
+**Key question:** Why would a third-party artifact need to read or change the host agent's identity, memory, or policy files?
 
-**Exclusion:** third-party skills should not need these files. This is a different surface from **`security-review.md`** §9 AI/LLM "persistent memory poisoning," which is about *writing* durable memory that a later consumer acts on. Here the issue is a *foreign* artifact *reading* the host's identity or memory. A first-party skill whose stated job is to maintain those files, in the repo that owns them, is expected.
+**Exclusion:** third-party skills should not need these files. This is a different surface from **`security-review.md`** §9 AI/LLM "persistent memory poisoning," which is about *writing* durable memory that a later consumer acts on. Here the issue is a *foreign* artifact reading or rewriting the host's identity, memory, or policy. A first-party skill whose stated job is to maintain those files, in the repo that owns them, is expected.
 
 ### 4.5 Dynamic exec from untrusted input
 
@@ -108,7 +108,7 @@ Each lens is a reading question, not an automatic finding. One signal is not con
 
 ### 4.8 Runtime secondary download, pipe-to-shell, and one-shot execution
 
-**Signal:** install or run of additional packages at runtime that were not in the reviewed inventory; `curl | sh` / `wget | bash`; `npx` / `pipx run` of an unreviewed package, especially with `-y` or `--force`.
+**Signal:** install or run of additional packages at runtime that were not in the reviewed inventory; `curl | sh` / `wget | bash`; `git clone` of an unreviewed tree followed by execute; `npx` / `pipx run` of an unreviewed package, especially with `-y` or `--force`.
 
 **Key question:** Is the payload that would actually run present and reviewable now?
 
@@ -173,7 +173,7 @@ Do not restate **`security-review.md`** §9 Supply chain (lockfiles, lifecycle s
 
 For artifacts that talk to external services or touch credentials, funds, or host config, ask — and only promote to a finding when the answer is a demonstrated boundary failure:
 
-- **Who holds the keys?** The user holds keys and the agent prepares unsigned work, versus the agent or a third party taking custody.
+- **Who holds the keys?** The user holds keys and the agent prepares unsigned work, versus the agent or a third party taking custody. An artifact that solicits plaintext private keys or mnemonics, or that signs with a key it holds, is a custody failure unless that custody is the stated, user-approved purpose.
 - **Do dangerous operations require explicit user confirmation**, bound to the finalized payload (**`security-review.md`** §9 AI/LLM action and approval binding)?
 - **Is auto-update consented and reviewable** (§6), or silent?
 - **Does data stay local**, or leave for a host the stated purpose does not require (§4.1–4.2)?
@@ -183,7 +183,26 @@ A "could be designed better" answer with no reachable unauthorized effect is a H
 
 ---
 
-## 8. Exclusions and anti-patterns
+## 8. MCP and multi-artifact lenses
+
+When the artifact is an MCP server, or will share a host with other skills or MCPs, add these questions. Product-code MCP trust inheritance and tool-schema disagreement already live in **`security-review.md`** §9 AI/LLM; this section is the install and coexistence surface.
+
+- **Tool and prompt text is untrusted input.** Tool descriptions, resource templates, prompt templates, and third-party API responses the server injects into model context are an instruction surface, not documentation. Scan them with §5. A description that directs the agent to skip confirmation, install another server, or exfiltrate data is a lead until the handler path is named.
+- **Name collision and competitive override.** A new MCP that registers a tool name already used by a first-party or previously reviewed server can intercept calls. The finding needs a colliding name and a capability or destination that differs from the existing tool — a unique name is not a finding. Absence of a namespace in the artifact is a Hardening note unless a collision is shown on this host.
+- **Cross-MCP induction.** Tool output, errors, or prompts that instruct the agent to enable, install, or call a second server, or to drive a sensitive operation on one. Name the inducing text and the second capability it reaches. A documented, in-purpose orchestration of a declared dependency is expected.
+- **Background persistence after the host session ends.** An MCP that leaves processes, agents, or scheduled work running after the client shuts down is a persistence finding when that lifetime is not disclosed and approved (§4.7). Documented daemon behavior with user consent may be expected — still report the lifetime so the user can decide.
+- **Auto-approve and hidden invocation.** A skill or MCP that requests auto-approval for destructive or credential-bearing tools, or that hides the invoked payload from the user-visible confirmation (hidden tags, or a different tool call than the one shown), is an approval-binding failure — same bar as **`security-review.md`** §9 AI/LLM action and approval binding.
+- **Sampling and context exfil.** An MCP sampling or completion call that includes host conversation, credentials, or memory beyond the stated task is an outbound-boundary question (§4.1–4.2).
+
+---
+
+## 9. Re-review and integrity
+
+A first-pass review does not cover later mutation. Re-load this file when the artifact is updated, the host or engine is upgraded, behavior diverges from the reviewed inventory, or the installed tree no longer matches the reviewed files (hash or manifest drift). Treat a post-install updater or "audit" helper that can rewrite the tree as §4.8 / §6, not as a trusted control. Do not import host-specific nightly-audit or immutable-file playbooks; those are operational hardening, not this skill's findings format.
+
+---
+
+## 10. Exclusions and anti-patterns
 
 - **Do not import "when uncertain, classify as higher risk."** That upstream principle conflicts with this skill's false-positive discipline. Uncertain items go to **Needs verification** or **Hardening**, not to inflated findings.
 - **Do not swap rating systems.** Stay on **`security-review.md`** §2 anchors. Do not add a parallel report template.
