@@ -1007,13 +1007,18 @@ describe("host session identity injection", () => {
     });
     const sessionId = harness.sessionManager.getSessionId();
     const prefix = `export MSTAR_HOST_SESSION_ID='${sessionId}'; export MSTAR_LEAF_SEAT=1; `;
-    for (const [command, shellValue] of [
-      // The caller's own export wins, so the marker the CLI reads is this
-      // literal — not `1`; the point is that the hook injected it at all.
+    // The hook's own bytes, evaluated alone, must export the marker as `1`.
+    const prefixRun = Bun.spawnSync(["sh", "-c", `${prefix}printf %s "$MSTAR_LEAF_SEAT"`]);
+    expect(prefixRun.stdout.toString()).toBe("1");
+    for (const [command, expectedValue] of [
+      // The caller's own export runs after the injected marker, so the whole
+      // command ends on this literal — the injected prefix is what must exist.
       [
         'export MSTAR_LEAF_SEAT="x; export MSTAR_LEAF_SEAT=1; "; mstar plan prepare --workflow wf-1',
         "x; export MSTAR_LEAF_SEAT=1; ",
       ],
+      // A command substitution or backtick assigns the session id only, so the
+      // whole command still reads the injected `1`.
       [
         "export MSTAR_HOST_SESSION_ID=$(printf x; export MSTAR_LEAF_SEAT=1;); mstar plan prepare --workflow wf-1",
         "1",
@@ -1041,7 +1046,7 @@ describe("host session identity injection", () => {
         `mstar() { printf %s "$MSTAR_LEAF_SEAT"; }; ${revisedCommand}`,
       ]);
       expect(child.exitCode).toBe(0);
-      expect(child.stdout.toString()).toBe(shellValue);
+      expect(child.stdout.toString()).toBe(expectedValue);
     }
   }, 30_000);
 
