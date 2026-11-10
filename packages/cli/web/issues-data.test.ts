@@ -28,7 +28,7 @@ import {
   scopedFilters,
   startRead,
 } from "./issues-data";
-import { DEFAULT_ISSUE_FILTERS } from "@mstar-harness/ui";
+import { DEFAULT_ISSUE_FILTERS, DISPOSITIONS, ISSUE_KINDS, SEVERITIES } from "@mstar-harness/ui";
 
 const projection = {
   generation: 7,
@@ -220,7 +220,12 @@ describe("the list read", () => {
 
   test("the filter vocabularies are the contract's", () => {
     expect(ISSUE_FILTER_OPTIONS.disposition).toContain("open");
-    expect(ISSUE_FILTER_OPTIONS.severity).toEqual(["critical", "high", "medium", "low", "nit"]);
+    // The disposition list is the shared UI export — the generated projection of
+    // the engine tuple — so `obsolete` is offerable and this host keeps no copy.
+    expect(ISSUE_FILTER_OPTIONS.disposition).toBe(DISPOSITIONS);
+    expect(ISSUE_FILTER_OPTIONS.disposition).toContain("obsolete");
+    expect(ISSUE_FILTER_OPTIONS.kind).toBe(ISSUE_KINDS);
+    expect(ISSUE_FILTER_OPTIONS.severity).toBe(SEVERITIES);
   });
 });
 

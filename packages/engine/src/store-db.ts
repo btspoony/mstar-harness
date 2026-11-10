@@ -1788,6 +1788,99 @@ create table sync_runs(
 );
 `;
 
+/**
+ * Migration 19 - the `obsolete` disposition reaches the storage CHECK.
+ *
+ * Migration 12 rebuilt `issues` for the severity vocabulary and restated the
+ * disposition CHECK it carried; `obsolete` is that same kind of change one
+ * vocabulary later, so the parent is rebuilt with the SAME FK-safe staging
+ * pattern: `issues` is referenced by `occurrences`, `provenance`, `relations`
+ * (×2), `issue_transitions`, `issue_project_moves` and `issue_sync_state`, and
+ * the batch runs with `foreign_keys=ON` inside one transaction, so the child
+ * rows are staged out, the parent rebuilt and the rows restored before COMMIT.
+ *
+ * It is a pure vocabulary widening: every existing row's disposition is still
+ * accepted verbatim, so no row is rewritten and no history, index, trigger or
+ * milestone link changes. The rebuilt table restores migration 1's indexes,
+ * migration 7's milestone column/index/triggers and migration 12's `nit` CHECK.
+ */
+export const MIGRATION_19_SQL = `
+create table occurrences_v19_stage as select * from occurrences;
+create table provenance_v19_stage as select * from provenance;
+create table relations_v19_stage as select * from relations;
+create table issue_transitions_v19_stage as select * from issue_transitions;
+create table issue_project_moves_v19_stage as select * from issue_project_moves;
+create table issue_sync_state_v19_stage as select * from issue_sync_state;
+delete from occurrences;
+delete from provenance;
+delete from relations;
+delete from issue_transitions;
+delete from issue_project_moves;
+delete from issue_sync_state;
+create table issues_obsolete(
+  id text primary key,
+  project_id text not null,
+  title text not null,
+  kind text not null check (kind in ('bug','risk','improvement','request','decision','review-obligation')),
+  severity text not null check (severity in ('critical','high','medium','low','nit')),
+  disposition text not null default 'open' check (disposition in ('open','resolved','waived','duplicate','superseded','obsolete')),
+  impact text not null,
+  acceptance text not null,
+  owner text,
+  registered_at text,
+  closed_at text,
+  closure_note text,
+  created_at text not null,
+  updated_at text not null,
+  revision integer not null default 1,
+  provider text not null default 'local',
+  external_id text,
+  url text,
+  identity_key text not null unique,
+  milestone_id text references project_milestones(milestone_id)
+);
+insert into issues_obsolete(id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id)
+  select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id
+  from issues;
+drop table issues;
+alter table issues_obsolete rename to issues;
+create unique index issues_external_identity on issues(provider, external_id) where external_id is not null;
+create index issues_disposition on issues(project_id, disposition, severity);
+create index issues_milestone_disposition
+  on issues(project_id, milestone_id, disposition)
+  where milestone_id is not null;
+create trigger issues_milestone_project_insert
+before insert on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+create trigger issues_milestone_project_update
+before update of project_id, milestone_id on issues
+when new.milestone_id is not null and not exists (
+  select 1 from project_milestones m
+  where m.milestone_id = new.milestone_id and m.project_id = new.project_id
+)
+begin
+  select raise(abort, 'milestone.project-mismatch');
+end;
+insert into occurrences select * from occurrences_v19_stage;
+insert into provenance select * from provenance_v19_stage;
+insert into relations select * from relations_v19_stage;
+insert into issue_transitions select * from issue_transitions_v19_stage;
+insert into issue_project_moves select * from issue_project_moves_v19_stage;
+insert into issue_sync_state select * from issue_sync_state_v19_stage;
+drop table occurrences_v19_stage;
+drop table provenance_v19_stage;
+drop table relations_v19_stage;
+drop table issue_transitions_v19_stage;
+drop table issue_project_moves_v19_stage;
+drop table issue_sync_state_v19_stage;
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry - append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -1808,6 +1901,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 16, name: "sync-pending-target", sql: MIGRATION_16_SQL },
   { version: 17, name: "sync-push-ledger", sql: MIGRATION_17_SQL },
   { version: 18, name: "sync-run-lease", sql: MIGRATION_18_SQL },
+  { version: 19, name: "issue-obsolete-disposition", sql: MIGRATION_19_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 

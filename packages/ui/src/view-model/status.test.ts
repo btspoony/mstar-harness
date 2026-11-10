@@ -100,9 +100,10 @@ describe("tone mapping keeps the label as the signal", () => {
 
   test("disposition: green is resolved only", () => {
     expect(dispositionTone("resolved")).toBe("success");
-    expect(dispositionTone("waived")).toBe("purple");
-    expect(dispositionTone("duplicate")).toBe("purple");
-    expect(dispositionTone("superseded")).toBe("purple");
+    for (const retired of ["waived", "duplicate", "superseded", "obsolete"] as const) {
+      // `obsolete` retires a removed subject; it is not a success either.
+      expect(dispositionTone(retired)).toBe("purple");
+    }
     expect(dispositionTone("open")).toBe("neutral");
   });
 

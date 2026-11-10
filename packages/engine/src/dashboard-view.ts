@@ -16,7 +16,7 @@
  */
 import { SddScriptError } from "./sdd.js";
 import { queryDashboard, withStoreRead, type StoreReadQuery } from "./store-read.js";
-import type { IssueFilter } from "./issue.js";
+import { ISSUE_DISPOSITIONS, vocabularyMap, type Disposition, type IssueFilter } from "./issue.js";
 import type { StoreContext } from "./store-db.js";
 import type { DashboardFilters, DashboardView, DashboardViewData, ReadEnvelope } from "./store-read.js";
 
@@ -39,7 +39,7 @@ const VIEW_QUERY_FIELDS: Record<DashboardView, readonly string[]> = {
   overview: ["project"],
 };
 
-const DISPOSITIONS: Record<string, true> = { open: true, resolved: true, waived: true, duplicate: true, superseded: true };
+const DISPOSITIONS: Record<Disposition, true> = vocabularyMap(ISSUE_DISPOSITIONS);
 const KINDS: Record<string, true> = {
   bug: true,
   risk: true,
@@ -104,7 +104,7 @@ export function dashboardFilters(
 
   if (view === "issues") {
     const disposition = queryValue(params, "disposition");
-    if (disposition !== undefined && DISPOSITIONS[disposition] !== true) {
+    if (disposition !== undefined && !Object.hasOwn(DISPOSITIONS, disposition)) {
       refuse(`disposition must be one of ${Object.keys(DISPOSITIONS).join(", ")}`);
     }
     const kind = queryValue(params, "kind");

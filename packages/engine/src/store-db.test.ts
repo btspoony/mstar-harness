@@ -1772,6 +1772,97 @@ describe("migration 17 - the push ledger facts", () => {
   });
 });
 
+describe("migration 19 - the obsolete disposition reaches the store CHECK", () => {
+  test("a populated store keeps every row and relation, then accepts obsolete and still refuses an unknown disposition", async () => {
+    const dir = mkdtempSync(join(ROOT, "obsolete-upgrade-"));
+    // A store written by the previous schema, populated BEFORE the upgrade.
+    const before = historicalStore(dir, 18);
+    before.prepare(
+      "insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project','p-one','P','projects','p-one/roadmap.md','now','now')",
+    ).run();
+    before.prepare(
+      "insert into project_milestones(milestone_id,project_id,name,ordinal,created_at,updated_at) values('m-one','p-one','M',0,'now','now')",
+    ).run();
+    const insertIssue = before.prepare(
+      "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, milestone_id)" +
+        " values (?, 'p-one', ?, 'bug', 'high', ?, 'impact', 'acceptance', 'now', 'now', ?, ?)",
+    );
+    insertIssue.run("I-000301", "Open subject", "open", "identity-1", "m-one");
+    insertIssue.run("I-000302", "Already resolved", "resolved", "identity-2", null);
+    insertIssue.run("I-000303", "Already superseded", "superseded", "identity-3", null);
+    before.prepare(
+      "insert into occurrences(issue_id,occurrence_key,source_kind,source_identity,root_cause_key,acceptance_key,location,observed_behavior,evidence_json,recorded_at)" +
+        " values ('I-000301','occ-1','test','src','rc','ac','loc','observed','[]','now')",
+    ).run();
+    before.prepare("insert into provenance(issue_id,kind,target,source_hash) values ('I-000301','plan','plan-a','hash')").run();
+    before.prepare("insert into relations(from_issue,relation,to_issue) values ('I-000301','blocks','I-000302')").run();
+    before.prepare(
+      "insert into issue_transitions(issue_id,from_disposition,to_disposition,recorded_at,reason,evidence_json,issue_revision)" +
+        " values ('I-000302','open','resolved','now','done','[]',2)",
+    ).run();
+    before.prepare(
+      "insert into issue_project_moves(issue_id,from_project_id,to_project_id,actor,reason,occurred_at,recorded_at,issue_revision)" +
+        " values ('I-000301','p-old','p-one','project-manager','moved','now','now',2)",
+    ).run();
+    before.prepare(
+      "insert into project_bindings(project_id,provider,workspace,team,remote_project,revision,updated_at) values ('p-one','linear','ws','team','RP',1,'now')",
+    ).run();
+    before.prepare(
+      "insert into issue_sync_state(binding_id,direction,local_id,external_id,item_state,revision,updated_at) values ('linear:p-one','import','I-000301','EXT-1','pending',1,'now')",
+    ).run();
+    before.close();
+
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+
+    const upgraded = await openStore({ harnessDir: dir }, "write");
+    try {
+      const { db } = upgraded;
+      // Every row survives with its own disposition; nothing was reinterpreted.
+      expect(db.prepare("select id, disposition from issues order by id").all()).toEqual([
+        { id: "I-000301", disposition: "open" },
+        { id: "I-000302", disposition: "resolved" },
+        { id: "I-000303", disposition: "superseded" },
+      ]);
+      // The child rows and their relations still resolve to their parent.
+      expect(db.prepare("select count(*) as n from occurrences").get()).toEqual({ n: 1 });
+      expect(db.prepare("select count(*) as n from provenance").get()).toEqual({ n: 1 });
+      expect(db.prepare("select count(*) as n from relations").get()).toEqual({ n: 1 });
+      expect(db.prepare("select count(*) as n from issue_transitions").get()).toEqual({ n: 1 });
+      expect(db.prepare("select count(*) as n from issue_project_moves").get()).toEqual({ n: 1 });
+      expect(db.prepare("select count(*) as n from issue_sync_state").get()).toEqual({ n: 1 });
+      expect(db.prepare("pragma foreign_key_check").all()).toEqual([]);
+      // The rebuilt parent keeps its indexes, its milestone link and its triggers.
+      expect(
+        (db.prepare("select name from sqlite_master where type='index' and name in ('issues_external_identity','issues_disposition','issues_milestone_disposition')").all() as Array<{ name: string }>).length,
+      ).toBe(3);
+      expect(
+        db.prepare("select milestone_id from issues where id = 'I-000301'").get(),
+      ).toEqual({ milestone_id: "m-one" });
+      expect(
+        (db.prepare("select name from sqlite_master where type='trigger' and name in ('issues_milestone_project_insert','issues_milestone_project_update')").all() as Array<{ name: string }>).length,
+      ).toBe(2);
+      // The milestone trigger still refuses a cross-project link after the rebuild.
+      db.prepare(
+        "insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project','p-two','P2','projects','p-two/roadmap.md','now','now')",
+      ).run();
+      db.prepare(
+        "insert into project_milestones(milestone_id,project_id,name,ordinal,created_at,updated_at) values('m-two','p-two','M2',0,'now','now')",
+      ).run();
+      expect(() => db.prepare("update issues set project_id='p-two' where id='I-000301'").run()).toThrow(/milestone.project-mismatch/);
+
+      // The new value is accepted; an invented one is still refused.
+      db.prepare("update issues set disposition='obsolete' where id='I-000301'").run();
+      expect(db.prepare("select disposition from issues where id='I-000301'").get()).toEqual({ disposition: "obsolete" });
+      expect(() => db.prepare("update issues set disposition='gone' where id='I-000302'").run()).toThrow(/check/i);
+    } finally {
+      upgraded.close();
+    }
+    // The upgraded store re-opens as an applied set (no pending migration, no drift).
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("migration 18 - the run lease", () => {
   test("one row per binding and direction, and it holds the holder's own facts", async () => {
     const { Database } = await import("bun:sqlite");

@@ -721,7 +721,10 @@ export {
   assignIssueMilestone,
   ISSUE_ACTIONS,
   ISSUE_ACTION_NAMES,
+  ISSUE_DISPOSITIONS,
   ISSUE_PAYLOAD_SCHEMAS,
+  TERMINAL_DISPOSITIONS,
+  vocabularyMap,
 } from "./issue.js";
 // Provider adapter contract (issue-sync): the engine defines it, the host
 // implements it. One probe-state vocabulary for every consumer.

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { TERMINAL_DISPOSITIONS, type Disposition } from "./issue.js";
 import type { StoreReadQuery } from "./store-read.js";
 
 export type ProjectMilestoneStatus = "planned" | "active" | "delivered" | "dropped";
@@ -9,7 +10,7 @@ export type MilestonePatch = { name?: string; target?: string | null; ordinal?: 
 export type MilestoneMutation = { operationId: string; expectedStoreRevision: number };
 export type MilestoneReceipt = { projectId: string; milestoneId: string; revision: number; storeRevision: number; changed: boolean };
 export type MilestoneAssignment = { projectId: string; milestoneId: string | null; reason: string };
-export type MilestoneIssueDTO = { id: string; title: string; acceptance: string; disposition: "open" | "resolved" | "waived" | "duplicate" | "superseded"; revision: number };
+export type MilestoneIssueDTO = { id: string; title: string; acceptance: string; disposition: Disposition; revision: number };
 export type MilestoneRead = { projectId: string; milestones: ProjectMilestoneDTO[]; issues: Array<MilestoneIssueDTO & { milestoneId: string }>; unassignedIssues: number };
 
 type MilestoneErrorCode = "milestone.schema-outdated" | "store.not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.project-mismatch" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "store.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.empty" | "milestone.not-empty";
@@ -21,6 +22,14 @@ function guard(db: StoreDb): void {
   const active = db.prepare("select authority_state from store_meta where id=1").get() as { authority_state?: string } | undefined;
   if (active?.authority_state !== "active") fail("store.not-active", "Milestone access requires an active store.");
 }
+/**
+ * Every terminal disposition that is retired WITHOUT being resolved — the
+ * `otherRetiredIssues` aggregate. Derived from the one vocabulary, so a new
+ * retirement can never be silently dropped from the milestone rollup.
+ */
+const OTHER_RETIRED_DISPOSITION_SQL = TERMINAL_DISPOSITIONS.filter((value) => value !== "resolved")
+  .map((value) => `'${value}'`)
+  .join(",");
 function project(db: StoreDb, projectId: string): void {
   if (!db.prepare("select 1 from catalog_entities where kind='project' and id=?").get(projectId)) fail("milestone.project-not-found", `Project ${projectId} does not exist.`);
 }
@@ -129,7 +138,7 @@ export function readMilestonesOn(db: StoreDb, projectId: string, milestoneId?: s
   }
   const filter = milestoneId === undefined ? "" : " and m.milestone_id=?";
   const params = milestoneId === undefined ? [projectId] : [projectId,milestoneId];
-  const rows = db.prepare(`select m.milestone_id,m.project_id,m.name,m.target,m.status,m.ordinal,m.revision,m.created_at,m.updated_at,count(i.id) total_issues,sum(case when i.disposition='open' then 1 else 0 end) open_issues,sum(case when i.disposition='resolved' then 1 else 0 end) resolved_issues,sum(case when i.disposition in ('waived','duplicate','superseded') then 1 else 0 end) other_retired_issues from project_milestones m left join issues i on i.milestone_id=m.milestone_id and i.project_id=m.project_id where m.project_id=?${filter} group by m.milestone_id order by m.ordinal,m.milestone_id`).all(...params) as Array<Record<string,unknown>>;
+  const rows = db.prepare(`select m.milestone_id,m.project_id,m.name,m.target,m.status,m.ordinal,m.revision,m.created_at,m.updated_at,count(i.id) total_issues,sum(case when i.disposition='open' then 1 else 0 end) open_issues,sum(case when i.disposition='resolved' then 1 else 0 end) resolved_issues,sum(case when i.disposition in (${OTHER_RETIRED_DISPOSITION_SQL}) then 1 else 0 end) other_retired_issues from project_milestones m left join issues i on i.milestone_id=m.milestone_id and i.project_id=m.project_id where m.project_id=?${filter} group by m.milestone_id order by m.ordinal,m.milestone_id`).all(...params) as Array<Record<string,unknown>>;
   const milestones: ProjectMilestoneDTO[] = rows.map(r => { const resolvedIssues=Number(r.resolved_issues)||0, otherRetiredIssues=Number(r.other_retired_issues)||0, openIssues=Number(r.open_issues)||0; return { milestoneId:String(r.milestone_id),projectId:String(r.project_id),name:String(r.name),target:r.target as string|null,status:r.status as ProjectMilestoneStatus,ordinal:Number(r.ordinal),revision:Number(r.revision),createdAt:String(r.created_at),updatedAt:String(r.updated_at),totalIssues:Number(r.total_issues),openIssues,resolvedIssues,otherRetiredIssues }; });
   const issues = (db.prepare(`select id,title,acceptance,disposition,revision,milestone_id from issues where project_id=? and milestone_id is not null${milestoneId === undefined ? "" : " and milestone_id=?"} order by milestone_id,id`).all(...params) as Array<Record<string,unknown>>).map(r => ({ id:String(r.id),title:String(r.title),acceptance:String(r.acceptance),disposition:r.disposition as MilestoneIssueDTO["disposition"],revision:Number(r.revision),milestoneId:String(r.milestone_id) }));
   const unassigned = db.prepare("select count(*) as count from issues where project_id=? and milestone_id is null").get(projectId) as {count:number};

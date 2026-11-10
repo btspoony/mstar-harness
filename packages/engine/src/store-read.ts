@@ -30,7 +30,19 @@ import {
   type ExecutionReadSelection,
 } from "./execution-read.js";
 import type { ExecutionPlanView, ExecutionRead, ExecutionState } from "./execution-store.js";
-import { assertIssueProvenanceSchema, IssueError, type Disposition, type IssueDetail, type IssueFilter, type IssueKind, type IssuePage, type Severity } from "./issue.js";
+import {
+  assertIssueProvenanceSchema,
+  IssueError,
+  ISSUE_DISPOSITIONS,
+  TERMINAL_DISPOSITIONS,
+  vocabularyMap,
+  type Disposition,
+  type IssueDetail,
+  type IssueFilter,
+  type IssueKind,
+  type IssuePage,
+  type Severity,
+} from "./issue.js";
 import { readMilestonesOn, type MilestoneRead } from "./milestone-store.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
 import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
@@ -692,13 +704,7 @@ const ISSUE_KINDS: Record<string, true> = {
   "review-obligation": true,
 };
 const ISSUE_SEVERITIES: Record<string, true> = { critical: true, high: true, medium: true, low: true, nit: true };
-const ISSUE_DISPOSITIONS: Record<string, true> = {
-  open: true,
-  resolved: true,
-  waived: true,
-  duplicate: true,
-  superseded: true,
-};
+const ISSUE_DISPOSITION_MAP: Record<Disposition, true> = vocabularyMap(ISSUE_DISPOSITIONS);
 
 /** issue.ts `LAST_ACTIVITY_SQL`: max nonnull registration / discovery / transition date. */
 const ISSUE_LAST_ACTIVITY_SQL = `(select max(ts) from (
@@ -722,7 +728,7 @@ function bindIssueFilter(filter: IssueFilter): { where: string; params: unknown[
     params.push(filter.projectId);
   }
   const disposition = filter.disposition ?? "open";
-  if (!Object.hasOwn(ISSUE_DISPOSITIONS, disposition)) usage("disposition is not a contract vocabulary value");
+  if (!Object.hasOwn(ISSUE_DISPOSITION_MAP, disposition)) usage("disposition is not a contract vocabulary value");
   clauses.push("issues.disposition = ?");
   params.push(disposition);
   if (filter.kind !== undefined) {
@@ -1016,7 +1022,7 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
 // ---------------------------------------------------------------------------
 
 /** Terminal dispositions (issue contract §4): every one counts as retired. */
-const TERMINAL_DISPOSITIONS = "'resolved', 'waived', 'duplicate', 'superseded'";
+const TERMINAL_DISPOSITION_SQL = TERMINAL_DISPOSITIONS.map((value) => `'${value}'`).join(", ");
 
 /**
  * The UTC day of a recorded timestamp, or `null` when the stored lexeme has no
@@ -1049,7 +1055,7 @@ function readIssueFlow(db: StoreDb, projectId: string | undefined): IssueFlow {
                 select 1 from issue_transitions t
                 where t.issue_id = issues.id and t.imported = 1 and t.to_disposition = issues.disposition
               ) as imported
-       from issues ${scope ? `${scope} and` : "where"} disposition in (${TERMINAL_DISPOSITIONS})`,
+       from issues ${scope ? `${scope} and` : "where"} disposition in (${TERMINAL_DISPOSITION_SQL})`,
     )
     .all(...scopeParams) as Array<{ at: string | null; imported: number }>;
 

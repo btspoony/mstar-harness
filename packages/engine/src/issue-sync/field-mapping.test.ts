@@ -4,13 +4,14 @@
  * Run with `bun test packages/engine/src/issue-sync/field-mapping.test.ts`.
  */
 import { describe, expect, test } from "bun:test";
-import type { Disposition, Severity } from "../issue.js";
+import { ISSUE_DISPOSITIONS, type Disposition, type Severity } from "../issue.js";
 import type { LinearFacetMapping } from "../mstarc.js";
 import { SyncError } from "../issue-sync.js";
 import type { ProviderItem } from "./provider.js";
 import {
   kindOfItem,
   labelOfKind,
+  defaultStateOfDisposition,
   priorityOfSeverity,
   providerPayloadFields,
   severityOfPriority,
@@ -74,12 +75,23 @@ describe("push direction: severity -> priority (D7)", () => {
 });
 
 describe("push direction: disposition -> workflow state (D7)", () => {
-  test("waived, duplicate and superseded each map to Canceled; resolved is Done; open is Todo", () => {
-    for (const retired of ["waived", "duplicate", "superseded"] as const) {
+  test("every retired disposition maps to Canceled; resolved is Done; open is Todo", () => {
+    for (const retired of ["waived", "duplicate", "superseded", "obsolete"] as const) {
       expect(stateOfDisposition(retired)).toBe("Canceled");
     }
     expect(stateOfDisposition("resolved")).toBe("Done");
     expect(stateOfDisposition("open")).toBe("Todo");
+  });
+
+  test("the mapping covers every declared disposition, so a new one cannot ship unmapped", () => {
+    // An unmapped local disposition would throw at push time; derive the check
+    // from the one vocabulary instead of a second list of names.
+    for (const disposition of ISSUE_DISPOSITIONS) {
+      expect(() => stateOfDisposition(disposition)).not.toThrow();
+      expect(["Todo", "Done", "Canceled"]).toContain(stateOfDisposition(disposition));
+    }
+    // Retirement is never completion, `obsolete` included.
+    expect(defaultStateOfDisposition("obsolete")).not.toBe(defaultStateOfDisposition("resolved"));
   });
 
   test("an unknown disposition is refused rather than defaulted", () => {

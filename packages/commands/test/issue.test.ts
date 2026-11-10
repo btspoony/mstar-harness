@@ -268,6 +268,26 @@ describe("issue command family", () => {
       payload: { reason: "wrong branch", scope: "scope", alignmentRef: "approval" },
       actor: "project-manager",
     }, duplicateContract, composedSchema).success).toBe(false);
+    // `obsolete` is an admitted disposition whose evidence rule belongs to the
+    // ENGINE: the transport must not shadow `issue.invalid-disposition` (and its
+    // removal-evidence recovery) with a generic payload refusal.
+    expect(admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "obsolete",
+      payload: { reason: "subject removed", references: ["commit abc123 deletes src/gone.ts"] },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema).success).toBe(true);
+    expect(admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "obsolete",
+      payload: { reason: "subject removed" },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema).success).toBe(true);
+    // The published contract still declares the requirement the engine enforces.
+    const closureSchema = getCommandSchemas(getCommandDefinitions()).find(({ id }) => id === "issue.close");
+    expect(JSON.stringify(closureSchema?.descriptor?.payloads ?? closureSchema)).toContain("obsolete");
 
 
     const duplicateSource = await executeCommand("issue.add", {

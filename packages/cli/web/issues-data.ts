@@ -23,6 +23,9 @@ import type { IssueDetail, IssuePage, ReadEnvelope } from "@mstar-harness/engine
 
 import { UNREACHABLE, asEnvelope, refusalMessage } from "./read-envelope";
 import {
+  DISPOSITIONS,
+  ISSUE_KINDS,
+  SEVERITIES,
   issueDetailModel,
   issueListModel,
   issueQuery,
@@ -218,11 +221,16 @@ export function issueDetailOutcome(
   }
 }
 
-/** The filter vocabularies the bar offers; the project list is data the host supplies. */
+/**
+ * The filter vocabularies the bar offers; the project list is data the host
+ * supplies. Disposition comes from the shared UI export (the generated
+ * projection of the engine tuple), so the dashboard and the dsh panel offer the
+ * same values the store accepts.
+ */
 export const ISSUE_FILTER_OPTIONS = {
-  disposition: ["open", "resolved", "waived", "duplicate", "superseded"],
-  kind: ["bug", "risk", "improvement", "request", "decision", "review-obligation"],
-  severity: ["critical", "high", "medium", "low", "nit"],
+  disposition: DISPOSITIONS,
+  kind: ISSUE_KINDS,
+  severity: SEVERITIES,
 } as const;
 
 /** The filters a list request applies, with a project scope forced when the page owns one. */
