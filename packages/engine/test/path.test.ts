@@ -1159,16 +1159,20 @@ describe("scaffoldHarness", () => {
 
   test("a harness dir outside the scaffold root gets no .mstarc", async () => {
     const root = tmpRoot("path-scaffold-mstarc-outside-");
-    const outside = tmpRoot("path-scaffold-mstarc-outside-harness-");
+    const outsideParent = tmpRoot("path-scaffold-mstarc-outside-parent-");
+    const outside = join(outsideParent, "harness");
     try {
       setArtifactStore(createFsStore(outside));
       const harnessDir = await scaffoldHarness(root, { harnessDir: outside });
       expect(harnessDir).toBe(outside);
       expect(readdirSync(outside).sort()).not.toContain(".mstarc");
+      // The declaration would land at the harness dir's parent, not inside it:
+      // that is the path the outside-root early return protects.
+      expect(existsSync(join(outsideParent, ".mstarc"))).toBe(false);
       expect(existsSync(join(root, ".mstarc"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
-      rmSync(outside, { recursive: true, force: true });
+      rmSync(outsideParent, { recursive: true, force: true });
     }
   });
 
