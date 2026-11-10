@@ -38401,8 +38401,9 @@ var init_engine = __esm(() => {
         canonicalIssueId: {
           required: false,
           requiredWhen: ["duplicate", "superseded"],
-          type: "string",
-          description: "Canonical issue for duplicate/superseded; required for those dispositions and absent for obsolete"
+          type: "string | null",
+          nullable: true,
+          description: "Canonical issue for duplicate/superseded; required for those dispositions and refused for obsolete"
         },
         alignmentRef: {
           required: false,
