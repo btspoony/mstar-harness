@@ -1,5 +1,5 @@
 ---
-packages: root, engine, commands, cli, ui, dsh
+packages: root, engine, commands, cli, dsh
 ---
 
 - **The issue store gains an honest terminal state for a removed subject: `obsolete`.** One authoritative tuple in `packages/engine/src/issue.ts` now defines the disposition vocabulary, and every server schema, filter, aggregate, history query and outbound mapping derives from it instead of repeating a list. An `obsolete` close requires a nonblank reason and at least one removal reference, refuses any `canonicalIssueId` (including `null`/`""`) before mutation, and refuses with `issue.invalid-disposition` plus the exact removal-evidence recovery. Migration 19 is append-only and preserves existing rows, relations and triggers; the browser projection is generated from the same tuple, and `obsolete` maps to `Canceled` on outbound Linear pushes.

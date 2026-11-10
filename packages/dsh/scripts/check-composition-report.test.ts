@@ -12,7 +12,7 @@
  * spec files.
  */
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -188,6 +188,60 @@ describe('composition report gate — script exit status', () => {
     expect(run.stderr).toContain(SESSION_SPEC)
     expect(run.stderr).toContain(`executed ${SESSION_CASES - 1}`)
     expect(run.stderr).toContain(`expected at least ${SESSION_CASES}`)
+  })
+})
+
+describe('composition report gate — the reporter\'s own output', () => {
+  // The gate reads what `bun test --reporter=junit` actually writes: the title
+  // verbatim in `name`, the owning file on `<testcase>`, and a `<skipped/>`
+  // child for a skip. Synthetic reports cannot catch a change to that shape, so
+  // these cases run the reporter itself and feed its real file to the checker.
+  const realRoot = mkdtempSync(join(tmpdir(), 'dsh-composition-real-'))
+  afterAll(() => rmSync(realRoot, { recursive: true, force: true }))
+
+  const marker = `(${LOCAL_SKILL_MOUNT_SKIP_REASON})`
+  const gatedCase = (index: number, skipped = false): string =>
+    `test${skipped ? '.skip' : ''}("mounts the real composition surface ${index} ${marker}", () => {})`
+
+  /** Write both gated specs and return the report the pinned bun emitted. */
+  function realReport(sessionCases: readonly string[]): string {
+    mkdirSync(join(realRoot, 'tests'), { recursive: true })
+    writeFileSync(
+      join(realRoot, SESSION_SPEC),
+      `import { test } from 'bun:test'\n${sessionCases.join('\n')}\ntest("an ordinary case", () => {})\n`,
+    )
+    writeFileSync(
+      join(realRoot, SKILLS_SPEC),
+      `import { test } from 'bun:test'\n${Array.from({ length: SKILLS_CASES }, (_, index) => gatedCase(index + 1)).join('\n')}\n`,
+    )
+    const reportPath = join(realRoot, 'report.xml')
+    const proc = Bun.spawnSync(
+      [process.execPath, 'test', SESSION_SPEC, SKILLS_SPEC, '--reporter=junit', `--reporter-outfile=${reportPath}`],
+      { cwd: realRoot },
+    )
+    expect(proc.exitCode).toBe(0)
+    return readFileSync(reportPath, 'utf8')
+  }
+
+  test('a real report of executed gated cases satisfies the gate', () => {
+    const check = checkCompositionReport(
+      realReport(Array.from({ length: SESSION_CASES }, (_, index) => gatedCase(index + 1))),
+    )
+    expect(check).toEqual({
+      ok: true,
+      files: [
+        { file: SESSION_SPEC, executed: SESSION_CASES, skipped: 0 },
+        { file: SKILLS_SPEC, executed: SKILLS_CASES, skipped: 0 },
+      ],
+    })
+  })
+
+  test('a real report of one executed and one skipped gated case is refused by name', () => {
+    const check = checkCompositionReport(realReport([gatedCase(1), gatedCase(2, true)]))
+    expect(check.ok).toBe(false)
+    if (check.ok) return
+    expect(check.reason).toContain(SESSION_SPEC)
+    expect(check.reason).toContain('1 skipped gated case(s)')
   })
 })
 

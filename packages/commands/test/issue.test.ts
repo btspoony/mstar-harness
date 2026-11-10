@@ -288,7 +288,16 @@ describe("issue command family", () => {
     // The published contract still declares the requirement the engine enforces.
     const closureSchema = getCommandSchemas(getCommandDefinitions()).find(({ id }) => id === "issue.close");
     expect(JSON.stringify(closureSchema?.descriptor?.payloads ?? closureSchema)).toContain("obsolete");
-
+    // An explicitly null id is the same claim: the transport carries it so the
+    // engine can name `issue.invalid-disposition` and its recovery, instead of
+    // the schema answering with a generic payload error.
+    expect(admitCommandInput(duplicateDefinition, {
+      id: "I-000002",
+      expect: 0,
+      disposition: "obsolete",
+      payload: { reason: "subject removed", references: ["commit abc123 deletes src/gone.ts"], canonicalIssueId: null },
+      actor: "project-manager",
+    }, duplicateContract, composedSchema).success).toBe(true);
 
     const duplicateSource = await executeCommand("issue.add", {
       payload: capture({ sourceIdentity: "review/closure-duplicate", rootCauseKey: "closure-duplicate", acceptanceKey: "closure-duplicate", occurrenceKey: "closure-duplicate" }),
@@ -333,6 +342,27 @@ describe("issue command family", () => {
       actor: "project-manager",
     }, context);
     expect(invalidOpen).toMatchObject({ status: "usage", code: "command.invalid-input" });
+
+    // The null id's refusal comes from the engine, with the disposition's own
+    // recovery — never the transport's generic payload error.
+    const obsoleteSource = await executeCommand("issue.add", {
+      payload: capture({ sourceIdentity: "review/closure-obsolete-null", rootCauseKey: "closure-obsolete-null", acceptanceKey: "closure-obsolete-null", occurrenceKey: "closure-obsolete-null" }),
+      operationId: "closure-obsolete-null-seed",
+      actor: "project-manager",
+    }, context);
+    expect(obsoleteSource.status).toBe("ok");
+    if (obsoleteSource.status !== "ok") return;
+    const obsolete = obsoleteSource.data as { issueId: string; revision: number };
+    const nullCanonical = await executeCommand("issue.close", {
+      id: obsolete.issueId,
+      expect: obsolete.revision,
+      disposition: "obsolete",
+      payload: { reason: "subject removed", references: ["commit abc123 deletes src/gone.ts"], canonicalIssueId: null },
+      operationId: "closure-obsolete-null",
+      actor: "project-manager",
+    }, context);
+    expect(nullCanonical).toMatchObject({ status: "refused", code: "issue.invalid-disposition" });
+    expect(JSON.stringify(nullCanonical)).toContain("takes no canonicalIssueId");
   });
 
   test("malformed capture is rejected without creating an issue", async () => {

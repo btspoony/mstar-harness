@@ -1005,10 +1005,12 @@ describe("issue dispositions, revisions, and relations", () => {
       }),
     ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
     // A canonical issue is a different claim than "the subject is gone". Every
-    // spelling of it — including the empty string — is refused.
+    // spelling of it — including the empty string and an explicit null — is
+    // refused by the engine, not by the transport that carried it here.
     for (const [operationId, canonicalIssueId] of [
       ["obsolete-canonical", "I-000001"],
       ["obsolete-canonical-blank", ""],
+      ["obsolete-canonical-null", null],
     ] as const) {
       await expect(
         closeIssue(context, created.issueId, "obsolete", { ...evidence, canonicalIssueId }, {
