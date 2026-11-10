@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.4.1] - 2026-11-10
+
+### Fixed
+
+- **Leaf-seat prefix idempotency (#694):** the omp `tool_call` handler no longer stacks `export MSTAR_LEAF_SEAT=1; ` onto a command it already revised — leaf-session bash commands previously accumulated one marker per host re-fire (up to 361 consecutive copies in one transcript). One predicate now recognises only the contiguous leading chain of this hook's own exports (`MSTAR_HOST_SESSION_ID`, `MSTAR_LEAF_SEAT`) and stops at the first other statement, so the marker stays fail-closed: a command that merely mentions it (`echo 'export MSTAR_LEAF_SEAT='`, `grep MSTAR_LEAF_SEAT=`) still receives the prefix, and a caller's own leading `export MSTAR_HOST_SESSION_ID=…; ` is still respected.
+
+- Version alignment with harness **4.4.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.4.1**.
+
 ## [4.4.0] - 2026-11-09
 
 ### Harness

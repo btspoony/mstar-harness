@@ -59,8 +59,8 @@ import { basename as basename12, dirname as dirname14, join as join21, relative 
 import { readlinkSync, realpathSync as realpathSync10 } from "node:fs";
 import { basename as basename13, dirname as dirname15, relative as relative8, resolve as resolve19 } from "node:path";
 import { createHash as createHash16 } from "node:crypto";
-import { readFileSync as readFileSync23 } from "node:fs";
-import { join as join30 } from "node:path";
+import { readFileSync as readFileSync24 } from "node:fs";
+import { join as join31 } from "node:path";
 var __defProp = Object.defineProperty;
 var __returnValue = (v) => v;
 function __exportSetter(name, newValue) {
@@ -17419,7 +17419,7 @@ class ProjectionError extends Error {
 function readCompassSource(spec) {
   let content3;
   try {
-    content3 = readFileSync23(spec.absolutePath, "utf8");
+    content3 = readFileSync24(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {
@@ -17800,7 +17800,7 @@ async function captureExecutionProjectionSources(context) {
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text4(authorityPlanView.plan.status), progress: text4(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text4(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
     for (const doc of inputs.compassDocs) {
-      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join30(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const fspec = { sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join31(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readCompassSource(fspec);
       if (read.state !== "ok" || read.content === null) {
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });

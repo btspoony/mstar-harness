@@ -8,6 +8,29 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.4.1] - 2026-11-10
+
+### Documentation
+
+- **mstar-audit agent-artifact review:** distill SlowMist Agent Security (MIT, v0.1.2) skill/MCP/repo/URL review lenses, plus MCP coexistence and re-review/integrity notes from the SlowMist MCP Security Checklist and OpenClaw Security Practice Guide (both MIT), into `skills/mstar-audit/references/agent-artifact-review.md`. Findings still use the existing format and `informational`…`critical` anchors; on-chain AML, social-share review, the upstream REJECT scale, "false negative > false positive," OpenClaw nightly-audit playbooks, and exploit-demo material are not adopted.
+- **ADR (proposed):** record an incremental Guard 9–11 skill-corpus optimization and errata policy — budget-first migrate→compress→raise, close the three-file Git NEVER allowlist, fix post-v4.4.0 seat/topic nomenclature without renaming carriers, and sequence Waves A–C for body→references and trigger minimization (`docs/adr/proposed/process/2026-11-10-skill-corpus-optimization-errata.md`).
+- **Skills Wave A errata:** replace live-seat `QC/QA` with `QC/PM Acceptance` in the plan quality bar; point knowledge docs at `mstar-knowledge` instead of `mstar-compound` as the writer skill; rewrite the three role Git NEVER citations into Guard-10-recognized `→ … § …` pointers and clear `scripts/rule-duplication.allowlist.json` (carriers such as `qa.md` / `qa_gate` unchanged). Closes #699.
+- **Skills Wave B (body→references):** migrate saturated progressive-disclosure blocks out of `mstar-branch-worktree`, `mstar-conventions`, `mstar-use-cli`, `mstar-knowledge`, and `mstar-phase-gates` into new `references/` files (cleanup / L1 diagnostics / gitignore tracking / task-family index / maintain workflow / playbook-vs-hotfix) without raising Guard 9 caps; each edited `SKILL.md` keeps ≥10% headroom. Stacks on Wave A. Closes #700.
+- **Skills Wave C (triggers + routing):** narrow overlong `description` trigger contracts on `mstar-prose` / `mstar-pr-loop` / `mstar-design-system` / `mstar-knowledge` / `mstar-skill-authoring` (symptoms/exclusions, no workflow summaries); document 1–3 skill routing minimization on the `@project-manager` typical-append table in `mstar-harness-core`. Stacks on Wave B. Closes #701.
+
+### Harness
+
+- Added `mstar lint --type specs` and `--type adr`. Specs are checked by `lintSpecsTree` / `lintSpecsDoc`: `{class}/` location, no `-v<N>` suffix or date prefix, no history directory, the required `Scope` / `Current state` / `Invariants` / `Where it lives` / `Change obligations` skeleton, banned ADR sections, README index links and local-path disclosure. ADR trees are checked by `lintAdrTree`: four buckets (`proposed` / `implemented` / `rejected` / `archived`), class membership, `Status` agreeing with the directory, one `Archived: YYYY-MM-DD — …` line on archived records, required and banned sections, filename shape and fence closure.
+- Made `scripts/adr-check.ts` a thin adapter over `lintAdrTree`, so the repository's Guard 12 gate and the product command share one implementation.
+- Defined the three document layers in `mstar-artifacts/references/knowledge-and-designs.md`: knowledge = reusable experience and methodology, specs = the current state kept true to code, ADR = one decision with its real alternatives and cost. Added the spec skeleton and admission, the ADR four-state lifecycle with archived admission and freeze, per-layer naming, the retirement rule (tracked layers hold no version history; history lives in Git and ADRs), and the process-artifact table. The lifecycle rule lands here; the repository's own `docs/adr` contract and archive directories follow in the stacked PR.
+- Narrowed the boundary prose in `mstar-conventions` and `mstar-knowledge` to pointers and updated the `mstar-artifacts` index.
+- Added the tracked `docs/specs/` corpus describing the project's current architecture (layers and data flow, the store as state authority, the document corpora and their boundaries), and declared `specs_dir=docs/specs` in `.mstarc`.
+- Brought the repository's ADR contract in line with the four-state lifecycle defined in the base change: `docs/adr/README.md` now documents the `archived/` bucket, its admission, the `Archived:` line and the freeze, and the archive class directories ship with the tree.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.4.1**.
+
 ## [4.4.0] - 2026-11-09
 
 ### Harness
