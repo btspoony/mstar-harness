@@ -260,7 +260,7 @@ test("T4: stdio MCP chain - identity-free shared connection, per-call injected i
       plan: PLAN_ID,
       worktreePath,
       workingBranch: BRANCH,
-      qaGate: "pm-acceptance",
+      acceptanceGate: "pm-acceptance",
       findingsCleanup: "allow-residual",
       expect: prePrepareToken,
       operation: "prepare-1",
