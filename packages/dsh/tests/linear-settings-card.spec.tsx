@@ -272,6 +272,46 @@ describe('the linear-mcp Settings row card', () => {
     expect(html).toContain(translate('en')('state.disabled.title'))
     expect(html).not.toContain('data-ms-linear-action="authorize"')
   })
+
+  it('the registered card renders every credential state the host reports, through the slot it was registered on', async () => {
+    const EXPIRED = {
+      status: 'ready',
+      rowEnabled: true,
+      fiberPhase: 'live',
+      credential: { display: 'expired', scope: null, expiresAt: START - 1_000, canWrite: false },
+    }
+    const cases = [
+      { label: 'disabled row', answer: READY_DISABLED, state: 'disabled', push: null, authorize: false },
+      { label: 'enabled, no grant', answer: READY_ABSENT, state: 'unauthorized', push: null, authorize: true },
+      { label: 'expired grant', answer: EXPIRED, state: 'unauthorized', push: null, authorize: true },
+      { label: 'writable grant', answer: READY_AUTHORIZED, state: 'authorized', push: 'ready', authorize: false },
+      { label: 'read-only grant', answer: READY_READ_ONLY, state: 'authorized', push: 'scope-insufficient', authorize: true },
+    ] as const
+
+    for (const testCase of cases) {
+      // The slot contribution the plugin entry makes, then the renderer's own
+      // contract: the component with the props the registration injects.
+      const { connection } = stubConnection(() => testCase.answer)
+      const { ctx, registrations } = pluginContext(connection)
+      apply(ctx as never)
+      const registered = registrations.filter((entry) => entry.name === 'plugins.row.config')[0]!
+      const { controller, hooks } = registered.inject!()
+      await controller.refresh()
+      const Card = registered.component as typeof LinearSettingsCard
+      const html = renderToStaticMarkup(createElement(Card, {
+        view: 'page',
+        t: translate('en'),
+        controller,
+        useSnapshot: <S,>(selector: (state: LinearSettingsState) => S): S => selector(hooks.snapshot.getSnapshot()),
+      }))
+
+      expect(html, testCase.label).toContain(`data-ms-linear-state="${testCase.state}"`)
+      if (testCase.push !== null) expect(html, testCase.label).toContain(`data-ms-linear-push="${testCase.push}"`)
+      if (testCase.authorize) expect(html, testCase.label).toContain('data-ms-linear-action="authorize"')
+      else expect(html, testCase.label).not.toContain('data-ms-linear-action="authorize"')
+      controller.dispose()
+    }
+  })
 })
 
 /* ------------------------------------------------------------------------ *
@@ -501,6 +541,88 @@ describe('the card states', () => {
     expect(html).toContain('data-ms-linear-action="authorize"')
     expect(html).toContain(new Date(START + 3_600_000).toISOString())
     expectNoSecret(READY_READ_ONLY)
+    store.dispose()
+  })
+
+  it('an explicit reauthorization of a read-only grant runs the shipped begin/poll flow and widens it', async () => {
+    // The grant the host reports also carries credential material it must
+    // never hand the browser: the card's view is closed, so these two fields
+    // must not reach a payload or a rendered frame.
+    const secretAccess = tok('hidden')
+    const secretRefresh = ref('hidden')
+    const withSecrets = (credential: object): unknown => ({
+      status: 'ready',
+      rowEnabled: true,
+      fiberPhase: 'live',
+      credential: { ...credential, accessToken: secretAccess, refreshToken: secretRefresh },
+    })
+    let widened = false
+    const { connection, calls } = stubConnection((endpoint) => {
+      if (endpoint === LINEAR_STATUS_ENDPOINT) {
+        return widened ? withSecrets(READY_AUTHORIZED.credential) : withSecrets(READY_READ_ONLY.credential)
+      }
+      if (endpoint === LINEAR_AUTHORIZE_BEGIN_ENDPOINT) {
+        return {
+          status: 'started',
+          attemptId: 'attempt-widen',
+          url: 'https://linear.test/authorize?client_id=client-one&scope=read%2Cissues%3Acreate&state=state-widen&code_challenge=challenge-widen&code_challenge_method=S256',
+          expiresAt: START + 300_000,
+        }
+      }
+      if (endpoint === LINEAR_AUTHORIZE_STATUS_ENDPOINT) {
+        return { status: 'authorized', scope: 'read,issues:create', expiresAt: START + 3_600_000 }
+      }
+      throw new Error(`unexpected ${endpoint}`)
+    })
+    const opened: string[] = []
+    const timers = manualTimers()
+    const store = storeFor(connection, {
+      openBrowser: (url) => opened.push(url),
+      schedule: timers.schedule,
+      cancelSchedule: timers.cancel,
+    })
+    await store.refresh()
+
+    // Valid and read-only: the widening control is there, and reading the state
+    // is the only traffic — an insufficient scope earns no consent on its own.
+    const before = render(store)
+    expect(before).toContain('data-ms-linear-state="authorized"')
+    expect(before).toContain('data-ms-linear-push="scope-insufficient"')
+    expect(before).toContain('data-ms-linear-action="authorize"')
+    expect(calls.map((call) => call.endpoint)).toEqual([LINEAR_STATUS_ENDPOINT])
+
+    // The explicit action starts the same host-owned attempt the absent case
+    // uses: one begin, and the browser opens the shipped PKCE URL (a verifier
+    // never crosses to it).
+    const begin = await store.begin()
+    expect(begin.status).toBe('started')
+    if (begin.status !== 'started') throw new Error('begin did not start')
+    expect(opened).toEqual([begin.url])
+    const url = new URL(begin.url)
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256')
+    expect(url.searchParams.has('code_verifier')).toBe(false)
+    expect(calls.map((call) => call.endpoint)).toEqual([
+      LINEAR_STATUS_ENDPOINT,
+      LINEAR_AUTHORIZE_BEGIN_ENDPOINT,
+    ])
+
+    // The consent completes on the host; the card polls the outcome and then
+    // shows the widened grant the host now reports.
+    widened = true
+    timers.fire()
+    await flush()
+
+    const after = render(store)
+    expect(after).toContain('data-ms-linear-state="authorized"')
+    expect(after).toContain('data-ms-linear-push="ready"')
+    expect(after).toContain('read,issues:create')
+    expect(after).not.toContain('data-ms-linear-action="authorize"')
+
+    // No secret reached the browser: not in the render, not in any request.
+    expect(after).not.toContain(secretAccess)
+    expect(after).not.toContain(secretRefresh)
+    for (const call of calls) expectNoSecret(call.payload)
+    expectNoSecret(begin)
     store.dispose()
   })
 })
