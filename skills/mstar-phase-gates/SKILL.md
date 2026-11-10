@@ -41,20 +41,11 @@ description: Spec-Driven 双阶段门禁：Prepare（specify→clarify→plan）
 
 ### Hotfix 例外
 
-压缩路径与事后补记见下文 **§ Hotfix 例外**（Playbook 末尾）。
+Playbook 与 Hotfix 完整对照 → **`references/playbook-vs-hotfix.md`**。
 
 ## Phase Gate Playbook
 
-执行动作与最小产物见上文 **§ Spec-Driven 双阶段门禁**。本节仅 **Playbook 补充**（不重复 Prepare/Execute 长文）。
-
-### Execute 补充（Playbook 专有）
-
-- **`plan locked`**
-  - 最小动作：在 plan 或 notes 记录当前锁定版本（日期或 hash）。
-  - **Plan 质量门**（新 plan / 大改）：无 placeholder（`...`、`TBD`、`etc.`）—— 该判定在 **`plan(locked)`** 时点执行。Prepare 期间**唯一**被认可的未完成形态是带 owner 的 `TODO(owner: …)` marker（语法、owner 词汇与清除口径 → **`mstar-iteration/references/phase-1-prepare.md`** §1.3；清除期限按路线取：迭代初稿 = compass `status: locked`（**不是**该 plan 的 `plan(locked)` 时点）；独立 plan（无 compass）= 本节 `plan(locked)` 时点）；无 owner 的 placeholder 在任何阶段都不被接受。含 **Global Constraints** 与 per-task **Interfaces**；PM self-review 四问（每 task 可独立验证？依赖顺序清晰？无隐含假设？每 task 可单轮闭合其 Files 与验证门 — Task shape / session fit？→ **`mstar-artifacts/references/plan-quality-bar.md`** item 7）— 见 `mstar-artifacts/templates/plan.main.md` + **`mstar-artifacts/references/plan-quality-bar.md`**（自包含/验证门/STOP 条件/drift check/done criteria）。
-- **`implement`**
-  - 最小产物：实现 diff、自检证据、回报与 handoff；行为准则 → **`mstar-coding-behavior`**；编辑纪律 → 上文「可验证编辑与上下文纪律」。
-  - **知识库 / 迭代 compass**：**默认**开工前扫 `{KNOWLEDGE_DIR}/README.md` 索引（若存在）并阅读与当轮相关的 **Active** 行（**即使 metadata 无 knowledge 链接**）；若 `plans[].metadata` 登记了 `primary_spec` / `spec_refs` / `iteration_compass` / `iteration_refs`，所链接文档**仍须**阅读；两类阅读均须在回报中说明已对齐 → **`mstar-conventions`** · **`mstar-artifacts/references/knowledge-and-designs.md`**。该 implement 时阅读是输入变化时的 re-alignment，不替代 Prepare 的锁前 recall receipt（见上文 Prepare `plan` 节）。
+执行动作与最小产物的 Playbook 专有补充 → **`references/playbook-vs-hotfix.md`** § Phase Gate Playbook。上文 § Spec-Driven 仍是非热修强制骨架。
 
 ## 角色职责
 
@@ -103,10 +94,7 @@ per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动�
 
 ## Hotfix 例外
 
-- 允许路径：`specify(min) -> plan(min) -> implement`
-- 必须补记：
-  - 事后 `clarify/RCA`
-  - 触发条件、影响范围、修复与回滚摘要
+完整例外边界与证据要求 → **`references/playbook-vs-hotfix.md`** § Hotfix 例外（full）。
 
 ## 最小证据要求
 
@@ -115,8 +103,13 @@ per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动�
 - 结论证据：不得仅写"done"，必须可复核（命令、输出、截图或复现步骤）。
 - **证据与变更同层。** 单测/集成测试是 plan task 的默认证据；**开发 plan** 中，真实浏览器、真机、安装/部署 E2E **不写成 task，也不构成任何 gate 的证据义务**——各层自行测试，缺环境如实记为未验证。这类验证的**唯一**落点是用户显式请求的独立 `mstar-e2e` workflow：该 workflow 自身以 plan 注册并承载命名场景，是此边界的合法例外（授权来源见 `mstar-harness-core` § 定向执行与验证边界）。issue/需求/验收文本中出现的端到端场景**不构成**在开发 plan 中加 task 的授权。
 
+## Workflow
+
+Prepare（specify→clarify→plan，意图/clarify/Roadmap/Recall）→ lock → Execute（plan(locked)→tasks→implement；多 task 默认 SDD）→ 非热修 Playbook / 热修例外见 **`references/playbook-vs-hotfix.md`** → 证据同层（§ 最小证据）并用 § 快速判定防越级。
+
 ## References
 
 - plan 文件落盘与路径符号 → **`mstar-conventions`**
 - 多 task 默认 `Execution mode: sdd` 的 implement 波次 → **`mstar-sdd`**
 - QC / PM Acceptance 审查链与 residual 登记 → **`mstar-review-qc`**
+- Playbook vs Hotfix → **`references/playbook-vs-hotfix.md`**

@@ -48,7 +48,7 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 
 并存时 **`.mstar/` 优先**；仅当项目已有 `.agents/` 且无 `.mstar/` 时继续沿用 `.agents/`。
 
-#### `.mstarc` 格式（INI 子集；默认 gitignored，见下「Git 跟踪策略」）
+#### `.mstarc` 格式（INI 子集；默认 gitignored，→ `references/git-tracking-and-gitignore.md`）
 
 ```ini
 [config]
@@ -153,7 +153,7 @@ PM 在需要持久化追踪时：
 
 1. **Bootstrap 唯一路径 = `mstar harness scaffold` + `mstar store init`**（store 分工见步骤 4）：scaffold 建 authored 目录与 `projects/_default/` 登记；`store init` 激活执行权威。**无 ACTIVE store 的 harness 没有执行权威**——用对话追踪（no-plan mode），门禁（QC/PM Acceptance）仍适用；scaffold **不**写 `status.json`。
 2. scaffold 建立 `plans/` / `iterations/` / `knowledge/` / `specs/` / `sdd/` / `reviews/` 空目录；运行时 per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建；`workflows/` 由 engine writers 按需创建，**不**预建。
-3. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（见下文「Git 跟踪策略」）— CLI `init` 可自动添加；文件已声明 harness 根规则时属作者所有，fence 不写入（见下文「Git 跟踪策略」）
+3. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（→ `references/git-tracking-and-gitignore.md`）— CLI `init` 可自动添加；文件已声明 harness 根规则时属作者所有，fence 不写入（→ `references/git-tracking-and-gitignore.md`）
 4. Store：全新、无 legacy register/catalog 的 harness 用 `mstar store init` 建 active issue/catalog store；已有或 legacy harness 用 `mstar store upgrade`（operator 见 help）导入可识别执行状态、激活 authority 并报告 skipped 项。`store activate` 是 staged `store migrate` apply 后的激活入口（attestation 自动生成，`--attestation <path>` 仅为显式覆盖，`--operator` 必填），不是 init/upgrade 的例行下一步。以回执确认 authority，再用 `mstar status validate` / `mstar plan show` 读执行状态。
 5. Git：**进程本地、结果共享** — 默认跟踪 `{HARNESS_DIR}/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`；store 与运行过程默认 gitignored，plan Markdown 仍是 authored artifact，非状态权威。跨 clone 持久 handoff = knowledge + specs + `{HARNESS_DIR}/AGENTS.md`（及根 `CONCEPTS.md` / `STRATEGY.md` 若使用）；须跨 clone 的 finding 须提升（compound）或写入 tracked results — **勿**默认 `git add` 迁移源 `status.json` / `plans/`。
 
@@ -163,67 +163,7 @@ PM 在需要持久化追踪时：
 
 ## Git 跟踪策略（进程 vs 结果）
 
-**原则**：进程留在本地；结果与团队共享。
-
-**默认 tracked（`{HARNESS_DIR}` 下）**：
-
-- `{HARNESS_DIR}/AGENTS.md`
-- `{KNOWLEDGE_DIR}/**`
-- `{HARNESS_DIR}/specs/`（即解析后的 `{SPECS_DIR}` 在 harness 下的默认落点）
-- `{ADR_DIR}/**`
-
-**默认 gitignored（`{HARNESS_DIR}` 下）**：
-
-- `archived/`、`iterations/`、`plans/`、`sdd/`、`status.json`（进程产物；`status.json` 仅历史输入，无 live writer）
-- `workflows/` — retained ordinary bodies/notes.
-- `projects/` — project files; roadmap transport rules → `mstar-project-governance`.
-- `reviews/`（review 运行目录树：codebase audit / PR / branch / diff review 的 report 与 evidence；进程产物）
-- `store.db`（issue/catalog/roadmap/milestone 与 execution_* 权威；默认随 `{HARNESS_DIR}` 忽略）
-
-Legacy `.agents/` 项目：将上表路径前缀 `.mstar/` 换为 `.agents/`。**仓库把 `{HARNESS_DIR}` 全量 gitignore 时**（tracked 结果无法提交），tracked specs / knowledge / adr 须解析到 `.agents/specs|knowledge|adr` 才可共享。`mstar path check` 按 Git 实况判定、**目录名不作准**：被忽略的文件只能留在 **control checkout**，可提交的文件属于**调用方自己的 checkout**（work / integration worktree）；结果目录被忽略只是 warning（`path.result-ignored`，exit `0`，指向 `.agents/` 或 `.mstarc`），位置越界才是 finding（exit `1`）。
-
-**v3 运行时目录的 gitignore 说明（文档化；canonical snippet 零改动）**：`workflows/`、`projects/` 与 `reviews/` 都位于已被 **`.mstar/**` 默认忽略**的 `{HARNESS_DIR}` 之下——**不需要**在仓库根 `.gitignore` 增加任何条目，也**不新增** re-include 条目（它们不是 tracked 结果）。`projects/_default/` 由 **`scaffoldHarness` / `mstar harness scaffold` 建目录并在可用的 catalog 中登记**，不生成 `roadmap.md` 或 `residuals.json`；其余 project id 与 `workflows/` 子目录由各自 domain writers 按需创建。历史文件的迁移只走 transport/review（→ `mstar-project-governance`）。**`review_dir` 声明在 `{HARNESS_DIR}` 之外时**（例如 `review_dir=process/reviews` 或绝对路径）`{REVIEW_DIR}` 落在 canonical snippet 的 `.mstar/**` / `.agents/**` 之外，review report 与证据因此**不再被忽略**——这类布局需自行在仓库根 `.gitignore` 声明对应规则（canonical snippet 只 bootstrap 默认 harness 布局）。
-
-**多 worktree（iteration L1）**：默认 gitignored 的进程产物**不会**随 `git worktree add` 进入新检出。进程 SSOT 固定在 **control root = 主 checkout（main worktree）**，读写经 control 绝对路径（`<main-repo-root>/{HARNESS_DIR}/…`）；integration 分支检出在专属 integration worktree（ACTIVE workflow `integration_worktree_path`，唯一 merge cwd）；产品代码改在 feature worktree。**Gitignore 策略注**：tracked-results 层（`{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{HARNESS_DIR}/AGENTS.md`）随 Git 分支走，在采纳 canonical gitignore snippet 的仓库中对所有 worktree **可见**——本仓库 `.mstar/` 全量 gitignore 属仓库自身 ignore 规则的属性，非契约。三写域模型（process SSOT / tracked results / product source）的 SSOT → **`mstar-branch-worktree`**「Harness path SSOT under default gitignore」；反模式（禁止因 feature 缺 plans 而 `Worktree mode: waived`）同见该节。
-
-**control root 的发现路径（two-step）**：`git -C <cwd> worktree list --porcelain` 的首条记录即主 worktree 根；`mstar path resolve` 直接报告 `controlRoot`（主 worktree 根）/ `controlHarnessDir`（该根的 `{HARNESS_DIR}`）/ `linkedWorktree`。进程文档一律从 `controlHarnessDir` 读写；linked checkout 里没有 `.mstar/` **不是**未初始化 harness——它只是说明本 checkout 不持有进程 SSOT。解析顺序的唯一 SSOT 见上文「`{HARNESS_DIR}` 解析顺序」。
-
-**`.gitignore` 作者所有（author-owned）**：文件已含任一 harness **根声明**——`.mstar` 或 `.agents` 的规则，含前导 `/`、`!` 否定与部分声明（如 `.mstar/plans/`）——即为作者所有；scaffold、fence 写路径与 `doctor` 读路径共用 engine `path` 模块导出的同一个只读谓词 `hasHarnessRootDeclaration`，命中即**不做任何改动**（不追加、不重排、不去重、不规范化），文件字节不变。无关路径（`node_modules`、`dist/`）与单独出现的配置项 `.mstarc` **不**构成声明。canonical snippet 只 bootstrap **未声明**的文件；自定义 harness 布局的跳过行为不变。
-
-**Canonical `.gitignore` snippet**（skills 与 CLI `init` 对齐）：
-
-```gitignore
-# Morning Star harness (.mstar/)
-# Principle: process stays local; results are shared with the team.
-# Default-ignore everything under .mstar/, then re-include the tracked results.
-.mstar/**
-!.mstar/AGENTS.md
-!.mstar/knowledge/
-!.mstar/knowledge/**
-!.mstar/specs/
-!.mstar/specs/**
-!.mstar/adr/
-!.mstar/adr/**
-# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
-.mstarc
-```
-
-Legacy `.agents/` 等价：
-
-```gitignore
-# Morning Star harness (.agents/) — legacy
-# Default-ignore everything under .agents/, then re-include the tracked results.
-.agents/**
-!.agents/AGENTS.md
-!.agents/knowledge/
-!.agents/knowledge/**
-!.agents/specs/
-!.agents/specs/**
-!.agents/adr/
-!.agents/adr/**
-```
-
-> **Engine check:** engine `emitGitignoreSnippet` / `validateGitignore` to emit or validate the canonical snippet above — a declared file validates as author-owned (`gitignore.author-declared`) with no rewrite, while a missing file still fails as `gitignore.missing`. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+**原则**：进程留在本地；结果与团队共享。Tracked defaults（`AGENTS.md` / `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{ADR_DIR}`）、gitignore 面、canonical snippet、author-owned 判定、multi-worktree 可见性与 `mstar path check` 语义 → **`references/git-tracking-and-gitignore.md`**（唯一契约本体）。Bootstrap 步骤里的 ignore 引用指向同一文件。
 
 ## Spec 驱动的分支模型（多 Plan · 同一 Spec）
 
@@ -262,6 +202,7 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 ## References
 
 - `references/harness-bootstrap-and-agents-layering.md` — 新仓 harness + AGENTS 分层
+- `references/git-tracking-and-gitignore.md` — 进程 vs 结果跟踪、canonical `.gitignore` snippet、author-owned 判定
 - `references/effort-estimation.md` — agent-oriented 工期（禁人天/FTE）
 - `references/artifact-storage-paths.md` — **产物存储路径 SSOT**（知识文档、CONCEPTS.md、STRATEGY.md 等落盘位置；`mstar-knowledge` 等技能引用此表，不得本地重定义）
 - **`mstar-project-governance`** `references/migration-source-shapes.md` — historical execution/register file shapes; no execution route or live writer

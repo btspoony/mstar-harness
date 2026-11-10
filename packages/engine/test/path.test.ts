@@ -1528,12 +1528,12 @@ describe("byte-parity with skill SSOT files ", () => {
   const repoRoot = findRepoRoot();
 
   test("emitGitignoreSnippet(\"mstar\") is byte-identical to the plan-conventions .mstar/ fence", () => {
-    const skillPath = join(repoRoot, "skills", "mstar-conventions", "SKILL.md");
+    const skillPath = join(repoRoot, "skills", "mstar-conventions", "references", "git-tracking-and-gitignore.md");
     expect(emitGitignoreSnippet("mstar")).toBe(gitignoreFence(skillPath, 0));
   });
 
   test("emitGitignoreSnippet(\"agents\") is byte-identical to the plan-conventions legacy .agents/ fence", () => {
-    const skillPath = join(repoRoot, "skills", "mstar-conventions", "SKILL.md");
+    const skillPath = join(repoRoot, "skills", "mstar-conventions", "references", "git-tracking-and-gitignore.md");
     expect(emitGitignoreSnippet("agents")).toBe(gitignoreFence(skillPath, 1));
   });
 

@@ -435,7 +435,7 @@ describe("checkUseCliSkillCliCitations — mstar-use-cli skill scan (Task 3)", (
       process.chdir(outer);
       const { files, failures } = readUseCliSkillMarkdown(REPO_ROOT);
       expect(failures).toEqual([]);
-      expect(files.length).toBe(5);
+      expect(files.length).toBe(6);
       expect(files.every((f) => f.rel.startsWith("skills/mstar-use-cli/"))).toBe(true);
     } finally {
       process.chdir(prev);
