@@ -1,18 +1,22 @@
 /**
  * The outcomes the CI report gate must distinguish, on synthetic JUnit reports
  * (Bun's `--reporter=junit` shape): valid, skipped, missing, empty, a deleted
- * gated case, and an over-executed (parametrized) gated case. The reports are
- * fixtures — nothing here is compared against a real runner.
+ * gated case, a many-case file whose gated cases were deleted, and an
+ * over-executed (parametrized) gated case. The reports are fixtures — nothing
+ * here is compared against a real runner.
  *
- * The expected per-file counts come from the gate's own inventory; the skip that
- * must NOT fail it is in `tests/install-e2e.spec.ts`, because the invariant is
- * scoped to the two gated spec files.
+ * Gated fixtures carry the real skip reason in the title, because that suffix is
+ * what the gate counts; ordinary fixtures never do. The expected per-file counts
+ * come from the gate's own inventory; the skip that must NOT fail it is in
+ * `tests/install-e2e.spec.ts`, because the invariant is scoped to the two gated
+ * spec files.
  */
 import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { GATED_SPECS, checkCompositionReport } from './check-composition-report.ts'
+import { LOCAL_SKILL_MOUNT_SKIP_REASON } from '../tests/harness.ts'
 
 const [
   { file: SESSION_SPEC, expectedExecuted: SESSION_CASES },
@@ -28,9 +32,15 @@ function testcase(file: string, name: string, skipped = false): string {
   return `<testcase name="${name}" classname="suite" file="${file}" line="1"><skipped /></testcase>`
 }
 
-/** `count` executed cases for a file, as a report would list them. */
-function executed(file: string, count: number): string[] {
+/** `count` ordinary (non-gated) executed cases for a file, as a report would list them. */
+function ordinary(file: string, count: number): string[] {
   return Array.from({ length: count }, (_, index) => testcase(file, `case ${index + 1}`))
+}
+
+/** `count` executed cases carrying the gated marker, as Bun reports their titles. */
+function gated(file: string, count: number, skipped = false): string[] {
+  return Array.from({ length: count }, (_, index) =>
+    testcase(file, `mounts the real composition surface ${index + 1} (${LOCAL_SKILL_MOUNT_SKIP_REASON})`, skipped))
 }
 
 /** One file-level suite, optionally with a nested describe suite, as Bun emits them. */
@@ -55,8 +65,10 @@ function runScript(xml: string): { exitCode: number; stdout: string; stderr: str
 describe('composition report gate — synthetic reports', () => {
   test('valid: both gated files executed, an unrelated file may skip', () => {
     const check = checkCompositionReport(report(
-      suite(SESSION_SPEC, executed(SESSION_SPEC, SESSION_CASES)),
-      suite(SKILLS_SPEC, executed(SKILLS_SPEC, SKILLS_CASES)),
+      // An ordinary case of a gated spec file is outside the invariant: only the
+      // marker-carrying cases are counted, so its skip is not the gate's business.
+      suite(SESSION_SPEC, [...gated(SESSION_SPEC, SESSION_CASES), testcase(SESSION_SPEC, 'an ordinary case', true)]),
+      suite(SKILLS_SPEC, gated(SKILLS_SPEC, SKILLS_CASES)),
       suite('tests/install-e2e.spec.ts', [testcase('tests/install-e2e.spec.ts', 'no dsh bin on PATH', true)], false),
     ))
     expect(check.ok).toBe(true)
@@ -67,8 +79,8 @@ describe('composition report gate — synthetic reports', () => {
 
   test('deleted: fewer executed cases than the inventory pins names that file and both counts', () => {
     const check = checkCompositionReport(report(
-      suite(SESSION_SPEC, executed(SESSION_SPEC, SESSION_CASES - 1)),
-      suite(SKILLS_SPEC, executed(SKILLS_SPEC, SKILLS_CASES)),
+      suite(SESSION_SPEC, gated(SESSION_SPEC, SESSION_CASES - 1)),
+      suite(SKILLS_SPEC, gated(SKILLS_SPEC, SKILLS_CASES)),
     ))
     expect(check.ok).toBe(false)
     if (check.ok) return
@@ -77,18 +89,41 @@ describe('composition report gate — synthetic reports', () => {
     expect(check.reason).toContain(`expected at least ${SESSION_CASES}`)
   })
 
+  test('mixed file: ordinary cases in a gated spec cannot stand in for a missing gated case', () => {
+    const check = checkCompositionReport(report(
+      suite(SESSION_SPEC, [...ordinary(SESSION_SPEC, 9), ...gated(SESSION_SPEC, SESSION_CASES - 1)]),
+      suite(SKILLS_SPEC, gated(SKILLS_SPEC, SKILLS_CASES)),
+    ))
+    expect(check.ok).toBe(false)
+    if (check.ok) return
+    expect(check.reason).toContain(SESSION_SPEC)
+    expect(check.reason).toContain(`executed ${SESSION_CASES - 1} gated case(s)`)
+    expect(check.reason).toContain(`expected at least ${SESSION_CASES}`)
+  })
+
+  test('mixed file: deleting every gated case from a many-case file refuses', () => {
+    const check = checkCompositionReport(report(
+      suite(SESSION_SPEC, ordinary(SESSION_SPEC, 11)),
+      suite(SKILLS_SPEC, gated(SKILLS_SPEC, SKILLS_CASES)),
+    ))
+    expect(check.ok).toBe(false)
+    if (check.ok) return
+    expect(check.reason).toContain(SESSION_SPEC)
+    expect(check.reason).toContain('no executed gated case')
+  })
+
   test('over-executed: a parametrized gated case may exceed the pinned count', () => {
     const check = checkCompositionReport(report(
-      suite(SESSION_SPEC, executed(SESSION_SPEC, SESSION_CASES + 1)),
-      suite(SKILLS_SPEC, executed(SKILLS_SPEC, SKILLS_CASES + 1)),
+      suite(SESSION_SPEC, gated(SESSION_SPEC, SESSION_CASES + 1)),
+      suite(SKILLS_SPEC, gated(SKILLS_SPEC, SKILLS_CASES + 1)),
     ))
     expect(check.ok).toBe(true)
   })
 
   test('skipped: a gated case reported as a skip names that file', () => {
     const check = checkCompositionReport(report(
-      suite(SESSION_SPEC, executed(SESSION_SPEC, SESSION_CASES)),
-      suite(SKILLS_SPEC, [...executed(SKILLS_SPEC, SKILLS_CASES - 1), testcase(SKILLS_SPEC, 'loads the body', true)]),
+      suite(SESSION_SPEC, gated(SESSION_SPEC, SESSION_CASES)),
+      suite(SKILLS_SPEC, [...gated(SKILLS_SPEC, SKILLS_CASES - 1), ...gated(SKILLS_SPEC, 1, true)]),
     ))
     expect(check.ok).toBe(false)
     if (check.ok) return
@@ -98,7 +133,7 @@ describe('composition report gate — synthetic reports', () => {
 
   test('missing: an absent gated suite names that file', () => {
     const check = checkCompositionReport(report(
-      suite(SESSION_SPEC, executed(SESSION_SPEC, SESSION_CASES)),
+      suite(SESSION_SPEC, gated(SESSION_SPEC, SESSION_CASES)),
       suite('tests/invariant.spec.ts', [testcase('tests/invariant.spec.ts', 'exports')], false),
     ))
     expect(check.ok).toBe(false)
@@ -109,28 +144,28 @@ describe('composition report gate — synthetic reports', () => {
 
   test('empty: a present gated suite with no executed case names that file', () => {
     const check = checkCompositionReport(report(
-      suite(SESSION_SPEC, executed(SESSION_SPEC, SESSION_CASES)),
+      suite(SESSION_SPEC, gated(SESSION_SPEC, SESSION_CASES)),
       suite(SKILLS_SPEC, []),
     ))
     expect(check.ok).toBe(false)
     if (check.ok) return
     expect(check.reason).toContain(SKILLS_SPEC)
-    expect(check.reason).toContain('no executed case')
+    expect(check.reason).toContain('no executed gated case')
   })
 })
 
 describe('composition report gate — script exit status', () => {
   const valid = report(
-    suite(SESSION_SPEC, executed(SESSION_SPEC, SESSION_CASES)),
-    suite(SKILLS_SPEC, executed(SKILLS_SPEC, SKILLS_CASES)),
+    suite(SESSION_SPEC, gated(SESSION_SPEC, SESSION_CASES)),
+    suite(SKILLS_SPEC, gated(SKILLS_SPEC, SKILLS_CASES)),
   )
   const skipped = report(
-    suite(SESSION_SPEC, executed(SESSION_SPEC, SESSION_CASES)),
-    suite(SKILLS_SPEC, [...executed(SKILLS_SPEC, SKILLS_CASES - 1), testcase(SKILLS_SPEC, 'mounts the mirror', true)]),
+    suite(SESSION_SPEC, gated(SESSION_SPEC, SESSION_CASES)),
+    suite(SKILLS_SPEC, [...gated(SKILLS_SPEC, SKILLS_CASES - 1), ...gated(SKILLS_SPEC, 1, true)]),
   )
   const deleted = report(
-    suite(SESSION_SPEC, executed(SESSION_SPEC, SESSION_CASES - 1)),
-    suite(SKILLS_SPEC, executed(SKILLS_SPEC, SKILLS_CASES)),
+    suite(SESSION_SPEC, gated(SESSION_SPEC, SESSION_CASES - 1)),
+    suite(SKILLS_SPEC, gated(SKILLS_SPEC, SKILLS_CASES)),
   )
 
   test('exits 0 and reports the executed population when the gate holds', () => {
