@@ -17,7 +17,7 @@
  * makes the upgrade refuse exactly as it would in a real workspace.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,7 +47,8 @@ import {
   type ExecutionToken,
   type ExecutionTransaction,
 } from "./execution-store.js";
-import { mutateExecutionPlan } from "./execution-coordination.js";
+import { completeExecutionPlan, mutateExecutionPlan, prepareExecutionPlan, progressExecutionPlan } from "./execution-coordination.js";
+import { resolveSddDir } from "./path.js";
 import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import type { WorkflowEntry } from "./status.js";
 import {
@@ -2610,4 +2611,209 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     expect(planTokens["p-1"]).toBeDefined();
   });
 
+});
+
+/* ------------------------------------------------------------------------ *
+ * Legacy completion provenance — the optional `review_base` of a stored row
+ *
+ * I-001068 was filed as "any historical row whose `completion.review_base` is
+ * null makes every store read refuse". The row below is completed through the
+ * public producers (so every other member of its completion record is the
+ * canonical one the write path wrote) and is then mutated in exactly ONE
+ * member: `completion.review_base` becomes null, or is replaced by a value that
+ * is not a Git object id. The read path is what must decide the finding, so the
+ * fixture never plants a second defect to manufacture a refusal.
+ * ------------------------------------------------------------------------ */
+
+const LEGACY_PLAN = "20261108-legacy-completion";
+const LEGACY_WORKFLOW = "wf-legacy-completion";
+const LEGACY_TS = "2026-11-08T00:00:00.000Z";
+
+function legacyGit(cwd: string, args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+}
+
+function legacyCommit(cwd: string, message: string): void {
+  legacyGit(cwd, ["add", "-A"]);
+  legacyGit(cwd, ["-c", "user.email=fixture@example.test", "-c", "user.name=fixture", "commit", "-q", "-m", message]);
+}
+
+/**
+ * One standalone-development plan completed through the public producers: the
+ * stored row carries a real `completion` record with the reviewed base it was
+ * given (or none, when the submission omits it), a real source commit and its
+ * retained evidence.
+ */
+async function completedLegacyPlan(label: string, options: { omitReviewBase?: boolean } = {}): Promise<{
+  context: StoreContext;
+  caller: ExecutionCaller;
+  session: ExecutionSessionRef;
+  sourceSha: string;
+  baseSha: string;
+}> {
+  const repoRoot = realpathSync(mkdtempSync(join(ROOT, `${label}-`)));
+  legacyGit(repoRoot, ["init", "-q", "-b", "main"]);
+  writeFileSync(join(repoRoot, "base.txt"), "base\n");
+  legacyCommit(repoRoot, "init");
+  const context: StoreContext = { harnessDir: join(repoRoot, ".mstar") };
+  mkdirSync(context.harnessDir, { recursive: true });
+  (await initializeStore(context)).close();
+  const initialized = await readExecutionState(context);
+  await registerCatalogEntity(
+    context,
+    { kind: "plan", id: LEGACY_PLAN, title: `${LEGACY_PLAN} title`, rootKind: "plans", relativePath: `plans/${LEGACY_PLAN}.md` },
+    { operationId: `register-${label}`, actor: "execution-store.test" },
+  );
+  const worktreePath = join(repoRoot, "wt-legacy");
+  legacyGit(repoRoot, ["worktree", "add", "-q", "-b", `feature/${LEGACY_PLAN}`, worktreePath]);
+  writeFileSync(join(worktreePath, "slice.txt"), "reviewed slice\n");
+  legacyCommit(worktreePath, "feat: reviewed slice");
+  const sourceSha = legacyGit(worktreePath, ["rev-parse", "HEAD"]);
+  const baseSha = legacyGit(repoRoot, ["rev-parse", "HEAD"]);
+
+  const caller: ExecutionCaller = { sessionId: "legacy-coordinator", role: "coordinator", workflowId: LEGACY_WORKFLOW };
+  const planContext: ExecutionContext = { ...context, caller };
+  const created = await createExecutionWorkflow(planContext, {
+    entry: { id: LEGACY_WORKFLOW, type: "plan", started_at: LEGACY_TS, dir: `workflows/${LEGACY_WORKFLOW}` },
+    snapshot: {
+      schema_version: 1,
+      id: LEGACY_WORKFLOW,
+      type: "plan",
+      status: "running",
+      started_at: LEGACY_TS,
+      updated_at: LEGACY_TS,
+      plans: [{ id: LEGACY_PLAN, title: `${LEGACY_PLAN} title`, file: `plans/${LEGACY_PLAN}.md`, status: "Todo" }],
+      delivery_kind: "development",
+      branch: { base: "main", source: `feature/${LEGACY_PLAN}`, target: "main" },
+    } as unknown as WorkflowSnapshot,
+    expected: initialized.token,
+    operationId: `create-${label}`,
+  });
+  const session = (
+    await bindExecutionSession(planContext, {
+      workflowId: LEGACY_WORKFLOW,
+      expected: created.data.workflows[0]!.workflowToken,
+      operationId: `bind-${label}`,
+    })
+  ).data;
+  const planToken = async (): Promise<ExecutionToken> => (await readExecutionPlan(planContext, session, LEGACY_PLAN)).token;
+  await prepareExecutionPlan(planContext, {
+    operationId: `prepare-${label}`,
+    session,
+    expected: await planToken(),
+    planId: LEGACY_PLAN,
+    operation: { kind: "prepare", config: { worktreePath, workingBranch: `feature/${LEGACY_PLAN}`, qaGate: "pm-acceptance" } },
+  });
+  for (const status of ["InProgress", "InReview"] as const) {
+    await progressExecutionPlan(planContext, {
+      operationId: `progress-${status}-${label}`,
+      session,
+      expected: await planToken(),
+      planId: LEGACY_PLAN,
+      operation: { kind: "progress", progress: { status, summary: "reviewed", evidence_paths: [] } },
+    });
+  }
+  const sddDir = resolveSddDir(context.harnessDir, LEGACY_PLAN);
+  mkdirSync(sddDir, { recursive: true });
+  const bodies = { qc: join(sddDir, "qc1.md"), consolidated: join(sddDir, "qc.md"), qa: join(sddDir, "qa.md") };
+  writeFileSync(bodies.qc, "reviewed QC body\n");
+  writeFileSync(bodies.consolidated, "consolidated QC body\n");
+  writeFileSync(bodies.qa, "QA verdict body\n");
+  await completeExecutionPlan(planContext, {
+    operationId: `complete-${label}`,
+    session,
+    expected: await planToken(),
+    planId: LEGACY_PLAN,
+    operation: {
+      kind: "complete",
+      evidence: {
+        source_sha: sourceSha,
+        ...(options.omitReviewBase === true ? {} : { review_base: baseSha }),
+        review_head: sourceSha,
+        qc: { decision: "Approve", reports: [bodies.qc], consolidated: bodies.consolidated },
+        qa: { gate: "pm-acceptance", decision: "pass", report: bodies.qa },
+      },
+    },
+  });
+  return { context, caller, session, sourceSha, baseSha };
+}
+
+type StoredReviewBase = "null" | "invalid";
+
+/**
+ * Rewrite ONLY `completion.review_base` on the stored row: decode the stored
+ * block, change that one member, persist the JSON through a parameterized
+ * statement on the fixture handle.
+ */
+function rewriteStoredReviewBase(context: StoreContext, planId: string, mode: StoredReviewBase): void {
+  const db = rawDb(storePath(context));
+  try {
+    const stored = db
+      .prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?")
+      .get(LEGACY_WORKFLOW, planId);
+    const text =
+      stored !== null && typeof stored === "object" && "coordination_json" in stored ? stored.coordination_json : undefined;
+    if (typeof text !== "string") throw new Error(`fixture: execution_plans(${LEGACY_WORKFLOW},${planId}) has no coordination_json`);
+    const coordination = JSON.parse(text) as { completion?: Record<string, unknown> };
+    const completion = coordination.completion;
+    if (completion === undefined) throw new Error(`fixture: the completed row ${planId} carries no completion record`);
+    completion.review_base = mode === "null" ? null : "not-a-git-object-id";
+    db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(
+      JSON.stringify(coordination),
+      LEGACY_WORKFLOW,
+      planId,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/** The stored completion of the fixture's single plan row, read authoritatively. */
+async function storedCompletion(context: StoreContext) {
+  const state = await readExecutionState(context);
+  return state.data.workflows[0]!.plans[0]!.coordination?.completion;
+}
+
+describe("execution-domain: the optional review_base of a completed row", () => {
+  test("a stored completion with review_base null is served by the stored-row read", async () => {
+    const fixture = await completedLegacyPlan("legacy-review-base-null");
+    // The canonical row first: the write path stored the reviewed base it was given.
+    expect((await storedCompletion(fixture.context))?.review_base).toBe(fixture.baseSha);
+
+    // BASELINE: only completion.review_base differs from that canonical row.
+    rewriteStoredReviewBase(fixture.context, LEGACY_PLAN, "null");
+    const served = await storedCompletion(fixture.context);
+    expect(served?.review_base).toBeNull();
+    expect(served).toMatchObject({ source_sha: fixture.sourceSha, review_head: fixture.sourceSha });
+  });
+
+  test("an omitted review_base is recorded as an explicit null and served", async () => {
+    // Absence at the trust boundary is valid on every route; the write path
+    // records it as null rather than leaving the key out, so a stored row never
+    // carries an omission and the strict stored-row validator is never asked to
+    // accept one.
+    const fixture = await completedLegacyPlan("legacy-review-base-omitted", { omitReviewBase: true });
+
+    const served = await storedCompletion(fixture.context);
+    expect(served).toHaveProperty("review_base", null);
+    expect(served).toMatchObject({ source_sha: fixture.sourceSha, review_head: fixture.sourceSha });
+  });
+
+  test("a stored review_base that is not a Git object id still refuses, naming its row and field", async () => {
+    const fixture = await completedLegacyPlan("legacy-review-base-invalid");
+
+    rewriteStoredReviewBase(fixture.context, LEGACY_PLAN, "invalid");
+    const refusal: unknown = await readExecutionState(fixture.context).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(refusal).toMatchObject({ code: "store.corrupt" });
+    const message = refusal instanceof Error ? refusal.message : "";
+    expect(message).toContain(`execution_plans(${LEGACY_WORKFLOW},${LEGACY_PLAN}).coordination_json`);
+    expect(message).toContain("review_base");
+
+    // The refusal edited nothing: correcting that one value serves the row again.
+    rewriteStoredReviewBase(fixture.context, LEGACY_PLAN, "null");
+    expect((await storedCompletion(fixture.context))?.review_base).toBeNull();
+  });
 });
