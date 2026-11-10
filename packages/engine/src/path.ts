@@ -771,7 +771,10 @@ export async function scaffoldHarness(root: string, options: ScaffoldOptions = {
  *
  * A `.mstarc` already in scope from `root` (the file that declared the
  * layout, e.g. `harness_dir=config/.mstar`) is authoritative and never
- * edited, second-guessed or duplicated at a nested parent.
+ * edited, second-guessed or duplicated at a nested parent. The destination
+ * is guarded on its own path too: an explicit `harnessDir` whose parent
+ * already holds an author-owned `.mstarc` is not visible from `root`, so the
+ * write is skipped whenever that file exists.
  */
 function writeBootstrapMstarc(root: string, harnessDir: string): void {
   const parent = dirname(harnessDir);
@@ -781,8 +784,6 @@ function writeBootstrapMstarc(root: string, harnessDir: string): void {
   // caller never named.
   if (rel.startsWith("..") || isAbsolute(rel)) return;
   if (findMstarc(root, root) !== null) return;
-  const mstarcPath = join(parent, MSTARC_FILE);
-  mkdirSync(parent, { recursive: true });
   const content =
     "; Morning Star harness layout for this repository.\n" +
     "; Values mirror the resolved layout so candidate-chain drift cannot move them.\n" +
@@ -791,7 +792,8 @@ function writeBootstrapMstarc(root: string, harnessDir: string): void {
     "knowledge_dir=.agents/knowledge\n" +
     "specs_dir=.agents/specs\n" +
     "adr_dir=.agents/adr\n";
-  writeFileSync(mstarcPath, content, "utf8");
+  mkdirSync(parent, { recursive: true });
+  writeIfAbsent(join(parent, MSTARC_FILE), content);
 }
 
 /**
@@ -840,7 +842,7 @@ Every record here is one decision made **among real alternatives**, filed so a r
 
 ## Lifecycle
 
-Three moves exist, each landed as one change \u2014 move, rewrite and header together: \`proposed \u2192 implemented\`, \`proposed \u2192 rejected\`, \`implemented \u2192 archived\`. The first line of a record is \`# ADR: <title>\`; the header also carries \`Status: <state> \u2014 <why>\`, whose state equals the containing bucket.
+Three moves exist, each landed as one change \u2014 move, rewrite and header together: \`proposed \u2192 implemented\`, \`proposed \u2192 rejected\`, \`implemented \u2192 archived\`. The first line of a record is \`# ADR: <title>\`; the header also carries \`Status: <state> \u2014 <why>\`. For \`proposed/\`, \`implemented/\` and \`rejected/\` the state equals the containing bucket; an archived record keeps \`Status: implemented \u2014 <why>\` and carries an additional \`Archived: yyyy-mm-dd \u2014 <reason>\` line below it. An archive records a reversal of the decision, not a fourth status.
 `;
 
 /** Verbatim skeleton from this repository's `docs/adr/proposed/TEMPLATE.md`. */

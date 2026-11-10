@@ -146,7 +146,10 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       // Canonical snippet appended once, complete fence present.
       const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
       for (const entry of MSTAR_FENCE_ENTRIES) expect(gitignore).toContain(entry);
-      expect(gitignore.split(".mstar/").length - 1).toBe(1);
+      // Exact entry lines, not a substring count: `.mstar/**` also contains
+      // `.mstar/` once and must not satisfy the fence assertion.
+      expect(gitignore.split(/\r?\n/).filter((line) => line.trim() !== "" && !line.startsWith("#")))
+        .toEqual(MSTAR_FENCE_ENTRIES);
     });
   });
 

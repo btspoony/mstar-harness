@@ -1138,6 +1138,57 @@ describe("scaffoldHarness", () => {
     }
   });
 
+  test("an author-owned .mstarc at an explicit nested harness parent keeps its bytes", async () => {
+    const root = tmpRoot("path-scaffold-mstarc-nested-present-");
+    try {
+      const authored = "[config]\nharness_dir=harness\nknowledge_dir=docs/knowledge\n[linear]\nteam=ABC\n";
+      mkdirSync(join(root, "runtime"), { recursive: true });
+      writeFileSync(join(root, "runtime", ".mstarc"), authored, "utf8");
+      const harnessDir = join(root, "runtime", "harness");
+      setArtifactStore(createFsStore(harnessDir));
+      await scaffoldHarness(root, { harnessDir });
+      // The guard at the destination, not only at the scaffold root, keeps the
+      // author's declaration intact.
+      expect(readFileSync(join(root, "runtime", ".mstarc"), "utf8")).toBe(authored);
+      expect(existsSync(join(root, ".mstarc"))).toBe(false);
+      expect(existsSync(join(root, "runtime", "harness", ".mstarc"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a harness dir outside the scaffold root gets no .mstarc", async () => {
+    const root = tmpRoot("path-scaffold-mstarc-outside-");
+    const outside = tmpRoot("path-scaffold-mstarc-outside-harness-");
+    try {
+      setArtifactStore(createFsStore(outside));
+      const harnessDir = await scaffoldHarness(root, { harnessDir: outside });
+      expect(harnessDir).toBe(outside);
+      expect(readdirSync(outside).sort()).not.toContain(".mstarc");
+      expect(existsSync(join(root, ".mstarc"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("a rerun with a nested explicit harness dir rewrites and creates nothing", async () => {
+    const root = tmpRoot("path-scaffold-mstarc-nested-rerun-");
+    try {
+      const harnessDir = join(root, "runtime", "harness");
+      setArtifactStore(createFsStore(harnessDir));
+      await scaffoldHarness(root, { harnessDir });
+      const mstarc = readFileSync(join(root, "runtime", ".mstarc"), "utf8");
+      const parentEntries = readdirSync(join(root, "runtime")).sort();
+      await scaffoldHarness(root, { harnessDir });
+      expect(readFileSync(join(root, "runtime", ".mstarc"), "utf8")).toBe(mstarc);
+      expect(readdirSync(join(root, "runtime")).sort()).toEqual(parentEntries);
+      expect(existsSync(join(root, ".mstarc"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("an existing .mstarc is authoritative and never rewritten", async () => {
     const root = tmpRoot("path-scaffold-mstarc-present-");
     try {
