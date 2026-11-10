@@ -281,11 +281,13 @@ describe('the linear-mcp Settings row card', () => {
       credential: { display: 'expired', scope: null, expiresAt: START - 1_000, canWrite: false },
     }
     const cases = [
-      { label: 'disabled row', answer: READY_DISABLED, state: 'disabled', push: null, authorize: false },
-      { label: 'enabled, no grant', answer: READY_ABSENT, state: 'unauthorized', push: null, authorize: true },
-      { label: 'expired grant', answer: EXPIRED, state: 'unauthorized', push: null, authorize: true },
-      { label: 'writable grant', answer: READY_AUTHORIZED, state: 'authorized', push: 'ready', authorize: false },
-      { label: 'read-only grant', answer: READY_READ_ONLY, state: 'authorized', push: 'scope-insufficient', authorize: true },
+      { label: 'disabled row', answer: READY_DISABLED, state: 'disabled', push: null, outcome: null, authorize: false },
+      // The absent and expired rows share a state word, so the outcome
+      // attribute is what keeps "expired collapsed into absent" failing.
+      { label: 'enabled, no grant', answer: READY_ABSENT, state: 'unauthorized', push: null, outcome: 'absent', authorize: true },
+      { label: 'expired grant', answer: EXPIRED, state: 'unauthorized', push: null, outcome: 'expired', authorize: true },
+      { label: 'writable grant', answer: READY_AUTHORIZED, state: 'authorized', push: 'ready', outcome: null, authorize: false },
+      { label: 'read-only grant', answer: READY_READ_ONLY, state: 'authorized', push: 'scope-insufficient', outcome: null, authorize: true },
     ] as const
 
     for (const testCase of cases) {
@@ -306,7 +308,12 @@ describe('the linear-mcp Settings row card', () => {
       }))
 
       expect(html, testCase.label).toContain(`data-ms-linear-state="${testCase.state}"`)
+      if (testCase.outcome !== null) {
+        expect(html, testCase.label).toContain(`data-ms-linear-outcome="${testCase.outcome}"`)
+      }
+      // Push capability is an authorized-row fact: no other state may carry it.
       if (testCase.push !== null) expect(html, testCase.label).toContain(`data-ms-linear-push="${testCase.push}"`)
+      else expect(html, testCase.label).not.toContain('data-ms-linear-push')
       if (testCase.authorize) expect(html, testCase.label).toContain('data-ms-linear-action="authorize"')
       else expect(html, testCase.label).not.toContain('data-ms-linear-action="authorize"')
       controller.dispose()
@@ -592,15 +599,13 @@ describe('the card states', () => {
     expect(calls.map((call) => call.endpoint)).toEqual([LINEAR_STATUS_ENDPOINT])
 
     // The explicit action starts the same host-owned attempt the absent case
-    // uses: one begin, and the browser opens the shipped PKCE URL (a verifier
-    // never crosses to it).
+    // uses: one begin, and the browser is handed the URL the host answered
+    // with. What that URL's PKCE parameters mean is the host suite's contract
+    // (a fixture URL here would only assert the fixture).
     const begin = await store.begin()
     expect(begin.status).toBe('started')
     if (begin.status !== 'started') throw new Error('begin did not start')
     expect(opened).toEqual([begin.url])
-    const url = new URL(begin.url)
-    expect(url.searchParams.get('code_challenge_method')).toBe('S256')
-    expect(url.searchParams.has('code_verifier')).toBe(false)
     expect(calls.map((call) => call.endpoint)).toEqual([
       LINEAR_STATUS_ENDPOINT,
       LINEAR_AUTHORIZE_BEGIN_ENDPOINT,
