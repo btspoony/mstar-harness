@@ -43,6 +43,7 @@ For the method behind this checklist — exploitability bar, false-positive disc
 - Auth/session mechanics: JWT validation gaps (alg/claims/key-selection), session rotation on privilege change, password-reset token binding/single-use/expiry.
 - Rate-limiting & abuse surfaces: auth/reset/expensive endpoints without limits — respecting deployment model (CDN-level limiting counts).
 - AI/LLM feature surfaces (if present): model output treated as untrusted at its sink; tool permissions scoped per-user-resource; ingestion sources as indirect-injection vectors; consumption caps.
+- Agent-facing artifacts (skill, MCP, third-party install, or fetched doc that could alter agent behavior): load **`references/agent-artifact-review.md`** — same dispositions and severity as the security deep-dive.
 - Supply chain & pipelines: single authoritative lockfile at the install boundary, unreviewed dependency lifecycle scripts, unpinned CI actions / `pull_request_target`, typosquat signals on new deps.
 - Infra/config surfaces: Dockerfile/K8s/Terraform misconfigs, debug modes & default credentials, exposed debug/actuator endpoints.
 - Privacy retention: personal-data stores without TTL + working deletion path (backups/caches/indexes included).

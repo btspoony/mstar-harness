@@ -9,6 +9,7 @@
   { "file": "skills/mstar-artifacts/templates/README.md", "maxLines": 20 },
   { "file": "skills/mstar-artifacts/templates/plan.main.md", "maxLines": 100 },
   { "file": "skills/mstar-audit/SKILL.md", "maxLines": 120 },
+  { "file": "skills/mstar-audit/references/agent-artifact-review.md", "maxLines": 210 },
   { "file": "skills/mstar-audit/references/audit-playbook.md", "maxLines": 170 },
   { "file": "skills/mstar-audit/references/codebase-audit.md", "maxLines": 180 },
   { "file": "skills/mstar-audit/references/finding-format.md", "maxLines": 120 },
