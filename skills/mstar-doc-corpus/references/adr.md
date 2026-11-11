@@ -50,7 +50,7 @@ Date: <yyyy-mm-dd>
 ```
 
 - `rejected/` has no third skeleton: it reuses the proposed shape with a **frozen body**, and only `Problem`, `Proposal` and `Alternatives considered` are required of it. After rejection, those three are never rewritten — only the Status line says why the proposal died.
-- `Plans`, `Plan`, `Migration plan` and `Acceptance criteria` are banned as sections of an implemented record: they are proposal-era scaffolding, and a promotion that keeps them is half-finished. Sections neither required nor banned stay.
+- `Proposal`, `Plan`, `Migration plan` and `Acceptance criteria` are banned as sections of an implemented record: they are proposal-era scaffolding, and a promotion that keeps them is half-finished. Sections neither required nor banned stay.
 
 ## Lifecycle
 

@@ -260,7 +260,7 @@ export function validateSchemaYaml(frontmatterText: string): GateResult {
       violation(
         "medium",
         "compound.schema.missing-frontmatter",
-        "no `---` YAML frontmatter block found \u2014 knowledge docs must open with the schema.yaml contract (mstar-knowledge/references/schema.yaml)",
+        "no `---` YAML frontmatter block found \u2014 knowledge docs must open with the schema.yaml contract (skills/mstar-doc-corpus/references/schema.yaml)",
         "add the fenced frontmatter with module, date, problem_type, category, severity",
       ),
     );

@@ -3,9 +3,10 @@
  * reference existence checks, knowledge catalog completeness, and
  * Maintain scope guarding.
  *
- * Spec sources (cited per test): mstar-knowledge/references/schema.yaml
- * (required/optional fields, track rules), mstar-knowledge/references/
- * category-mapping.md (problem_type → category directory),
+ * Spec sources (cited per test): skills/mstar-doc-corpus/references/schema.yaml
+ * (required/optional fields, track rules),
+ * skills/mstar-doc-corpus/references/category-mapping.md
+ * (problem_type → category directory),
  * mstar-knowledge SKILL.md (`## Workflow — Capture`) Phase 6 (the knowledge
  * index duty is now the
  * catalog-completeness query, state-projection contract §4), and
@@ -150,7 +151,7 @@ Body only.
 `;
 
 // ---------------------------------------------------------------------------
-// validateSchemaYaml — mstar-knowledge/references/schema.yaml
+// validateSchemaYaml — skills/mstar-doc-corpus/references/schema.yaml
 // ---------------------------------------------------------------------------
 
 describe("validateSchemaYaml", () => {
