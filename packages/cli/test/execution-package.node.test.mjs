@@ -24,11 +24,15 @@
  *    runs via `node`. It is spawned as a subprocess with real PreToolUse
  *    envelopes against a populated database fixture and against a
  *    pre-activation harness fixture.
- * 4. (removed) The generated consumer manifests are NOT re-derived here. Their
- *    producer owns that check — `bun scripts/execution-consumer-manifest.ts
- *    --check` re-verifies every recorded digest against the bytes on disk — and
- *    CI runs it as its own step, so the rule has one implementation instead of a
- *    second tree walk in a test that could disagree with it.
+ * 4. (removed) The generated consumer manifests are NOT re-derived here, and
+ *    this file proves nothing about them beyond what is stated above: the CLI
+ *    entrypoint's existence and the declared runtime floor, which is all the
+ *    CLI consumer records (it pins no generated digest). The producer owns the
+ *    rest — `bun scripts/execution-consumer-manifest.ts --check` re-verifies
+ *    each PINNED digest and copied mirror against the bytes on disk, and fails
+ *    naming the first stale entry. That check runs in CI's `pack-consumers`
+ *    job, so the rule has one implementation instead of a second tree walk in a
+ *    test that could disagree with it.
  *
  * WHAT THIS TEST IS NOT (labels, so no reader over-claims)
  *
@@ -92,9 +96,10 @@ const CLI_ROOT = resolve(TEST_DIR, "..");
 const REPO = resolve(CLI_ROOT, "..", "..");
 const CLI_ENTRY = join(CLI_ROOT, "dist", "mstar-harness.js");
 const HOOK_ENTRY = join(REPO, "hooks", "mstar-write-gate.mjs");
-// The aggregate packaging manifest: read here for the artifact-existence check
-// and for the consumer ids/floors; its byte parity is the producer's own
-// `--check`, which CI runs as its own step.
+// The aggregate packaging manifest: read here only for the artifact-existence
+// checks and the consumer ids/runtime floor. Its digests are NOT re-derived in
+// this file — the producer's own `--check` owns that, and CI's `pack-consumers`
+// job runs it.
 const MANIFEST_PATH = join(REPO, "scripts", "packaging-manifests", "manifest.json");
 
 // The resolution above is load-bearing for EVERY manifest/artifact path in this
