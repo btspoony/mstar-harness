@@ -232,9 +232,10 @@ export class CatalogError extends Error {
 /**
  * The already-resolved root for a `root_kind`. The harness root is the same
  * selected root as the database; process callers discover it before building
- * the StoreContext. The repository root is the harness dir's parent, the
- * existing convention in `resolveSpecsDir`. `.mstarc` overrides apply through
- * the shared resolvers.
+ * the StoreContext. The repository root is the main worktree that owns the
+ * harness (its parent only when Git cannot name one) — the checkout the
+ * `.agents/` corpora belong to. `.mstarc` overrides apply through the shared
+ * resolvers.
  */
 export function catalogRootDir(context: StoreContext, rootKind: CatalogRootKind): string {
   if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
