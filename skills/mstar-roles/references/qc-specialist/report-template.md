@@ -67,6 +67,8 @@ Write under the Assignment-provided **`{SDD_DIR}/review/qc#.md`** (`qc1`…`qc3`
 **Verdict**: Approve | Request Changes | Needs Discussion | Unconfirmed
 ```
 
+The body conclusion `**Verdict**: Approve with residuals — <leftovers>` is an `Approve`: the validator takes the phrase by its longest enum prefix (`qcreview.ts` `bodyVerdictPhrase`), so it agrees with the frontmatter token. It does not relax rule 10 — `Approve` still requires Critical = 0 and Warning = 0 in `## Summary`; a leftover still open at those severities is not approved, and registered non-blocking residuals ride the plan-linked issue capture instead (`qc-specialist-shared.md` § Verdict Rules).
+
 Report **Critical / Warning / Suggestion** sections are human-readable; PM maps them to the machine **`severity`** of the issue it captures for the finding in `{HARNESS_DIR}/store.db`, per `mstar-artifacts/references/status-and-residuals.md`.
 
 ## Verdict rules (reviewer applies)
