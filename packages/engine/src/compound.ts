@@ -4,10 +4,10 @@
  * and Maintain scope guarding.
  *
  * Spec sources (all embedded as constants — no runtime skill-file reads):
- * - mstar-knowledge/references/schema.yaml: required/optional frontmatter
+ * - skills/mstar-doc-corpus/references/schema.yaml: required/optional frontmatter
  *   fields, problem_type enum, severity enum, track rules (bug vs
  *   knowledge), resolution_type enum, tags max 8.
- * - mstar-knowledge/references/category-mapping.md: problem_type → category
+ * - skills/mstar-doc-corpus/references/category-mapping.md: problem_type → category
  *   directory mapping (rule 1: category must match the directory name).
  * - mstar-knowledge SKILL.md (`## Workflow — Capture`) Phase 6: the knowledge
  *   index duty is now a catalog-completeness query over `store.db`

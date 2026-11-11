@@ -381,6 +381,32 @@ describe("lintLoadOrder", () => {
     expect(result.violations).toEqual([]);
   });
 
+  test("exact doc-corpus is exempt without a Load Order section", () => {
+    const result = lintLoadOrder({
+      "mstar-doc-corpus": "# Doc Corpus\n## Purpose\nThree document layers, no lifecycle required.\n",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("exact doc-corpus stays exempt from core-first with a non-core-first Load Order section", () => {
+    const result = lintLoadOrder({
+      "mstar-doc-corpus":
+        "## Load order\nHarness loading is optional; this skill requires no lifecycle topic.\n",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("the doc-corpus exemption is exact: another topic with the same declaration still fails", () => {
+    const result = lintLoadOrder({
+      "mstar-doc-corpus-extra":
+        "## Load order\nHarness loading is optional; this skill requires no lifecycle topic.\n",
+    });
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toEqual(["roles.loadorder.core.missing"]);
+  });
+
   test.each(["mstar-coding-behavior-extra", "mstar-other-topic"])(
     "standalone claims do not exempt another topic: %s",
     (name) => {
