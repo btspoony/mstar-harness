@@ -12,7 +12,7 @@ Capability detail for Phase 1 when direction lock mode is **`autonomous`**.
 
 ## Ranking heuristics（highest first）
 
-1. **Deferred / roadmap next** — prior compass `## Roadmap Position` next iteration, deferred-features, residuals marked for follow-up
+1. **Deferred / roadmap next** — prior compass `## Roadmap Position` next iteration, deferred-features, and issues explicitly deferred to a later iteration (blocker-defer marker in the issue store)
 2. **Open issues** — `{HARNESS_DIR}/store.db` residual SSOT; `critical` / `high` first, and a milestone-linked issue is delivery evidence
 3. **Proposed ADRs** — an argued decision with acceptance criteria, not yet implemented (`{ADR_DIR}/proposed/`)
 4. **STRATEGY alignment** — `STRATEGY.md` vision / decision principles when present
