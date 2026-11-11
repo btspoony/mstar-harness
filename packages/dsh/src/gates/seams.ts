@@ -138,8 +138,8 @@ function rolesDirOf(path: string): string {
 
 /** Whether a target is in the seam's artifact scope. Design-md matches by
  * basename (the artifact is the file itself, wherever the design lives);
- * audit matches the `{REVIEW_DIR}` review-run tree; compound matches
- * `{HARNESS_DIR}/knowledge/**` (inert without a harness dir); roles
+ * audit matches the `{REVIEW_DIR}` review-run tree; compound matches the
+ * knowledge root resolved from the harness dir (inert without one); roles
  * matches the mstar-roles skill layout. */
 function isSeamTarget(seam: SeamId, harnessDir: string | null, target: FsTarget): boolean {
   const path = resolve(target.displayPath)

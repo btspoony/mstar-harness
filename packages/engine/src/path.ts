@@ -218,10 +218,10 @@ function mstarcDeclared(harnessDir: string, key: MstarcStringKey): { dir: string
  */
 export type ResolveSpecsDirOptions = {
   /**
- * Default true: when every candidate is absent or empty, create
- * `{HARNESS_DIR}/specs/` (plan-conventions § 创建默认). Read-only callers
- * (e.g. `mstar path resolve`) pass `false` to skip the side effect.
- */
+   * Default true: when every candidate is absent or empty, create
+   * `<repoRoot>/.agents/specs/`. Read-only callers (e.g. `mstar path resolve`)
+   * pass `false` to skip the side effect.
+   */
   create?: boolean;
 };
 
@@ -230,18 +230,22 @@ export type ResolveSpecsDirOptions = {
  * `.mstarc` `[config] specs_dir` declaration is authoritative — returned
  * directly (resolved against the config file's directory; created when
  * `create` is not false; no candidate chain, no empty-dir rule). Otherwise
- * the first non-empty candidate wins — `{HARNESS_DIR}/specs/` →
- * `<repoRoot>/.agents/specs/` → `docs/specs/` → repo-root `specs/` (repo
- * root = parent of the harness dir), then the legacy read-only `designs/`
- * candidates (`{HARNESS_DIR}/designs/` → repo-root `designs/`,
- * § {SPECS_DIR} 解析 Legacy — 兼容读 only, never created by init). The
- * `<repoRoot>/.agents/specs/` rung lets a repo whose `.mstar/` is fully
- * gitignored keep its tracked specs in the tracked `.agents/` tree; when the
- * harness dir IS `.agents` it duplicates the first candidate and the
- * candidate list drops the repeat. A candidate that exists but holds no
- * files is treated as absent (empty-dir rule, recursive). When all
- * candidates are absent, `{HARNESS_DIR}/specs/` is created and returned
- * (unless `create: false`).
+ * the first non-empty candidate wins — `<repoRoot>/.agents/specs/` →
+ * `docs/specs/` → repo-root `specs/` (repo root = parent of the harness
+ * dir), then the legacy read-only `designs/` candidates
+ * (`{HARNESS_DIR}/designs/` → repo-root `designs/`, § {SPECS_DIR} 解析
+ * Legacy — 兼容读 only, never created by init). The `.agents/` rung is a
+ * default, not a claim: it is what a repository without a `.mstarc` gets, so
+ * a tracked corpus survives a fully gitignored `.mstar/`; when the harness
+ * dir IS `.agents` the candidate list dedupes the repeat. A candidate that
+ * exists but holds no files is treated as absent (empty-dir rule,
+ * recursive). When all candidates are absent, `<repoRoot>/.agents/specs/`
+ * is created and returned (unless `create: false`).
+ *
+ * `{HARNESS_DIR}/specs/` is a legacy read source only, at the END of the
+ * chain: it is never created, never returned as the fallback, and no
+ * document presents it as a place specs live. Delete that rung once no
+ * repository is expected to carry pre-move specs there.
  */
 export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions = {}): string {
   const declared = mstarcDirOverride(harnessDir, "specsDir");
@@ -252,7 +256,6 @@ export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions
   const harness = resolve(harnessDir);
   const repoRoot = dirname(harness);
   const candidates = [
-    join(harness, "specs"),
     join(repoRoot, ".agents", "specs"),
     join(repoRoot, "docs", "specs"),
     join(repoRoot, "specs"),
@@ -260,11 +263,13 @@ export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions
 // init must NOT create designs/; same empty-dir-as-absent rule applies.
     join(harness, "designs"),
     join(repoRoot, "designs"),
+// Legacy read-only tail: pre-move specs under the harness root.
+    join(harness, "specs"),
   ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory(candidate) && hasFiles(candidate)) return candidate;
   }
-  const fallback = join(harness, "specs");
+  const fallback = join(repoRoot, ".agents", "specs");
   if (opts.create !== false) mkdirSync(fallback, { recursive: true });
   return fallback;
 }
@@ -362,8 +367,8 @@ export function resolveIterationDir(harnessDir: string): string {
 export type ResolveTrackedDirOptions = {
   /**
    * Default true: when every candidate is absent or empty, create the
-   * `{HARNESS_DIR}` fallback. Read-only callers (e.g. `mstar path resolve`)
-   * pass `false` to skip the side effect.
+   * `<repoRoot>/.agents/<kind>/` fallback. Read-only callers (e.g.
+   * `mstar path resolve`) pass `false` to skip the side effect.
    */
   create?: boolean;
 };
@@ -372,10 +377,11 @@ export type ResolveTrackedDirOptions = {
  * Resolve `{KNOWLEDGE_DIR}`. A `.mstarc` `[config] knowledge_dir`
  * declaration is authoritative (resolved against the config file's
  * directory). Otherwise the first non-empty candidate wins —
- * `{HARNESS_DIR}/knowledge/` → `<repoRoot>/.agents/knowledge/` (tracked
- * knowledge survives a fully gitignored `.mstar/`) — with the empty-dir
- * rule applied to both; when neither holds files the fallback
- * `{HARNESS_DIR}/knowledge/` is created (unless `create: false`).
+ * `<repoRoot>/.agents/knowledge/` (a default, so tracked knowledge survives
+ * a fully gitignored `.mstar/`) — with the empty-dir rule applied; when it
+ * holds no files the fallback `<repoRoot>/.agents/knowledge/` is created
+ * (unless `create: false`). `{HARNESS_DIR}/knowledge/` is a legacy read
+ * source only: last in the chain, never created, never the fallback.
  */
 export function resolveKnowledgeDir(harnessDir: string, opts: ResolveTrackedDirOptions = {}): string {
   return resolveTrackedDir(harnessDir, opts, "knowledgeDir", "knowledge", [".agents", "knowledge"]);
@@ -384,10 +390,11 @@ export function resolveKnowledgeDir(harnessDir: string, opts: ResolveTrackedDirO
 /**
  * Resolve `{ADR_DIR}`. A `.mstarc` `[config] adr_dir` declaration is
  * authoritative (resolved against the config file's directory). Otherwise
- * the first non-empty candidate wins — `{HARNESS_DIR}/adr/` →
- * `<repoRoot>/.agents/adr/` → `<repoRoot>/docs/adr/` — all subject to the
- * empty-dir rule; when none holds files the fallback `{HARNESS_DIR}/adr/`
- * is created (unless `create: false`).
+ * the first non-empty candidate wins — `<repoRoot>/.agents/adr/` (default) →
+ * `<repoRoot>/docs/adr/` — both subject to the empty-dir rule; when neither
+ * holds files the fallback `<repoRoot>/.agents/adr/` is created (unless
+ * `create: false`). `{HARNESS_DIR}/adr/` is a legacy read source only:
+ * last in the chain, never created, never the fallback.
  */
 export function resolveAdrDir(harnessDir: string, opts: ResolveTrackedDirOptions = {}): string {
   return resolveTrackedDir(harnessDir, opts, "adrDir", "adr", [".agents", "adr"], ["docs", "adr"]);
@@ -439,10 +446,12 @@ export function resolveTrackedResultDir(
 
 /**
  * Shared body of the tracked-result resolvers: `.mstarc` override, then the
- * non-empty candidate chain (`{HARNESS_DIR}/<name>` followed by the given
- * repo-root-relative segments), then the created `{HARNESS_DIR}/<name>`
- * fallback. Candidates are deduped so a `.agents` harness does not test its
- * own directory twice.
+ * non-empty candidate chain (`<repoRoot>/.agents/<name>` followed by the given
+ * repo-root-relative segments), then the legacy read-only
+ * `{HARNESS_DIR}/<name>` tail, then the created
+ * `<repoRoot>/.agents/<name>` fallback. The legacy rung is read, never
+ * created and never the fallback. Candidates are deduped so a `.agents`
+ * harness does not test its own directory twice.
  */
 function resolveTrackedDir(
   harnessDir: string,
@@ -455,13 +464,18 @@ function resolveTrackedDir(
   if (declared !== null) return declared;
   const harness = resolve(harnessDir);
   const repoRoot = dirname(harness);
-  const candidates = [join(harness, name), ...extra.map((segments) => join(repoRoot, ...segments))];
+  const preferred = join(repoRoot, ".agents", name);
+  const candidates = [
+    preferred,
+    ...extra.map((segments) => join(repoRoot, ...segments)),
+    // Legacy read-only tail: pre-move documents under the harness root.
+    join(harness, name),
+  ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory(candidate) && hasFiles(candidate)) return candidate;
   }
-  const fallback = join(harness, name);
-  if (opts.create !== false) mkdirSync(fallback, { recursive: true });
-  return fallback;
+  if (opts.create !== false) mkdirSync(preferred, { recursive: true });
+  return preferred;
 }
 
 /**

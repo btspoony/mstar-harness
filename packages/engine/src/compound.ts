@@ -14,7 +14,7 @@
  *   (state-projection contract §4); the README table is not a register.
  * - mstar-knowledge SKILL.md (`## Workflow — Maintain`) § 产物与操作路径
  *   (scope SSOT): only
- *   `{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, and
+ *   `{KNOWLEDGE_DIR}/**`, `knowledge/README.md`, and
  *   `<repo-root>/CONCEPTS.md`.
  */
 import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
@@ -569,8 +569,9 @@ export async function assertKnowledgeCatalogCompleteness(context: StoreContext):
 
 /**
  * The Maintain scope (mstar-knowledge SKILL.md `## Workflow — Maintain` §
- * 产物与操作路径): `{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`,
- * and `<repo-root>/CONCEPTS.md`.
+ * 产物与操作路径): `{KNOWLEDGE_DIR}/**`, `knowledge/README.md`, and
+ * `<repo-root>/CONCEPTS.md`. `harnessDir` seeds the legacy default only —
+ * callers pass the resolved knowledge root.
  */
 export function compoundRefreshScope(harnessDir: string, projectRoot: string): string[] {
   return [
