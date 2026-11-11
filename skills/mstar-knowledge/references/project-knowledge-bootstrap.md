@@ -116,7 +116,7 @@ From the Phase 1 survey, identify patterns and conventions worth documenting as 
 | **Project setup** | Dependencies, environment setup, build/run commands | `developer-experience/` |
 | **Key domain patterns** | ORM patterns, auth flow, error handling, API design | `best-practices/` |
 
-Each doc follows the Knowledge track template (`mstar-knowledge/assets/resolution-template.md`).
+Each doc follows the Knowledge track skeleton (`mstar-doc-corpus` `assets/knowledge-skeleton.md`).
 
 ### What NOT to generate
 

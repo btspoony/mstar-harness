@@ -22,7 +22,9 @@ For each doc, check:
 
 Classify each doc → Keep / Update / Consolidate / Replace / Delete. Apply changes.
 
-#### Phase 4: Reconcile the catalog
+#### Phase 4: Reconcile the catalog（仅 active store）
+
+Applies only when the harness store is active. With no store, skip this phase and record `catalog: n/a (no store)` in the maintenance report — the document set is its own registry, and no row is owed. A store that exists but is not active is not a skip reason: report its refusal code.
 
 1. For every doc whose verdict changed its metadata or lifecycle (`Update` / `Consolidate` / `Replace` / `Delete`), update its catalog row: `mstar catalog update` for title/description/path/source hash and for the catalog lifecycle (`active` / `archived` / `superseded`), and `mstar catalog link` for provenance/supersession relations (identity is never patched; the revision guard is in `--help`). A doc deleted outside the iteration-start §1.6 archive gate leaves git history as its record — set/keep its catalog lifecycle so the row is not a silent dangling claim.
 2. A knowledge body with **no** catalog row is a completeness gap, not a pass: register it (`mstar catalog register`, or reviewed `mstar catalog discover` + `mstar catalog import`) or report it. `{KNOWLEDGE_DIR}/README.md` index tables are **not** maintained as a register — README is prose.

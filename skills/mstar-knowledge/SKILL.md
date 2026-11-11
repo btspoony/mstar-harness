@@ -11,13 +11,13 @@ description: "Load for `{KNOWLEDGE_DIR}` capture, maintain/refresh/bootstrap, or
 
 ## Purpose
 
-One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one field table (`references/schema.yaml`), two workflows: **Capture** 把已解决的问题沉淀为结构化知识文档，供未来的 plan 研究、debug 与实现检索复用；**Maintain** 让既有文档对抗代码漂移重新可信。Knowledge that isn't captured evaporates when the session ends; knowledge that is captured but not discoverable is equally lost; documents that are captured also age — code changes, conventions evolve, patterns become obsolete — so capture and maintenance are one skill over one artifact.
+One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one document shape (**`mstar-doc-corpus`** → `references/knowledge-format.md`、`references/schema.yaml`、`assets/knowledge-skeleton.md`；本 skill 不维护第二份字段表或骨架), two workflows: **Capture** 把已解决的问题沉淀为结构化知识文档，供未来的 plan 研究、debug 与实现检索复用；**Maintain** 让既有文档对抗代码漂移重新可信。Knowledge that isn't captured evaporates when the session ends; knowledge that is captured but not discoverable is equally lost; documents that are captured also age — code changes, conventions evolve, patterns become obsolete — so capture and maintenance are one skill over one artifact.
 
 **In the mstar lifecycle**, Capture is invoked by lifecycle flows — the iteration-close round or a standalone-development delivery tail — sharing one step sequence (see「Integration with mstar lifecycle」). It is never triggered at per-plan `Done`, and stays invocable standalone for ad-hoc captures. Maintain runs only from its own entries (`## When to use / Skip`), which include the Capture Phase 7 flag and the on-demand project-knowledge bootstrap.
 
-**Storage SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 不重定义路径：知识文档 → `{HARNESS_DIR}/knowledge/<category>/<slug>.md`（`<category>` 取值见 `references/category-mapping.md`）；CONCEPTS.md → `<repo-root>/CONCEPTS.md`；Maintain 另可操作 `{HARNESS_DIR}/knowledge/README.md`（**散文**，见 Maintain Phase 4）。
+**Storage SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 不重定义路径：知识文档 → `{HARNESS_DIR}/knowledge/<category>/<slug>.md`（`<category>` 取值见 **`mstar-doc-corpus`** `references/category-mapping.md`）；CONCEPTS.md → `<repo-root>/CONCEPTS.md`；Maintain 另可操作 `{HARNESS_DIR}/knowledge/README.md`（**散文**，见 Maintain Phase 4）。
 
-**层级分工**：本 skill 产出的**工程经验与方法论**不是当前系统状态；三层语料的边界与更新义务 → **`mstar-artifacts/references/knowledge-and-designs.md`** § 与公开文档目录的分工（当前状态属 `{SPECS_DIR}`，决策属 `{ADR_DIR}`）。
+**层级分工**：本 skill 产出的**工程经验与方法论**不是当前系统状态；三层语料的边界与更新义务 → **`mstar-doc-corpus`** SKILL.md § The three layers（当前状态属 `{SPECS_DIR}`，决策属 `{ADR_DIR}`）。
 
 ## When to use / Skip
 
@@ -71,12 +71,12 @@ Compound 是**被生命周期流程调用**的知识结晶流程：本 SKILL 只
 
 ### Two tracks
 
-| Track | What it captures | Section structure |
-|-------|-----------------|-------------------|
-| **Bug** | Incident-level fix — "X broke, here's why and how we fixed it" | Problem, Symptoms, What Didn't Work, Solution, Why This Works, Prevention |
-| **Knowledge** | Durable guidance — "this is how we do X, and why" | Context, Guidance, Why This Matters, When to Apply, Examples |
+| Track | What it captures |
+|-------|-----------------|
+| **Bug** | Incident-level fix — "X broke, here's why and how we fixed it" |
+| **Knowledge** | Durable guidance — "this is how we do X, and why" |
 
-Track 由 `problem_type` 决定，完整映射见 `references/category-mapping.md`。
+Track 由 `problem_type` 决定（完整映射 → **`mstar-doc-corpus`** `references/category-mapping.md`）。每轨的正文小节结构在 **`mstar-doc-corpus`** `assets/knowledge-skeleton.md`；本 skill 只决定写哪一轨，不复述小节清单。
 
 ### Execution modes
 
@@ -91,15 +91,15 @@ Full mode dispatches research subagents through the host's task tool. PM selects
 
 完整步骤细节（Gather context / Overlap detection / Write document 含 frontmatter schema + path + validate / Discoverability check / CONCEPTS.md synergy / Catalog registration / Refresh trigger）→ **`references/compound-workflow.md`**。每 Phase 一个关键决策：
 
-1. **Gather** — 读对话史 + iteration package；分类 track/category（`references/category-mapping.md`）
+1. **Gather** — 读对话史 + iteration package；分类 track/category（**`mstar-doc-corpus`** `references/category-mapping.md`）
 2. **Overlap** — 高重叠 → 更新已有（加 `last_updated`）；中度 → 新建并标 consolidation review；低/无 → 正常新建
-3. **Write** — path + frontmatter（SSOT `references/schema.yaml`）+ body（`assets/resolution-template.md`）+ YAML validate
+3. **Write** — path + frontmatter（SSOT **`mstar-doc-corpus`** `references/schema.yaml`）+ body（**`mstar-doc-corpus`** `assets/knowledge-skeleton.md`）+ YAML validate
 4. **Discoverability** — 若 root `AGENTS.md`/`CLAUDE.md` 未提 `{KNOWLEDGE_DIR}`，提议最小补充（需用户同意；拒绝则仅跳过该编辑，doc 仍写）
 5. **CONCEPTS.md** — 项目特定领域词满足 qualifying bar 时提议入 `CONCEPTS.md`（规则见 `references/concepts-vocabulary.md`）；全仓 bootstrap 归本 skill `## Workflow — Maintain`
-6. **Catalog** — 新文档在 `{HARNESS_DIR}/store.db` 的 catalog 中登记为 `kind=document`（`document_kind=knowledge`）：单行 `mstar catalog register`，或 reviewed `mstar catalog discover` + `mstar catalog import`；provenance/supersession 用 `mstar catalog link`（`derived-from` / `supersedes` 关系）；生命周期变更用 `mstar catalog update`（`active` / `archived` / `superseded`；revision 守卫见 help）。**不再**要求 `{KNOWLEDGE_DIR}/README.md` 索引行（README 是散文，不是登记表）。知识关联载体是 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 仅 legacy 只读，不是写入面。每篇新 doc 必须完成本 Phase
+6. **Catalog（仅 harness store active 时）** — 新文档在 `{HARNESS_DIR}/store.db` 的 catalog 中登记为 `kind=document`（`document_kind=knowledge`）：单行 `mstar catalog register`，或 reviewed `mstar catalog discover` + `mstar catalog import`；provenance/supersession 用 `mstar catalog link`（`derived-from` / `supersedes` 关系）；生命周期变更用 `mstar catalog update`（`active` / `archived` / `superseded`；revision 守卫见 help）。**不再**要求 `{KNOWLEDGE_DIR}/README.md` 索引行（README 是散文，不是登记表）。知识关联载体是 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 仅 legacy 只读，不是写入面。**无 active store 时跳过本 Phase**（文档集自身即登记），并在结果记录 `catalog: n/a (no store)`；store 存在但未激活/未初始化不是跳过理由——按拒绝码报告
 7. **Refresh trigger** — 新知识暗示旧 doc 过时 → 推荐本 skill 的 `## Workflow — Maintain`（经 `/pm` 并指明 scope；不自动跑，仅 flag）
 
-> **Engine check:** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (engine `validateSchemaYaml`, `assertKnowledgeCatalogCompleteness`) to validate the frontmatter against `references/schema.yaml` (Phase 3 Write) and assert that every knowledge body under `{KNOWLEDGE_DIR}` has a catalog row (Phase 6 Catalog, contract §4). The `assertIndexRows` export refuses actionably (`compound.index.retired`) instead of passing, and the `mstar compound validate --knowledge-dir` index-row check fails for the same reason. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (engine `validateSchemaYaml`, `assertKnowledgeCatalogCompleteness`) to validate the frontmatter against `mstar-doc-corpus` `references/schema.yaml` (Phase 3 Write); the `--knowledge-dir` branch additionally asserts that every knowledge body under `{KNOWLEDGE_DIR}` has a catalog row (Phase 6 Catalog, contract §4) and therefore applies only when the harness store is active. The `assertIndexRows` export refuses actionably (`compound.index.retired`) instead of passing, and the `mstar compound validate --knowledge-dir` index-row check fails for the same reason. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## Workflow — Maintain
 
@@ -107,9 +107,9 @@ Full mode dispatches research subagents through the host's task tool. PM selects
 
 ### 产物与操作路径
 
-**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md`（**散文**，见 Phase 4）+ `<repo-root>/CONCEPTS.md`；知识关联经 `mstar catalog link`，不写 status/snapshot metadata。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
+**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md`（**散文**，见 Phase 4）+ `<repo-root>/CONCEPTS.md`；知识关联经 catalog relations（`mstar catalog link`，仅 active store 时），不写 status/snapshot metadata。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
 
-> **Engine check:** run `mstar compound validate <doc-path> --knowledge-dir <dir>` (engine `scopeGuard`, `compoundRefreshScope`) to resolve the allowed scope above (`{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, `<repo-root>/CONCEPTS.md`) and guard every write against it; this scope never authorizes ACTIVE status/snapshot writes. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar compound validate <doc-path> --knowledge-dir <dir>` (engine `scopeGuard`, `compoundRefreshScope`) to resolve the allowed scope above (`{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, `<repo-root>/CONCEPTS.md`) and guard every write against it; this scope never authorizes ACTIVE status/snapshot writes. The same command's catalog-completeness branch needs an active harness store, so a storeless maintenance run uses scope resolution alone. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ### Bootstrap vs refresh
 
@@ -154,7 +154,7 @@ PM provides a scope hint (directory name, filename, module name, or keyword). Ma
 
 ### Process
 
-Inventory → assess → classify/act → catalog reconcile → report → CONCEPTS.md reconciliation. Full Phase 1–6 procedure → **`references/maintain-workflow.md`**. CONCEPTS admission rules for Phase 6 → `references/concepts-vocabulary.md`.
+Inventory → assess → classify/act → catalog reconcile（仅 active store；无 store 记 `catalog: n/a (no store)`）→ report → CONCEPTS.md reconciliation. Full Phase 1–6 procedure → **`references/maintain-workflow.md`**. CONCEPTS admission rules for Phase 6 → `references/concepts-vocabulary.md`.
 
 
 ## Decision Rules
@@ -186,19 +186,17 @@ Inventory → assess → classify/act → catalog reconcile → report → CONCE
 
 ## Evidence
 
-**Capture** — 正确结果 = 一篇**可发现**的结晶文档：`{KNOWLEDGE_DIR}/<category>/<slug>.md` 通过 `references/schema.yaml` frontmatter 校验（Phase 3 Write）+ catalog 登记为 `kind=document`（`document_kind=knowledge`，Phase 6 Catalog；`mstar catalog list` 可查到）+ 达标领域词入 `CONCEPTS.md`（Phase 5）+ 源文件 / package README 标注 `Promoted to: <knowledge-path>`（Phase 4 Trace）。
+**Capture** — 正确结果 = 一篇**可发现**的结晶文档：`{KNOWLEDGE_DIR}/<category>/<slug>.md` 通过 **`mstar-doc-corpus`** `references/schema.yaml` frontmatter 校验（Phase 3 Write）+ 达标领域词入 `CONCEPTS.md`（Phase 5）+ 源文件 / package README 标注 `Promoted to: <knowledge-path>`（Phase 4 Trace）+ catalog 登记为 `kind=document`（`document_kind=knowledge`，Phase 6 Catalog；`mstar catalog list` 可查到）——**仅当 harness store active**；无 store 时该义务不适用，结果记 `catalog: n/a (no store)`。
 
-**Maintain** — 正确结果 = 每篇候选文档有明确 verdict（Keep / Update / Consolidate / Replace / Delete）并落到产物：文档改动 + catalog 行对账（Phase 4：`mstar catalog update` / `register`，生命周期 `active` / `archived` / `superseded`）+ catalog relations 知识关联（`mstar catalog link`；status/snapshot `knowledge_refs` 仅 legacy 只读）+ 维护报告（Phase 5：reviewed / kept / updated / consolidated / replaced / deleted / flagged）+ `CONCEPTS.md` 对账（Phase 6）。
+**Maintain** — 正确结果 = 每篇候选文档有明确 verdict（Keep / Update / Consolidate / Replace / Delete）并落到产物：文档改动 + 维护报告（Phase 5：reviewed / kept / updated / consolidated / replaced / deleted / flagged）+ `CONCEPTS.md` 对账（Phase 6）+ catalog 行对账（Phase 4：`mstar catalog update` / `register`，生命周期 `active` / `archived` / `superseded`）与 catalog relations 知识关联（`mstar catalog link`；status/snapshot `knowledge_refs` 仅 legacy 只读）——**仅当 harness store active**；无 store 时文档改动与报告即为完整证据，结果记 `catalog: n/a (no store)`。
 
 ## References
 
 | 何时 | 打开 |
 |------|------|
 | Capture 步骤细节（Q1–Q8 完整表、决策矩阵、Phase 1–7、HEAD-resolvability 质量门与 mstar 泄漏分类） | `references/compound-workflow.md` |
-| frontmatter 字段表（唯一 SSOT；本 skill 内没有第二处枚举） | `references/schema.yaml` |
-| `problem_type` → `<category>` 目录映射 | `references/category-mapping.md` |
+| 知识文档形状（唯一 SSOT：frontmatter 字段、两轨骨架、`problem_type` → `<category>`） | **`mstar-doc-corpus`** → `references/knowledge-format.md`（索引）、`references/schema.yaml`（字段）、`assets/knowledge-skeleton.md`（正文骨架）、`references/category-mapping.md`（目录映射） |
 | CONCEPTS.md 准入规则（Capture Phase 5、Maintain Phase 6） | `references/concepts-vocabulary.md` |
-| track 正文骨架 | `assets/resolution-template.md` |
 | Maintain Phase 1–6 详细步骤 | `references/maintain-workflow.md` |
 | 项目知识 bootstrap（absent/stale `STRATEGY.md` / `CONCEPTS.md` / `{KNOWLEDGE_DIR}`），on demand | `references/project-knowledge-bootstrap.md` |
 

@@ -13,10 +13,10 @@
 3. **Phase 2 Overlap** — 高重叠 → 更新既有文档，**不新建**。
 4. **Phase 3 Write** — 结构化重写进 `{KNOWLEDGE_DIR}/<category>/<slug>.md`（**禁止**整文件复制）；frontmatter 过 schema 校验。
 5. **Phase 4 Discoverability** / **Phase 5 CONCEPTS.md** — 按需；被拒绝的编辑不阻塞文档写入。
-6. **Phase 6 Catalog** — 每篇新 doc 登记 `kind=document` / `document_kind=knowledge`。
+6. **Phase 6 Catalog（仅 active store）** — 每篇新 doc 登记 `kind=document` / `document_kind=knowledge`；无 store 时跳过并记 `catalog: n/a (no store)`。
 7. **Phase 7 Refresh trigger** — 仅 flag 本 skill 的 `## Workflow — Maintain`，不自动运行。
 
-产出判据（与调用方无关）：catalog 登记完成；高重叠时更新既有文档；无结晶时以 reasoned `skipped` 结束（记录到哪由调用方承载）。
+产出判据（与调用方无关）：文档通过 schema 校验；高重叠时更新既有文档；active store 时完成 catalog 登记；无结晶时以 reasoned `skipped` 结束（记录到哪由调用方承载）。
 
 ## 是否值得结晶 —— 完整自检（Q1–Q8）
 
@@ -71,7 +71,7 @@ Understand:
 
 Query the store.db catalog for related existing documents; read `{KNOWLEDGE_DIR}/README.md`, if present, as prose only.
 
-Classify the problem into a track (bug vs knowledge) and category using `references/category-mapping.md`.
+Classify the problem into a track (bug vs knowledge) and category using **`mstar-doc-corpus`** `references/category-mapping.md`.
 
 ## Phase 2: Overlap detection
 
@@ -99,25 +99,11 @@ Filename: `<sanitized-slug>.md` (lowercase, hyphen-separated, no date prefix).
 
 ### 3.2 Frontmatter
 
-Canonical: `references/schema.yaml` (this skill's only field enumeration). At a glance:
-
-| Field | Kind | Note |
-|---|---|---|
-| `module` | string | module / component / area affected |
-| `date` | `YYYY-MM-DD` | date documented |
-| `problem_type` | enum | determines the track (bug vs knowledge) |
-| `category` | string | directory under `{KNOWLEDGE_DIR}` (`references/category-mapping.md`) |
-| `severity` | enum | `critical` / `high` / `medium` / `low` |
-| `plan_id` | string, optional | registered workflow/plan identity |
-| `tags` | array, optional | search keywords, max 8 |
-| `symptoms`, `root_cause`, `resolution_type` | bug track | required on the bug track |
-| `applies_when` | knowledge track | optional conditions where the guidance applies |
-| `last_updated` | `YYYY-MM-DD`, optional | added when updating an existing doc |
-| `related_components` | array, optional | other components involved |
+Canonical: **`mstar-doc-corpus`** `references/knowledge-format.md`（字段索引）→ `references/schema.yaml`（字段 SSOT）。本 skill 不枚举字段表。
 
 ### 3.3 Body
 
-Follow the section structure from `assets/resolution-template.md` for the determined track.
+Follow the section structure from **`mstar-doc-corpus`** `assets/knowledge-skeleton.md` for the determined track.
 
 ### 3.4 Validate
 
@@ -168,12 +154,12 @@ Read `references/concepts-vocabulary.md` for inclusion rules. Only propose when 
 
 If `CONCEPTS.md` doesn't exist yet, ask whether to seed it. A seed populates the core domain nouns of the area the learning touches; a full repo-wide bootstrap is the job of `## Workflow — Maintain` (`references/project-knowledge-bootstrap.md`).
 
-## Phase 6: Catalog registration
+## Phase 6: Catalog registration（仅 active store）
 
 1. Register each new knowledge document in the store.db catalog (`mstar catalog register`, or reviewed `mstar catalog discover` + `mstar catalog import`). README is prose, not a register; no index-row obligation.
 2. The knowledge-association carrier is catalog relations (`mstar catalog link`). Snapshot `plans[].metadata.knowledge_refs` is legacy read-only, not a write target.
 
-Every new doc must complete this phase; do not skip for lightweight captures.
+This phase applies only when the harness store is active. With no store, skip it and record `catalog: n/a (no store)` in the result — the document set is its own registry. A store that exists but is not active or not initialized is not a skip reason: report its refusal code. Do not skip a lightweight capture of an active store.
 
 ## Phase 7: Refresh trigger
 
