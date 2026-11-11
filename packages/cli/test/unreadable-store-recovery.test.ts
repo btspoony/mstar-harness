@@ -42,7 +42,14 @@ describe("unreadable store — refusal boundary and the documented fresh-root bo
       mkdirSync(corruptHarness, { recursive: true });
       writeFileSync(storePath, CORRUPT_BYTES);
       const bytesBefore = readFileSync(storePath);
-      const freshHarness = join(corruptHarness, "recovered-control");
+      // The repository declares a custom corpus layout. The fresh root is a
+      // SIBLING of `.mstarc` (the documented location): `.mstarc` is read only
+      // at the harness dir and its parent, so a nested `<root>/.mstar/…` root
+      // would hide this declaration and fall back to the defaults.
+      const mstarc = join(root, ".mstarc");
+      const declared = "[config]\nspecs_dir=custom/specs\n";
+      writeFileSync(mstarc, declared);
+      const freshHarness = join(root, "recovered-control");
 
       // (a) The unreadable store keeps its typed refusal and names supported routes.
       const refused = runCli(["status", "validate"], { cwd: root, env: { MSTAR_HARNESS_DIR: corruptHarness } });
@@ -56,11 +63,17 @@ describe("unreadable store — refusal boundary and the documented fresh-root bo
       expect(recovery).toContain("mstar catalog discover --harness");
       // It never advertises an online restore of a store no reader can inventory.
       expect(recovery).not.toContain("mstar store restore");
+      // The recommended root is a SIBLING of `.mstarc`; nesting it in `.mstar`
+      // would put it beyond the `.mstarc` discovery chain.
+      expect(recovery).toContain("<repo>/recovered-control");
+      expect(recovery).not.toContain(".mstar/recovered-control");
 
       // (b) The documented public sequence bootstraps a usable fresh harness.
       const scaffold = envelopeOf(runCli(["harness", "scaffold", root], { cwd: root, env: { MSTAR_HARNESS_DIR: freshHarness } }));
       expect(scaffold.status).toBe("ok");
       expect(scaffold.data?.harnessDir).toBe(freshHarness);
+      // The repository's own `.mstarc` is in scope, so the bootstrap adds none.
+      expect(readFileSync(mstarc, "utf8")).toBe(declared);
 
       const initialized = envelopeOf(runCli(["store", "init", "--harness", freshHarness], { cwd: root }));
       expect(initialized.status).toBe("ok");
@@ -68,6 +81,13 @@ describe("unreadable store — refusal boundary and the documented fresh-root bo
 
       const discovered = envelopeOf(runCli(["catalog", "discover", "--harness", freshHarness], { cwd: root }));
       expect(discovered.status).toBe("ok");
+
+      // The fresh root still resolves the repository's declared corpus layout.
+      const resolved = envelopeOf(
+        runCli(["path", "resolve"], { cwd: root, env: { MSTAR_HARNESS_DIR: freshHarness } }),
+      );
+      expect(resolved.status).toBe("ok");
+      expect(resolved.data?.specsDir).toBe(join(root, "custom", "specs"));
 
       // Usable: the fresh root answers a store read on its own authority.
       const listed = envelopeOf(runCli(["catalog", "list", "--harness", freshHarness], { cwd: root }));
