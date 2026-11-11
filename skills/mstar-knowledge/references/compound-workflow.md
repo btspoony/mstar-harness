@@ -69,7 +69,7 @@ Understand:
 - Which files/modules were involved
 - The plan_id if applicable (link to the registered workflow/plan identity)
 
-Discover related existing documents: with no initialized harness store, search `{KNOWLEDGE_DIR}/**/*.md` by the Phase 2 overlap method and record `catalog: n/a (no store)` in the result; an initialized store — staged included — answers the read-only catalog query, since a read is not blocked by activation, while the Phase 6 registration is a mutation that needs an active store and reports its refusal code there. Read `{KNOWLEDGE_DIR}/README.md`, if present, as prose only.
+Discover related existing documents: with no initialized harness store, search `{KNOWLEDGE_DIR}/**/*.md` by the Phase 2 overlap method and record `catalog: n/a (no store)` in the result; a staged store answers the discovery query's `catalog list` / `catalog show`, while an authority-shaped read such as the completeness check and the Phase 6 registration need an active store and report its refusal code. Read `{KNOWLEDGE_DIR}/README.md`, if present, as prose only.
 
 Classify the problem into a track (bug vs knowledge) and category using **`mstar-doc-corpus`** `references/category-mapping.md`.
 
