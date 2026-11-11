@@ -6,6 +6,21 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.5.1] - 2026-11-11
+
+### Harness
+
+- The three tracked corpora — `{KNOWLEDGE_DIR}`, `{SPECS_DIR}`, `{ADR_DIR}` — now default to `<repoRoot>/.agents/<kind>/`. `packages/engine/src/path.ts` drops the harness-first candidate and the `{HARNESS_DIR}/<kind>/` fallback: the chain is `.mstarc` → `.agents/<kind>` → kind-specific secondaries → a **legacy read-only** `{HARNESS_DIR}/<kind>/` tail, and an absent corpus creates `.agents/<kind>/` (skipped by `create: false`). A tracked corpus therefore survives a fully gitignored `.mstar/`.
+- `<repoRoot>` is now an explicit anchor rather than an assumption: `resolveSpecsDir` / `resolveKnowledgeDir` / `resolveAdrDir` accept `opts.repoRoot` (defaulting to the harness dir's parent), and the CLI, `scaffoldHarness` and the catalog pass the checkout they know — so a harness configured outside the repository creates the corpus in the checkout that can commit it, not beside itself.
+- `.mstarc` stays the only authority: a declared `knowledge_dir` / `specs_dir` / `adr_dir` is returned as declared, ahead of every candidate. Repositories that declare keys, including this one on `docs/{knowledge,specs,adr}`, keep their layout.
+- Writers must **resolve the symbol before writing** — read `.mstarc`, or run `mstar path resolve` — and never compose a default path. That rule is now stated in `mstar-conventions` (symbol-table preamble and resolution chains), `mstar-doc-corpus` § Layout defaults, `mstar-knowledge` § Storage, `mstar-artifacts` § Workflow and `docs/specs/architecture/document-corpus.md`; it is the root fix for issue #714, where two competing defaults let an agent write an unshareable document into the harness root.
+- The prose moved but two code paths did not, so they now resolve instead of composing: the `compound` write-gate matches the `{KNOWLEDGE_DIR}` the resolver returns (a literal `{HARNESS_DIR}/knowledge` had silently stopped covering `.agents/knowledge/`), and `compoundRefreshScope` takes the already-resolved knowledge root from its caller. `scaffoldHarness` derives its bootstrap `.mstarc` corpus keys from the directories it creates, so a nested harness (`harness_dir=runtime/harness`) declares `../.agents/<kind>` instead of a second corpus beside itself, and an already-declared corpus key is seeded where it points rather than in a second `.agents/<kind>` tree.
+- Recorded as `docs/adr/implemented/architecture/2026-11-11-corpus-default-location.md`.
+
+- Version alignment with harness **4.5.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.5.1**.
+
 ## [4.5.0] - 2026-11-11
 
 ### Fixed

@@ -1125,9 +1125,9 @@ function catalogRootDir(context, rootKind) {
   }
   const harness = dirname3(storeDbPath(context));
   const mainRoot = dirname3(harness);
+  const repoRoot = mainWorktreeRoot(harness) ?? mainRoot;
   switch (rootKind) {
     case "repository": {
-      const repoRoot = mainWorktreeRoot(harness) ?? mainRoot;
       if (context.checkoutRoot === undefined)
         return repoRoot;
       const callerMain = mainWorktreeRoot(context.checkoutRoot);
@@ -1140,9 +1140,9 @@ function catalogRootDir(context, rootKind) {
     case "iterations":
       return resolveIterationDir(harness);
     case "specs":
-      return context.checkoutRoot === undefined ? resolveSpecsDir(harness, { create: false }) : resolveTrackedResultDir(context.checkoutRoot, harness, "specsDir");
+      return context.checkoutRoot === undefined ? resolveSpecsDir(harness, { create: false, repoRoot }) : resolveTrackedResultDir(context.checkoutRoot, harness, "specsDir");
     case "knowledge":
-      return context.checkoutRoot === undefined ? resolveKnowledgeDir(harness, { create: false }) : resolveTrackedResultDir(context.checkoutRoot, harness, "knowledgeDir");
+      return context.checkoutRoot === undefined ? resolveKnowledgeDir(harness, { create: false, repoRoot }) : resolveTrackedResultDir(context.checkoutRoot, harness, "knowledgeDir");
     case "projects":
       return resolveProjectDir(harness, { harnessDir: harness });
   }
@@ -15994,20 +15994,20 @@ function resolveSpecsDir(harnessDir, opts = {}) {
     return declared;
   }
   const harness = resolve12(harnessDir);
-  const repoRoot = dirname10(harness);
+  const repoRoot = opts.repoRoot === undefined ? dirname10(harness) : resolve12(opts.repoRoot);
   const candidates = [
-    join14(harness, "specs"),
     join14(repoRoot, ".agents", "specs"),
     join14(repoRoot, "docs", "specs"),
     join14(repoRoot, "specs"),
     join14(harness, "designs"),
-    join14(repoRoot, "designs")
+    join14(repoRoot, "designs"),
+    join14(harness, "specs")
   ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory2(candidate) && hasFiles(candidate))
       return candidate;
   }
-  const fallback = join14(harness, "specs");
+  const fallback = join14(repoRoot, ".agents", "specs");
   if (opts.create !== false)
     mkdirSync4(fallback, { recursive: true });
   return fallback;
@@ -16069,7 +16069,7 @@ function resolveTrackedResultDir(callerCheckoutRoot, harnessDir, key) {
   const harness = resolve12(harnessDir);
   const mainRoot = mainWorktreeRoot(harness) ?? dirname10(harness);
   const declared = mstarcDeclared(harness, key);
-  const mainTarget = declared === null ? key === "specsDir" ? resolveSpecsDir(harness, { create: false }) : key === "knowledgeDir" ? resolveKnowledgeDir(harness, { create: false }) : resolveAdrDir(harness, { create: false }) : isAbsolute6(declared.value) ? resolve12(declared.value) : resolve12(declared.dir, declared.value);
+  const mainTarget = declared === null ? key === "specsDir" ? resolveSpecsDir(harness, { create: false, repoRoot: mainRoot }) : key === "knowledgeDir" ? resolveKnowledgeDir(harness, { create: false, repoRoot: mainRoot }) : resolveAdrDir(harness, { create: false, repoRoot: mainRoot }) : isAbsolute6(declared.value) ? resolve12(declared.value) : resolve12(declared.dir, declared.value);
   const rel = relative3(realpathNearest(mainRoot), realpathNearest(mainTarget));
   if (rel === "" || rel.startsWith("..") || isAbsolute6(rel))
     return mainTarget;
@@ -16084,16 +16084,20 @@ function resolveTrackedDir(harnessDir, opts, key, name, ...extra) {
   if (declared !== null)
     return declared;
   const harness = resolve12(harnessDir);
-  const repoRoot = dirname10(harness);
-  const candidates = [join14(harness, name), ...extra.map((segments) => join14(repoRoot, ...segments))];
+  const repoRoot = opts.repoRoot === undefined ? dirname10(harness) : resolve12(opts.repoRoot);
+  const preferred = join14(repoRoot, ".agents", name);
+  const candidates = [
+    preferred,
+    ...extra.map((segments) => join14(repoRoot, ...segments)),
+    join14(harness, name)
+  ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory2(candidate) && hasFiles(candidate))
       return candidate;
   }
-  const fallback = join14(harness, name);
   if (opts.create !== false)
-    mkdirSync4(fallback, { recursive: true });
-  return fallback;
+    mkdirSync4(preferred, { recursive: true });
+  return preferred;
 }
 function resolveHarnessSubdir(startDir, opts, key, fallback) {
   const harness = resolveHarnessDir(startDir, opts);
@@ -16191,21 +16195,22 @@ function resolveScaffoldDirs(root, options = {}) {
 async function scaffoldHarness(root, options = {}) {
   const { harnessDir, projectDir } = resolveScaffoldDirs(root, options);
   const harness = resolve12(harnessDir);
-  writeBootstrapMstarc(resolve12(root), harness);
+  const repoRoot = resolve12(root);
+  const knowledgeDir = mstarcDirOverride(harness, "knowledgeDir") ?? join14(repoRoot, ".agents", "knowledge");
+  const specsDir = mstarcDirOverride(harness, "specsDir") ?? join14(repoRoot, ".agents", "specs");
+  const adrDir = mstarcDirOverride(harness, "adrDir") ?? join14(repoRoot, ".agents", "adr");
+  writeBootstrapMstarc(repoRoot, harness, { knowledge: knowledgeDir, specs: specsDir, adr: adrDir });
   for (const dir of SCAFFOLD_DIRS)
     mkdirSync4(join14(harness, dir), { recursive: true });
   const defaultProjectDir = join14(projectDir, _DEFAULT_PROJECT);
   mkdirSync4(defaultProjectDir, { recursive: true });
-  const knowledgeDir = resolveKnowledgeDir(harness);
-  const specsDir = resolveSpecsDir(harness);
-  const adrDir = resolveAdrDir(harness);
   for (const dir of [knowledgeDir, specsDir, adrDir])
     mkdirSync4(dir, { recursive: true });
   seedAdrTree(adrDir);
   await registerScaffoldCatalog(harness);
   return harnessDir;
 }
-function writeBootstrapMstarc(root, harnessDir) {
+function writeBootstrapMstarc(root, harnessDir, corpus) {
   const parent = dirname10(harnessDir);
   const rel = relative3(root, parent);
   if (rel.startsWith("..") || isAbsolute6(rel))
@@ -16216,9 +16221,9 @@ function writeBootstrapMstarc(root, harnessDir) {
 ` + `; Values mirror the resolved layout so candidate-chain drift cannot move them.
 ` + `[config]
 ` + `harness_dir=${relative3(parent, harnessDir)}
-` + `knowledge_dir=.agents/knowledge
-` + `specs_dir=.agents/specs
-` + `adr_dir=.agents/adr
+` + `knowledge_dir=${relative3(parent, corpus.knowledge)}
+` + `specs_dir=${relative3(parent, corpus.specs)}
+` + `adr_dir=${relative3(parent, corpus.adr)}
 `;
   mkdirSync4(parent, { recursive: true });
   writeIfAbsent(join14(parent, MSTARC_FILE), content3);
@@ -21691,12 +21696,8 @@ function assertIndexRows(knowledgeDir) {
 async function assertKnowledgeCatalogCompleteness(context) {
   return await assertCatalogCompleteness(context, ["knowledge"]);
 }
-function compoundRefreshScope(harnessDir, projectRoot) {
-  return [
-    join23(harnessDir, "knowledge"),
-    join23(harnessDir, "knowledge", "README.md"),
-    join23(projectRoot, "CONCEPTS.md")
-  ];
+function compoundRefreshScope(knowledgeDir, projectRoot) {
+  return [knowledgeDir, join23(knowledgeDir, "README.md"), join23(projectRoot, "CONCEPTS.md")];
 }
 function isFileLikeRoot(root) {
   return /^[^.]*\.[A-Za-z0-9]{1,10}$/.test(basename14(root));
