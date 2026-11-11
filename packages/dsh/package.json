@@ -30,6 +30,7 @@
       "default": "./dist/client.js"
     },
     "./locale/*.json": "./locale/*.json",
+    "./docs/*": "./docs/*",
     "./bundle/cordis.patch.yml": "./bundle/cordis.patch.yml",
     "./package.json": "./package.json"
   },
