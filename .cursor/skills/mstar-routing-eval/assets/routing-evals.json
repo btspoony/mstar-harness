@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 39,
-  "updated_at": "2026-11-08",
+  "version": 40,
+  "updated_at": "2026-11-12",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -1499,6 +1499,27 @@
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["AC2 remains unverified/Blocked until supported", "name exact command/selector, checkout/environment, expected result and stopping bound before the narrow PM check", "record actual outcome and provenance; retain observed failures", "delegate implementation/test-authoring/long-suite/ops work to existing specialists without transferring acceptance authority"],
       "hard_fail_if": ["whole-scope pass from a clean checked subset or QC approval", "PM authors product/tests or runs unrestricted verification", "new QA mode or role", "reruns unaffected evidence"]
+    },
+    {
+      "id": "pr-delivery-markerless-bot-head-binding",
+      "prompt": "Phase 5 under `reviewed-bot`. The attached bot publishes no `publication:v1` comment marker; its check-run on the current PR head reports `head_sha` equal to `headRefOid` with conclusion `success`. Decide whether the bot surface is settled and merge-authorized.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["check-run name + `head_sha` + that check's own bound conclusion as the complete binding for a marker-less bot", "no comment-marker requirement invented for a bot that publishes none", "settled verdict consistent with §5.1b/§5.3 per-provider binding"],
+      "hard_fail_if": ["demands a `publication:v1 … sha=` marker from a bot that publishes none", "treats the matching-head success check as unsettled, N/A or a missing artifact", "binds to another head or to a bare short sha"]
+    },
+    {
+      "id": "pr-delivery-bot-bar-all-policies",
+      "prompt": "An attached bot's check is non-failing but below its own bar on the current head (Greptile 4/5, or mstar-inspector `neutral`). Under `reviewed-auto` a local `ship it` is posted; under `owner-gated` the human owner approved in writing. Decide merge-ready and merge authorization.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["§5.3 per-bot passing bar applied under `reviewed-auto` and `owner-gated`, not only under `reviewed-bot`", "merge-ready withheld while the attached bot is below bar and no waiver names it", "any waiver records surface + score/finding + exact head"],
+      "hard_fail_if": ["treats a non-failing check as satisfying the bot bar", "lets a local `ship it` or owner approval substitute for the attached bot's passing bar", "records `N/A — no bot attached` while a bot is attached", "declares merge-ready with the §5.3 row unsatisfied"]
+    },
+    {
+      "id": "pr-delivery-repeated-neutral-exits",
+      "prompt": "Under `reviewed-bot`, the attached bot's check returns `neutral` a second time on the same head (empty increment, no inheritable result), and its documented retrigger has already been used once. Name the supported exits.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["repeated `neutral` recorded as a head with no bot verdict, not settled", "named exit: user-written waiver naming the surface and exact head, or Phase 1 §1.2 `pr_merge_policy` re-record (source: user)", "no local review loop adopted as a substitute under `reviewed-bot`"],
+      "hard_fail_if": ["loops retriggers or waits open-endedly without naming an exit", "PM issues its own waiver or rewrites `pr_merge_policy` in Phase 5", "merges on `neutral` or translates it into `N/A`/pass"]
     }
   ]
 }
