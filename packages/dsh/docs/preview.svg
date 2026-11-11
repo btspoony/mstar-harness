@@ -4,38 +4,42 @@
   <text x="40" y="84" font-size="14" fill="#5B6472">Morning Star's skills assign every seat; the engine keeps the plan, reviews and acceptance on the record - inside your dsh session.</text>
   <rect x="40" y="112" width="536" height="395" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
   <text x="64" y="150" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">IN THE SESSION</text>
-  <rect x="64" y="162" width="488" height="38" rx="10" fill="#F1F2F8"/>
+  <rect x="64" y="162" width="488" height="34" rx="10" fill="#F1F2F8"/>
   <text x="82" y="187" font-size="13.5" fill="#363B46">Ship the README graphics</text>
-  <line x1="540" y1="200" x2="540" y2="214" stroke="#C3C8D4" stroke-width="1.4"/><path d="M536 209l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="64" y="214" width="488" height="56" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="82" y="237" font-size="13" font-weight="600" fill="#16181D">PM clarifies and writes the plan</text>
-  <text x="82" y="256" font-size="10.5" fill="#6B7280">skill · project-manager</text>
-  <line x1="540" y1="270" x2="540" y2="284" stroke="#C3C8D4" stroke-width="1.4"/><path d="M536 279l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="64" y="284" width="488" height="46" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="82" y="306" font-size="12.5" font-weight="600" fill="#16181D">Implement on a feature branch</text>
-  <text x="82" y="323" font-size="10.5" fill="#6B7280">executor · per-task review</text>
-  <line x1="540" y1="330" x2="540" y2="336" stroke="#C3C8D4" stroke-width="1.4"/>
-  <line x1="140" y1="336" x2="476" y2="336" stroke="#C3C8D4" stroke-width="1.4"/>
-  <line x1="140" y1="336" x2="140" y2="350" stroke="#C3C8D4" stroke-width="1.4"/><path d="M136 345l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="64" y="350" width="152" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="80" y="369" font-size="12.5" font-weight="600" fill="#16181D">QC 1</text>
-  <text x="80" y="385" font-size="10.5" fill="#6B7280">independent seat</text>
-  <line x1="308" y1="336" x2="308" y2="350" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 345l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="232" y="350" width="152" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="248" y="369" font-size="12.5" font-weight="600" fill="#16181D">QC 2</text>
-  <text x="248" y="385" font-size="10.5" fill="#6B7280">independent seat</text>
-  <line x1="476" y1="336" x2="476" y2="350" stroke="#C3C8D4" stroke-width="1.4"/><path d="M472 345l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="400" y="350" width="152" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="416" y="369" font-size="12.5" font-weight="600" fill="#16181D">QC 3</text>
-  <text x="416" y="385" font-size="10.5" fill="#6B7280">independent seat</text>
-  <line x1="140" y1="394" x2="476" y2="394" stroke="#C3C8D4" stroke-width="1.4"/>
-  <line x1="540" y1="394" x2="540" y2="410" stroke="#C3C8D4" stroke-width="1.4"/><path d="M536 405l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="64" y="410" width="488" height="46" rx="10" fill="#EDF7F0" stroke="#CDE8D6"/>
-  <circle cx="86" cy="433" r="9" fill="#DFF2E5"/>
-  <path d="M82 433l3 3 5-6" stroke="#17864A" stroke-width="1.8" fill="none" stroke-linecap="round"/>
-  <text x="106" y="438" font-size="12.5" fill="#1D3B29">PM Acceptance · evidence per criterion</text>
-  <rect x="456" y="422" width="96" height="22" rx="11" fill="#DFF2E5"/>
-  <text x="504" y="437" font-size="10.5" fill="#17864A" text-anchor="middle">merge-ready</text>
+  <path d="M308 196V213" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M304 213h8l-4 7z" fill="#AEB6C4"/>
+  <rect x="64" y="220" width="488" height="48" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="82" y="243" font-size="13" font-weight="600" fill="#16181D">PM clarifies and writes the plan</text>
+  <text x="82" y="262" font-size="10.5" fill="#6B7280">skill · project-manager</text>
+  <path d="M308 268V285" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M304 285h8l-4 7z" fill="#AEB6C4"/>
+  <rect x="64" y="292" width="488" height="42" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="82" y="314" font-size="12.5" font-weight="600" fill="#16181D">Implement on a feature branch</text>
+  <text x="82" y="331" font-size="10.5" fill="#6B7280">executor · per-task review</text>
+  <path d="M308 334V336Q308 342 302 342H146Q140 342 140 348V351" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M136 351h8l-4 7z" fill="#AEB6C4"/>
+  <path d="M314 342H470Q476 342 476 348V351" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M472 351h8l-4 7z" fill="#AEB6C4"/>
+  <path d="M308 342V351" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M304 351h8l-4 7z" fill="#AEB6C4"/>
+  <rect x="64" y="358" width="152" height="36" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="80" y="375" font-size="12.5" font-weight="600" fill="#16181D">QC 1</text>
+  <text x="80" y="389" font-size="10.5" fill="#6B7280">independent seat</text>
+  <rect x="232" y="358" width="152" height="36" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="248" y="375" font-size="12.5" font-weight="600" fill="#16181D">QC 2</text>
+  <text x="248" y="389" font-size="10.5" fill="#6B7280">independent seat</text>
+  <rect x="400" y="358" width="152" height="36" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="416" y="375" font-size="12.5" font-weight="600" fill="#16181D">QC 3</text>
+  <text x="416" y="389" font-size="10.5" fill="#6B7280">independent seat</text>
+  <path d="M140 394V396Q140 402 146 402H470Q476 402 476 396V394" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M308 394V411" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M304 411h8l-4 7z" fill="#AEB6C4"/>
+  <rect x="64" y="418" width="488" height="40" rx="10" fill="#EDF7F0" stroke="#CDE8D6"/>
+  <circle cx="86" cy="439" r="9" fill="#DFF2E5"/>
+  <path d="M82 439l3 3 5-6" stroke="#17864A" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <text x="106" y="444" font-size="12.5" fill="#1D3B29">PM Acceptance · evidence per criterion</text>
+  <rect x="456" y="428" width="96" height="22" rx="11" fill="#DFF2E5"/>
+  <text x="504" y="443" font-size="10.5" fill="#17864A" text-anchor="middle">merge-ready</text>
   <text x="64" y="484" font-size="11" fill="#6B7280">skills let every seat own its part, and the engine keeps every step on the record</text>
   <rect x="596" y="112" width="444" height="395" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
   <text x="620" y="150" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">IN THE SIDEBAR</text>
