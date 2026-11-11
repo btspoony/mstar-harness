@@ -21,15 +21,17 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 
 ## 路径符号（SSOT）
 
+下表的值是**默认值**，不是布局声明：`.mstarc`（`{HARNESS_DIR}` 或其父目录的最近一份）权威。任何 workflow 在向某符号写入之前**必须先解析该符号**——读 `.mstarc`，或运行 `mstar path resolve`——**不得**用默认路径自行拼出目标（issue #714 的根因）。
+
 | 符号 | 默认 |
 |------|------|
 | `{HARNESS_DIR}` | `.mstar/` |
 | `{PLAN_DIR}` | `{HARNESS_DIR}/plans/` |
 | `{SDD_DIR}` | `{HARNESS_DIR}/sdd/<plan-id>/`（SDD 运行时 scratch + review bundle；gitignored） |
 | `{ITERATION_DIR}` | `{HARNESS_DIR}/iterations/` |
-| `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/`（默认）；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
-| `{SPECS_DIR}` | `{HARNESS_DIR}/specs/`（默认）；解析见下文「`{SPECS_DIR}` 解析」 |
-| `{ADR_DIR}` | `{HARNESS_DIR}/adr/`（默认）；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
+| `{KNOWLEDGE_DIR}` | `.agents/knowledge/`（不是 `{HARNESS_DIR}/knowledge/`）；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
+| `{SPECS_DIR}` | `.agents/specs/`（不是 `{HARNESS_DIR}/specs/`）；解析见下文「`{SPECS_DIR}` 解析」 |
+| `{ADR_DIR}` | `.agents/adr/`（不是 `{HARNESS_DIR}/adr/`）；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
 | `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/` (default; `.mstarc` `workflow_dir` overrides it) — retained ordinary bodies, append-only `notes.jsonl` and workflow-owned `reports/` (e.g. `<workflow-id>/reports/e2e.md`) |
 | `{PROJECT_DIR}` | `{HARNESS_DIR}/projects/`（默认；`.mstarc` `project_dir` 声明时用声明值）——project 层目录；旧 `roadmap.md` 仅作文件 transport/history |
 | `{REVIEW_DIR}` | `{HARNESS_DIR}/reviews/`（默认；`.mstarc` `review_dir` 声明时用声明值）——review 运行目录树（codebase audit / PR / branch / diff review 的 report 与 evidence；`mstar audit scaffold` 写入，`mstar pr-review report-path` 解析；gitignored） |
@@ -81,23 +83,23 @@ enforcement=hard
 
 ### `{SPECS_DIR}` 解析（找到非空目录即停）
 
-1. `.mstarc` `specs_dir`（**权威**：声明即采用，跳过本链）
-2. `{HARNESS_DIR}/specs/`（默认 `.mstar/specs/`）
-3. `<repo-root>/.agents/specs/`
-4. `docs/specs/`
-5. `specs/`（仓库根）
-6. legacy 只读：`{HARNESS_DIR}/designs/`、仓库根 `designs/`（仅非空时可用；init **不**新建）
+1. `.mstarc` `specs_dir`（**权威**：声明即采用，跳过本链与空目录规则；目录不存在也照用）
+2. `<repo-root>/.agents/specs/`（默认）
+3. `docs/specs/`
+4. `specs/`（仓库根）
+5. legacy 只读：`{HARNESS_DIR}/designs/`、仓库根 `designs/`
+6. legacy 只读：`{HARNESS_DIR}/specs/`（**链尾**；只在仓库仍带迁移前语料时可读）
 
-**空目录规则**：候选路径存在但无任何文件 → 视为不存在，继续下一候选；候选按解析后路径去重（harness 根即 `.agents/` 时第 3 项与第 2 项是同一目录）。
+**空目录规则**：候选路径存在但无任何文件 → 视为不存在，继续下一候选；候选按解析后路径去重（harness 根即 `.agents/` 时第 2 项与第 6 项是同一目录）。
 
-**创建默认**：全部缺失或皆空 → 创建并使用 `{HARNESS_DIR}/specs/`（统一落在 `.mstar/` 下）。**禁止**在 greenfield init 时优先创建裸仓库根 `specs/`。bootstrap 布局下 scaffold 先写 `.mstarc` 声明 `specs_dir=.agents/specs`，本链第 1 项直接命中，不走到回退创建。
+**创建默认**：全部缺失或皆空 → 创建并使用 `<repo-root>/.agents/specs/`（`create: false` 时只返回不创建）。**禁止**在 greenfield init 时创建裸仓库根 `specs/`；**禁止**把 `{HARNESS_DIR}/specs/` 当创建目标。
 
 ### `{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析（找到非空目录即停）
 
-- `{KNOWLEDGE_DIR}`：`.mstarc` `knowledge_dir`（权威）→ `{HARNESS_DIR}/knowledge/` → `<repo-root>/.agents/knowledge/`（空目录视为不存在）→ 回退 `{HARNESS_DIR}/knowledge/`，需创建时创建（`resolveKnowledgeDir` 默认创建，`{ create: false }` 关闭）。
-- `{ADR_DIR}`：`.mstarc` `adr_dir`（权威）→ `{HARNESS_DIR}/adr/` → `<repo-root>/.agents/adr/` → `<repo-root>/docs/adr/`（均按空目录规则）→ 回退 `{HARNESS_DIR}/adr/`，创建规则同上（`resolveAdrDir`）。
+- `{KNOWLEDGE_DIR}`：`.mstarc` `knowledge_dir`（权威）→ `<repo-root>/.agents/knowledge/`（默认）→ legacy 只读 `{HARNESS_DIR}/knowledge/`（链尾）→ 回退创建 `<repo-root>/.agents/knowledge/`（`resolveKnowledgeDir` 默认创建，`{ create: false }` 关闭）。
+- `{ADR_DIR}`：`.mstarc` `adr_dir`（权威）→ `<repo-root>/.agents/adr/`（默认）→ `<repo-root>/docs/adr/` → legacy 只读 `{HARNESS_DIR}/adr/`（链尾）→ 回退创建 `<repo-root>/.agents/adr/`（`resolveAdrDir`）。
 
-bootstrap 布局下 `.mstarc` 已声明 `knowledge_dir` / `adr_dir`，两条链的第 1 项直接命中（`scaffoldHarness` 随后为解析结果建目录并种子 ADR 树）；上表 `{HARNESS_DIR}/*` 默认值只描述未声明时的行为。
+`{HARNESS_DIR}/<kind>/` 在这三条链里都只是 **legacy 只读源**：永不创建、永不作为回退、也不再被任何文档表述为语料所在；直到没有仓库预期在迁移前位置携带内容时才删除该候选。`.mstarc` 已声明的仓库（含本仓库）布局不变——声明即命中第 1 项。`.agents/` 默认值只描述未声明时的行为，且它位于 `{HARNESS_DIR}` 之外，所以 `.mstar/` 整体 gitignored 时 tracked 语料仍随仓库提交。
 
 > **Engine check:** engine `resolveSpecsDir` / `resolveKnowledgeDir` / `resolveAdrDir` — or run `mstar path resolve` (prints all three) — to confirm the candidate order (empty-dir-as-absent included). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 

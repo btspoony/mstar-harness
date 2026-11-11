@@ -139,7 +139,7 @@ Check whether the project's `AGENTS.md` or `CLAUDE.md` would lead a future agent
 If `{KNOWLEDGE_DIR}` is not mentioned in the root instruction file, propose the smallest addition that surfaces the knowledge store. Example:
 
 ```markdown
-- `{HARNESS_DIR}/knowledge/` — captured solutions and reusable patterns
+- `.agents/knowledge/` — captured solutions and reusable patterns
 ```
 
 Ask for user consent before applying (PM can approve). If the user declines, the doc is still written — only the discoverability edit is skipped.

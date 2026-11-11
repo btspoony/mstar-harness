@@ -4,7 +4,7 @@
 >
 > **三层语料契约不在此文件**：`{KNOWLEDGE_DIR}`（工程经验）、`{SPECS_DIR}`（当前状态）、`{ADR_DIR}`（决策记录）的层间边界、文档骨架、命名、生命周期与可选校验器只在 **`mstar-doc-corpus`**（SKILL.md § The three layers 与 `references/specs.md` / `references/adr.md` / `references/knowledge-format.md`）。本文件只拥有**过程产物**。
 
-**路径符号（默认）**：`**{KNOWLEDGE_DIR}** = **{HARNESS_DIR}/knowledge/**`，`**{ITERATION_DIR}** = **{HARNESS_DIR}/iterations/**`；`{SPECS_DIR}` / `{ADR_DIR}` 的默认值与 `.mstarc` 覆盖 → **`mstar-doc-corpus`** SKILL.md § Layout defaults；完整发现链（`.agents/`、`docs/specs/`、`docs/adr/`、legacy `designs/` 等候选）→ **`mstar-conventions`** SKILL.md「路径符号」。
+**路径符号（默认）**：`**{KNOWLEDGE_DIR}** = **.agents/knowledge/**`，`**{ITERATION_DIR}** = **{HARNESS_DIR}/iterations/**`；`{SPECS_DIR}` / `{ADR_DIR}` 的默认值（`.agents/specs` / `.agents/adr`）与 `.mstarc` 覆盖 → **`mstar-doc-corpus`** SKILL.md § Layout defaults；完整发现链（`.mstarc` 权威 → `.agents/` → `docs/specs/`、`docs/adr/`、legacy `designs/` 与 `{HARNESS_DIR}/<kind>/` 只读）→ **`mstar-conventions`** SKILL.md「路径符号」。写入这三层前先解析符号，不要自行拼默认路径。
 
 本文件将「agent / 实施过程产物」与「三层语料」分开，**与具体业务仓库无关**；项目可在根目录 `AGENTS.md` 用一小段指向本 reference 或复述分界关键词，避免重复维护长文。
 
