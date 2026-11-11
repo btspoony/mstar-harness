@@ -1,6 +1,6 @@
 ---
 name: mstar-knowledge
-description: "Load for `{KNOWLEDGE_DIR}` capture, maintain/refresh/bootstrap, or iteration-close promotion（结晶/清理/显式 bootstrap）；skip with reasoned skipped when nothing to crystallize. Not for ordinary feature coding."
+description: "Load for `{KNOWLEDGE_DIR}` capture, maintain/refresh/bootstrap, or close-time promotion（结晶/清理/显式 bootstrap/收口提升）；skip with reasoned skipped when nothing to crystallize. Not for ordinary feature coding."
 ---
 
 # mstar-knowledge（知识结晶与维护）
