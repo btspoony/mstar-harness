@@ -6,6 +6,17 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-11-11
+
+### Changed
+
+- **The issue store gains an honest terminal state for a removed subject: `obsolete`.** One authoritative tuple in `packages/engine/src/issue.ts` now defines the disposition vocabulary, and every server schema, filter, aggregate, history query and outbound mapping derives from it instead of repeating a list. An `obsolete` close requires a nonblank reason and at least one removal reference, refuses any `canonicalIssueId` (including `null`/`""`) before mutation, and refuses with `issue.invalid-disposition` plus the exact removal-evidence recovery. Migration 19 is append-only and preserves existing rows, relations and triggers; the browser projection is generated from the same tuple, and `obsolete` maps to `Canceled` on outbound Linear pushes.
+- **The external half of the dashboard is removed.** The `sync-binding` screen, its `#sync-binding` route and navigation entry, the `/api/sync-binding` read, the `querySyncBinding` engine view, the shell-chrome nav key and both locales' copy are gone end to end; a stale `#sync-binding` address now lands on the overview and a stale `/api/sync-binding` request answers the dashboard's structured `not-found`. The dashboard renders the local `store.db` only — the issues/detail, issue-flow, workflows/detail, iterations/detail, roadmap, projects and overview reads keep answering.
+
+- Version alignment with harness **4.5.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.5.0**.
+
 ## [4.4.1] - 2026-11-10
 
 ### Harness

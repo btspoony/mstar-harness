@@ -6,6 +6,35 @@
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-11-11
+
+### Harness
+
+- **Acceptance 承载改名：** 完成载荷成员现为 `acceptance: {gate, decision, report}`（原 `qa`），prepare 参数为 `--acceptance-gate`（原 `--qa-gate`），发出的证据标签为 `acceptance.report`。gate 取值仍为 `pm-acceptance`。已存为 `qa` 的完成记录仍可通过读取侧的单一兼容点校验与读取；携带 `qa` 的新提交会被拒绝，并在消息中指明 `acceptance`。prepared 配置中存储的 `qa_gate` 键不变，且不提供别名参数。
+- **受影响面：** 归属 skill 正文（`mstar-artifacts`、`mstar-roles` PM 参考、`mstar-use-cli`）、迭代与项目治理参考（`mstar-iteration/references/phase-2-worktree-lease.md`、`mstar-project-governance/references/migration-source-shapes.md`）、`docs/commands.md` / `docs/runtime-reference.md`、重新生成的 ZCode hook bundle（`hooks/session-context.mjs`、`hooks/mstar-write-gate.mjs`，以固定版本 Bun 1.4.0 构建），以及知识库清理：受影响页面只保留现行做法，历史的 `## Source` 溯源与 `QA gate` 标签已移除。
+- **已归档迭代缺失的 compass 不再被渲染成当前失败，总览页的缺失通知改为有界摘要。** 仅当所属迭代可确证为历史（catalog 已归档/已取代，或对应权威迭代 workflow 已终止且不再活跃注册）时，投影才把缺失 compass 从必需来源集合中排除；仍活跃注册的迭代照常报错，未知或尚未执行的迭代仍为必需，invalid/inaccessible 仍报错。总览页现在只给出受影响/缺失来源的去重计数、至多三个具名来源与未列出的数量，两种语言均如此；原始诊断消息、内部路径与无界列表不再进入该通知。
+- 新增 **`mstar-doc-corpus`** —— 三层文档语料的独立契约（层间边界、specs 骨架、ADR 记录契约、knowledge 文档形状）。它不加载任何生命周期专题、不需要 store；`mstar-knowledge/references/schema.yaml`、`category-mapping.md` 与两轨骨架已迁入其中。
+- `mstar-knowledge` 只保留采集与维护：frontmatter 字段表改为指针，catalog 步骤（Capture Phase 6、Maintain Phase 4）**仅在 harness store active 时**适用——无 store 时结果记录 `catalog: n/a (no store)`。
+- `mstar-artifacts/references/knowledge-and-designs.md` 现在只拥有过程产物（iteration、plan、SDD、project references、residuals）并委派三层语料；所有入站指针按此拆分。
+- `packages/engine/src/roles.ts`：`lintLoadOrder` 按精确名字豁免 `mstar-doc-corpus` 的 core-first 规则——语料撰写先于、且不得要求生命周期加载。
+- `mstar lint --type adr`、`mstar lint --type specs` 与 `mstar compound validate <doc>` 行为不变，文档化为**可选**校验器，无需 store 即可运行。
+- **issue store 为“主体已删除”的条目新增一个诚实的终态：`obsolete`。** `packages/engine/src/issue.ts` 的单一权威元组现在定义处置词表，所有服务端 schema、过滤器、聚合、历史查询与外发映射都从它派生，不再各自重复维护列表。`obsolete` 关闭要求非空原因与至少一条删除证据引用，并在任何变更前拒绝 `canonicalIssueId`（含 `null`/`""`），以 `issue.invalid-disposition` 及精确的补证据恢复路径拒绝。迁移 19 为追加式，保留既有行、关系与触发器；浏览器投影由同一元组生成，外发 Linear 时 `obsolete` 映射为 `Canceled`。
+- **迭代 Phase 1 现把 ADR proposals 与 open issues 作为研究来源。** §1.1 新增两步：经 `mstar path resolve` 解析 `{ADR_DIR}` 并读记录层 `proposed/*/*.md` 的 `Problem` / `Proposal` / `Acceptance criteria`（`TEMPLATE.md` 骨架永不是候选），以及经 `mstar status tech-debt` 与 `mstar issue list --disposition open` 读 issue store。proposal 桶缺失、为空或只剩骨架记为 absence；open issue 列表为空是一次成功读取。桶语义与捕获契约仍留在各自权威文档、不复述。
+- **autonomous direction lock 的排序覆盖这两个来源。** open issues 紧跟已承诺的 deferral（`critical` / `high` 优先，关联 milestone 的 issue 视为交付证据），proposed ADRs 排在战略对齐之前，且每个入选候选须引用 path 或 issue id。
+- **PM Acceptance 报告名：** review bundle 的推荐报告名由 `qa.md` 改为 `pm-acceptance.md`——文件按承载它的 gate 命名，而不是已退役的席位。`mstar-roles` 的 acceptance 落地规则与 `mstar-artifacts` 的报告表 / durable summary 指针改用新默认（仍允许同目录的其他 basename）；完成载荷的 `qa` 成员、`--qa-gate` 参数与历史 `qa.md` 证据不变。
+- **移除 dashboard 的对外集成半边。** `sync-binding` 页面、它的 `#sync-binding` 路由与导航项、`/api/sync-binding` 读取、engine 的 `querySyncBinding` 视图、shell chrome 的导航键以及两种语言的文案已端到端删除；旧的 `#sync-binding` 地址现在落在总览页，旧的 `/api/sync-binding` 请求返回 dashboard 的结构化 `not-found`。dashboard 只渲染本地 `store.db` —— issues/detail、issue-flow、workflows/detail、iterations/detail、roadmap、projects 与 overview 读取保持可用。
+- **Scaffold 引导布局：** `mstar harness scaffold` 现在产出 harness 推荐的布局。canonical `.mstar` 片段整体忽略进程根，不再列出 `.mstarc`——进程产物留在本地，布局声明随仓库共享。`scaffoldHarness` 在仓库内无可解析声明、且 harness 目录父目录位于 scaffold 根内时，于该父目录写入 tracked `.mstarc`（`harness_dir` 加 `knowledge_dir` / `specs_dir` / `adr_dir` = `.agents/*`）；在 harness 目录下创建 `plans/` `iterations/` `sdd/` `reviews/` `projects/_default/`；按解析结果（而非硬编码 `.mstar/knowledge` / `.mstar/specs`）创建 `.agents/knowledge|specs|adr` 语料；并为 ADR 树种子 `README.md`、两个模板与四个桶目录（class 目录由首条记录创建）。`harness.scaffold` 将 harness 规则文件写到 `.agents/AGENTS.md`——两种布局下唯一被跟踪的位置。重跑不创建也不改写任何内容；作者所有的既有 `.gitignore` 或 `.mstarc` 永不被改动。
+- 更新 `mstar-conventions`（路径符号、初始化步骤、git 跟踪契约、bootstrap 分层）、`mstar-roles/references/project-manager/plan-management.md`，以及新增 ADR `docs/adr/implemented/architecture/2026-11-11-scaffold-result-layout.md`。
+
+### Fixed
+
+- **门禁覆盖的真实组合用例不能再「没跑也算过」地放行 dsh 作业。** `isCiEnvironment()` 现在同时接受非空的 `GITHUB_ACTIONS` 与非空的 `CI`（非空字符串语义不变，字面量 `"false"` 也算已设置），因此未设置 `CI` 的 runner 子进程依旧会执行这十个 `test.if(...)` 真实组合用例，而不是把它们降级为 skip。
+- **限定范围的 JUnit 校验只统计受门禁用例。** `Test dsh` 会输出 `.junit-dsh.xml`，紧随其后的 `check:composition-report` 步骤只针对两个带门禁的 spec 文件要求：suite 存在、被跳过的**受门禁用例**为零、**受门禁用例**的执行数量达到清单钉住的下限（2 与 8，与文件清单位于同一处）。受门禁用例以「报告标题带记录在案的 skip 原因」为准，因此这两个文件里同时存在的普通用例不能顶替被删掉的受门禁用例：报告缺失、没有任何已执行的受门禁用例（包括用例很多但受门禁用例被全部删掉的文件）、任一受门禁用例被跳过，或受门禁用例少一个，都会让作业变红。受门禁用例多于下限则放行，参数化不会卡死门禁。普通用例的 skip（包括这两个文件内部的）以及其它文件里的 skip 仍然允许；因为校验是独立步骤，测试步骤自身的退出状态不受影响。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.5.0**。
+
 ## [4.4.1] - 2026-11-10
 
 ### Documentation
