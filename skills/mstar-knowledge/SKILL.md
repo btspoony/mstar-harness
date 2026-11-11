@@ -1,13 +1,13 @@
 ---
 name: mstar-knowledge
-description: "Load for `{KNOWLEDGE_DIR}` capture, maintain/refresh/bootstrap, or iteration-close promotion（结晶/清理/显式 bootstrap）；skip with reasoned skipped when nothing to crystallize. Not for ordinary feature coding."
+description: "Load for `{KNOWLEDGE_DIR}` capture, maintain/refresh/bootstrap, or close-time promotion（结晶/清理/显式 bootstrap/收口提升）；skip with reasoned skipped when nothing to crystallize. Not for ordinary feature coding."
 ---
 
 # mstar-knowledge（知识结晶与维护）
 
 ## Load order
 
-**Read `mstar-harness-core` first.** Path symbols (`{KNOWLEDGE_DIR}`, `{HARNESS_DIR}`) → **`mstar-conventions`**. On conflict, **`mstar-harness-core` wins**.
+Standalone, this skill needs nothing beyond itself and **`mstar-doc-corpus`** for document shape. When the harness is running, **`mstar-harness-core`** is the lifecycle/authorization authority and the full path chain lives in **`mstar-conventions`**; read them only in that case.
 
 ## Purpose
 
@@ -15,13 +15,13 @@ One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one 
 
 **In the mstar lifecycle**, Capture is invoked by lifecycle flows — the iteration-close round or a standalone-development delivery tail — sharing one step sequence (see「Integration with mstar lifecycle」). It is never triggered at per-plan `Done`, and stays invocable standalone for ad-hoc captures. Maintain runs only from its own entries (`## When to use / Skip`), which include the Capture Phase 7 flag and the on-demand project-knowledge bootstrap.
 
-**Storage SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 不重定义路径：知识文档 → `{HARNESS_DIR}/knowledge/<category>/<slug>.md`（`<category>` 取值见 **`mstar-doc-corpus`** `references/category-mapping.md`）；CONCEPTS.md → `<repo-root>/CONCEPTS.md`；Maintain 另可操作 `{HARNESS_DIR}/knowledge/README.md`（**散文**，见 Maintain Phase 4）。
+**Storage**: `{KNOWLEDGE_DIR}` is `.agents/knowledge/` in a project without the harness, and `.mstar/knowledge/` once the harness runs without a `.mstarc` declaration; a `.mstarc` `knowledge_dir` overrides either, resolved relative to the `.mstarc` (**`mstar-doc-corpus`** § Layout defaults)。知识文档 → `{KNOWLEDGE_DIR}/<category>/<slug>.md`（`<category>` 取值见 **`mstar-doc-corpus`** `references/category-mapping.md`）；CONCEPTS.md → `<repo-root>/CONCEPTS.md`；Maintain 另可操作 `{KNOWLEDGE_DIR}/README.md`（**散文**，见 Maintain Phase 4）。当 harness 运行时，完整的发现链与其余路径符号 → **`mstar-conventions`**。
 
 **层级分工**：本 skill 产出的**工程经验与方法论**不是当前系统状态；三层语料的边界与更新义务 → **`mstar-doc-corpus`** SKILL.md § The three layers（当前状态属 `{SPECS_DIR}`，决策属 `{ADR_DIR}`）。
 
 ## When to use / Skip
 
-**Capture — use**: 迭代收口（`mstar-iteration` § iteration-close）批量回顾；独立触发（非迭代或紧急，任何非平凡问题解决后）；重大 bug 修复后（`mstar-iteration` 未启用时手动）；独立 development plan 交付前的 disposition review（PR head 定稿前，见「Integration with mstar lifecycle」）。
+**Capture — use**: 任何非平凡问题解决后（独立触发，紧急情况同样适用）；重大 bug 修复后；独立 development plan 交付前的 disposition review（PR head 定稿前，见「Integration with mstar lifecycle」）；当迭代流程在收口时调用本 skill，另做一次批量回顾（迭代机制 → **`mstar-iteration`** § iteration-close，仅当该项目跑迭代时）。
 
 **Capture — skip**: 自检 ≤2 Yes；Q5 高重叠（更新已有而非新建）；纯机械工作（格式化、依赖升级、typo）；问题未经验证。独立交付 plan 的 disposition 义务不因跳过结晶而消失——结晶跳过时以 reasoned `skipped` 记录结果（记录在 workflow，见「Integration with mstar lifecycle」）。
 
@@ -61,7 +61,7 @@ Compound 是**被生命周期流程调用**的知识结晶流程：本 SKILL 只
 | 4. Trace | 源文件顶栏或 package README：`Promoted to: <knowledge-path>`；provenance 记在 catalog 关系（`mstar catalog link`，关系取 `derived-from`），**不**在 README 表格加列 |
 | 5. Summary | 记录本轮提升篇数、保留快照、跳过及原因（记录面由调用方承载） |
 
-**Promote 典型**：迭代 spec 已验证且指导未来实现；guide 含非显而易见过程知识或失败尝试。**Keep snapshot**：仅迭代史、已被 `{SPECS_DIR}/` 取代的草案、或自检 ≤2 Yes 的琐碎笔记。边界 SSOT → **`mstar-iteration/references/iteration-artifact-boundaries.md`**。
+**Promote 典型**：迭代 spec 已验证且指导未来实现；guide 含非显而易见过程知识或失败尝试。**Keep snapshot**：仅迭代史、已被 `{SPECS_DIR}/` 取代的草案、或自检 ≤2 Yes 的琐碎笔记。迭代流程自持其 package 边界（仅当迭代运行时 → **`mstar-iteration`** `references/iteration-artifact-boundaries.md`）。
 
 ### 是否值得结晶（自检门禁）
 
@@ -99,24 +99,24 @@ Full mode dispatches research subagents through the host's task tool. PM selects
 6. **Catalog（仅 harness store active 时）** — 新文档在 `{HARNESS_DIR}/store.db` 的 catalog 中登记为 `kind=document`（`document_kind=knowledge`）：单行 `mstar catalog register`，或 reviewed `mstar catalog discover` + `mstar catalog import`；provenance/supersession 用 `mstar catalog link`（`derived-from` / `supersedes` 关系）；生命周期变更用 `mstar catalog update`（`active` / `archived` / `superseded`；revision 守卫见 help）。**不再**要求 `{KNOWLEDGE_DIR}/README.md` 索引行（README 是散文，不是登记表）。知识关联载体是 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 仅 legacy 只读，不是写入面。**无 active store 时跳过本 Phase**（文档集自身即登记），并在结果记录 `catalog: n/a (no store)`；store 存在但未激活/未初始化不是跳过理由——按拒绝码报告
 7. **Refresh trigger** — 新知识暗示旧 doc 过时 → 推荐本 skill 的 `## Workflow — Maintain`（经 `/pm` 并指明 scope；不自动跑，仅 flag）
 
-> **Engine check:** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (engine `validateSchemaYaml`, `assertKnowledgeCatalogCompleteness`) to validate the frontmatter against `mstar-doc-corpus` `references/schema.yaml` (Phase 3 Write); the `--knowledge-dir` branch additionally asserts that every knowledge body under `{KNOWLEDGE_DIR}` has a catalog row (Phase 6 Catalog, contract §4) and therefore applies only when the harness store is active. The `assertIndexRows` export refuses actionably (`compound.index.retired`) instead of passing, and the `mstar compound validate --knowledge-dir` index-row check fails for the same reason. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check (optional validator):** run `mstar compound validate <doc-path> [--knowledge-dir <dir>]` (engine `validateSchemaYaml`, `assertKnowledgeCatalogCompleteness`) to validate the frontmatter against `mstar-doc-corpus` `references/schema.yaml` (Phase 3 Write); the `--knowledge-dir` branch additionally asserts that every knowledge body under `{KNOWLEDGE_DIR}` has a catalog row (Phase 6 Catalog, contract §4) and therefore applies only when the harness store is active. The `assertIndexRows` export refuses actionably (`compound.index.retired`) instead of passing, and the `mstar compound validate --knowledge-dir` index-row check fails for the same reason. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ## Workflow — Maintain
 
-**Stock workflow**: existing `{KNOWLEDGE_DIR}` documents show staleness signals, and the store is audited against the current codebase until it is trustworthy again.
+**Stock workflow**: existing `{KNOWLEDGE_DIR}` documents show staleness signals, and the document set is audited against the current codebase until it is trustworthy again.
 
 ### 产物与操作路径
 
-**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md`（**散文**，见 Phase 4）+ `<repo-root>/CONCEPTS.md`；知识关联经 catalog relations（`mstar catalog link`，仅 active store 时），不写 status/snapshot metadata。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
+**操作面**: 本 skill 仅操作 `{KNOWLEDGE_DIR}/**/*.md` + `{KNOWLEDGE_DIR}/README.md`（**散文**，见 Phase 4）+ `<repo-root>/CONCEPTS.md`；知识关联经 catalog relations（`mstar catalog link`，仅 active store 时），不写 status/snapshot metadata。**禁止**操作 `docs/`，以及 harness 运行时才存在的 plan / iteration / spec 树（`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`）。完整解析链 → **`mstar-conventions`** `references/artifact-storage-paths.md`（仅当 harness 运行时）。
 
-> **Engine check:** run `mstar compound validate <doc-path> --knowledge-dir <dir>` (engine `scopeGuard`, `compoundRefreshScope`) to resolve the allowed scope above (`{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, `<repo-root>/CONCEPTS.md`) and guard every write against it; this scope never authorizes ACTIVE status/snapshot writes. The same command's catalog-completeness branch needs an active harness store, so a storeless maintenance run uses scope resolution alone. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check (optional validator):** run `mstar compound validate <doc-path> --knowledge-dir <dir>` (engine `scopeGuard`, `compoundRefreshScope`) to resolve the allowed scope above (`{KNOWLEDGE_DIR}/**`, `{KNOWLEDGE_DIR}/README.md`, `<repo-root>/CONCEPTS.md`) and guard every write against it; this scope never authorizes ACTIVE status/snapshot writes. The same command's catalog-completeness branch needs an active harness store, so a storeless maintenance run uses scope resolution alone. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 ### Bootstrap vs refresh
 
 | Mode | When | Procedure |
 |------|------|-----------|
 | **Refresh** | `{KNOWLEDGE_DIR}` exists; audit accuracy, merge overlaps, delete stale docs | This skill `## Workflow — Maintain` (Phases 1–6) |
-| **Bootstrap** | No knowledge scaffolding, or artifacts are absent/stale enough to warrant full distillation from codebase | **`references/project-knowledge-bootstrap.md`** (7-phase: survey → STRATEGY.md → CONCEPTS.md → baseline knowledge → indexing → harness init → commit) |
+| **Bootstrap** | No knowledge scaffolding, or artifacts are absent/stale enough to warrant full distillation from codebase | **`references/project-knowledge-bootstrap.md`** (7-phase: survey → STRATEGY.md → CONCEPTS.md → baseline knowledge → indexing → opt-in harness init → commit) |
 
 Read the bootstrap reference on demand; do not paste its body into this SKILL.md.
 
@@ -166,7 +166,7 @@ Inventory → assess → classify/act → catalog reconcile（仅 active store�
 3. **Match docs to reality.** When code differs from doc, update the doc — not ask whether the code change was "intentional."
 4. **Be decisive.** When evidence is clear (file renamed, class moved), apply. Only ask PM when genuinely ambiguous.
 5. **Avoid low-value churn.** Don't edit for typos, polish, or cosmetic changes that don't improve accuracy.
-6. **Delete, don't archive** — **except** formal **iteration-start** §1.6 corpus hygiene (`mstar-iteration/references/iteration-corpus-hygiene.md`), which **moves** superseded/redundant knowledge/specs to `{HARNESS_DIR}/archived/knowledge|specs/`. Outside that gate, git history is the archive; `git log --diff-filter=D -- <path>` finds deleted docs. Durable decision *reason* — why an alternative lost, or what a choice cost — has its home in the ADR tree (`{ADR_DIR}`), not in a kept knowledge doc.
+6. **Delete, don't archive** — git history is the archive; `git log --diff-filter=D -- <path>` finds deleted docs. The one exception is bulk archiving, which exists only inside an iteration: when an iteration runs, its hygiene pass owns moving superseded/redundant knowledge/specs to `{HARNESS_DIR}/archived/knowledge|specs/`（**`mstar-iteration`** §1.6 corpus hygiene → `references/iteration-corpus-hygiene.md`）. Durable decision *reason* — why an alternative lost, or what a choice cost — has its home in the ADR tree (`{ADR_DIR}`), not in a kept knowledge doc.
    > **Not adopted:** frozen-archive seal machinery, `Archived:` triplets, or a verifier — they contradict rule 6 (delete, don't archive; git history is the archive); do not reintroduce.
 7. **Evaluate document-set design.** Check whether two+ docs overlap and should be consolidated. Redundant docs silently drift apart.
 
@@ -200,5 +200,5 @@ Inventory → assess → classify/act → catalog reconcile（仅 active store�
 | Maintain Phase 1–6 详细步骤 | `references/maintain-workflow.md` |
 | 项目知识 bootstrap（absent/stale `STRATEGY.md` / `CONCEPTS.md` / `{KNOWLEDGE_DIR}`），on demand | `references/project-knowledge-bootstrap.md` |
 
-- **`mstar-conventions`** — path symbols（`{KNOWLEDGE_DIR}`、`{HARNESS_DIR}`）与产物存储 SSOT（`references/artifact-storage-paths.md`）
-- **`mstar-artifacts`** — store.db catalog 登记与生命周期（snapshot 为迁移源；project register 仅迁移历史）
+- Only when the harness runs: **`mstar-conventions`** — 完整路径发现链与其余路径符号（`references/artifact-storage-paths.md`）
+- Only when an active store exists: **`mstar-artifacts`** — store.db catalog 登记与生命周期（snapshot 为迁移源；project register 仅迁移历史）

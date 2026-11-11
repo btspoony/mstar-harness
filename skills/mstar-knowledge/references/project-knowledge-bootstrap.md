@@ -6,12 +6,13 @@ Distill a coherent knowledge baseline from the current project — useful when t
 
 ## Load order (bootstrap)
 
-1. `mstar-harness-core`
-2. `mstar-knowledge` (this skill; `## Workflow — Maintain`)
-3. `mstar-conventions`（路径符号）
-4. This skill's **references/strategy-document.md**（STRATEGY.md 形状、六节校验、访谈、维护触发）
-5. This skill's **references/concepts-vocabulary.md**（CONCEPTS.md 规则）
-6. This reference — **§ Decision Rules / Core rules** in `mstar-knowledge/SKILL.md`（知识维护基线）
+Standalone, this bootstrap needs **`mstar-knowledge`** (this skill) plus **`mstar-doc-corpus`** for document shape; `mstar-harness-core` and `mstar-conventions` apply only when the project already runs the harness.
+
+1. `mstar-knowledge` — this skill: `## Workflow — Maintain` 步骤与 `## Decision Rules` 基线
+2. **`mstar-doc-corpus`** — 知识文档形状 SSOT（frontmatter 字段、两轨骨架、`problem_type` → 目录）
+3. This skill's **references/strategy-document.md**（STRATEGY.md 形状、六节校验、访谈、维护触发）
+4. This skill's **references/concepts-vocabulary.md**（CONCEPTS.md 规则）
+5. Only when the harness already runs: `mstar-harness-core`（生命周期/授权权威）与 `mstar-conventions`（路径符号与发现链）
 
 ## Phase 1: Survey — understand what exists
 
@@ -31,12 +32,12 @@ Check what already exists and note its condition:
 |----------|-------|-----------|
 | `STRATEGY.md` | Exists? Is it current/accurate? | `absent` / `stale` / `partial` / `current` |
 | `CONCEPTS.md` | Exists? Covers core domain nouns? | `absent` / `stale` / `partial` / `current` |
-| `{KNOWLEDGE_DIR}/README.md` | Exists as prose navigation? Check registration completeness through `mstar catalog list`, not README rows. | `absent` / `empty` / `partial` / `current` |
+| `{KNOWLEDGE_DIR}/README.md` | Exists as prose navigation? Check registration completeness through `mstar catalog list` only when an active store exists, not README rows; with no store the document set is its own registry, so judge it from the files alone. | `absent` / `empty` / `partial` / `current` |
 | `{KNOWLEDGE_DIR}/**/*.md` | Any knowledge docs? Are they still accurate? | `none` / `few` / `some` / `many` |
 | `{ITERATION_DIR}/README.md` | Exists? Any past iteration artifacts? | `absent` / `present` |
 | `{SPECS_DIR}/` or `designs/` | Any specs or ADRs? | `absent` / `present` |
 | `docs/` | Any architecture docs, design notes? | Count and note relevance |
-| Store-backed execution authority | Query `mstar status validate` / `mstar plan show` for workflow/plan history (retained `status.json` / snapshots are migration sources only, never an execution probe). | `absent` / `present` |
+| Store-backed execution authority (only when the harness exists) | Query `mstar status validate` / `mstar plan show` for workflow/plan history (retained `status.json` / snapshots are migration sources only, never an execution probe). | `absent` / `present` |
 
 Report findings to the user: what exists, what's missing, what's stale.
 
@@ -61,7 +62,7 @@ Six required sections — Vision / What we build / What we don't build / Guiding
 
 ### Six-section validation
 
-`mstar lint <STRATEGY.md>` (`lintStrategySections`) must pass the six required headings before this phase reports done → `references/strategy-document.md` § Validation.
+The six required headings must all be present before this phase reports done; `mstar lint <STRATEGY.md>` (`lintStrategySections`, optional validator) checks them for you → `references/strategy-document.md` § Validation.
 
 ### Creation interview
 
@@ -126,36 +127,33 @@ Each doc follows the Knowledge track skeleton (`mstar-doc-corpus` `assets/knowle
 
 ### If knowledge docs already exist
 
-Apply `## Workflow — Maintain` logic:
-- Keep accurate docs
-- Update stale references
-- Consolidate overlapping docs
-- Delete docs for code that no longer exists
-- Add new docs only for genuinely undocumented patterns
+Apply `## Workflow — Maintain` logic: keep accurate docs, update stale references, consolidate overlapping docs, delete docs for code that no longer exists, add new docs only for genuinely undocumented patterns.
 
 ## Phase 5: Indexing & discoverability
 
-1. Discover and register knowledge through reviewed `mstar catalog discover` + `mstar catalog import` (or `register`); README is prose, with no registration-row obligation
+1. With an active store, discover and register knowledge through reviewed `mstar catalog discover` + `mstar catalog import` (or `register`); with no store the document set is its own registry and this step is a no-op. README is prose, with no registration-row obligation
 2. Create or update `{ITERATION_DIR}/README.md` index table (if iteration artifacts exist)
 3. Check AGENTS.md references all knowledge artifacts:
-   - If missing `{HARNESS_DIR}/knowledge/` → propose adding
+   - If missing `{KNOWLEDGE_DIR}/` → propose adding
    - If missing `STRATEGY.md` → propose adding
    - If missing `CONCEPTS.md` → propose adding
 4. Ask for consent before editing AGENTS.md
 
-## Phase 6: Initialize harness (if absent)
+## Phase 6: Initialize harness — opt-in only
 
-If `{HARNESS_DIR}/` does not exist:
-1. Initialize per `mstar-conventions`（`.mstar/` + subdirectories via `mstar harness scaffold`）
-2. Activate the execution authority with `mstar store init`（scaffold writes no `status.json`; a harness without an ACTIVE store has no execution authority and uses conversation tracking）
+Opt in only when the project wants lifecycle tracking (plans, iterations, a store-backed catalog, issue capture); the default standalone outcome needs none of it, the Phase 2–5 artifacts being a complete bootstrap committed with no `{HARNESS_DIR}` and no store.
+
+With **no active store**, scaffold per **`mstar-conventions`**（`.mstar/` + subdirectories via `mstar harness scaffold`）then create the authority with `mstar store init`（scaffold writes no `status.json`；without an ACTIVE store there is no execution authority and work uses conversation tracking）. With an **active store already present**, initialize nothing — `mstar store init` refuses against an existing store.
+
+Either way, before Phase 7, register every bootstrap artifact the catalog does not have yet: reviewed `mstar catalog discover`（dry-run proposal）then `mstar catalog import`，scoped to `STRATEGY.md`, `CONCEPTS.md` and the Phase 4 knowledge docs, so catalog searches and the completeness check see them instead of failing while bootstrap reports success.
 
 ## Phase 7: Commit
 
-All bootstrap artifacts must be committed:
+All bootstrap artifacts must be committed; add `{HARNESS_DIR}/` only when Phase 6 scaffolded it (the standalone default commits no harness root).
 Bootstrap commits use the configured identity; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 
 ```bash
-git add STRATEGY.md CONCEPTS.md AGENTS.md {HARNESS_DIR}/ {KNOWLEDGE_DIR}/
+git add STRATEGY.md CONCEPTS.md AGENTS.md {KNOWLEDGE_DIR}/
 git commit -m "chore: bootstrap project knowledge — STRATEGY.md, CONCEPTS.md, baseline knowledge docs"
 ```
 
@@ -163,5 +161,5 @@ Report a summary:
 - STRATEGY.md: created / updated / skipped
 - CONCEPTS.md: created / updated（<N> entries）/ skipped
 - Knowledge docs: <N> created, <N> updated, <N> deleted, <N> kept
-- Harness: initialized / already existed
+- Harness: initialized / already existed / not initialized (standalone default)
 - AGENTS.md: updated / not modified

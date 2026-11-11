@@ -1,6 +1,6 @@
 # mstar-knowledge — Capture 工作流详情
 
-> Loaded by `mstar-knowledge` SKILL.md (`## Workflow — Capture`) at the self-check and Phase 1–7 steps. **Read `mstar-harness-core` first.** Path symbols → `mstar-conventions`.
+> Loaded by `mstar-knowledge` SKILL.md (`## Workflow — Capture`) at the self-check and Phase 1–7 steps. It needs nothing beyond that skill and `mstar-doc-corpus`; when the harness is running, **`mstar-harness-core`** is the lifecycle/authorization authority and path symbols resolve through `mstar-conventions`.
 >
 > **接口边界（HARD）**：本文件是 compound **执行步骤**的唯一 SSOT。触发时机、cwd、写入面与结果记录面属于**调用方流程**，由调用方自身声明并引用本文件 —— 本文件**不复述、也不维护调用方清单**。
 
@@ -126,7 +126,7 @@ After writing, validate the YAML frontmatter:
   - reviewer-addressed justification（向评审自辩的措辞）
   - control-flow narration（过程/控制流叙述）
   - date stamps in prose：durable 正文陈述现状与结论（「the route governs reads」），不写撰写/观察日期（「Read side (2026-09-21)」）；时间信息属于 frontmatter 的 `date` / `last_updated`（schema 字段），不在正文重复
-  - machine-local paths：不写绝对路径或机器专属布局（`/Users/<name>/...`、checkout 外的主机目录）；引用仓库内目标用 repo-relative 路径，harness 目标用 `{HARNESS_DIR}` / `{KNOWLEDGE_DIR}` 等符号（`mstar-conventions`）
+  - machine-local paths：不写绝对路径或机器专属布局（`/Users/<name>/...`、checkout 外的主机目录）；引用仓库内目标用 repo-relative 路径；harness 目标用 `{HARNESS_DIR}` / `{KNOWLEDGE_DIR}` 等符号（符号定义见本 skill SKILL.md § Purpose「Storage」；完整解析链 → `mstar-conventions`，仅当 harness 运行时）
   - hedges without markers → 既有 `simplify:` / `temporary` 标记约定（`mstar-coding-behavior` § Decision Rules；引用不重复）
   - authoring-language slips：双语对之外的 zh/en 混杂
 - **Keep 规则（mstar-sanctioned）**：review bundle / QC report 内的 R# 与 finding id（durable 文档引用 QC 证据的 sanctioned pattern 是经 review bundle 路径引用：finding id 留在 bundle 内，durable 文档只引用 bundle 路径本身）；issue 引用；带 provenance 词的 measured bounds；runtime old/new 生命周期态；Alternatives-considered genre 节；HEAD 持久工件中的 iteration/plan id
