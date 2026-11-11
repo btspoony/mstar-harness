@@ -1345,6 +1345,32 @@ describe("scaffoldHarness", () => {
     }
   });
 
+  // A declared corpus is authoritative: the scaffold seeds where the
+  // repository already writes instead of creating a second tree beside it.
+  test("seeds a declared adr_dir and never creates the .agents default", async () => {
+    const root = tmpRoot("path-scaffold-declared-adr-");
+    try {
+      const authored = "[config]\nharness_dir=.mstar\nadr_dir=docs/adr\n";
+      writeFileSync(join(root, ".mstarc"), authored, "utf8");
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      await scaffoldHarness(root);
+
+      for (const bucket of ["proposed", "implemented"]) {
+        expect(existsSync(join(root, "docs", "adr", bucket, "TEMPLATE.md"))).toBe(true);
+      }
+      expect(existsSync(join(root, "docs", "adr", "README.md"))).toBe(true);
+      // The declared path is the only ADR tree the scaffold touches.
+      expect(existsSync(join(root, ".agents", "adr"))).toBe(false);
+      // The two undeclared corpora keep the greenfield default.
+      expect(existsSync(join(root, ".agents", "knowledge"))).toBe(true);
+      expect(existsSync(join(root, ".agents", "specs"))).toBe(true);
+      // The author's declaration is authoritative and never rewritten.
+      expect(readFileSync(join(root, ".mstarc"), "utf8")).toBe(authored);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("seeds the ADR tree: README, both templates and the four buckets", async () => {
     const root = tmpRoot("path-scaffold-adr-");
     try {

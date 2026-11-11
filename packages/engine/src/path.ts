@@ -757,12 +757,14 @@ export function resolveScaffoldDirs(
  * wins outright (`writeBootstrapMstarc` backs off when one is already in
  * scope), so the file never pre-empts a choice the repository already made.
  *
- * The corpora are always `<scaffoldRoot>/.agents/<kind>`, never a resolver
- * candidate. Bootstrap is greenfield: adopting a directory that merely exists
- * would turn it into the declared write target — a legacy
- * `{HARNESS_DIR}/<kind>/` most of all, whose contents a wholesale gitignored
- * `.mstar/` can never carry into a commit. Existing content is read by the
- * resolvers, not re-homed by the scaffold.
+ * Declared wins, greenfield default next, undeclared legacy never adopted.
+ * A `.mstarc` key for the corpus is authoritative — the scaffold seeds where
+ * that repository already writes — and otherwise the corpora are the
+ * greenfield `<scaffoldRoot>/.agents/<kind>` paths, never a resolver
+ * candidate: adopting a directory that merely exists would turn it into the
+ * declared write target — a legacy `{HARNESS_DIR}/<kind>/` most of all, whose
+ * contents a wholesale gitignored `.mstar/` can never carry into a commit.
+ * Existing content is read by the resolvers, not re-homed by the scaffold.
  *
  * Idempotent: an existing `.mstarc`, directory, template or README is never
  * rewritten. Returns the absolute resolved harness dir.
@@ -775,17 +777,18 @@ export function resolveScaffoldDirs(
 export async function scaffoldHarness(root: string, options: ScaffoldOptions = {}): Promise<string> {
   const { harnessDir, projectDir } = resolveScaffoldDirs(root, options);
   const harness = resolve(harnessDir);
-  // Tracked corpora are always the greenfield `<root>/.agents/<kind>` paths.
-  // Resolving them here would adopt a non-empty candidate that merely exists
-  // (legacy `{HARNESS_DIR}/<kind>/` above all) and declare *that* as the
-  // write target — a bootstrap must never re-home existing content.
+  // Each corpus: the `.mstarc` declaration when one is in scope, else the
+  // greenfield `<root>/.agents/<kind>` default — never a resolver candidate,
+  // which would adopt a non-empty directory that merely exists (legacy
+  // `{HARNESS_DIR}/<kind>/` above all) and declare *that* as the write target.
+  // A bootstrap must never re-home existing content.
   // `root` is the repository the scaffold ran for (the tracked-results owner);
   // the `.agents/` corpora belong there even when `harness_dir` points outside
   // the checkout (an explicit `MSTAR_HARNESS_DIR`, a nested harness).
   const repoRoot = resolve(root);
-  const knowledgeDir = join(repoRoot, ".agents", "knowledge");
-  const specsDir = join(repoRoot, ".agents", "specs");
-  const adrDir = join(repoRoot, ".agents", "adr");
+  const knowledgeDir = mstarcDirOverride(harness, "knowledgeDir") ?? join(repoRoot, ".agents", "knowledge");
+  const specsDir = mstarcDirOverride(harness, "specsDir") ?? join(repoRoot, ".agents", "specs");
+  const adrDir = mstarcDirOverride(harness, "adrDir") ?? join(repoRoot, ".agents", "adr");
   writeBootstrapMstarc(repoRoot, harness, { knowledge: knowledgeDir, specs: specsDir, adr: adrDir });
   for (const dir of SCAFFOLD_DIRS) mkdirSync(join(harness, dir), { recursive: true });
   // `_default` is the fallback project identity; its directory is a location,
