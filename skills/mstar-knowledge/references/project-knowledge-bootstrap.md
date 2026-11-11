@@ -32,7 +32,7 @@ Check what already exists and note its condition:
 |----------|-------|-----------|
 | `STRATEGY.md` | Exists? Is it current/accurate? | `absent` / `stale` / `partial` / `current` |
 | `CONCEPTS.md` | Exists? Covers core domain nouns? | `absent` / `stale` / `partial` / `current` |
-| `{KNOWLEDGE_DIR}/README.md` | Exists as prose navigation? Check registration completeness through `mstar catalog list`, not README rows. | `absent` / `empty` / `partial` / `current` |
+| `{KNOWLEDGE_DIR}/README.md` | Exists as prose navigation? Check registration completeness through `mstar catalog list` only when an active store exists, not README rows; with no store the document set is its own registry, so judge it from the files alone. | `absent` / `empty` / `partial` / `current` |
 | `{KNOWLEDGE_DIR}/**/*.md` | Any knowledge docs? Are they still accurate? | `none` / `few` / `some` / `many` |
 | `{ITERATION_DIR}/README.md` | Exists? Any past iteration artifacts? | `absent` / `present` |
 | `{SPECS_DIR}/` or `designs/` | Any specs or ADRs? | `absent` / `present` |
