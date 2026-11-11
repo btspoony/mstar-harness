@@ -2,46 +2,46 @@
   <rect width="1080" height="600" fill="#F5F6FC"/>
   <text x="40" y="52" font-size="29" font-weight="600" fill="#16181D">从一句需求到一次合并</text>
   <text x="40" y="84" font-size="14" fill="#5B6472">skills 让每个席位各司其职，engine 把计划、审查与验收留成记录 —— 就在你的 dsh 会话里。</text>
-  <rect x="40" y="112" width="536" height="395" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <rect x="40" y="112" width="536" height="398" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
   <text x="64" y="150" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">会话内</text>
   <rect x="64" y="162" width="488" height="34" rx="10" fill="#F1F2F8"/>
-  <text x="82" y="187" font-size="13.5" fill="#363B46">把 README 配图做完</text>
-  <path d="M308 196V213" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M304 213h8l-4 7z" fill="#AEB6C4"/>
-  <rect x="64" y="220" width="488" height="48" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="82" y="243" font-size="13" font-weight="600" fill="#16181D">PM 澄清请求并写出计划</text>
-  <text x="82" y="262" font-size="10.5" fill="#6B7280">skill · project-manager</text>
-  <path d="M308 268V285" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M304 285h8l-4 7z" fill="#AEB6C4"/>
-  <rect x="64" y="292" width="488" height="42" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="82" y="314" font-size="12.5" font-weight="600" fill="#16181D">在功能分支上实现</text>
-  <text x="82" y="331" font-size="10.5" fill="#6B7280">executor · 逐任务审查</text>
-  <path d="M308 334V336Q308 342 302 342H146Q140 342 140 348V351" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M136 351h8l-4 7z" fill="#AEB6C4"/>
-  <path d="M314 342H470Q476 342 476 348V351" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M472 351h8l-4 7z" fill="#AEB6C4"/>
-  <path d="M308 342V351" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M304 351h8l-4 7z" fill="#AEB6C4"/>
-  <rect x="64" y="358" width="152" height="36" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="80" y="375" font-size="12.5" font-weight="600" fill="#16181D">QC 1</text>
-  <text x="80" y="389" font-size="10.5" fill="#6B7280">独立席位</text>
-  <rect x="232" y="358" width="152" height="36" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="248" y="375" font-size="12.5" font-weight="600" fill="#16181D">QC 2</text>
-  <text x="248" y="389" font-size="10.5" fill="#6B7280">独立席位</text>
-  <rect x="400" y="358" width="152" height="36" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="416" y="375" font-size="12.5" font-weight="600" fill="#16181D">QC 3</text>
-  <text x="416" y="389" font-size="10.5" fill="#6B7280">独立席位</text>
-  <path d="M140 394V396Q140 402 146 402H470Q476 402 476 396V394" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="82" y="185" font-size="13.5" fill="#363B46">把 README 配图做完</text>
+  <path d="M308 196V209" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M304 209h8l-4 7z" fill="#AEB6C4"/>
+  <rect x="64" y="216" width="488" height="48" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="82" y="239" font-size="13" font-weight="600" fill="#16181D">PM 澄清请求并写出计划</text>
+  <text x="82" y="258" font-size="10.5" fill="#6B7280">skill · project-manager</text>
+  <path d="M308 264V277" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M304 277h8l-4 7z" fill="#AEB6C4"/>
+  <rect x="64" y="284" width="488" height="42" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="82" y="304" font-size="12.5" font-weight="600" fill="#16181D">在功能分支上实现</text>
+  <text x="82" y="320" font-size="10.5" fill="#6B7280">executor · 逐任务审查</text>
+  <path d="M308 326V331Q308 336 303 336H145Q140 336 140 341V343" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M136 343h8l-4 7z" fill="#AEB6C4"/>
+  <path d="M313 336H471Q476 336 476 341V343" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M472 343h8l-4 7z" fill="#AEB6C4"/>
+  <path d="M308 336V343" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M304 343h8l-4 7z" fill="#AEB6C4"/>
+  <rect x="64" y="350" width="152" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="80" y="369" font-size="12.5" font-weight="600" fill="#16181D">QC 1</text>
+  <text x="80" y="386" font-size="10.5" fill="#6B7280">独立席位</text>
+  <rect x="232" y="350" width="152" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="248" y="369" font-size="12.5" font-weight="600" fill="#16181D">QC 2</text>
+  <text x="248" y="386" font-size="10.5" fill="#6B7280">独立席位</text>
+  <rect x="400" y="350" width="152" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="416" y="369" font-size="12.5" font-weight="600" fill="#16181D">QC 3</text>
+  <text x="416" y="386" font-size="10.5" fill="#6B7280">独立席位</text>
+  <path d="M140 394V399Q140 404 145 404H471Q476 404 476 399V394" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M308 394V411" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M304 411h8l-4 7z" fill="#AEB6C4"/>
-  <rect x="64" y="418" width="488" height="40" rx="10" fill="#EDF7F0" stroke="#CDE8D6"/>
-  <circle cx="86" cy="439" r="9" fill="#DFF2E5"/>
-  <path d="M82 439l3 3 5-6" stroke="#17864A" stroke-width="1.8" fill="none" stroke-linecap="round"/>
-  <text x="106" y="444" font-size="12.5" fill="#1D3B29">PM Acceptance · 逐条标准映射证据</text>
-  <rect x="456" y="428" width="96" height="22" rx="11" fill="#DFF2E5"/>
-  <text x="504" y="443" font-size="10.5" fill="#17864A" text-anchor="middle">merge-ready</text>
-  <text x="64" y="484" font-size="11" fill="#6B7280">skills 让每个席位各司其职，engine 把每一步留成记录</text>
-  <rect x="596" y="112" width="444" height="395" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <rect x="64" y="418" width="488" height="44" rx="10" fill="#EDF7F0" stroke="#CDE8D6"/>
+  <circle cx="86" cy="440" r="9" fill="#DFF2E5"/>
+  <path d="M82 440l3 3 5-6" stroke="#17864A" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <text x="106" y="445" font-size="12.5" fill="#1D3B29">PM Acceptance · 逐条标准映射证据</text>
+  <rect x="456" y="429" width="96" height="22" rx="11" fill="#DFF2E5"/>
+  <text x="504" y="444" font-size="10.5" fill="#17864A" text-anchor="middle">merge-ready</text>
+  <text x="64" y="486" font-size="11" fill="#6B7280">skills 让每个席位各司其职，engine 把每一步留成记录</text>
+  <rect x="596" y="112" width="444" height="398" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
   <text x="620" y="150" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">右侧栏</text>
   <rect x="620" y="162" width="78" height="24" rx="12" fill="#EEF0FF"/>
   <text x="659" y="178" font-size="11" fill="#3D4AA8" text-anchor="middle" font-weight="600">总览</text>
@@ -77,10 +77,10 @@
   <path d="M620 432 L686 430 L752 426 L818 420 L884 414 L950 408 L1016 402" fill="none" stroke="#9AA3B2" stroke-width="1.5" stroke-dasharray="5 4"/>
   <text x="620" y="450" font-size="9" fill="#A6ACB8">2026-08-26</text>
   <text x="1016" y="450" font-size="9" fill="#A6ACB8" text-anchor="end">2026-11-11</text>
-  <line x1="620" y1="480" x2="646" y2="480" stroke="#5B5BD6" stroke-width="1.8"/>
-  <text x="652" y="484" font-size="9.5" fill="#6B7280">捕获（累计）</text>
-  <line x1="786" y1="480" x2="812" y2="480" stroke="#9AA3B2" stroke-width="1.5" stroke-dasharray="5 4"/>
-  <text x="818" y="484" font-size="9.5" fill="#6B7280">退役（累计）</text>
+  <line x1="620" y1="482" x2="646" y2="482" stroke="#5B5BD6" stroke-width="1.8"/>
+  <text x="652" y="486" font-size="9.5" fill="#6B7280">捕获（累计）</text>
+  <line x1="786" y1="482" x2="812" y2="482" stroke="#9AA3B2" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="818" y="486" font-size="9.5" fill="#6B7280">退役（累计）</text>
   <circle cx="47" cy="534" r="7" fill="#EEF0FF"/>
   <path d="M43.5 534l2.5 2.5 4-5" stroke="#3D4AA8" stroke-width="1.5" fill="none" stroke-linecap="round"/>
   <text x="64" y="538" font-size="12" fill="#363B46">Skills：PM、executor、QC 席位与 reviewer 各司其职。</text>
