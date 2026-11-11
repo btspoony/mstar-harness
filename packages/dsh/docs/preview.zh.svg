@@ -1,87 +1,86 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1080" height="600" viewBox="0 0 1080 600" role="img" lang="zh-CN" aria-label="从一句需求到一次合并" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif">
   <rect width="1080" height="600" fill="#F5F6FC"/>
-  <text x="40" y="56" font-size="29" font-weight="600" fill="#16181D">从一句需求到一次合并</text>
-  <text x="40" y="86" font-size="14" fill="#5B6472">skills 让每个席位各司其职，engine 把计划、审查与验收留成记录 —— 就在你的 dsh 会话里。</text>
-  <rect x="40" y="114" width="536" height="410" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="68" y="148" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">会话内</text>
-  <rect x="68" y="162" width="480" height="40" rx="10" fill="#F1F2F8"/>
-  <text x="86" y="187" font-size="13.5" fill="#363B46">把 README 配图做完</text>
-  <line x1="308" y1="202" x2="308" y2="218" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 213l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="68" y="218" width="480" height="58" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="86" y="241" font-size="13" font-weight="600" fill="#16181D">PM 澄清请求并写出计划</text>
-  <text x="86" y="260" font-size="10.5" fill="#6B7280">skill · project-manager</text>
-  <line x1="308" y1="276" x2="308" y2="306" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 301l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="68" y="306" width="480" height="48" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="86" y="328" font-size="12.5" font-weight="600" fill="#16181D">在功能分支上实现</text>
-  <text x="86" y="345" font-size="10.5" fill="#6B7280">executor · 逐任务审查</text>
-  <line x1="308" y1="354" x2="308" y2="360" stroke="#C3C8D4" stroke-width="1.4"/>
-  <line x1="143" y1="360" x2="443" y2="360" stroke="#C3C8D4" stroke-width="1.4"/>
-  <line x1="143" y1="360" x2="143" y2="374" stroke="#C3C8D4" stroke-width="1.4"/><path d="M139 369l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="68" y="374" width="150" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="84" y="393" font-size="12.5" font-weight="600" fill="#16181D">QC 1</text>
-  <text x="84" y="409" font-size="10.5" fill="#6B7280">独立席位</text>
-  <line x1="293" y1="360" x2="293" y2="374" stroke="#C3C8D4" stroke-width="1.4"/><path d="M289 369l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="218" y="374" width="150" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="234" y="393" font-size="12.5" font-weight="600" fill="#16181D">QC 2</text>
-  <text x="234" y="409" font-size="10.5" fill="#6B7280">独立席位</text>
-  <line x1="443" y1="360" x2="443" y2="374" stroke="#C3C8D4" stroke-width="1.4"/><path d="M439 369l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="368" y="374" width="150" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="384" y="393" font-size="12.5" font-weight="600" fill="#16181D">QC 3</text>
-  <text x="384" y="409" font-size="10.5" fill="#6B7280">独立席位</text>
-  <line x1="143" y1="424" x2="443" y2="424" stroke="#C3C8D4" stroke-width="1.4"/>
-  <line x1="308" y1="418" x2="308" y2="424" stroke="#C3C8D4" stroke-width="1.4"/>
-  <line x1="308" y1="424" x2="308" y2="436" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 431l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="68" y="436" width="480" height="46" rx="10" fill="#EDF7F0" stroke="#CDE8D6"/>
-  <circle cx="90" cy="459" r="9" fill="#DFF2E5"/>
-  <path d="M86 459l3 3 5-6" stroke="#17864A" stroke-width="1.8" fill="none" stroke-linecap="round"/>
-  <text x="110" y="464" font-size="12.5" fill="#1D3B29">PM Acceptance · 逐条标准映射证据</text>
-  <rect x="440" y="448" width="88" height="22" rx="11" fill="#DFF2E5"/>
-  <text x="484" y="463" font-size="10.5" fill="#17864A" text-anchor="middle">merge-ready</text>
-  <text x="68" y="508" font-size="11" fill="#6B7280">skills 让每个席位各司其职，engine 把每一步留成记录。</text>
-  <rect x="596" y="114" width="444" height="410" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="624" y="148" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">右侧栏</text>
-  <rect x="620" y="158" width="78" height="24" rx="12" fill="#EEF0FF"/>
-  <text x="659" y="174" font-size="11" fill="#3D4AA8" text-anchor="middle" font-weight="600">总览</text>
-  <rect x="706" y="158" width="60" height="24" rx="12" fill="transparent"/>
-  <text x="736" y="174" font-size="11" fill="#8A8A94" text-anchor="middle" font-weight="400">问题</text>
-  <rect x="774" y="158" width="76" height="24" rx="12" fill="transparent"/>
-  <text x="812" y="174" font-size="11" fill="#8A8A94" text-anchor="middle" font-weight="400">工作流</text>
-  <rect x="858" y="158" width="72" height="24" rx="12" fill="transparent"/>
-  <text x="894" y="174" font-size="11" fill="#8A8A94" text-anchor="middle" font-weight="400">迭代</text>
-  <line x1="624" y1="192" x2="1012" y2="192" stroke="#E6E7EF"/>
-  <text x="624" y="216" font-size="13.5" font-weight="600" fill="#16181D">总览</text>
-  <text x="1012" y="216" font-size="10.5" fill="#8A8A94" text-anchor="end">全部项目 · 176 项未关闭</text>
-  <text x="624" y="246" font-size="10.5" fill="#8A8A94">进行中的工作流</text>
-  <text x="624" y="266" font-size="12" font-weight="600" fill="#16181D">空</text>
-  <text x="624" y="284" font-size="10.5" fill="#6B7280">读取成功，目前没有内容。</text>
-  <text x="848" y="246" font-size="10.5" fill="#8A8A94">未关闭的遗留项</text>
-  <circle cx="854" cy="262" r="3.5" fill="#F0736A"/>
-  <text x="866" y="266" font-size="11" fill="#363B46">high</text>
-  <text x="1012" y="266" font-size="11" fill="#363B46" text-anchor="end">3</text>
-  <circle cx="854" cy="282" r="3.5" fill="#F2A65A"/>
-  <text x="866" y="286" font-size="11" fill="#363B46">medium</text>
-  <text x="1012" y="286" font-size="11" fill="#363B46" text-anchor="end">29</text>
-  <circle cx="854" cy="302" r="3.5" fill="#8B93A3"/>
-  <text x="866" y="306" font-size="11" fill="#363B46">low</text>
-  <text x="1012" y="306" font-size="11" fill="#363B46" text-anchor="end">97</text>
-  <circle cx="854" cy="322" r="3.5" fill="#C3C8D4"/>
-  <text x="866" y="326" font-size="11" fill="#363B46">nit</text>
-  <text x="1012" y="326" font-size="11" fill="#363B46" text-anchor="end">47</text>
-  <text x="624" y="378" font-size="10.5" fill="#8A8A94">问题走势</text>
-  <text x="1012" y="378" font-size="9.5" fill="#A6ACB8" text-anchor="end">2026-08-26 → 2026-11-11</text>
-  <line x1="624" y1="432" x2="1012" y2="432" stroke="#E6E7EF"/>
-  <path d="M624 428 L688 424 L688 420 L752 420 L752 412 L816 412 L816 404 L880 404 L880 394 L944 394 L944 386 L1012 386" fill="none" stroke="#5B5BD6" stroke-width="1.8" stroke-linejoin="round"/>
-  <path d="M624 430 L688 430 L688 428 L752 428 L752 424 L816 424 L816 422 L880 422 L880 418 L944 418 L944 416 L1012 416" fill="none" stroke="#9AA3B2" stroke-width="1.5" stroke-dasharray="5 4"/>
-  <text x="624" y="446" font-size="9" fill="#A6ACB8">2026-08-26</text>
-  <text x="1012" y="446" font-size="9" fill="#A6ACB8" text-anchor="end">2026-11-11</text>
-  <line x1="624" y1="464" x2="650" y2="464" stroke="#5B5BD6" stroke-width="1.8"/>
-  <text x="656" y="468" font-size="9.5" fill="#6B7280">捕获（累计）</text>
-  <line x1="770" y1="464" x2="796" y2="464" stroke="#9AA3B2" stroke-width="1.5" stroke-dasharray="5 4"/>
-  <text x="802" y="468" font-size="9.5" fill="#6B7280">退役（累计）</text>
-  <circle cx="47" cy="560" r="7" fill="#EEF0FF"/>
-  <path d="M43.5 560l2.5 2.5 4-5" stroke="#3D4AA8" stroke-width="1.5" fill="none" stroke-linecap="round"/>
-  <text x="64" y="564" font-size="12" fill="#363B46">Skills：PM、executor、QC 席位与 reviewer 各司其职。</text>
-  <circle cx="47" cy="582" r="7" fill="#EEF0FF"/>
-  <path d="M44 582h6M47 579v6" stroke="#3D4AA8" stroke-width="1.4" stroke-linecap="round"/>
-  <text x="64" y="586" font-size="12" fill="#363B46">Engine：计划、发现、审查与验收都留成记录。</text>
+  <text x="40" y="52" font-size="29" font-weight="600" fill="#16181D">从一句需求到一次合并</text>
+  <text x="40" y="84" font-size="14" fill="#5B6472">skills 让每个席位各司其职，engine 把计划、审查与验收留成记录 —— 就在你的 dsh 会话里。</text>
+  <rect x="40" y="112" width="536" height="395" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="64" y="150" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">会话内</text>
+  <rect x="64" y="162" width="488" height="38" rx="10" fill="#F1F2F8"/>
+  <text x="82" y="187" font-size="13.5" fill="#363B46">把 README 配图做完</text>
+  <line x1="540" y1="200" x2="540" y2="214" stroke="#C3C8D4" stroke-width="1.4"/><path d="M536 209l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="64" y="214" width="488" height="56" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="82" y="237" font-size="13" font-weight="600" fill="#16181D">PM 澄清请求并写出计划</text>
+  <text x="82" y="256" font-size="10.5" fill="#6B7280">skill · project-manager</text>
+  <line x1="540" y1="270" x2="540" y2="284" stroke="#C3C8D4" stroke-width="1.4"/><path d="M536 279l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="64" y="284" width="488" height="46" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="82" y="306" font-size="12.5" font-weight="600" fill="#16181D">在功能分支上实现</text>
+  <text x="82" y="323" font-size="10.5" fill="#6B7280">executor · 逐任务审查</text>
+  <line x1="540" y1="330" x2="540" y2="336" stroke="#C3C8D4" stroke-width="1.4"/>
+  <line x1="140" y1="336" x2="476" y2="336" stroke="#C3C8D4" stroke-width="1.4"/>
+  <line x1="140" y1="336" x2="140" y2="350" stroke="#C3C8D4" stroke-width="1.4"/><path d="M136 345l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="64" y="350" width="152" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="80" y="369" font-size="12.5" font-weight="600" fill="#16181D">QC 1</text>
+  <text x="80" y="385" font-size="10.5" fill="#6B7280">独立席位</text>
+  <line x1="308" y1="336" x2="308" y2="350" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 345l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="232" y="350" width="152" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="248" y="369" font-size="12.5" font-weight="600" fill="#16181D">QC 2</text>
+  <text x="248" y="385" font-size="10.5" fill="#6B7280">独立席位</text>
+  <line x1="476" y1="336" x2="476" y2="350" stroke="#C3C8D4" stroke-width="1.4"/><path d="M472 345l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="400" y="350" width="152" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="416" y="369" font-size="12.5" font-weight="600" fill="#16181D">QC 3</text>
+  <text x="416" y="385" font-size="10.5" fill="#6B7280">独立席位</text>
+  <line x1="140" y1="394" x2="476" y2="394" stroke="#C3C8D4" stroke-width="1.4"/>
+  <line x1="540" y1="394" x2="540" y2="410" stroke="#C3C8D4" stroke-width="1.4"/><path d="M536 405l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="64" y="410" width="488" height="46" rx="10" fill="#EDF7F0" stroke="#CDE8D6"/>
+  <circle cx="86" cy="433" r="9" fill="#DFF2E5"/>
+  <path d="M82 433l3 3 5-6" stroke="#17864A" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <text x="106" y="438" font-size="12.5" fill="#1D3B29">PM Acceptance · 逐条标准映射证据</text>
+  <rect x="456" y="422" width="96" height="22" rx="11" fill="#DFF2E5"/>
+  <text x="504" y="437" font-size="10.5" fill="#17864A" text-anchor="middle">merge-ready</text>
+  <text x="64" y="484" font-size="11" fill="#6B7280">skills 让每个席位各司其职，engine 把每一步留成记录</text>
+  <rect x="596" y="112" width="444" height="395" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="620" y="150" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">右侧栏</text>
+  <rect x="620" y="162" width="78" height="24" rx="12" fill="#EEF0FF"/>
+  <text x="659" y="178" font-size="11" fill="#3D4AA8" text-anchor="middle" font-weight="600">总览</text>
+  <rect x="706" y="162" width="60" height="24" rx="12" fill="transparent"/>
+  <text x="736" y="178" font-size="11" fill="#8A8A94" text-anchor="middle" font-weight="400">问题</text>
+  <rect x="774" y="162" width="76" height="24" rx="12" fill="transparent"/>
+  <text x="812" y="178" font-size="11" fill="#8A8A94" text-anchor="middle" font-weight="400">工作流</text>
+  <rect x="858" y="162" width="72" height="24" rx="12" fill="transparent"/>
+  <text x="894" y="178" font-size="11" fill="#8A8A94" text-anchor="middle" font-weight="400">迭代</text>
+  <line x1="620" y1="196" x2="1016" y2="196" stroke="#E6E7EF"/>
+  <text x="620" y="218" font-size="13.5" font-weight="600" fill="#16181D">总览</text>
+  <text x="1016" y="218" font-size="10.5" fill="#8A8A94" text-anchor="end">全部项目 · 176 项未关闭</text>
+  <text x="620" y="248" font-size="10.5" fill="#8A8A94">进行中的工作流</text>
+  <text x="620" y="270" font-size="12" font-weight="600" fill="#16181D">空</text>
+  <text x="620" y="290" font-size="10.5" fill="#6B7280">读取成功，目前没有内容。</text>
+  <text x="844" y="248" font-size="10.5" fill="#8A8A94">未关闭的遗留项</text>
+  <circle cx="850" cy="268" r="3.5" fill="#F0736A"/>
+  <text x="862" y="272" font-size="11" fill="#363B46">high</text>
+  <text x="1016" y="272" font-size="11" fill="#363B46" text-anchor="end">3</text>
+  <circle cx="850" cy="286" r="3.5" fill="#F2A65A"/>
+  <text x="862" y="290" font-size="11" fill="#363B46">medium</text>
+  <text x="1016" y="290" font-size="11" fill="#363B46" text-anchor="end">29</text>
+  <circle cx="850" cy="304" r="3.5" fill="#8B93A3"/>
+  <text x="862" y="308" font-size="11" fill="#363B46">low</text>
+  <text x="1016" y="308" font-size="11" fill="#363B46" text-anchor="end">97</text>
+  <circle cx="850" cy="322" r="3.5" fill="#C3C8D4"/>
+  <text x="862" y="326" font-size="11" fill="#363B46">nit</text>
+  <text x="1016" y="326" font-size="11" fill="#363B46" text-anchor="end">47</text>
+  <text x="620" y="352" font-size="10.5" fill="#8A8A94">问题走势</text>
+  <text x="1016" y="352" font-size="9.5" fill="#A6ACB8" text-anchor="end">2026-08-26 → 2026-11-11</text>
+  <line x1="620" y1="434" x2="1016" y2="434" stroke="#E6E7EF"/>
+  <path d="M620 430 L686 426 L752 418 L818 404 L884 392 L950 378 L1016 366" fill="none" stroke="#5B5BD6" stroke-width="1.8" stroke-linejoin="round"/>
+  <path d="M620 432 L686 430 L752 426 L818 420 L884 414 L950 408 L1016 402" fill="none" stroke="#9AA3B2" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="620" y="450" font-size="9" fill="#A6ACB8">2026-08-26</text>
+  <text x="1016" y="450" font-size="9" fill="#A6ACB8" text-anchor="end">2026-11-11</text>
+  <line x1="620" y1="480" x2="646" y2="480" stroke="#5B5BD6" stroke-width="1.8"/>
+  <text x="652" y="484" font-size="9.5" fill="#6B7280">捕获（累计）</text>
+  <line x1="786" y1="480" x2="812" y2="480" stroke="#9AA3B2" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="818" y="484" font-size="9.5" fill="#6B7280">退役（累计）</text>
+  <circle cx="47" cy="534" r="7" fill="#EEF0FF"/>
+  <path d="M43.5 534l2.5 2.5 4-5" stroke="#3D4AA8" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  <text x="64" y="538" font-size="12" fill="#363B46">Skills：PM、executor、QC 席位与 reviewer 各司其职。</text>
+  <circle cx="47" cy="564" r="7" fill="#EEF0FF"/>
+  <path d="M44 564h6M47 561v6" stroke="#3D4AA8" stroke-width="1.4" stroke-linecap="round"/>
+  <text x="64" y="568" font-size="12" fill="#363B46">Engine：计划、发现、审查与验收都留成记录。</text>
 </svg>
