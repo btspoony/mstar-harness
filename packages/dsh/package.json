@@ -42,7 +42,11 @@
     "harness-skills",
     "harness-agents",
     "harness-commands",
-    "workflows"
+    "workflows",
+    "docs/DETAIL.md",
+    "docs/DETAIL.zh.md",
+    "docs/preview.svg",
+    "docs/preview.zh.svg"
   ],
   "dsh": {
     "bundle": {

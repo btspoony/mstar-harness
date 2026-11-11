@@ -98,25 +98,7 @@ The audit commands read and report; they do not edit your code. Two boundaries t
 
 ## Workflow
 
-```mermaid
-flowchart TD
-    A["You describe the work"] --> B["PM clarifies it and writes the plan"]
-    B --> C["Implement on a feature branch"]
-    C --> D["Independent review"]
-    D -->|changes requested| C
-    D --> E["PM Acceptance, mapped to per-criterion evidence"]
-    E -->|not accepted| C
-    E --> F{"Iteration with plans still to run?"}
-    F -->|yes: next plan| C
-    F -->|no| G["Wrap up: record results and issues, keep reusable lessons"]
-    G --> H["Open the pull request"]
-    H --> I["CI checks and review feedback"]
-    I --> J{"All green and reviews resolved?"}
-    J -->|no: fix, verify, push| I
-    J -->|yes| K["Merge-ready"]
-    K -->|per its merge policy §5.3, or your approval| L["Merge"]
-    L --> M["Verify the merge, then close the delivery"]
-```
+![Delivery workflow: you describe the work, PM clarifies and plans, implementation on a feature branch, independent review (changes-requested loop) and PM Acceptance (not-accepted loop) feed back to implementation, an iteration decision loops back to the next plan, wrap-up opens the pull request, a CI-and-reviews-green gate loops back for fixes, merge-ready then merges under the recorded merge policy §5.3 or owner approval, and a verified merge with post-merge close ends the delivery](assets/workflow.svg)
 
 The main path shows a **development** delivery. Every plan gets plan-level QC — three independent seats by default — and multi-task plans add per-task review. Hotfix/inline review keeps its lighter seat rules. **PM Acceptance** is the sole acceptance route for every scope: each required criterion maps to relevant evidence and an honest result; QC approval alone is not test proof. PM may fill a named gap with a short bounded acceptance check, not implementation, test authoring, long suites or ops. Unfixed confirmed problems remain tracked issues.
 
