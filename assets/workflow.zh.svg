@@ -1,4 +1,4 @@
-<svg viewBox="0 0 844 1520" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase" style="" width="844" height="1520" xmlns="http://www.w3.org/2000/svg"><style>
+<svg viewBox="0 0 1080 674" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase" style="" width="1080" height="674" xmlns="http://www.w3.org/2000/svg"><style>
 /*
 JetBrains Mono variable WOFF2 subsets from Google Fonts service revision v24.
 These fixed bytes are shared by the viewer and its SVG/raster exports.
@@ -416,7 +416,7 @@ svg[data-theme="dark"] { --bg: #020617; --grid: #1e293b; --text: #ffffff; --text
 rect.c-bg-rect { fill: var(--bg); }
 </style><rect width="100%" height="100%" class="c-bg-rect"/>
         <title id="archify-diagram-title">Morning Star 交付工作流</title>
-        <desc id="archify-diagram-description">由 Archify 生成的工作流图。</desc>
+        <desc id="archify-diagram-description">由 Archify 生成的架构图。</desc>
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -439,287 +439,245 @@ rect.c-bg-rect { fill: var(--bg); }
         <!-- Background Grid -->
         <rect width="100%" height="100%" fill="url(#grid)"/>
 
-        <!-- Swimlanes -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-0" x="40" y="52" width="776" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / 你</text>
-
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-1" x="40" y="176" width="776" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="198" class="t-dim" font-size="10" font-weight="600">02 / 计划</text>
-
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="300" width="776" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="322" class="t-dim" font-size="10" font-weight="600">03 / 实现</text>
-
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-3" x="40" y="424" width="776" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="446" class="t-dim" font-size="10" font-weight="600">04 / 审查与验收</text>
-
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-4" x="40" y="548" width="776" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="570" class="t-dim" font-size="10" font-weight="600">05 / 迭代决策</text>
-
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-5" x="40" y="672" width="776" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="694" class="t-dim" font-size="10" font-weight="600">06 / 收尾并开 PR</text>
-
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-6" x="40" y="796" width="776" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="818" class="t-dim" font-size="10" font-weight="600">07 / CI 检查</text>
-
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-7" x="40" y="920" width="776" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="942" class="t-dim" font-size="10" font-weight="600">08 / CI 门禁</text>
-
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-8" x="40" y="1044" width="776" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="1066" class="t-dim" font-size="10" font-weight="600">09 / 合并授权</text>
-
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-9" x="40" y="1168" width="776" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="1190" class="t-dim" font-size="10" font-weight="600">10 / 合并</text>
-
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-10" x="40" y="1292" width="776" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="1314" class="t-dim" font-size="10" font-weight="600">11 / Post-merge 收尾</text>
-
-        <!-- Phase headers -->
-        <line x1="58" y1="35" x2="270" y2="35" class="a-default" stroke-width="1.1"/>
-        <rect x="58" y="27" width="212" height="16" rx="4" class="c-mask"/>
-        <text x="164" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">描述与计划</text>
-        <line x1="298" y1="35" x2="390" y2="35" class="a-emphasis" stroke-width="1.1"/>
-        <rect x="298" y="27" width="92" height="16" rx="4" class="c-mask"/>
-        <text x="344" y="39" class="t-backend" font-size="8" font-weight="600" text-anchor="middle">实现与审查</text>
-        <line x1="446" y1="35" x2="538" y2="35" class="a-default" stroke-width="1.1"/>
-        <rect x="446" y="27" width="92" height="16" rx="4" class="c-mask"/>
-        <text x="492" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">验收与收尾</text>
-        <line x1="586" y1="35" x2="683.6" y2="35" class="a-emphasis" stroke-width="1.1"/>
-        <rect x="586" y="27" width="97.6" height="16" rx="4" class="c-mask"/>
-        <text x="634.8" y="39" class="t-backend" font-size="8" font-weight="600" text-anchor="middle">交付、合并与核实</text>
-
-        <!-- Workflow groups -->
+        <!-- Boundaries (behind everything) -->
 
 
-        <!-- Edge paths -->
-        <path data-edge-from="ci_checks" data-edge-to="green_gate" data-edge-key="0" data-composition-points="625,889;625,961" d="M 625 889 L 625 961" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="describe_work" data-edge-to="plan" data-edge-key="1" data-composition-points="160,119;224,119;224,217" d="M 160 119 L 224 119 L 224 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="green_gate" data-edge-to="ci_checks" data-edge-label="否：修正、验证后推送" data-edge-key="2" data-composition-points="688,987;828,987;828,863;688,863" d="M 688 987 L 828 987 L 828 863 L 688 863" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="green_gate" data-edge-to="merge_ready" data-edge-label="是" data-edge-key="3" data-composition-points="576,987;20,987;20,1111;576,1111" d="M 576 987 L 20 987 L 20 1111 L 576 1111" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="implement" data-edge-to="review" data-edge-key="4" data-composition-points="337,393;337,465" d="M 337 393 L 337 465" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="iteration_gate" data-edge-to="implement" data-edge-label="是：下一个计划" data-edge-key="5" data-composition-points="436,615;20,615;20,374;288,374" d="M 436 615 L 20 615 L 20 374 L 288 374" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="iteration_gate" data-edge-to="wrap_up" data-edge-label="否" data-edge-key="6" data-composition-points="548,615;564,615;564,662;492,662;492,713" d="M 548 615 L 564 615 L 564 662 L 492 662 L 492 713" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="merge" data-edge-to="verify_close" data-edge-key="7" data-composition-points="632,1261;632,1333" d="M 632 1261 L 632 1333" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="merge_ready" data-edge-to="merge" data-edge-key="8" data-composition-points="632,1137;632,1209" d="M 632 1137 L 632 1209" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="open_pr" data-edge-to="ci_checks" data-edge-key="9" data-composition-points="632,765;632,837" d="M 632 765 L 632 837" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="plan" data-edge-to="implement" data-edge-key="10" data-composition-points="280,243;344,243;344,341" d="M 280 243 L 344 243 L 344 341" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="pm_acceptance" data-edge-to="implement" data-edge-label="未通过" data-edge-key="11" data-composition-points="492,465;492,367;400,367" d="M 492 465 L 492 367 L 400 367" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="pm_acceptance" data-edge-to="iteration_gate" data-edge-key="12" data-composition-points="492,517;492,589" d="M 492 517 L 492 589" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="review" data-edge-to="implement" data-edge-label="要求修改" data-edge-key="13" data-composition-points="280,491;20,491;20,367;288,367" d="M 280 491 L 20 491 L 20 367 L 288 367" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="review" data-edge-to="pm_acceptance" data-edge-key="14" data-composition-points="408,491;436,491" d="M 408 491 L 436 491" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="wrap_up" data-edge-to="open_pr" data-edge-key="15" data-composition-points="548,739;576,739" d="M 548 739 L 576 739" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <!-- Connection paths (before components for correct z-order) -->
+        <path data-edge-from="describe" data-edge-to="plan" data-edge-key="0" data-composition-points="200,93;240,93" d="M 200 93 L 240 93" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="plan" data-edge-to="implement" data-edge-key="1" data-composition-points="410,93;450,93" d="M 410 93 L 450 93" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="implement" data-edge-to="review" data-edge-key="2" data-composition-points="620,93;660,93" d="M 620 93 L 660 93" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="review" data-edge-to="implement" data-edge-label="要求修改" data-edge-key="3" data-composition-points="745,60;745,24;535,24;535,60" d="M 745 60 L 745 32 Q 745 24 737 24 L 543 24 Q 535 24 535 32 L 535 60" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="review" data-edge-to="acceptance" data-edge-key="4" data-composition-points="830,93;870,93" d="M 830 93 L 870 93" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="acceptance" data-edge-to="implement" data-edge-label="未通过" data-edge-key="5" data-composition-points="955,126;955,160;535,160;535,126" d="M 955 126 L 955 152 Q 955 160 947 160 L 543 160 Q 535 160 535 152 L 535 126" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="acceptance" data-edge-to="next" data-edge-key="6" data-composition-points="955,126;955,300" d="M 955 126 L 955 300" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="next" data-edge-to="implement" data-edge-label="是：下一个计划" data-edge-key="7" data-composition-points="955,300;955,250;535,250;535,126" d="M 955 300 L 955 258 Q 955 250 947 250 L 543 250 Q 535 250 535 242 L 535 126" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="next" data-edge-to="wrap" data-edge-label="否" data-edge-key="8" data-composition-points="870,333;830,333" d="M 870 333 L 830 333" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="wrap" data-edge-to="pr" data-edge-key="9" data-composition-points="660,333;620,333" d="M 660 333 L 620 333" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="pr" data-edge-to="ci" data-edge-key="10" data-composition-points="450,333;410,333" d="M 450 333 L 410 333" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="ci" data-edge-to="green" data-edge-key="11" data-composition-points="240,333;200,333" d="M 240 333 L 200 333" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="green" data-edge-to="ci" data-edge-label="否：修正、验证、推送" data-edge-key="12" data-composition-points="115,366;115,450;325,450;325,366" d="M 115 366 L 115 442 Q 115 450 123 450 L 317 450 Q 325 450 325 442 L 325 366" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="green" data-edge-to="ready" data-edge-label="是" data-edge-key="13" data-composition-points="115,366;115,540" d="M 115 366 L 115 540" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="ready" data-edge-to="merge" data-edge-key="14" data-composition-points="200,573;240,573" d="M 200 573 L 240 573" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="merge" data-edge-to="verify" data-edge-key="15" data-composition-points="410,573;450,573" d="M 410 573 L 450 573" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
 
-        <!-- Nodes -->
-        <g id="node-describe_work" data-node-id="describe_work" data-node-label="描述要做的事" tabindex="0" role="button" aria-label="聚焦描述要做的事，你设定意图, 你 › 描述与计划" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="你设定意图" data-node-context="你 › 描述与计划">
-          <title>描述要做的事 · 你设定意图 · 你 › 描述与计划</title>
-          <rect x="48" y="93" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="48" y="93" width="112" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(54 99) scale(0.6875)">
+        <!-- Components -->
+        <g id="node-describe" data-node-id="describe" data-node-label="描述要做的事" tabindex="0" role="button" aria-label="聚焦描述要做的事，你设定意图, 架构组件" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="你设定意图" data-node-context="架构组件">
+          <title>描述要做的事 · 你设定意图 · 架构组件</title>
+          <rect x="30" y="60" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="30" y="60" width="170" height="66" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(36 66) scale(0.6875)">
             <rect x="2" y="3" width="12" height="10" rx="2"/>
             <path d="M2 6.5h12"/>
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="104" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">描述要做的事</text>
-          <text x="104" y="131" class="t-muted" font-size="8" text-anchor="middle">你设定意图</text>
+          <text data-node-label="" x="115" y="91" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">描述要做的事</text>
+        <text x="115" y="107" class="t-muted" font-size="9" text-anchor="middle">你设定意图</text>
         </g>
 
-        <g id="node-plan" data-node-id="plan" data-node-label="澄清并制定计划" tabindex="0" role="button" aria-label="聚焦澄清并制定计划，PM 写出计划, 计划 › 描述与计划" aria-pressed="false" data-node-kind="backend" data-node-sublabel="PM 写出计划" data-node-context="计划 › 描述与计划">
-          <title>澄清并制定计划 · PM 写出计划 · 计划 › 描述与计划</title>
-          <rect x="168" y="217" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="168" y="217" width="112" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(174 223) scale(0.6875)">
+        <g id="node-plan" data-node-id="plan" data-node-label="澄清并制定计划" tabindex="0" role="button" aria-label="聚焦澄清并制定计划，PM 写出计划, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="PM 写出计划" data-node-context="架构组件">
+          <title>澄清并制定计划 · PM 写出计划 · 架构组件</title>
+          <rect x="240" y="60" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="240" y="60" width="170" height="66" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(246 66) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="224" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">澄清并制定计划</text>
-          <text x="224" y="255" class="t-muted" font-size="8" text-anchor="middle">PM 写出计划</text>
+          <text data-node-label="" x="325" y="91" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">澄清并制定计划</text>
+        <text x="325" y="107" class="t-muted" font-size="9" text-anchor="middle">PM 写出计划</text>
         </g>
 
-        <g id="node-implement" data-node-id="implement" data-node-label="实现" tabindex="0" role="button" aria-label="聚焦实现，功能分支, 实现 › 实现与审查" aria-pressed="false" data-node-kind="backend" data-node-sublabel="功能分支" data-node-context="实现 › 实现与审查">
-          <title>实现 · 功能分支 · 实现 › 实现与审查</title>
-          <rect x="288" y="341" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="288" y="341" width="112" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(294 347) scale(0.6875)">
+        <g id="node-implement" data-node-id="implement" data-node-label="实现" tabindex="0" role="button" aria-label="聚焦实现，功能分支, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="功能分支" data-node-context="架构组件">
+          <title>实现 · 功能分支 · 架构组件</title>
+          <rect x="450" y="60" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="450" y="60" width="170" height="66" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(456 66) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="344" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">实现</text>
-          <text x="344" y="379" class="t-muted" font-size="8" text-anchor="middle">功能分支</text>
+          <text data-node-label="" x="535" y="91" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">实现</text>
+        <text x="535" y="107" class="t-muted" font-size="9" text-anchor="middle">功能分支</text>
         </g>
 
-        <g id="node-review" data-node-id="review" data-node-label="独立审查" tabindex="0" role="button" aria-label="聚焦独立审查，审查与验收 › 实现与审查" aria-pressed="false" data-node-kind="security" data-node-context="审查与验收 › 实现与审查">
-          <title>独立审查 · 审查与验收 › 实现与审查</title>
-          <rect x="280" y="465" width="128" height="52" rx="6" class="c-mask"/>
-          <rect x="280" y="465" width="128" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(286 471) scale(0.6875)">
+        <g id="node-review" data-node-id="review" data-node-label="独立审查" tabindex="0" role="button" aria-label="聚焦独立审查，架构组件" aria-pressed="false" data-node-kind="security" data-node-context="架构组件">
+          <title>独立审查 · 架构组件</title>
+          <rect x="660" y="60" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="660" y="60" width="170" height="66" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(666 66) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" x="344" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">独立审查</text>
+          <text data-node-label="" x="745" y="97" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">独立审查</text>
         </g>
 
-        <g id="node-pm_acceptance" data-node-id="pm_acceptance" data-node-label="PM Acceptance" tabindex="0" role="button" aria-label="聚焦PM Acceptance，逐条标准到证据, 审查与验收 › 验收与收尾" aria-pressed="false" data-node-kind="security" data-node-sublabel="逐条标准到证据" data-node-context="审查与验收 › 验收与收尾">
-          <title>PM Acceptance · 逐条标准到证据 · 审查与验收 › 验收与收尾</title>
-          <rect x="436" y="465" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="436" y="465" width="112" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(442 471) scale(0.6875)">
+        <g id="node-acceptance" data-node-id="acceptance" data-node-label="PM Acceptance" tabindex="0" role="button" aria-label="聚焦PM Acceptance，逐条标准映射证据, 架构组件" aria-pressed="false" data-node-kind="security" data-node-sublabel="逐条标准映射证据" data-node-context="架构组件">
+          <title>PM Acceptance · 逐条标准映射证据 · 架构组件</title>
+          <rect x="870" y="60" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="870" y="60" width="170" height="66" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(876 66) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" x="492" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">PM Acceptance</text>
-          <text x="492" y="503" class="t-muted" font-size="8" text-anchor="middle">逐条标准到证据</text>
+          <text data-node-label="" x="955" y="91" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">PM Acceptance</text>
+        <text x="955" y="107" class="t-muted" font-size="9" text-anchor="middle">逐条标准映射证据</text>
         </g>
 
-        <g id="node-iteration_gate" data-node-id="iteration_gate" data-node-label="还有计划？" tabindex="0" role="button" aria-label="聚焦还有计划？，迭代中待执行, 迭代决策 › 验收与收尾" aria-pressed="false" data-node-kind="backend" data-node-sublabel="迭代中待执行" data-node-context="迭代决策 › 验收与收尾">
-          <title>还有计划？ · 迭代中待执行 · 迭代决策 › 验收与收尾</title>
-          <rect x="436" y="589" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="436" y="589" width="112" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(442 595) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" x="492" y="610" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">还有计划？</text>
-          <text x="492" y="627" class="t-muted" font-size="8" text-anchor="middle">迭代中待执行</text>
-        </g>
-
-        <g id="node-wrap_up" data-node-id="wrap_up" data-node-label="收尾" tabindex="0" role="button" aria-label="聚焦收尾，结果与经验, 收尾并开 PR › 验收与收尾" aria-pressed="false" data-node-kind="backend" data-node-sublabel="结果与经验" data-node-context="收尾并开 PR › 验收与收尾">
-          <title>收尾 · 结果与经验 · 收尾并开 PR › 验收与收尾</title>
-          <rect x="436" y="713" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="436" y="713" width="112" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(442 719) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" x="492" y="734" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">收尾</text>
-          <text x="492" y="751" class="t-muted" font-size="8" text-anchor="middle">结果与经验</text>
-        </g>
-
-        <g id="node-open_pr" data-node-id="open_pr" data-node-label="开 PR" tabindex="0" role="button" aria-label="聚焦开 PR，收尾并开 PR › 交付、合并与核实" aria-pressed="false" data-node-kind="frontend" data-node-context="收尾并开 PR › 交付、合并与核实">
-          <title>开 PR · 收尾并开 PR › 交付、合并与核实</title>
-          <rect x="576" y="713" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="576" y="713" width="112" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(582 719) scale(0.6875)">
-            <rect x="2" y="3" width="12" height="10" rx="2"/>
-            <path d="M2 6.5h12"/>
-            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
-            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
-          </g>
-          <text data-node-label="" x="632" y="734" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">开 PR</text>
-        </g>
-
-        <g id="node-ci_checks" data-node-id="ci_checks" data-node-label="CI 检查" tabindex="0" role="button" aria-label="聚焦CI 检查，审查反馈, CI 检查 › 交付、合并与核实" aria-pressed="false" data-node-kind="security" data-node-sublabel="审查反馈" data-node-context="CI 检查 › 交付、合并与核实">
-          <title>CI 检查 · 审查反馈 · CI 检查 › 交付、合并与核实</title>
-          <rect x="576" y="837" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="576" y="837" width="112" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(582 843) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" x="632" y="858" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">CI 检查</text>
-          <text x="632" y="875" class="t-muted" font-size="8" text-anchor="middle">审查反馈</text>
-        </g>
-
-        <g id="node-green_gate" data-node-id="green_gate" data-node-label="全部通过？" tabindex="0" role="button" aria-label="聚焦全部通过？，review 已解决, CI 门禁 › 交付、合并与核实" aria-pressed="false" data-node-kind="security" data-node-sublabel="review 已解决" data-node-context="CI 门禁 › 交付、合并与核实">
-          <title>全部通过？ · review 已解决 · CI 门禁 › 交付、合并与核实</title>
-          <rect x="576" y="961" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="576" y="961" width="112" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(582 967) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" x="632" y="982" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">全部通过？</text>
-          <text x="632" y="999" class="t-muted" font-size="8" text-anchor="middle">review 已解决</text>
-        </g>
-
-        <g id="node-merge_ready" data-node-id="merge_ready" data-node-label="Merge-ready" tabindex="0" role="button" aria-label="聚焦Merge-ready，合并授权 › 交付、合并与核实" aria-pressed="false" data-node-kind="messagebus" data-node-context="合并授权 › 交付、合并与核实">
-          <title>Merge-ready · 合并授权 › 交付、合并与核实</title>
-          <rect x="576" y="1085" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="576" y="1085" width="112" height="52" rx="6" class="c-messagebus" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(582 1091) scale(0.6875)">
+        <g id="node-next" data-node-id="next" data-node-label="下一个计划？" tabindex="0" role="button" aria-label="聚焦下一个计划？，仍有计划待执行, 架构组件" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="仍有计划待执行" data-node-context="架构组件">
+          <title>下一个计划？ · 仍有计划待执行 · 架构组件</title>
+          <rect x="870" y="300" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="870" y="300" width="170" height="66" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(876 306) scale(0.6875)">
             <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
             <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
             <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
             <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="632" y="1106" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Merge-ready</text>
+          <text data-node-label="" x="955" y="331" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">下一个计划？</text>
+        <text x="955" y="347" class="t-muted" font-size="9" text-anchor="middle">仍有计划待执行</text>
         </g>
 
-        <g id="node-merge" data-node-id="merge" data-node-label="合并" tabindex="0" role="button" aria-label="聚焦合并，§5.3 或你的批准, 合并 › 交付、合并与核实" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="§5.3 或你的批准" data-node-context="合并 › 交付、合并与核实">
-          <title>合并 · §5.3 或你的批准 · 合并 › 交付、合并与核实</title>
-          <rect x="576" y="1209" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="576" y="1209" width="112" height="52" rx="6" class="c-cloud" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(582 1215) scale(0.6875)">
-            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
-          </g>
-          <text data-node-label="" x="632" y="1230" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">合并</text>
-          <text x="632" y="1247" class="t-muted" font-size="8" text-anchor="middle">§5.3 或你的批准</text>
-        </g>
-
-        <g id="node-verify_close" data-node-id="verify_close" data-node-label="核实并收尾" tabindex="0" role="button" aria-label="聚焦核实并收尾，post-merge 收尾, Post-merge 收尾 › 交付、合并与核实" aria-pressed="false" data-node-kind="backend" data-node-sublabel="post-merge 收尾" data-node-context="Post-merge 收尾 › 交付、合并与核实">
-          <title>核实并收尾 · post-merge 收尾 · Post-merge 收尾 › 交付、合并与核实</title>
-          <rect x="576" y="1333" width="112" height="52" rx="6" class="c-mask"/>
-          <rect x="576" y="1333" width="112" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(582 1339) scale(0.6875)">
+        <g id="node-wrap" data-node-id="wrap" data-node-label="收尾" tabindex="0" role="button" aria-label="聚焦收尾，结果与可复用经验, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="结果与可复用经验" data-node-context="架构组件">
+          <title>收尾 · 结果与可复用经验 · 架构组件</title>
+          <rect x="660" y="300" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="660" y="300" width="170" height="66" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(666 306) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="632" y="1354" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">核实并收尾</text>
-          <text x="632" y="1371" class="t-muted" font-size="8" text-anchor="middle">post-merge 收尾</text>
+          <text data-node-label="" x="745" y="331" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">收尾</text>
+        <text x="745" y="347" class="t-muted" font-size="9" text-anchor="middle">结果与可复用经验</text>
         </g>
 
-        <!-- Edge labels -->
-
-
-        <g data-edge-from="green_gate" data-edge-to="ci_checks" data-edge-label="否：修正、验证后推送" data-edge-key="2">
-          <rect x="705" y="967" width="106" height="14" rx="3" class="c-mask"/>
-          <text x="758" y="977" class="t-muted" font-size="8" text-anchor="middle">否：修正、验证后推送</text>
-        </g>
-        <g data-edge-from="green_gate" data-edge-to="merge_ready" data-edge-label="是" data-edge-key="3">
-          <rect x="283" y="967" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="298" y="977" class="t-muted" font-size="8" text-anchor="middle">是</text>
-        </g>
-
-        <g data-edge-from="iteration_gate" data-edge-to="implement" data-edge-label="是：下一个计划" data-edge-key="5">
-          <rect x="189.4" y="595" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="228" y="605" class="t-muted" font-size="8" text-anchor="middle">是：下一个计划</text>
-        </g>
-        <g data-edge-from="iteration_gate" data-edge-to="wrap_up" data-edge-label="否" data-edge-key="6">
-          <rect x="513" y="642" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="528" y="652" class="t-muted" font-size="8" text-anchor="middle">否</text>
+        <g id="node-pr" data-node-id="pr" data-node-label="开 PR" tabindex="0" role="button" aria-label="聚焦开 PR，架构组件" aria-pressed="false" data-node-kind="frontend" data-node-context="架构组件">
+          <title>开 PR · 架构组件</title>
+          <rect x="450" y="300" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="450" y="300" width="170" height="66" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(456 306) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" x="535" y="337" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">开 PR</text>
         </g>
 
-
-
-
-        <g data-edge-from="pm_acceptance" data-edge-to="implement" data-edge-label="未通过" data-edge-key="11">
-          <rect x="426.6" y="347" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="446" y="357" class="t-muted" font-size="8" text-anchor="middle">未通过</text>
+        <g id="node-ci" data-node-id="ci" data-node-label="CI 检查" tabindex="0" role="button" aria-label="聚焦CI 检查，审查反馈, 架构组件" aria-pressed="false" data-node-kind="security" data-node-sublabel="审查反馈" data-node-context="架构组件">
+          <title>CI 检查 · 审查反馈 · 架构组件</title>
+          <rect x="240" y="300" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="240" y="300" width="170" height="66" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(246 306) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" x="325" y="331" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">CI 检查</text>
+        <text x="325" y="347" class="t-muted" font-size="9" text-anchor="middle">审查反馈</text>
         </g>
 
-        <g data-edge-from="review" data-edge-to="implement" data-edge-label="要求修改" data-edge-key="13">
-          <rect x="129.8" y="347" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="154" y="357" class="t-muted" font-size="8" text-anchor="middle">要求修改</text>
+        <g id="node-green" data-node-id="green" data-node-label="全部通过？" tabindex="0" role="button" aria-label="聚焦全部通过？，review 已解决, 架构组件" aria-pressed="false" data-node-kind="security" data-node-sublabel="review 已解决" data-node-context="架构组件">
+          <title>全部通过？ · review 已解决 · 架构组件</title>
+          <rect x="30" y="300" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="30" y="300" width="170" height="66" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(36 306) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" x="115" y="331" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">全部通过？</text>
+        <text x="115" y="347" class="t-muted" font-size="9" text-anchor="middle">review 已解决</text>
         </g>
 
+        <g id="node-ready" data-node-id="ready" data-node-label="Merge-ready" tabindex="0" role="button" aria-label="聚焦Merge-ready，架构组件" aria-pressed="false" data-node-kind="messagebus" data-node-context="架构组件">
+          <title>Merge-ready · 架构组件</title>
+          <rect x="30" y="540" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="30" y="540" width="170" height="66" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(36 546) scale(0.6875)">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" x="115" y="577" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Merge-ready</text>
+        </g>
+
+        <g id="node-merge" data-node-id="merge" data-node-label="合并" tabindex="0" role="button" aria-label="聚焦合并，§5.3 或你的批准, 架构组件" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="§5.3 或你的批准" data-node-context="架构组件">
+          <title>合并 · §5.3 或你的批准 · 架构组件</title>
+          <rect x="240" y="540" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="240" y="540" width="170" height="66" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(246 546) scale(0.6875)">
+            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
+          </g>
+          <text data-node-label="" x="325" y="571" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">合并</text>
+        <text x="325" y="587" class="t-muted" font-size="9" text-anchor="middle">§5.3 或你的批准</text>
+        </g>
+
+        <g id="node-verify" data-node-id="verify" data-node-label="核实并收尾" tabindex="0" role="button" aria-label="聚焦核实并收尾，post-merge 收尾, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="post-merge 收尾" data-node-context="架构组件">
+          <title>核实并收尾 · post-merge 收尾 · 架构组件</title>
+          <rect x="450" y="540" width="170" height="66" rx="6" class="c-mask"/>
+          <rect x="450" y="540" width="170" height="66" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(456 546) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" x="535" y="571" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">核实并收尾</text>
+        <text x="535" y="587" class="t-muted" font-size="9" text-anchor="middle">post-merge 收尾</text>
+        </g>
+
+        <!-- Connection labels -->
+
+
+
+        <g data-edge-from="review" data-edge-to="implement" data-edge-label="要求修改" data-edge-key="3">
+          <rect x="615.8" y="4" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="640" y="14" class="t-muted" font-size="8" text-anchor="middle">要求修改</text>
+        </g>
+
+        <g data-edge-from="acceptance" data-edge-to="implement" data-edge-label="未通过" data-edge-key="5">
+          <rect x="725.6" y="138" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="745" y="148" class="t-muted" font-size="8" text-anchor="middle">未通过</text>
+        </g>
+
+        <g data-edge-from="next" data-edge-to="implement" data-edge-label="是：下一个计划" data-edge-key="7">
+          <rect x="706.4" y="228" width="77.2" height="14" rx="3" class="c-mask"/>
+          <text x="745" y="238" class="t-muted" font-size="8" text-anchor="middle">是：下一个计划</text>
+        </g>
+        <g data-edge-from="next" data-edge-to="wrap" data-edge-label="否" data-edge-key="8">
+          <rect x="835" y="273" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="850" y="283" class="t-muted" font-size="8" text-anchor="middle">否</text>
+        </g>
+
+
+
+        <g data-edge-from="green" data-edge-to="ci" data-edge-label="否：修正、验证、推送" data-edge-key="12">
+          <rect x="167" y="428" width="106" height="14" rx="3" class="c-mask"/>
+          <text x="220" y="438" class="t-muted" font-size="8" text-anchor="middle">否：修正、验证、推送</text>
+        </g>
+        <g data-edge-from="green" data-edge-to="ready" data-edge-label="是" data-edge-key="13">
+          <rect x="125" y="460" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="140" y="470" class="t-muted" font-size="8" text-anchor="middle">是</text>
+        </g>
+
+
+
+        <!-- Boundary labels (foreground masks keep routes out of titles) -->
 
 
         <!-- Legend -->
         <g data-legend="">
-          <text x="20" y="1420" class="t-primary" font-size="12" font-weight="650">图例</text>
-          <g data-legend-semantic-kind="frontend" data-legend-x="20" data-legend-baseline="1440" data-legend-width="78">
-            <rect x="20" y="1432" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
-            <text x="42" y="1440" class="t-muted" font-size="7.5" font-weight="500">用户界面</text>
+          <text x="40" y="638" class="t-primary" font-size="12" font-weight="650">图例</text>
+          <g data-legend-semantic-kind="frontend" data-legend-x="40" data-legend-baseline="658" data-legend-width="63">
+            <rect x="40" y="649" width="16" height="10" rx="2.5" class="c-frontend" stroke-width="1"/>
+            <text x="62" y="658" class="t-muted" font-size="10" font-weight="500">前端</text>
           </g>
-          <g data-legend-semantic-kind="backend" data-legend-x="105" data-legend-baseline="1440" data-legend-width="87">
-            <rect x="105" y="1432" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-            <text x="127" y="1440" class="t-muted" font-size="7.5" font-weight="500">Agent 逻辑</text>
+          <g data-legend-semantic-kind="backend" data-legend-x="125" data-legend-baseline="658" data-legend-width="63">
+            <rect x="125" y="649" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
+            <text x="147" y="658" class="t-muted" font-size="10" font-weight="500">后端</text>
           </g>
-          <g data-legend-semantic-kind="security" data-legend-x="199" data-legend-baseline="1440" data-legend-width="61">
-            <rect x="199" y="1432" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-            <text x="221" y="1440" class="t-muted" font-size="7.5" font-weight="500">策略</text>
+          <g data-legend-semantic-kind="cloud" data-legend-x="210" data-legend-baseline="658" data-legend-width="73">
+            <rect x="210" y="649" width="16" height="10" rx="2.5" class="c-cloud" stroke-width="1"/>
+            <text x="232" y="658" class="t-muted" font-size="10" font-weight="500">云服务</text>
           </g>
-          <g data-legend-semantic-kind="messagebus" data-legend-x="267" data-legend-baseline="1440" data-legend-width="78">
-            <rect x="267" y="1432" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
-            <text x="289" y="1440" class="t-muted" font-size="7.5" font-weight="500">工具操作</text>
+          <g data-legend-semantic-kind="security" data-legend-x="305" data-legend-baseline="658" data-legend-width="63">
+            <rect x="305" y="649" width="16" height="10" rx="2.5" class="c-security" stroke-width="1"/>
+            <text x="327" y="658" class="t-muted" font-size="10" font-weight="500">安全</text>
           </g>
-          <g data-legend-semantic-kind="cloud" data-legend-x="352" data-legend-baseline="1440" data-legend-width="70">
-            <rect x="352" y="1432" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
-            <text x="374" y="1440" class="t-muted" font-size="7.5" font-weight="500">云服务</text>
+          <g data-legend-semantic-kind="messagebus" data-legend-x="390" data-legend-baseline="658" data-legend-width="83">
+            <rect x="390" y="649" width="16" height="10" rx="2.5" class="c-messagebus" stroke-width="1"/>
+            <text x="412" y="658" class="t-muted" font-size="10" font-weight="500">消息总线</text>
           </g>
         </g>
       </svg>
