@@ -1,11 +1,11 @@
 # iteration-start 产物边界（specs · iterations · knowledge）
 
 > **When**: Phase 1 prototype checkpoint (§1.2.5), formal drafting (§1.3) and Review & Edit (§1.6). Design context stays under `prototypes/`; iteration specs under `<iteration-id>/specs/`. Existing execute/close boundaries below remain unchanged.
-> **Conflict**: 与 `mstar-artifacts/references/knowledge-and-designs.md` 一致；冲突以 **`mstar-harness-core`** 为准。
+> **Conflict**: 三层语料的边界以 **`mstar-doc-corpus`**（SKILL.md § The three layers）为准，过程产物边界以 `mstar-artifacts/references/knowledge-and-designs.md` 为准；冲突以 **`mstar-harness-core`** 为准。
 
 ## 三棵树分工（HARD）
 
-三棵树（specs · iterations · knowledge）的落点、长期价值与写者 → **`mstar-artifacts`** `references/knowledge-and-designs.md` § 与公开文档目录的分工（产物边界表唯一权威）。本文件其余各节只补充 iteration package 布局、`{SPECS_DIR}/` 准入与角色编辑域。
+三棵树中 **specs · knowledge** 的落点、长期价值与写者 → **`mstar-doc-corpus`**（SKILL.md § The three layers；specs 骨架 → `references/specs.md`，knowledge 形状 → `references/knowledge-format.md`）；**iterations** 的落点与写者 → `mstar-artifacts` `references/knowledge-and-designs.md`。本文件其余各节只补充 iteration package 布局、`{SPECS_DIR}/` 准入与角色编辑域。
 
 ## `{ITERATION_DIR}/<iteration-id>/` 迭代 package（目录优先）
 
@@ -59,7 +59,7 @@
 
 ## Knowledge 与 compound 提升
 
-- iteration-close 的 knowledge / specs package 盘点、准入、结构化提升与历史保留规则 → **`mstar-knowledge`**「Iteration package promotion」及 **`mstar-artifacts/references/knowledge-and-designs.md`**；本轨写入 integration worktree，随 close commit 交付。
+- iteration-close 的 knowledge / specs package 盘点、准入、结构化提升与历史保留规则 → **`mstar-knowledge`**「Iteration package promotion」；目标层形状 → **`mstar-doc-corpus`**（`references/specs.md` / `references/knowledge-format.md`）。本轨写入 integration worktree，随 close commit 交付。
 - **iteration-start §1.6**：product / architect **不得**向 `{KNOWLEDGE_DIR}/` **新增**；误写由 writing-specialist 迁回 **package**。
 
 ## §1.6 selected-role editing scope

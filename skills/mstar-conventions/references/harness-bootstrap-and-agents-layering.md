@@ -16,7 +16,7 @@
 2. Store：ACTIVE root register / plan 行 / leases / sessions 在 store；findings 是 store issues，project register 无条件退役为迁移历史。初始化/升级与 staged activation 的分工只按 **`mstar-conventions` SKILL.md「初始化 Plan 目录」**：全新用 `store init`；已有/legacy 用 `store upgrade` 导入并激活执行权威；`store activate` 仅用于 reviewed staged migration，不是例行追加步骤。无 ACTIVE store 的 harness 没有执行权威——用对话追踪（no-plan mode），门禁（QC/PM Acceptance）仍适用。
 3. per-plan SDD 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建（`sdd/` 由 scaffold 建好）。
 4. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（canonical snippet → `mstar-conventions/references/git-tracking-and-gitignore.md`；legacy `.agents/` 有等价表）。
-5. 可选：为 `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` 补导览 `README.md`（散文，无登记义务）；bootstrap 布局下 `{SPECS_DIR}` / `{KNOWLEDGE_DIR}` / `{ADR_DIR}` 由 `.mstarc` 解析到 `.agents/*`，未声明时才回落到 `{HARNESS_DIR}/*`；内容边界见 `mstar-conventions` SKILL.md 与 `references/knowledge-and-designs.md`。
+5. 可选：为 `{ITERATION_DIR}` / `{KNOWLEDGE_DIR}` 补导览 `README.md`（散文，无登记义务）；bootstrap 布局下 `{SPECS_DIR}` / `{KNOWLEDGE_DIR}` / `{ADR_DIR}` 由 `.mstarc` 解析到 `.agents/*`，未声明时才回落到 `{HARNESS_DIR}/*`；内容边界见 `mstar-conventions` SKILL.md 与 **`mstar-doc-corpus`**（三层语料）/ `references/knowledge-and-designs.md`（过程产物）。
 6. 创建 `.agents/AGENTS.md`（harness 子树规则；**tracked**）：符号表可复述 `{HARNESS_DIR}`、`{PLAN_DIR}`、`{ITERATION_DIR}`、`{KNOWLEDGE_DIR}`、`{SPECS_DIR}`、`{ADR_DIR}` 与 `docs/` 分工。它是两种布局下唯一被跟踪的 harness 规则文件位置——`.mstar/` 整体被忽略，放在里面的规则文件无法共享。
 7. 校准根 `AGENTS.md`：只保留仓库级长期约束，显式引用 `.agents/AGENTS.md` 作为 harness SSOT。
 8. 仅在确有稳定边界时新增目录级 `AGENTS.md`（如 `contracts/`、`gateway/`、`sdk/`）。

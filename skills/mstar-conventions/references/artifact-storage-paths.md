@@ -57,4 +57,4 @@
 
 ## `<category>` 取值
 
-知识文档的 `<category>` 子目录由 `mstar-knowledge` 的 `references/category-mapping.md` 定义，在 `{KNOWLEDGE_DIR}` 下按需创建。示例：`runtime-errors/`、`conventions/`、`architecture-patterns/` 等。
+知识文档的 `<category>` 子目录由 **`mstar-doc-corpus`** 的 `references/category-mapping.md` 定义，在 `{KNOWLEDGE_DIR}` 下按需创建。示例：`runtime-errors/`、`conventions/`、`architecture-patterns/` 等。
