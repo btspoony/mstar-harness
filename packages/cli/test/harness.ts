@@ -24,7 +24,10 @@ export const SRC_ENTRY: string = join(CLI_ROOT, "src/index.ts");
  * (audit-002) reads them ahead of PWD, so an ambient value would redirect
  * every relative-path fixture spuriously. TZ stays pinned so a date any
  * fixture records is read in the same frame the child wrote it (an explicit
- * ambient TZ is propagated; the default is UTC). `extra` is applied after
+ * ambient TZ is propagated; the default is UTC). The leaf-seat markers are
+ * pinned out as well: a subagent shell exports one, and any registration verb
+ * a fixture runs would then refuse with `coordination.leaf-seat` before
+ * reaching the behaviour under test. `extra` is applied after
  * the scrub: a string re-pins or adds a variable, `undefined` deletes one
  * (a suite may deliberately re-introduce a scrubbed variable per case). */
 export function cliEnv(extra?: Record<string, string | undefined>): Record<string, string> {
@@ -36,7 +39,9 @@ export function cliEnv(extra?: Record<string, string | undefined>): Record<strin
       key === "SDD_DIR" ||
       key === "MSTAR_WORKING_BRANCH" ||
       key === "MSTAR_CLI_PROJECT_ROOT" ||
-      key === "INIT_CWD"
+      key === "INIT_CWD" ||
+      key === "DSH_MSTAR_LEAF_SEAT" ||
+      key === "MSTAR_LEAF_SEAT"
     ) {
       continue;
     }
@@ -52,7 +57,7 @@ export function cliEnv(extra?: Record<string, string | undefined>): Record<strin
   return env;
 }
 
-interface RunResult {
+export interface RunResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
