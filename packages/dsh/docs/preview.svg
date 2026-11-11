@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="600" viewBox="0 0 1080 600" role="img" aria-label="A delivery process your agents cannot skip." font-family="-apple-system, 'SF Pro Text', 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="600" viewBox="0 0 1080 600" role="img" aria-label="From a prompt to a pull request" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif">
   <rect width="1080" height="600" fill="#F5F6FC"/>
-  <text x="40" y="56" font-size="29" font-weight="600" fill="#16181D">A delivery process your agents cannot skip.</text>
-  <text x="40" y="86" font-size="14" fill="#5B6472">Morning Star's skills give every seat its role; the engine keeps the plan, the reviews and the acceptance on the record - inside your dsh session.</text>
+  <text x="40" y="56" font-size="29" font-weight="600" fill="#16181D">From a prompt to a pull request</text>
+  <text x="40" y="86" font-size="14" fill="#5B6472">Morning Star's skills assign every seat; the engine keeps the plan, reviews and acceptance on the record - inside your dsh session.</text>
   <rect x="40" y="114" width="536" height="410" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
   <text x="68" y="148" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">IN THE SESSION</text>
   <rect x="68" y="162" width="480" height="40" rx="10" fill="#F1F2F8"/>

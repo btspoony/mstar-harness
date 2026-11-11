@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="600" viewBox="0 0 1080 600" role="img" aria-label="一套 agent 跳不过的交付流程。" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="600" viewBox="0 0 1080 600" role="img" aria-label="从一句需求到一次合并" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif">
   <rect width="1080" height="600" fill="#F5F6FC"/>
-  <text x="40" y="56" font-size="29" font-weight="600" fill="#16181D">一套 agent 跳不过的交付流程。</text>
-  <text x="40" y="86" font-size="14" fill="#5B6472">Morning Star 的 skills 给每个席位角色与流程；engine 把计划、审查与验收留成记录 —— 就在你的 dsh 会话里。</text>
+  <text x="40" y="56" font-size="29" font-weight="600" fill="#16181D">从一句需求到一次合并</text>
+  <text x="40" y="86" font-size="14" fill="#5B6472">skills 让每个席位各司其职，engine 把计划、审查与验收留成记录 —— 就在你的 dsh 会话里。</text>
   <rect x="40" y="114" width="536" height="410" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
   <text x="68" y="148" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">会话内</text>
   <rect x="68" y="162" width="480" height="40" rx="10" fill="#F1F2F8"/>
@@ -36,7 +36,7 @@
   <text x="110" y="464" font-size="12.5" fill="#1D3B29">PM Acceptance · 逐条标准映射证据</text>
   <rect x="440" y="448" width="88" height="22" rx="11" fill="#DFF2E5"/>
   <text x="484" y="463" font-size="10.5" fill="#17864A" text-anchor="middle">merge-ready</text>
-  <text x="68" y="508" font-size="11" fill="#6B7280">skills 给每个席位角色与流程，engine 把每一步留成记录。</text>
+  <text x="68" y="508" font-size="11" fill="#6B7280">skills 让每个席位各司其职，engine 把每一步留成记录。</text>
   <rect x="596" y="114" width="444" height="410" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
   <text x="624" y="148" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">右侧栏</text>
   <rect x="620" y="158" width="78" height="24" rx="12" fill="#EEF0FF"/>
@@ -79,7 +79,7 @@
   <text x="802" y="468" font-size="9.5" fill="#6B7280">退役（累计）</text>
   <circle cx="47" cy="560" r="7" fill="#EEF0FF"/>
   <path d="M43.5 560l2.5 2.5 4-5" stroke="#3D4AA8" stroke-width="1.5" fill="none" stroke-linecap="round"/>
-  <text x="64" y="564" font-size="12" fill="#363B46">Skills：PM、executor、QC 席位与 reviewer —— 一套流程，而不是一段提示词。</text>
+  <text x="64" y="564" font-size="12" fill="#363B46">Skills：PM、executor、QC 席位与 reviewer 各司其职。</text>
   <circle cx="47" cy="582" r="7" fill="#EEF0FF"/>
   <path d="M44 582h6M47 579v6" stroke="#3D4AA8" stroke-width="1.4" stroke-linecap="round"/>
   <text x="64" y="586" font-size="12" fill="#363B46">Engine：计划、发现、审查与验收都留成记录。</text>
