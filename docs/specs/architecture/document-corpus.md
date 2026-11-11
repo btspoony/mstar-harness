@@ -75,4 +75,4 @@ The registry for documents is the store's catalog domain (`catalog_entities`, `c
 - **New directory key in `.mstarc`** → add it to the resolution description and to `skills/mstar-conventions/SKILL.md`.
 - **Change to a resolution chain or probe order** → update the affected chain here and in [store-authority.md](store-authority.md) when the harness root itself moves.
 - **Change to catalog schema or verbs** → update catalog registration and [store-authority.md](store-authority.md).
-- **Change to the ADR bucket set or record contract** → update this table, `mstar-doc-corpus/references/adr.md` (the contract) and `docs/adr/README.md` (this repository's tree and gate) together.
+- **Change to the ADR bucket set or record contract** → update this table, `mstar-doc-corpus/references/adr.md` (the contract), `docs/adr/README.md` (this repository's tree and gate) and the seeded consumer copy `ADR_README` in `packages/engine/src/path.ts` together.
