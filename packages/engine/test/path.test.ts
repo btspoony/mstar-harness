@@ -1234,6 +1234,15 @@ describe("scaffoldHarness", () => {
       await scaffoldHarness(root, { harnessDir });
       const config = parseMstarc(readFileSync(join(root, "runtime", ".mstarc"), "utf8"));
       expect(config.harnessDir).toBe("harness");
+      // Each corpus key is relative to this declaration's own directory, and
+      // the corpora the scaffold created sit at the repository root — so the
+      // written values climb out of `runtime/`, rather than naming a second
+      // `.agents/` beside the harness.
+      expect(config.knowledgeDir).toBe("../.agents/knowledge");
+      expect(config.specsDir).toBe("../.agents/specs");
+      expect(config.adrDir).toBe("../.agents/adr");
+      expect(existsSync(join(root, ".agents", "knowledge"))).toBe(true);
+      expect(existsSync(join(root, "runtime", ".agents"))).toBe(false);
       // The declaration is not second-guessed at a nested parent either.
       expect(existsSync(join(root, ".mstarc"))).toBe(false);
     } finally {
@@ -1303,6 +1312,34 @@ describe("scaffoldHarness", () => {
       setArtifactStore(createFsStore(resolve(root, ".custom")));
       await scaffoldHarness(root);
       expect(readFileSync(join(root, ".mstarc"), "utf8")).toBe("[config]\nharness_dir=.custom\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Bootstrap is greenfield: a legacy `{HARNESS_DIR}/adr/` that merely exists
+  // must not be adopted as the declared target — the resolver would pick it
+  // and the `.mstarc` would then point at a path a gitignored `.mstar/` cannot
+  // carry into a commit, with the templates seeded into it.
+  test("never adopts a populated .mstar/adr: declares and seeds .agents/adr instead", async () => {
+    const root = tmpRoot("path-scaffold-legacy-adr-");
+    try {
+      const legacyAdr = join(root, ".mstar", "adr");
+      mkdirSync(legacyAdr, { recursive: true });
+      writeFileSync(join(legacyAdr, "0001-legacy.md"), "# ADR: legacy\n", "utf8");
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      await scaffoldHarness(root);
+
+      const config = parseMstarc(readFileSync(join(root, ".mstarc"), "utf8"));
+      expect(config.adrDir).toBe(".agents/adr");
+      // The templates land in the declared dir, not in the legacy one.
+      for (const bucket of ["proposed", "implemented"]) {
+        expect(existsSync(join(root, ".agents", "adr", bucket, "TEMPLATE.md"))).toBe(true);
+      }
+      expect(existsSync(join(root, ".agents", "adr", "README.md"))).toBe(true);
+      // The legacy tree is read-only for the scaffold: same entries, same bytes.
+      expect(readdirSync(legacyAdr)).toEqual(["0001-legacy.md"]);
+      expect(readFileSync(join(legacyAdr, "0001-legacy.md"), "utf8")).toBe("# ADR: legacy\n");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

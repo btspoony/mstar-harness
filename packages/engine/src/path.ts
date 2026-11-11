@@ -751,9 +751,18 @@ export function resolveScaffoldDirs(
  *
  * The layout bootstrap produces is the recommended one: `.mstar/` is a fully
  * local process root, `.mstarc` (tracked) declares the layout, and the
- * tracked corpora live under `.agents/`. Order matters — the `.mstarc` write
- * comes first so the resolvers below land on the declared directories instead
- * of their candidate-chain fallbacks.
+ * tracked corpora live under `.agents/`. Order matters — the three corpus
+ * dirs are composed first, and the bootstrap `.mstarc` is then written *from*
+ * the directories this run creates. A declaration authored before the run
+ * wins outright (`writeBootstrapMstarc` backs off when one is already in
+ * scope), so the file never pre-empts a choice the repository already made.
+ *
+ * The corpora are always `<scaffoldRoot>/.agents/<kind>`, never a resolver
+ * candidate. Bootstrap is greenfield: adopting a directory that merely exists
+ * would turn it into the declared write target — a legacy
+ * `{HARNESS_DIR}/<kind>/` most of all, whose contents a wholesale gitignored
+ * `.mstar/` can never carry into a commit. Existing content is read by the
+ * resolvers, not re-homed by the scaffold.
  *
  * Idempotent: an existing `.mstarc`, directory, template or README is never
  * rewritten. Returns the absolute resolved harness dir.
@@ -766,23 +775,23 @@ export function resolveScaffoldDirs(
 export async function scaffoldHarness(root: string, options: ScaffoldOptions = {}): Promise<string> {
   const { harnessDir, projectDir } = resolveScaffoldDirs(root, options);
   const harness = resolve(harnessDir);
-  writeBootstrapMstarc(resolve(root), harness);
+  // Tracked corpora are always the greenfield `<root>/.agents/<kind>` paths.
+  // Resolving them here would adopt a non-empty candidate that merely exists
+  // (legacy `{HARNESS_DIR}/<kind>/` above all) and declare *that* as the
+  // write target — a bootstrap must never re-home existing content.
+  // `root` is the repository the scaffold ran for (the tracked-results owner);
+  // the `.agents/` corpora belong there even when `harness_dir` points outside
+  // the checkout (an explicit `MSTAR_HARNESS_DIR`, a nested harness).
+  const repoRoot = resolve(root);
+  const knowledgeDir = join(repoRoot, ".agents", "knowledge");
+  const specsDir = join(repoRoot, ".agents", "specs");
+  const adrDir = join(repoRoot, ".agents", "adr");
+  writeBootstrapMstarc(repoRoot, harness, { knowledge: knowledgeDir, specs: specsDir, adr: adrDir });
   for (const dir of SCAFFOLD_DIRS) mkdirSync(join(harness, dir), { recursive: true });
   // `_default` is the fallback project identity; its directory is a location,
   // not a mandate to create or register a Markdown roadmap.
   const defaultProjectDir = join(projectDir, _DEFAULT_PROJECT);
   mkdirSync(defaultProjectDir, { recursive: true });
-  // Tracked corpora come from the resolvers, never from hardcoded names: a
-  // repository that re-points a `.mstarc` key keeps one creation path. The
-  // knowledge/adr resolvers do not create a declared dir (they only create
-  // their own fallback), so the scaffold creates each resolved dir.
-  // `root` is the repository the scaffold ran for (the tracked-results owner);
-  // the `.agents/` corpora belong there even when `harness_dir` points outside
-  // the checkout (an explicit `MSTAR_HARNESS_DIR`, a nested harness).
-  const repoRoot = resolve(root);
-  const knowledgeDir = resolveKnowledgeDir(harness, { repoRoot });
-  const specsDir = resolveSpecsDir(harness, { repoRoot });
-  const adrDir = resolveAdrDir(harness, { repoRoot });
   for (const dir of [knowledgeDir, specsDir, adrDir]) mkdirSync(dir, { recursive: true });
   seedAdrTree(adrDir);
   await registerScaffoldCatalog(harness);
@@ -802,7 +811,11 @@ export async function scaffoldHarness(root: string, options: ScaffoldOptions = {
  * already holds an author-owned `.mstarc` is not visible from `root`, so the
  * write is skipped whenever that file exists.
  */
-function writeBootstrapMstarc(root: string, harnessDir: string): void {
+function writeBootstrapMstarc(
+  root: string,
+  harnessDir: string,
+  corpus: { knowledge: string; specs: string; adr: string },
+): void {
   const parent = dirname(harnessDir);
   const rel = relative(root, parent);
   // A harness outside the scaffold root (e.g. `MSTAR_HARNESS_DIR` elsewhere)
@@ -810,14 +823,19 @@ function writeBootstrapMstarc(root: string, harnessDir: string): void {
   // caller never named.
   if (rel.startsWith("..") || isAbsolute(rel)) return;
   if (findMstarc(root, root) !== null) return;
+  // Each corpus key is written relative to this file's directory, from the
+  // directory the scaffold actually creates. A nested harness (`root/runtime/
+  // harness`) puts the declaration at `root/runtime/`, where the literal
+  // `.agents/knowledge` would resolve to `root/runtime/.agents/knowledge` —
+  // a second corpus beside the one created at the repository root.
   const content =
     "; Morning Star harness layout for this repository.\n" +
     "; Values mirror the resolved layout so candidate-chain drift cannot move them.\n" +
     "[config]\n" +
     `harness_dir=${relative(parent, harnessDir)}\n` +
-    "knowledge_dir=.agents/knowledge\n" +
-    "specs_dir=.agents/specs\n" +
-    "adr_dir=.agents/adr\n";
+    `knowledge_dir=${relative(parent, corpus.knowledge)}\n` +
+    `specs_dir=${relative(parent, corpus.specs)}\n` +
+    `adr_dir=${relative(parent, corpus.adr)}\n`;
   mkdirSync(parent, { recursive: true });
   writeIfAbsent(join(parent, MSTARC_FILE), content);
 }

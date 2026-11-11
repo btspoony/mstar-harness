@@ -92,14 +92,14 @@ enforcement=hard
 
 **空目录规则**：候选路径存在但无任何文件 → 视为不存在，继续下一候选；候选按解析后路径去重（harness 根即 `.agents/` 时第 2 项与第 6 项是同一目录）。
 
-**创建默认**：全部缺失或皆空 → 创建并使用 `<repo-root>/.agents/specs/`（`create: false` 时只返回不创建）。**禁止**在 greenfield init 时创建裸仓库根 `specs/`；**禁止**把 `{HARNESS_DIR}/specs/` 当创建目标。
+**创建默认**：全部缺失或皆空 → 创建并使用 `<repo-root>/.agents/specs/`（`create: false` 时只返回不创建）。**禁止**在 greenfield init 时创建裸仓库根 `specs/`；解析出的 `{HARNESS_DIR}` 不是 `<repo-root>/.agents/` 时，**禁止**把 `{HARNESS_DIR}/specs/` 当创建目标。
 
 ### `{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析（找到非空目录即停）
 
 - `{KNOWLEDGE_DIR}`：`.mstarc` `knowledge_dir`（权威）→ `<repo-root>/.agents/knowledge/`（默认）→ legacy 只读 `{HARNESS_DIR}/knowledge/`（链尾）→ 回退创建 `<repo-root>/.agents/knowledge/`（`resolveKnowledgeDir` 默认创建，`{ create: false }` 关闭）。
 - `{ADR_DIR}`：`.mstarc` `adr_dir`（权威）→ `<repo-root>/.agents/adr/`（默认）→ `<repo-root>/docs/adr/` → legacy 只读 `{HARNESS_DIR}/adr/`（链尾）→ 回退创建 `<repo-root>/.agents/adr/`（`resolveAdrDir`）。
 
-`{HARNESS_DIR}/<kind>/` 在这三条链里都只是 **legacy 只读源**：永不创建、永不作为回退、也不再被任何文档表述为语料所在；直到没有仓库预期在迁移前位置携带内容时才删除该候选。`.mstarc` 已声明的仓库（含本仓库）布局不变——声明即命中第 1 项。`.agents/` 默认值只描述未声明时的行为，且它位于 `{HARNESS_DIR}` 之外，所以 `.mstar/` 整体 gitignored 时 tracked 语料仍随仓库提交。`<repo-root>` 是**该 `.agents/` 默认值所属的检出**：调用方知道就传（`opts.repoRoot`——CLI 取 start 的 git top-level，scaffold 取 scaffold 根，catalog 取持有该 harness 的主 worktree），不知道时才是 harness 目录的父目录；harness 配在检出之外（`MSTAR_HARNESS_DIR`、嵌套 `.mstarc`）时两种答案不同，而只有前者能提交。
+`{HARNESS_DIR}/<kind>/` 在这三条链里只是 **legacy 只读源**：只要解析出的 `{HARNESS_DIR}` 不是 `<repo-root>/.agents/`（即该候选不与第 2 项同一目录），它永不创建、永不作为回退，也不再被任何文档表述为语料所在；直到没有仓库预期在迁移前位置携带内容时才删除该候选。`.mstarc` 已声明的仓库（含本仓库）布局不变——声明即命中第 1 项。`.agents/` 默认值只描述未声明时的行为，且它位于 `{HARNESS_DIR}` 之外，所以 `.mstar/` 整体 gitignored 时 tracked 语料仍随仓库提交。`<repo-root>` 是**该 `.agents/` 默认值所属的检出**：调用方知道就传（`opts.repoRoot`——CLI 取 start 的 git top-level，scaffold 取 scaffold 根，catalog 取持有该 harness 的主 worktree），不知道时才是 harness 目录的父目录；harness 配在检出之外（`MSTAR_HARNESS_DIR`、嵌套 `.mstarc`）时两种答案不同，而只有前者能提交。
 
 > **Engine check:** engine `resolveSpecsDir` / `resolveKnowledgeDir` / `resolveAdrDir` — or run `mstar path resolve` (prints all three) — to confirm the candidate order (empty-dir-as-absent included). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
