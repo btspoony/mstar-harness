@@ -20,9 +20,14 @@
  * here are gone: two identical model-facing surfaces cost ~10k characters of
  * fixed context per request and forced the model to choose between them.
  *
- * Identity: this native surface is the ONLY identity path — the shared MCP
- * connection carries none, and no MCP tool can supply one on a caller's behalf.
- * `mstar_plan_bind` calls the shared `@mstar-harness/commands`
+ * Identity: the shared MCP connection carries a per-call `sessionId` — the
+ * bundle launches it with `mstar mcp --trust-caller-session-id`, which
+ * publishes the selector and treats its value as a BEARER identity
+ * (`executionContextFor` → `context.caller`, the caller's own coordinator
+ * binding; ADR `dsh-native-identity-channels`). Without the flag the selector
+ * stays unpublished and a call that sends one is refused. This native surface
+ * remains the HOST-PROVEN route, and the only one that reaches plugin-local
+ * state: `mstar_plan_bind` calls the shared `@mstar-harness/commands`
  * implementation through its programmatic entry (`executeCommand` — the same
  * admission + execution path the CLI uses) and injects `sessionId` from
  * `exec.agent.id` (ADR `dsh-native-identity-channels` constraints 1–2:
