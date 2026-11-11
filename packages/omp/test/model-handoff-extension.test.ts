@@ -2077,6 +2077,34 @@ describe("model handoff on the ACTIVE route", () => {
     expect(harness.attempts).toHaveLength(0);
     expect(harness.records()).toHaveLength(0);
   }, 120_000);
+
+  test("a store schema this loaded build cannot read keeps its engine code and names the loaded build's recovery", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const store = await initializeStore({ harnessDir: repo.harness });
+    store.db.exec("insert into schema_version values(999, 'future', 'future', 'now')");
+    store.close();
+
+    // The refusal is the stale bundle naming itself: the engine's own code, the
+    // module the host actually loaded, and the installed-package recovery. It is
+    // never the generic registration refusal that leaves the operator guessing.
+    const refused = await harness.runTool(startParams("missing-iteration"));
+    expect(refused.isError).toBe(true);
+    expect(codeOf(refused)).toBe("store.schema-unsupported");
+    const details = refused.details.mstarModelHandoff as Record<string, unknown>;
+    expect(typeof details.loadedEntry).toBe("string");
+    expect(String(details.loadedEntry)).toMatch(/\.(ts|js)$/);
+    const text = String(refused.content[0]?.text);
+    expect(text).toContain("@mstar-harness/omp");
+    expect(text).toContain("NEW host process");
+    expect(harness.attempts).toHaveLength(0);
+    expect(harness.records()).toHaveLength(0);
+  }, 120_000);
   test("ACTIVE fire re-reads preference and refuses incomplete readiness without switching", async () => {
     const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@default" });

@@ -1407,6 +1407,48 @@ describe("execution-concurrency: §3.1 concurrent plan operations", () => {
     expect(workflow.plans.map((plan) => plan.coordination?.prepared).filter(Boolean)).toHaveLength(2);
   });
 
+  /**
+   * The competing-write case the ceremony row closes on: two writers address the
+   * SAME row with the SAME token, so whichever transaction commits first is the
+   * only one whose token was still the row's CAS. Transactional refusals leave no
+   * receipt row, so this behavior — not any receipt count — is what proves it.
+   */
+  test("two writers on the same plan token commit exactly once and refuse the other with the superseded CAS", async () => {
+    const fixture = await seededWorkflow("concurrency-same-token");
+    const { context } = fixture;
+    const before = footprint(context);
+    const token = await planTokenOf(fixture, OWN_PLAN);
+    // Distinct operation ids and distinct payloads: neither call can be served as
+    // the other's replay, so both genuinely attempt the row.
+    const writers = [
+      { operationId: "same-token-a", workingBranch: "feature/concurrency-a" },
+      { operationId: "same-token-b", workingBranch: "feature/concurrency-b" },
+    ];
+    const settled = await Promise.allSettled(
+      writers.map((writer) =>
+        planCall(fixture, OWN_PLAN, writer.operationId, token, {
+          kind: "prepare",
+          config: { workingBranch: writer.workingBranch },
+        } as CoordinationOperation),
+      ),
+    );
+
+    const winner = settled.findIndex((result) => result.status === "fulfilled");
+    const refusals = settled.filter((result) => result.status === "rejected");
+    expect(settled.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(refusals).toHaveLength(1);
+    // The existing conflict code, not the wording of its message.
+    expect((refusals[0] as PromiseRejectedResult).reason).toMatchObject({ code: "execution.stale-token" });
+
+    // Exactly one write landed: one revision advance, one receipt, one recorded config.
+    const after = footprint(context);
+    expect(after.own_plan_revision).toBe((before.own_plan_revision as number) + 1);
+    expect(after.operations).toBe((before.operations as number) + 1);
+    expect((planRow(context, OWN_PLAN).metadata as Record<string, unknown>).working_branch).toBe(
+      writers[winner]!.workingBranch,
+    );
+  });
+
   test("a catalog edit after prepare does not rewrite the recorded config", async () => {
     const fixture = await seededWorkflow("catalog-edit-after-prepare");
     const { context } = fixture;

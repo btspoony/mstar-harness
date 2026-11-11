@@ -136,6 +136,8 @@ The integration checkout is established at Phase 2 entry; the bounded Phase 1 un
 | **Integration worktree** | Resolved `spec_integration_branch` (same across active plans) | `integration_worktree_path` (ACTIVE store-backed workflow view) — canonical **repository root** (not `{HARNESS_DIR}`) | Sole merge cwd for serial integration merges (`integration_merge_lease`) + tracked-result close commits (Phase 3 compound); **no product-source edits** — Phase-5 fixes use a feature worktree |
 | **Feature worktree** (per plan) | Plan's Working branch | Row `metadata.worktree_path` (ACTIVE plan view) | **Required cwd** for product/source edits |
 
+**Feature-worktree dependency readiness:** a feature worktree may resolve shared dependencies (installed `node_modules`, another package's built `dist`) from another checkout — a false-green risk recorded in `docs/knowledge/tooling-decisions/worktree-dependency-dist-isolation.md`; before accepting plan evidence run the task's own module-resolution check (dependency presence in that checkout plus the consuming package's build/import), and no generic launch refusal is imposed, since it would reject legitimate git/node-only commands — this is the recorded explicit waiver of the probe-enforcement demand (`I-000253`).
+
 ### Harness path SSOT under default gitignore (L1) — three write domains
 
 Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪策略」); `git worktree add` does **not** copy them into a new checkout. A worktree's `.mstar/` is **not** categorically non-writable — writability is decided per domain. This is the **sole** three-domain statement in the skill corpus; other skills point here instead of restating it.

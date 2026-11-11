@@ -29,6 +29,15 @@ export function gitProbeTimeoutMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
 }
 
+/**
+ * Child environment for every probe: the inherited environment with the
+ * locale pinned. Fatal-128 classes are indistinguishable by exit code, so the
+ * classification reads stderr and that text must not depend on the user locale.
+ */
+function probeEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, LC_ALL: "C", LANG: "C" };
+}
+
 /** stderr text of a failed child process, when the platform captured one. */
 function stderrOf(error: unknown): string {
   if (typeof error === "object" && error !== null && "stderr" in error) {
@@ -113,6 +122,7 @@ export function worktreeList(startDir: string, opts: GitProbeOptions = {}): { ro
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: opts.timeoutMs ?? gitProbeTimeoutMs(),
+      env: probeEnv(),
     });
     return parseWorktreeList(out);
   } catch {
@@ -156,6 +166,7 @@ export function checkoutRootOrFailure(
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: opts.timeoutMs ?? gitProbeTimeoutMs(),
+      env: probeEnv(),
     }).trim();
     if (out === "") return { root: null, failed: false };
     // Git answered, but an unresolvable toplevel is not a usable checkout:
@@ -186,6 +197,7 @@ export function gitIgnored(root: string, target: string): boolean | null {
     execFileSync("git", ["-C", root, "check-ignore", "-q", "--", target], {
       stdio: ["ignore", "ignore", "ignore"],
       timeout: gitProbeTimeoutMs(),
+      env: probeEnv(),
     });
     return true;
   } catch (error) {

@@ -27,6 +27,9 @@ import type { ExecutionPlanView, ExecutionRead, ExecutionSessionRef, ExecutionSt
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../model-handoff-readiness";
 import {
   COORDINATOR_TOOL_NAME,
+  INCOMPATIBLE_LOADED_ENGINE_CODES,
+  INCOMPATIBLE_LOADED_ENGINE_RECOVERY,
+  LOADED_ENTRY,
   SHELL_TOOL_NAMES,
   bindCoordinatorIdentity,
   classifyCoordinatorShellCall,
@@ -637,7 +640,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   };
 
   /** Refused start: durable notice plus a visible tool result; no binding is written. */
-  const refuseStart = (code: string, message: string): ToolOutcome => {
+  const refuseStart = (code: string, message: string, details: Record<string, unknown> = {}): ToolOutcome => {
     // Deliberately snapshot-free: a refusal reports this seat's derivation, not
     // workflow status.
     notice(
@@ -646,7 +649,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
         detail: `${message}. No model action was taken.`,
       }),
     );
-    return outcome(false, true, `the new-iteration handoff start was refused (${code}): ${message}`, { code });
+    return outcome(false, true, `the new-iteration handoff start was refused (${code}): ${message}`, { ...details, code });
   };
 
   /* --------------------------------------------------------------- arm --- */
@@ -705,7 +708,16 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     try {
       addressed = await readExecutionAuthority({ harnessDir: harnessRoot }, { workflowId: params.workflowId });
     } catch (error) {
-      return refuseStart("register-invalid", `the execution authority of ${harnessRoot} cannot serve workflow ${params.workflowId}: ${String(error)}`);
+      const cause = `the execution authority of ${harnessRoot} cannot serve workflow ${params.workflowId}: ${String(error)}`;
+      // A store this loaded build cannot read is a stale plugin bundle, not a
+      // bad caller: it keeps its own engine code and the shared recovery that
+      // names the build which answered. Every other cause stays the generic
+      // registration refusal.
+      const code = (error as { code?: unknown } | null)?.code;
+      if (typeof code === "string" && INCOMPATIBLE_LOADED_ENGINE_CODES[code] === true) {
+        return refuseStart(code, `${cause} ${INCOMPATIBLE_LOADED_ENGINE_RECOVERY}`, { loadedEntry: LOADED_ENTRY });
+      }
+      return refuseStart("register-invalid", cause);
     }
     const workflow = "workflows" in addressed.data ? addressed.data.workflows[0] : undefined;
     let registry: readonly Readonly<{ id: string; status: string; coordinator: ExecutionSessionRef | null }>[] = [];

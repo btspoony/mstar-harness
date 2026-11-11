@@ -1,7 +1,7 @@
 import { closeSync, constants, createReadStream, fstatSync, openSync, readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, isAbsolute, relative, resolve } from "node:path";
-import { findMstarc, parseMstarc, type MstarcConfig } from "../../engine/src/mstarc.js";
+import { findMstarc, parseMstarc, type MstarcConfig } from "@mstar-harness/engine";
 import {
   CONTRACT_REVISION,
   NATIVE_MODEL,

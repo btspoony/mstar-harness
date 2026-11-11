@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
-import { initializeStore, type StoreDb } from "../store-db.js";
+import { initializeStore, openStore, type StoreDb } from "../store-db.js";
 import type { IssueKind, Severity } from "../issue.js";
 import { acquireRun, claimItem, planItem, readItem, releaseRun } from "../issue-sync.js";
 import type { IssueProvider, ProviderPage, ProviderWrite, ProviderWriteReceipt } from "./provider.js";
@@ -32,13 +32,14 @@ const PROJECT = "p-push";
 const BINDING = `linear:${PROJECT}`;
 const STORE_ID = "store-alpha";
 
-async function openedStore(name: string): Promise<{ db: StoreDb; close: () => void }> {
-  const handle = await initializeStore({ harnessDir: mkdtempSync(join(ROOT, name)) });
+async function openedStore(name: string): Promise<{ db: StoreDb; harnessDir: string; close: () => void }> {
+  const harnessDir = mkdtempSync(join(ROOT, name));
+  const handle = await initializeStore({ harnessDir });
   const db = handle.db;
   db.prepare(
     "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', ?, 'Push', 'projects', ?, 'now', 'now')",
   ).run(PROJECT, `${PROJECT}/roadmap.md`);
-  return { db, close: () => handle.close() };
+  return { db, harnessDir, close: () => handle.close() };
 }
 
 function addIssue(
@@ -959,21 +960,35 @@ describe("(k) a stale ledger read cannot mint a second create for the same conte
   const planInput = { bindingId: BINDING, direction: "push" as const, localId: "I-001041", operationId: PLAN_OP };
 
   test("only the first identical claim holds the send right; a replay of it does not", async () => {
-    const { db, close } = await openedStore("claim-once");
+    const { db, harnessDir, close } = await openedStore("claim-once");
     try {
       addIssue(db, "I-001041");
-      // Two callers that derive the SAME operationId from content + revision.
-      // `planItem` replays its receipt for both of them, which is exactly how
-      // two concurrent pushes each concluded they owned the create.
-      const first = claimItem(db, planInput);
-      const second = claimItem(db, planInput);
-      expect(first.claimed).toBe(true);
-      expect(second.claimed).toBe(false);
-      // The loser is told what the ledger now holds, not what the winner's
-      // receipt said, so it can act on the current row.
-      expect(second.item).toEqual(first.item);
-      // `planItem` keeps its idempotent-replay semantics for everyone else.
-      expect(planItem(db, planInput)).toEqual(first.item);
+      // The second connection is opened BEFORE the first claim, so exclusivity
+      // cannot come from one connection's in-process view: the two handles hold
+      // independent connections to the same store file.
+      const rival = await openStore({ harnessDir }, "write");
+      try {
+        // Two callers that derive the SAME operationId from content + revision.
+        // `planItem` replays its receipt for both of them, which is exactly how
+        // two concurrent pushes each concluded they owned the create.
+        const first = claimItem(db, planInput);
+        const second = claimItem(rival.db, planInput);
+        expect(first.claimed).toBe(true);
+        expect(second.claimed).toBe(false);
+        // The loser is told what the ledger now holds, not what the winner's
+        // receipt said, so it can act on the current row.
+        expect(second.item).toEqual(first.item);
+        // `planItem` keeps its idempotent-replay semantics for everyone else.
+        expect(planItem(db, planInput)).toEqual(first.item);
+        // The losing connection cannot turn the winner's residue into a second
+        // create: the ledger row, not the caller's view, holds the send right.
+        const loser = provider();
+        const lost = await pushItem(rival.db, loser, context(), candidates(rival.db)[0]!);
+        expect(lost).toMatchObject({ outcome: "unresolved", externalId: null });
+        expect(loser.writes).toEqual([]);
+      } finally {
+        rival.close();
+      }
     } finally {
       close();
     }
