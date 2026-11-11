@@ -14,6 +14,8 @@ PM 在新迭代启动时执行。
 2. 读 `STRATEGY.md`（若存在），对齐战略方向（创建/维护 → `mstar-knowledge` `references/strategy-document.md`）
 3. 查 catalog 取 Research 候选：`mstar catalog list`（按 kind / document kind / lifecycle 过滤出 `active` knowledge；见 help；**不**要求阅读全部 knowledge 正文；README 表格不再是权威）
 4. 确定所选 catalog project（未归属使用 `_default`），通过 `mstar roadmap show --project <id>` 读取 `{HARNESS_DIR}/store.db` roadmap 域的未完成路线范围（含上一迭代 `next`），纳入本次迭代范围候选；另用 `mstar milestone list --project <id>` 读取结构化目标。已知项目缺少 roadmap 记录或 milestone 时明确记录 absence；legacy Markdown 仅 transport/history，绝不从项目文件、README 索引行或 catalog 路径回退读取路线内容。读写规则 → **`mstar-project-governance`**。
+5. 读 ADR proposals：先用 `mstar path resolve` 解析 `{ADR_DIR}`，列出 `{ADR_DIR}/proposed/**/*.md`，逐份读 `Problem` / `Proposal` / `Acceptance criteria` 作为范围与验收种子。只有 `proposed/` 供给候选（`implemented/` 是当前行为，`rejected/` / `archived/` 是冻结历史）；ADR 不是 catalog 行（无 `adr` document kind，树内禁建索引），**不**经 `mstar catalog list` 读取；`proposed/` 缺失或为空明确记录 absence。桶语义与记录形态 → **`docs/adr/README.md`**，不复述。
+6. 读 open issues：`mstar status tech-debt` 取汇总，`mstar issue list --disposition open`（可选 `--project <id>`）取条目 —— 这些是 `{HARNESS_DIR}/store.db` 的残留 SSOT，按 severity 排序纳入候选。契约 → **`mstar-project-governance`**「Issue capture」，不复述；项目 register（`residuals.json`）只是迁移历史，**不**是来源。
 
 **Direct skill entry** uses interactive direction lock by default; explicit caller opt-in may select autonomous mode without a command. Command-only helpers are not runtime dependencies.
 
