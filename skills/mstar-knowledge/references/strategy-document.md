@@ -2,7 +2,7 @@
 
 `STRATEGY.md` at `<repo-root>/STRATEGY.md` is the project's upstream anchor: a concise declaration of what the project is, where it is going, and which principles govern decisions. Brainstorm, specify and plan phases read it as grounding so strategic choices flow into every feature; without it each plan is decided in isolation and misses the larger context.
 
-**Storage SSOT**: `mstar-conventions/references/artifact-storage-paths.md` — `<repo-root>/STRATEGY.md`, beside `.git/` and `AGENTS.md`. Never under `{HARNESS_DIR}`, `docs/` or any subdirectory.
+**Storage**: `<repo-root>/STRATEGY.md`, beside `.git/` and `AGENTS.md` — never under a harness root or `docs/`, and never in a subdirectory. When the harness runs, its path table is `mstar-conventions/references/artifact-storage-paths.md`.
 
 This file owns the artifact. The flow that produces it — survey, interview, draft/review, and the absent/stale/current handling — is `references/project-knowledge-bootstrap.md` Phase 2.
 
@@ -24,7 +24,7 @@ A good strategy document is opinionated and concise — it fits in one screen of
 
 ## Validation
 
-> **Engine check:** run `mstar lint <STRATEGY.md>` (engine `lintStrategySections`) to check the six required sections in § Shape. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check (optional validator):** run `mstar lint <STRATEGY.md>` (engine `lintStrategySections`) to check the six required sections in § Shape. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
 A document missing any required section is not a finished Phase 2 — fix it before the bootstrap reports its result.
 
