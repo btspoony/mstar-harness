@@ -6,16 +6,18 @@ Capability detail for Phase 1 when direction lock mode is **`autonomous`**.
 
 ## Preconditions
 
-- Research (§1.1) and candidate exploration already done — **read repo artifacts before ranking**.
-- Do not invent roadmap items that have no file or status evidence.
+- Research (§1.1) and candidate exploration already done — **read repo artifacts before ranking**: roadmap/milestone records, open issues (`mstar issue list --disposition open`), `{ADR_DIR}/proposed/` records, and `STRATEGY.md`.
+- Do not invent roadmap items that have no file or status evidence; every shortlisted candidate cites a path or an issue id.
 - Scale budget (`S`/`M`/`L`/`XL`) applies in this mode (or when the caller supplies one); do not retrofit a scale cap onto an interactive start that never asked for one.
 
 ## Ranking heuristics（highest first）
 
-1. **Deferred / roadmap next** — prior compass `## Roadmap Position` next iteration, deferred-features, residuals marked for follow-up
-2. **STRATEGY alignment** — `STRATEGY.md` vision / decision principles when present
-3. **Product completeness** — closes a user-visible gap or unfinished capability
-4. **Risk / blast radius** — prefer smaller, shippable slices when candidates are otherwise equal
+1. **Deferred / roadmap next** — prior compass `## Roadmap Position` next iteration, deferred-features, and issues explicitly deferred to a later iteration that remain open in the issue store
+2. **Open issues** — `{HARNESS_DIR}/store.db` residual SSOT; `critical` / `high` first, and a milestone-linked issue is delivery evidence
+3. **Proposed ADRs** — an argued decision with acceptance criteria, not yet implemented (`{ADR_DIR}/proposed/`)
+4. **STRATEGY alignment** — `STRATEGY.md` vision / decision principles when present
+5. **Product completeness** — closes a user-visible gap or unfinished capability
+6. **Risk / blast radius** — prefer smaller, shippable slices when candidates are otherwise equal
 
 Document trade-offs for **each** shortlisted candidate (2–4), then lock **one**.
 
