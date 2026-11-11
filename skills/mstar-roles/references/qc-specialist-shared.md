@@ -61,6 +61,10 @@ Primary focus from `{focus}`. Still cover shared baseline in `reviewer-workflow.
 
 See **`references/qc-specialist/report-template.md`**. Machine **`severity`** enum → `mstar-artifacts`.
 
+### Residual approval is not a fifth token
+
+Frontmatter `verdict` carries exactly `Approve | Request Changes | Needs Discussion | Unconfirmed`. An allow-residual approval stays `Approve`: write the body conclusion as `**Verdict**: Approve with residuals — <leftovers>` and the validator normalizes that phrase to `Approve` before comparing the two (`qcreview.ts` `bodyVerdictPhrase`), so both lines agree. The residuals live outside the verdict — each open leftover is captured as this plan's linked issue through `Findings cleanup: allow-residual` (**`mstar-project-governance`**「Issue capture」) — which is why there is no fifth token and no residual-list field. Body mechanics and the counts bar → `references/qc-specialist/report-template.md` § Verdict rules.
+
 ### Verdict NEVER (`{role_id}`)
 
 - **NEVER** `Approve` with unresolved **Critical** (or mandatory **Warning** per assignment).
