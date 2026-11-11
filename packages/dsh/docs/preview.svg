@@ -10,26 +10,27 @@
   <rect x="68" y="218" width="480" height="58" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
   <text x="86" y="241" font-size="13" font-weight="600" fill="#16181D">PM clarifies and writes the plan</text>
   <text x="86" y="260" font-size="10.5" fill="#6B7280">skill · project-manager</text>
-  <line x1="308" y1="276" x2="308" y2="292" stroke="#C3C8D4" stroke-width="1.4"/>
-  <line x1="143" y1="292" x2="473" y2="292" stroke="#C3C8D4" stroke-width="1.4"/>
-  <line x1="143" y1="292" x2="143" y2="306" stroke="#C3C8D4" stroke-width="1.4"/><path d="M139 301l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="68" y="306" width="150" height="50" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="84" y="328" font-size="12.5" font-weight="600" fill="#16181D">QC 1</text>
-  <text x="84" y="345" font-size="10.5" fill="#6B7280">independent seat</text>
-  <line x1="293" y1="292" x2="293" y2="306" stroke="#C3C8D4" stroke-width="1.4"/><path d="M289 301l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="218" y="306" width="150" height="50" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="234" y="328" font-size="12.5" font-weight="600" fill="#16181D">QC 2</text>
-  <text x="234" y="345" font-size="10.5" fill="#6B7280">independent seat</text>
-  <line x1="443" y1="292" x2="443" y2="306" stroke="#C3C8D4" stroke-width="1.4"/><path d="M439 301l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="368" y="306" width="150" height="50" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="384" y="328" font-size="12.5" font-weight="600" fill="#16181D">QC 3</text>
-  <text x="384" y="345" font-size="10.5" fill="#6B7280">independent seat</text>
-  <line x1="143" y1="362" x2="473" y2="362" stroke="#C3C8D4" stroke-width="1.4"/>
-  <line x1="308" y1="362" x2="308" y2="370" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 366l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="68" y="370" width="480" height="50" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="86" y="393" font-size="12.5" font-weight="600" fill="#16181D">Implement on a feature branch</text>
-  <text x="86" y="410" font-size="10.5" fill="#6B7280">executor · per-task review</text>
-  <line x1="308" y1="420" x2="308" y2="436" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 431l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <line x1="308" y1="276" x2="308" y2="306" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 301l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="68" y="306" width="480" height="48" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="86" y="328" font-size="12.5" font-weight="600" fill="#16181D">Implement on a feature branch</text>
+  <text x="86" y="345" font-size="10.5" fill="#6B7280">executor · per-task review</text>
+  <line x1="308" y1="354" x2="308" y2="360" stroke="#C3C8D4" stroke-width="1.4"/>
+  <line x1="143" y1="360" x2="443" y2="360" stroke="#C3C8D4" stroke-width="1.4"/>
+  <line x1="143" y1="360" x2="143" y2="374" stroke="#C3C8D4" stroke-width="1.4"/><path d="M139 369l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="68" y="374" width="150" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="84" y="393" font-size="12.5" font-weight="600" fill="#16181D">QC 1</text>
+  <text x="84" y="409" font-size="10.5" fill="#6B7280">independent seat</text>
+  <line x1="293" y1="360" x2="293" y2="374" stroke="#C3C8D4" stroke-width="1.4"/><path d="M289 369l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="218" y="374" width="150" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="234" y="393" font-size="12.5" font-weight="600" fill="#16181D">QC 2</text>
+  <text x="234" y="409" font-size="10.5" fill="#6B7280">independent seat</text>
+  <line x1="443" y1="360" x2="443" y2="374" stroke="#C3C8D4" stroke-width="1.4"/><path d="M439 369l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="368" y="374" width="150" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="384" y="393" font-size="12.5" font-weight="600" fill="#16181D">QC 3</text>
+  <text x="384" y="409" font-size="10.5" fill="#6B7280">independent seat</text>
+  <line x1="143" y1="424" x2="443" y2="424" stroke="#C3C8D4" stroke-width="1.4"/>
+  <line x1="308" y1="418" x2="308" y2="424" stroke="#C3C8D4" stroke-width="1.4"/>
+  <line x1="308" y1="424" x2="308" y2="436" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 431l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
   <rect x="68" y="436" width="480" height="46" rx="10" fill="#EDF7F0" stroke="#CDE8D6"/>
   <circle cx="90" cy="459" r="9" fill="#DFF2E5"/>
   <path d="M86 459l3 3 5-6" stroke="#17864A" stroke-width="1.8" fill="none" stroke-linecap="round"/>

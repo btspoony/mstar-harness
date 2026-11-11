@@ -33,7 +33,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 - **由专职角色分工，而不是一段超长 prompt** —— PM 负责编排；需求、架构、实现、QC、验收、审计、运维各有专属角色与明确边界。
 - **留下可审计的轨迹** —— 计划、发现、审查报告与决策都记录在仓库的 harness 目录里，而不只是留在对话中。
 
-![Morning Star Harness 在 dsh 中：PM 写出计划、三个独立 QC 席位审查、executor 在功能分支上实现、PM Acceptance 逐条标准映射证据，右侧栏「晨星工作流」面板列出未关闭项与问题走势](packages/dsh/docs/preview.zh.svg)
+![Morning Star Harness 在 dsh 中：PM 写出计划、executor 在功能分支上实现、三个独立 QC 席位审查、PM Acceptance 逐条标准映射证据，右侧栏「晨星工作流」面板列出未关闭项与问题走势](packages/dsh/docs/preview.zh.svg)
 
 ## 安装
 
