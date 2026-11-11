@@ -819,11 +819,11 @@ function writeIfAbsent(file: string, content: string): void {
 const ADR_BUCKETS = ["proposed", "implemented", "rejected", "archived"] as const;
 
 /**
- * Consumer ADR tree contract (English). An intentional condensation of this
- * repository's `docs/adr/README.md` — the runtime copy states the contract a
- * consumer needs without the authoring detail — so no equality test guards
- * it: update this text in the same change whenever the README's contract
- * changes.
+ * Consumer ADR tree contract (English). An intentional condensation of the
+ * corpus ADR contract (`mstar-doc-corpus/references/adr.md`) — the runtime
+ * copy states what a consumer needs without the authoring detail — so no
+ * equality test guards it: update this text in the same change whenever the
+ * contract changes.
  */
 const ADR_README = `# Architecture decision records
 

@@ -21545,7 +21545,7 @@ function validateSchemaYaml(frontmatterText) {
   const violations = [];
   const doc = parseYamlLite(frontmatterText);
   if (doc === null) {
-    violations.push(violation10("medium", "compound.schema.missing-frontmatter", "no `---` YAML frontmatter block found — knowledge docs must open with the schema.yaml contract (skills/mstar-doc-corpus/references/schema.yaml)", "add the fenced frontmatter with module, date, problem_type, category, severity"));
+    violations.push(violation10("medium", "compound.schema.missing-frontmatter", "no `---` YAML frontmatter block found — knowledge docs must open with the schema.yaml contract (mstar-doc-corpus/references/schema.yaml)", "add the fenced frontmatter with module, date, problem_type, category, severity"));
     return { ok: false, violations };
   }
   const isStr = (v) => typeof v === "string";

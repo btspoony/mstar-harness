@@ -15,12 +15,15 @@
  * core stays the lifecycle/authorization semantic authority; the LOAD
  * SELECTION authority is `mstar-roles` (Spec A2: single load-selection
  * authority, no second mandatory-role table). Direct topics declare core
- * first in their Load Order / First action section, except standalone
- * `mstar-coding-behavior`, which has no mandatory load declaration, and
- * the `mstar-roles` hub bootstrap, which declares its identity→preset
- * decision matrix (identity-first, `Skill presets:` none/standard arms,
- * role-owned methods, unknown-preset refusal) and conditional core
- * conflict-authority pointer. All exemptions are keyed on exact names.
+ * first in their Load Order / First action section, except three
+ * exemptions keyed on exact names, each of which skips both the section
+ * and the core-first check: standalone `mstar-coding-behavior`, the
+ * standalone `mstar-doc-corpus` corpus contract, and the inbound-only
+ * `mstar-engine-legacy` archive. The `mstar-roles` hub keeps its section
+ * and declares its identity→preset decision matrix there (identity-first,
+ * `Skill presets:` none/standard arms, role-owned methods,
+ * unknown-preset refusal) plus the conditional core conflict-authority
+ * pointer, in place of core-first.
  * - `mstar-engine-legacy` SKILL.md § Decision Rules (inbound-only) — the
  * engine-absent condition archive never names another `mstar-*` topic:
  * runtime skills may point at the archive, the archive never points at
@@ -425,7 +428,8 @@ export function lintLoadOrder(skillTexts: Record<string, string>): GateResult {
   for (const [name, text] of Object.entries(skillTexts)) {
     if (!name.startsWith("mstar-") || name === "mstar-harness-core") continue;
     if (name === "mstar-coding-behavior") continue;
-    // Standalone corpus skill: owns document shape, loads no lifecycle topic, usable without the harness.
+    // Standalone corpus skill: skips both the Load Order section and the
+    // core-first check — it owns document shape and loads no lifecycle topic.
     if (name === "mstar-doc-corpus") continue;
     if (name === "mstar-engine-legacy") {
       // Inbound-only archive: core-first-exempt by exact name, and its text

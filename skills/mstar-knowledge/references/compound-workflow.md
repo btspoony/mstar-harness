@@ -69,7 +69,7 @@ Understand:
 - Which files/modules were involved
 - The plan_id if applicable (link to the registered workflow/plan identity)
 
-Query the store.db catalog for related existing documents; read `{KNOWLEDGE_DIR}/README.md`, if present, as prose only.
+Discover related existing documents: with an active harness store, query its catalog; with none, search `{KNOWLEDGE_DIR}/**/*.md` by the Phase 2 overlap method and record `catalog: n/a (no store)` in the result. Read `{KNOWLEDGE_DIR}/README.md`, if present, as prose only.
 
 Classify the problem into a track (bug vs knowledge) and category using **`mstar-doc-corpus`** `references/category-mapping.md`.
 

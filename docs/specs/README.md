@@ -24,7 +24,7 @@ Every page follows the same sections in order — `Scope`, `Current state`, `Inv
 
 ## Invariants
 
-- **Disjoint layers.** An experience writeup belongs in `docs/knowledge/`, a snapshot of how the system currently works belongs here, and "we chose X over Y and why" belongs in `docs/adr/` (contract: `docs/adr/README.md`).
+- **Disjoint layers.** An experience writeup belongs in `docs/knowledge/`, a snapshot of how the system currently works belongs here, and "we chose X over Y and why" belongs in `docs/adr/` (contract: `skills/mstar-doc-corpus/references/adr.md`; this repository's tree and gate: `docs/adr/README.md`).
 - **Updated in place, no version suffixes.** A spec describes the latest state. Its history lives in Git and, where a change encodes a decision, in an ADR — never in a sibling `-v2` file.
 - **Decisions outlive plans → ADR.** A decision whose rationale must survive the plan or PR that produced it goes to `docs/adr/`, not into these pages; a spec states the resulting current behavior and may link the ADR.
 - **No plan text.** These pages contain no acceptance criteria, local plan/iteration identifiers, merge references, or harness-internal process paths.

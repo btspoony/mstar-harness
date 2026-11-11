@@ -3,7 +3,9 @@
  * `lintAdrTree`, so the product command (`mstar lint <dir> --type adr`) and
  * this CI guard can never drift into two implementations.
  *
- * Contract: `docs/adr/README.md`. Scope: one walk of `docs/adr/`. This module
+ * Contract: `mstar-doc-corpus/references/adr.md` (skill-relative; the text this
+ * repository applies). This repository's instance of it — the tree and the
+ * gate — is `docs/adr/README.md`. Scope: one walk of `docs/adr/`. This module
  * owns exactly two things the engine does not: where the tree sits in this
  * repository (`docs/adr`) and the `adr.*` failure-code prefix Guard 12 has
  * always printed.
