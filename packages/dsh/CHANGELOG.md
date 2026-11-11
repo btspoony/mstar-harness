@@ -6,6 +6,20 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-11-11
+
+### Fixed
+
+- **The dsh host build owns its source-input provenance.** `bun run --cwd packages/dsh build` now runs `scripts/build-host.ts`, which after a successful build records `.dist-inputs.json`: the outputs it wrote plus a content fingerprint of every reachable input, taken from the build's own metafile rather than a directory walk. The stamp is removed up front and the build throws on failure, so a failed build cannot leave a current stamp over a stale `dist`.
+- **Freshness is answered by content, not mtimes.** `checkHostBuild()` answers `current` / `stale` / `missing` and names the offending input, pairing every non-current answer with the single recovery `bun run --cwd packages/dsh build`. The packed-entry smoke consumes that check, so the mtime walk and its `CI_MTIME_GUARD_SKIP_REASON` CI bypass are gone: a regenerated-but-identical input stays `current`, an edited reachable input reads `stale`. The recorded set is the bundle's real inputs, which is why a fresh checkout's mtimes and the `cli:build`-regenerated `packages/commands/src` module no longer produce false answers.
+- **The gated composition cases can no longer pass the dsh job by not running.** `isCiEnvironment()` now accepts a nonempty `GITHUB_ACTIONS` as well as a nonempty `CI` (nonempty-string semantics unchanged, including the literal `"false"`), so a runner child that unsets `CI` still executes the ten `test.if(...)` real-composition cases instead of demoting them to skips.
+- **A scoped JUnit check counts only the gated cases.** `Test dsh` emits `.junit-dsh.xml` and a following `check:composition-report` step requires, for the two gated spec files only, a present suite, zero skipped **gated** cases, and at least the pinned **gated** count (2 and 8, held beside the file list). A gated case is one whose reported title carries the recorded skip reason, so the ordinary cases those two files also contain cannot stand in for a deleted gated one: a missing report, no executed gated case (including a many-case file whose gated cases were all deleted), one skipped gated case, or one gated case short of the pinned count fails the job. More gated cases than pinned pass, so a parametrized case cannot wedge the gate. Skips of ordinary cases — including inside the gated spec files — and skips in other files stay permitted, and the test step's own exit status is untouched because the check is a separate step.
+- **The issue store gains an honest terminal state for a removed subject: `obsolete`.** One authoritative tuple in `packages/engine/src/issue.ts` now defines the disposition vocabulary, and every server schema, filter, aggregate, history query and outbound mapping derives from it instead of repeating a list. An `obsolete` close requires a nonblank reason and at least one removal reference, refuses any `canonicalIssueId` (including `null`/`""`) before mutation, and refuses with `issue.invalid-disposition` plus the exact removal-evidence recovery. Migration 19 is append-only and preserves existing rows, relations and triggers; the browser projection is generated from the same tuple, and `obsolete` maps to `Canceled` on outbound Linear pushes.
+
+- Version alignment with harness **4.5.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.5.0**.
+
 ## [4.4.1] - 2026-11-10
 
 ### Changed
