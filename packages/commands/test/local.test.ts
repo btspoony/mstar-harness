@@ -121,7 +121,9 @@ describe("shared host-health helpers", () => {
       status: "ok",
       data: {
         harnessDir: path.join(root, ".mstar"),
-        specsDir: path.join(root, ".mstar", "specs"),
+        // Undeclared: the tracked corpus default is the repository's own
+        // `.agents/specs/`, never a sibling of the harness (issue #714).
+        specsDir: path.join(root, ".agents", "specs"),
         workflowDir: path.join(root, ".mstar", "workflows"),
         projectDir: path.join(root, ".mstar", "projects"),
         // The override points outside the harness: the default would be
@@ -258,9 +260,9 @@ describe("shared host-health helpers", () => {
         controlRoot: main,
         controlHarnessDir: path.join(main, ".mstar"),
         linkedWorktree: true,
-        // Undeclared and gitignored: the default tracked dirs stay with the
-        // process harness.
-        specsDir: path.join(main, ".mstar", "specs"),
+        // Undeclared, and `.agents/` is not gitignored, so the default
+        // tracked corpus is committable and follows the caller's checkout.
+        specsDir: path.join(nested, ".agents", "specs"),
         // The nested checkout carries no harness of its own, so its probe
         // stays null while the top-level answers come from the control root.
         local: { harnessDir: null },

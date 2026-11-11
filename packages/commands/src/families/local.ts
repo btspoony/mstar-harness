@@ -587,6 +587,12 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         });
         if (unnamedStart !== undefined) return unnamedStart;
         const startDir = input.path === undefined ? context.cwd : resolveCliPath(input.path, context.cwd);
+        // The `.agents/<kind>/` default belongs to the checkout, never to the
+        // harness's parent: a harness configured outside the repository (or
+        // nested below it) would otherwise place the created corpus beside
+        // itself, where nobody can commit it. Git's top level is the checkout;
+        // outside Git the start directory is the only identity available.
+        const repoRoot = probeCheckoutRoot(startDir) ?? startDir;
         // `controlRoot` is a HARNESS dir, not a workspace boundary; feeding it
         // as `workspaceRoot` makes the resolver refuse the very harness it
         // sits inside (the boundary contains the answer). Resolve from the
@@ -630,9 +636,9 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             ...control,
             local: {
               harnessDir,
-              specsDir: harnessDir === null ? null : resolveSpecsDir(harnessDir, { create: false }),
-              knowledgeDir: harnessDir === null ? null : resolveKnowledgeDir(harnessDir, { create: false }),
-              adrDir: harnessDir === null ? null : resolveAdrDir(harnessDir, { create: false }),
+              specsDir: harnessDir === null ? null : resolveSpecsDir(harnessDir, { create: false, repoRoot }),
+              knowledgeDir: harnessDir === null ? null : resolveKnowledgeDir(harnessDir, { create: false, repoRoot }),
+              adrDir: harnessDir === null ? null : resolveAdrDir(harnessDir, { create: false, repoRoot }),
               workflowDir: harnessDir === null ? null : resolveWorkflowDir(startDir),
               projectDir: harnessDir === null ? null : resolveProjectDir(startDir),
               reviewDir: harnessDir === null ? null : resolveReviewDir(startDir),
@@ -647,9 +653,9 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         return ok("path.resolve", {
           startDir,
           harnessDir,
-          specsDir: resolveSpecsDir(harnessDir, { create: false }),
-          knowledgeDir: resolveKnowledgeDir(harnessDir, { create: false }),
-          adrDir: resolveAdrDir(harnessDir, { create: false }),
+          specsDir: resolveSpecsDir(harnessDir, { create: false, repoRoot }),
+          knowledgeDir: resolveKnowledgeDir(harnessDir, { create: false, repoRoot }),
+          adrDir: resolveAdrDir(harnessDir, { create: false, repoRoot }),
           workflowDir: resolveWorkflowDir(startDir),
           projectDir: resolveProjectDir(startDir),
           reviewDir: resolveReviewDir(startDir),

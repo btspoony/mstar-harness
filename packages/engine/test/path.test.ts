@@ -1129,6 +1129,64 @@ describe("resolveAdrDir (tracked-results chain)", () => {
   });
 });
 
+describe("resolvers — `repoRoot` anchors the `.agents/` default to a checkout", () => {
+  test("a harness outside the checkout keeps the created corpus inside it, not beside the harness", () => {
+    const root = tmpRoot("path-repo-root-anchor-");
+    try {
+      const checkout = join(root, "checkout");
+      const harness = join(root, "state", "harness");
+      mkdirSync(checkout, { recursive: true });
+      expect(resolveSpecsDir(harness, { repoRoot: checkout })).toBe(join(checkout, ".agents", "specs"));
+      expect(existsSync(join(checkout, ".agents", "specs"))).toBe(true);
+      expect(resolveKnowledgeDir(harness, { repoRoot: checkout })).toBe(join(checkout, ".agents", "knowledge"));
+      expect(resolveAdrDir(harness, { repoRoot: checkout })).toBe(join(checkout, ".agents", "adr"));
+      // Nothing is created beside the harness: that directory is not a checkout.
+      expect(existsSync(join(root, "state", ".agents"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("`repoRoot` also anchors the candidate chain, so a checkout's docs/specs wins", () => {
+    const root = tmpRoot("path-repo-root-chain-");
+    try {
+      const checkout = join(root, "checkout");
+      const harness = join(root, "state", "harness");
+      mkdirSync(join(checkout, "docs", "specs"), { recursive: true });
+      writeFileSync(join(checkout, "docs", "specs", "spec.md"), "# spec\n");
+      // Without an anchor the chain looks beside the harness and creates a
+      // default there; the anchor must make the checkout's own rung win.
+      expect(resolveSpecsDir(harness, { create: false, repoRoot: checkout })).toBe(join(checkout, "docs", "specs"));
+      expect(existsSync(join(root, "state", ".agents"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an omitted `repoRoot` keeps the harness dir's parent as the anchor", () => {
+    const root = tmpRoot("path-repo-root-omitted-");
+    try {
+      const harness = join(root, ".mstar");
+      expect(resolveSpecsDir(harness, { create: false })).toBe(join(root, ".agents", "specs"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("`.mstarc` stays authoritative when a `repoRoot` is passed", () => {
+    const root = tmpRoot("path-repo-root-declared-");
+    try {
+      const checkout = join(root, "checkout");
+      const harness = join(root, ".mstar");
+      mkdirSync(checkout, { recursive: true });
+      writeFileSync(join(root, ".mstarc"), "[config]\nspecs_dir=docs/specs\n");
+      expect(resolveSpecsDir(harness, { create: false, repoRoot: checkout })).toBe(join(root, "docs", "specs"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("scaffoldHarness", () => {
   test("creates the process dirs, the tracked corpora and the .mstarc declaration without writing status.json", async () => {
     const root = tmpRoot("path-scaffold-");
