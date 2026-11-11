@@ -37,7 +37,7 @@ Specs say what is now, knowledge says how to work and what was learned, ADRs say
 
 ## Layout defaults
 
-- Default: `.agents/knowledge/`, `.agents/specs/`, `.agents/adr/` — one default whether or not a harness runs; tracked, with no ignore rule that would drop the corpus.
+- Default: the repository's own `.agents/knowledge/`, `.agents/specs/`, `.agents/adr/` — one default whether or not a harness runs; tracked, with no ignore rule that would drop the corpus. "The repository's own" matters: the anchor is the checkout, never the harness directory's parent, so a harness configured outside the checkout cannot place the corpus where no commit reaches it.
 - `.mstarc` keys `knowledge_dir` / `specs_dir` / `adr_dir` are authoritative over that default; the value resolves relative to the `.mstarc` file's directory (an absolute path is used as given). Resolve the symbol before writing (`mstar path resolve`) rather than composing the default path.
 - Legacy candidates (`docs/specs/`, `docs/adr/`, `{HARNESS_DIR}/<kind>/`, `designs/`) are read-only compat rungs for projects that moved later; this contract needs none of them.
 
