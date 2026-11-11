@@ -395,13 +395,13 @@ export function collectLegacyArchiveReferenceTexts(skillsRoot: string): string[]
  * Input: `skillTexts` maps skill name → full SKILL.md text. `mstar-harness-
  * core` itself and non-`mstar-*` skills are exempt.
  *
- * - `mstar-coding-behavior` is independently usable and exempt from
- * mandatory Load Order and core-first declarations by exact name only.
- * - `mstar-doc-corpus` is the standalone document-corpus contract: it is
- * exempt from core-first by exact name only, because corpus authoring
- * precedes — and never requires — lifecycle loading.
- * - `mstar-engine-legacy` is exempt from core-first by exact name only
- * (the engine-absent condition archive declares its own conditional-load
+ * - `mstar-coding-behavior` is independently usable: exempt by exact name
+ * from both the Load Order section and the core-first requirement.
+ * - `mstar-doc-corpus` is the standalone document-corpus contract: exempt by
+ * exact name from both checks, because corpus authoring precedes — and
+ * never requires — lifecycle loading.
+ * - `mstar-engine-legacy` is exempt by exact name from both checks (the
+ * engine-absent condition archive declares its own conditional-load
  * boundary) and is inbound-only: its text must not contain any other
  * `mstar-*` name present in the linted corpus (the candidate names are the
  * corpus keys, so `@mstar-harness/engine` package prose and `mstar` CLI

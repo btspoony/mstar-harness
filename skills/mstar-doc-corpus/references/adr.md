@@ -19,7 +19,7 @@ Exempt: mechanical edits (formatting, renames, dependency bumps, regenerated out
 ```
 
 - **Bucket** — the fate: `proposed/`, `implemented/`, `rejected/`, `archived/`.
-- **Class** — the domain: `feature/`, `bug-fix/`, `simplification/`, `architecture/`, `process/`, `testing/`. There is no `refactor`: the judge is mechanical — observable behavior changes → `bug-fix` or `feature`; it does not → `simplification`.
+- **Class** — the domain: `feature/`, `bug-fix/`, `simplification/`, `architecture/`, `process/`, `testing/`. There is no `refactor`: the judge is mechanical — observable behavior changes → `bug-fix` or `feature`; it does not → `simplification`. Adding a class needs a validator change in the same change.
 - **Filename** — the record's **original** date plus a lowercase kebab topic. It never changes across a lifecycle move; only the bucket directory moves.
 
 ## Header and skeletons

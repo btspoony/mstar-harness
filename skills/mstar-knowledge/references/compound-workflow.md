@@ -69,7 +69,7 @@ Understand:
 - Which files/modules were involved
 - The plan_id if applicable (link to the registered workflow/plan identity)
 
-Discover related existing documents: with an active harness store, query its catalog; with none, search `{KNOWLEDGE_DIR}/**/*.md` by the Phase 2 overlap method and record `catalog: n/a (no store)` in the result. Read `{KNOWLEDGE_DIR}/README.md`, if present, as prose only.
+Discover related existing documents: with no initialized harness store, search `{KNOWLEDGE_DIR}/**/*.md` by the Phase 2 overlap method and record `catalog: n/a (no store)` in the result; with one, query its catalog — a store that is initialized but not active refuses, and its code is reported, as Phase 6 states. Read `{KNOWLEDGE_DIR}/README.md`, if present, as prose only.
 
 Classify the problem into a track (bug vs knowledge) and category using **`mstar-doc-corpus`** `references/category-mapping.md`.
 
