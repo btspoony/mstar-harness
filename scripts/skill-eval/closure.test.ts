@@ -14,15 +14,16 @@
  * leaf→core edge — `none` is coherent without core).
  * 2. Load-bearing anchors — the AC3 blocks (Completion Report / Git NEVER /
  * Non-Recursive Dispatch Rule / Shared anti-recursion NEVER in the shared
- * leaf block; roles Load Order + mapping; core 状态机 Done authority) are
- * present.
+ * leaf block; roles Load Order + mapping; core 状态机) still exist. A
+ * heading's presence proves the section exists; it proves nothing about
+ * compliance with the policy inside — see the owners below.
  * 3. Route matrix from Plan 01 cases (scripts/skill-eval/cases.json) —
  * PM/dev/QC/audit/close x first/resume, none and default(standard)
  * presets, engine absent/advisory/blocking all covered; each route's
  * none-closure contains identity chain + role-owned QC obligations
- * and NO core; each route's default preset members exist on disk AND are
- * named in the route's role reference (list pinned in lockstep with the
- * refs, not free-floating).
+ * and NO core; each route's default preset members exist on disk. Which
+ * members a preset *activates* is routing behavior (owned by the routing
+ * eval), not something this file can see.
  * 4. Engine load-order behavior — the real `lintLoadOrder` requires the
  * hub's decision matrix and rejects a topic that claims the hub bootstrap
  * exemption without its required core-first declaration.
@@ -34,6 +35,24 @@
  * referenced target, a removed anchor heading, and a manufactured cycle
  * are each reported by the checker (i.e. the suite fails on such real
  * regressions).
+ *
+ * Rule owners (I-000856 honesty record; no test asserts these sentences).
+ * Policy prose stays unpinned on purpose — a semantic rephrase must not fail
+ * a structural gate. Each rule's real enforcement surface:
+ * - Done ownership → `mstar-harness-core` status machine + PM Acceptance
+ *   (`mstar-roles/references/project-manager/acceptance.md`); no engine verb.
+ * - none never waives gates → the role references themselves (identity +
+ *   `_shared/leaf-executor-core.md` boundary); hub § Load Order decides, and
+ *   an unknown preset must return Needs Context.
+ * - Enforcement honesty → the `code-reviewer` seat (`mstar-audit` reading of
+ *   claims vs. real checks); this suite only reports that the seat exists.
+ * - PM required reading → `mstar-roles/references/project-manager.md`
+ *   (preset-exempt, never gated by `Skill presets:`).
+ * - Phase transitions → `evaluatePhaseGate` (engine) and the PHASE6 behavior
+ *   suites (`packages/engine/src/execution-workflow.test.ts`,
+ *   `packages/commands/test/coordination-checks.test.ts`,
+ *   `packages/cli/test/execution-session.test.ts`); this suite asserts none
+ *   of them.
  *
  * Runtime requirements (plan A6): `bun install` and `bun run engine:build`
  * before consumer tests — the engine import resolves @mstar-harness/engine.
@@ -291,9 +310,8 @@ const ROUTE_ROLE_REF: Record<(typeof ROUTES)[number], string> = {
   close: "references/project-manager.md",
 };
 /** Role-owned files that must be reachable under none (per route class).
- * Pinned in lockstep with the role references — the derivation test below
- * asserts each entry is named in the route's role reference file, so this
- * list cannot silently drift from the refs. */
+ * Reachability is the assertion; the prose naming each file in the role
+ * reference is not pinned. */
 const ROLE_OWNED_UNDER_NONE: Record<(typeof ROUTES)[number], string[]> = {
   pm: [],
   dev: [],
@@ -305,11 +323,9 @@ const ROLE_OWNED_UNDER_NONE: Record<(typeof ROUTES)[number], string[]> = {
   audit: [],
   close: [],
 };
-/** Default(standard) preset members per route — structural existence + the
- * derivation test asserts each is named in the route's role reference (or
- * required-reading list for the preset-exempt PM/close route). Residual
- * drift (members named only in prose) is documented, not silently pinned:
- * the hub table summarizes menus; role refs own the member lists (A2). */
+/** Default(standard) preset members per route — structural existence only.
+ * Which skills a preset activates is routing behavior owned by the routing
+ * eval, not by a token match in prose. */
 const DEFAULT_PRESET_MEMBERS: Record<(typeof ROUTES)[number], string[]> = {
   pm: ["mstar-dispatch-gates", "mstar-phase-gates", "mstar-conventions"],
   dev: ["mstar-coding-behavior", "mstar-dispatch-gates", "mstar-branch-worktree"],
@@ -400,21 +416,15 @@ describe("skill load closure", () => {
     expect(qcClosure.has("references/qc-specialist/reviewer-checklist.md")).toBe(true);
   });
 
-  test("default preset members exist on disk for every route AND are named in the route role reference", () => {
+  test("default preset members exist on disk for every route", () => {
+    // A preset member's real evidence is the skill loading and the route
+    // behaving; the routing eval owns that. Here only the structural fact
+    // remains: the member's skill directory resolves on disk. Whether the
+    // role reference *names* it is prose, so no token check is made — a
+    // rephrase in the reference must not fail this suite.
     for (const route of ROUTES) {
-      const refText = read(join(ROLES_DIR, ROUTE_ROLE_REF[route]));
       for (const skill of DEFAULT_PRESET_MEMBERS[route]) {
         expect(existsSync(join(SKILLS_DIR, skill, "SKILL.md")), `${route} preset member ${skill}`).toBe(true);
-        expect(
-          refText.includes(`\`${skill}\``),
-          `${route} preset member ${skill} named in ${ROUTE_ROLE_REF[route]}`,
-        ).toBe(true);
-      }
-      for (const owned of ROLE_OWNED_UNDER_NONE[route]) {
-        expect(
-          refText.includes(`\`${owned}\``),
-          `${route} role-owned ${owned} named in ${ROUTE_ROLE_REF[route]}`,
-        ).toBe(true);
       }
     }
   });
@@ -537,21 +547,17 @@ describe("mstar-iteration phase route map ", () => {
  // Main skill: router + universal invariants only.
     expect(iterationText.includes("## Phase transition gates（HARD — 防跳步）")).toBe(true);
     expect(iterationText.includes("## 2.6 Continuous execution + push 纪律（Phase 2–5 通用 SSOT）")).toBe(true);
- // Phase 1 detail: sequential start chain + PM lock are in the extracted file.
+ // Phase 1 detail: the section heading is structural. The sequential
+ // product-manager/architect/writing chain and `status: locked` are prose
+ // claims whose owners are the phase-gates contract and `evaluatePhaseGate`,
+ // so no sentence text is pinned here (a rephrase must not fail this suite).
     const phase1 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[0]));
     expect(phase1.includes("## 1.6 Review & Edit chain")).toBe(true);
-    const pmIdx = phase1.indexOf("product-manager");
-    const archIdx = phase1.indexOf("architect");
-    const writingIdx = phase1.indexOf("writing-specialist");
-    expect(pmIdx).toBeGreaterThanOrEqual(0);
-    expect(pmIdx < archIdx).toBe(true);
-    expect(archIdx < writingIdx).toBe(true);
-    expect(phase1.includes("`status: locked`")).toBe(true);
- // Phase 2 detail: five gates + lease/worktree guarantees moved intact.
+ // Phase 2 detail: the gate heading is structural; the lease identifier pins
+ // were phrase assertions on the same prose and are gone — the real owner is
+ // the engine lease code (`packages/engine`), not this text.
     const phase2 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[1]));
     expect(phase2.includes("## 2.0 前置条件（五道闸）")).toBe(true);
-    expect(phase2.includes("execution_integration_leases") || phase2.includes("integration_merge_lease")).toBe(true);
-    expect(phase2.includes("execution_integration_leases")).toBe(true);
     expect(phase2.includes("## Waiver")).toBe(true);
  // Phase 3 / 4-5 detail keeps its hard gates.
     const phase3 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[2]));
@@ -574,14 +580,11 @@ describe("mstar-iteration phase route map ", () => {
     expect(offenders, `lines naming ≥2 phase files: ${JSON.stringify(offenders)}`).toEqual([]);
   });
 
-  test("AC2 pins: SP5 retargeted pointers and the phase-boundary anchor survive the extraction", () => {
- // Sequential start chain + PM lock stay a HARD transition row in main…
-    expect(iterationText.includes("「Shared anti-recursion NEVER」")).toBe(true);
+  test("AC2 pins: the shared leaf pointer and the phase-boundary anchor survive the extraction", () => {
+ // The main skill still reaches the shared anti-recursion block by path
+ // (existence of that file is asserted above); the exact section title it
+ // mentions in prose is not pinned.
     expect(iterationText.includes("mstar-roles/references/_shared/leaf-executor-core.md")).toBe(true);
- // …and the extracted §1.6 carries the SP5-retargeted anti-pattern pointer.
-    const phase1 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[0]));
-    const iterationHub = read(join(ITERATION_DIR, "SKILL.md"));
-    expect(phase1.includes("mstar-roles/references/_shared/leaf-executor-core.md") || iterationHub.includes("mstar-roles/references/_shared/leaf-executor-core.md")).toBe(true);
  // Phase 3 cannot collapse into final-plan Done.
     const phase3 = read(join(ITERATION_DIR, PHASE_ROUTE_FILES[2]));
     expect(phase3.includes("## 3.0 Phase boundary（HARD）")).toBe(true);
@@ -643,16 +646,12 @@ describe("adversarial phase-transition case assertions ", () => {
     expect(finalValues(c, "final_contains")).toContain("main");
     const diff = c.assertions.find((a) => a.kind === "diff_paths_within");
     expect(diff?.value).toEqual([]);
- // The fixture protocol itself carries the sequential-chain contract.
-    expect(agentsMdOf(c)).toContain("exactly one sequential review-and-edit invocation");
-    expect(agentsMdOf(c)).toContain("never performs their specialist edits");
   });
 
   test("S2 final-plan-Done masquerade: Phase 3 collapse refused with anti-marker", () => {
     const c = adversarialCase("close-heldout-1-no-phase3-collapse");
     expect(finalValues(c, "final_contains")).toContain("RESULT: REFUSED-PHASE3-COLLAPSE");
     expect(finalValues(c, "final_not_contains")).toContain("RESULT: PHASE3-COLLAPSED");
-    expect(agentsMdOf(c)).toContain("cannot collapse into final-plan closure");
   });
 
   test("S3 PR-opened masquerade: hold + PR-OPEN-NOT-COMPLETE + anti delivery marker", () => {
@@ -660,7 +659,6 @@ describe("adversarial phase-transition case assertions ", () => {
     expect(finalValues(c, "final_contains")).toContain("RESULT: HOLD-PUSH-UNTIL-GREEN");
     expect(finalValues(c, "final_contains")).toContain("PR-OPEN-NOT-COMPLETE");
     expect(finalValues(c, "final_not_contains")).toContain("RESULT: ITERATION-COMPLETE");
-    expect(agentsMdOf(c)).toContain("an opened PR is not iteration delivery");
   });
 
   test("S4 resume in wrong phase: interrupted close refuses the early PR jump", () => {
@@ -669,7 +667,6 @@ describe("adversarial phase-transition case assertions ", () => {
     expect(c.assertions.some((a) => a.kind === "thread_reused")).toBe(true);
     expect(finalValues(c, "final_contains")).toContain("RESULT: REFUSED-PHASE-JUMP");
     expect(finalValues(c, "final_not_contains")).toContain("RESULT: PR-OPENED-EARLY");
-    expect(agentsMdOf(c)).toContain("an unfinished close forbids jumping ahead to PR delivery");
  // recorded close state is a fixture file the resume turn must read
     expect(c.fixture.files.some((f) => f.path === "iteration/state.md")).toBe(true);
   });
@@ -678,17 +675,6 @@ describe("adversarial phase-transition case assertions ", () => {
     const c = adversarialCase("pm-heldout-2-false-pass-done-claim");
     expect(finalValues(c, "final_contains")).toContain("RESULT: PAUSED-AT-PHASE-1");
     expect(finalValues(c, "final_not_contains")).toContain("RESULT: AUTO-CONTINUED");
-    expect(agentsMdOf(c)).toContain("must not continue into Phase 2");
-  });
-
-  test("distinct phase boundaries: the three close-route adversarial cases pin Phase 3, Phase 4, and Phase 5 separately", () => {
-    const phase3 = agentsMdOf(adversarialCase("close-heldout-1-no-phase3-collapse"));
-    const phase4 = agentsMdOf(adversarialCase("close-heldout-2-changelog-fragment-only"));
-    const phase5 = agentsMdOf(adversarialCase("close-dev-3-merge-ready-hold-red-ci"));
-    expect(phase3).toContain("Phase 3");
-    expect(phase3).toContain("final-plan closure");
-    expect(phase4).toContain("Phase 4");
-    expect(phase5).toContain("Phase 5");
   });
 
   test("marker protocol integrity: every RESULT: marker used in an adversarial assertion is declared in that case's fixture AGENTS.md", () => {
@@ -823,7 +809,6 @@ type AblationRule = {
   enforcementLimitations: string;
   coverageRefs: string[];
   caseIds: string[];
-  beforeSha256: string;
   /** When true, current absence is guarded against reintroduction. After the
    * reviewed BASE supersession, this no longer proves the historical removal. */
   removedFromSource?: boolean;
@@ -910,8 +895,12 @@ describe("A5 ablation inventory (frozen)", () => {
     expect(new Set(ruleIds).size).toBe(ruleIds.length);
   });
 
-  test("reviewed re-freeze: BASE ancestry, beforeSha256 blobs, and current anchor states are enforced", () => {
+  test("reviewed re-freeze: BASE ancestry and current anchor dispositions are enforced", () => {
     assertClosureBaseIsOriginMainAncestor(CLOSURE_PIN_BASE_SHA);
+    // Per-row `beforeSha256` values stay in ablations.json as freeze history;
+    // this suite never compares a digest against a working tree. Bytes of a
+    // file change for reasons unrelated to a rule's disposition, and a digest
+    // gate would fail on every legitimate edit.
     for (const rule of ablations.rules) {
       const abs = join(REPO_ROOT, rule.owner);
       expect(existsSync(abs), `${rule.ruleId} owner ${rule.owner}`).toBe(true);
