@@ -1,3 +1,3 @@
-![dsh 会话中的一步：mstar-engine 状态行报告 workflow.selection.no-active，mstar_plan_bind 在注册 lifecycle 之前被拒绝，mstar_audit_validate 把评审报告脱敏为行号与类型，右侧栏「晨星工作流」面板读取同一份工作区状态](preview.zh.svg)
+![dsh 会话里的 Morning Star 交付流程：PM 写出计划，三个独立 QC 席位审查，executor 在功能分支上实现，PM Acceptance 把每条标准映射到证据并进入 merge-ready；右侧栏「晨星工作流」面板列出未关闭项、问题走势与迭代进度](preview.zh.svg)
 
-插件让工作区 harness 在 dsh 会话里可见、可约束：一条模型可见的 `mstar-engine` 目录行在 `agent/pre-step` 注入（引擎状态、迭代阶段门禁与工作区摘要）；三个原生工具承载共享 MCP 连接无法提供的门禁（`mstar_plan_bind` 绑定 coordinator 计划并写入本会话的 `executionBinding` 槽，`mstar_audit_validate` 执行 `mstar-audit` Hard Rule 4 的凭据扫描且只按行号与类型报告，`mstar_execution_clear` 只清除调用者自己的绑定）；右侧栏的「晨星工作流」面板通过 `/api/mstar/*` 读写同一份状态。
+Morning Star Harness 给 dsh 会话的是一套交付流程，而不是一段提示词：PM skill 写出计划，独立 QC 席位与 reviewer 审查，executor 在功能分支上实现，PM Acceptance 在交付进入 merge-ready 之前把每条标准映射到证据。插件把这份记录留在会话里 —— `agent/pre-step` 的模型可见 `mstar-engine` 行与工具调用上的三个原生门禁 —— 也留在右侧栏：「晨星工作流」面板从 CLI 写入的同一份工作区状态里列出未关闭项、问题走势与迭代进度。

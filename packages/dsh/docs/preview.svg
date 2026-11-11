@@ -1,61 +1,86 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="600" viewBox="0 0 1080 600" role="img" aria-label="Your dsh session, held to the Morning Star lifecycle." font-family="-apple-system, 'SF Pro Text', 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="600" viewBox="0 0 1080 600" role="img" aria-label="A delivery process your agents cannot skip." font-family="-apple-system, 'SF Pro Text', 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif">
   <rect width="1080" height="600" fill="#F5F6FC"/>
-  <text x="40" y="58" font-size="29" font-weight="600" fill="#16181D">Your dsh session, held to the Morning Star lifecycle.</text>
-  <text x="40" y="88" font-size="14.5" fill="#5B6472">A status row in the step stream, three native gates on tool calls, and the Morning Star Workflow panel in the sidebar.</text>
-  <rect x="40" y="116" width="536" height="404" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="68" y="150" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">IN THE SESSION</text>
-  <rect x="68" y="166" width="480" height="44" rx="10" fill="#F1F2F8"/>
-  <text x="86" y="193" font-size="13.5" fill="#363B46">Ship the README graphics</text>
-  <line x1="308" y1="210" x2="308" y2="226" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 221l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="68" y="226" width="480" height="62" rx="10" fill="#FFF8E8" stroke="#F0D9A8"/>
-  <rect x="86" y="241" width="196" height="22" rx="11" fill="#FBEBC8"/>
-  <text x="98" y="256" font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#8A5A12">workflow.selection.no-active</text>
-  <text x="86" y="278" font-size="11.5" fill="#7A6A4A">mstar-engine · appended at agent/pre-step</text>
-  <line x1="308" y1="288" x2="308" y2="304" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 299l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="68" y="304" width="480" height="66" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <circle cx="92" cy="330" r="9" fill="#FDECEC"/>
-  <path d="M89 326l6 6M95 326l-6 6" stroke="#B42318" stroke-width="1.7" fill="none" stroke-linecap="round"/>
-  <text x="110" y="330" font-size="13.5" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#16181D">mstar_plan_bind</text>
-  <text x="110" y="349" font-size="11.5" fill="#6B7280">refused · no active lifecycle · register one first</text>
-  <rect x="440" y="316" width="88" height="22" rx="11" fill="#FDECEC"/>
-  <text x="484" y="331" font-size="11" fill="#B42318" text-anchor="middle">refused</text>
-  <line x1="308" y1="370" x2="308" y2="382" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 377l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-  <rect x="68" y="382" width="480" height="66" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <circle cx="92" cy="408" r="9" fill="#E4F5EA"/>
-  <path d="M88 408l3 3 5-6" stroke="#17864A" stroke-width="1.8" fill="none" stroke-linecap="round"/>
-  <text x="110" y="408" font-size="13.5" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#16181D">mstar_audit_validate</text>
-  <text x="110" y="427" font-size="11.5" fill="#6B7280">review report · credential scan, line and type only</text>
-  <rect x="432" y="394" width="102" height="22" rx="11" fill="#EDF1FF"/>
-  <text x="483" y="409" font-size="11" fill="#3D4AA8" text-anchor="middle">redacted report</text>
-  <rect x="68" y="458" width="480" height="42" rx="10" fill="#F7F8FC" stroke="#E6E7EF" stroke-dasharray="4 3"/>
-  <text x="86" y="484" font-size="11.5" fill="#5B6472">mstar_execution_clear · clears only its own binding</text>
-  <rect x="596" y="116" width="444" height="404" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
-  <text x="624" y="150" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">IN THE SIDEBAR</text>
-  <rect x="624" y="166" width="81.6" height="26" rx="13" fill="transparent"/>
-  <text x="664.8" y="183" font-size="11.5" fill="#8A8A94" text-anchor="middle" font-weight="400">Overview</text>
-  <rect x="715.6" y="166" width="88.8" height="26" rx="13" fill="#EEF0FF"/>
-  <text x="760" y="183" font-size="11.5" fill="#3D4AA8" text-anchor="middle" font-weight="600">Workflows</text>
-  <rect x="814.4" y="166" width="67.2" height="26" rx="13" fill="transparent"/>
-  <text x="848" y="183" font-size="11.5" fill="#8A8A94" text-anchor="middle" font-weight="400">Issues</text>
-  <rect x="891.6" y="166" width="96" height="26" rx="13" fill="transparent"/>
-  <text x="939.6" y="183" font-size="11.5" fill="#8A8A94" text-anchor="middle" font-weight="400">Iterations</text>
-  <rect x="624" y="206" width="388" height="254" rx="12" fill="#F7F8FC"/>
-  <text x="644" y="236" font-size="14" font-weight="600" fill="#16181D">Morning Star Workflow</text>
-  <text x="644" y="256" font-size="11.5" fill="#6B7280">mstar-harness</text>
-  <line x1="644" y1="270" x2="992" y2="270" stroke="#E6E7EF"/>
-  <text x="644" y="292" font-size="12" fill="#8A8A94">Iteration</text>
-  <text x="992" y="292" font-size="12" fill="#363B46" text-anchor="end">execute</text>
-  <text x="644" y="314" font-size="12" fill="#8A8A94">Enforcement</text>
-  <text x="992" y="314" font-size="12" fill="#363B46" text-anchor="end">soft</text>
-  <text x="644" y="336" font-size="12" fill="#8A8A94">Next</text>
-  <text x="992" y="336" font-size="12" fill="#363B46" text-anchor="end">QC review</text>
-  <rect x="644" y="356" width="348" height="44" rx="9" fill="#FFFFFF" stroke="#C9CFFA"/>
-  <circle cx="664" cy="378" r="6" fill="#5B5BD6"/>
-  <text x="680" y="383" font-size="12.5" fill="#16181D">plan · README graphics</text>
-  <rect x="892" y="366" width="88" height="22" rx="11" fill="#EDF1FF"/>
-  <text x="936" y="381" font-size="10.5" fill="#3D4AA8" text-anchor="middle">bound</text>
-  <text x="624" y="486" font-size="11.5" fill="#6B7280">The panel and the CLI read and write the same workspace state.</text>
-  <rect x="40" y="540" width="14" height="14" rx="4" fill="#5B5BD6" opacity="0.18"/>
-  <path d="M43 547l3 3 5-7" stroke="#3D4AA8" stroke-width="1.6" fill="none" stroke-linecap="round"/>
-  <text x="64" y="552" font-size="12.5" fill="#363B46">Native gates: plan bind · audit validate · execution clear</text>
+  <text x="40" y="56" font-size="29" font-weight="600" fill="#16181D">A delivery process your agents cannot skip.</text>
+  <text x="40" y="86" font-size="14" fill="#5B6472">Morning Star's skills give every seat its role; the engine keeps the plan, the reviews and the acceptance on the record - inside your dsh session.</text>
+  <rect x="40" y="114" width="536" height="410" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="68" y="148" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">IN THE SESSION</text>
+  <rect x="68" y="162" width="480" height="40" rx="10" fill="#F1F2F8"/>
+  <text x="86" y="187" font-size="13.5" fill="#363B46">Ship the README graphics</text>
+  <line x1="308" y1="202" x2="308" y2="218" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 213l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="68" y="218" width="480" height="58" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="86" y="241" font-size="13" font-weight="600" fill="#16181D">PM clarifies and writes the plan</text>
+  <text x="86" y="260" font-size="10.5" fill="#6B7280">skill · project-manager</text>
+  <line x1="308" y1="276" x2="308" y2="292" stroke="#C3C8D4" stroke-width="1.4"/>
+  <line x1="143" y1="292" x2="473" y2="292" stroke="#C3C8D4" stroke-width="1.4"/>
+  <line x1="143" y1="292" x2="143" y2="306" stroke="#C3C8D4" stroke-width="1.4"/><path d="M139 301l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="68" y="306" width="150" height="50" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="84" y="328" font-size="12.5" font-weight="600" fill="#16181D">QC 1</text>
+  <text x="84" y="345" font-size="10.5" fill="#6B7280">independent seat</text>
+  <line x1="293" y1="292" x2="293" y2="306" stroke="#C3C8D4" stroke-width="1.4"/><path d="M289 301l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="218" y="306" width="150" height="50" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="234" y="328" font-size="12.5" font-weight="600" fill="#16181D">QC 2</text>
+  <text x="234" y="345" font-size="10.5" fill="#6B7280">independent seat</text>
+  <line x1="443" y1="292" x2="443" y2="306" stroke="#C3C8D4" stroke-width="1.4"/><path d="M439 301l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="368" y="306" width="150" height="50" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="384" y="328" font-size="12.5" font-weight="600" fill="#16181D">QC 3</text>
+  <text x="384" y="345" font-size="10.5" fill="#6B7280">independent seat</text>
+  <line x1="143" y1="362" x2="473" y2="362" stroke="#C3C8D4" stroke-width="1.4"/>
+  <line x1="308" y1="362" x2="308" y2="370" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 366l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="68" y="370" width="480" height="50" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="86" y="393" font-size="12.5" font-weight="600" fill="#16181D">Implement on a feature branch</text>
+  <text x="86" y="410" font-size="10.5" fill="#6B7280">executor · per-task review</text>
+  <line x1="308" y1="420" x2="308" y2="436" stroke="#C3C8D4" stroke-width="1.4"/><path d="M304 431l4 5 4-5" stroke="#C3C8D4" stroke-width="1.4" fill="none" stroke-linecap="round"/>
+  <rect x="68" y="436" width="480" height="46" rx="10" fill="#EDF7F0" stroke="#CDE8D6"/>
+  <circle cx="90" cy="459" r="9" fill="#DFF2E5"/>
+  <path d="M86 459l3 3 5-6" stroke="#17864A" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <text x="110" y="464" font-size="12.5" fill="#1D3B29">PM Acceptance · evidence per criterion</text>
+  <rect x="440" y="448" width="88" height="22" rx="11" fill="#DFF2E5"/>
+  <text x="484" y="463" font-size="10.5" fill="#17864A" text-anchor="middle">merge-ready</text>
+  <text x="68" y="508" font-size="11" fill="#6B7280">Skills give every seat its role; the engine records every plan, review and acceptance.</text>
+  <rect x="596" y="114" width="444" height="410" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="624" y="148" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">IN THE SIDEBAR</text>
+  <rect x="620" y="158" width="78" height="24" rx="12" fill="#EEF0FF"/>
+  <text x="659" y="174" font-size="11" fill="#3D4AA8" text-anchor="middle" font-weight="600">Overview</text>
+  <rect x="706" y="158" width="60" height="24" rx="12" fill="transparent"/>
+  <text x="736" y="174" font-size="11" fill="#8A8A94" text-anchor="middle" font-weight="400">Issues</text>
+  <rect x="774" y="158" width="76" height="24" rx="12" fill="transparent"/>
+  <text x="812" y="174" font-size="11" fill="#8A8A94" text-anchor="middle" font-weight="400">Workflows</text>
+  <rect x="858" y="158" width="72" height="24" rx="12" fill="transparent"/>
+  <text x="894" y="174" font-size="11" fill="#8A8A94" text-anchor="middle" font-weight="400">Iterations</text>
+  <line x1="624" y1="192" x2="1012" y2="192" stroke="#E6E7EF"/>
+  <text x="624" y="216" font-size="13.5" font-weight="600" fill="#16181D">Overview</text>
+  <text x="1012" y="216" font-size="10.5" fill="#8A8A94" text-anchor="end">All projects · 176 open items</text>
+  <text x="624" y="246" font-size="10.5" fill="#8A8A94">Workflows in progress</text>
+  <text x="624" y="266" font-size="12" font-weight="600" fill="#16181D">Empty</text>
+  <text x="624" y="284" font-size="10.5" fill="#6B7280">Read succeeded, nothing here yet.</text>
+  <text x="848" y="246" font-size="10.5" fill="#8A8A94">Open items</text>
+  <circle cx="854" cy="262" r="3.5" fill="#F0736A"/>
+  <text x="866" y="266" font-size="11" fill="#363B46">high</text>
+  <text x="1012" y="266" font-size="11" fill="#363B46" text-anchor="end">3</text>
+  <circle cx="854" cy="282" r="3.5" fill="#F2A65A"/>
+  <text x="866" y="286" font-size="11" fill="#363B46">medium</text>
+  <text x="1012" y="286" font-size="11" fill="#363B46" text-anchor="end">29</text>
+  <circle cx="854" cy="302" r="3.5" fill="#8B93A3"/>
+  <text x="866" y="306" font-size="11" fill="#363B46">low</text>
+  <text x="1012" y="306" font-size="11" fill="#363B46" text-anchor="end">97</text>
+  <circle cx="854" cy="322" r="3.5" fill="#C3C8D4"/>
+  <text x="866" y="326" font-size="11" fill="#363B46">nit</text>
+  <text x="1012" y="326" font-size="11" fill="#363B46" text-anchor="end">47</text>
+  <text x="624" y="378" font-size="10.5" fill="#8A8A94">Issue flow</text>
+  <text x="1012" y="378" font-size="9.5" fill="#A6ACB8" text-anchor="end">2026-08-26 → 2026-11-11</text>
+  <line x1="624" y1="432" x2="1012" y2="432" stroke="#E6E7EF"/>
+  <path d="M624 428 L688 424 L688 420 L752 420 L752 412 L816 412 L816 404 L880 404 L880 394 L944 394 L944 386 L1012 386" fill="none" stroke="#5B5BD6" stroke-width="1.8" stroke-linejoin="round"/>
+  <path d="M624 430 L688 430 L688 428 L752 428 L752 424 L816 424 L816 422 L880 422 L880 418 L944 418 L944 416 L1012 416" fill="none" stroke="#9AA3B2" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="624" y="446" font-size="9" fill="#A6ACB8">2026-08-26</text>
+  <text x="1012" y="446" font-size="9" fill="#A6ACB8" text-anchor="end">2026-11-11</text>
+  <line x1="624" y1="464" x2="650" y2="464" stroke="#5B5BD6" stroke-width="1.8"/>
+  <text x="656" y="468" font-size="9.5" fill="#6B7280">caught (cumulative)</text>
+  <line x1="770" y1="464" x2="796" y2="464" stroke="#9AA3B2" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="802" y="468" font-size="9.5" fill="#6B7280">retired (cumulative)</text>
+  <circle cx="47" cy="560" r="7" fill="#EEF0FF"/>
+  <path d="M43.5 560l2.5 2.5 4-5" stroke="#3D4AA8" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  <text x="64" y="564" font-size="12" fill="#363B46">Skills: PM, executor, QC seats and reviewers - one process, not a prompt.</text>
+  <circle cx="47" cy="582" r="7" fill="#EEF0FF"/>
+  <path d="M44 582h6M47 579v6" stroke="#3D4AA8" stroke-width="1.4" stroke-linecap="round"/>
+  <text x="64" y="586" font-size="12" fill="#363B46">Engine: plans, findings, reviews and acceptance stay on the record.</text>
 </svg>
