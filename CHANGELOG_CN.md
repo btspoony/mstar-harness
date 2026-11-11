@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [4.5.2] - 2026-11-11
+
+### Harness
+
+- 将 **README 交付工作流 Mermaid 图**替换为设计过的 Archify 图，发布为 `assets/workflow.svg`（英文）与 `assets/workflow.zh.svg`（简体中文）：用一条紧凑的 S 形路径代替纵向长图，并保留审查、PM Acceptance、下一个计划与 CI 门禁回环。
+- 两张 SVG 都是规范导出：通过 `prefers-color-scheme` 适配主题、自包含、不含脚本与外部引用。
+- 两份 README 现在也在 Install 之前展示产品预览图（`packages/dsh/docs/preview.svg` / `preview.zh.svg`）。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.5.2**。
+
 ## [4.5.1] - 2026-11-11
 
 ### Harness

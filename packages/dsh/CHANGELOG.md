@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.5.2] - 2026-11-11
+
+### Changed
+
+- **The dsh plugin gains its own plugin-detail page.** `locale/en.json` and `locale/zh.json` add `meta.detail` (`docs/DETAIL.md` / `docs/DETAIL.zh.md`), and each document renders a new product illustration (`docs/preview.svg` / `docs/preview.zh.svg`): the delivery process inside a session (PM plan, executor on a feature branch, three independent QC seats, PM Acceptance to merge-ready) beside the Morning Star Workflow sidebar panel with open items, issue flow and iteration progress.
+- The illustration names only what ships: the session-side delivery roles, the sidebar panel, and the engine that records plans, reviews and acceptance. `package.json` ships the two documents and the two images and exposes them under `./docs/*`.
+- No README change belongs to this part of the change set.
+
+- Version alignment with harness **4.5.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.5.2**.
+
 ## [4.5.1] - 2026-11-11
 
 ### Harness

@@ -8,6 +8,18 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.5.2] - 2026-11-11
+
+### Harness
+
+- Replaced the **README delivery workflow Mermaid block** with a designed Archify diagram, shipped as `assets/workflow.svg` (English) and `assets/workflow.zh.svg` (Simplified Chinese): one compact S-shaped path instead of a tall column, with the review, PM Acceptance, next-plan and CI-gate loops kept explicit.
+- Both SVGs are canonical exports: theme-aware through `prefers-color-scheme`, self-contained, and free of scripts and external references.
+- Both READMEs now also show the product preview illustration (`packages/dsh/docs/preview.svg` / `preview.zh.svg`) above the Install section.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.5.2**.
+
 ## [4.5.1] - 2026-11-11
 
 ### Harness
