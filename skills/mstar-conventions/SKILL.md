@@ -29,9 +29,9 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 | `{PLAN_DIR}` | `{HARNESS_DIR}/plans/` |
 | `{SDD_DIR}` | `{HARNESS_DIR}/sdd/<plan-id>/`（SDD 运行时 scratch + review bundle；gitignored） |
 | `{ITERATION_DIR}` | `{HARNESS_DIR}/iterations/` |
-| `{KNOWLEDGE_DIR}` | `.agents/knowledge/`（不是 `{HARNESS_DIR}/knowledge/`）；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
-| `{SPECS_DIR}` | `.agents/specs/`（不是 `{HARNESS_DIR}/specs/`）；解析见下文「`{SPECS_DIR}` 解析」 |
-| `{ADR_DIR}` | `.agents/adr/`（不是 `{HARNESS_DIR}/adr/`）；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
+| `{KNOWLEDGE_DIR}` | `.agents/knowledge/`；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
+| `{SPECS_DIR}` | `.agents/specs/`；解析见下文「`{SPECS_DIR}` 解析」 |
+| `{ADR_DIR}` | `.agents/adr/`；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
 | `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/` (default; `.mstarc` `workflow_dir` overrides it) — retained ordinary bodies, append-only `notes.jsonl` and workflow-owned `reports/` (e.g. `<workflow-id>/reports/e2e.md`) |
 | `{PROJECT_DIR}` | `{HARNESS_DIR}/projects/`（默认；`.mstarc` `project_dir` 声明时用声明值）——project 层目录；旧 `roadmap.md` 仅作文件 transport/history |
 | `{REVIEW_DIR}` | `{HARNESS_DIR}/reviews/`（默认；`.mstarc` `review_dir` 声明时用声明值）——review 运行目录树（codebase audit / PR / branch / diff review 的 report 与 evidence；`mstar audit scaffold` 写入，`mstar pr-review report-path` 解析；gitignored） |
