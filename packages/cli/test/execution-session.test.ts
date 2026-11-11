@@ -1355,13 +1355,13 @@ describe("mstar status validate — disclosed authority state", () => {
     expect(envelope.code).toBe("store.corrupt");
     expect(envelope.message).toContain("Self-check recovery:");
     expect(envelope.message).toContain("not a readable regular store file");
-    expect(envelope.details).toMatchObject({
-      state: "unreadable",
-      selfCheck: {
-        couldNotRead: expect.stringContaining("not a readable regular store file"),
-        recovery: expect.stringContaining("Preserve the corrupt database and legacy sources"),
-      },
-    });
+    const details = envelope.details as { state?: string; selfCheck?: { couldNotRead?: string; recovery?: string } };
+    expect(details.state).toBe("unreadable");
+    expect(details.selfCheck?.couldNotRead).toContain("not a readable regular store file");
+    // The self-check names supported verb families the operator can actually run,
+    // not an online restore of a store no reader can inventory.
+    expect(details.selfCheck?.recovery).toContain("mstar store init --harness");
+    expect(details.selfCheck?.recovery).toContain("mstar catalog discover --harness");
   });
 });
 
