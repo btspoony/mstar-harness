@@ -76,7 +76,7 @@ One explanation has one home; essential contract facts may repeat locally. Each 
 Topic skills below are **presets activated by PM**, never unconditional dependencies; selection rule → **`mstar-roles`** § Load Order. The identity, responsibilities and NEVER rules above stand alone; this section lists only this role's preset members. When active, load in order:
 
 1. `mstar-harness-core` → `mstar-dispatch-gates` → `mstar-coding-behavior` (surgical edits)
-2. Typically: `mstar-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-artifacts` (when writing under knowledge or plan trees); `mstar-prose` when the deliverable's prose is judged against HEAD (on demand, never a default load); `mstar-skill-authoring` when the deliverable is a skill body
+2. Typically: `mstar-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-doc-corpus` (corpus shape when the deliverable is a knowledge, specs or ADR document); `mstar-artifacts` (when writing plan or review artifacts); `mstar-prose` when the deliverable's prose is judged against HEAD (on demand, never a default load); `mstar-skill-authoring` when the deliverable is a skill body
 3. Host: `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`)
 
 ## Completion Report

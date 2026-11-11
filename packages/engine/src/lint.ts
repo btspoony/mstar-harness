@@ -1097,7 +1097,7 @@ export function lintSpecsTree(dir: string): GateResult {
   return { ok: violations.length === 0, violations };
 }
 
-/** ADR lifecycle buckets (`docs/adr/README.md` § Directory shape). `archived`
+/** ADR lifecycle buckets (`mstar-doc-corpus/references/adr.md` § Directory shape). `archived`
  * is the terminal bucket: only an implemented-shaped record may enter it. */
 export const ADR_BUCKETS = ["proposed", "implemented", "rejected", "archived"] as const;
 export type AdrBucket = (typeof ADR_BUCKETS)[number];
@@ -1282,7 +1282,7 @@ function checkAdrRecord(path: string, relPath: string, bucket: AdrBucket, push: 
 }
 
 /**
- * Lint an ADR tree (`docs/adr/README.md` contract, one walk of the root):
+ * Lint an ADR tree (`mstar-doc-corpus/references/adr.md` contract, one walk of the root):
  * bucket and class membership, `Status` agreeing with the directory, the
  * required and banned sections per bucket, the `Archived:` line on archived
  * records, filename shape, fence closure, and no `INDEX.md`.

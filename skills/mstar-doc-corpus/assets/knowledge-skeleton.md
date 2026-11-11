@@ -1,9 +1,11 @@
-# Resolution templates for mstar-knowledge
+# Knowledge document skeletons (`mstar-doc-corpus`)
+
+Body skeleton per track. Frontmatter fields are indexed by `references/knowledge-format.md` and owned by `references/schema.yaml`.
 
 ## Bug track template
 
 ```markdown
-<!-- frontmatter fields: see references/schema.yaml (bug track adds symptoms/root_cause/resolution_type) -->
+<!-- frontmatter fields: mstar-doc-corpus references/schema.yaml (bug track adds symptoms/root_cause/resolution_type) -->
 
 # <Title>
 

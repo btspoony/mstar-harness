@@ -64,7 +64,7 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
 
 The durable summary is not a paste of raw reports. It is a small gate record sufficient for handoff after `{SDD_DIR}` is unavailable.
 
-Decision rationale that must outlive the plan is not a durable-summary field: it is written as an ADR under `docs/adr/` (that tree's `README.md` states the contract), and the summary keeps a pointer to the record.
+Decision rationale that must outlive the plan is not a durable-summary field: it is written as an ADR under `docs/adr/` (contract: `mstar-doc-corpus/references/adr.md`), and the summary keeps a pointer to the record.
 
 ## Residual findings（R#）：权威在哪、和主 plan 谁先谁后？
 

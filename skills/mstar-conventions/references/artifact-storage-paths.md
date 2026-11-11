@@ -28,7 +28,7 @@
 | **迭代 README（散文）** | `.mstar/iterations/README.md`（gitignored；可选导览散文，**不是**登记索引 — 见下） | `mstar-iteration`（散文指向；**不再**维护「一行 = 一次迭代」） |
 | **issue/catalog/roadmap/milestone/execution store** | `.mstar/store.db`（进程/control harness 根；gitignored；issues、catalog、project_roadmaps/project_milestones 与 execution_* 路由/plan/lease/session/冻结输入权威） | `mstar issue …` / `mstar catalog …` / `mstar roadmap …` / `mstar milestone …` / 公共 workflow/plan 动词；读取 `mstar status validate` / `mstar plan show` |
 | **规格** | `{SPECS_DIR}/`（默认 `.mstar/specs/`；解析 `.mstarc` `specs_dir` → `{HARNESS_DIR}/specs` → `.agents/specs` → `docs/specs` → 根 `specs` → legacy `designs`，见 `mstar-conventions`） | `mstar-artifacts` |
-| **ADR** | `{ADR_DIR}/<slug>.md`（默认 `.mstar/adr/`；解析 `.mstarc` `adr_dir` → `{HARNESS_DIR}/adr` → `.agents/adr` → `docs/adr`） | `mstar-artifacts` |
+| **ADR** | `{ADR_DIR}/{bucket}/{class}/yyyy-mm-dd-topic.md`（默认 `.mstar/adr/`；解析 `.mstarc` `adr_dir` → `{HARNESS_DIR}/adr` → `.agents/adr` → `docs/adr`；命名与生命周期 → `mstar-doc-corpus/references/adr.md`） | `mstar-doc-corpus`（记录形状 / 生命周期） |
 | **harness AGENTS** | `.agents/AGENTS.md`（tracked；`.mstar/` 整体被忽略，其中的规则文件无法共享） | `mstar harness scaffold` 写；PM 维护 |
 | **archived knowledge** | `.mstar/archived/knowledge/`（保留原 `{KNOWLEDGE_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-artifacts` |
 | **archived specs** | `.mstar/archived/specs/`（保留原 `{SPECS_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-artifacts` |
@@ -57,4 +57,4 @@
 
 ## `<category>` 取值
 
-知识文档的 `<category>` 子目录由 `mstar-knowledge` 的 `references/category-mapping.md` 定义，在 `{KNOWLEDGE_DIR}` 下按需创建。示例：`runtime-errors/`、`conventions/`、`architecture-patterns/` 等。
+知识文档的 `<category>` 子目录由 **`mstar-doc-corpus`** 的 `references/category-mapping.md` 定义，在 `{KNOWLEDGE_DIR}` 下按需创建。示例：`runtime-errors/`、`conventions/`、`architecture-patterns/` 等。

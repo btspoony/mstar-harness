@@ -21545,7 +21545,7 @@ function validateSchemaYaml(frontmatterText) {
   const violations = [];
   const doc = parseYamlLite(frontmatterText);
   if (doc === null) {
-    violations.push(violation10("medium", "compound.schema.missing-frontmatter", "no `---` YAML frontmatter block found — knowledge docs must open with the schema.yaml contract (mstar-knowledge/references/schema.yaml)", "add the fenced frontmatter with module, date, problem_type, category, severity"));
+    violations.push(violation10("medium", "compound.schema.missing-frontmatter", "no `---` YAML frontmatter block found — knowledge docs must open with the schema.yaml contract (mstar-doc-corpus/references/schema.yaml)", "add the fenced frontmatter with module, date, problem_type, category, severity"));
     return { ok: false, violations };
   }
   const isStr = (v) => typeof v === "string";
@@ -22399,6 +22399,8 @@ function lintLoadOrder(skillTexts) {
       continue;
     if (name === "mstar-coding-behavior")
       continue;
+    if (name === "mstar-doc-corpus")
+      continue;
     if (name === "mstar-engine-legacy") {
       for (const referenced of Object.keys(skillTexts)) {
         if (referenced === name || !referenced.startsWith("mstar-") || !text4.includes(referenced))
@@ -22409,7 +22411,7 @@ function lintLoadOrder(skillTexts) {
     }
     const section = extractLoadOrderSection(text4);
     if (section === null) {
-      violations.push(violation12("medium", "roles.loadorder.section.missing", `skill "${name}" has no Load Order / First action section — mstar-* topics require a load declaration except the exact-name exemptions mstar-coding-behavior and mstar-engine-legacy (mstar-harness-core load contract; mstar-roles § Load Order)`, `add a "## Load Order" section: topics name mstar-harness-core first; mstar-roles declares the Skill presets decision matrix`));
+      violations.push(violation12("medium", "roles.loadorder.section.missing", `skill "${name}" has no Load Order / First action section — mstar-* topics require a load declaration except the exact-name exemptions mstar-coding-behavior, mstar-doc-corpus and mstar-engine-legacy (mstar-harness-core load contract; mstar-roles § Load Order)`, `add a "## Load Order" section: topics name mstar-harness-core first; mstar-roles declares the Skill presets decision matrix`));
       continue;
     }
     if (name === "mstar-roles") {
@@ -22424,7 +22426,7 @@ function lintLoadOrder(skillTexts) {
       continue;
     }
     if (!section.includes("mstar-harness-core")) {
-      violations.push(violation12("medium", "roles.loadorder.core.missing", `skill "${name}" Load Order section does not declare mstar-harness-core as its first dependency (mstar-harness-core load contract: exceptions are the mstar-roles hub bootstrap, exact standalone mstar-coding-behavior, and the inbound-only mstar-engine-legacy archive)`, "name mstar-harness-core first in the Load Order section"));
+      violations.push(violation12("medium", "roles.loadorder.core.missing", `skill "${name}" Load Order section does not declare mstar-harness-core as its first dependency (mstar-harness-core load contract: exceptions are the mstar-roles hub bootstrap, the exact standalone mstar-coding-behavior and mstar-doc-corpus, and the inbound-only mstar-engine-legacy archive)`, "name mstar-harness-core first in the Load Order section"));
     }
   }
   return { ok: violations.length === 0, violations };

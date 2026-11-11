@@ -15,12 +15,15 @@
  * core stays the lifecycle/authorization semantic authority; the LOAD
  * SELECTION authority is `mstar-roles` (Spec A2: single load-selection
  * authority, no second mandatory-role table). Direct topics declare core
- * first in their Load Order / First action section, except standalone
- * `mstar-coding-behavior`, which has no mandatory load declaration, and
- * the `mstar-roles` hub bootstrap, which declares its identity→preset
- * decision matrix (identity-first, `Skill presets:` none/standard arms,
- * role-owned methods, unknown-preset refusal) and conditional core
- * conflict-authority pointer. All exemptions are keyed on exact names.
+ * first in their Load Order / First action section, except three
+ * exemptions keyed on exact names, each of which skips both the section
+ * and the core-first check: standalone `mstar-coding-behavior`, the
+ * standalone `mstar-doc-corpus` corpus contract, and the inbound-only
+ * `mstar-engine-legacy` archive. The `mstar-roles` hub keeps its section
+ * and declares its identity→preset decision matrix there (identity-first,
+ * `Skill presets:` none/standard arms, role-owned methods,
+ * unknown-preset refusal) plus the conditional core conflict-authority
+ * pointer, in place of core-first.
  * - `mstar-engine-legacy` SKILL.md § Decision Rules (inbound-only) — the
  * engine-absent condition archive never names another `mstar-*` topic:
  * runtime skills may point at the archive, the archive never points at
@@ -392,10 +395,13 @@ export function collectLegacyArchiveReferenceTexts(skillsRoot: string): string[]
  * Input: `skillTexts` maps skill name → full SKILL.md text. `mstar-harness-
  * core` itself and non-`mstar-*` skills are exempt.
  *
- * - `mstar-coding-behavior` is independently usable and exempt from
- * mandatory Load Order and core-first declarations by exact name only.
- * - `mstar-engine-legacy` is exempt from core-first by exact name only
- * (the engine-absent condition archive declares its own conditional-load
+ * - `mstar-coding-behavior` is independently usable: exempt by exact name
+ * from both the Load Order section and the core-first requirement.
+ * - `mstar-doc-corpus` is the standalone document-corpus contract: exempt by
+ * exact name from both checks, because corpus authoring precedes — and
+ * never requires — lifecycle loading.
+ * - `mstar-engine-legacy` is exempt by exact name from both checks (the
+ * engine-absent condition archive declares its own conditional-load
  * boundary) and is inbound-only: its text must not contain any other
  * `mstar-*` name present in the linted corpus (the candidate names are the
  * corpus keys, so `@mstar-harness/engine` package prose and `mstar` CLI
@@ -422,6 +428,9 @@ export function lintLoadOrder(skillTexts: Record<string, string>): GateResult {
   for (const [name, text] of Object.entries(skillTexts)) {
     if (!name.startsWith("mstar-") || name === "mstar-harness-core") continue;
     if (name === "mstar-coding-behavior") continue;
+    // Standalone corpus skill: skips both the Load Order section and the
+    // core-first check — it owns document shape and loads no lifecycle topic.
+    if (name === "mstar-doc-corpus") continue;
     if (name === "mstar-engine-legacy") {
       // Inbound-only archive: core-first-exempt by exact name, and its text
       // must never name another mstar-* skill of the linted corpus.
@@ -447,7 +456,7 @@ export function lintLoadOrder(skillTexts: Record<string, string>): GateResult {
         violation(
           "medium",
           "roles.loadorder.section.missing",
-          `skill "${name}" has no Load Order / First action section \u2014 mstar-* topics require a load declaration except the exact-name exemptions mstar-coding-behavior and mstar-engine-legacy (mstar-harness-core load contract; mstar-roles \u00a7 Load Order)`,
+          `skill "${name}" has no Load Order / First action section \u2014 mstar-* topics require a load declaration except the exact-name exemptions mstar-coding-behavior, mstar-doc-corpus and mstar-engine-legacy (mstar-harness-core load contract; mstar-roles \u00a7 Load Order)`,
           `add a "## Load Order" section: topics name mstar-harness-core first; mstar-roles declares the Skill presets decision matrix`,
         ),
       );
@@ -491,7 +500,7 @@ export function lintLoadOrder(skillTexts: Record<string, string>): GateResult {
         violation(
           "medium",
           "roles.loadorder.core.missing",
-          `skill "${name}" Load Order section does not declare mstar-harness-core as its first dependency (mstar-harness-core load contract: exceptions are the mstar-roles hub bootstrap, exact standalone mstar-coding-behavior, and the inbound-only mstar-engine-legacy archive)`,
+          `skill "${name}" Load Order section does not declare mstar-harness-core as its first dependency (mstar-harness-core load contract: exceptions are the mstar-roles hub bootstrap, the exact standalone mstar-coding-behavior and mstar-doc-corpus, and the inbound-only mstar-engine-legacy archive)`,
           "name mstar-harness-core first in the Load Order section",
         ),
       );

@@ -199,7 +199,7 @@ ACTIVE 的中途增减范围先经 `mstar plan bind --execution --workflow <id> 
 
 ## 1.5.5 产物边界（specs · iterations · knowledge）
 
-Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（HARD）；三棵树的落点、长期价值与写者 → **`mstar-artifacts`** `references/knowledge-and-designs.md` § 与公开文档目录的分工。
+Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（HARD）；三棵树的落点、长期价值与写者 → **`mstar-doc-corpus`**（SKILL.md § The three layers）与 **`mstar-artifacts`** `references/knowledge-and-designs.md`（iterations 与其它过程产物）。
 
 **写入边界**：Phase 1（含 §1.6）的规格落在 `<iteration-id>/specs/`；全局 `{SPECS_DIR}/` 在 Phase 3 iteration-close 提升时写入；`{KNOWLEDGE_DIR}/` 由 **`mstar-knowledge`** @ iteration-close 写入。
 

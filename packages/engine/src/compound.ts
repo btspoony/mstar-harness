@@ -4,10 +4,10 @@
  * and Maintain scope guarding.
  *
  * Spec sources (all embedded as constants — no runtime skill-file reads):
- * - mstar-knowledge/references/schema.yaml: required/optional frontmatter
+ * - skills/mstar-doc-corpus/references/schema.yaml: required/optional frontmatter
  *   fields, problem_type enum, severity enum, track rules (bug vs
  *   knowledge), resolution_type enum, tags max 8.
- * - mstar-knowledge/references/category-mapping.md: problem_type → category
+ * - skills/mstar-doc-corpus/references/category-mapping.md: problem_type → category
  *   directory mapping (rule 1: category must match the directory name).
  * - mstar-knowledge SKILL.md (`## Workflow — Capture`) Phase 6: the knowledge
  *   index duty is now a catalog-completeness query over `store.db`
@@ -260,7 +260,7 @@ export function validateSchemaYaml(frontmatterText: string): GateResult {
       violation(
         "medium",
         "compound.schema.missing-frontmatter",
-        "no `---` YAML frontmatter block found \u2014 knowledge docs must open with the schema.yaml contract (mstar-knowledge/references/schema.yaml)",
+        "no `---` YAML frontmatter block found \u2014 knowledge docs must open with the schema.yaml contract (mstar-doc-corpus/references/schema.yaml)",
         "add the fenced frontmatter with module, date, problem_type, category, severity",
       ),
     );

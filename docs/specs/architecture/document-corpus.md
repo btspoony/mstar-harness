@@ -12,7 +12,7 @@ This page describes the tracked document corpora the harness maintains, what eac
 | --- | --- | --- | --- |
 | Knowledge `{KNOWLEDGE_DIR}` | `docs/knowledge/` (via `.mstarc`) | Reusable agent engineering experience and methodology: patterns, lessons, implementation SSOT crystallized at iteration-close | Current-state descriptions of the system |
 | Specs `{SPECS_DIR}` | `docs/specs/` (via `.mstarc`) | Accurate description of the present state: architecture, contracts, current paths/commands; updated in place | Experience writeups, decision rationale, per-iteration drafts |
-| ADR `{ADR_DIR}` | `docs/adr/` (via `.mstarc`) | Decision records among real alternatives: `proposed/`, `implemented/`, `rejected/`, `archived/` buckets, `docs/adr/README.md` contract | Behavior descriptions without a decision |
+| ADR `{ADR_DIR}` | `docs/adr/` (via `.mstarc`) | Decision records among real alternatives: `proposed/`, `implemented/`, `rejected/`, `archived/` buckets; contract in `mstar-doc-corpus/references/adr.md`, this repo's tree and gate in `docs/adr/README.md` | Behavior descriptions without a decision |
 
 Routing between them: methodology → knowledge; "how it works today" → specs; "we chose X over Y and why" → an ADR. A spec may link an ADR for the rationale behind a stated behavior; it does not restate it.
 
@@ -67,7 +67,7 @@ The registry for documents is the store's catalog domain (`catalog_entities`, `c
 - Declared overrides: `.mstarc` `[config]` (`harness_dir`, `specs_dir`, `knowledge_dir`, `adr_dir`, plus the process-directory keys).
 - Git reality check: `mstar path check`; the harness root is gitignored in this repository's `.gitignore`.
 - Registration: catalog tables in `{HARNESS_DIR}/store.db` and the `mstar catalog` verb family.
-- ADR contract: `docs/adr/README.md`, with records filed under `docs/adr/{bucket}/{class}/`.
+- ADR contract: `mstar-doc-corpus/references/adr.md`; this repository's tree and gate: `docs/adr/README.md`, with records filed under `docs/adr/{bucket}/{class}/`.
 
 ## Change obligations
 
@@ -75,4 +75,4 @@ The registry for documents is the store's catalog domain (`catalog_entities`, `c
 - **New directory key in `.mstarc`** → add it to the resolution description and to `skills/mstar-conventions/SKILL.md`.
 - **Change to a resolution chain or probe order** → update the affected chain here and in [store-authority.md](store-authority.md) when the harness root itself moves.
 - **Change to catalog schema or verbs** → update catalog registration and [store-authority.md](store-authority.md).
-- **Change to the ADR bucket set or record contract** → update this table and `docs/adr/README.md` together.
+- **Change to the ADR bucket set or record contract** → update this table, `mstar-doc-corpus/references/adr.md` (the contract), `docs/adr/README.md` (this repository's tree and gate) and the seeded consumer copy `ADR_README` in `packages/engine/src/path.ts` together.

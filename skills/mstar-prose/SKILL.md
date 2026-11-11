@@ -93,5 +93,5 @@ This file is held to the same test whenever it changes: no clause here may cite 
 |------|------|
 | calibrating a borderline passage, judging an over-trim, seeing a three-way over-trimmed / over-detailed / balanced example | `references/calibrated-examples.md` |
 | the passage is a skill body — structure, trigger contract, five-question body | `mstar-skill-authoring` |
-| deciding whether a rationale needs a record, and which bucket and class it takes | `docs/adr/README.md` |
+| deciding whether a rationale needs a record, and which bucket and class it takes | `mstar-doc-corpus` `references/adr.md` |
 | an owner for a hedge or a deliberate shortcut — the `simplify:` / `temporary` markers | `mstar-coding-behavior` |

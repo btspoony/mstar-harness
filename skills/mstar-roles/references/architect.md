@@ -110,7 +110,7 @@ Write inapplicable sections as `N/A — <one-line reason>` instead of invented f
 Topic skills below are **presets activated by PM**, never unconditional dependencies; selection rule → **`mstar-roles`** § Load Order. The identity, responsibilities and NEVER rules above stand alone; this section lists only this role's preset members. When active, load in order:
 
 1. `mstar-harness-core` → `mstar-dispatch-gates` → `mstar-phase-gates` (Prepare: specify/clarify/plan) → `mstar-conventions` (`{PLAN_DIR}`, plan-writing path)
-2. Typically: `mstar-artifacts` (specs, **`{ITERATION_DIR}/<id>/` package**); `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**
+2. Typically: `mstar-doc-corpus` (knowledge / specs / ADR shape, structure and admission); `mstar-artifacts` (plan, review and **`{ITERATION_DIR}/<id>/` package** artifacts); `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**
 3. On demand: `mstar-branch-worktree` (committing architecture docs to the business repo); `mstar-design-md` (plan involves UI work / design tokens — read DESIGN.md for design specs); `mstar-use-cli` (round runs or interprets CLI commands — resolving a plan path, validating a coordination document)
 4. Host: `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`)
 

@@ -105,7 +105,7 @@ bootstrap 布局下 `.mstarc` 已声明 `knowledge_dir` / `adr_dir`，两条链�
 
 ## 内容边界（摘要）
 
-人类文档在 `docs/`（安装、quickstart、贡献指南）。三层语料——knowledge = 工程经验与方法论、specs = 项目当前状态、ADR = 单一决策及其备选与代价——的 Job / 放什么 / 不放什么 / 更新义务 → **`mstar-artifacts/references/knowledge-and-designs.md`** § 与公开文档目录的分工（产物边界表唯一权威），本文件不复述。
+人类文档在 `docs/`（安装、quickstart、贡献指南）。三层语料——knowledge = 工程经验与方法论、specs = 项目当前状态、ADR = 单一决策及其备选与代价——的 Job / 放什么 / 不放什么 / 更新义务只在 **`mstar-doc-corpus`** SKILL.md § The three layers（唯一权威），本文件不复述；过程产物的分界 → **`mstar-artifacts/references/knowledge-and-designs.md`**。
 
 `{ITERATION_DIR}` 保留 `prototypes/` 设计上下文，再到正式 compass + guides/specs（原型路径/处置 → `mstar-iteration` Phase 1 §1.2.5）；`{PLAN_DIR}/` 放主 plan、durable gate summaries、可选 residual prose；`{REVIEW_DIR}/` 是 review 运行目录：codebase audit 的 `README.md` 报告 + 证据、PR/branch/diff review 的 `report.md` + `stage<N>-<slug>.md` 证据（进程产物，gitignored；不是 plan 产物，不经 plan 状态机）。
 
