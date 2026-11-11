@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+## [4.5.1] - 2026-11-11
+
+### Harness
+
+- 三层 tracked 语料 —— `{KNOWLEDGE_DIR}`、`{SPECS_DIR}`、`{ADR_DIR}` —— 默认改为 `<repoRoot>/.agents/<kind>/`。`packages/engine/src/path.ts` 去掉 harness-first 候选与 `{HARNESS_DIR}/<kind>/` 回退：链序为 `.mstarc` → `.agents/<kind>` → 各类别的次级候选 → 链尾的 **legacy 只读** `{HARNESS_DIR}/<kind>/`；全部缺失时创建 `.agents/<kind>/`（`create: false` 时只返回不创建）。因此 `.mstar/` 整体 gitignored 时 tracked 语料仍随仓库提交。
+- `<repoRoot>` 现在是显式锚点而非假设：`resolveSpecsDir` / `resolveKnowledgeDir` / `resolveAdrDir` 接受 `opts.repoRoot`（缺省为 harness 目录的父目录），CLI、`scaffoldHarness` 与 catalog 各自传入已知的检出——配置在仓库之外的 harness 会把语料建在能提交的那份检出里，而不是自己旁边。
+- `.mstarc` 仍是唯一权威：声明的 `knowledge_dir` / `specs_dir` / `adr_dir` 直接采用，先于所有候选。已声明的仓库（含本仓库的 `docs/{knowledge,specs,adr}`）布局不变。
+- 写入方**必须先解析符号**——读 `.mstarc`，或运行 `mstar path resolve`——不得自行拼默认路径。该规则已写入 `mstar-conventions`（符号表前言与解析链）、`mstar-doc-corpus` § Layout defaults、`mstar-knowledge` § Storage、`mstar-artifacts` § Workflow 与 `docs/specs/architecture/document-corpus.md`；这正是 issue #714 的根因修复：两个并存的默认值会让 agent 把不可共享的文档写进 harness 根。
+- 散文搬了、两条代码路径没搬，故改为解析而非拼接：`compound` 写入门禁匹配解析器返回的 `{KNOWLEDGE_DIR}`（原先把字面 `{HARNESS_DIR}/knowledge` 拼出来，已静默不再覆盖 `.agents/knowledge/`）；`compoundRefreshScope` 改由调用方传入已解析的知识根。`scaffoldHarness` 的 bootstrap `.mstarc` 语料键改由本次实际创建的目录推导，嵌套 harness（`harness_dir=runtime/harness`）因此声明 `../.agents/<kind>`，而不是在自己旁边再建一份语料；已声明的语料键则在其指向处播种，不再另建一份 `.agents/<kind>`。
+- 决策记录：`docs/adr/implemented/architecture/2026-11-11-corpus-default-location.md`。
+- `mstar-knowledge` 现在可以在没有 `.mstar/` 根、没有 store、没有迭代的仓库里完成采集、维护与项目 bootstrap：Load Order 只在项目已运行 harness 时才点名 **`mstar-harness-core`**，`mstar-conventions` 退为完整路径链的条件指针，技能自身声明 `{KNOWLEDGE_DIR}` 默认值（`.agents/knowledge/`，`.mstarc` 可覆盖）。
+- bootstrap 的 harness 初始化阶段改为**可选**：默认独立结果是 `STRATEGY.md` + `CONCEPTS.md` + 基线知识文档直接提交，无 `.mstar/`、无 store。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.5.1**。
+
 ## [4.5.0] - 2026-11-11
 
 ### Harness
