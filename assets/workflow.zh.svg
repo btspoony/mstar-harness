@@ -636,8 +636,8 @@ rect.c-bg-rect { fill: var(--bg); }
           <text x="745" y="238" class="t-muted" font-size="8" text-anchor="middle">是：下一个计划</text>
         </g>
         <g data-edge-from="next" data-edge-to="wrap" data-edge-label="否" data-edge-key="8">
-          <rect x="835" y="273" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="850" y="283" class="t-muted" font-size="8" text-anchor="middle">否</text>
+          <rect x="835" y="308" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="850" y="318" class="t-muted" font-size="8" text-anchor="middle">否</text>
         </g>
 
 
