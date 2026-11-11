@@ -1005,6 +1005,9 @@ function gitProbeTimeoutMs() {
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
 }
+function probeEnv() {
+  return { ...process.env, LC_ALL: "C", LANG: "C" };
+}
 function stderrOf(error) {
   if (typeof error === "object" && error !== null && "stderr" in error) {
     const stderr = error.stderr;
@@ -1076,7 +1079,8 @@ function worktreeList(startDir, opts = {}) {
     const out = execFileSync(opts.gitPath ?? "git", ["-C", startDir, "worktree", "list", "--porcelain", "-z"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: opts.timeoutMs ?? gitProbeTimeoutMs()
+      timeout: opts.timeoutMs ?? gitProbeTimeoutMs(),
+      env: probeEnv()
     });
     return parseWorktreeList(out);
   } catch {
@@ -1094,7 +1098,8 @@ function checkoutRootOrFailure(startDir, opts = {}) {
     const out = execFileSync(opts.gitPath ?? "git", ["-C", startDir, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: opts.timeoutMs ?? gitProbeTimeoutMs()
+      timeout: opts.timeoutMs ?? gitProbeTimeoutMs(),
+      env: probeEnv()
     }).trim();
     if (out === "")
       return { root: null, failed: false };
@@ -1112,7 +1117,8 @@ function gitIgnored(root, target) {
   try {
     execFileSync("git", ["-C", root, "check-ignore", "-q", "--", target], {
       stdio: ["ignore", "ignore", "ignore"],
-      timeout: gitProbeTimeoutMs()
+      timeout: gitProbeTimeoutMs(),
+      env: probeEnv()
     });
     return true;
   } catch (error) {

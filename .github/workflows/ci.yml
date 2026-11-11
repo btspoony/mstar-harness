@@ -1180,6 +1180,23 @@ jobs:
       - name: Build OpenCode V2
         run: bun run opencode-v2:build
 
+      # The manifest check below digests every consumer's build output, so the
+      # two remaining consumers must be built here as well. omp first: the dsh
+      # host build fingerprints its reachable inputs, and `cli:build` above is a
+      # producer of `commands/dist`, so dsh must stay the last writer.
+      - name: Build omp
+        run: bun run omp:build
+
+      - name: Build dsh (last writer of its recorded inputs)
+        run: bun run dsh:build
+
+      # Byte parity, not existence: the producer re-derives every recorded
+      # source/generated digest and copied mirror from the bytes on disk and
+      # fails naming the first drifted entry, so a manifest that no longer
+      # describes this tree reddens the job instead of shipping.
+      - name: Verify consumer manifest (--check)
+        run: bun scripts/execution-consumer-manifest.ts --repo . --check
+
       - name: Pack CLI tarball
         run: bun run cli:pack
 
