@@ -19,6 +19,7 @@ import { type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
   assertLightDarkParity,
+  canonicalizeNearestExisting,
   collectLegacyArchiveReferenceTexts,
   lintLoadOrder,
   mergeLegacyArchiveReferences,
@@ -154,12 +155,22 @@ function isSeamTarget(seam: SeamId, harnessDir: string | null, target: FsTarget)
     case 'audit':
       return isAuditReviewTarget(path, harnessDir)
     case 'compound': {
-      if (harnessDir === null) return false
+      // Cheap predicate first: `fs/write-intent` fires on every write, and the
+      // checkout anchor below costs a Git probe.
+      if (harnessDir === null || !isMarkdownDoc(path)) return false
       // Resolve, never compose: the corpus default is `.agents/knowledge/`,
       // so a literal `join(harnessDir, 'knowledge')` would miss the directory
       // the resolver actually returns and the gate would stop covering it.
-      const knowledgeDir = resolveKnowledgeDir(harnessDir, { create: false })
-      return path.startsWith(resolve(knowledgeDir) + sep) && isMarkdownDoc(path)
+      // The anchor is the checkout that owns the harness, not the harness
+      // dir's parent: a nested or outside harness would otherwise scope a
+      // directory no corpus occupies. The parent stands in only when Git
+      // cannot name a checkout (a non-repository fixture).
+      const repoRoot = probeCheckoutRoot(harnessDir) ?? dirname(harnessDir)
+      const knowledgeDir = resolveKnowledgeDir(harnessDir, { create: false, repoRoot })
+      // The probe answers a realpath, and the target arrives in whatever
+      // spelling the session used: `/var` vs `/private/var` must not decide
+      // membership (the engine's own resolver canonicalizes the same pair).
+      return canonicalizeNearestExisting(path).startsWith(canonicalizeNearestExisting(knowledgeDir) + sep)
     }
     case 'roles':
       return isRolesTarget(path)

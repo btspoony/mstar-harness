@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: engine, root
+packages: engine, commands, dsh, root
 ---
 
 - The three tracked corpora — `{KNOWLEDGE_DIR}`, `{SPECS_DIR}`, `{ADR_DIR}` — now default to `<repoRoot>/.agents/<kind>/`. `packages/engine/src/path.ts` drops the harness-first candidate and the `{HARNESS_DIR}/<kind>/` fallback: the chain is `.mstarc` → `.agents/<kind>` → kind-specific secondaries → a **legacy read-only** `{HARNESS_DIR}/<kind>/` tail, and an absent corpus creates `.agents/<kind>/` (skipped by `create: false`). A tracked corpus therefore survives a fully gitignored `.mstar/`.
