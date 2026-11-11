@@ -9,7 +9,7 @@ A knowledge document captures engineering experience and method — a pattern, a
 ```
 
 - `<category>` is one of the directory names in `references/category-mapping.md`, chosen from the document's `problem_type`; the frontmatter `category` field must match the directory.
-- `<slug>` is a lowercase kebab phrase naming the problem or the guidance, with no date prefix and no version suffix. Update the page in place; keep a `<slug>-v<N>.md` copy only when an old version is genuinely needed for comparison, and never inside a tracked tree without a catalog row marking it `superseded`.
+- `<slug>` is a lowercase kebab phrase naming the problem or the guidance, with no date prefix and no version suffix. Update the page in place. An old version is kept only for comparison: when the harness store is active, the kept `<slug>-v<N>.md` copy carries a catalog `superseded` row; with no store, the new document says that it supersedes the old one, or the copy is simply deleted — Git keeps the history.
 
 ## Frontmatter
 

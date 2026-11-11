@@ -37,9 +37,10 @@ Specs say what is now, knowledge says how to work and what was learned, ADRs say
 
 ## Layout defaults
 
-- `{KNOWLEDGE_DIR}` → `.mstar/knowledge/`, `{SPECS_DIR}` → `.mstar/specs/`, `{ADR_DIR}` → `.mstar/adr/`.
-- A `.mstarc` file in the repository overrides any of them with `knowledge_dir` / `specs_dir` / `adr_dir`; the value is resolved relative to the `.mstarc` file's directory (an absolute path is used as given).
-- With no `.mstarc`, the defaults above apply. The long discovery chains (`.agents/`, `docs/specs/`, `docs/adr/`, legacy candidates) exist for projects that already ran the harness; they are only reachable through `mstar-conventions` when the harness is active, and this contract needs none of them.
+- **Standalone (no harness)**: `.agents/knowledge/`, `.agents/specs/`, `.agents/adr/` — tracked by default, with no ignore rule that would drop the corpus.
+- **Harness active, no `.mstarc` declaration**: `.mstar/knowledge/`, `.mstar/specs/`, `.mstar/adr/` — the harness process root, whose ignore rules the harness owns.
+- `.mstarc` keys `knowledge_dir` / `specs_dir` / `adr_dir` override either default; the value resolves relative to the `.mstarc` file's directory (an absolute path is used as given).
+- The long discovery chains (`.agents/`, `docs/specs/`, `docs/adr/`, legacy candidates) exist for projects that already ran the harness; they are only reachable through `mstar-conventions` when the harness is active, and this contract needs none of them.
 
 ## Layer references
 
