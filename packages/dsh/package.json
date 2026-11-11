@@ -30,6 +30,7 @@
       "default": "./dist/client.js"
     },
     "./locale/*.json": "./locale/*.json",
+    "./docs/*": "./docs/*",
     "./bundle/cordis.patch.yml": "./bundle/cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -42,7 +43,11 @@
     "harness-skills",
     "harness-agents",
     "harness-commands",
-    "workflows"
+    "workflows",
+    "docs/DETAIL.md",
+    "docs/DETAIL.zh.md",
+    "docs/preview.svg",
+    "docs/preview.zh.svg"
   ],
   "dsh": {
     "bundle": {

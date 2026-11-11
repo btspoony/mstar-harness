@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="600" viewBox="0 0 1080 600" role="img" lang="en" aria-label="From a prompt to a pull request" font-family="-apple-system, 'SF Pro Text', 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <rect width="1080" height="600" fill="#F5F6FC"/>
+  <text x="40" y="52" font-size="29" font-weight="600" fill="#16181D">From a prompt to a pull request</text>
+  <text x="40" y="84" font-size="14" fill="#5B6472">Morning Star's skills assign every seat; the engine keeps the plan, reviews and acceptance on the record - inside your dsh session.</text>
+  <rect x="40" y="112" width="536" height="398" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="64" y="150" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">IN THE SESSION</text>
+  <rect x="64" y="162" width="488" height="34" rx="10" fill="#F1F2F8"/>
+  <text x="82" y="185" font-size="13.5" fill="#363B46">Ship the README graphics</text>
+  <path d="M308 196V209" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M304 209h8l-4 7z" fill="#AEB6C4"/>
+  <rect x="64" y="216" width="488" height="48" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="82" y="239" font-size="13" font-weight="600" fill="#16181D">PM clarifies and writes the plan</text>
+  <text x="82" y="258" font-size="10.5" fill="#6B7280">skill · project-manager</text>
+  <path d="M308 264V277" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M304 277h8l-4 7z" fill="#AEB6C4"/>
+  <rect x="64" y="284" width="488" height="42" rx="10" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="82" y="304" font-size="12.5" font-weight="600" fill="#16181D">Implement on a feature branch</text>
+  <text x="82" y="320" font-size="10.5" fill="#6B7280">executor · per-task review</text>
+  <path d="M308 326V331Q308 336 303 336H145Q140 336 140 341V343" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M136 343h8l-4 7z" fill="#AEB6C4"/>
+  <path d="M308 336H471Q476 336 476 341V343" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M472 343h8l-4 7z" fill="#AEB6C4"/>
+  <path d="M308 336V343" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M304 343h8l-4 7z" fill="#AEB6C4"/>
+  <rect x="64" y="350" width="152" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="80" y="369" font-size="12.5" font-weight="600" fill="#16181D">QC 1</text>
+  <text x="80" y="386" font-size="10.5" fill="#6B7280">independent review</text>
+  <rect x="232" y="350" width="152" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="248" y="369" font-size="12.5" font-weight="600" fill="#16181D">QC 2</text>
+  <text x="248" y="386" font-size="10.5" fill="#6B7280">independent review</text>
+  <rect x="400" y="350" width="152" height="44" rx="9" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="416" y="369" font-size="12.5" font-weight="600" fill="#16181D">QC 3</text>
+  <text x="416" y="386" font-size="10.5" fill="#6B7280">independent review</text>
+  <path d="M140 394V399Q140 404 145 404H471Q476 404 476 399V394" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M308 394V411" fill="none" stroke="#AEB6C4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M304 411h8l-4 7z" fill="#AEB6C4"/>
+  <rect x="64" y="418" width="488" height="44" rx="10" fill="#EDF7F0" stroke="#CDE8D6"/>
+  <circle cx="86" cy="440" r="9" fill="#DFF2E5"/>
+  <path d="M82 440l3 3 5-6" stroke="#17864A" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <text x="106" y="445" font-size="12.5" fill="#1D3B29">PM Acceptance · evidence per criterion</text>
+  <rect x="456" y="429" width="96" height="22" rx="11" fill="#DFF2E5"/>
+  <text x="504" y="444" font-size="10.5" fill="#17864A" text-anchor="middle">merge-ready</text>
+  <text x="64" y="486" font-size="11" fill="#6B7280">skills let every seat own its part, and the engine keeps every step on the record</text>
+  <rect x="596" y="112" width="444" height="398" rx="16" fill="#FFFFFF" stroke="#E6E7EF"/>
+  <text x="620" y="150" font-size="10.5" letter-spacing="1.4" font-weight="600" fill="#8A8A94">IN THE SIDEBAR</text>
+  <rect x="620" y="162" width="78" height="24" rx="12" fill="#EEF0FF"/>
+  <text x="659" y="178" font-size="11" fill="#3D4AA8" text-anchor="middle" font-weight="600">Overview</text>
+  <rect x="706" y="162" width="60" height="24" rx="12" fill="transparent"/>
+  <text x="736" y="178" font-size="11" fill="#8A8A94" text-anchor="middle" font-weight="400">Issues</text>
+  <rect x="774" y="162" width="76" height="24" rx="12" fill="transparent"/>
+  <text x="812" y="178" font-size="11" fill="#8A8A94" text-anchor="middle" font-weight="400">Workflows</text>
+  <rect x="858" y="162" width="72" height="24" rx="12" fill="transparent"/>
+  <text x="894" y="178" font-size="11" fill="#8A8A94" text-anchor="middle" font-weight="400">Iterations</text>
+  <line x1="620" y1="196" x2="1016" y2="196" stroke="#E6E7EF"/>
+  <text x="620" y="218" font-size="13.5" font-weight="600" fill="#16181D">Overview</text>
+  <text x="1016" y="218" font-size="10.5" fill="#8A8A94" text-anchor="end">All projects · 176 open items</text>
+  <text x="620" y="248" font-size="10.5" fill="#8A8A94">Workflows in progress</text>
+  <text x="620" y="270" font-size="12" font-weight="600" fill="#16181D">Empty</text>
+  <text x="620" y="290" font-size="10.5" fill="#6B7280">Read succeeded, nothing here yet.</text>
+  <text x="844" y="248" font-size="10.5" fill="#8A8A94">Open items</text>
+  <circle cx="850" cy="268" r="3.5" fill="#F0736A"/>
+  <text x="862" y="272" font-size="11" fill="#363B46">high</text>
+  <text x="1016" y="272" font-size="11" fill="#363B46" text-anchor="end">3</text>
+  <circle cx="850" cy="286" r="3.5" fill="#F2A65A"/>
+  <text x="862" y="290" font-size="11" fill="#363B46">medium</text>
+  <text x="1016" y="290" font-size="11" fill="#363B46" text-anchor="end">29</text>
+  <circle cx="850" cy="304" r="3.5" fill="#8B93A3"/>
+  <text x="862" y="308" font-size="11" fill="#363B46">low</text>
+  <text x="1016" y="308" font-size="11" fill="#363B46" text-anchor="end">97</text>
+  <circle cx="850" cy="322" r="3.5" fill="#C3C8D4"/>
+  <text x="862" y="326" font-size="11" fill="#363B46">nit</text>
+  <text x="1016" y="326" font-size="11" fill="#363B46" text-anchor="end">47</text>
+  <text x="620" y="352" font-size="10.5" fill="#8A8A94">Issue flow</text>
+  <text x="1016" y="352" font-size="9.5" fill="#A6ACB8" text-anchor="end">2026-08-26 → 2026-11-11</text>
+  <line x1="620" y1="434" x2="1016" y2="434" stroke="#E6E7EF"/>
+  <path d="M620 430 L686 426 L752 418 L818 404 L884 392 L950 378 L1016 366" fill="none" stroke="#5B5BD6" stroke-width="1.8" stroke-linejoin="round"/>
+  <path d="M620 432 L686 430 L752 426 L818 420 L884 414 L950 408 L1016 402" fill="none" stroke="#9AA3B2" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="620" y="450" font-size="9" fill="#A6ACB8">2026-08-26</text>
+  <text x="1016" y="450" font-size="9" fill="#A6ACB8" text-anchor="end">2026-11-11</text>
+  <line x1="620" y1="482" x2="646" y2="482" stroke="#5B5BD6" stroke-width="1.8"/>
+  <text x="652" y="486" font-size="9.5" fill="#6B7280">caught (cumulative)</text>
+  <line x1="786" y1="482" x2="812" y2="482" stroke="#9AA3B2" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="818" y="486" font-size="9.5" fill="#6B7280">retired (cumulative)</text>
+  <circle cx="47" cy="534" r="7" fill="#EEF0FF"/>
+  <path d="M43.5 534l2.5 2.5 4-5" stroke="#3D4AA8" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  <text x="64" y="538" font-size="12" fill="#363B46">Skills: PM, executor, QC seats and reviewers each own their part.</text>
+  <circle cx="47" cy="564" r="7" fill="#EEF0FF"/>
+  <path d="M44 564h6M47 561v6" stroke="#3D4AA8" stroke-width="1.4" stroke-linecap="round"/>
+  <text x="64" y="568" font-size="12" fill="#363B46">Engine: plans, findings, reviews and acceptance stay on the record.</text>
+</svg>
