@@ -32,6 +32,8 @@ Morning Star brings a delivery process to the AI coding tools you already use �
 - **Specialists instead of one long prompt** — a PM orchestrates; separate roles own requirements, architecture, implementation, QC, acceptance, audits, and ops, each with a narrow brief.
 - **A trail you can audit** — plans, findings, review reports, and decisions are recorded under the harness directory in your repo, not just in the chat.
 
+![Morning Star Harness inside dsh: the PM writes the plan, three independent QC seats review it, the executor implements on a feature branch, PM Acceptance maps every criterion to evidence, and the Morning Star Workflow sidebar panel lists open items and issue flow](packages/dsh/docs/preview.svg)
+
 ## Install
 
 Every host installs two ways: this CLI's `init` flow, or the host's own plugin manager — the native command installs the plugin only. Options, path layout, and host notes: [`INSTALL.md`](INSTALL.md).
