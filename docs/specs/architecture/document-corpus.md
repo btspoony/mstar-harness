@@ -16,6 +16,8 @@ This page describes the tracked document corpora the harness maintains, what eac
 
 Routing between them: methodology → knowledge; "how it works today" → specs; "we chose X over Y and why" → an ADR. A spec may link an ADR for the rationale behind a stated behavior; it does not restate it.
 
+The "Default" column shows this repository's declarations. With no `.mstarc`, each of the three resolves to `.agents/knowledge/`, `.agents/specs/`, `.agents/adr/` as its **preferred** default — never to a corpus inside the harness root, unless that root is itself `<repo-root>/.agents/` (the two then coincide). "Preferred" is exact: a non-empty `docs/specs/` or repo-root `specs/` still wins for `{SPECS_DIR}`, and a non-empty `docs/adr/` still wins for `{ADR_DIR}`, so an undeclared repository that already keeps a spec or ADR corpus where it is keeps resolving there; knowledge has no such secondary rung, so it lands in `.agents/knowledge/`.
+
 ### Process-local artifacts (not tracked)
 
 The remaining harness directories are process artifacts, gitignored, with the store as their registry or state authority:
@@ -30,18 +32,18 @@ The remaining harness directories are process artifacts, gitignored, with the st
 
 ### Path resolution chains
 
-Resolved by engine functions; each chain stops at the first non-empty candidate (empty directories count as absent):
+Resolved by engine functions; each chain stops at the first non-empty candidate (empty directories count as absent), and every chain ends with a legacy read-only rung for pre-move content under the harness root:
 
-- `{SPECS_DIR}` (`resolveSpecsDir`): `.mstarc` `specs_dir` (authoritative, skips the chain) → `{HARNESS_DIR}/specs/` → `<repo-root>/.agents/specs/` → `docs/specs/` → repo-root `specs/` → legacy `designs/` directories (read-only).
-- `{KNOWLEDGE_DIR}` (`resolveKnowledgeDir`): `.mstarc` `knowledge_dir` → `{HARNESS_DIR}/knowledge/` → `.agents/knowledge/` → fallback create.
-- `{ADR_DIR}` (`resolveAdrDir`): `.mstarc` `adr_dir` → `{HARNESS_DIR}/adr/` → `.agents/adr/` → `docs/adr/`.
+- `{SPECS_DIR}` (`resolveSpecsDir`): `.mstarc` `specs_dir` (authoritative, skips the chain) → `<repo-root>/.agents/specs/` → `docs/specs/` → repo-root `specs/` → legacy `designs/` directories (read-only) → legacy `{HARNESS_DIR}/specs/` (read-only, never created).
+- `{KNOWLEDGE_DIR}` (`resolveKnowledgeDir`): `.mstarc` `knowledge_dir` → `<repo-root>/.agents/knowledge/` → legacy `{HARNESS_DIR}/knowledge/` (read-only) → fallback create `<repo-root>/.agents/knowledge/`.
+- `{ADR_DIR}` (`resolveAdrDir`): `.mstarc` `adr_dir` → `<repo-root>/.agents/adr/` → `docs/adr/` → legacy `{HARNESS_DIR}/adr/` (read-only).
 - `{HARNESS_DIR}` itself: explicit override → `.mstarc` `harness_dir` → `.mstar` → `.agents/` → legacy `plans/` probes; probes never cross the workspace root.
 
-This repository's `.mstarc` declares all three keys — `specs_dir=docs/specs`, `knowledge_dir=docs/knowledge`, `adr_dir=docs/adr` — so each resolution takes the declared value and skips its chain. `mstar path resolve` prints the resolved directories for all three corpora.
+Without a `.mstarc`, all three corpora therefore prefer `.agents/<kind>/`, outside the harness root: the tracked corpus survives a fully gitignored `.mstar/`. The `{HARNESS_DIR}/<kind>/` rung is read only and last — never created and never the fallback unless the resolved harness root is itself `<repo-root>/.agents/` (the rung then coincides with the default), and never presented as a corpus home; it can be deleted once no repository is expected to carry pre-move content there. `<repo-root>` in those chains is the checkout the `.agents/` default belongs to: callers that know it pass `opts.repoRoot` (the CLI uses the start directory's Git top level, the scaffold uses its scaffold root, the catalog uses the main worktree that owns the harness); only when it is unknown does the harness directory's parent stand in. A harness configured outside the checkout (`MSTAR_HARNESS_DIR`, a nested `.mstarc`) makes the two answers differ, and only the former is committable. This repository's `.mstarc` declares all three keys — `specs_dir=docs/specs`, `knowledge_dir=docs/knowledge`, `adr_dir=docs/adr` — so each resolution takes the declared value and skips its chain. `mstar path resolve` prints the resolved directories for all three corpora.
 
 ### Git tracking policy
 
-Principle: process stays local; results are shared. Under the default layout, tracked results are `{HARNESS_DIR}/AGENTS.md`, `{KNOWLEDGE_DIR}/**`, `{SPECS_DIR}/**`, and `{ADR_DIR}/**`; everything else under `{HARNESS_DIR}` (plans, iterations, sdd, workflows, projects, reviews, archived, `store.db`, `status.json`) is gitignored. Cross-clone handoff is therefore knowledge + specs + ADR + AGENTS layering; a finding that must cross clones is promoted into a tracked corpus or captured as a store issue. In this repository the corpora resolve outside `{HARNESS_DIR}` (to `docs/`), so they follow normal branch tracking directly; `mstar path check` verifies the landed reality against Git, not directory names, and reports a gitignored result directory as a `path.result-ignored` warning (exit `0`) rather than a finding.
+Principle: process stays local; results are shared. Under the default layout, tracked results are `.agents/AGENTS.md`, `{KNOWLEDGE_DIR}/**`, `{SPECS_DIR}/**`, and `{ADR_DIR}/**` — the first lives in `.agents/` and the last three default to `.agents/<kind>/`, all outside `{HARNESS_DIR}`; everything under `{HARNESS_DIR}` (plans, iterations, sdd, workflows, projects, reviews, archived, `store.db`, `status.json`) is gitignored. Cross-clone handoff is therefore knowledge + specs + ADR + AGENTS layering; a finding that must cross clones is promoted into a tracked corpus or captured as a store issue. In this repository the corpora resolve outside `{HARNESS_DIR}` (to `docs/`), so they follow normal branch tracking directly; `mstar path check` verifies the landed reality against Git, not directory names, and reports a gitignored result directory as a `path.result-ignored` warning (exit `0`) rather than a finding.
 
 ### Catalog registration
 

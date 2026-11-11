@@ -21,15 +21,17 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 
 ## 路径符号（SSOT）
 
+下表的值是**默认值**，不是布局声明：`.mstarc`（`{HARNESS_DIR}` 或其父目录的最近一份）权威。任何 workflow 在向某符号写入之前**必须先解析该符号**——读 `.mstarc`，或运行 `mstar path resolve`——**不得**用默认路径自行拼出目标（issue #714 的根因）。
+
 | 符号 | 默认 |
 |------|------|
 | `{HARNESS_DIR}` | `.mstar/` |
 | `{PLAN_DIR}` | `{HARNESS_DIR}/plans/` |
 | `{SDD_DIR}` | `{HARNESS_DIR}/sdd/<plan-id>/`（SDD 运行时 scratch + review bundle；gitignored） |
 | `{ITERATION_DIR}` | `{HARNESS_DIR}/iterations/` |
-| `{KNOWLEDGE_DIR}` | `{HARNESS_DIR}/knowledge/`（默认）；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
-| `{SPECS_DIR}` | `{HARNESS_DIR}/specs/`（默认）；解析见下文「`{SPECS_DIR}` 解析」 |
-| `{ADR_DIR}` | `{HARNESS_DIR}/adr/`（默认）；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
+| `{KNOWLEDGE_DIR}` | `.agents/knowledge/`；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
+| `{SPECS_DIR}` | `.agents/specs/`；解析见下文「`{SPECS_DIR}` 解析」 |
+| `{ADR_DIR}` | `.agents/adr/`；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
 | `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/` (default; `.mstarc` `workflow_dir` overrides it) — retained ordinary bodies, append-only `notes.jsonl` and workflow-owned `reports/` (e.g. `<workflow-id>/reports/e2e.md`) |
 | `{PROJECT_DIR}` | `{HARNESS_DIR}/projects/`（默认；`.mstarc` `project_dir` 声明时用声明值）——project 层目录；旧 `roadmap.md` 仅作文件 transport/history |
 | `{REVIEW_DIR}` | `{HARNESS_DIR}/reviews/`（默认；`.mstarc` `review_dir` 声明时用声明值）——review 运行目录树（codebase audit / PR / branch / diff review 的 report 与 evidence；`mstar audit scaffold` 写入，`mstar pr-review report-path` 解析；gitignored） |
@@ -66,7 +68,7 @@ enforcement=hard
 ```
 
 - `#` / `;` 注释；`[section]` 头；`key=value`（去空白）。仅读 `[config]` 段，未知键忽略（向前兼容）。
-- 目录键：`harness_dir`（`{HARNESS_DIR}`）、`plan_dir`（`{PLAN_DIR}`）、`sdd_dir`（`{SDD_DIR}` 的 per-plan 基目录，`<plan-id>` 仍会追加）、`iteration_dir`（`{ITERATION_DIR}`）、`knowledge_dir`（`{KNOWLEDGE_DIR}`）、`specs_dir`（`{SPECS_DIR}`，**权威**——声明后不再走候选链）、`adr_dir`（`{ADR_DIR}`，**权威**——同上）、`workflow_dir`（`{WORKFLOW_DIR}`）、`project_dir`（`{PROJECT_DIR}`）、`review_dir`（`{REVIEW_DIR}`）。全部相对 `.mstarc` 所在目录解析（绝对路径亦可）；无需目录已存在（可后续 scaffold；v3 的 `workflows/` / `projects/` / `reviews/` 子目录由 engine writers 按需创建）。
+- 目录键：`harness_dir`（`{HARNESS_DIR}`）、`plan_dir`（`{PLAN_DIR}`）、`sdd_dir`（`{SDD_DIR}` 的 per-plan 基目录，`<plan-id>` 仍会追加）、`iteration_dir`（`{ITERATION_DIR}`）、`knowledge_dir`（`{KNOWLEDGE_DIR}`，**权威**——声明后不再走候选链）、`specs_dir`（`{SPECS_DIR}`，**权威**——同上）、`adr_dir`（`{ADR_DIR}`，**权威**——同上）、`workflow_dir`（`{WORKFLOW_DIR}`）、`project_dir`（`{PROJECT_DIR}`）、`review_dir`（`{REVIEW_DIR}`）。全部相对 `.mstarc` 所在目录解析（绝对路径亦可）；无需目录已存在（可后续 scaffold；v3 的 `workflows/` / `projects/` / `reviews/` 子目录由 engine writers 按需创建）。
 - **`enforcement=hard|soft`**：仓库级硬门禁策略（`hard` 硬门禁、`soft` 本地回滚；其他值忽略）。优先级：显式 Config > Assignment `Enforcement: hard` 头标记（仅派发闸门）> `.mstarc` > 迭代 compass frontmatter > 默认 warn-only。`.mstarc` `soft` 可回滚 hard compass；`.mstarc` `hard` 硬化无标记的派发与各闸门。
 - 子目录键与 `enforcement` 由 engine `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveAdrDir` / `resolveWorkflowDir` / `resolveProjectDir` / `resolveReviewDir` / `resolveRepoEnforcement` 读取：从 harness 目录与其父目录（仓库根，`.mstarc` 的文档化位置）向上找最近配置文件。
 - 优先级：显式 override > `.mstarc` > 探测。非默认布局的仓库写一个 `.mstarc` 即可程序化解目录问题，无需逐宿主设置 env / config。
@@ -76,28 +78,28 @@ enforcement=hard
 1. 从当前目录向上找**最近**的 `.mstarc`（find-first-stop），**不越过工作区根**（CLI=git top-level，非 git=start 自身；dsh=会话工作区）。
 2. 读 `[config]` 段：`key=value`（去空白），`#`/`;` 注释与空行忽略；同一键最后一次出现生效。
 3. `harness_dir` 存在 → 相对该 `.mstarc` 所在目录解析（绝对路径直接用），即 `{HARNESS_DIR}`；无需目录已存在。
-4. 其余键（`plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` / `adr_dir` / `workflow_dir` / `project_dir` / `review_dir`）从 **`{HARNESS_DIR}` 或其父目录**（仓库根）向上找最近 `.mstarc` 读取；值同样相对配置文件目录解析；`specs_dir` / `adr_dir` 声明后直接采用（跳过下方候选链与空目录规则），`sdd_dir` 只替换基目录（`<plan-id>` 仍追加），`workflow_dir` / `project_dir` / `review_dir` 直接替换默认子目录名。
+4. 其余键（`plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` / `adr_dir` / `workflow_dir` / `project_dir` / `review_dir`）从 **`{HARNESS_DIR}` 或其父目录**（仓库根）向上找最近 `.mstarc` 读取；值同样相对配置文件目录解析；`knowledge_dir` / `specs_dir` / `adr_dir` 声明后直接采用（跳过下方候选链与空目录规则），`sdd_dir` 只替换基目录（`<plan-id>` 仍追加），`workflow_dir` / `project_dir` / `review_dir` 直接替换默认子目录名。
 5. 未声明的键回落默认组合：`{HARNESS_DIR}/plans/`、`{HARNESS_DIR}/sdd/<plan-id>/`、`{HARNESS_DIR}/iterations/`、`{HARNESS_DIR}/workflows/`、`{HARNESS_DIR}/projects/`、`{HARNESS_DIR}/reviews/`；`{SPECS_DIR}` / `{KNOWLEDGE_DIR}` / `{ADR_DIR}` 走下方候选链。
 
 ### `{SPECS_DIR}` 解析（找到非空目录即停）
 
-1. `.mstarc` `specs_dir`（**权威**：声明即采用，跳过本链）
-2. `{HARNESS_DIR}/specs/`（默认 `.mstar/specs/`）
-3. `<repo-root>/.agents/specs/`
-4. `docs/specs/`
-5. `specs/`（仓库根）
-6. legacy 只读：`{HARNESS_DIR}/designs/`、仓库根 `designs/`（仅非空时可用；init **不**新建）
+1. `.mstarc` `specs_dir`（**权威**：声明即采用，跳过本链与空目录规则；目录不存在也照用）
+2. `<repo-root>/.agents/specs/`（默认）
+3. `docs/specs/`
+4. `specs/`（仓库根）
+5. legacy 只读：`{HARNESS_DIR}/designs/`、仓库根 `designs/`
+6. legacy 只读：`{HARNESS_DIR}/specs/`（**链尾**；只在仓库仍带迁移前语料时可读）
 
-**空目录规则**：候选路径存在但无任何文件 → 视为不存在，继续下一候选；候选按解析后路径去重（harness 根即 `.agents/` 时第 3 项与第 2 项是同一目录）。
+**空目录规则**：候选路径存在但无任何文件 → 视为不存在，继续下一候选；候选按解析后路径去重（harness 根即 `.agents/` 时第 2 项与第 6 项是同一目录）。
 
-**创建默认**：全部缺失或皆空 → 创建并使用 `{HARNESS_DIR}/specs/`（统一落在 `.mstar/` 下）。**禁止**在 greenfield init 时优先创建裸仓库根 `specs/`。bootstrap 布局下 scaffold 先写 `.mstarc` 声明 `specs_dir=.agents/specs`，本链第 1 项直接命中，不走到回退创建。
+**创建默认**：全部缺失或皆空 → 创建并使用 `<repo-root>/.agents/specs/`（`create: false` 时只返回不创建）。**禁止**在 greenfield init 时创建裸仓库根 `specs/`；解析出的 `{HARNESS_DIR}` 不是 `<repo-root>/.agents/` 时，**禁止**把 `{HARNESS_DIR}/specs/` 当创建目标。
 
 ### `{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析（找到非空目录即停）
 
-- `{KNOWLEDGE_DIR}`：`.mstarc` `knowledge_dir`（权威）→ `{HARNESS_DIR}/knowledge/` → `<repo-root>/.agents/knowledge/`（空目录视为不存在）→ 回退 `{HARNESS_DIR}/knowledge/`，需创建时创建（`resolveKnowledgeDir` 默认创建，`{ create: false }` 关闭）。
-- `{ADR_DIR}`：`.mstarc` `adr_dir`（权威）→ `{HARNESS_DIR}/adr/` → `<repo-root>/.agents/adr/` → `<repo-root>/docs/adr/`（均按空目录规则）→ 回退 `{HARNESS_DIR}/adr/`，创建规则同上（`resolveAdrDir`）。
+- `{KNOWLEDGE_DIR}`：`.mstarc` `knowledge_dir`（权威）→ `<repo-root>/.agents/knowledge/`（默认）→ legacy 只读 `{HARNESS_DIR}/knowledge/`（链尾）→ 回退创建 `<repo-root>/.agents/knowledge/`（`resolveKnowledgeDir` 默认创建，`{ create: false }` 关闭）。
+- `{ADR_DIR}`：`.mstarc` `adr_dir`（权威）→ `<repo-root>/.agents/adr/`（默认）→ `<repo-root>/docs/adr/` → legacy 只读 `{HARNESS_DIR}/adr/`（链尾）→ 回退创建 `<repo-root>/.agents/adr/`（`resolveAdrDir`）。
 
-bootstrap 布局下 `.mstarc` 已声明 `knowledge_dir` / `adr_dir`，两条链的第 1 项直接命中（`scaffoldHarness` 随后为解析结果建目录并种子 ADR 树）；上表 `{HARNESS_DIR}/*` 默认值只描述未声明时的行为。
+`{HARNESS_DIR}/<kind>/` 在这三条链里只是 **legacy 只读源**：只要解析出的 `{HARNESS_DIR}` 不是 `<repo-root>/.agents/`（即该候选不与第 2 项同一目录），它永不创建、永不作为回退，也不再被任何文档表述为语料所在；直到没有仓库预期在迁移前位置携带内容时才删除该候选。`.mstarc` 已声明的仓库（含本仓库）布局不变——声明即命中第 1 项。`.agents/` 默认值只描述未声明时的行为，且它位于 `{HARNESS_DIR}` 之外，所以 `.mstar/` 整体 gitignored 时 tracked 语料仍随仓库提交。`<repo-root>` 是**该 `.agents/` 默认值所属的检出**：调用方知道就传（`opts.repoRoot`——CLI 取 start 的 git top-level，scaffold 取 scaffold 根，catalog 取持有该 harness 的主 worktree），不知道时才是 harness 目录的父目录；harness 配在检出之外（`MSTAR_HARNESS_DIR`、嵌套 `.mstarc`）时两种答案不同，而只有前者能提交。
 
 > **Engine check:** engine `resolveSpecsDir` / `resolveKnowledgeDir` / `resolveAdrDir` — or run `mstar path resolve` (prints all three) — to confirm the candidate order (empty-dir-as-absent included). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 

@@ -14,7 +14,7 @@
  *   (state-projection contract §4); the README table is not a register.
  * - mstar-knowledge SKILL.md (`## Workflow — Maintain`) § 产物与操作路径
  *   (scope SSOT): only
- *   `{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, and
+ *   `{KNOWLEDGE_DIR}/**`, `knowledge/README.md`, and
  *   `<repo-root>/CONCEPTS.md`.
  */
 import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
@@ -569,15 +569,18 @@ export async function assertKnowledgeCatalogCompleteness(context: StoreContext):
 
 /**
  * The Maintain scope (mstar-knowledge SKILL.md `## Workflow — Maintain` §
- * 产物与操作路径): `{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`,
- * and `<repo-root>/CONCEPTS.md`.
+ * 产物与操作路径): `{KNOWLEDGE_DIR}/**`, `{KNOWLEDGE_DIR}/README.md`, and
+ * `<repo-root>/CONCEPTS.md`.
+ *
+ * The first argument is the **already-resolved** knowledge root, not a
+ * harness dir: the caller resolves `{KNOWLEDGE_DIR}` (`.mstarc` `knowledge_dir`
+ * → `.agents/knowledge/` → legacy) and passes the answer, so this function can
+ * never disagree with the resolver about where the corpus is. Composing
+ * `harnessDir/knowledge` here is what made a scope silently cover the wrong
+ * directory (issue #714).
  */
-export function compoundRefreshScope(harnessDir: string, projectRoot: string): string[] {
-  return [
-    join(harnessDir, "knowledge"),
-    join(harnessDir, "knowledge", "README.md"),
-    join(projectRoot, "CONCEPTS.md"),
-  ];
+export function compoundRefreshScope(knowledgeDir: string, projectRoot: string): string[] {
+  return [knowledgeDir, join(knowledgeDir, "README.md"), join(projectRoot, "CONCEPTS.md")];
 }
 
 /** True when the root path looks like a file (extension suffix) — exact

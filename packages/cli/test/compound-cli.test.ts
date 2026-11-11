@@ -74,8 +74,11 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const harness = join(dir, ".mstar");
       mkdirSync(harness);
+      // A non-empty legacy rung is what resolves here (no `.mstarc` declaration
+      // and no `.agents/knowledge`), so the configured root IS this directory.
       const knowledgeDir = join(harness, "knowledge");
       mkdirSync(knowledgeDir);
+      writeFileSync(join(knowledgeDir, "existing.md"), KNOWLEDGE_GOOD);
       const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir], {
         cwd: dir,
         env: { MSTAR_HARNESS_DIR: harness },

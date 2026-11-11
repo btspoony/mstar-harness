@@ -62,4 +62,18 @@ describe("catalogRootDir repository root", () => {
     gitRepo(main);
     expect(catalogRootDir({ harnessDir: join(main, ".mstar") }, "repository")).toBe(main);
   });
+
+  test("a harness nested below the repository anchors the corpora at the repository root", () => {
+    // A nested `.mstarc` layout (`harness_dir=runtime/harness`) must not push
+    // the `.agents/` corpora down to `runtime/.agents/`: they are tracked
+    // results of the repository, and only the repository root is committable
+    // at a stable path.
+    const main = repo();
+    gitRepo(main);
+    // The harness dir exists in the real case: the store lives in it.
+    mkdirSync(join(main, "runtime", "harness"), { recursive: true });
+    const context = { harnessDir: join(main, "runtime", "harness") };
+    expect(catalogRootDir(context, "specs")).toBe(join(main, ".agents", "specs"));
+    expect(catalogRootDir(context, "knowledge")).toBe(join(main, ".agents", "knowledge"));
+  });
 });

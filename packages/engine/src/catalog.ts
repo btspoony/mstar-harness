@@ -232,9 +232,10 @@ export class CatalogError extends Error {
 /**
  * The already-resolved root for a `root_kind`. The harness root is the same
  * selected root as the database; process callers discover it before building
- * the StoreContext. The repository root is the harness dir's parent, the
- * existing convention in `resolveSpecsDir`. `.mstarc` overrides apply through
- * the shared resolvers.
+ * the StoreContext. The repository root is the main worktree that owns the
+ * harness (its parent only when Git cannot name one) — the checkout the
+ * `.agents/` corpora belong to. `.mstarc` overrides apply through the shared
+ * resolvers.
  */
 export function catalogRootDir(context: StoreContext, rootKind: CatalogRootKind): string {
   if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
@@ -245,13 +246,15 @@ export function catalogRootDir(context: StoreContext, rootKind: CatalogRootKind)
   }
   const harness = dirname(storeDbPath(context));
   const mainRoot = dirname(harness);
+  // The repository root follows the caller's checkout for the same reason
+  // tracked results do; another repository's checkout keeps its own root.
+  // The harness may sit below the repository root (a nested `.mstar`), so
+  // the repository root is the main worktree that owns the harness. The
+  // `.agents/` corpora default there, never beside a harness that lives
+  // outside the checkout.
+  const repoRoot = mainWorktreeRoot(harness) ?? mainRoot;
   switch (rootKind) {
     case "repository": {
-      // The repository root follows the caller's checkout for the same reason
-      // tracked results do; another repository's checkout keeps its own root.
-      // The harness may sit below the repository root (a nested `.mstar`), so
-      // the repository root is the main worktree that owns the harness.
-      const repoRoot = mainWorktreeRoot(harness) ?? mainRoot;
       if (context.checkoutRoot === undefined) return repoRoot;
       const callerMain = mainWorktreeRoot(context.checkoutRoot);
       return callerMain !== null && realpathNearest(callerMain) === realpathNearest(repoRoot)
@@ -269,11 +272,11 @@ export function catalogRootDir(context: StoreContext, rootKind: CatalogRootKind)
     // falls back to the process harness.
     case "specs":
       return context.checkoutRoot === undefined
-        ? resolveSpecsDir(harness, { create: false })
+        ? resolveSpecsDir(harness, { create: false, repoRoot })
         : resolveTrackedResultDir(context.checkoutRoot, harness, "specsDir");
     case "knowledge":
       return context.checkoutRoot === undefined
-        ? resolveKnowledgeDir(harness, { create: false })
+        ? resolveKnowledgeDir(harness, { create: false, repoRoot })
         : resolveTrackedResultDir(context.checkoutRoot, harness, "knowledgeDir");
     case "projects":
       return resolveProjectDir(harness, { harnessDir: harness });

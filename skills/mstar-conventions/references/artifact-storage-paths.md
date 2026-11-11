@@ -6,12 +6,12 @@
 
 ## Harness 子树内（`{HARNESS_DIR}/` 下）
 
-这些是 agent handoff 用的结构化产物。**Git 跟踪**遵循 `mstar-conventions` SKILL.md「Git 跟踪策略」：**进程本地、结果共享** — `{HARNESS_DIR}` 整体（`plans/`、`iterations/`、`sdd/`、`reviews/`、`status.json`、`workflows/`、`projects/`、`store.db`）默认 gitignored；tracked 结果在 `.agents/AGENTS.md`、`.agents/knowledge/**`、`.agents/specs/**`、`.agents/adr/**`（bootstrap 默认，由 tracked `.mstarc` 声明；未声明时才回落到 `{HARNESS_DIR}` 下的同名候选链，`mstar path check` 按 Git 实况核对）。 Historical execution/register file shapes (`status.json`, workflow `snapshot.json`, project `residuals.json`) are archive-only — no execution route, no live writer → **`mstar-project-governance`** `references/migration-source-shapes.md`.
+这些是 agent handoff 用的结构化产物。**Git 跟踪**遵循 `mstar-conventions` SKILL.md「Git 跟踪策略」：**进程本地、结果共享** — `{HARNESS_DIR}` 整体（`plans/`、`iterations/`、`sdd/`、`reviews/`、`status.json`、`workflows/`、`projects/`、`store.db`）默认 gitignored；tracked 结果默认在 `.agents/AGENTS.md`、`.agents/knowledge/**`、`.agents/specs/**`、`.agents/adr/**`（`.mstarc` 声明时以声明为准；这三层不在 `{HARNESS_DIR}` 下，迁移前的 `{HARNESS_DIR}/<kind>/` 仅作 legacy 只读，`mstar path check` 按 Git 实况核对）。 Historical execution/register file shapes (`status.json`, workflow `snapshot.json`, project `residuals.json`) are archive-only — no execution route, no live writer → **`mstar-project-governance`** `references/migration-source-shapes.md`.
 
 | 产物 | 解析后路径（默认 `.mstar/`） | 读写的技能 |
 |------|---------------------------|-----------|
-| **知识文档** | `{KNOWLEDGE_DIR}/<category>/<slug>.md`（默认 `.mstar/knowledge/`；`.mstarc` `knowledge_dir` → 默认 → `.agents/knowledge/` 解析，空目录视为不存在） | `mstar-knowledge`（Capture 写；Maintain 读写） |
-| **知识 README（散文）** | `.mstar/knowledge/README.md`（可选导览散文；**不是**登记索引 — 见下） | `mstar-knowledge`（散文指向；**不再**维护索引行） |
+| **知识文档** | `{KNOWLEDGE_DIR}/<category>/<slug>.md`（默认 `.agents/knowledge/`；`.mstarc` `knowledge_dir` 权威，未声明才走解析链，空目录视为不存在） | `mstar-knowledge`（Capture 写；Maintain 读写） |
+| **知识 README（散文）** | `.agents/knowledge/README.md`（或 `{KNOWLEDGE_DIR}` 下同名文件；可选导览散文；**不是**登记索引 — 见下） | `mstar-knowledge`（散文指向；**不再**维护索引行） |
 | **主 plan** | `.mstar/plans/<plan-id>-<name>.md`（gitignored；authored artifact，非执行状态权威） | PM / `mstar-artifacts` |
 | **Review bundle (QC / PM Acceptance raw reports)** | `{HARNESS_DIR}/sdd/<plan-id>/review/` (gitignored) | `mstar-sdd`, `mstar-review-qc`, primary `project-manager` |
 | **SDD scratch** | `{HARNESS_DIR}/sdd/<plan-id>/`（gitignored；含 per-task handoff 与 `review/` bundle） | `mstar-sdd` |
@@ -27,8 +27,8 @@
 | **Iteration prototype** | `{ITERATION_DIR}/<iteration-id>/prototypes/` (gitignored; retained design preview/revisions, feedback and confirmation or autonomous disposition; HTML interactive, HTML/Markdown/JSON autonomous) | `mstar-iteration` Phase 1 §1.2.5; design context linked with existing `iteration_refs`, not specs or runnable acceptance evidence |
 | **迭代 README（散文）** | `.mstar/iterations/README.md`（gitignored；可选导览散文，**不是**登记索引 — 见下） | `mstar-iteration`（散文指向；**不再**维护「一行 = 一次迭代」） |
 | **issue/catalog/roadmap/milestone/execution store** | `.mstar/store.db`（进程/control harness 根；gitignored；issues、catalog、project_roadmaps/project_milestones 与 execution_* 路由/plan/lease/session/冻结输入权威） | `mstar issue …` / `mstar catalog …` / `mstar roadmap …` / `mstar milestone …` / 公共 workflow/plan 动词；读取 `mstar status validate` / `mstar plan show` |
-| **规格** | `{SPECS_DIR}/`（默认 `.mstar/specs/`；解析 `.mstarc` `specs_dir` → `{HARNESS_DIR}/specs` → `.agents/specs` → `docs/specs` → 根 `specs` → legacy `designs`，见 `mstar-conventions`） | `mstar-artifacts` |
-| **ADR** | `{ADR_DIR}/{bucket}/{class}/yyyy-mm-dd-topic.md`（默认 `.mstar/adr/`；解析 `.mstarc` `adr_dir` → `{HARNESS_DIR}/adr` → `.agents/adr` → `docs/adr`；命名与生命周期 → `mstar-doc-corpus/references/adr.md`） | `mstar-doc-corpus`（记录形状 / 生命周期） |
+| **规格** | `{SPECS_DIR}/`（默认 `.agents/specs/`；解析 `.mstarc` `specs_dir` 权威 → `.agents/specs` → `docs/specs` → 根 `specs` → legacy `designs` → legacy `{HARNESS_DIR}/specs` 只读，见 `mstar-conventions`） | `mstar-artifacts` |
+| **ADR** | `{ADR_DIR}/{bucket}/{class}/yyyy-mm-dd-topic.md`（默认 `.agents/adr/`；解析 `.mstarc` `adr_dir` 权威 → `.agents/adr` → `docs/adr` → legacy `{HARNESS_DIR}/adr` 只读；命名与生命周期 → `mstar-doc-corpus/references/adr.md`） | `mstar-doc-corpus`（记录形状 / 生命周期） |
 | **harness AGENTS** | `.agents/AGENTS.md`（tracked；`.mstar/` 整体被忽略，其中的规则文件无法共享） | `mstar harness scaffold` 写；PM 维护 |
 | **archived knowledge** | `.mstar/archived/knowledge/`（保留原 `{KNOWLEDGE_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-artifacts` |
 | **archived specs** | `.mstar/archived/specs/`（保留原 `{SPECS_DIR}` 相对路径） | `mstar-iteration` §1.6 corpus hygiene、`mstar-artifacts` |

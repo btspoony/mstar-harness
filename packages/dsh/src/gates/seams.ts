@@ -19,10 +19,13 @@ import { type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
   assertLightDarkParity,
+  canonicalizeNearestExisting,
   collectLegacyArchiveReferenceTexts,
   lintLoadOrder,
   mergeLegacyArchiveReferences,
+  probeCheckoutRoot,
   referenceExists,
+  resolveKnowledgeDir,
   resolveReviewDir,
   validateDesignTokenFrontmatter,
   validateRoleMapping,
@@ -138,9 +141,10 @@ function rolesDirOf(path: string): string {
 
 /** Whether a target is in the seam's artifact scope. Design-md matches by
  * basename (the artifact is the file itself, wherever the design lives);
- * audit matches the `{REVIEW_DIR}` review-run tree; compound matches
- * `{HARNESS_DIR}/knowledge/**` (inert without a harness dir); roles
- * matches the mstar-roles skill layout. */
+ * audit matches the `{REVIEW_DIR}` review-run tree; compound matches the
+ * `{KNOWLEDGE_DIR}` the resolver returns for this harness (`.mstarc`, else
+ * the `.agents/knowledge/` default, else legacy) — inert without a harness;
+ * roles matches the mstar-roles skill layout. */
 function isSeamTarget(seam: SeamId, harnessDir: string | null, target: FsTarget): boolean {
   const path = resolve(target.displayPath)
   switch (seam) {
@@ -151,8 +155,22 @@ function isSeamTarget(seam: SeamId, harnessDir: string | null, target: FsTarget)
     case 'audit':
       return isAuditReviewTarget(path, harnessDir)
     case 'compound': {
-      if (harnessDir === null) return false
-      return path.startsWith(resolve(join(harnessDir, 'knowledge')) + sep) && isMarkdownDoc(path)
+      // Cheap predicate first: `fs/write-intent` fires on every write, and the
+      // checkout anchor below costs a Git probe.
+      if (harnessDir === null || !isMarkdownDoc(path)) return false
+      // Resolve, never compose: the corpus default is `.agents/knowledge/`,
+      // so a literal `join(harnessDir, 'knowledge')` would miss the directory
+      // the resolver actually returns and the gate would stop covering it.
+      // The anchor is the checkout that owns the harness, not the harness
+      // dir's parent: a nested or outside harness would otherwise scope a
+      // directory no corpus occupies. The parent stands in only when Git
+      // cannot name a checkout (a non-repository fixture).
+      const repoRoot = probeCheckoutRoot(harnessDir) ?? dirname(harnessDir)
+      const knowledgeDir = resolveKnowledgeDir(harnessDir, { create: false, repoRoot })
+      // The probe answers a realpath, and the target arrives in whatever
+      // spelling the session used: `/var` vs `/private/var` must not decide
+      // membership (the engine's own resolver canonicalizes the same pair).
+      return canonicalizeNearestExisting(path).startsWith(canonicalizeNearestExisting(knowledgeDir) + sep)
     }
     case 'roles':
       return isRolesTarget(path)
@@ -205,17 +223,17 @@ export function validateAuditDoc(doc: string, path: string): GateResult & { find
 
 /**
  * Validate a knowledge doc: schema.yaml frontmatter contract + referenced
- * path/module existence. The repo root for `referenceExists` is derived as
- * the parent of `{HARNESS_DIR}` — the plan-conventions discovery layout
- * always places the harness dir directly under the repo root
- * (`<repo>/.mstar`, `<repo>/.agents`, `<repo>/plans`).
- * simplify: single-level harness layout — revisit if a nested harness root
- * becomes an observed deployment.
+ * path/module existence. The repo root for `referenceExists` is the checkout
+ * that contains `{HARNESS_DIR}` — a git probe, not `dirname(harness)` — so a
+ * nested `.mstarc` layout (`<repo>/runtime/harness`) does not look for the
+ * document's references one level too deep. The parent stands in only when
+ * Git cannot name a checkout (a non-repository fixture).
  */
 export function validateCompoundDoc(doc: string, _path: string, harnessDir: string | null): GateResult {
   const violations = [...validateSchemaYaml(doc).violations]
   if (harnessDir !== null) {
-    violations.push(...referenceExists(dirname(harnessDir), doc).violations)
+    const repoRoot = probeCheckoutRoot(harnessDir) ?? dirname(harnessDir)
+    violations.push(...referenceExists(repoRoot, doc).violations)
   }
   return violations.length === 0 ? { ok: true, violations } : { ok: false, violations }
 }

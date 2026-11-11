@@ -9,9 +9,9 @@
  * `.plans/`/`plans/` (rung 3: `{HARNESS_DIR}={PLAN_DIR}`); harness
  * candidates are dir-existence (the empty-dir rule applies to SPECS only).
  * - `{SPECS_DIR}` resolution (first non-empty candidate wins, empty-dir-as-
- * absent, default-create `{HARNESS_DIR}/specs/` when all absent; legacy
- * read-only `designs/` candidates `{HARNESS_DIR}/designs/` → repo-root
- * `designs/` — 兼容读, never created by init):
+ * absent, default-create `<repoRoot>/.agents/specs/` when all absent; legacy
+ * read-only `designs/` candidates and the `{HARNESS_DIR}/specs/` tail —
+ * 兼容读, never created by init):
  * `skills/mstar-conventions/SKILL.md` § {SPECS_DIR} 解析（找到非空目录即停）
  * + § {SPECS_DIR} 解析 Legacy.
  * - Scaffold dirs: `skills/mstar-conventions/SKILL.md` § 初始化 Plan 目录.
@@ -576,7 +576,7 @@ describe("resolveXDir — `.mstarc` [config] sub-directory keys (plan-convention
       expect(resolvePlanDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "plans"));
       writeFileSync(join(root, ".mstarc"), "# no dirs\n");
       expect(resolveIterationDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "iterations"));
-      expect(resolveKnowledgeDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "knowledge"));
+      expect(resolveKnowledgeDir(join(root, ".mstar"), { create: false })).toBe(join(root, ".agents", "knowledge"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -799,19 +799,31 @@ describe("resolveReviewDir / review-run dir names ({REVIEW_DIR}, review-report c
 });
 
 describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
-  test("first non-empty candidate wins: {HARNESS_DIR}/specs", () => {
-    const root = tmpRoot("path-specs-first-");
+  test("candidate order: .agents/specs → docs/specs → repo-root specs → legacy {HARNESS_DIR}/specs", () => {
+    const root = tmpRoot("path-specs-order-");
     try {
-      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      const harness = join(root, ".mstar");
+      mkdirSync(join(harness, "specs"), { recursive: true });
+      writeFileSync(join(harness, "specs", "spec.md"), "# spec\n");
+      expect(resolveSpecsDir(harness, { create: false })).toBe(join(harness, "specs"));
+
+      mkdirSync(join(root, "specs"), { recursive: true });
+      writeFileSync(join(root, "specs", "spec.md"), "# spec\n");
+      expect(resolveSpecsDir(harness, { create: false })).toBe(join(root, "specs"));
+
       mkdirSync(join(root, "docs", "specs"), { recursive: true });
-      writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
-      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "specs"));
+      writeFileSync(join(root, "docs", "specs", "spec.md"), "# spec\n");
+      expect(resolveSpecsDir(harness, { create: false })).toBe(join(root, "docs", "specs"));
+
+      mkdirSync(join(root, ".agents", "specs"), { recursive: true });
+      writeFileSync(join(root, ".agents", "specs", "spec.md"), "# spec\n");
+      expect(resolveSpecsDir(harness, { create: false })).toBe(join(root, ".agents", "specs"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("empty {HARNESS_DIR}/specs is treated as absent → docs/specs", () => {
+  test("empty {HARNESS_DIR}/specs is treated as absent → docs/specs (legacy dir never wins by existing)", () => {
     const root = tmpRoot("path-specs-second-");
     try {
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
@@ -848,23 +860,24 @@ describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
     }
   });
 
-  test("all candidates absent → default-creates {HARNESS_DIR}/specs", () => {
+  test("no .mstarc, empty repo → creates <repoRoot>/.agents/specs", () => {
     const root = tmpRoot("path-specs-default-");
     try {
       const specsDir = resolveSpecsDir(join(root, ".mstar"));
-      expect(specsDir).toBe(join(root, ".mstar", "specs"));
+      expect(specsDir).toBe(join(root, ".agents", "specs"));
       expect(readdirSync(specsDir)).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("create: false skips the directory creation side effect", () => {
+  test("create: false performs no filesystem writes", () => {
     const root = tmpRoot("path-specs-nocreate-");
     try {
       const specsDir = resolveSpecsDir(join(root, ".mstar"), { create: false });
-      expect(specsDir).toBe(join(root, ".mstar", "specs"));
+      expect(specsDir).toBe(join(root, ".agents", "specs"));
       expect(() => readdirSync(specsDir)).toThrow();
+      expect(existsSync(join(root, ".agents"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -896,13 +909,13 @@ describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
     }
   });
 
-  test("empty legacy repo-root designs/ is skipped → default-creates {HARNESS_DIR}/specs", () => {
+  test("empty legacy repo-root designs/ is skipped → default-creates <repoRoot>/.agents/specs", () => {
     const root = tmpRoot("path-specs-designs-empty-");
     try {
       mkdirSync(join(root, ".mstar", "designs"), { recursive: true });
       mkdirSync(join(root, "designs"), { recursive: true });
       const specsDir = resolveSpecsDir(join(root, ".mstar"));
-      expect(specsDir).toBe(join(root, ".mstar", "specs"));
+      expect(specsDir).toBe(join(root, ".agents", "specs"));
       expect(readdirSync(specsDir)).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -915,7 +928,7 @@ describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
       mkdirSync(join(root, ".mstar", "designs"), { recursive: true });
       mkdirSync(join(root, "designs"), { recursive: true });
       const specsDir = resolveSpecsDir(join(root, ".mstar"), { create: false });
-      expect(specsDir).toBe(join(root, ".mstar", "specs"));
+      expect(specsDir).toBe(join(root, ".agents", "specs"));
       expect(() => readdirSync(specsDir)).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -936,14 +949,14 @@ describe("resolveSpecsDir — tracked `.agents/specs` rung", () => {
     }
   });
 
-  test("non-empty {HARNESS_DIR}/specs still wins over the `.agents` rung", () => {
+  test("non-empty .agents/specs wins over a non-empty legacy {HARNESS_DIR}/specs", () => {
     const root = tmpRoot("path-specs-agents-precedence-");
     try {
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
       mkdirSync(join(root, ".agents", "specs"), { recursive: true });
       writeFileSync(join(root, ".agents", "specs", "other.md"), "# other\n");
-      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "specs"));
+      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, ".agents", "specs"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -965,23 +978,22 @@ describe("resolveSpecsDir — tracked `.agents/specs` rung", () => {
 });
 
 describe("resolveKnowledgeDir (plan-conventions § 路径符号 / tracked-results chain)", () => {
-  test("non-empty {HARNESS_DIR}/knowledge wins", () => {
-    const root = tmpRoot("path-knowledge-first-");
+  test("no .mstarc, empty repo → creates <repoRoot>/.agents/knowledge", () => {
+    const root = tmpRoot("path-knowledge-default-");
     try {
-      mkdirSync(join(root, ".mstar", "knowledge"), { recursive: true });
-      writeFileSync(join(root, ".mstar", "knowledge", "kb.md"), "# kb\n");
-      mkdirSync(join(root, ".agents", "knowledge"), { recursive: true });
-      writeFileSync(join(root, ".agents", "knowledge", "tracked.md"), "# tracked\n");
-      expect(resolveKnowledgeDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "knowledge"));
+      const dir = resolveKnowledgeDir(join(root, ".mstar"));
+      expect(dir).toBe(join(root, ".agents", "knowledge"));
+      expect(existsSync(dir)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("empty {HARNESS_DIR}/knowledge falls through to <repoRoot>/.agents/knowledge", () => {
-    const root = tmpRoot("path-knowledge-agents-");
+  test("non-empty .agents/knowledge wins over a non-empty legacy {HARNESS_DIR}/knowledge", () => {
+    const root = tmpRoot("path-knowledge-first-");
     try {
       mkdirSync(join(root, ".mstar", "knowledge"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "knowledge", "kb.md"), "# kb\n");
       mkdirSync(join(root, ".agents", "knowledge"), { recursive: true });
       writeFileSync(join(root, ".agents", "knowledge", "tracked.md"), "# tracked\n");
       expect(resolveKnowledgeDir(join(root, ".mstar"))).toBe(join(root, ".agents", "knowledge"));
@@ -990,23 +1002,27 @@ describe("resolveKnowledgeDir (plan-conventions § 路径符号 / tracked-result
     }
   });
 
-  test("all candidates absent → creates the {HARNESS_DIR}/knowledge fallback", () => {
-    const root = tmpRoot("path-knowledge-fallback-");
+  test("legacy {HARNESS_DIR}/knowledge is still read when nothing preferred exists, and never created", () => {
+    const root = tmpRoot("path-knowledge-legacy-");
     try {
-      const dir = resolveKnowledgeDir(join(root, ".mstar"));
-      expect(dir).toBe(join(root, ".mstar", "knowledge"));
-      expect(existsSync(dir)).toBe(true);
+      const legacy = join(root, ".mstar", "knowledge");
+      expect(resolveKnowledgeDir(join(root, ".mstar"), { create: false })).toBe(join(root, ".agents", "knowledge"));
+      expect(existsSync(join(root, ".agents"))).toBe(false);
+
+      mkdirSync(legacy, { recursive: true });
+      writeFileSync(join(legacy, "kb.md"), "# kb\n");
+      expect(resolveKnowledgeDir(join(root, ".mstar"), { create: false })).toBe(legacy);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("create: false keeps the resolver read-only", () => {
+  test("create: false performs no filesystem writes", () => {
     const root = tmpRoot("path-knowledge-nocreate-");
     try {
       const dir = resolveKnowledgeDir(join(root, ".mstar"), { create: false });
-      expect(dir).toBe(join(root, ".mstar", "knowledge"));
-      expect(existsSync(dir)).toBe(false);
+      expect(dir).toBe(join(root, ".agents", "knowledge"));
+      expect(existsSync(join(root, ".agents"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1026,7 +1042,7 @@ describe("resolveKnowledgeDir (plan-conventions § 路径符号 / tracked-result
 });
 
 describe("resolveAdrDir (tracked-results chain)", () => {
-  test("candidate order: {HARNESS_DIR}/adr → .agents/adr → docs/adr", () => {
+  test("candidate order: .agents/adr → docs/adr → legacy {HARNESS_DIR}/adr", () => {
     const root = tmpRoot("path-adr-chain-");
     try {
       const harness = join(root, ".mstar");
@@ -1038,9 +1054,26 @@ describe("resolveAdrDir (tracked-results chain)", () => {
       writeFileSync(join(root, ".agents", "adr", "0002.md"), "# adr\n");
       expect(resolveAdrDir(harness, { create: false })).toBe(join(root, ".agents", "adr"));
 
+      rmSync(join(root, ".agents", "adr"), { recursive: true, force: true });
+      expect(resolveAdrDir(harness, { create: false })).toBe(join(root, "docs", "adr"));
+
+      rmSync(join(root, "docs", "adr"), { recursive: true, force: true });
       mkdirSync(join(harness, "adr"), { recursive: true });
       writeFileSync(join(harness, "adr", "0003.md"), "# adr\n");
       expect(resolveAdrDir(harness, { create: false })).toBe(join(harness, "adr"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("non-empty .agents/adr beats a non-empty docs/adr", () => {
+    const root = tmpRoot("path-adr-agents-first-");
+    try {
+      mkdirSync(join(root, ".agents", "adr"), { recursive: true });
+      writeFileSync(join(root, ".agents", "adr", "0001.md"), "# adr\n");
+      mkdirSync(join(root, "docs", "adr"), { recursive: true });
+      writeFileSync(join(root, "docs", "adr", "0002.md"), "# adr\n");
+      expect(resolveAdrDir(join(root, ".mstar"), { create: false })).toBe(join(root, ".agents", "adr"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1059,13 +1092,25 @@ describe("resolveAdrDir (tracked-results chain)", () => {
     }
   });
 
-  test("all candidates absent → creates the {HARNESS_DIR}/adr fallback", () => {
+  test("all candidates absent → creates <repoRoot>/.agents/adr; create: false writes nothing", () => {
     const root = tmpRoot("path-adr-fallback-");
     try {
       const dir = resolveAdrDir(join(root, ".mstar"));
-      expect(dir).toBe(join(root, ".mstar", "adr"));
+      expect(dir).toBe(join(root, ".agents", "adr"));
       expect(existsSync(dir)).toBe(true);
       expect(resolveAdrDir(join(root, ".mstar"), { create: false })).toBe(dir);
+      expect(existsSync(join(root, ".mstar", "adr"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("create: false performs no filesystem writes", () => {
+    const root = tmpRoot("path-adr-nocreate-");
+    try {
+      const dir = resolveAdrDir(join(root, ".mstar"), { create: false });
+      expect(dir).toBe(join(root, ".agents", "adr"));
+      expect(existsSync(join(root, ".agents"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1078,6 +1123,64 @@ describe("resolveAdrDir (tracked-results chain)", () => {
       mkdirSync(join(root, "docs", "adr"), { recursive: true });
       writeFileSync(join(root, "docs", "adr", "0001.md"), "# adr\n");
       expect(resolveAdrDir(join(root, ".mstar"), { create: false })).toBe(join(root, "docs", "decisions"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolvers — `repoRoot` anchors the `.agents/` default to a checkout", () => {
+  test("a harness outside the checkout keeps the created corpus inside it, not beside the harness", () => {
+    const root = tmpRoot("path-repo-root-anchor-");
+    try {
+      const checkout = join(root, "checkout");
+      const harness = join(root, "state", "harness");
+      mkdirSync(checkout, { recursive: true });
+      expect(resolveSpecsDir(harness, { repoRoot: checkout })).toBe(join(checkout, ".agents", "specs"));
+      expect(existsSync(join(checkout, ".agents", "specs"))).toBe(true);
+      expect(resolveKnowledgeDir(harness, { repoRoot: checkout })).toBe(join(checkout, ".agents", "knowledge"));
+      expect(resolveAdrDir(harness, { repoRoot: checkout })).toBe(join(checkout, ".agents", "adr"));
+      // Nothing is created beside the harness: that directory is not a checkout.
+      expect(existsSync(join(root, "state", ".agents"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("`repoRoot` also anchors the candidate chain, so a checkout's docs/specs wins", () => {
+    const root = tmpRoot("path-repo-root-chain-");
+    try {
+      const checkout = join(root, "checkout");
+      const harness = join(root, "state", "harness");
+      mkdirSync(join(checkout, "docs", "specs"), { recursive: true });
+      writeFileSync(join(checkout, "docs", "specs", "spec.md"), "# spec\n");
+      // Without an anchor the chain looks beside the harness and creates a
+      // default there; the anchor must make the checkout's own rung win.
+      expect(resolveSpecsDir(harness, { create: false, repoRoot: checkout })).toBe(join(checkout, "docs", "specs"));
+      expect(existsSync(join(root, "state", ".agents"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an omitted `repoRoot` keeps the harness dir's parent as the anchor", () => {
+    const root = tmpRoot("path-repo-root-omitted-");
+    try {
+      const harness = join(root, ".mstar");
+      expect(resolveSpecsDir(harness, { create: false })).toBe(join(root, ".agents", "specs"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("`.mstarc` stays authoritative when a `repoRoot` is passed", () => {
+    const root = tmpRoot("path-repo-root-declared-");
+    try {
+      const checkout = join(root, "checkout");
+      const harness = join(root, ".mstar");
+      mkdirSync(checkout, { recursive: true });
+      writeFileSync(join(root, ".mstarc"), "[config]\nspecs_dir=docs/specs\n");
+      expect(resolveSpecsDir(harness, { create: false, repoRoot: checkout })).toBe(join(root, "docs", "specs"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1131,6 +1234,15 @@ describe("scaffoldHarness", () => {
       await scaffoldHarness(root, { harnessDir });
       const config = parseMstarc(readFileSync(join(root, "runtime", ".mstarc"), "utf8"));
       expect(config.harnessDir).toBe("harness");
+      // Each corpus key is relative to this declaration's own directory, and
+      // the corpora the scaffold created sit at the repository root — so the
+      // written values climb out of `runtime/`, rather than naming a second
+      // `.agents/` beside the harness.
+      expect(config.knowledgeDir).toBe("../.agents/knowledge");
+      expect(config.specsDir).toBe("../.agents/specs");
+      expect(config.adrDir).toBe("../.agents/adr");
+      expect(existsSync(join(root, ".agents", "knowledge"))).toBe(true);
+      expect(existsSync(join(root, "runtime", ".agents"))).toBe(false);
       // The declaration is not second-guessed at a nested parent either.
       expect(existsSync(join(root, ".mstarc"))).toBe(false);
     } finally {
@@ -1200,6 +1312,60 @@ describe("scaffoldHarness", () => {
       setArtifactStore(createFsStore(resolve(root, ".custom")));
       await scaffoldHarness(root);
       expect(readFileSync(join(root, ".mstarc"), "utf8")).toBe("[config]\nharness_dir=.custom\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Bootstrap is greenfield: a legacy `{HARNESS_DIR}/adr/` that merely exists
+  // must not be adopted as the declared target — the resolver would pick it
+  // and the `.mstarc` would then point at a path a gitignored `.mstar/` cannot
+  // carry into a commit, with the templates seeded into it.
+  test("never adopts a populated .mstar/adr: declares and seeds .agents/adr instead", async () => {
+    const root = tmpRoot("path-scaffold-legacy-adr-");
+    try {
+      const legacyAdr = join(root, ".mstar", "adr");
+      mkdirSync(legacyAdr, { recursive: true });
+      writeFileSync(join(legacyAdr, "0001-legacy.md"), "# ADR: legacy\n", "utf8");
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      await scaffoldHarness(root);
+
+      const config = parseMstarc(readFileSync(join(root, ".mstarc"), "utf8"));
+      expect(config.adrDir).toBe(".agents/adr");
+      // The templates land in the declared dir, not in the legacy one.
+      for (const bucket of ["proposed", "implemented"]) {
+        expect(existsSync(join(root, ".agents", "adr", bucket, "TEMPLATE.md"))).toBe(true);
+      }
+      expect(existsSync(join(root, ".agents", "adr", "README.md"))).toBe(true);
+      // The legacy tree is read-only for the scaffold: same entries, same bytes.
+      expect(readdirSync(legacyAdr)).toEqual(["0001-legacy.md"]);
+      expect(readFileSync(join(legacyAdr, "0001-legacy.md"), "utf8")).toBe("# ADR: legacy\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // A declared corpus is authoritative: the scaffold seeds where the
+  // repository already writes instead of creating a second tree beside it.
+  test("seeds a declared adr_dir and never creates the .agents default", async () => {
+    const root = tmpRoot("path-scaffold-declared-adr-");
+    try {
+      const authored = "[config]\nharness_dir=.mstar\nadr_dir=docs/adr\n";
+      writeFileSync(join(root, ".mstarc"), authored, "utf8");
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      await scaffoldHarness(root);
+
+      for (const bucket of ["proposed", "implemented"]) {
+        expect(existsSync(join(root, "docs", "adr", bucket, "TEMPLATE.md"))).toBe(true);
+      }
+      expect(existsSync(join(root, "docs", "adr", "README.md"))).toBe(true);
+      // The declared path is the only ADR tree the scaffold touches.
+      expect(existsSync(join(root, ".agents", "adr"))).toBe(false);
+      // The two undeclared corpora keep the greenfield default.
+      expect(existsSync(join(root, ".agents", "knowledge"))).toBe(true);
+      expect(existsSync(join(root, ".agents", "specs"))).toBe(true);
+      // The author's declaration is authoritative and never rewritten.
+      expect(readFileSync(join(root, ".mstarc"), "utf8")).toBe(authored);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -214,15 +214,25 @@ function mstarcDeclared(harnessDir: string, key: MstarcStringKey): { dir: string
 }
 
 /**
- * Options for `resolveSpecsDir`.
+ * Options for `resolveSpecsDir` / `resolveKnowledgeDir` / `resolveAdrDir`.
  */
 export type ResolveSpecsDirOptions = {
   /**
- * Default true: when every candidate is absent or empty, create
- * `{HARNESS_DIR}/specs/` (plan-conventions § 创建默认). Read-only callers
- * (e.g. `mstar path resolve`) pass `false` to skip the side effect.
- */
+   * Default true: when every candidate is absent or empty, create
+   * `<repoRoot>/.agents/specs/`. Read-only callers (e.g. `mstar path resolve`)
+   * pass `false` to skip the side effect.
+   */
   create?: boolean;
+  /**
+   * The checkout the `.agents/` default belongs to. Defaults to
+   * `dirname(harnessDir)`, which is only correct when the harness sits
+   * directly under the repository root: a harness passed as
+   * `scaffoldHarness(root, { harnessDir: outside })`, or a nested harness,
+   * would otherwise create the fallback beside that harness — outside the
+   * repository, where no one can commit it. Callers that know the checkout
+   * (a Git top level, a scaffold `root`) pass it.
+   */
+  repoRoot?: string;
 };
 
 /**
@@ -230,18 +240,24 @@ export type ResolveSpecsDirOptions = {
  * `.mstarc` `[config] specs_dir` declaration is authoritative — returned
  * directly (resolved against the config file's directory; created when
  * `create` is not false; no candidate chain, no empty-dir rule). Otherwise
- * the first non-empty candidate wins — `{HARNESS_DIR}/specs/` →
- * `<repoRoot>/.agents/specs/` → `docs/specs/` → repo-root `specs/` (repo
- * root = parent of the harness dir), then the legacy read-only `designs/`
- * candidates (`{HARNESS_DIR}/designs/` → repo-root `designs/`,
- * § {SPECS_DIR} 解析 Legacy — 兼容读 only, never created by init). The
- * `<repoRoot>/.agents/specs/` rung lets a repo whose `.mstar/` is fully
- * gitignored keep its tracked specs in the tracked `.agents/` tree; when the
- * harness dir IS `.agents` it duplicates the first candidate and the
- * candidate list drops the repeat. A candidate that exists but holds no
- * files is treated as absent (empty-dir rule, recursive). When all
- * candidates are absent, `{HARNESS_DIR}/specs/` is created and returned
- * (unless `create: false`).
+ * the first non-empty candidate wins — `<repoRoot>/.agents/specs/` →
+ * `docs/specs/` → repo-root `specs/` (`repoRoot` is the checkout the
+ * `.agents/` default belongs to: `opts.repoRoot` when the caller knows it,
+ * else the harness dir's parent), then the legacy read-only `designs/`
+ * candidates
+ * (`{HARNESS_DIR}/designs/` → repo-root `designs/`, § {SPECS_DIR} 解析
+ * Legacy — 兼容读 only, never created by init). The `.agents/` rung is a
+ * default, not a claim: it is what a repository without a `.mstarc` gets, so
+ * a tracked corpus survives a fully gitignored `.mstar/`; when the harness
+ * dir IS `.agents` the candidate list dedupes the repeat. A candidate that
+ * exists but holds no files is treated as absent (empty-dir rule,
+ * recursive). When all candidates are absent, `<repoRoot>/.agents/specs/`
+ * is created and returned (unless `create: false`).
+ *
+ * `{HARNESS_DIR}/specs/` is a legacy read source only, at the END of the
+ * chain: it is never created, never returned as the fallback, and no
+ * document presents it as a place specs live. Delete that rung once no
+ * repository is expected to carry pre-move specs there.
  */
 export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions = {}): string {
   const declared = mstarcDirOverride(harnessDir, "specsDir");
@@ -250,9 +266,8 @@ export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions
     return declared;
   }
   const harness = resolve(harnessDir);
-  const repoRoot = dirname(harness);
+  const repoRoot = opts.repoRoot === undefined ? dirname(harness) : resolve(opts.repoRoot);
   const candidates = [
-    join(harness, "specs"),
     join(repoRoot, ".agents", "specs"),
     join(repoRoot, "docs", "specs"),
     join(repoRoot, "specs"),
@@ -260,11 +275,13 @@ export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions
 // init must NOT create designs/; same empty-dir-as-absent rule applies.
     join(harness, "designs"),
     join(repoRoot, "designs"),
+// Legacy read-only tail: pre-move specs under the harness root.
+    join(harness, "specs"),
   ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory(candidate) && hasFiles(candidate)) return candidate;
   }
-  const fallback = join(harness, "specs");
+  const fallback = join(repoRoot, ".agents", "specs");
   if (opts.create !== false) mkdirSync(fallback, { recursive: true });
   return fallback;
 }
@@ -357,25 +374,20 @@ export function resolveIterationDir(harnessDir: string): string {
 }
 
 /**
- * Options for `resolveKnowledgeDir` / `resolveAdrDir`.
+ * Options for `resolveKnowledgeDir` / `resolveAdrDir`: the same `create` and
+ * `repoRoot` contract as `resolveSpecsDir`.
  */
-export type ResolveTrackedDirOptions = {
-  /**
-   * Default true: when every candidate is absent or empty, create the
-   * `{HARNESS_DIR}` fallback. Read-only callers (e.g. `mstar path resolve`)
-   * pass `false` to skip the side effect.
-   */
-  create?: boolean;
-};
+export type ResolveTrackedDirOptions = ResolveSpecsDirOptions;
 
 /**
  * Resolve `{KNOWLEDGE_DIR}`. A `.mstarc` `[config] knowledge_dir`
  * declaration is authoritative (resolved against the config file's
  * directory). Otherwise the first non-empty candidate wins —
- * `{HARNESS_DIR}/knowledge/` → `<repoRoot>/.agents/knowledge/` (tracked
- * knowledge survives a fully gitignored `.mstar/`) — with the empty-dir
- * rule applied to both; when neither holds files the fallback
- * `{HARNESS_DIR}/knowledge/` is created (unless `create: false`).
+ * `<repoRoot>/.agents/knowledge/` (a default, so tracked knowledge survives
+ * a fully gitignored `.mstar/`) — with the empty-dir rule applied; when it
+ * holds no files the fallback `<repoRoot>/.agents/knowledge/` is created
+ * (unless `create: false`). `{HARNESS_DIR}/knowledge/` is a legacy read
+ * source only: last in the chain, never created, never the fallback.
  */
 export function resolveKnowledgeDir(harnessDir: string, opts: ResolveTrackedDirOptions = {}): string {
   return resolveTrackedDir(harnessDir, opts, "knowledgeDir", "knowledge", [".agents", "knowledge"]);
@@ -384,10 +396,11 @@ export function resolveKnowledgeDir(harnessDir: string, opts: ResolveTrackedDirO
 /**
  * Resolve `{ADR_DIR}`. A `.mstarc` `[config] adr_dir` declaration is
  * authoritative (resolved against the config file's directory). Otherwise
- * the first non-empty candidate wins — `{HARNESS_DIR}/adr/` →
- * `<repoRoot>/.agents/adr/` → `<repoRoot>/docs/adr/` — all subject to the
- * empty-dir rule; when none holds files the fallback `{HARNESS_DIR}/adr/`
- * is created (unless `create: false`).
+ * the first non-empty candidate wins — `<repoRoot>/.agents/adr/` (default) →
+ * `<repoRoot>/docs/adr/` — both subject to the empty-dir rule; when neither
+ * holds files the fallback `<repoRoot>/.agents/adr/` is created (unless
+ * `create: false`). `{HARNESS_DIR}/adr/` is a legacy read source only:
+ * last in the chain, never created, never the fallback.
  */
 export function resolveAdrDir(harnessDir: string, opts: ResolveTrackedDirOptions = {}): string {
   return resolveTrackedDir(harnessDir, opts, "adrDir", "adr", [".agents", "adr"], ["docs", "adr"]);
@@ -412,13 +425,15 @@ export function resolveTrackedResultDir(
   const harness = resolve(harnessDir);
   const mainRoot = mainWorktreeRoot(harness) ?? dirname(harness);
   const declared = mstarcDeclared(harness, key);
+  // `repoRoot` is the checkout that owns the harness: the `.agents/` default
+  // belongs there, not beside a harness that may sit outside it.
   const mainTarget =
     declared === null
       ? key === "specsDir"
-        ? resolveSpecsDir(harness, { create: false })
+        ? resolveSpecsDir(harness, { create: false, repoRoot: mainRoot })
         : key === "knowledgeDir"
-          ? resolveKnowledgeDir(harness, { create: false })
-          : resolveAdrDir(harness, { create: false })
+          ? resolveKnowledgeDir(harness, { create: false, repoRoot: mainRoot })
+          : resolveAdrDir(harness, { create: false, repoRoot: mainRoot })
       : isAbsolute(declared.value)
         ? resolve(declared.value)
         : resolve(declared.dir, declared.value);
@@ -439,10 +454,12 @@ export function resolveTrackedResultDir(
 
 /**
  * Shared body of the tracked-result resolvers: `.mstarc` override, then the
- * non-empty candidate chain (`{HARNESS_DIR}/<name>` followed by the given
- * repo-root-relative segments), then the created `{HARNESS_DIR}/<name>`
- * fallback. Candidates are deduped so a `.agents` harness does not test its
- * own directory twice.
+ * non-empty candidate chain (`<repoRoot>/.agents/<name>` followed by the given
+ * repo-root-relative segments), then the legacy read-only
+ * `{HARNESS_DIR}/<name>` tail, then the created
+ * `<repoRoot>/.agents/<name>` fallback. The legacy rung is read, never
+ * created and never the fallback. Candidates are deduped so a `.agents`
+ * harness does not test its own directory twice.
  */
 function resolveTrackedDir(
   harnessDir: string,
@@ -454,14 +471,19 @@ function resolveTrackedDir(
   const declared = mstarcDirOverride(harnessDir, key);
   if (declared !== null) return declared;
   const harness = resolve(harnessDir);
-  const repoRoot = dirname(harness);
-  const candidates = [join(harness, name), ...extra.map((segments) => join(repoRoot, ...segments))];
+  const repoRoot = opts.repoRoot === undefined ? dirname(harness) : resolve(opts.repoRoot);
+  const preferred = join(repoRoot, ".agents", name);
+  const candidates = [
+    preferred,
+    ...extra.map((segments) => join(repoRoot, ...segments)),
+    // Legacy read-only tail: pre-move documents under the harness root.
+    join(harness, name),
+  ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory(candidate) && hasFiles(candidate)) return candidate;
   }
-  const fallback = join(harness, name);
-  if (opts.create !== false) mkdirSync(fallback, { recursive: true });
-  return fallback;
+  if (opts.create !== false) mkdirSync(preferred, { recursive: true });
+  return preferred;
 }
 
 /**
@@ -729,9 +751,20 @@ export function resolveScaffoldDirs(
  *
  * The layout bootstrap produces is the recommended one: `.mstar/` is a fully
  * local process root, `.mstarc` (tracked) declares the layout, and the
- * tracked corpora live under `.agents/`. Order matters — the `.mstarc` write
- * comes first so the resolvers below land on the declared directories instead
- * of their candidate-chain fallbacks.
+ * tracked corpora live under `.agents/`. Order matters — the three corpus
+ * dirs are composed first, and the bootstrap `.mstarc` is then written *from*
+ * the directories this run creates. A declaration authored before the run
+ * wins outright (`writeBootstrapMstarc` backs off when one is already in
+ * scope), so the file never pre-empts a choice the repository already made.
+ *
+ * Declared wins, greenfield default next, undeclared legacy never adopted.
+ * A `.mstarc` key for the corpus is authoritative — the scaffold seeds where
+ * that repository already writes — and otherwise the corpora are the
+ * greenfield `<scaffoldRoot>/.agents/<kind>` paths, never a resolver
+ * candidate: adopting a directory that merely exists would turn it into the
+ * declared write target — a legacy `{HARNESS_DIR}/<kind>/` most of all, whose
+ * contents a wholesale gitignored `.mstar/` can never carry into a commit.
+ * Existing content is read by the resolvers, not re-homed by the scaffold.
  *
  * Idempotent: an existing `.mstarc`, directory, template or README is never
  * rewritten. Returns the absolute resolved harness dir.
@@ -744,19 +777,24 @@ export function resolveScaffoldDirs(
 export async function scaffoldHarness(root: string, options: ScaffoldOptions = {}): Promise<string> {
   const { harnessDir, projectDir } = resolveScaffoldDirs(root, options);
   const harness = resolve(harnessDir);
-  writeBootstrapMstarc(resolve(root), harness);
+  // Each corpus: the `.mstarc` declaration when one is in scope, else the
+  // greenfield `<root>/.agents/<kind>` default — never a resolver candidate,
+  // which would adopt a non-empty directory that merely exists (legacy
+  // `{HARNESS_DIR}/<kind>/` above all) and declare *that* as the write target.
+  // A bootstrap must never re-home existing content.
+  // `root` is the repository the scaffold ran for (the tracked-results owner);
+  // the `.agents/` corpora belong there even when `harness_dir` points outside
+  // the checkout (an explicit `MSTAR_HARNESS_DIR`, a nested harness).
+  const repoRoot = resolve(root);
+  const knowledgeDir = mstarcDirOverride(harness, "knowledgeDir") ?? join(repoRoot, ".agents", "knowledge");
+  const specsDir = mstarcDirOverride(harness, "specsDir") ?? join(repoRoot, ".agents", "specs");
+  const adrDir = mstarcDirOverride(harness, "adrDir") ?? join(repoRoot, ".agents", "adr");
+  writeBootstrapMstarc(repoRoot, harness, { knowledge: knowledgeDir, specs: specsDir, adr: adrDir });
   for (const dir of SCAFFOLD_DIRS) mkdirSync(join(harness, dir), { recursive: true });
   // `_default` is the fallback project identity; its directory is a location,
   // not a mandate to create or register a Markdown roadmap.
   const defaultProjectDir = join(projectDir, _DEFAULT_PROJECT);
   mkdirSync(defaultProjectDir, { recursive: true });
-  // Tracked corpora come from the resolvers, never from hardcoded names: a
-  // repository that re-points a `.mstarc` key keeps one creation path. The
-  // knowledge/adr resolvers do not create a declared dir (they only create
-  // their own fallback), so the scaffold creates each resolved dir.
-  const knowledgeDir = resolveKnowledgeDir(harness);
-  const specsDir = resolveSpecsDir(harness);
-  const adrDir = resolveAdrDir(harness);
   for (const dir of [knowledgeDir, specsDir, adrDir]) mkdirSync(dir, { recursive: true });
   seedAdrTree(adrDir);
   await registerScaffoldCatalog(harness);
@@ -776,7 +814,11 @@ export async function scaffoldHarness(root: string, options: ScaffoldOptions = {
  * already holds an author-owned `.mstarc` is not visible from `root`, so the
  * write is skipped whenever that file exists.
  */
-function writeBootstrapMstarc(root: string, harnessDir: string): void {
+function writeBootstrapMstarc(
+  root: string,
+  harnessDir: string,
+  corpus: { knowledge: string; specs: string; adr: string },
+): void {
   const parent = dirname(harnessDir);
   const rel = relative(root, parent);
   // A harness outside the scaffold root (e.g. `MSTAR_HARNESS_DIR` elsewhere)
@@ -784,14 +826,19 @@ function writeBootstrapMstarc(root: string, harnessDir: string): void {
   // caller never named.
   if (rel.startsWith("..") || isAbsolute(rel)) return;
   if (findMstarc(root, root) !== null) return;
+  // Each corpus key is written relative to this file's directory, from the
+  // directory the scaffold actually creates. A nested harness (`root/runtime/
+  // harness`) puts the declaration at `root/runtime/`, where the literal
+  // `.agents/knowledge` would resolve to `root/runtime/.agents/knowledge` —
+  // a second corpus beside the one created at the repository root.
   const content =
     "; Morning Star harness layout for this repository.\n" +
     "; Values mirror the resolved layout so candidate-chain drift cannot move them.\n" +
     "[config]\n" +
     `harness_dir=${relative(parent, harnessDir)}\n` +
-    "knowledge_dir=.agents/knowledge\n" +
-    "specs_dir=.agents/specs\n" +
-    "adr_dir=.agents/adr\n";
+    `knowledge_dir=${relative(parent, corpus.knowledge)}\n` +
+    `specs_dir=${relative(parent, corpus.specs)}\n` +
+    `adr_dir=${relative(parent, corpus.adr)}\n`;
   mkdirSync(parent, { recursive: true });
   writeIfAbsent(join(parent, MSTARC_FILE), content);
 }

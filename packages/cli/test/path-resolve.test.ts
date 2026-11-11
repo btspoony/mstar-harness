@@ -8,8 +8,8 @@
  * compass ruling 4 — the v3 workflow/project dirs join the path-symbol SSOT):
  * - Exit 0 returns resolved directories in a structured CLI envelope.
  * - Refusal with guidance when no harness dir resolves from the start dir.
- * - Specs resolution is read-only: `mstar path resolve` never creates
- *   `{HARNESS_DIR}/specs/` as a side effect.
+ * - Specs resolution is read-only: `mstar path resolve` never creates the
+ *   `<repoRoot>/.agents/specs/` fallback as a side effect.
  *
  * Each case runs the real CLI as a subprocess against a temp fixture tree.
  */
@@ -238,14 +238,14 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
     });
   });
 
-  test("read-only: resolve never creates {HARNESS_DIR}/specs when every candidate is absent", () => {
+  test("read-only: resolve never creates the .agents fallback when every candidate is absent", () => {
     withRoot((root) => {
       mkdirSync(join(root, ".mstar"), { recursive: true });
       const result = runResolve([root]);
       expect(result.exitCode).toBe(0);
       // Engine default would create the fallback; the CLI opts out.
-      expect(existsSync(join(root, ".mstar", "specs"))).toBe(false);
-      expect(data(result).specsDir).toBe(join(root, ".mstar", "specs"));
+      expect(existsSync(join(root, ".agents", "specs"))).toBe(false);
+      expect(data(result).specsDir).toBe(join(root, ".agents", "specs"));
     });
   });
 
@@ -255,10 +255,10 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
       const result = runResolve([root]);
       expect(result.exitCode).toBe(0);
-      expect(data(result).knowledgeDir).toBe(join(root, ".mstar", "knowledge"));
-      expect(data(result).adrDir).toBe(join(root, ".mstar", "adr"));
-      expect(existsSync(join(root, ".mstar", "knowledge"))).toBe(false);
-      expect(existsSync(join(root, ".mstar", "adr"))).toBe(false);
+      expect(data(result).knowledgeDir).toBe(join(root, ".agents", "knowledge"));
+      expect(data(result).adrDir).toBe(join(root, ".agents", "adr"));
+      expect(existsSync(join(root, ".agents", "knowledge"))).toBe(false);
+      expect(existsSync(join(root, ".agents", "adr"))).toBe(false);
     });
   });
 });
@@ -306,8 +306,8 @@ describe("mstar path check \u2014 verdict from Git state", () => {
       const result = runCli(["path", "check"], worktree, { ...cliEnv(), MSTAR_HARNESS_DIR: join(root, ".mstar") });
       expect(result.exitCode).toBe(0);
       expect(data(result).trackedHarness).toBe(join(realpathSync(worktree), ".mstar"));
-      expect(data(result).specsDir).toBe(join(realpathSync(worktree), ".mstar", "specs"));
-      expect(data(result).knowledgeDir).toBe(join(realpathSync(worktree), ".mstar", "knowledge"));
+      expect(data(result).specsDir).toBe(join(realpathSync(worktree), ".agents", "specs"));
+      expect(data(result).knowledgeDir).toBe(join(realpathSync(worktree), ".agents", "knowledge"));
     });
   });
 
@@ -325,11 +325,9 @@ describe("mstar path check \u2014 verdict from Git state", () => {
       expect(data(result).findings).toEqual([]);
       // The layout resolver answers canonical (realpath'd) directories.
       const warnings = data(result).warnings ?? [];
-      expect(warnings.map((warning) => warning.path)).toEqual([
-        join(realpathSync(root), ".mstar", "specs"),
-        join(realpathSync(root), ".mstar", "knowledge"),
-        join(realpathSync(root), ".mstar", "adr"),
-      ]);
+      // Only the legacy read rung resolves under `{HARNESS_DIR}` now; knowledge
+      // and adr default to the tracked `.agents/` tree and are never ignored.
+      expect(warnings.map((warning) => warning.path)).toEqual([join(realpathSync(root), ".mstar", "specs")]);
       expect(warnings.every((warning) => warning.code === "path.result-ignored")).toBe(true);
       expect(warnings[0]?.message).toContain("never be committed or shared");
     });
@@ -360,8 +358,12 @@ describe("mstar path check \u2014 verdict from Git state", () => {
     withRoot((root) => {
       gitRepo(root);
       writeFileSync(join(root, ".gitignore"), ".mstar/\n");
+      // Non-empty legacy dirs are the resolved result dirs (`mstarc` declares
+      // none here), so the named probe is judged against their Git verdict.
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
+      writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
       mkdirSync(join(root, "docs", "adr"), { recursive: true });
+      writeFileSync(join(root, "docs", "adr", "0001.md"), "# adr\n");
       const ignored = runCli(["path", "check", ".mstar/specs"], root);
       expect(ignored.exitCode).toBe(0);
       expect(envelope(ignored).status).toBe("ok");

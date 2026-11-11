@@ -49,7 +49,7 @@ Current field semantics, severity mapping, findings cleanup and issue closure �
 
 ## Workflow
 
-Write the main plan under `{PLAN_DIR}` → primary coordinator advances its explicitly selected rows through ordinary domain operations → raw review bundle and durable summaries → capture confirmed findings as linked issues → direct complete with QC/PM Acceptance and declared-route proof → the workflow's outer delivery/close obligations. ACTIVE identity/session/token defaults may be derived when unambiguous; explicit constraints still validate. Registration/unregistration stays workflow-owned on the ACTIVE store route (lifecycle contract §4a).
+Write the main plan under `{PLAN_DIR}` — resolve every path symbol before writing (`.mstarc`, then `mstar path resolve`); never compose the default path, including for `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{ADR_DIR}` — → primary coordinator advances its explicitly selected rows through ordinary domain operations → raw review bundle and durable summaries → capture confirmed findings as linked issues → direct complete with QC/PM Acceptance and declared-route proof → the workflow's outer delivery/close obligations. ACTIVE identity/session/token defaults may be derived when unambiguous; explicit constraints still validate. Registration/unregistration stays workflow-owned on the ACTIVE store route (lifecycle contract §4a).
 
 ## Decision Rules
 

@@ -94,7 +94,7 @@ git commit -m "chore(iteration): close <iteration-id> — compound round"
 git push origin <spec_integration_branch>
 ```
 
-Staging 说明：`{SPECS_DIR}` 为解析后的实际 specs 目录（候选链见 `mstar-conventions`，如 `{HARNESS_DIR}/specs/`、`docs/specs/`、`specs/`）；本轮更新过才加入。Roadmap store 变更是进程权威，不以 `git add` Markdown 文件代替；可供跨环境传递的 export 是 transport，不是本轮 close commit 的正文权威。
+Staging 说明：`{SPECS_DIR}` 为解析后的实际 specs 目录（候选链见 `mstar-conventions`，默认 `.agents/specs/`，其次 `docs/specs/`、`specs/`；`.mstarc` 声明时以声明为准）；本轮更新过才加入。Roadmap store 变更是进程权威，不以 `git add` Markdown 文件代替；可供跨环境传递的 export 是 transport，不是本轮 close commit 的正文权威。
 
 PR 目标使用当前权威 workflow `branch.target`；缺失时停止并按受守卫入口处理，不默认 `main`。
 

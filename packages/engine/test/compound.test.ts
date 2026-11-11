@@ -28,6 +28,7 @@ import {
   validateSchemaYaml,
 } from "../src/compound.js";
 import { registerCatalogEntity } from "../src/catalog.js";
+import { resolveKnowledgeDir } from "../src/path.js";
 import { createFsStore } from "../src/store.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
 
@@ -408,7 +409,19 @@ describe("scopeGuard", () => {
   afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
   const harness = join(tmp, ".mstar");
-  const roots = compoundRefreshScope(harness, tmp);
+  // The caller resolves the corpus and passes the answer; the scope never
+  // composes `harnessDir/knowledge`, which is what made a scope silently
+  // cover the pre-move location instead of the resolved one (issue #714).
+  const resolved = resolveKnowledgeDir(harness, { create: false });
+  const roots = compoundRefreshScope(resolved, tmp);
+
+  test("refresh scope is the caller's resolved knowledge root, not a composed harness path", () => {
+    const knowledge = join(tmp, ".agents", "knowledge");
+    expect(resolved).toBe(knowledge);
+    expect(roots).toEqual([knowledge, join(knowledge, "README.md"), join(tmp, "CONCEPTS.md")]);
+    expect(scopeGuard(knowledge, roots).ok).toBe(true);
+    expect(scopeGuard(join(harness, "knowledge"), roots).ok).toBe(false);
+  });
 
   test("refresh scope excludes status.json", () => {
     expect(scopeGuard(join(harness, "status.json"), roots).ok).toBe(false);

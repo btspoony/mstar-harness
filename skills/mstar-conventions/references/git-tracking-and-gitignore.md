@@ -8,7 +8,7 @@
 
 - `.mstarc`（仓库根；布局声明，四个键 `harness_dir` / `knowledge_dir` / `specs_dir` / `adr_dir`，随分支共享）
 - `.agents/AGENTS.md`（harness 规则文件；scaffold 写在仓库根下）
-- `{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`、`{ADR_DIR}/**` — bootstrap 默认即 `.agents/knowledge|specs|adr`；`{ADR_DIR}` 另含 `README.md`、`proposed/TEMPLATE.md`、`implemented/TEMPLATE.md`
+- `{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`、`{ADR_DIR}/**` — 默认即 `.agents/knowledge|specs|adr`（`.mstarc` 声明时以声明为准；这三层不位于 `{HARNESS_DIR}` 下，`{HARNESS_DIR}/<kind>/` 仅是 legacy 只读位置，不建、不声称）；`{ADR_DIR}` 另含 `README.md`、`proposed/TEMPLATE.md`、`implemented/TEMPLATE.md`
 
 **默认 gitignored**：`{HARNESS_DIR}` **整体**（默认 `.mstar/`）——`archived/`、`iterations/`、`plans/`、`sdd/`、`reviews/`（review 运行目录树：codebase audit / PR / branch / diff review 的 report 与 evidence）、`projects/`（roadmap transport 规则 → `mstar-project-governance`）、`workflows/`（retained ordinary bodies/notes）、`store.db`（issue/catalog/roadmap/milestone 与 execution_* 权威）、`status.json`（仅历史输入，无 live writer）。
 

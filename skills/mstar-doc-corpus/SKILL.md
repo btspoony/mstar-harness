@@ -37,10 +37,9 @@ Specs say what is now, knowledge says how to work and what was learned, ADRs say
 
 ## Layout defaults
 
-- **Standalone (no harness)**: `.agents/knowledge/`, `.agents/specs/`, `.agents/adr/` — tracked by default, with no ignore rule that would drop the corpus.
-- **Harness active, no `.mstarc` declaration**: `.mstar/knowledge/`, `.mstar/specs/`, `.mstar/adr/` — the harness process root, whose ignore rules the harness owns.
-- `.mstarc` keys `knowledge_dir` / `specs_dir` / `adr_dir` override either default; the value resolves relative to the `.mstarc` file's directory (an absolute path is used as given).
-- The long discovery chains (`.agents/`, `docs/specs/`, `docs/adr/`, legacy candidates) exist for projects that already ran the harness; they are only reachable through `mstar-conventions` when the harness is active, and this contract needs none of them.
+- Default: the repository's own `.agents/knowledge/`, `.agents/specs/`, `.agents/adr/` — one default whether or not a harness runs; tracked, with no ignore rule that would drop the corpus. "The repository's own" matters: callers pass the checkout as the anchor (`repoRoot`); only when it is unknown does the harness directory's parent stand in, so a harness configured outside the checkout lands the corpus beside itself, where no commit reaches it.
+- `.mstarc` keys `knowledge_dir` / `specs_dir` / `adr_dir` are authoritative over that default; the value resolves relative to the `.mstarc` file's directory (an absolute path is used as given). Resolve the symbol before writing (`mstar path resolve`) rather than composing the default path.
+- Candidates, in two classes that must not be confused: `docs/specs/`, repo-root `specs/` and `docs/adr/` are ordinary **writable** candidates — a repository may legitimately keep a corpus there, and a non-empty one wins whenever the `.agents/` default is absent or empty; `{HARNESS_DIR}/<kind>/` and `designs/` are **legacy read-only** migration rungs — read when non-empty, and when the harness root is not `<repo>/.agents/` never created and never the fallback. This contract needs none of them.
 
 ## Layer references
 

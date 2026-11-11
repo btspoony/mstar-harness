@@ -613,6 +613,46 @@ describe('compound gate — fs/write-intent listener ({HARNESS_DIR}/knowledge sc
     expect(advisories).toHaveLength(0)
   })
 
+  it('scopes the `.agents/knowledge` default, not `{HARNESS_DIR}/knowledge`', async () => {
+    booted = await bootApp()
+    // The corpus default moved out of the harness root: with no legacy
+    // `harness/knowledge` content, the resolved scope is `<repo>/.agents/
+    // knowledge`, and that is where a knowledge doc is gated.
+    const doc = join(booted.root, '.agents', 'knowledge', 'logic-errors', 'broken.md')
+    await seedFile(doc, KNOWLEDGE_BROKEN)
+    const advisories = captureAdvisories(booted.ctx)
+
+    await booted.ctx.waterfall('fs/write-intent', target(doc), {}, () => undefined)
+
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.seam).toBe('compound')
+    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('compound.schema.missing-field')
+  })
+
+  it('anchors the scope on the harness checkout, not the harness dir parent (nested harness)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-nested-'))
+    // Minimal git work tree (no `git init` subprocess): `rev-parse
+    // --show-toplevel` only needs a valid `.git` layout.
+    await mkdir(join(root, '.git', 'objects'), { recursive: true })
+    await mkdir(join(root, '.git', 'refs'), { recursive: true })
+    await writeFile(join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    await writeFile(join(root, '.git', 'config'), '[core]\n\trepositoryformatversion = 0\n')
+    // A nested harness (`<repo>/runtime/harness`): its parent is NOT the
+    // corpus anchor, so the gate must scope `<repo>/.agents/knowledge`.
+    const nestedHarness = join(root, 'runtime', 'harness')
+    await mkdir(nestedHarness, { recursive: true })
+    booted = await bootApp({ root, harnessDir: nestedHarness })
+    const doc = join(root, '.agents', 'knowledge', 'logic-errors', 'broken.md')
+    await seedFile(doc, KNOWLEDGE_BROKEN)
+    const advisories = captureAdvisories(booted.ctx)
+
+    await booted.ctx.waterfall('fs/write-intent', target(doc), {}, () => undefined)
+
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.seam).toBe('compound')
+    expect(advisories[0]!.result.violations.map((v) => v.code)).toContain('compound.schema.missing-field')
+  })
+
   it('path-scoping: knowledge README.md index is untouched', async () => {
     booted = await bootApp()
     await seedHarness(booted.harnessDir, { 'knowledge/README.md': '# Knowledge index\n' })
