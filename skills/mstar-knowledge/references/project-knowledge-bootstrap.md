@@ -127,12 +127,7 @@ Each doc follows the Knowledge track skeleton (`mstar-doc-corpus` `assets/knowle
 
 ### If knowledge docs already exist
 
-Apply `## Workflow — Maintain` logic:
-- Keep accurate docs
-- Update stale references
-- Consolidate overlapping docs
-- Delete docs for code that no longer exists
-- Add new docs only for genuinely undocumented patterns
+Apply `## Workflow — Maintain` logic: keep accurate docs, update stale references, consolidate overlapping docs, delete docs for code that no longer exists, add new docs only for genuinely undocumented patterns.
 
 ## Phase 5: Indexing & discoverability
 
@@ -146,13 +141,15 @@ Apply `## Workflow — Maintain` logic:
 
 ## Phase 6: Initialize harness — opt-in only
 
-The default standalone outcome needs none of it: the Phase 2–5 artifacts — `STRATEGY.md`, `CONCEPTS.md` and the baseline knowledge docs — are a complete bootstrap committed with no `{HARNESS_DIR}` and no store.
+Opt in only when the project wants lifecycle tracking (plans, iterations, a store-backed catalog, issue capture); the default standalone outcome needs none of it, the Phase 2–5 artifacts being a complete bootstrap committed with no `{HARNESS_DIR}` and no store.
 
-Initialize the harness only when the project wants lifecycle tracking (plans, iterations, a store-backed catalog, issue capture). Then scaffold per **`mstar-conventions`**（`.mstar/` + subdirectories via `mstar harness scaffold`）and activate the execution authority with `mstar store init`（scaffold writes no `status.json`; a harness without an ACTIVE store has no execution authority and uses conversation tracking）.
+With **no active store**, scaffold per **`mstar-conventions`**（`.mstar/` + subdirectories via `mstar harness scaffold`）then create the authority with `mstar store init`（scaffold writes no `status.json`；without an ACTIVE store there is no execution authority and work uses conversation tracking）. With an **active store already present**, initialize nothing — `mstar store init` refuses against an existing store.
+
+Either way, before Phase 7, register every bootstrap artifact the catalog does not have yet: reviewed `mstar catalog discover`（dry-run proposal）then `mstar catalog import`，scoped to `STRATEGY.md`, `CONCEPTS.md` and the Phase 4 knowledge docs, so catalog searches and the completeness check see them instead of failing while bootstrap reports success.
 
 ## Phase 7: Commit
 
-All bootstrap artifacts must be committed; add `{HARNESS_DIR}/` only when Phase 6 initialized the harness (the standalone default commits no harness root).
+All bootstrap artifacts must be committed; add `{HARNESS_DIR}/` only when Phase 6 scaffolded it (the standalone default commits no harness root).
 Bootstrap commits use the configured identity; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 
 ```bash
