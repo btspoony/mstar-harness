@@ -1,7 +1,7 @@
 ---
 module: packages/dsh
 date: 2026-08-16
-last_updated: 2026-11-09
+last_updated: 2026-11-12
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
@@ -60,6 +60,7 @@ Any second companion plugin (or an upstream preset addition) re-opens the same r
 
 ## Source
 
+- Dependency-boundary decision record (the two `dsh-llm-fallbacks` pin literals and the accepted dev-only nested `react` peer): [`docs/adr/implemented/architecture/2026-11-12-fallbacks-dependency-boundaries.md`](../../adr/implemented/architecture/2026-11-12-fallbacks-dependency-boundaries.md).
 - QC evidence: `{HARNESS_DIR}/sdd/<plan-id>/review/qc3.md` (W-1 preset competition), `qc2.md` (S-1), fix wave `cadd416`.
 - API anchors: `{HARNESS_DIR}/iterations/iter-<plan-id>/specs/architect-api-verification-20260816.md` Source 1.
 - Promoted from: `iterations/iter-<plan-id>/specs/seeds-convergence-contract.md` (apply-window + bounded retry + latch-honesty contract, verified by plan `<plan-id>`; QA PASS 1062).
