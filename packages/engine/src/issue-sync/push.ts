@@ -525,12 +525,14 @@ export function assertReleaseTargets(db: StoreDb, bindingId: string, release: Re
  * carries its exact marker. Zero or several matches stay `unresolved`; this
  * function never creates, and prose equality is never evidence.
  *
- * `options.maxPages` bounds the scan, and the caller passes the SAME number the
- * import direction stops at: engine does not own that default, so the two cannot
- * drift. A scan still holding a cursor at that bound is NOT a full listing, so
- * `stoppedAtPageBound` names it, an unmatched row's cause says the listing was
- * truncated instead of claiming absence, and a release is refused — "the scan
- * found nothing" is the one thing a truncated scan has not proved.
+ * `options.maxPages` bounds the scan and must be >= 1, and the caller passes the
+ * SAME number the import direction stops at: engine does not own that default,
+ * so the two cannot drift. A scan still holding a cursor at that bound is NOT a
+ * full listing, so `stoppedAtPageBound` names it and ONE standard follows: a
+ * truncated listing proves neither absence nor uniqueness. No release (absence),
+ * no adoption (uniqueness) — every residue is reported `unresolved` with the
+ * bound in its cause, so `--adopt` or a listing that fits the bound is the way
+ * out.
  *
  * `options.release` names `pending`-without-id rows the operator has released
  * after this same scan found nothing: they drop to `failed`, the retryable edge,
@@ -547,6 +549,12 @@ export async function reconcilePendingCreate(
   options: { release?: ReadonlySet<string>; maxPages: number },
 ): Promise<ReconcileReport> {
   const maxPages = options.maxPages;
+  if (!Number.isInteger(maxPages) || maxPages < 1) {
+    throw new SyncError(
+      "sync.invalid-input",
+      `the reconcile scan needs maxPages >= 1; received ${String(maxPages)}. A scan that reads no page proves nothing and requests nothing`,
+    );
+  }
   const release = options.release ?? new Set<string>();
   assertReleaseTargets(db, context.bindingId, release);
   const pending = db
@@ -579,17 +587,20 @@ export async function reconcilePendingCreate(
   if (cursor !== null) report.stoppedAtPageBound = maxPages;
   const truncated = cursor !== null;
 
-  // A match is evidence of an identity, so releasing over it would discard what
-  // the scan just proved. Decided over the whole scan, before any adoption write.
+  // ONE standard for a scan that was not read to its end. Both verbs below
+  // decide over "what the listing proved": a truncated listing proves neither
+  // absence (so no release) nor uniqueness (so no adoption). Splitting those
+  // two would let a row leave `pending` bound to one of several remote issues
+  // carrying its marker, where no later scan could surface the other.
   for (const localId of release) {
     const found = matches.get(localId) ?? [];
-    if (found.length === 0) {
-      if (!truncated) continue;
+    if (truncated) {
       throw new SyncError(
         "sync.illegal-transition",
-        `--release ${localId} needs a listing scan that was read to its end, and this one stopped at ${maxPages} pages with more advertised; the marker may sit on a page never read, so absence is not proved and nothing was written - re-run push when the listing fits the bound`,
+        `--release ${localId} needs a listing scan that was read to its end, and this one stopped at ${maxPages} pages with more advertised; what sits on the pages never read decides whether this residue has a remote issue at all, so absence is not proved and nothing was written - resolve the issue yourself with --adopt <localId>=<issueUrl|externalId>, or re-run push against a listing that fits the bound`,
       );
     }
+    if (found.length === 0) continue;
     throw new SyncError(
       "sync.illegal-transition",
       found.length === 1
@@ -604,15 +615,27 @@ export async function reconcilePendingCreate(
       continue;
     }
     const found = matches.get(localId) ?? [];
+    if (truncated) {
+      // The same standard as the refusal above: uniqueness was not proved, so
+      // adopting "the one match read so far" would be a guess about the pages
+      // never read. The row stays `pending`, which is where a later scan can
+      // still reach it.
+      report.unresolved.push({
+        localId,
+        cause:
+          found.length === 0
+            ? `the reconcile listing stopped at its ${maxPages}-page bound with more pages advertised, so this item's marker was never ruled out; nothing was adopted or written - re-run push against a listing that fits the bound, or resolve the issue yourself with --adopt <localId>=<issueUrl|externalId>`
+            : `${found.length} remote issue(s) carrying this item's correlation marker were read before the listing stopped at its ${maxPages}-page bound with more pages advertised, so uniqueness is not proved; nothing was adopted or written - resolve the remote issue yourself with --adopt <localId>=<issueUrl|externalId>, or re-run push against a listing that fits the bound`,
+      });
+      continue;
+    }
     if (found.length !== 1) {
       report.unresolved.push({
         localId,
         cause:
-          found.length > 0
-            ? `${found.length} remote issues carry this item's correlation marker; adopting any of them would be a guess`
-            : truncated
-              ? `the reconcile listing stopped at its ${maxPages}-page bound with more pages advertised, so this item's marker was never ruled out - re-run push to scan again; --release is refused while the scan is truncated`
-              : "no remote issue carries this item's correlation marker; the interrupted create is not confirmed either way - if you can establish the remote absence yourself, re-run push with --release <localId>",
+          found.length === 0
+            ? "no remote issue carries this item's correlation marker; the interrupted create is not confirmed either way - if you can establish the remote absence yourself, re-run push with --release <localId>"
+            : `${found.length} remote issues carry this item's correlation marker; adopting any of them would be a guess`,
       });
       continue;
     }

@@ -1705,3 +1705,80 @@ describe("(m) a malformed remote reference is invalid input, not a crash (I-0009
     expect((thrown as Error).name).not.toBe("TypeError");
   });
 });
+
+describe("(n) a truncated scan never decides an identity (I-000970)", () => {
+  const markerOf = correlationMarker({ workspace: "acme", team: "ENG" }, STORE_ID, "I-001131");
+
+  function pageOf(externalId: string, nextCursor: string | null): ProviderPage {
+    return {
+      items: [
+        {
+          externalId,
+          title: "t",
+          description: `body\n\n${markerOf}`,
+          state: "Todo",
+          priority: "High",
+          labels: [],
+          updatedAt: "2026-11-02T00:00:00.000Z",
+          url: `https://linear.app/acme/issue/${externalId}`,
+        },
+      ],
+      nextCursor,
+    };
+  }
+
+  async function pendingResidue(name: string): Promise<{ db: StoreDb; close: () => void }> {
+    const store = await openedStore(name);
+    addIssue(store.db, "I-001131");
+    const ambiguousRun = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
+    await pushItem(store.db, ambiguousRun, context(), candidates(store.db)[0]!);
+    expect(row(store.db, "I-001131")).toMatchObject({ itemState: "pending", externalId: null });
+    return store;
+  }
+
+  test("a lone match read before the bound is not adopted: uniqueness was never proved", async () => {
+    const { db, close } = await pendingResidue("truncated-single-match");
+    try {
+      // One page carries the marker, but it advertises a successor, so a second
+      // remote issue with the same marker may sit on a page never read.
+      const fake = provider({ pages: [pageOf("LIN-501", "more")] });
+      const report = await scan(db, fake, context(), { maxPages: 1 });
+
+      expect(report.adopted).toEqual([]);
+      expect(report.stoppedAtPageBound).toBe(1);
+      expect(report.unresolved).toHaveLength(1);
+      expect(report.unresolved[0]!.cause).toContain("1");
+      // The row stays reachable by a later, complete scan.
+      expect(row(db, "I-001131")).toMatchObject({ itemState: "pending", externalId: null });
+      expect(fake.listings).toHaveLength(1);
+    } finally {
+      close();
+    }
+  });
+
+  test("the same match IS adopted once the scan reaches the end of the listing", async () => {
+    const { db, close } = await pendingResidue("truncated-complete-scan");
+    try {
+      const fake = provider({ pages: [pageOf("LIN-502", null)] });
+      const report = await scan(db, fake, context(), { maxPages: 1 });
+
+      expect(report.adopted).toEqual([{ localId: "I-001131", externalId: "LIN-502" }]);
+      expect(report.stoppedAtPageBound).toBeUndefined();
+      expect(row(db, "I-001131")).toMatchObject({ itemState: "applied", externalId: "LIN-502" });
+    } finally {
+      close();
+    }
+  });
+
+  test("a bound below one is refused instead of reading a page it did not budget", async () => {
+    const { db, close } = await pendingResidue("truncated-invalid-bound");
+    try {
+      const fake = provider();
+      await expect(scan(db, fake, context(), { maxPages: 0 })).rejects.toThrow(/sync\.invalid-input/);
+      expect(fake.listings).toEqual([]);
+      expect(row(db, "I-001131")).toMatchObject({ itemState: "pending", externalId: null });
+    } finally {
+      close();
+    }
+  });
+});
