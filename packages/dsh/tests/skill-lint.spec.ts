@@ -502,8 +502,8 @@ describe('skill lint gate — fs/write-intent listener (content-blind slot)', ()
 
     const intent = await booted.ctx.waterfall('fs/write-intent', skillTarget(root, 'broken-skill'), {}, () => undefined)
 
-    // `resolveSeamHard` mirrors `resolveHard`: the iteration compass hardens
-    // the skill lint gate exactly like the status gate (no Config override).
+    // `resolveSeamHard` (the resolver the status gate also calls): the
+    // iteration compass hardens the skill lint gate with no Config override.
     expect(intent).toBeUndefined()
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.hard).toBe(true)

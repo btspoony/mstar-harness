@@ -789,8 +789,9 @@ export function apply(ctx: Context, config: Config): void {
   // then FAILS CLOSED — every Assignment-shaped dispatch emits
   // `dispatch.anti-recursion.empty-binding` (critical) — so surface the blank
   // instead of only documenting it, and point at the supported fix.
-  // (Boot-time the only known enforcement source is the explicit Config
-  // override — compass hard is per-workspace and resolves at event time.)
+  // (Boot-time `resolveSeamHard` reads the explicit Config override first and,
+  // when that is silent, the repo `.mstarc` / iteration compass of the boot
+  // harness dir — the same resolution the event-time gates apply.)
   const effectiveHard = resolveSeamHard(bootHarnessDir, config)
   const configuredBinding = liveConfigValue(config.dispatchBinding)
   if (effectiveHard && configuredBinding !== undefined && configuredBinding.trim() === '') {

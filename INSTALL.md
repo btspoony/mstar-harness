@@ -31,6 +31,8 @@ node node_modules/@mstar-harness/cli/dist/mstar-harness.js init
 
 `init` is target-aware and writes baseline config in one flow. `--scope` defaults to `project` when omitted, except for a target whose host has a single supported scope (omp installs host-wide, so an unscoped `init --target omp` uses `--scope global` and says so). It also resolves the published `@mstar-harness/cli` version before it touches the host: when that `latest` is **newer** than the CLI running it (a cached `npx` resolution can differ), it installs that `latest` globally and reports it; a version ahead of `latest` is left alone. `--no-global-cli` skips both the probe and that install.
 
+`init` never prompts, so `--yes` is optional: it only suppresses the `Scope not provided; defaulting to project` notice.
+
 `init` reads and writes no `.gitignore`: host-specific install paths (`.cursor/plugins/morning-star-harness`, `.codex/agents/*.toml`, `.agents/skills/<name>`, `.zcode/plugin-checkout`) stay untracked until you ignore them yourself. Add the entries you want by hand, or run `npx @mstar-harness/cli harness scaffold` to append the canonical `.mstar/` harness snippet.
 
 The native command installs the plugin only and bypasses this CLI entirely — use it when `init` is blocked. Run `npx @mstar-harness/cli@latest init …` when the CLI that runs must itself be the newest release. The published binary is `mstar-harness`; the short alias `mstar` exists only where this package is installed, and an unrelated npm package claims the same name — use the long form when in doubt.

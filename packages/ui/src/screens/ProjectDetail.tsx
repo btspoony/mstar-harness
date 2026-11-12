@@ -29,7 +29,7 @@ import {
   type RoadmapModel,
 } from "../view-model/projects.ts";
 import type { Resolved } from "../view-model/state.ts";
-import { milestoneStatusTone, type Tone } from "../view-model/status.ts";
+import { milestoneStatusTone } from "../view-model/status.ts";
 
 /** The closed status set the engine accepts for a milestone patch. */
 const MILESTONE_STATUSES = ["planned", "active", "delivered", "dropped"] as const;
