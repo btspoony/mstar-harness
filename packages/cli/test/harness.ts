@@ -74,14 +74,16 @@ export interface RunResult {
 /** Run the real CLI entry as a subprocess; cwd + env overrides per test.
  * The entry is `MSTAR_CLI_ENTRY` when the suite runs where the CLI is already
  * built, else the source entry. `stdin` is forwarded to the child when given
- * (persist-style suites); `timeout` bounds a child that hangs. */
+ * (persist-style suites); `timeout` bounds a child that hangs. `opts.env` is
+ * applied through `cliEnv` after its scrub, so an `undefined` value deletes
+ * an ambient variable instead of being dropped by a spread. */
 export function runCli(
   args: string[],
-  opts: { cwd?: string; env?: Record<string, string>; stdin?: string; timeout?: number } = {},
+  opts: { cwd?: string; env?: Record<string, string | undefined>; stdin?: string; timeout?: number } = {},
 ): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", process.env.MSTAR_CLI_ENTRY ?? SRC_ENTRY, ...args], {
     cwd: opts.cwd ?? CLI_ROOT,
-    env: { ...cliEnv(), ...opts.env },
+    env: cliEnv(opts.env),
     stdout: "pipe",
     stderr: "pipe",
     ...(opts.stdin !== undefined ? { stdin: new Blob([opts.stdin]) } : {}),

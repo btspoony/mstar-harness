@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { persistPayloadContracts, synthesizeReview } from "@mstar-harness/engine";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
-import { cliEnv, runCli as spawnCli, type RunResult } from "./harness";
+import { runCli as spawnCli, type RunResult } from "./harness";
 
 type CommandEnvelope = {
   command: string;
@@ -43,9 +43,9 @@ function persistedPayload(result: RunResult): unknown {
 }
 
 /** Run the real CLI entry; cwd + env overrides. An ambient MSTAR_STORE_MODULE
- * is pinned out so it cannot redirect a fixture. */
-function runCli(args: string[], opts: { cwd?: string; env?: Record<string, string> } = {}): RunResult {
-  return spawnCli(args, { ...opts, env: { ...cliEnv({ MSTAR_STORE_MODULE: undefined }), ...opts.env } });
+ * is pinned out so it cannot redirect a fixture; a caller may re-pin it. */
+function runCli(args: string[], opts: { cwd?: string; env?: Record<string, string | undefined> } = {}): RunResult {
+  return spawnCli(args, { ...opts, env: { MSTAR_STORE_MODULE: undefined, ...opts.env } });
 }
 
 
@@ -513,6 +513,35 @@ describe("mstar persist — --store / MSTAR_STORE_MODULE module injection", () =
     });
   });
 
+
+  test("the ambient MSTAR_STORE_MODULE is pinned out, and an explicit re-pin still wins", () => {
+    withTempDir((dir) => {
+      const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
+      const ambient = join(dir, "ambient-store.ts");
+      writeFileSync(ambient, 'export function createArtifactStore() { throw new Error("ambient module loaded"); }', "utf8");
+      const previous = process.env.MSTAR_STORE_MODULE;
+      process.env.MSTAR_STORE_MODULE = ambient;
+      try {
+        // Deleted by the wrapper: the child falls back to the FsStore.
+        const pinnedOut = runCli(["persist", "write", "review", "--key", "pin-1", "--file", payloadFile], { env: harnessEnv(dir) });
+        expect(pinnedOut.exitCode).toBe(0);
+        expect(message(pinnedOut)).not.toContain("ambient module loaded");
+
+        // String re-pin reaches the child ahead of the delete.
+        const moduleFile = join(dir, "store-mod.ts");
+        writeFileSync(moduleFile, storeModuleSource("PERSIST_MODULE_FILE"), "utf8");
+        const outFile = join(dir, "module-out.json");
+        const repinned = runCli(["persist", "write", "review", "--key", "pin-2", "--file", payloadFile], {
+          env: { ...harnessEnv(dir), MSTAR_STORE_MODULE: moduleFile, PERSIST_MODULE_FILE: outFile },
+        });
+        expect(repinned.exitCode).toBe(0);
+        expect(existsSync(outFile)).toBe(true);
+      } finally {
+        if (previous === undefined) delete process.env.MSTAR_STORE_MODULE;
+        else process.env.MSTAR_STORE_MODULE = previous;
+      }
+    });
+  });
 
   test("--store with a URI scheme is rejected before any import", () => {
     withTempDir((dir) => {

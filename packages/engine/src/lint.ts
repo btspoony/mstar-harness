@@ -544,7 +544,9 @@ function stripInlineCode(line: string): string {
  * - verification set: a Files entry on a mapped code surface that names
  * none of that surface's mapped commands yields
  * `lint.plan-quality.verification-set` (surface map in
- * `plan-quality-bar.md` § Verification gates).
+ * `plan-quality-bar.md` § Verification gates). Fenced examples and the
+ * frontmatter block are not read, so a fenced entry adds no surface and a
+ * fenced command satisfies no check.
  * - out of scope (judgment stays prompt): "add tests" without code, and
  * `FIXME`/`XXX` code markers.
  */
@@ -561,6 +563,9 @@ export function planQualityBar(planText: string): PlanQualityResult {
     if (close !== -1) start = close + 1;
   }
   let inFence = false;
+  // Body lines outside fences and frontmatter: the verification-set pass reads
+  // only these, so a fenced example can neither add a surface nor supply a check.
+  const bodyLines: string[] = [];
   for (let i = start; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (/^```/.test(trimmed) || /^~~~/.test(trimmed)) {
@@ -568,6 +573,7 @@ export function planQualityBar(planText: string): PlanQualityResult {
       continue;
     }
     if (inFence) continue;
+    bodyLines.push(lines[i]);
     const stripped = stripInlineCode(lines[i]);
  // Negation guard: "no TBD/placeholder/TODO" asserts absence (a mention
  // of the rule), not a placeholder. A negation word earlier in the same
@@ -617,13 +623,13 @@ export function planQualityBar(planText: string): PlanQualityResult {
   // with the check that surface maps to, on a verification line. Only the
   // paths a Files entry lists as its subject are surfaces; prose or a quoted
   // command around them is a mention.
-  const filesText = lines
+  const filesText = bodyLines
     .filter((line) => FILES_ENTRY_RE.test(line))
     .map((line) => line.replace(FILES_ENTRY_RE, ""))
     .filter((entry) => FILES_ENTRY_PATH_START_RE.test(entry))
     .flatMap((entry) => [...entry.matchAll(QUOTED_PATH_RE)].map((m) => m[1]!))
     .join("\n");
-  const verificationText = lines.filter((line) => VERIFICATION_LINE_RE.test(line)).join("\n");
+  const verificationText = bodyLines.filter((line) => VERIFICATION_LINE_RE.test(line)).join("\n");
   for (const { surface, missing } of SURFACE_CHECKS) {
     if (!surface.test(filesText)) continue;
     const missingChecks = missing(filesText, verificationText);
