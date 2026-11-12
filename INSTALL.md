@@ -42,7 +42,7 @@ npx @mstar-harness/cli init --target opencode --yes
 npx @mstar-harness/cli doctor --target opencode
 ```
 
-Non-interactive preview:
+Dry-run preview:
 
 ```bash
 npx @mstar-harness/cli init --target opencode --dry-run --yes

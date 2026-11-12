@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { Command, CommanderError } from "commander";
 import { refusalEnvelope, safeReceivedValue, admitCommandInput, owningSkillFor, type RefusalDiagnostic } from "@mstar-harness/commands";
@@ -872,14 +871,8 @@ function cliEffects(services: Array<{ close(): Promise<void> }>, signal: AbortSi
       const pending = await beginAuthorization(authorizationServer, (redirectUri) =>
         registerClient(authorizationServer, redirectUri),
       );
-      const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-      const argv = process.platform === "win32" ? ["/c", "start", "", pending.url] : [pending.url];
       try {
-        const child = spawn(opener, argv, { stdio: "ignore", shell: false });
-        await new Promise<void>((resolve, reject) => {
-          child.once("spawn", () => resolve());
-          child.once("error", reject);
-        });
+        await openBrowserBounded(pending.url, signal);
         process.stderr.write(`Authorize in the browser; waiting for the callback on ${pending.redirectUri}\n`);
         const code = await pending.wait();
         return await exchangeCode(authorizationServer, { clientId: pending.clientId, redirectUri: pending.redirectUri }, code, pending.verifier);
