@@ -1129,6 +1129,58 @@ describe("push — the credential scope preflight", () => {
     }
   });
 
+  test("a reconcile scan that stops at the page bound says so in the run report", async () => {
+    const receipts = [{ kind: "ambiguous" as const, cause: "connection closed mid-call" }];
+    let listings = 0;
+    const provider = {
+      async probe() {
+        return { state: "ready" as const, cause: "ready: fixture handshake" };
+      },
+      // Every page advertises a successor, so the scan can only end at its bound.
+      async listIssues() {
+        listings += 1;
+        return { items: [], nextCursor: `cursor-${listings}` };
+      },
+      async applyWrite() {
+        return receipts.shift() ?? { kind: "confirmed" as const, externalId: "LIN-999", updatedAt: "2026-11-02T00:10:00.000Z" };
+      },
+      async discoverLabels() {
+        return new Set(["bug", "risk"]);
+      },
+      async discoverStates() {
+        return new Set(["Todo", "Done", "Canceled"]);
+      },
+    };
+    const f = await fixture("push-reconcile-truncated", null);
+    storeCredential("read,issues:create");
+    {
+      const handle = await openStore({ harnessDir: f.harnessDir }, "write");
+      handle.db.prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
+          " values ('I-000814', ?, 'Truncated', 'bug', 'high', 'i', 'a', 'now', 'now', 'sync-I-000814')",
+      ).run(PROJECT);
+      handle.close();
+    }
+    const context = { ...f.context, effects: { ...f.context.effects, issueProvider: () => provider as never } };
+
+    // Leave the pending residue the scan exists for. This run's own reconcile
+    // ran before its create, so it scanned nothing.
+    const before = listings;
+    await executeCommand("issue-sync.push", { project: PROJECT }, context);
+    expect(listings).toBe(before);
+    const run = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as {
+      status: string;
+      data?: { stoppedAtPageBound?: number; reconciled: unknown[]; items: Array<{ outcome: string }> };
+    };
+    expect(run.status).toBe("ok");
+    // The report a caller reads carries the truncation: without it a partial
+    // listing whose residue all happened to be adopted would read as complete.
+    // The number it names is the number of pages actually read — never one more.
+    expect(run.data?.stoppedAtPageBound).toBe(listings - before);
+    expect(run.data?.reconciled).toEqual([]);
+    expect(run.data?.items).toEqual([expect.objectContaining({ outcome: "unresolved" })]);
+  });
+
   test("a second push on the same binding is refused by name while the first holds the run, and --take-run takes a dead holder's run over", async () => {
     const provider = writeProvider(["bug"]);
     const f = await fixture("push-run-lease", null);

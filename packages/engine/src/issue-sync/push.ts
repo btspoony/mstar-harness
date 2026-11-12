@@ -138,10 +138,17 @@ export function correlationMarker(binding: PushBinding, storeId: string, localId
   return `<!-- mstar-sync: ${parts.join("/")} -->`;
 }
 
-/** The marker one description carries, or null when it carries none. */
+/**
+ * The marker one description carries, or null when it carries none. The LAST
+ * match wins: a description that quotes a marker in operator text must not let
+ * the quoted occurrence decide the identity.
+ */
 function markerIn(description: string): string | null {
-  const match = /<!--\s*mstar-sync:\s*([^\n]*?)\s*-->/.exec(description);
-  return match === null ? null : `<!-- mstar-sync: ${match[1]!.trim()} -->`;
+  let last: string | null = null;
+  for (const match of description.matchAll(/<!--\s*mstar-sync:\s*([^\n]*?)\s*-->/g)) {
+    last = `<!-- mstar-sync: ${match[1]!.trim()} -->`;
+  }
+  return last;
 }
 
 /**
@@ -228,6 +235,22 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
   }
   const marker = correlationMarker(context.binding, context.storeId, candidate.localId);
   const fields = providerPayloadFields(candidate, context.mapping);
+  const payload: ProviderWritePayload = {
+    title: candidate.title,
+    description: descriptionFor(candidate, marker),
+    priority: fields.priority,
+    state: fields.state,
+    labels: [fields.label],
+  };
+  const hash = requestHash(payload);
+
+  // The skip rule comes FIRST. When the ledger already proves the remote says
+  // exactly this, nothing will be written — so a label or state that has since
+  // left the workspace must not turn that into a `failed` row, which would
+  // overwrite the applied row with an error it never earned.
+  if (externalId !== null && ledger?.itemState === "applied" && ledger.lastRequestHash === hash) {
+    return { localId: candidate.localId, outcome: "skipped", externalId };
+  }
   // Both mapped names are resolved against what the workspace HAS, before the
   // call. Push never creates a provider label or state, so an absent name
   // refuses this item only — and a renamed workflow state is diagnosed here
@@ -259,21 +282,7 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
       undefined,
     );
   }
-  const payload: ProviderWritePayload = {
-    title: candidate.title,
-    description: descriptionFor(candidate, marker),
-    priority: fields.priority,
-    state: fields.state,
-    labels: [fields.label],
-  };
-  const hash = requestHash(payload);
-
   if (externalId !== null) {
-    if (ledger?.itemState === "applied" && ledger.lastRequestHash === hash) {
-      // The skip rule: nothing changed locally since the last confirmed write,
-      // so the ledger is not touched at all.
-      return { localId: candidate.localId, outcome: "skipped", externalId };
-    }
     // A changed kind replaces EXACTLY the labels this tool may own. An
     // unconfirmed earlier update can leave more than one of them on the remote,
     // so every recorded label except the desired one is removed (removing an
@@ -447,6 +456,11 @@ export type ReconcileReport = {
   adopted: Array<{ localId: string; externalId: string }>;
   /** Rows that could not be attributed to exactly one remote issue. */
   unresolved: Array<{ localId: string; cause: string }>;
+  /**
+   * The page bound the scan stopped at, set only when it stopped with a cursor
+   * still advertised. Present means the listing was NOT read to its end.
+   */
+  stoppedAtPageBound?: number;
 };
 
 /**
@@ -507,9 +521,18 @@ export function assertReleaseTargets(db: StoreDb, bindingId: string, release: Re
 /**
  * Adopt ambiguous creates by correlation marker.
  *
- * Runs a full listing scan and adopts a row ONLY when exactly one remote issue
+ * Runs a listing scan and adopts a row ONLY when exactly one remote issue
  * carries its exact marker. Zero or several matches stay `unresolved`; this
  * function never creates, and prose equality is never evidence.
+ *
+ * `options.maxPages` bounds the scan and must be >= 1, and the caller passes the
+ * SAME number the import direction stops at: engine does not own that default,
+ * so the two cannot drift. A scan still holding a cursor at that bound is NOT a
+ * full listing, so `stoppedAtPageBound` names it and ONE standard follows: a
+ * truncated listing proves neither absence nor uniqueness. No release (absence),
+ * no adoption (uniqueness) — every residue is reported `unresolved` with the
+ * bound in its cause, so `--adopt` or a listing that fits the bound is the way
+ * out.
  *
  * `options.release` names `pending`-without-id rows the operator has released
  * after this same scan found nothing: they drop to `failed`, the retryable edge,
@@ -523,8 +546,15 @@ export async function reconcilePendingCreate(
   db: StoreDb,
   provider: IssueProvider,
   context: PushContext,
-  options: { release?: ReadonlySet<string> } = {},
+  options: { release?: ReadonlySet<string>; maxPages: number },
 ): Promise<ReconcileReport> {
+  const maxPages = options.maxPages;
+  if (!Number.isInteger(maxPages) || maxPages < 1) {
+    throw new SyncError(
+      "sync.invalid-input",
+      `the reconcile scan needs maxPages >= 1; received ${String(maxPages)}. A scan that reads no page proves nothing and requests nothing`,
+    );
+  }
   const release = options.release ?? new Set<string>();
   assertReleaseTargets(db, context.bindingId, release);
   const pending = db
@@ -541,8 +571,10 @@ export async function reconcilePendingCreate(
   }
   const matches = new Map<string, string[]>();
   let cursor: string | null = null;
+  let pages = 0;
   do {
     const page = await provider.listIssues(cursor);
+    pages += 1;
     for (const item of page.items) {
       const marker = markerIn(item.description);
       if (marker === null) continue;
@@ -551,12 +583,23 @@ export async function reconcilePendingCreate(
       matches.set(localId, [...(matches.get(localId) ?? []), item.externalId]);
     }
     cursor = page.nextCursor;
-  } while (cursor !== null);
+  } while (cursor !== null && pages < maxPages);
+  if (cursor !== null) report.stoppedAtPageBound = maxPages;
+  const truncated = cursor !== null;
 
-  // A match is evidence of an identity, so releasing over it would discard what
-  // the scan just proved. Decided over the whole scan, before any adoption write.
+  // ONE standard for a scan that was not read to its end. Both verbs below
+  // decide over "what the listing proved": a truncated listing proves neither
+  // absence (so no release) nor uniqueness (so no adoption). Splitting those
+  // two would let a row leave `pending` bound to one of several remote issues
+  // carrying its marker, where no later scan could surface the other.
   for (const localId of release) {
     const found = matches.get(localId) ?? [];
+    if (truncated) {
+      throw new SyncError(
+        "sync.illegal-transition",
+        `--release ${localId} needs a listing scan that was read to its end, and this one stopped at ${maxPages} pages with more advertised; what sits on the pages never read decides whether this residue has a remote issue at all, so absence is not proved and nothing was written - resolve the issue yourself with --adopt <localId>=<issueUrl|externalId>, or re-run push against a listing that fits the bound`,
+      );
+    }
     if (found.length === 0) continue;
     throw new SyncError(
       "sync.illegal-transition",
@@ -572,6 +615,20 @@ export async function reconcilePendingCreate(
       continue;
     }
     const found = matches.get(localId) ?? [];
+    if (truncated) {
+      // The same standard as the refusal above: uniqueness was not proved, so
+      // adopting "the one match read so far" would be a guess about the pages
+      // never read. The row stays `pending`, which is where a later scan can
+      // still reach it.
+      report.unresolved.push({
+        localId,
+        cause:
+          found.length === 0
+            ? `the reconcile listing stopped at its ${maxPages}-page bound with more pages advertised, so this item's marker was never ruled out; nothing was adopted or written - re-run push against a listing that fits the bound, or resolve the issue yourself with --adopt <localId>=<issueUrl|externalId>`
+            : `${found.length} remote issue(s) carrying this item's correlation marker were read before the listing stopped at its ${maxPages}-page bound with more pages advertised, so uniqueness is not proved; nothing was adopted or written - resolve the remote issue yourself with --adopt <localId>=<issueUrl|externalId>, or re-run push against a listing that fits the bound`,
+      });
+      continue;
+    }
     if (found.length !== 1) {
       report.unresolved.push({
         localId,
@@ -700,7 +757,12 @@ export function externalIdOf(reference: string): string {
     throw new Error("[sync.invalid-input] the adopted reference is empty; pass <localId>=<issueUrl|externalId>");
   }
   if (!/^https?:\/\//i.test(raw)) return raw;
-  const url = new URL(raw);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`[sync.invalid-input] ${raw} is not a parseable URL; pass a linear.app issue URL or the issue identifier`);
+  }
   if (url.hostname !== "linear.app" && !url.hostname.endsWith(".linear.app")) {
     throw new Error(`[sync.invalid-input] ${url.hostname} is not a Linear host; pass a linear.app issue URL or the issue identifier`);
   }
