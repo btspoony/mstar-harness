@@ -67,7 +67,7 @@ export type OverviewCopy = {
   workflowsTruncated: (shown: number, total: number) => string;
   /** One workflow row's plan progress. */
   plansProgress: (done: number, total: number) => string;
-  /** The plan table's five columns (`prototype.html:859-866`). */
+  /** The plan table's five columns (`prototype.html`, the plan table's `<th>` header row). */
   planColumns: { plan: string; title: string; status: string; progress: string; done: string };
   /** `7 plans · running` — the count line above the table. */
   workflowMeta: (plans: number, status: string) => string;
@@ -77,7 +77,7 @@ export type OverviewCopy = {
   planTableCaption: string;
   /** A plan whose status the store does not record. */
   planStatusAbsent: string;
-  /** The workflow header line's type label (`prototype.html:855`). */
+  /** The workflow header line's type label (`prototype.html`, the `.wf-summary` header). */
   typeLabel: string;
   /** The link into the workflow's own screen. */
   openWorkflow: string;
@@ -160,7 +160,7 @@ export type OverviewProps = {
   onOpenWorkflow?: (id: string) => void;
   /**
    * Open the issue list filtered to one severity. The prototype's residual rows are
-   * links to exactly that (`prototype.html:1109-1111`); without it they read as dead
+   * links to exactly that (`prototype.html`, the `.res-row` links with `data-issue-sev`); without it they read as dead
    * text. Absent when the host has no issues destination.
    */
   onOpenIssues?: (severity: string) => void;
@@ -287,7 +287,7 @@ function planColumns(copy: OverviewCopy): DataTableColumn<OverviewPlanRow>[] {
 
 /**
  * One active workflow: the header line, the branch chain, and the plan table
- * (`prototype.html:845-925`). Several workflows stack, each with its own table.
+ * (`prototype.html`, the active-workflow block under `.overview-grid`). Several workflows stack, each with its own table.
  */
 function WorkflowRowView(props: {
   row: OverviewWorkflowRow;
@@ -371,7 +371,7 @@ function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
 
 /**
  * The trend card: two cumulative lines, the axis labels, the legend with both
- * open counts, and the gap note (`prototype.html:929-945`). The dated-history
+ * open counts, and the gap note (`prototype.html`, the `#ov-flow-title` trend panel). The dated-history
  * table that used to repeat the same numbers is gone (plan
  * the dashboard alignment change, Task 2), so the figure and its two text lines are
  * the whole card.
@@ -548,7 +548,7 @@ export function Overview(props: OverviewProps) {
             meta={model.residuals.kind === "populated" ? copy.residualsTotal() : undefined}
           />
           <PanelBody>
-          {/* The prototype's compact tally (`prototype.html:2424-2434`): five severity
+          {/* The prototype's compact tally (`prototype.html`, the `.res-grid` rows): five severity
               rows in a two-column grid — critical/high, medium/low, nit — severity on the
               left with its dot, count right-aligned. The row label is the literal enum:
               contract values stay English and untranslated so they can be copied into the

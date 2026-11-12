@@ -287,7 +287,7 @@ describe("DataTable — the collapse rule", () => {
     expect(css).toContain(".row-meta");
   });
   test("the pane's head band carries the prototype's nav inset", () => {
-    // `prototype.html:487`: `.dsh-page-head .app-nav { padding: 0 12px }` on a surface
+    // `prototype.html`: `.dsh-page-head .app-nav { padding: 0 12px }` on a surface
     // band with a closing hairline. Both seats mount this class, so the dsh pane's nav
     // is inset from the pane's edges instead of touching them.
     expect(stylesheet("base")).toMatch(/\.ms-pane-head\s*\{[^}]*padding-inline: 12px;/);
@@ -517,7 +517,7 @@ describe("ProgressBar — a measured fraction, never a series", () => {
   });
 
   test("a complete bar carries the prototype's completed tone", () => {
-    // `prototype.html:291`: the completed fill is `.bar.is-done > i`; the attribute-only
+    // `prototype.html`: the completed fill is `.bar.is-done > i`; the attribute-only
     // success rule died with the component module, so the class is the painting contract.
     expect(render(<ProgressBar done={4} total={4} />)).toContain('class="bar is-done"');
     expect(render(<ProgressBar done={3} total={6} />)).toContain('class="bar"');

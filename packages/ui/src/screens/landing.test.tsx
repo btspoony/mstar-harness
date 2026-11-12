@@ -331,7 +331,7 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
   });
 
   test("the plan table: five columns, one row per plan, the prototype's cells", () => {
-    // `prototype.html:859-866`: Plan | Title | Status | Progress | Done.
+    // `prototype.html`, the plan table's `<th>` header row: Plan | Title | Status | Progress | Done.
     for (const key of ["plan", "title", "status", "progress", "done"]) {
       expect(html).toContain(`data-ms-col-key="${key}"`);
     }

@@ -32,7 +32,7 @@ export type IssueFlowChartProps = {
    * overview's card) and `full` (132px, the issues screen's own panel). The height is
    * fixed on purpose — a chart that scaled with its container would grow a pixel for
    * every pixel of pane width, which is what `height: auto` did to a 1350px panel.
-   * `prototype.html:3229` is the source: `var height = compact ? 88 : 132;`.
+   * `prototype.html` is the source: `var height = compact ? 88 : 132;`.
    */
 };
 
