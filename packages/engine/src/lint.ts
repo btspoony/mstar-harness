@@ -467,7 +467,12 @@ const ELLIPSIS_RE = /\.\.\./;
  * surface maps to, or `plan-quality-bar` reports
  * `lint.plan-quality.verification-set`. Prose-only plans map to nothing.
  * `scripts/**` maps to that script's own test or its own run — never to
- * `lint:ascii-literals`, which scans nothing under `scripts/`. */
+ * `lint:ascii-literals`, which scans nothing under `scripts/`. The
+ * `scripts/` surface is the repository root only: `packages/ui/scripts/x.ts`
+ * is package-local code whose tests live beside it. A repository-root script
+ * path is a path whose left boundary is not a name character or `/`, so a
+ * nested `scripts/` directory yields no match. */
+const ROOT_SCRIPT_PATH_RE = /(?<![\w/.-])scripts\/[\w.-]+?\.ts\b/;
 const SURFACE_CHECKS: ReadonlyArray<{ surface: RegExp; missing: (filesText: string, verificationText: string) => string[] }> = [
   {
     surface: /\bpackages\/(?:engine|cli)\/src\b|\bhooks\/src\b/,
@@ -478,21 +483,28 @@ const SURFACE_CHECKS: ReadonlyArray<{ surface: RegExp; missing: (filesText: stri
     missing: (_files, verification) => (verification.includes("bun run validation:drift") ? [] : ["bun run validation:drift"]),
   },
   {
-    surface: /\bscripts\/([\w.-]+?)\.ts\b/,
+    surface: ROOT_SCRIPT_PATH_RE,
     missing: (files, verification) => {
       // A script's own check is its test or its own `bun run` entry name
       // (npm scripts spell `:` where the file has `-`).
       const runNames = [...verification.matchAll(/\bbun run ([\w:.-]+)/g)].map((m) => m[1]!.replace(/:/g, "-"));
-      return [...new Set([...files.matchAll(/\bscripts\/([\w.-]+?)\.ts\b/g)].map((m) => m[1]!))]
-        .filter((stem) => !stem.endsWith(".test"))
-        .filter((stem) => !verification.includes(`scripts/${stem}.ts`) && !verification.includes(`scripts/${stem}.test.ts`) && !runNames.includes(stem))
-        .map((stem) => `bun test scripts/${stem}.test.ts`);
+      return [...new Set([...files.matchAll(new RegExp(ROOT_SCRIPT_PATH_RE, "g"))].map((m) => m[0]))]
+        .filter((path) => !path.endsWith(".test.ts"))
+        .filter((path) => !verification.includes(path) && !verification.includes(path.replace(/\.ts$/, ".test.ts")) && !runNames.includes(path.slice("scripts/".length, -".ts".length)))
+        .map((path) => `bun test ${path.replace(/\.ts$/, ".test.ts")}`);
     },
   },
 ];
 /** Files-list entry labels (`- Modify: \`path\``) in a task's **Files:**
  * block. `Out of scope` is an exclusion, not a surface the plan checks. */
 const FILES_ENTRY_RE = /^\s*[-*]\s*\**\s*(?:Create|Modify|Test|Delete|Rename)\s*\**\s*:/i;
+/** A Files entry declares surfaces only when its subject is a quoted path
+ * list — the first thing after the label is a backticked span. An entry that
+ * opens with prose (`only paths …`) or quotes a full command line names no
+ * modified surface. */
+const FILES_ENTRY_PATH_START_RE = /^[ \t]*`/;
+/** A quoted path: a backticked span with no whitespace. */
+const QUOTED_PATH_RE = /`([^`\s]+)`/g;
 /** Verification lines: a step checkbox or an explicit `Run:` label. Only
  * these count as "the plan verifies this surface" — a command named in
  * constraints prose is a mention, not a gate. */
@@ -602,8 +614,15 @@ export function planQualityBar(planText: string): PlanQualityResult {
     }
   }
   // Verification set: a Files entry on a mapped code surface must be paired
-  // with the check that surface maps to, on a verification line.
-  const filesText = lines.filter((line) => FILES_ENTRY_RE.test(line)).join("\n");
+  // with the check that surface maps to, on a verification line. Only the
+  // paths a Files entry lists as its subject are surfaces; prose or a quoted
+  // command around them is a mention.
+  const filesText = lines
+    .filter((line) => FILES_ENTRY_RE.test(line))
+    .map((line) => line.replace(FILES_ENTRY_RE, ""))
+    .filter((entry) => FILES_ENTRY_PATH_START_RE.test(entry))
+    .flatMap((entry) => [...entry.matchAll(QUOTED_PATH_RE)].map((m) => m[1]!))
+    .join("\n");
   const verificationText = lines.filter((line) => VERIFICATION_LINE_RE.test(line)).join("\n");
   for (const { surface, missing } of SURFACE_CHECKS) {
     if (!surface.test(filesText)) continue;

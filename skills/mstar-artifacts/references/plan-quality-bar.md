@@ -46,13 +46,13 @@ Development ACs must not require a live API, provider receipt, named/authenticat
 
 These are examples, not commands to copy into every plan. Resolve actual paths/selectors before locking. No available scoped entry → report the exact gap; do not substitute a package/workspace suite. Non-executable docs/policy use `Verification mode: scoped-check` evidence per `mstar-sdd/references/file-handoffs.md`, with before/after observable criteria for policy changes. Executable changes retain their corresponding unit-test evidence.
 
-The surface map — a Files entry on a code surface must name the check that surface maps to, or `lint.plan-quality.verification-set` fires:
+The surface map — a Files entry on a code surface must name the check that surface maps to, or `lint.plan-quality.verification-set` fires. A Files entry surfaces only the paths it lists right after the label (`- Modify: \`a.ts\`, \`b.ts\``); prose before them or a quoted command line names no surface:
 
 | Files surface | Mapped check |
 |---------------|--------------|
 | `packages/engine/src`, `packages/cli/src`, `hooks/src` code literals | `bun run lint:ascii-literals` |
 | `skills/**` | `bun run validation:drift` |
-| `scripts/**` | that script's own test or run (`bun test scripts/<name>.test.ts`, `bun run <script>`), not `lint:ascii-literals` |
+| repo-root `scripts/*.ts` | that script's own test or run (`bun test scripts/<name>.test.ts`, `bun run <script>`), not `lint:ascii-literals`; a package-local `packages/*/scripts/*.ts` maps to nothing, its tests live beside it |
 | prose | scoped-check |
 
 ### 3. Hard boundaries

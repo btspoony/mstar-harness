@@ -825,6 +825,23 @@ describe("planQualityBar verification-set", () => {
     const mention = "**Files:**\n- Modify: `scripts/rule-duplication.ts`\n\nGlobal constraint: `bun test scripts/rule-duplication.test.ts` exists.\n";
     expect(planQualityBar(mention).violations.map((v) => v.code)).toEqual(["lint.plan-quality.verification-set"]);
   });
+
+  test("a package-local scripts path is not the root surface (no invented root command)", () => {
+    const plan = "**Files:**\n- Modify: `packages/ui/scripts/declaration-diff.ts`, `packages/judgment/scripts/evaluate.ts`\n\n- [ ] Run: `bun test packages/ui/test/declaration-diff.test.ts`\n";
+    expect(planQualityBar(plan).violations).toEqual([]);
+  });
+
+  test("a Files entry quoting a command names no surface", () => {
+    const plan = "**Files:**\n- Modify: only paths `bun scripts/execution-consumer-manifest.ts --repo . --write` changes under `scripts/packaging-manifests/`\n\n- [ ] From the integration checkout, run `--write` once, then `--check`.\n";
+    expect(planQualityBar(plan).violations).toEqual([]);
+  });
+
+  test("a root script path with no check, no test and no run entry is still flagged", () => {
+    const plan = "**Files:**\n- Modify: `scripts/adr-check.ts`\n\n- [ ] Run: `bun test packages/engine/test/lint.test.ts`\n";
+    const violations = planQualityBar(plan).violations;
+    expect(violations.map((v) => v.code)).toEqual(["lint.plan-quality.verification-set"]);
+    expect(violations[0]!.message).toContain("bun test scripts/adr-check.test.ts");
+  });
 });
 
 // ---------------------------------------------------------------------------
