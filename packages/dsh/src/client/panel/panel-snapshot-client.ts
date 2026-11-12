@@ -243,9 +243,13 @@ export class MstarPanelSnapshotClient {
       if (result === null || typeof result !== 'object') return { ok: false, code: 'internal-error', message: 'malformed-answer' }
       if (result.ok !== true) {
         const error = result.error as { code?: unknown; message?: unknown } | null | undefined
-        // The engine's own refusal code survives the transport envelope; only an
-        // answer with no usable code degrades to `transport-error` (the retry
-        // policy's ambiguity token).
+        // A `gateway/*` envelope refusal keeps its own code; only an answer with
+        // no usable code stays `transport-error`. Engine refusals never arrive
+        // here — they are the method's value, decoded by
+        // parseMilestoneWriteResult. shortcut: only the literal
+        // `transport-error` is ambiguous to the retry channel, so a future
+        // post-commit throw surfacing as `gateway/internal` is treated as
+        // terminal; upgrade when a milestone verb can throw after committing.
         return {
           ok: false,
           code: str(error?.code) ?? 'transport-error',
