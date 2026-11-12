@@ -53,7 +53,7 @@ The terminal loop reads every terminal header in the served graph unconditionall
 
 **Reason:** `check-annotations` cannot enforce fields no producer emits, and the landing step the acceptance names does not exist. Populating them would mean inventing identity metadata. The acceptance stays unsatisfied; a project-manager waiver of `model` and `assistance` only — their population at a landing step that does not exist, and `check-annotations` enforcement of those two fields — is accepted. The waiver does not reach `seat`, `shard` or `sessionId`: `check-annotations` still rejects a declared seat or shard that disagrees with the shard being read, and still reports all three per shard. It is not a resolution and must not be recorded as one.
 
-**What would change the decision:** a producer for `model` or `assistance` is defined — for example annotation writers that know the model and the assistance level they ran under. Then the acceptance is met by that producer and the waiver is withdrawn.
+**What would change the decision:** a producer for `model` and `assistance` is defined — for example annotation writers that know the model and the assistance level they ran under. Then the acceptance is met by that producer and the waiver is withdrawn.
 
 ## Alternatives considered
 
