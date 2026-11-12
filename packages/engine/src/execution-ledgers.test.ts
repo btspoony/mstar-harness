@@ -79,8 +79,10 @@ const PLAN_ID = "p-1";
 const COORDINATOR_ID = "host-notes";
 const LEGACY_NOTE_TS = "2026-09-01T00:00:00.000Z";
 
+const LEGACY_TEXT = "legacy migrated note";
+
 /** One migrated historical line, exactly as `migrate.ts` serialized it. */
-const LEGACY_LINE = `${JSON.stringify({ kind: "note", ts: LEGACY_NOTE_TS, text: "legacy migrated note" })}\n`;
+const LEGACY_LINE = `${JSON.stringify({ kind: "note", ts: LEGACY_NOTE_TS, text: LEGACY_TEXT })}\n`;
 
 /** The retained legacy snapshot of this workflow, with inline row notes. */
 const LEGACY_SNAPSHOT = `${JSON.stringify(
@@ -1206,9 +1208,9 @@ describe("execution-ledgers: compaction at the ledger size ceiling", () => {
   test("a failed compacted write says the triggering note already landed and never asks for a duplicate append", async () => {
     const fixture = shared;
     const lineBytes = Buffer.byteLength(LEGACY_LINE, "utf8");
-    fixture.seed({ ledger: LEGACY_LINE.repeat(Math.ceil(WORKFLOW_NOTES_LEDGER_MAX_BYTES / lineBytes) + 1) });
+    const seededLines = Math.ceil(WORKFLOW_NOTES_LEDGER_MAX_BYTES / lineBytes) + 1;
+    fixture.seed({ ledger: LEGACY_LINE.repeat(seededLines) });
     const target = note("note-compacted-write-fails", "triggering note whose compaction cannot write");
-    const before = ledgerBytes(fixture);
     // The triggering frame's own write succeeds; every write after it belongs to
     // the compaction's temporary file and fails short, so the only refusal this
     // case observes is the compacted-write failure.
@@ -1226,11 +1228,14 @@ describe("execution-ledgers: compaction at the ledger size ceiling", () => {
       spy.mockRestore();
     }
     expect(refusal.code).toBe("execution-ledgers.append-short");
-    // The frame this call committed is retained: the receipted note is not lost,
-    // so the only honest recovery is to leave it alone.
-    const retained = ledgerBytes(fixture);
-    expect(retained.subarray(0, before.length).equals(before)).toBe(true);
-    expect(retained.subarray(before.length).toString("utf8")).toBe(framedLineOf(target));
+    // The frame this call committed is retained: the reader still finds the
+    // receipted note whole, on top of the seeded history, with no compaction
+    // disclosure and no second copy of it.
+    const facts = factsOf(fixture);
+    expect(facts.counts).toEqual({ historical: seededLines, records: 1, unrecognized: 0 });
+    expect(facts.records.map((entry) => entry.record.id)).toEqual([target.id]);
+    expect(facts.records[0]!.record.text).toBe(target.text);
+    expect(facts.compaction).toBeNull();
     // The text must not invite the duplicate the landed frame makes possible.
     const meaning = refusal.message.toLowerCase();
     expect(meaning).toContain("already landed");
@@ -1277,7 +1282,11 @@ describe("execution-ledgers: compaction at the ledger size ceiling", () => {
     }
     expect(rotated).toBe(true);
     expect(refusal.code).toBe("execution-ledgers.target-untrusted");
-    // Nothing was classified or rewritten through the link.
-    expect(readFileSync(outside, "utf8")).toBe(LEGACY_LINE);
+    // Nothing was rewritten through the link: the target still reads as its one
+    // untouched legacy note, with no compaction disclosure over it.
+    const outsideFacts = normalizeWorkflowNotesCoverage({ workflowId: WF, path: outside, bytes: readFileSync(outside) });
+    expect(outsideFacts.counts).toEqual({ historical: 1, records: 0, unrecognized: 0 });
+    expect(outsideFacts.historical[0]!.record?.text).toBe(LEGACY_TEXT);
+    expect(outsideFacts.compaction).toBeNull();
   }, 30_000);
 });

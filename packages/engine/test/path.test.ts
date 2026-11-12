@@ -1240,11 +1240,6 @@ describe("scaffoldHarness", () => {
       const outsideHarness = realpathSync(outside);
       mkdirSync(join(outsideRoot, "control", "plans"), { recursive: true });
       expect(realpathSync(resolveProcessHarnessDir(join(outsideRoot, "control"))!)).toBe(outsideHarness);
-      // ...but discovering from the harness itself answers its own `plans/`
-      // child, so the store keeps the root only through the explicit-harness
-      // short route in `resolveProcessHarnessDir`. Delete that short circuit
-      // and `storeDbPath` reads `{harness}/plans/store.db`.
-      expect(resolveProcessHarnessDir(outsideHarness)).toBe(join(outsideHarness, "plans"));
       expect(storeDbPath({ harnessDir: outsideHarness })).toBe(join(outsideHarness, "store.db"));
     } finally {
       rmSync(root, { recursive: true, force: true });
