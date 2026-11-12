@@ -17,7 +17,7 @@ Parallel PM dispatch: **`parallel-dispatch.md`** (read in dispatch rounds).
 Two OpenCode generations are supported by two independent packages; the installer/doctor resolve which one applies (`opencode --version` probe on real installs; `--opencode-generation <v1|v2>` always wins; probe failure refuses with that flag as the recovery — never a guess). A config carrying both generations' keys is a supported dual-host state that the doctor validates per generation.
 
 - **OpenCode 1.x** → `@mstar-harness/opencode` (V1 plugin API `@opencode-ai/plugin` 1.4.8). Every other section of this reference documents that surface: warn-only write hook, `task` dispatch, no caller identity.
-- **OpenCode 2.x** → **`@mstar-harness/opencode-v2`** (pinned `@opencode/plugin` **2.0.26**).
+- **OpenCode 2.x** → **`@mstar-harness/opencode-v2`** (pinned `@opencode/plugin` **2.2.5**).
 
 V2 differences that change harness behavior:
 
