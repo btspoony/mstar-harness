@@ -112,6 +112,19 @@ function candidates(db: StoreDb) {
   return selectPushCandidates(db, BINDING);
 }
 
+/** The bound import stops at, which the reconcile scan is handed by its caller. */
+const RECONCILE_MAX_PAGES = 20;
+
+/** `reconcilePendingCreate` with the caller-supplied page bound. */
+function scan(
+  db: StoreDb,
+  provider: IssueProvider,
+  ctx: PushContext,
+  options: { release?: ReadonlySet<string>; maxPages?: number } = {},
+) {
+  return reconcilePendingCreate(db, provider, ctx, { maxPages: RECONCILE_MAX_PAGES, ...options });
+}
+
 function row(db: StoreDb, localId: string) {
   return readItem(db, { bindingId: BINDING, direction: "push", localId });
 }
@@ -283,7 +296,7 @@ describe("(c2) reconciliation costs nothing when there is no ambiguous residue",
       const fake = provider();
       const ctx = context();
       await pushItem(db, fake, ctx, candidates(db)[0]!);
-      const report = await reconcilePendingCreate(db, fake, ctx);
+      const report = await scan(db, fake, ctx);
       expect(report).toEqual({ adopted: [], unresolved: [] });
       expect(fake.listings).toEqual([]);
     } finally {
@@ -325,7 +338,7 @@ describe("(d) ambiguous creates are adopted by correlation marker only", () => {
           },
         ],
       });
-      const report = await reconcilePendingCreate(db, fake, context());
+      const report = await scan(db, fake, context());
       expect(report.adopted).toEqual([{ localId: "I-000951", externalId: "LIN-77" }]);
       expect(row(db, "I-000951")).toMatchObject({ itemState: "applied", externalId: "LIN-77" });
       expect(fake.writes).toEqual([]);
@@ -357,7 +370,7 @@ describe("(d) ambiguous creates are adopted by correlation marker only", () => {
           },
         ],
       });
-      const report = await reconcilePendingCreate(db, fake, context());
+      const report = await scan(db, fake, context());
       expect(report.adopted).toEqual([]);
       expect(report.unresolved).toHaveLength(1);
       expect(row(db, "I-000951")).toMatchObject({ itemState: "pending", externalId: null });
@@ -389,7 +402,7 @@ describe("(d) ambiguous creates are adopted by correlation marker only", () => {
           },
         ],
       });
-      const report = await reconcilePendingCreate(db, fake, context());
+      const report = await scan(db, fake, context());
       expect(report.adopted).toEqual([]);
       expect(report.unresolved).toHaveLength(1);
       expect(row(db, "I-000951")).toMatchObject({ itemState: "pending", externalId: null });
@@ -417,7 +430,7 @@ describe("(d) ambiguous creates are adopted by correlation marker only", () => {
           url: `https://linear.app/acme/issue/LIN-${index + 1}`,
         }));
         const fake = provider({ pages: [{ items, nextCursor: null }] });
-        const report = await reconcilePendingCreate(db, fake, context());
+        const report = await scan(db, fake, context());
         expect(report.adopted).toEqual([]);
         expect(report.unresolved).toHaveLength(1);
         expect(fake.writes).toEqual([]);
@@ -733,7 +746,7 @@ describe("(h) a label preflight failure never erases an earlier ambiguous create
 
       // Reconciliation finds no marker: the create stays unattributed.
       const scanned = provider();
-      const report = await reconcilePendingCreate(db, scanned, available);
+      const report = await scan(db, scanned, available);
       expect(report.unresolved).toHaveLength(1);
 
       // The mapped label is unavailable now. That says nothing about whether the
@@ -928,7 +941,7 @@ describe("(j) an unresolved create blocks every later create until reconcile att
           },
         ],
       });
-      const report = await reconcilePendingCreate(db, scanning, ctx);
+      const report = await scan(db, scanning, ctx);
       expect(report.adopted).toEqual([{ localId: "I-001031", externalId: "LIN-77" }]);
       expect(row(db, "I-001031")).toMatchObject({ itemState: "applied", externalId: "LIN-77" });
     } finally {
@@ -1204,7 +1217,7 @@ describe("(n) an operator release clears a pending create only when reconciliati
       // release lands on the retryable `failed` edge, and the candidate loop
       // then creates the issue it just released.
       const fake = provider();
-      const report = await reconcilePendingCreate(db, fake, context(), { release: new Set(["I-001081"]) });
+      const report = await scan(db, fake, context(), { release: new Set(["I-001081"]) });
       expect(report).toEqual({ adopted: [], unresolved: [] });
       expect(fake.listings).toEqual([null]);
       expect(row(db, "I-001081")).toMatchObject({ itemState: "failed", externalId: null });
@@ -1243,7 +1256,7 @@ describe("(n) an operator release clears a pending create only when reconciliati
           },
         ],
       });
-      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001082"]) })).rejects.toThrow(
+      await expect(scan(db, scanning, context(), { release: new Set(["I-001082"]) })).rejects.toThrow(
         /adoption, not release/,
       );
       expect(scanning.writes).toEqual([]);
@@ -1280,7 +1293,7 @@ describe("(n) an operator release clears a pending create only when reconciliati
           },
         ],
       });
-      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001086"]) })).rejects.toThrow(
+      await expect(scan(db, scanning, context(), { release: new Set(["I-001086"]) })).rejects.toThrow(
         /adoption, not release/,
       );
       // Zero ledger change: the refused release never landed, and neither did the
@@ -1302,7 +1315,7 @@ describe("(n) an operator release clears a pending create only when reconciliati
       expect(row(db, "I-001083")).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
 
       const scanning = provider();
-      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001083"]) })).rejects.toThrow(
+      await expect(scan(db, scanning, context(), { release: new Set(["I-001083"]) })).rejects.toThrow(
         /names no unresolved create/,
       );
       expect(scanning.listings).toEqual([]);
@@ -1325,7 +1338,7 @@ describe("(n) an operator release clears a pending create only when reconciliati
         "I-001084",
       );
       const scanning = provider();
-      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001084"]) })).rejects.toThrow(
+      await expect(scan(db, scanning, context(), { release: new Set(["I-001084"]) })).rejects.toThrow(
         /as LIN-84/,
       );
       // Refused before ANY listing call: the row's shape is the operator's error,
@@ -1342,7 +1355,7 @@ describe("(n) an operator release clears a pending create only when reconciliati
     try {
       addIssue(db, "I-001085");
       const scanning = provider();
-      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001085"]) })).rejects.toThrow(
+      await expect(scan(db, scanning, context(), { release: new Set(["I-001085"]) })).rejects.toThrow(
         /has no push ledger row/,
       );
       expect(scanning.listings).toEqual([]);
@@ -1368,7 +1381,7 @@ describe("(n) an operator release clears a pending create only when reconciliati
         url: `https://linear.app/acme/issue/${externalId}`,
       }));
       const scanning = provider({ pages: [{ items: duplicates, nextCursor: null }] });
-      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001086"]) })).rejects.toThrow(
+      await expect(scan(db, scanning, context(), { release: new Set(["I-001086"]) })).rejects.toThrow(
         /would risk a duplicate: 2 remote issues carry this item's correlation marker/,
       );
       expect(scanning.writes).toEqual([]);
@@ -1407,7 +1420,7 @@ describe("(n) an operator release clears a pending create only when reconciliati
           },
         ],
       });
-      await expect(reconcilePendingCreate(db, scanning, context(), { release: new Set(["I-001088"]) })).rejects.toThrow(
+      await expect(scan(db, scanning, context(), { release: new Set(["I-001088"]) })).rejects.toThrow(
         /would discard a proved identity: LIN-2 carries this item's correlation marker/,
       );
       // Both pages were read, in order, before the refusal decided anything.
@@ -1431,7 +1444,7 @@ describe("(n) an operator release clears a pending create only when reconciliati
           { items: [], nextCursor: null },
         ],
       });
-      const report = await reconcilePendingCreate(db, fake, context(), { release: new Set(["I-001089"]) });
+      const report = await scan(db, fake, context(), { release: new Set(["I-001089"]) });
       expect(report).toEqual({ adopted: [], unresolved: [] });
       expect(fake.listings).toEqual([null, "c-2"]);
       expect(row(db, "I-001089")).toMatchObject({ itemState: "failed", externalId: null });
@@ -1462,7 +1475,7 @@ describe("(n) an operator release clears a pending create only when reconciliati
         adoptItem(db, BINDING, "I-001087", "https://linear.app/acme/issue/LIN-301/slug");
         return page;
       };
-      await expect(reconcilePendingCreate(db, adopting, context(), { release: new Set(["I-001087"]) })).rejects.toThrow(
+      await expect(scan(db, adopting, context(), { release: new Set(["I-001087"]) })).rejects.toThrow(
         /from 'applied' is not in the contract/,
       );
       expect(adopting.writes).toEqual([]);
@@ -1567,5 +1580,128 @@ describe("(o) a taken-over run's later write is refused, and its successor is no
     } finally {
       close();
     }
+  });
+});
+
+describe("(j) the skip rule answers before the workspace checks (I-000968)", () => {
+  test("an applied row whose label has since left the workspace reports skipped and stays applied", async () => {
+    const { db, close } = await openedStore("skip-vanished-label");
+    try {
+      addIssue(db, "I-001101", { kind: "risk" });
+      const fake = provider();
+      const first = await pushItem(db, fake, context(), candidates(db)[0]!);
+      expect(first.outcome).toBe("created");
+      const applied = row(db, "I-001101")!;
+      expect(applied).toMatchObject({ itemState: "applied", externalId: "LIN-1" });
+
+      // `risk` is gone from the discovered set, but the remote already carries
+      // exactly this payload, so nothing would be written either way.
+      const noLabels = context({ labels: new Set(["bug"]) });
+      const second = await pushItem(db, fake, noLabels, candidates(db)[0]!);
+      expect(second).toMatchObject({ outcome: "skipped", externalId: "LIN-1" });
+      expect(row(db, "I-001101")).toEqual(applied);
+      expect(fake.writes).toHaveLength(1);
+    } finally {
+      close();
+    }
+  });
+});
+
+describe("(k) a marker quoted in operator text is not the marker (I-000969)", () => {
+  test("the last marker in the description decides the adopted issue", async () => {
+    const { db, close } = await openedStore("decoy-marker");
+    try {
+      addIssue(db, "I-001111");
+      const ambiguousRun = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
+      await pushItem(db, ambiguousRun, context(), candidates(db)[0]!);
+      expect(row(db, "I-001111")).toMatchObject({ itemState: "pending", externalId: null });
+
+      const real = correlationMarker({ workspace: "acme", team: "ENG" }, STORE_ID, "I-001111");
+      const scanning = provider({
+        pages: [
+          {
+            items: [
+              {
+                externalId: "LIN-401",
+                title: "Operator notes",
+                description: `body quoting <!-- mstar-sync: acme/ENG/other-store/I-999999 --> as an example\n\n${real}`,
+                state: "Todo",
+                priority: "High",
+                labels: [],
+                updatedAt: "2026-11-02T00:00:00.000Z",
+                url: "https://linear.app/acme/issue/LIN-401",
+              },
+            ],
+            nextCursor: null,
+          },
+        ],
+      });
+      const report = await scan(db, scanning, context());
+      expect(report.adopted).toEqual([{ localId: "I-001111", externalId: "LIN-401" }]);
+      expect(row(db, "I-001111")).toMatchObject({ itemState: "applied", externalId: "LIN-401" });
+    } finally {
+      close();
+    }
+  });
+});
+
+describe("(l) the reconcile scan stops at the shared page bound (I-000970)", () => {
+  /** One page per call, every page advertising a successor. */
+  function endlessPages(): Fake {
+    const fake = provider();
+    fake.listIssues = async (cursor) => {
+      fake.listings.push(cursor);
+      return { items: [], nextCursor: `cursor-${fake.listings.length}` };
+    };
+    return fake;
+  }
+
+  test("the report names the bound it stopped at and no further page is requested", async () => {
+    const { db, close } = await openedStore("reconcile-bound");
+    try {
+      addIssue(db, "I-001121");
+      const ambiguousRun = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
+      await pushItem(db, ambiguousRun, context(), candidates(db)[0]!);
+
+      const fake = endlessPages();
+      const report = await scan(db, fake, context());
+      expect(report.stoppedAtPageBound).toBe(RECONCILE_MAX_PAGES);
+      expect(fake.listings).toHaveLength(RECONCILE_MAX_PAGES);
+      expect(report.unresolved).toHaveLength(1);
+      expect(report.unresolved[0]!.cause).toContain(String(RECONCILE_MAX_PAGES));
+      expect(row(db, "I-001121")).toMatchObject({ itemState: "pending", externalId: null });
+    } finally {
+      close();
+    }
+  });
+
+  test("a release is refused when the scan never reached the end of the listing", async () => {
+    const { db, close } = await openedStore("reconcile-bound-release");
+    try {
+      addIssue(db, "I-001122");
+      const ambiguousRun = provider({ receipts: [{ kind: "ambiguous", cause: "connection closed mid-call" }] });
+      await pushItem(db, ambiguousRun, context(), candidates(db)[0]!);
+
+      await expect(scan(db, endlessPages(), context(), { release: new Set(["I-001122"]) })).rejects.toThrow(
+        /sync\.illegal-transition/,
+      );
+      expect(row(db, "I-001122")).toMatchObject({ itemState: "pending", externalId: null });
+    } finally {
+      close();
+    }
+  });
+});
+
+describe("(m) a malformed remote reference is invalid input, not a crash (I-000971)", () => {
+  test("a URL that does not parse throws the existing invalid-input refusal", () => {
+    let thrown: unknown;
+    try {
+      externalIdOf("http://[");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("[sync.invalid-input]");
+    expect((thrown as Error).name).not.toBe("TypeError");
   });
 });

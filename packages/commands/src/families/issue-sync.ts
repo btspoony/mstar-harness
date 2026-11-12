@@ -249,7 +249,7 @@ const RECOVERY: Record<string, string> = {
   "linear.write-ambiguous":
     "The write was sent but not confirmed, so delivery is unknown and the item stays pending with no external id. The next run reconciles it by correlation marker — exactly one match adopts that issue — and `--adopt <localId>=<issueUrl|externalId>` records the identity when you can see it yourself. When the next run's reconcile scan reports that no remote issue carries the marker and you can confirm the issue is gone, release the residue with `--release <localId>`: that clears it to a retryable failure, so the same run creates it.",
   "linear.label-unresolved":
-    "The mapped kind label does not exist in this Linear workspace and push never creates labels. Create that label in Linear's UI, or redirect it in `.mstarc` with `[linear.mapping] kind.<kind>=<label>`; other items still push.",
+    "Read the cause, which names one of two different situations. When the label discovery walk stopped at its page bound, the workspace's label set was not proven and the label may well exist: create nothing — re-run `mstar issue-sync push --project <project-id>` so the walk reads the full set, and only if it then names the label is it really absent. When the walk completed and the label is genuinely absent (push never creates labels), create that label in Linear's UI, or redirect it in `.mstarc` with `[linear.mapping] kind.<kind>=<label>`; other items still push.",
   "linear.state-unresolved":
     "The mapped workflow state does not exist in this Linear team and push never creates or renames states. Rename it in Linear's workflow settings, or redirect it in `.mstarc` with `[linear.mapping] disposition.<key>=<name>`, where <key> is the DEFAULT target state (Todo/Done/Canceled) that the local disposition maps to; other items still push.",
   "sync.identity-conflict":
@@ -778,7 +778,12 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
     //    `pushItem` reports it as `unresolved` without writing anything. A
     //    `--release` row joins this same scan: the flag acts only on a zero-match
     //    result and drops the row to `failed`, so the candidate loop creates it.
-    const reconciled = await reconcilePendingCreate(db, provider, pushContext, { release: released });
+    const reconciled = await reconcilePendingCreate(db, provider, pushContext, {
+      release: released,
+      // The same bound the import loop stops at: one number, so the two scans
+      // cannot drift.
+      maxPages: DEFAULT_MAX_PAGES,
+    });
     report.reconciled = reconciled.adopted;
     for (const adopted of reconciled.adopted) {
       report.items.push({ localId: adopted.localId, outcome: "reconciled", externalId: adopted.externalId });
