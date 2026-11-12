@@ -9,14 +9,16 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function installedFixture(options: { id?: string; effect?: boolean; nestedReference?: boolean } = {}): string {
+function installedFixture(options: { id?: string; effect?: boolean; nestedReference?: boolean; bootstrap?: boolean } = {}): string {
   const root = mkdtempSync(join(tmpdir(), "opencode-v2-smoke-fixture-"));
   roots.push(root);
   const assets = {
+    "AGENTS.md": "# Harness rules\n",
     "harness-agents/project-manager.md": "---\nname: project-manager\n---\n",
     "harness-commands/iteration-start.md": "---\nname: iteration-start\n---\n",
     "harness-skills/mstar-roles/SKILL.md": "---\nname: mstar-roles\n---\n",
   };
+  if (options.bootstrap === false) delete (assets as Partial<typeof assets>)["AGENTS.md"];
   if (options.nestedReference !== false) {
     Object.assign(assets, { "harness-skills/mstar-roles/references/project-manager.md": "nested reference\n" });
   }
@@ -65,5 +67,9 @@ describe("OpenCode V2 installed package smoke", () => {
 
   test("rejects a packed skill tree missing a nested reference", async () => {
     await expect(inspectInstalledPackage(installedFixture({ nestedReference: false }))).rejects.toThrow(/nested reference/);
+  });
+
+  test("rejects a packed install missing the AGENTS.md bootstrap asset", async () => {
+    await expect(inspectInstalledPackage(installedFixture({ bootstrap: false }))).rejects.toThrow(/bootstrap asset/);
   });
 });

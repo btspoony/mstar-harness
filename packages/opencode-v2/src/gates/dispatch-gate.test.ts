@@ -198,13 +198,13 @@ describe("OpenCode V2 subagent dispatch gate", () => {
   });
 
 
-  test("null engine seam fails closed with typed engine-unavailable refusal", async () => {
+  test("null engine seam fails closed and names the recovery that clears the cached load", async () => {
     await expect(Effect.runPromise(dispatchBefore(
       makeEvent("project-manager", "fullstack-dev", validAssignment()),
       { loadEngine: async () => null },
     ))).rejects.toMatchObject({
       _tag: "Tool.Error",
-      message: expect.stringContaining("[dispatch.engine-unavailable]"),
+      message: expect.stringMatching(/\[dispatch\.engine-unavailable\][\s\S]*reload or restart the OpenCode host/i),
     });
   });
   test("missing prompt refuses as typed schema drift instead of skipping validation", async () => {

@@ -110,7 +110,7 @@ export function dispatchBefore(event: DispatchBeforeEvent, services: DispatchGat
  (api) => api === null
  ? Effect.fail(toolError(
  "dispatch.engine-unavailable",
- "The ACTIVE dispatch-gate exports are unavailable. Upgrade @mstar-harness/opencode-v2 (or the host runtime) and retry; no subagent was spawned.",
+ "The ACTIVE dispatch-gate exports are unavailable. Reload or restart the OpenCode host to retry the engine import: a failed load is cached as null for the session, so upgrading alone does not clear it. No subagent was spawned.",
  ))
  : dispatchEffect(event, api, services.logger ?? defaultStatusLogger),
  );

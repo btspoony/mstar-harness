@@ -5,6 +5,8 @@
 
 import type * as Engine from "@mstar-harness/engine";
 
+import { defaultStatusLogger } from "./log";
+
 type EngineModule = typeof Engine;
 type CoordinationValidators = Pick<EngineModule, "validateStatus" | "validateWorkflowSnapshot">;
 type DirectoryResolvers = Pick<EngineModule, "resolveHarnessDir" | "resolveWorkflowDir" | "resolveProjectDir">;
@@ -50,6 +52,17 @@ let activeStoreApiPromise: Promise<ActiveStoreApi | null> | undefined;
 let dispatchGateApiPromise: Promise<DispatchGateApi | null> | undefined;
 let writeGateApiPromise: Promise<WriteGateApi | null> | undefined;
 
+/** A rejected engine import is cached as null for the process lifetime, so the
+ * cause must be logged here or it is lost to the later refusal. The cache is
+ * deliberately kept: clearing it would retry the import on every call. */
+const loadFailure = (seam: string) => (error: unknown): null => {
+  defaultStatusLogger(
+    "error",
+    `${seam} unavailable: ${error instanceof Error ? error.message : String(error)}. Reload or restart the host to retry the engine import; the failed load stays cached until then.`,
+  );
+  return null;
+};
+
 
 export function loadCoordinationValidators(): Promise<CoordinationValidators | null> {
   validatorsPromise ??= import("@mstar-harness/engine").then((engine) => {
@@ -58,7 +71,7 @@ export function loadCoordinationValidators(): Promise<CoordinationValidators | n
       validateStatus: engine.validateStatus,
       validateWorkflowSnapshot: engine.validateWorkflowSnapshot,
     };
-  }).catch(() => null);
+  }).catch(loadFailure("coordination validators"));
   return validatorsPromise;
 }
 
@@ -74,7 +87,7 @@ export function loadDirectoryResolvers(): Promise<DirectoryResolvers | null> {
       resolveWorkflowDir: engine.resolveWorkflowDir,
       resolveProjectDir: engine.resolveProjectDir,
     };
-  }).catch(() => null);
+  }).catch(loadFailure("directory resolvers"));
   return directoryResolversPromise;
 }
 
@@ -96,7 +109,7 @@ export function loadActiveStoreApi(): Promise<ActiveStoreApi | null> {
       readExecutionSource: engine.readExecutionSource,
       resolveExecutionReadRoute: engine.resolveExecutionReadRoute,
     };
-  }).catch(() => null);
+  }).catch(loadFailure("ACTIVE store API"));
   return activeStoreApiPromise;
 }
 export function loadDispatchGateApi(): Promise<DispatchGateApi | null> {
@@ -117,7 +130,7 @@ export function loadDispatchGateApi(): Promise<DispatchGateApi | null> {
       resolveHarnessDir: engine.resolveHarnessDir,
       resolveRepoEnforcement: engine.resolveRepoEnforcement,
     };
-  }).catch(() => null);
+  }).catch(loadFailure("dispatch gate exports"));
   return dispatchGateApiPromise;
 }
 export function loadWriteGateApi(): Promise<WriteGateApi | null> {
