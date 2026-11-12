@@ -156,6 +156,21 @@ describe("validateQcReport \u2014 report rules", () => {
     ]);
   });
 
+  test("rule 8: the historical 'Approve with residuals' body conclusion validates cleanly", () => {
+    // A seat whose only leftover is non-blocking states the residual in the
+    // body; the frontmatter keeps the four-token value and the counts agree.
+    const gate = validateQcReport(
+      VALID_REPORT.replace("| \ud83d\udfe2 Suggestion | 0 |", "| \ud83d\udfe2 Suggestion | 1 |")
+        .replace(
+          "### \ud83d\udfe2 Suggestion\n\nNone.",
+          "### \ud83d\udfe2 Suggestion\n\n- **S-1** registered as a plan-linked issue.",
+        )
+        .replace(BODY_VERDICT_LINE, "**Verdict**: Approve with residuals \u2014 S-1 registered."),
+    );
+    expect(gate.violations).toEqual([]);
+    expect(gate.ok).toBe(true);
+  });
+
   test("rule 8: trailing prose and the historical 'Approve with residuals' shape stay clean", () => {
     const gate = validateQcReport(
       VALID_REPORT.replace(BODY_VERDICT_LINE, "## Verdict: **Approve with residuals** \u2014 W-1 deferred by the PM."),

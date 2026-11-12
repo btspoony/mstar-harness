@@ -324,9 +324,11 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "packages/cli/src",
     ]);
     expect(cli.generated?.trees.map((tree) => tree.root)).toEqual(["packages/cli/dist"]);
-    expect(cli.generated?.files.map((file) => file.path)).toEqual([
-      "packages/cli/dist/mstar-harness.js",
-    ]);
+    // The single bundle's bytes are environment-dependent, so this consumer
+    // records no generated digest and excludes the bundle from its tree; what
+    // it does pin is the source closure and the runtime floor.
+    expect(cli.generated?.trees[0]?.exclude).toEqual(["execution-consumer.json", "mstar-harness.js"]);
+    expect(cli.generated?.files).toEqual([]);
 
     const omp = manifest.consumers.find((consumer) => consumer.id === "omp");
     expect(omp?.runtime.target).toBe("bun");
@@ -420,6 +422,51 @@ describe("execution-consumer-manifest — canonical collection", () => {
     const missingDsh = buildFixture();
     unlinkSync(join(missingDsh, "packages/dsh/dist/index.js"));
     expectRefusal(() => collectExecutionConsumerManifest(missingDsh), "consumer.path-missing");
+  });
+
+  test("accepts an empty generated closure for a consumer that declares one, and still proves its entrypoint", () => {
+    // `cli` deliberately declares no generated file: its single bundle's bytes
+    // are environment-dependent. Collecting and verifying it must therefore
+    // succeed on an unchanged tree — with no digest recorded for the bundle.
+    const root = buildFixture();
+    const manifest = collectExecutionConsumerManifest(root);
+    const cli = consumerIn(cloneManifest(manifest), "cli");
+    expect(cli.generated?.files).toEqual([]);
+    verifyExecutionConsumerManifest(manifest);
+
+    // The bundle is still a required artifact: rewriting its bytes is not
+    // drift (it is deliberately unpinned), but removing it is.
+    writeFileSync(join(root, "packages/cli/dist/mstar-harness.js"), "// rebuilt cli bundle\n");
+    verifyExecutionConsumerManifest(manifest);
+    unlinkSync(join(root, "packages/cli/dist/mstar-harness.js"));
+    expectRefusal(() => verifyExecutionConsumerManifest(manifest), "consumer.generated-missing");
+
+    // The producer proves the same thing, and refuses an empty bundle.
+    const absent = buildFixture();
+    unlinkSync(join(absent, "packages/cli/dist/mstar-harness.js"));
+    expectRefusal(() => collectExecutionConsumerManifest(absent), "consumer.generated-missing");
+    const empty = buildFixture();
+    writeFileSync(join(empty, "packages/cli/dist/mstar-harness.js"), "");
+    expectRefusal(() => collectExecutionConsumerManifest(empty), "consumer.generated-empty");
+  });
+
+  test("still refuses a consumer whose declared generated tree or artifact is absent", () => {
+    // Only a layout that DECLARES no generated file is relaxed: a consumer
+    // that declares generated trees must still have them built.
+    const missingTree = buildFixture();
+    rmSync(join(missingTree, "packages/engine/dist"), { recursive: true, force: true });
+    expectRefusal(() => collectExecutionConsumerManifest(missingTree), "consumer.path-missing");
+
+    const emptyDeclaredTree = buildFixture();
+    rmSync(join(emptyDeclaredTree, "packages/opencode/dist"), { recursive: true, force: true });
+    mkdirSync(join(emptyDeclaredTree, "packages/opencode/dist"), { recursive: true });
+    expectRefusal(() => collectExecutionConsumerManifest(emptyDeclaredTree), "consumer.generated-empty");
+
+    // A declared artifact can also go missing while its tree stays non-empty:
+    // that is still a refusal, never a silently shortened closure.
+    const missingDeclaredArtifact = buildFixture();
+    unlinkSync(join(missingDeclaredArtifact, "packages/engine/dist/audit.js"));
+    expectRefusal(() => collectExecutionConsumerManifest(missingDeclaredArtifact), "consumer.path-missing");
   });
 
   test("refuses a package whose engines floor is not the canonical runtime floor", () => {
@@ -607,8 +654,8 @@ describe("execution-consumer-manifest — verification refusals", () => {
     );
 
     const hashTamper = cloneManifest(manifest);
-    const cliGenerated = consumerIn(hashTamper, "cli").generated;
-    if (cliGenerated === null) throw new Error("fixture cli generated set missing");
+    const cliGenerated = consumerIn(hashTamper, "opencode").generated;
+    if (cliGenerated === null) throw new Error("fixture opencode generated set missing");
     cliGenerated.files[0]!.sha256 = "0".repeat(64);
     expectRefusal(() => verifyExecutionConsumerManifest(asManifest(hashTamper)), "consumer.digest-mismatch");
 
@@ -673,14 +720,14 @@ describe("execution-consumer-manifest — verification refusals", () => {
       const manifest = collectExecutionConsumerManifest(root);
 
       const escaped = cloneManifest(manifest);
-      const generated = consumerIn(escaped, "cli").generated;
-      if (generated === null) throw new Error("fixture cli generated set missing");
+      const generated = consumerIn(escaped, "opencode").generated;
+      if (generated === null) throw new Error("fixture opencode generated set missing");
       generated.files[0]!.path = "../outside-consumer-artifact.js";
       expectRefusal(() => verifyExecutionConsumerManifest(asManifest(escaped)), "consumer.path-outside-root");
 
       const absolute = cloneManifest(manifest);
-      const absoluteGenerated = consumerIn(absolute, "cli").generated;
-      if (absoluteGenerated === null) throw new Error("fixture cli generated set missing");
+      const absoluteGenerated = consumerIn(absolute, "opencode").generated;
+      if (absoluteGenerated === null) throw new Error("fixture opencode generated set missing");
       absoluteGenerated.trees[0]!.root = "/etc";
       expectRefusal(() => verifyExecutionConsumerManifest(asManifest(absolute)), "consumer.path-outside-root");
     } finally {

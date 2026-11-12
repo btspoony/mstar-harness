@@ -80,6 +80,7 @@ export {
 } from "./annotation-seat-gate.js";
 export type { AnnotationSeatGateInput, AnnotationSeatGateResult, AnnotationSeatMountPlan } from "./annotation-seat-gate.js";
 
+export { normalizeTypeSafeResponse, type NormalizedTypeSafeResponse } from "./normalize.js";
 export { classifyOutcome, clopperPearsonLower, summarizeQualification } from "./evaluation.js";
 export type { EvaluationOutcome, GoldLabel, OutcomeReason, QualificationRow, QualificationSummary } from "./evaluation.js";
 export { opaqueId128, runAnnotationProjection, runLeakCheck } from "./annotation-projection.js";

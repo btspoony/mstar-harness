@@ -14,7 +14,11 @@
  * This is packaging evidence only. It never inspects an installed consumer,
  * never reads a home directory, never bumps a version and never invents
  * parity: a missing or empty build output refuses instead of producing a
- * manifest. The layouts below mirror the existing build scripts (each
+ * manifest. The one exception is deliberate and per-consumer: a layout that
+ * declares no generated file (its only artifact's bytes are
+ * environment-dependent) records no build digest, and its entrypoint is
+ * proved by existence and non-emptiness instead. The layouts below mirror the
+ * existing build scripts (each
  * package's `build`/`bundle-assets`/`build-client` scripts and
  * `scripts/build-zcode-hooks.ts`) — this is an inventory over those layouts,
  * not a second build system, and a recorded source/output digest is **not** a
@@ -299,8 +303,20 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
       "scripts/ascii-literal-utils.ts",
       "scripts/escape-dist-literals.ts",
     ],
-    generatedTrees: [{ root: "packages/cli/dist", exclude: BUILD_OUTPUT_EXCLUSIONS }],
-    generatedFiles: ["packages/cli/dist/mstar-harness.js"],
+    // This consumer deliberately records NO generated digest. Its dist is the
+    // single `mstar-harness.js` bundle, and the same committed tree builds to
+    // different bytes across checkouts (the root cause is unreproduced), so a
+    // recorded digest records the machine that built it and is not a fact
+    // about the source. What IS deterministic — the source closure above and
+    // the runtime floor — stays pinned; the entrypoint is proved by existence
+    // and non-emptiness instead. The dsh `client.js` precedent (excluded from
+    // its tree, then re-derived byte-identically from its producer) is
+    // deliberately NOT copied here: this repo bans byte-equality assertions,
+    // so re-derivation would be a second, weaker pin.
+    generatedTrees: [
+      { root: "packages/cli/dist", exclude: [...BUILD_OUTPUT_EXCLUSIONS, "mstar-harness.js"] },
+    ],
+    generatedFiles: [],
     copies: [],
   },
   {
@@ -688,11 +704,15 @@ function buildConsumer(repoAbs: string, layout: ConsumerLayout): ExecutionConsum
     };
   }
 
+  // A consumer whose layout declares no generated file deliberately pins no
+  // bytes (its only artifact is environment-dependent), so an empty generated
+  // closure is its canonical state; the entrypoint is still proved below.
+  const pinsGeneratedFiles = layout.generatedFiles.length > 0;
   const generatedTrees = layout.generatedTrees
     .map((spec) => digestTree(repoAbs, spec))
     .sort((a, b) => (a.root < b.root ? -1 : a.root > b.root ? 1 : 0));
   for (const tree of generatedTrees) {
-    if (tree.files === 0) {
+    if (tree.files === 0 && pinsGeneratedFiles) {
       refuse(
         "consumer.generated-empty",
         `${layout.id} has no build output under ${tree.root} — build the package before writing a manifest`,
@@ -703,9 +723,6 @@ function buildConsumer(repoAbs: string, layout: ConsumerLayout): ExecutionConsum
   const generatedFiles = layout.generatedFiles
     .map((rel) => hashFile(repoAbs, rel))
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  if (generatedFiles.length === 0) {
-    refuse("consumer.generated-missing", `${layout.id} declares no generated artifact`);
-  }
   for (const artifact of generatedFiles) {
     const abs = resolveInsideRepo(repoAbs, artifact.path, artifact.path);
     if (!existsSync(abs)) {
@@ -715,7 +732,7 @@ function buildConsumer(repoAbs: string, layout: ConsumerLayout): ExecutionConsum
       refuse("consumer.generated-empty", `${layout.id} has empty build output ${artifact.path}`);
     }
   }
-  if (!generatedFiles.some((artifact) => artifact.path === toPosix(layout.entrypoint))) {
+  if (pinsGeneratedFiles && !generatedFiles.some((artifact) => artifact.path === toPosix(layout.entrypoint))) {
     refuse(
       "consumer.generated-missing",
       `${layout.id} entrypoint ${layout.entrypoint} is not a declared generated artifact`,
@@ -724,6 +741,9 @@ function buildConsumer(repoAbs: string, layout: ConsumerLayout): ExecutionConsum
   const entrypointAbs = resolveInsideRepo(repoAbs, layout.entrypoint, `entrypoint ${layout.entrypoint}`);
   if (!existsSync(entrypointAbs)) {
     refuse("consumer.generated-missing", `${layout.id} is missing build output ${layout.entrypoint}`);
+  }
+  if (statSync(entrypointAbs).size === 0) {
+    refuse("consumer.generated-empty", `${layout.id} has empty build output ${layout.entrypoint}`);
   }
 
   const sourceFiles = layout.sourceFiles
@@ -913,6 +933,10 @@ export function verifyExecutionConsumerManifest(manifest: ExecutionConsumerManif
         `${id} records entrypoint ${entrypoint}, expected ${toPosix(layout.entrypoint)}`,
       );
     }
+    // Mirrors the producer: a layout that declares no generated file pins no
+    // build bytes, so an empty generated tree is its canonical state rather
+    // than a missing build.
+    const pinsGeneratedFiles = layout.generatedFiles.length > 0;
 
     const checkDigestFiles = (
       kind: "sources" | "generated",
@@ -1006,7 +1030,7 @@ export function verifyExecutionConsumerManifest(manifest: ExecutionConsumerManif
       for (const spec of specs) {
         const recomputed = digestTree(repoAbs, spec);
         const recordedTree = recorded.find((tree) => tree.root === toPosix(spec.root));
-        if (recomputed.files === 0 && kind === "generated") {
+        if (recomputed.files === 0 && kind === "generated" && pinsGeneratedFiles) {
           refuse("consumer.generated-empty", `${id} has no build output under ${recomputed.root}`);
         }
         const expectedExclude = [...(spec.exclude ?? [])].sort();
@@ -1047,11 +1071,24 @@ export function verifyExecutionConsumerManifest(manifest: ExecutionConsumerManif
     };
 
     const generatedPaths = checkDigestFiles("generated", consumer.generated, layout.generatedFiles);
-    if (!generatedPaths.includes(entrypoint)) {
-      refuse(
-        "consumer.generated-missing",
-        `${id} entrypoint ${entrypoint} is not part of the recorded generated set`,
-      );
+    if (layout.generatedFiles.length > 0) {
+      if (!generatedPaths.includes(entrypoint)) {
+        refuse(
+          "consumer.generated-missing",
+          `${id} entrypoint ${entrypoint} is not part of the recorded generated set`,
+        );
+      }
+    } else {
+      // No generated closure to be a member of: the entrypoint is proved by
+      // existence and non-emptiness instead, so a consumer that deliberately
+      // records no digest still cannot ship a missing or empty surface.
+      const entrypointAbs = resolveInsideRepo(repoAbs, entrypoint, `entrypoint ${entrypoint}`);
+      if (!existsSync(entrypointAbs)) {
+        refuse("consumer.generated-missing", `${id} is missing build output ${entrypoint}`);
+      }
+      if (statSync(entrypointAbs).size === 0) {
+        refuse("consumer.generated-empty", `${id} has empty build output ${entrypoint}`);
+      }
     }
     checkDigestFiles("sources", consumer.sources, layout.sourceFiles);
     checkDigestTrees("sources", consumer.sources, layout.sourceTrees);

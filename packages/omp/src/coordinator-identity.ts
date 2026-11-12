@@ -251,11 +251,11 @@ function refusalOf(error: unknown, facts: Record<string, unknown> = {}): Coordin
  * of an existing holder (the prior holder named with its stop attestation).
  * The engine's own facts stay first; this is additive routing guidance only.
  */
-const INCOMPATIBLE_LOADED_ENGINE_CODES: Record<string, true> = {
+export const INCOMPATIBLE_LOADED_ENGINE_CODES: Record<string, true> = {
   "store.schema-unsupported": true,
   "store.schema-drift": true,
 };
-const INCOMPATIBLE_LOADED_ENGINE_RECOVERY =
+export const INCOMPATIBLE_LOADED_ENGINE_RECOVERY =
   "The loaded entry below is the build that answered, and this process keeps the extension registration it already " +
   "loaded: refreshing repository sources changes nothing here. Refresh the installed @mstar-harness/omp package to a " +
   "build that reads this store schema, then start a NEW host process so the registration is loaded from it — a new " +

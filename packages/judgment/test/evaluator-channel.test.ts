@@ -119,7 +119,9 @@ describe("bounded evaluator mailbox", () => {
     }
   });
 
-  test("production channel connects with the supervisor launcher's sibling request and status mounts", async () => {
+  // Production reads /proc/self/mountinfo and /proc/self/status; this case injects stand-in mounts, so it
+  // proves the mount check and channel path only and claims no real-container proof.
+  test("injected stand-in mounts stand in for the production /proc read; no real-container claim", async () => {
     const root = makeRoot();
     const requestDirectory = join(root, "requests");
     mkdirSync(requestDirectory);
