@@ -1561,7 +1561,7 @@ function iterationMembershipPlanIds(
  * `active` IS that closed non-terminal arm, including a non-terminal projected
  * status on a row the registry does not list as active (`active_registration`
  * is the registry's only claim). Accepted limit, not a corruption code to
- * encode: docs/adr/proposed/architecture/2026-11-12-low-sweep-accepted-limits.md
+ * encode: docs/adr/implemented/architecture/2026-11-12-low-sweep-accepted-limits.md
  */
 function executionLifecycleOf(workflowRow: ProjectedWorkflowRow | undefined): IterationExecutionLifecycle {
   if (workflowRow === undefined) return "none";

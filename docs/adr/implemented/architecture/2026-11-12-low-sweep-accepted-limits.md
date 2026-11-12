@@ -1,6 +1,6 @@
 # ADR: Five store, ledger and annotation limits are accepted at their documented boundary instead of gaining mechanisms
 
-Status: proposed — the limits already hold in the cited modules, but the four open reports close against this record and the `I-000196` waiver is a project-manager sign-off, so this is not yet the standing decision.
+Status: implemented — the limits already hold in the cited modules, so this record is the standing decision the four open reports close against, with `I-000196` accepted under a project-manager waiver.
 Date: 2026-11-12
 
 Scope: `executionLifecycleOf` in `packages/engine/src/store-read.ts`, the terminal loop in `packages/engine/src/projection.ts`, `writeLedgerTempFile` in `packages/engine/src/execution-ledgers.ts`, the terminal fixtures in `packages/engine/src/dashboard-view.test.ts` and `packages/engine/src/projection.test.ts`, and the annotation identity fields read by `check-annotations` in `packages/judgment/scripts/evaluate.ts`.
@@ -11,7 +11,7 @@ Five findings are true observations whose acceptances each ask for a mechanism. 
 
 Meeting all five acceptances means a second fixture path, a new lifecycle value threaded through every consumer, a retention knob with store-history semantics, a sweep that cannot tell a dead writer's temp file from one a live writer is about to rename, and synthesized identity metadata for fields no producer emits. Each mechanism is a permanent surface maintained for a signal nobody has hit, and each changes behavior to describe a cost that could instead be stated. Left undecided, the reports stay open indefinitely or get closed ad hoc by whichever reader arrives first, and the modules that already rely on the current behavior have nothing to point at.
 
-## Proposal
+## Decision
 
 The project accepts the five limits as they stand and records each one's reason and its reversal condition here, rather than adding a knob, a lifecycle value, a sweep or a fixture rewrite. No new schema, cache, validator or retention setting is introduced.
 
@@ -62,15 +62,11 @@ The terminal loop reads every terminal header in the served graph unconditionall
 - **Close the reports with a disposition and no record.** Lost: the acceptances explicitly allow a decision record, and a bare closure loses both the reason and the reversal condition, so the next reader reintroduces the mechanism without meeting the argument against it.
 - **Put the limits in a knowledge document.** Lost: knowledge carries how-to and lessons learned; an accepted limit is a standing decision a future contributor must confront before adding the knob, which is what an ADR is for. A knowledge page would also be rewritten by the next capture pass.
 
-## Acceptance criteria
+## Consequences
 
-- `mstar lint docs/adr --type adr` accepts this record in `proposed/architecture/` and it names `I-000906`, `I-000907`, `I-000913`, `I-000939` and `I-000196`.
+- The ADR gate accepts this record under `implemented/architecture/`: `mstar lint docs/adr --type adr` and `bun scripts/adr-check.ts` (Guard 12) pass with it there, and it names `I-000906`, `I-000907`, `I-000913`, `I-000939` and `I-000196`.
 - The four open reports close with a closure note citing this record; `I-000196` remains waived with its acceptance still unsatisfied, and its closure note says so.
 - The module comments that cite this path name the same five boundaries; no source change adds a knob, lifecycle value, sweep or fixture rewrite for them.
-- Flipping to `implemented` rewrites `Proposal` into a present-tense `Decision` and folds `Acceptance criteria` and `Risks` into `Consequences`; no section of this record is kept as proposal scaffolding.
-
-## Risks
-
 - These limits are documented, not enforced. Nothing fails if a future change adds the retention knob or lets a fixture drift, so each reversal condition above is a review obligation rather than a gate.
 - The costs are real and accepted: refresh time grows with terminal history, crashed compactions leave dead temporaries, an unregistered non-terminal row reads as active, raw-SQL fixtures can encode state no writer produces, and blind-independence attribution for annotation rows depends on supervisor transcripts rather than the rows.
 - `I-000196` carries the largest gap: the waiver accepts weaker attribution than its acceptance wanted, and nothing in the repository closes that gap without a producer for `model` and `assistance`.
