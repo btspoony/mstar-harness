@@ -62,14 +62,14 @@ const ours = new Set([
   ...selectors(readFileSync(join(stylesDir, "base.css"), "utf8")),
 ]);
 const prototypeKeys = new Set(selectors(prototypeCss));
-if (prototypeKeys.size === 0) {
-  console.error("selector-diff: 0 prototype selectors compared — the prototype yielded nothing to compare.");
+const comparable = [...prototypeKeys].filter(
+  (selector) => !NOT_APPLICABLE.some((rule) => rule.match(selector)),
+);
+if (comparable.length === 0) {
+  console.error("selector-diff: 0 prototype selectors compared — after the allowlist the prototype yielded nothing to compare.");
   process.exit(1);
 }
-const unexplained = [...prototypeKeys]
-  .filter((selector) => !ours.has(selector))
-  .filter((selector) => !NOT_APPLICABLE.some((rule) => rule.match(selector)))
-  .sort();
+const unexplained = comparable.filter((selector) => !ours.has(selector)).sort();
 
 if (unexplained.length > 0) {
   console.error(unexplained.map((s) => `  ${s}`).join("\n"));

@@ -27,10 +27,12 @@ const PACKAGE_ROOT = join(import.meta.dir, "..", "..");
  * line, or the `import type {` … `} from "@mstar-harness/engine"` block that
  * `view-model/iterations.ts` uses), default, namespace, and default-plus-named.
  */
+// Mask rather than delete: newlines are kept so positions in the result still
+// map to the same source lines (the diagnostic reports the offending line).
 const withoutTypeOnlyEngineImports = (source: string): string =>
   source.replace(
-    /^import\s+type\s+(?:[\w$]+(?:\s*,\s*(?:\{[^}]*\}|\*\s+as\s+[\w$]+))?|\*\s+as\s+[\w$]+|\{[^}]*\})\s*from\s*"@mstar-harness\/engine";?[^\S\n]*\n?/gm,
-    "",
+    /^import\s+type\s+(?:[\w$]+(?:\s*,\s*(?:\{[^}]*\}|\*\s+as\s+[\w$]+))?|\*\s+as\s+[\w$]+|\{[^}]*\})\s*from\s*["']@mstar-harness\/engine["'];?[^\S\n]*\n?/gm,
+    (match) => match.replace(/[^\n]/g, " "),
   );
 
 describe("the public surface is browser-safe", () => {
@@ -80,6 +82,8 @@ describe("the public surface is browser-safe", () => {
       'import type EngineType from "@mstar-harness/engine";\n',
       'import type * as engine from "@mstar-harness/engine";\n',
       'import type Default, { EngineType } from "@mstar-harness/engine";\n',
+      "import type { EngineType } from '@mstar-harness/engine';\n",
+      "import type EngineType from '@mstar-harness/engine';\n",
     ];
     for (const source of typeOnly) {
       expect(withoutTypeOnlyEngineImports(source)).not.toContain("@mstar-harness/engine");
@@ -92,6 +96,14 @@ describe("the public surface is browser-safe", () => {
     for (const source of value) {
       expect(withoutTypeOnlyEngineImports(source)).toContain("@mstar-harness/engine");
     }
+    // A preceding (possibly multiline) type-only import must not shift the
+    // reported line: masking keeps newlines, so the offender stays on its
+    // original source line.
+    const shifted = withoutTypeOnlyEngineImports(
+      'import type {\n  EngineType,\n} from "@mstar-harness/engine";\nimport { engineValue } from "@mstar-harness/engine";\n',
+    );
+    const at = shifted.indexOf("@mstar-harness/engine");
+    expect(shifted.slice(0, at).split("\n").length).toBe(4);
   });
 
   test("the entry point exposes the consumer surface and nothing host-specific", async () => {
