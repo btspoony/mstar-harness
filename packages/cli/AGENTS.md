@@ -20,6 +20,11 @@ This `packages/cli` directory hosts the standalone `@mstar-harness/cli` package 
 - `bun run build` -> build distributable CLI entry.
 - `bun run check` -> quick help command smoke check.
 
+## Tests
+
+- `bun run test` -> the package test flow: engine build, then this package's build, then `bun test`. Prefer it whenever anything under `packages/engine/src` changed.
+- Never run a suite beside a concurrent `bun run --cwd packages/engine build`. The suites resolve `@mstar-harness/engine` through `packages/engine/dist` (spawned CLI subprocesses included), while that build starts with `rm -rf dist`: a build overlapping a run can remove the module the run is loading, and the run dies with `Cannot find module '@mstar-harness/engine'` instead of reporting a test result. `test/persist.test.ts` restates this in its header.
+
 ## Command contract (hard requirement)
 
 The CLI is the agent-facing contract; agents drive it from `--help` alone. Treat every point below as a **hard requirement** for any command addition or change, not a style preference:
