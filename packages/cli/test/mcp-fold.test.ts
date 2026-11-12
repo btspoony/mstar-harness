@@ -639,16 +639,16 @@ describe("folded MCP command families", () => {
   });
 
   /**
-   * When this trips: measure the new surface in the checkout that holds the
-   * change (this same reduce, never a throwaway probe against another build),
-   * decide whether the growth is intended, and re-take the ceiling with that
-   * reason recorded next to it — never silently raise the number to go green.
+   * A re-take is a recorded product decision, not a mechanical re-measure;
+   * the same instruction rides the assertion message so it is what a failing
+   * run prints.
    */
   test("the published surface stays within its budget", async () => {
     await withClient(async (_client, tools) => {
       const surface = tools.reduce((total, tool) =>
         total + JSON.stringify(tool.inputSchema).length + (tool.description ?? "").length, 0);
-      expect(surface).toBeLessThanOrEqual(PUBLISHED_SURFACE_CEILING_CHARS);
+      expect(surface, "surface over the published ceiling: measure it in this checkout, decide whether the growth is intended, and re-take the ceiling with the reason recorded rather than raising it to go green")
+        .toBeLessThanOrEqual(PUBLISHED_SURFACE_CEILING_CHARS);
     });
   });
 });
