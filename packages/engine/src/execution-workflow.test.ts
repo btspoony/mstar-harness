@@ -1176,6 +1176,9 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
   });
 
   test("an unwritable TMPDIR refuses the close, naming the scratch write and the TMPDIR recovery", async () => {
+    // Root ignores mode bits, so a mode-locked directory cannot express EACCES
+    // there; the case is unprivileged by construction (no fixture needs root).
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
     const fixture = await workflowFixture("merge-scratch-unwritable");
     setRowStatus(fixture.context, PLAN_ID, "Done");
     await workflowMutation(fixture, "op-scratch-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
