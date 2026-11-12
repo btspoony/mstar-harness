@@ -18,7 +18,6 @@ import {
   inject as skillLocalInject,
   name as skillLocalName,
 } from '@deepseek-ai/dsh-skill-filesystem'
-import { resolveRepoEnforcement } from '@mstar-harness/engine'
 // Type-only: loads the `ctx.commands` cordis augmentation + the command
 // handler invocation shape from the (peer-stub / real) dsh-commands seam —
 // the runtime registration goes through `ctx.inject(['commands'], …)`.
@@ -31,6 +30,7 @@ import {
   HarnessResolver,
   liveConfigValue,
   packagedAgentsDir,
+  resolveSeamHard,
   skillLocalConfig,
 } from './gates/_shared.ts'
 import {
@@ -791,7 +791,7 @@ export function apply(ctx: Context, config: Config): void {
   // instead of only documenting it, and point at the supported fix.
   // (Boot-time the only known enforcement source is the explicit Config
   // override — compass hard is per-workspace and resolves at event time.)
-  const effectiveHard = config.enforcement === 'hard' || (bootHarnessDir !== null && resolveRepoEnforcement(bootHarnessDir).hard)
+  const effectiveHard = resolveSeamHard(bootHarnessDir, config)
   const configuredBinding = liveConfigValue(config.dispatchBinding)
   if (effectiveHard && configuredBinding !== undefined && configuredBinding.trim() === '') {
     ctx.logger(DISPATCH_LOGGER).warn(
