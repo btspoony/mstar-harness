@@ -53,8 +53,9 @@
  * `DEFAULT_CATALOG_TTL_MS`, `CatalogCacheEntry` / `EmissionDigest`,
  * `PreStepCatalogOptions`, `panelDigestOf`, `renderEngineStatusCatalog`,
  * `createCatalogInvalidation` / `CatalogInvalidation`) are entry-internal, and
- * the two renderers/projections — plus the `gateSegment` they share with the
- * always-on digest — are exported so both modes are unit-testable.
+ * the two renderers/projections — plus the `gateSegment` and `plansSegment`
+ * they share with the always-on digest — are exported so both modes are
+ * unit-testable.
  */
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'

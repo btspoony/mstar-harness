@@ -219,7 +219,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(text).not.toContain('done-plan')
   })
 
-  it('(c2) renders plans: all done when every active plan is Done (distinct from `plans: none`)', async () => {
+  it('(c2) renders plans: all done when every active plan is Done (distinct from `plans: none registered`)', async () => {
     const text = await activeDigest([
       { id: 'done-a', title: 'Done A', status: 'Done' },
       { id: 'done-b', title: 'Done B', status: 'Done' },

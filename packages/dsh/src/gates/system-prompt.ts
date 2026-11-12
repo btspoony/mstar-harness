@@ -474,9 +474,9 @@ const DIGEST_PLAN_CAP = 8
  * controlled value (workflow id, workflow type/status, plan ids, plan
  * statuses, branch anchors) is screened through `stripInterpolationHazard`
  * before embedding — a hostile `{{…}}` in any of them can never throw the
- * renderer. Engine-derived literals (version, `workflow`, `plans:`, `none`,
- * `all done`, `unknown`, the `+N more` overflow marker) are constants, not
- * operator text, and stay unscreened.
+ * renderer. Engine-derived literals (version, `workflow`, `plans:`,
+ * `none registered`, `all done`, `unknown`, the `+N more` overflow marker) are
+ * constants, not operator text, and stay unscreened.
  */
 function engineStatusSummary(payload: MstarEngineStatusPayload): string {
   const lines = [`mstar engine status: v${payload.version}`]
