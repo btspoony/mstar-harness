@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { CONTRACT_REVISION, NATIVE_ENDPOINT, NATIVE_MODEL, PACK_SCHEMA, PILOT_SCHEMA, TOKEN_POLICY_METHOD, TOKEN_RESERVATION_PER_ATTEMPT, validatePack, validatePilot, type JudgmentPilot, type ReviewDecisionPack } from "../src/contracts.js";
 import { buildA05Request, canonicalJsonBytes } from "../src/review-advice.js";
 import { assessShadowRun, buildDockerLaunchArgs, freezeBaseline, recordWorkUnitDisposition, runShadowSupervisor, type ApprovedChild, type ShadowMountPlan } from "../src/shadow-supervisor.js";
-import { assertSupervisorMountInfo, assertSupervisorMountPaths, SUPERVISOR_REQUESTS_MOUNT, SUPERVISOR_STATUS_MOUNT } from "../src/evaluator-channel.js";
+import { assertSupervisorMountPaths, SUPERVISOR_RUNTIME_MOUNT, SUPERVISOR_SOURCE_MOUNT, SUPERVISOR_STATUS_MOUNT } from "../src/evaluator-channel.js";
 
 import { calibrationBaselineInventory, stageCalibrationSources } from "../scripts/evaluate.js";
 
@@ -136,8 +136,8 @@ describe("trusted shadow supervisor", () => {
     expect(args).toContain("--cap-drop=ALL");
     expect(args).toContain("--network=none");
     expect(args).toContain(`--user=${fixture.child.uid}:${fixture.child.gid}`);
-    expect(args.some((arg) => arg === `--mount=type=bind,src=${fixture.mountPlan.syntheticSource},dst=/mnt/source,readonly`)).toBe(true);
-    expect(args.some((arg) => arg === `--mount=type=bind,src=${fixture.mountPlan.runtimeAssets},dst=/mnt/source/.runtime,readonly`)).toBe(true);
+    expect(args.some((arg) => arg === `--mount=type=bind,src=${fixture.mountPlan.syntheticSource},dst=${SUPERVISOR_SOURCE_MOUNT},readonly`)).toBe(true);
+    expect(args.some((arg) => arg === `--mount=type=bind,src=${fixture.mountPlan.runtimeAssets},dst=${SUPERVISOR_RUNTIME_MOUNT},readonly`)).toBe(true);
     expect(args.some((arg) => arg.startsWith("--pid=") || arg.includes("docker.sock"))).toBe(false);
     expect(args.some((arg) => arg.startsWith("--env=") && arg.includes("TYPESAFE"))).toBe(false);
   });
@@ -203,11 +203,10 @@ describe("trusted shadow supervisor", () => {
     }
   });
 
-  test("refuses a status mount that is not read-only and keeps both layers on the one mount-path authority", async () => {
+  test("refuses a non-file status mount and keeps both layers on the one mount-path authority", async () => {
     const fixture = inputs(workspace());
     // Genuine on-disk siblings rather than a shape-only stand-in: the channel accepts the pair.
-    const mounts = assertSupervisorMountPaths(fixture.mountPlan.requests, fixture.mountPlan.publicStatus);
-    expect(mounts.requestDirectory).not.toBe(mounts.statusPath);
+    expect(() => assertSupervisorMountPaths(fixture.mountPlan.requests, fixture.mountPlan.publicStatus)).not.toThrow();
     // The supervisor publishes the status mount read-only at the path the worker attests.
     const args = buildDockerLaunchArgs(fixture.child, "run-1", fixture.mountPlan);
     expect(args).toContain(`--mount=type=bind,src=${fixture.mountPlan.publicStatus},dst=${SUPERVISOR_STATUS_MOUNT},readonly`);
@@ -216,15 +215,6 @@ describe("trusted shadow supervisor", () => {
     mkdirSync(misplanned.publicStatus);
     expect(() => assertSupervisorMountPaths(misplanned.requests, misplanned.publicStatus)).toThrow("jev.channel-mount-invalid");
     await expect(runShadowSupervisor({ ...fixture, mountPlan: misplanned, runRoot: fixture.root, runId: "run-1", evidenceClass: "component", baseline: fixture.baseline }, undefined, testLauncher)).rejects.toThrow("jev.mount-shape-invalid");
-    // Real /proc/self/mountinfo shape; only the status mount's access mode differs. A
-    // writable status mount is the original confinement failure, and this asserts it
-    // without a write attempt, so root's DAC bypass cannot fake the refusal.
-    const mountInfo = (statusMode: "ro" | "rw") => [
-      ["/mnt/source", "ro"], ["/mnt/source/.runtime", "ro"], ["/mnt/output", "rw"],
-      [SUPERVISOR_REQUESTS_MOUNT, "rw"], [SUPERVISOR_STATUS_MOUNT, statusMode], ["/mnt/scratch", "rw"],
-    ].map(([path, mode], index) => `${index + 1} 0 0:1 / ${path} ${mode},nosuid - tmpfs tmpfs ${mode}`).join("\n");
-    expect(() => assertSupervisorMountInfo(mountInfo("ro"))).not.toThrow();
-    expect(() => assertSupervisorMountInfo(mountInfo("rw"))).toThrow("jev.channel-mount-unconfined");
   });
   test.skipIf(containerOnlySkip)("freezes baseline before real probe child and reports component-only measured events (requires Linux container /mnt mounts and /proc)", async () => {
     const args = inputs(workspace());

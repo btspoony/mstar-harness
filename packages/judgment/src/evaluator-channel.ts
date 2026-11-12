@@ -8,9 +8,16 @@ import type { EvaluatorChannel, EvaluatorChannelResponse, JudgmentInvocation } f
 const MAX_REQUEST_BYTES = 1_048_576;
 const MAX_STATUS_BYTES = 4_096;
 const CHANNEL_NAME = ".jev-mailbox";
-/** The two confinement mounts the worker attests and the supervisor launcher must publish; one source for both layers. */
+/** The confinement mounts the worker attests and the supervisor launcher publishes; one source for both layers. */
+export const SUPERVISOR_SOURCE_MOUNT = "/mnt/source";
+export const SUPERVISOR_RUNTIME_MOUNT = `${SUPERVISOR_SOURCE_MOUNT}/.runtime`;
+export const SUPERVISOR_OUTPUT_MOUNT = "/mnt/output";
 export const SUPERVISOR_REQUESTS_MOUNT = "/mnt/requests";
 export const SUPERVISOR_STATUS_MOUNT = "/mnt/status.json";
+export const SUPERVISOR_SCRATCH_MOUNT = "/mnt/scratch";
+// The generated worker text in scripts/evaluate.ts inlines the source and runtime mounts; a worker string
+// template cannot import this module, and Task 1 owns that file.
+
 type MailboxRequest = Readonly<{ schema: "mstar.judgment-request/v1"; requestId: string; runId: string; packBytes: string; pilotDigest: string }>;
 type PublicStatus = Readonly<{ schema: "mstar.judgment-status/v1"; runId: string; requestId?: string; status: "idle" | "pending" | "recorded" | "unavailable" | "invalid" | "cancelled"; code?: string }>;
 type PublicChannelOptions = Readonly<{ runId: string; requestDirectory: string; statusPath: string; maxRequestBytes?: number }>;
@@ -29,8 +36,8 @@ function assertSafeDirectory(path: string, root: string): string {
 /** Assert the complete supervisor mount set, not a false parent/child relationship between siblings. */
 export function assertSupervisorMountInfo(mountInfo: string): void {
   const expected: Record<string, "ro" | "rw"> = {
-    "/mnt/source": "ro", "/mnt/source/.runtime": "ro", "/mnt/output": "rw", [SUPERVISOR_REQUESTS_MOUNT]: "rw",
-    [SUPERVISOR_STATUS_MOUNT]: "ro", "/mnt/scratch": "rw",
+    [SUPERVISOR_SOURCE_MOUNT]: "ro", [SUPERVISOR_RUNTIME_MOUNT]: "ro", [SUPERVISOR_OUTPUT_MOUNT]: "rw", [SUPERVISOR_REQUESTS_MOUNT]: "rw",
+    [SUPERVISOR_STATUS_MOUNT]: "ro", [SUPERVISOR_SCRATCH_MOUNT]: "rw",
   };
   const found = new Set<string>();
   for (const line of mountInfo.split("\n")) {
