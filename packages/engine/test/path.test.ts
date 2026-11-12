@@ -53,7 +53,7 @@ import {
 import type { ReviewRunLevel } from "../src/path.js";
 import { readJson } from "../src/core.js";
 import { parseMstarc } from "../src/mstarc.js";
-import { initializeStore, openStore } from "../src/index.js";
+import { initializeStore, openStore, resolveProcessHarnessDir, storeDbPath } from "../src/index.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
@@ -1204,6 +1204,46 @@ describe("scaffoldHarness", () => {
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a fresh scaffold stores at {harness}/store.db, not the `plans/` child (I-000270)", async () => {
+    const root = tmpRoot("path-scaffold-store-path-");
+    const outsideRoot = tmpRoot("path-scaffold-store-outside-");
+    try {
+      gitInit(root);
+      // A declared harness dir the candidate list cannot answer: only the
+      // `.mstarc` rung can resolve `.runtime`, so dropping that rung turns
+      // this red (the sibling `.mstar`/`.agents`/`plans` probes stay absent).
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.runtime\n", "utf8");
+      setArtifactStore(createFsStore(resolve(root, ".runtime")));
+      const scaffolded = await scaffoldHarness(root);
+      // Canonical form: discovery shells `git` (readMainWorktree), which
+      // returns the real path, so the literal tmpdir path would not compare.
+      const harnessDir = realpathSync(scaffolded);
+      const discovered = resolveProcessHarnessDir(root);
+      expect(discovered).toBe(harnessDir);
+      expect(existsSync(join(harnessDir, "plans"))).toBe(true);
+
+      // The store init the commands perform, against that resolved root.
+      const initialized = await initializeStore({ harnessDir: discovered! });
+      initialized.close();
+      expect(existsSync(join(harnessDir, "store.db"))).toBe(true);
+      expect(existsSync(join(harnessDir, "plans", "store.db"))).toBe(false);
+
+      // Candidate order: a bare `plans/` beside the harness never outranks it.
+      // No git here, so discovery answers from the walked path rather than
+      // git's `getcwd`; canonicalize before comparing.
+      const outside = join(outsideRoot, "control", ".mstar");
+      setArtifactStore(createFsStore(outside));
+      await scaffoldHarness(root, { harnessDir: outside });
+      const outsideHarness = realpathSync(outside);
+      mkdirSync(join(outsideRoot, "control", "plans"), { recursive: true });
+      expect(realpathSync(resolveProcessHarnessDir(join(outsideRoot, "control"))!)).toBe(outsideHarness);
+      expect(storeDbPath({ harnessDir: outsideHarness })).toBe(join(outsideHarness, "store.db"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
     }
   });
 

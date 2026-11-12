@@ -66,7 +66,12 @@
  * and writes a `workflow-notes-compaction` row as the FINAL line disclosing the
  * dropped bytes. It is the only writer that rewrites
  * retained bytes, and it rewrites them atomically: a same-directory temporary
- * file, fsync, rename over the leaf, then the directory fsynced.
+ * file, fsync, rename over the leaf, then the directory fsynced. The read it
+ * classifies goes through the same trust-checked open as the append path
+ * (`readLedgerBytes`), so compaction never classifies bytes reached through a
+ * symbolic link or a non-file. A process that dies between the temporary write
+ * and the rename leaves a `.compaction-*.tmp` file beside the ledger; that
+ * residue is an accepted cost and no maintenance pass sweeps it.
  *
  * ## Reader and failure semantics (S3)
  *
@@ -543,10 +548,44 @@ function markerReserveBytes(totalBytes: number, workflowId: string): number {
 }
 
 /**
+ * Read one retained ledger through the module's trust-checked open: the leaf is
+ * opened without following a symbolic link and must be a regular file, so a
+ * compaction classifies exactly the bytes the append path writes and never the
+ * contents behind a link or a device. `O_NONBLOCK` keeps a FIFO from blocking the
+ * open before the type check can refuse it. Absent is `null`.
+ */
+function readLedgerBytes(path: string): Buffer | null {
+  let fd: number;
+  try {
+    fd = openWithoutFollowing(path, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    if (!fstatSync(fd).isFile()) {
+      throw new ExecutionLedgerError(
+        "execution-ledgers.target-untrusted",
+        `${path} is not a regular file; a retained ledger is only ever read from a regular file.`,
+      );
+    }
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
  * Write one ledger's next bytes to a same-directory temporary file and fsync it,
  * returning that path. The retained ledger is untouched: the caller publishes the
  * temporary file over the leaf only after checking the bytes it classified are
  * still what the leaf holds.
+ *
+ * A process that dies between this write and the caller's rename leaves the
+ * `.compaction-*.tmp` file beside the ledger. That residue is an accepted cost:
+ * the next maintenance pass does not sweep it, because a sweep cannot tell a
+ * dead writer's temp file from one a live writer is about to rename. See
+ * `docs/adr/proposed/architecture/2026-11-12-low-sweep-accepted-limits.md`.
  */
 function writeLedgerTempFile(path: string, content: Buffer): string {
   const temp = join(dirname(path), `${basename(path)}.compaction-${randomUUID()}.tmp`);
@@ -560,7 +599,9 @@ function writeLedgerTempFile(path: string, content: Buffer): string {
           throw new ExecutionLedgerError(
             "execution-ledgers.append-short",
             `the compacted ledger for ${path} could not be written in full; the retained bytes are unchanged and ` +
-              `the temporary file was removed. Retry the append with a new record id.`,
+              `the temporary file was removed. The triggering note already landed and was fsynced, so appending it ` +
+              `again would write a duplicate record. The ledger stays over its ceiling and the next append past ` +
+              `it retries the compaction.`,
           );
         }
         written += step;
@@ -613,13 +654,8 @@ function ledgerSnapshotUnchanged(path: string, totalBytes: number): boolean {
  * writer silently shortening the note.
  */
 function compactWorkflowNotesLedger(path: string, workflowId: string, trigger: Buffer): void {
-  let bytes: Buffer;
-  try {
-    bytes = readFileSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
-  }
+  const bytes = readLedgerBytes(path);
+  if (bytes === null) return;
   const totalBytes = bytes.length;
   if (totalBytes <= WORKFLOW_NOTES_LEDGER_MAX_BYTES) return;
   const spans = ledgerSpans(bytes);

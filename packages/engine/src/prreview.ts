@@ -426,6 +426,26 @@ const ENVELOPE_KEYS = ["schema", "verdict", "summary_md", "findings", "incomplet
  * {@link checkProvidedTallyShape} governs. */
 const ENVELOPE_TALLY_KEYS = ["verdict", "scorePct", "tally", "chatHeader", "band", "incomplete"] as const;
 
+/** The `findings[]` entry key set — the {@link MstarReviewFinding} members the
+ * validator reads and {@link synthesizeReview} carries. */
+const ENVELOPE_FINDING_KEYS = [
+  "mergeClass",
+  "category",
+  "file_path",
+  "line_start",
+  "line_end",
+  "title",
+  "body",
+  "fingerprint_hint",
+] as const;
+
+/** The `target` key set — the {@link MstarReviewV1} target members. */
+const ENVELOPE_TARGET_KEYS = ["owner", "repo", "pr", "head_sha"] as const;
+
+/** The `incomplete` fact key set — the {@link PrIncomplete} members the
+ * producer emits and both levels (envelope, tally echo) carry. */
+const INCOMPLETE_KEYS = ["reason", "unscanned"] as const;
+
 /** Report one violation per own key of `value` outside `allowed`, named by
  * its full path (`label` is empty for the envelope, `tally.` inside a tally).
  * The message names the object the key must be removed from — the bare label
@@ -477,7 +497,6 @@ function isIncompleteFact(fact: unknown): fact is PrIncomplete {
  * echo inside a provided tally).
  */
 function checkIncompleteShape(fact: unknown, label: string, violations: ValidationResult[]): void {
-  if (isIncompleteFact(fact)) return;
   if (!isPlainObject(fact)) {
     violations.push(violation(
       "high",
@@ -486,6 +505,8 @@ function checkIncompleteShape(fact: unknown, label: string, violations: Validati
     ));
     return;
   }
+  checkUnknownKeys(fact, INCOMPLETE_KEYS, `${label}.`, violations, "review.incomplete-malformed");
+  if (isIncompleteFact(fact)) return;
   if (!isSingleLineFact(fact.reason)) {
     violations.push(violation("high", "review.incomplete-malformed", `${label}.reason must be a single-line non-blank string`));
   }
@@ -806,6 +827,7 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
         violations.push(violation("high", "review.invalid-finding", `findings[${index}] must be an object`));
         return;
       }
+      checkUnknownKeys(finding, ENVELOPE_FINDING_KEYS, `findings[${index}].`, violations);
       if (finding.severity !== undefined) {
         violations.push(violation(
           "high",
@@ -921,6 +943,7 @@ export function validateMstarReviewV1(doc: unknown): GateResult {
     if (!isPlainObject(doc.target)) {
       violations.push(violation("high", "review.invalid-target", "target must be an object"));
     } else {
+      checkUnknownKeys(doc.target, ENVELOPE_TARGET_KEYS, "target.", violations);
       if (doc.target.owner !== undefined && typeof doc.target.owner !== "string") {
         violations.push(violation("high", "review.invalid-target", "target.owner must be a string"));
       }

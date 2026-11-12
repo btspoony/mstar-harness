@@ -5,7 +5,7 @@ import {
   synthesizeReview,
   validateMstarReviewV1,
 } from "./prreview.js";
-import type { MergeClass, MstarReviewTally, MstarReviewV1 } from "./prreview.js";
+import type { MergeClass, MstarReviewFinding, MstarReviewTally, MstarReviewV1 } from "./prreview.js";
 
 /**
  * Compile-level regression: `MstarReviewV1.tally` keeps `band` OPTIONAL, so a
@@ -103,6 +103,72 @@ describe("MstarReviewV1 envelope shape: keys outside the documented set are refu
     // Inherited members are not envelope keys: only own properties are enumerated.
     const inherited = Object.assign(Object.create({ ghost: 1 }), BAND_ENVELOPE);
     expect(validateMstarReviewV1(inherited).ok).toBe(true);
+  });
+
+  // Nested members are closed too: a stray key inside one would persist as an
+  // unreadable claim exactly like a stray envelope key (I-000857).
+  const KNOWN_FINDING: MstarReviewFinding = {
+    mergeClass: "should-fix",
+    category: "correctness",
+    file_path: "src/foo.ts",
+    line_start: 10,
+    line_end: 12,
+    title: "Unhandled null deref",
+    body: "foo() can return null before the call site dereferences it.",
+    fingerprint_hint: "abc123",
+  };
+
+  test("a finding carrying the full documented key set still validates", () => {
+    expect(validateMstarReviewV1({ ...BAND_ENVELOPE, findings: [KNOWN_FINDING] }).ok).toBe(true);
+  });
+
+  test("an unknown key inside a finding is refused and named", () => {
+    const doc = { ...BAND_ENVELOPE, findings: [{ ...KNOWN_FINDING, impact: "high" }] };
+    const gate = validateMstarReviewV1(doc);
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => `${v.code}: ${v.message}`).join("\n"))
+      .toContain('review.unknown-key: unknown key "findings[0].impact"');
+  });
+
+  test("a target carrying its documented key set still validates", () => {
+    const target = { owner: "example", repo: "repo", pr: 134, head_sha: "abc123" };
+    expect(validateMstarReviewV1({ ...BAND_ENVELOPE, target }).ok).toBe(true);
+  });
+
+  test("an unknown key inside target is refused and named", () => {
+    const target = { owner: "example", repo: "repo", pr: 134, head_sha: "abc123", base_sha: "def456" };
+    const gate = validateMstarReviewV1({ ...BAND_ENVELOPE, target });
+    expect(gate.ok).toBe(false);
+    expect(gate.violations.map((v) => `${v.code}: ${v.message}`).join("\n"))
+      .toContain('review.unknown-key: unknown key "target.base_sha"');
+  });
+
+  const INCOMPLETE_FACT = { reason: "budget spent", unscanned: ["src/auth.ts"] };
+  const INCOMPLETE_ENVELOPE: MstarReviewV1 = {
+    schema: "mstar.review/v1",
+    verdict: "incomplete",
+    tally: computePrTally({ findings: [], incomplete: INCOMPLETE_FACT }),
+    findings: [],
+    incomplete: INCOMPLETE_FACT,
+  };
+
+  test("an incomplete fact carrying reason + unscanned still validates", () => {
+    expect(validateMstarReviewV1(INCOMPLETE_ENVELOPE).ok).toBe(true);
+  });
+
+  test("an unknown key inside the incomplete fact is refused at both levels", () => {
+    const topLevel = { ...INCOMPLETE_ENVELOPE, incomplete: { ...INCOMPLETE_FACT, skipped: ["tests"] } };
+    const topGate = validateMstarReviewV1(topLevel);
+    expect(topGate.ok).toBe(false);
+    expect(topGate.violations.map((v) => `${v.code}: ${v.message}`).join("\n"))
+      .toContain('review.incomplete-malformed: unknown key "incomplete.skipped"');
+
+    // The tally's echo goes through the same shape check, so it refuses too.
+    const echoed = {
+      ...INCOMPLETE_ENVELOPE,
+      tally: { ...INCOMPLETE_ENVELOPE.tally, incomplete: { ...INCOMPLETE_FACT, skipped: ["tests"] } },
+    };
+    expect(validateMstarReviewV1(echoed).violations.map((v) => v.code)).toContain("review.incomplete-malformed");
   });
 });
 

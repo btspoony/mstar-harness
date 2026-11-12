@@ -592,6 +592,18 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
           (id) => [id],
         );
     const workflowIds = new Set(workflows.map((item) => item.workflow_id));
+    // One header check for BOTH arms of the table: a workflow header owns no
+    // `plans` rows (`execution_plans` does) and no `integration_merge_lease`
+    // (the leases table does), so the snapshot validator is always handed the
+    // header-only document. The v1 worktree alias stays a READ diagnostic, never
+    // a projection refusal. A terminal header is a historical row, so nothing is
+    // narrowed by lifecycle status here: every check the validator makes is
+    // checked on a header that actually carries those fields, and a field the
+    // header simply does not have (`phase`, `branch`, `integration_worktree_path`,
+    // `delivery`, ...) is optional in the schema and stays absent.
+    const headerViolations = (state: Record<string, unknown>) =>
+      validateWorkflowSnapshot({ ...state, plans: [] }).violations
+        .filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE);
     for (const item of registry) {
       if (!workflowIds.has(item.workflow_id)) {
         const sourceKey = sourceKeyOf("root", "harness", "execution/registry");
@@ -615,8 +627,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         continue;
       }
       const projectionState = servedWorkflow.state;
-      const workflowValidation = validateWorkflowSnapshot({ ...projectionState, plans: [] });
-      const workflowErrors = workflowValidation.violations.filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE);
+      const workflowErrors = headerViolations(projectionState);
       if (workflowErrors.length > 0) {
         recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation) => violation.code).join(", ")})`);
         continue;
@@ -642,6 +653,12 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     // still find its workflow row to answer the execution state. Terminal PLAN
     // workflows do not widen the projection, so the workflows list keeps its
     // active-registration membership.
+    //
+    // Retention: EVERY historical terminal header is read and projected — no
+    // pruning rule and no depth knob. The cost is linear in the store's whole
+    // terminal history, paid by every refresh that reads it; that growth is an
+    // accepted limit, not a defect to bound here. See
+    // docs/adr/proposed/architecture/2026-11-12-low-sweep-accepted-limits.md
     const terminalGraphIds = [
       ...(servedGraph.terminalUnregistered ?? []),
       ...(servedGraph.terminalAdoptions ?? []),
@@ -673,6 +690,16 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         if (!isPlainObject(state) || state.type === "iteration") {
           recordInvalid(workflowSpec, item.state_json, "invalid: terminal workflow state has an invalid object, type, or status");
         }
+        continue;
+      }
+      // The SAME header check the active arm applies (I-000911): a corrupt
+      // terminal branch or timestamp is recorded invalid instead of projecting.
+      // Nothing is dropped for being old — the active-only fields the check
+      // would need are fields a terminal header never had, and the schema makes
+      // them optional, so a row written before they existed still passes.
+      const terminalErrors = headerViolations(state);
+      if (terminalErrors.length > 0) {
+        recordInvalid(workflowSpec, item.state_json, `invalid: terminal workflow state failed validation (${terminalErrors.map((violation) => violation.code).join(", ")})`);
         continue;
       }
       record(workflowSpec, item.state_json);

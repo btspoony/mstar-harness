@@ -25,15 +25,8 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-
-const CLI_ROOT = resolve(import.meta.dir, "..");
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
+import { join } from "node:path";
+import { runCli, type RunResult } from "./harness";
 
 interface ScaffoldData {
   harnessDir: string;
@@ -52,28 +45,9 @@ function scaffoldData(result: RunResult): ScaffoldData {
   return data;
 }
 
-/**
- * Spawn env with ambient MSTAR_HARNESS_DIR pinned out: the CLI
- * resolves harness dirs from that env var ahead of probing, so an ambient
- * value would redirect every fixture to the env dir and fail spuriously.
- */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
+/** Spawn `mstar harness scaffold` against a fixture root. */
 function runScaffold(args: string[]): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", "src/index.ts", "harness", "scaffold", ...args], {
-    cwd: CLI_ROOT,
-    env: cliEnv(),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+  return runCli(["harness", "scaffold", ...args]);
 }
 
 /** Empty temp root; `.mstar/` and specs content added per test. */
@@ -299,14 +273,8 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
 
   test("fresh bootstrap: defaults to cwd when [path] is omitted", () => {
     withRoot((root) => {
-      const proc = Bun.spawnSync([process.execPath, "run", join(CLI_ROOT, "src/index.ts"), "harness", "scaffold"], {
-        cwd: root,
-        env: cliEnv(),
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      expect(proc.exitCode).toBe(0);
-      const procResult = { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+      const procResult = runCli(["harness", "scaffold"], { cwd: root });
+      expect(procResult.exitCode).toBe(0);
       expect(scaffoldData(procResult).harnessDir.endsWith(join(".mstar"))).toBe(true);
       expect(existsSync(join(root, ".mstar", "status.json"))).toBe(false);
     });

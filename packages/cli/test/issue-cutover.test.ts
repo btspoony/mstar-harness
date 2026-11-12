@@ -30,21 +30,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { encodeExecutionSessionRef, initializeStore, openStore, readExecutionAuthority, type ExecutionSessionRef } from "@mstar-harness/engine";
-
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+import { CLI_ROOT, cliEnv, runCli as spawnCli, type RunResult } from "./harness";
 
 const WORKFLOW_ID = "wf-issues";
 const PLAN_ID = "plan-issues";
 const PROJECT_ID = "proj-issues";
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
 
 const roots: string[] = [];
 
@@ -52,25 +44,8 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-/** Spawn env with ambient harness env vars pinned out (fixtures must not leak). */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
 function runCli(args: string[], cwd: string, env: Record<string, string> = {}): RunResult {
-  const currentArgs = args.filter((arg) => arg !== "--json");
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...currentArgs], {
-    cwd,
-    env: { ...cliEnv(), ...env },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+  return spawnCli(args.filter((arg) => arg !== "--json"), { cwd, env });
 }
 
 function jsonOf(result: RunResult): Record<string, unknown> {

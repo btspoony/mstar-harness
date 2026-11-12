@@ -63,7 +63,6 @@ import {
   evaluatePhaseGate,
   listCatalog,
   parseCompassFrontmatter,
-  parseCompassFrontmatterText,
   queryDashboard,
   resolveRepoEnforcement,
   withStoreRead,
@@ -955,12 +954,7 @@ async function readProjectRoadmapFacts(context: StoreContext): Promise<ProjectRo
         continue
       }
       hasRoadmap = true
-      const document = parseCompassFrontmatterText(record.roadmap.contentMarkdown, `store roadmap ${record.projectId}`)
-      if (Array.isArray(document.milestones)) {
-        for (const milestone of document.milestones) {
-          if (typeof milestone === 'string' && milestone.trim() !== '') milestones.push(milestone)
-        }
-      }
+      milestones.push(...record.content.milestones)
     }
     return {
       milestones,

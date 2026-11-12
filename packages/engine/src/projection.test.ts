@@ -29,7 +29,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
-import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
+import { adoptTerminalWorkflow, createExecutionWorkflow, readExecutionState } from "./execution-store.js";
 import { queryDashboard, withStoreRead } from "./store-read.js";
 import type { ExecutionCaller } from "./execution-store.js";
 import type { WorkflowSnapshot } from "./workflow.js";
@@ -590,6 +590,97 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     // iteration views still find the row above.
     const list = await withStoreRead(f.context, queryDashboard("workflows"));
     expect(list.data).toMatchObject({ items: [], total: 0 });
+    const detail = await withStoreRead(f.context, queryDashboard("workflow-detail", { id: iterationId }));
+    expect(detail.data).toMatchObject({ id: iterationId, status: "completed", activeRegistration: false });
+  });
+
+  test("a corrupt terminal header is recorded invalid, and an old header without active-only fields still projects", async () => {
+    const f = await fixture("terminal-validation-");
+    const oldHeaderId = "iter-legacy-header";
+    const corruptBranchId = "iter-corrupt-branch";
+    const corruptTimestampId = "iter-corrupt-timestamp";
+    for (const workflowId of [oldHeaderId, corruptBranchId, corruptTimestampId]) {
+      await seedIterationWorkflow(f, workflowId, "completed");
+    }
+    const handle = await openStore(f.context, "write");
+    try {
+      const rewrite = (workflowId: string, state: Record<string, unknown>): void => {
+        handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), workflowId);
+      };
+      // The legacy shape: a close recorded before the iteration anchors existed.
+      // No branch, phase, compass_ref, worktree path or plans key — every one of
+      // them is optional in the schema, so a stored row that predates them is
+      // still a valid header.
+      rewrite(oldHeaderId, {
+        schema_version: 1, id: oldHeaderId, type: "iteration", status: "completed",
+        started_at: STARTED_AT, updated_at: STARTED_AT, ended_at: STARTED_AT,
+      });
+      rewrite(corruptBranchId, {
+        schema_version: 1, id: corruptBranchId, type: "iteration", status: "completed",
+        started_at: STARTED_AT, updated_at: STARTED_AT, ended_at: STARTED_AT, branch: "feature/not-an-object",
+      });
+      rewrite(corruptTimestampId, {
+        schema_version: 1, id: corruptTimestampId, type: "iteration", status: "completed",
+        started_at: "", updated_at: STARTED_AT, ended_at: STARTED_AT,
+      });
+    } finally { handle.close(); }
+
+    const report = await refreshProjections(f.context);
+    // Both corrupt rows are recorded invalid with the codes the shared header
+    // check produces; the old header is not among them.
+    const invalidTerminal = report.sources.filter((source) => source.state === "invalid");
+    expect(invalidTerminal.map((source) => source.sourceKey).sort()).toEqual([
+      `workflow:harness:execution/workflows/${corruptBranchId}`,
+      `workflow:harness:execution/workflows/${corruptTimestampId}`,
+    ]);
+    expect(invalidTerminal.map((source) => source.diagnostic)).toEqual([
+      "invalid: terminal workflow state failed validation (workflow.snapshot.invalid-branch)",
+      "invalid: terminal workflow state failed validation (workflow.snapshot.invalid-started-at)",
+    ]);
+    // An invalid source blocks the publication: the corrupt rows never reach a
+    // projected table as valid rows.
+    expect(report).toMatchObject({ freshness: "unavailable", published: false });
+    expect((await projections(f)).workflows).toEqual([]);
+
+    // With the corruption repaired the same store publishes, and the old header
+    // is projected on its own fields — nothing was dropped for being old.
+    const repair = await openStore(f.context, "write");
+    try {
+      for (const workflowId of [corruptBranchId, corruptTimestampId]) {
+        repair.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify({
+          schema_version: 1, id: workflowId, type: "iteration", status: "completed",
+          started_at: STARTED_AT, updated_at: STARTED_AT, ended_at: STARTED_AT,
+        }), workflowId);
+      }
+    } finally { repair.close(); }
+    expect(await refreshProjections(f.context)).toMatchObject({ freshness: "current", published: true });
+    expect((await projections(f)).workflows).toEqual([
+      expect.objectContaining({ id: corruptBranchId, type: "iteration", status: "completed", active_registration: 0 }),
+      expect.objectContaining({ id: corruptTimestampId, type: "iteration", status: "completed", active_registration: 0 }),
+      // The legacy header projects on the fields it has; the branch columns it
+      // never recorded stay null rather than being invented.
+      expect.objectContaining({ id: oldHeaderId, type: "iteration", status: "completed", active_registration: 0, branch_base: null }),
+    ]);
+  });
+
+  test("an adopted terminal iteration projects its overlay row", async () => {
+    const f = await fixture("terminal-adoption-");
+    const iterationId = "iter-adopted-projection";
+    await seedIterationWorkflow(f, iterationId, "completed");
+    const applied = await adoptTerminalWorkflow(
+      { ...f.context, caller: { sessionId: "adopter-session", role: "coordinator", workflowId: iterationId } },
+      { workflowId: iterationId, reason: "close the imported terminal record", operationId: "adopt-projection" },
+    );
+    expect(applied.replayed).toBe(false);
+    expect(applied.data.terminalAdoptions).toEqual([
+      expect.objectContaining({ id: iterationId, status: "completed" }),
+    ]);
+
+    expect(await refreshProjections(f.context)).toMatchObject({ freshness: "current", published: true });
+    // The adoption arm of the terminal union feeds the same overlay row.
+    expect((await projections(f)).workflows).toEqual([
+      expect.objectContaining({ id: iterationId, type: "iteration", status: "completed", active_registration: 0 }),
+    ]);
     const detail = await withStoreRead(f.context, queryDashboard("workflow-detail", { id: iterationId }));
     expect(detail.data).toMatchObject({ id: iterationId, status: "completed", activeRegistration: false });
   });

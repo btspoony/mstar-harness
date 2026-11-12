@@ -19,7 +19,7 @@ import {
 
 describe("dates are shown as stored", () => {
   test("one timestamp form for every line that shows a timestamp", () => {
-    // `design-v1.html:1444` prints a detail timestamp as `2026-10-23 09:14`: the
+    // `prototype.html` prints a detail timestamp as `2026-10-23 09:14`: the
     // stored instant with the prototype's separator and precision, never the raw
     // ISO lexeme. The cell drops the year and the seconds (`formatShortDate`).
     expect(formatDate("2026-10-25T13:58:04.000Z")).toBe("2026-10-25 13:58");
@@ -190,7 +190,7 @@ describe("the projection state replaces the removed counters", () => {
 
 describe("formatShortDate — the list cell's own form", () => {
   test("a timestamp loses its year and keeps month, day and time", () => {
-    // `design-v1.html:1215`: the prototype's list cells print `10-25 13:58`.
+    // `prototype.html:1230`: the prototype's list cells print `10-25 13:58`.
     expect(formatShortDate("2026-10-24T09:06:22.000Z")).toBe("10-24 09:06");
     expect(formatShortDate("2026-10-25 13:58")).toBe("10-25 13:58");
   });

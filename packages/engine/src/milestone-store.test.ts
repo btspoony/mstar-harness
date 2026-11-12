@@ -86,6 +86,20 @@ describe("milestone store", () => {
       ["I-MILESTONE-7","resolved"],["I-MILESTONE-8","obsolete"],["I-MILESTONE-9","open"],
     ]);
   });
+  test("a staged store refuses the milestone path with store.not-active", async () => {
+    const stagedRoot = mkdtempSync(join(tmpdir(), "milestone-store-staged-"));
+    const staged: StoreContext = { harnessDir: stagedRoot };
+    const handle = await initializeStore(staged);
+    const stagedDb = handle.db;
+    try {
+      stagedDb.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
+      await expect(addMilestone(staged,{projectId,name:"Staged",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"store.not-active"});
+      expect(() => readMilestonesOn(stagedDb,projectId)).toThrow(expect.objectContaining({code:"store.not-active"}));
+    } finally {
+      stagedDb.close();
+      rmSync(stagedRoot,{recursive:true,force:true});
+    }
+  });
   test("milestone status rejects missing and cross-project IDs", async () => {
     const revision=(db.prepare("select revision from store_meta where id=1").get() as {revision:number}).revision;
     const own=await addMilestone(context,{projectId,name:"Own",target:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:revision});

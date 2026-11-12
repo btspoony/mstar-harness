@@ -211,7 +211,7 @@
  *
  * A pane is not one undifferentiated column. The prototype draws its head as a
  * surface band closed by a hairline, with the body below it inset by 24px
- * (`design-v1.html:482-488`); the dashboard's window header is the same band at
+ * (`prototype.html`, the `.dsh-page-head` / `.dsh-page-body` rules); the dashboard's window header is the same band at
  * page scale. Both hosts mount a product surface inside chrome they do not own,
  * so the band's treatment lives here — one rule, applied by whichever host has a
  * pane — instead of a fourth copy of two declarations.
@@ -223,7 +223,7 @@
  * The pane's head band, shared by both seats.
  *
  * The prototype puts the nav row at `padding: 0 12px` inside a head that carries the
- * surface and a closing hairline (`design-v1.html:482-487`). The pane (the dsh seat)
+ * surface and a closing hairline (`prototype.html`, `.dsh-page-head .app-nav`). The pane (the dsh seat)
  * inherits that inset; the dashboard's window header is the prototype's `0 20px` band
  * and overrides this padding in its own `.app-header` rule.
  */
@@ -236,8 +236,8 @@
 /* The navigation's whole style authority is its host BAND, not the product surface: the dsh
    pane mounts the shared nav in this head band, deliberately above `.ms-container`, so a
    container-scoped rule would leave the destinations unstyled there. Every value below is
-   the prototype's own (`design-v1.html:169-176`), including the narrow behaviour the
-   deleted `Nav.module.css` used to own (`design-v1.html:727`): without it a narrow pane
+   the prototype's own (`prototype.html:169-176`), including the narrow behaviour the
+   deleted `Nav.module.css` used to own (`prototype.html`, the 619px `.row-meta` rule): without it a narrow pane
    overflowed or stacked nothing. */
 .ms-pane-head .app-nav {
   display: flex;
@@ -458,7 +458,7 @@
 }
 
 /* The pager sits INSIDE `.panel-foot`, which already carries the prototype's single
-   `6px 12px` and its hairline (`design-v1.html:1345-1349` — one footer row, the controls
+   `6px 12px` and its hairline (`prototype.html`, `.panel-foot` — one footer row, the controls
    pushed right by `margin-left: auto`). Both rules carried their own padding and border,
    so a paged list drew a double gutter and two hairlines. */
 .panel-foot > .pager {
@@ -523,7 +523,7 @@
 
 /* The narrow row's second line, in the prototype's own three parts: `product.css` hides
    `.row-meta` by default, and at this breakpoint the prototype turns it back ON and clips it
-   to one line (`design-v1.html`: `display: block` beside
+   to one line (`prototype.html`: `display: block` beside
    `white-space: nowrap; overflow: hidden; text-overflow: ellipsis`).
    This rule previously said the opposite — it hid the line below 619px — which removed the
    facts the `secondary` columns yield at exactly the width they need restating. */

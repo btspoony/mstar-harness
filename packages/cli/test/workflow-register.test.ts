@@ -7,43 +7,11 @@
 import { initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { runCli, type RunResult } from "./harness";
 
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = resolve(import.meta.dir, "../src/index.ts");
 const WORKFLOW_ID = "20260916-plan-register-cli";
 const SESSION_ID = "registration-cli-session";
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-/**
- * Spawn env with ambient harness env vars pinned out: the CLI
- * resolves harness dirs from MSTAR_HARNESS_DIR / MSTAR_CONTROL_ROOT ahead
- * of probing, and SDD_DIR redirects default outfile paths — ambient values
- * would redirect every fixture spuriously.
- */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
-function runCli(args: string[]): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: CLI_ROOT,
-    env: cliEnv(),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
-}
 
 function commandOutput(result: RunResult): Record<string, unknown> {
   if (result.stdout.trim() === "") {

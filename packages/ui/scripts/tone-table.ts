@@ -43,6 +43,10 @@ try {
 
 const dir = join(import.meta.dir, "..", "src", "styles");
 const prototype = toneTable(prototypeSource);
+if (prototype.size === 0) {
+  console.error("tone-table: 0 tone colours compared — the prototype yielded nothing to compare.");
+  process.exit(1);
+}
 const ours = new Map([
   ...toneTable(readFileSync(join(dir, "product.css"), "utf8")),
   ...toneTable(readFileSync(join(dir, "base.css"), "utf8")),

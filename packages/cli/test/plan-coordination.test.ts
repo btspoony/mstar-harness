@@ -9,10 +9,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { initializeStore, readExecutionAuthority, serializeExecutionValue, type ExecutionIdentity, type StoreContext } from "@mstar-harness/engine";
-const ROOT = resolve(import.meta.dir, "..");
-const ENTRY = join(ROOT, "src/index.ts");
+import { runCli } from "./harness";
 const WF = "wf-plan-coordination", PLAN = "plan-coordination", SESSION = "coord-plan-coordination";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -31,13 +30,12 @@ async function fixture(): Promise<Fixture> {
   return { root, harness, context, worktree };
 }
 function cli(args: string[], f: Fixture, caller?: ExecutionIdentity): Result {
-  const env: Record<string, string | undefined> = { ...process.env, MSTAR_HARNESS_DIR: f.harness };
-  delete env.MSTAR_EXECUTION_IDENTITY; delete env.DSH_SESSION_ID;
+  const env: Record<string, string | undefined> = { MSTAR_HARNESS_DIR: f.harness };
   if (caller) env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(caller);
-  const proc = Bun.spawnSync([process.execPath, "run", ENTRY, ...args], { cwd: f.root, env, stdout: "pipe", stderr: "pipe" });
-  const stdout = proc.stdout.toString(); let json: Record<string, any> = {};
+  const { exitCode, stdout, stderr } = runCli(args, { cwd: f.root, env });
+  let json: Record<string, any> = {};
   try { json = JSON.parse(stdout) as Record<string, any>; } catch {}
-  return { code: proc.exitCode, stdout, stderr: proc.stderr.toString(), json };
+  return { code: exitCode, stdout, stderr, json };
 }
 async function register(f: Fixture, wf = WF, id = PLAN, title = "Plan coordination", branch = "feature/plan-coordination"): Promise<void> {
   const file = `plans/${id}.md`; write(join(f.harness, file), `# ${title}\n\n**plan_id:** ${id}\n`);
@@ -170,10 +168,10 @@ describe("mstar plan — ACTIVE coordinator operations", () => {
     const retired = cli(["plan", "handoff"], f, identity()); expect(retired.code).not.toBe(0); expect(retired.stdout + retired.stderr).toMatch(/unknown|retired|usage/i);
   });
   test("retired workflow verbs are absent from CLI help", () => {
-    const result = Bun.spawnSync([process.execPath, "run", ENTRY, "workflow", "--help"], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
+    const result = runCli(["workflow", "--help"]);
     expect(result.exitCode).toBe(0);
     for (const verb of ["show-prepare", "amend-prepare", "recover-coordinator"]) {
-      expect(result.stdout.toString()).not.toContain(verb);
+      expect(result.stdout).not.toContain(verb);
     }
   });
   test("progress, issue-add and issue-close recoveries advertise an invocation the decoder accepts", async () => {

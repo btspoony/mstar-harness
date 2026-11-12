@@ -372,7 +372,7 @@ function IterationDetailBody(props: {
               ) : (
                 /* The prototype's document table: fixed pixel widths and a scroller, so a
                    narrow pane scrolls instead of squeezing the location
-                   (`design-v1.html:1904-1909`). */
+                   (`prototype.html`, the Documents table's `data-narrow-cols` colgroup). */
                 <div className="table-wrap">
                   <table className="table" data-ms-documents="" data-narrow-cols="2">
                     <colgroup>

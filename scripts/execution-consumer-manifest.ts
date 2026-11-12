@@ -284,8 +284,13 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     // their own right — same shape as the `cli` layout below.
     sourceTrees: [{ root: "packages/engine/src" }, { root: "packages/engine/scripts" }],
     sourceFiles: ["packages/engine/package.json", "packages/engine/tsconfig.json"],
-    generatedTrees: [{ root: "packages/engine/dist", exclude: BUILD_OUTPUT_EXCLUSIONS }],
-    generatedFiles: ["packages/engine/dist/audit.js", "packages/engine/dist/engine.js"],
+    // Not pinned, same reason as the `cli` and `dsh` consumers: `dist` bytes
+    // depend on the build environment, so a manifest written on one machine
+    // cannot be verified on another (CI checks out without build output). What
+    // is deterministic stays pinned above — the source closure, the runtime
+    // floor — and the entrypoint is proved by existence and non-emptiness.
+    generatedTrees: [],
+    generatedFiles: [],
     copies: [],
   },
   {
@@ -366,19 +371,13 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
       "packages/omp/package.json",
       "packages/omp/tsconfig.json",
     ],
-    // `cp -R` (hooks/extensions) — the plugin loads the mirrors.
-    generatedTrees: [
-      { root: "packages/omp/dist", exclude: BUILD_OUTPUT_EXCLUSIONS },
-      { root: "packages/omp/extensions", exclude: BUILD_OUTPUT_EXCLUSIONS },
-      { root: "packages/omp/hooks", exclude: BUILD_OUTPUT_EXCLUSIONS },
-    ],
-    generatedFiles: [
-      "packages/omp/dist/extensions/model-handoff.js",
-      "packages/omp/dist/extensions/phase2-orchestration.js",
-      "packages/omp/dist/hooks/pre/mstar-gates.js",
-      "packages/omp/mcp.json",
-      "packages/omp/plugin.json",
-    ],
+    // Not pinned, same reason as the `engine` consumer: `dist` and the `cp -R`
+    // mirrors of it are build output whose bytes depend on the build
+    // environment, so a manifest written on one machine cannot be verified on
+    // another (CI checks out without build output). The mirrors of
+    // `.omp-plugin/*.json` stay pinned as source files above.
+    generatedTrees: [],
+    generatedFiles: [],
     copies: [
       ...OMP_HARNESS_ASSET_COPIES,
       { from: "assets", to: "packages/omp/assets", mode: "copy" },
@@ -394,8 +393,10 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     entrypoint: "packages/opencode/dist/mstar.js",
     sourceTrees: [{ root: "packages/opencode/src" }, { root: "packages/opencode/scripts" }],
     sourceFiles: ["packages/opencode/mcp.json", "packages/opencode/package.json"],
-    generatedTrees: [{ root: "packages/opencode/dist", exclude: BUILD_OUTPUT_EXCLUSIONS }],
-    generatedFiles: ["packages/opencode/dist/mstar.js"],
+    // Not pinned, same reason as the `engine` consumer: the single `bun build`
+    // bundle's bytes depend on the build environment.
+    generatedTrees: [],
+    generatedFiles: [],
     copies: [
       { from: "skills", to: "packages/opencode/harness-skills", mode: "copy" },
       { from: "commands", to: "packages/opencode/harness-commands", mode: "copy" },

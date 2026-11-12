@@ -637,6 +637,7 @@ describe("overview read model", () => {
     const doctored = await withStoreRead(context, { ...queryDashboard("iterations"), needsProjection: false });
     const paused = ((doctored.data as IterationListDTO).items).find((item) => item.iterationId === "iter-completed");
     expect(paused?.workflow?.status).toBe("paused");
+    // `active` is the closed non-terminal arm, not a corruption code.
     expect(paused?.executionLifecycle).toBe("active");
   });
 

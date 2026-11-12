@@ -45,7 +45,7 @@ import {
 } from "./issue.js";
 import { readMilestonesOn, type MilestoneRead } from "./milestone-store.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
-import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
+import type { RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
 import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
@@ -1533,9 +1533,15 @@ function iterationMembershipPlanIds(
   linkIds: Map<string, string[]>,
   iterationIds: readonly string[],
 ): Map<string, string[]> {
+  // One map before the loop; first row wins, so a duplicated compass row keeps
+  // first-match semantics.
+  const compassByIteration = new Map<string, ProjectedCompassRow>();
+  for (const row of generated.compasses) {
+    if (!compassByIteration.has(row.iteration_id)) compassByIteration.set(row.iteration_id, row);
+  }
   const merged = new Map<string, string[]>();
   for (const iterationId of iterationIds) {
-    const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
+    const compassRow = compassByIteration.get(iterationId);
     const mergedIds = new Set([...(linkIds.get(iterationId) ?? []), ...parseJsonArray<string>(compassRow?.plans_json)]);
     merged.set(iterationId, [...mergedIds].sort());
   }
@@ -1548,6 +1554,11 @@ function iterationMembershipPlanIds(
  * domain's own terminal set: a terminal literal answers for itself, and any
  * other projected status is not terminal — it answers the vocabulary's
  * non-terminal arm rather than leaking an out-of-union literal.
+ *
+ * `active` IS that closed non-terminal arm, including a non-terminal projected
+ * status on a row the registry does not list as active (`active_registration`
+ * is the registry's only claim). Accepted limit, not a corruption code to
+ * encode: docs/adr/proposed/architecture/2026-11-12-low-sweep-accepted-limits.md
  */
 function executionLifecycleOf(workflowRow: ProjectedWorkflowRow | undefined): IterationExecutionLifecycle {
   if (workflowRow === undefined) return "none";
@@ -1866,7 +1877,7 @@ function readRoadmap(db: StoreDb, filters: DashboardFilters): RoadmapDTO | null 
     projectId,
     catalog,
     authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
-    content: parseRoadmapContent(authority.roadmap.contentMarkdown),
+    content: authority.content,
     milestones,
   };
 }

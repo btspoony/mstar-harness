@@ -71,8 +71,9 @@
  * one file only; a second file points at it (arrow -> backticked skill ->
  * section marker) instead of re-vendoring it. A group that still duplicates
  * fails the run; genuine exceptions live in
- * `scripts/rule-duplication.allowlist.json` with a reason naming the file each
- * entry covers, and allowlisted groups are reported without failing.
+ * `scripts/rule-duplication.allowlist.json` with a reason naming the rule
+ * owner — another `skills/` path, or the covered file plus the word `owner` —
+ * and allowlisted groups are reported without failing.
  *
  * The forward callout citation check also validates the **binary prefix**
  * of every backticked CLI
@@ -1466,7 +1467,7 @@ if (import.meta.main) {
     fail(
       `Guard 10 duplicate HARD rules [${ruleFingerprintHash(group.normalized)}] ${group.hits
         .map((hit) => `${hit.file}:${hit.line}`)
-        .join(", ")}${exempt} - state the rule in one file and point at that owner (→ <skill> § <Section>); a genuine exception goes in ${RULE_DUPLICATION_ALLOWLIST} with a reason naming the file it covers`,
+        .join(", ")}${exempt} - state the rule in one file and point at that owner (→ <skill> § <Section>); a genuine exception goes in ${RULE_DUPLICATION_ALLOWLIST} with a reason naming the rule owner (another skills/ path, or this file plus the word "owner")`,
     );
   }
 

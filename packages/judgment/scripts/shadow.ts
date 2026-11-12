@@ -27,8 +27,17 @@ type StudyResult = Readonly<{
   childOutputBytes: number;
   exitStatus: "completed" | "failed";
 }>;
+function artifactPath(root: string, rel: string): string {
+  try { return realpathSync(resolve(root, rel)); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "EACCES" || code === "ENOTDIR") return fail(`jev.artifact-missing: ${rel}`);
+    throw error;
+  }
+}
 function readStudyResult(root: string, manifest: StudyManifest, baseline: FrozenBaseline): StudyResult {
-  const value = JSON.parse(readFileSync(resolve(root, "study-result.json"), "utf8")) as Partial<StudyResult>;
+  // simplify: reads stay untranslated — translating them caused an end-to-end regression (I-001095).
+  const value = JSON.parse(readFileSync(artifactPath(root, "study-result.json"), "utf8")) as Partial<StudyResult>;
   if (value.schema !== "mstar.shadow-study-result/v1" || typeof value.runId !== "string" ||
       (value.evidenceClass !== "component" && value.evidenceClass !== "synthetic-offline") ||
       typeof value.elapsedMs !== "number" || !Number.isFinite(value.elapsedMs) || value.elapsedMs < 0 || value.elapsedMs > 86_400_000 ||
@@ -46,22 +55,20 @@ function rootFromArgs(args: readonly string[]): string {
   return root;
 }
 function readManifest(root: string): StudyManifest {
-  const manifestPath = resolve(root, "study-manifest.json");
-  const canonicalPath = realpathSync(manifestPath);
+  const canonicalPath = artifactPath(root, "study-manifest.json");
   if (!canonicalPath.startsWith(`${root}/`) || statSync(canonicalPath).size > 1_048_576) return fail("Study manifest path or size is invalid");
   const value = JSON.parse(readFileSync(canonicalPath, "utf8")) as Partial<StudyManifest>;
   if (value.schema !== "mstar.shadow-study/v1" || typeof value.runId !== "string" || !value.child || !value.mountPlan || !value.baseline) return fail("Invalid study manifest");
   return value as StudyManifest;
 }
 function baselineFrom(root: string): FrozenBaseline {
-  const value = JSON.parse(readFileSync(resolve(root, "baseline.json"), "utf8")) as FrozenBaseline;
-  return value;
+  return JSON.parse(readFileSync(artifactPath(root, "baseline.json"), "utf8")) as FrozenBaseline;
 }
 function receiptsFrom(root: string): readonly WorkUnitReceipt[] {
-  return JSON.parse(readFileSync(resolve(root, "receipts.json"), "utf8")) as WorkUnitReceipt[];
+  return JSON.parse(readFileSync(artifactPath(root, "receipts.json"), "utf8")) as WorkUnitReceipt[];
 }
 function eventsFrom(root: string): readonly ProbeEvent[] {
-  return JSON.parse(readFileSync(resolve(root, "probe-events.json"), "utf8")) as ProbeEvent[];
+  return JSON.parse(readFileSync(artifactPath(root, "probe-events.json"), "utf8")) as ProbeEvent[];
 }
 export async function runShadowCommand(args = process.argv.slice(2), launcher?: ProbeLauncher): Promise<number> {
   const [command, ...options] = args;

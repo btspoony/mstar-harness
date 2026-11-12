@@ -22,10 +22,9 @@ import { initializeStore, openStore, readExecutionState, registerCatalogEntity, 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
+import { CLI_ROOT, runCli as spawnCli, type RunResult } from "./harness";
 
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
 const WORKFLOW_ID = "20260918-iteration-register-cli";
 const COMPASS_REF = "iterations/20260918-iteration-register-cli/delivery-compass.md";
 /** Shared subprocess identity: a coordinator binds only through its creating session. */
@@ -42,12 +41,6 @@ function compassFrontmatter(iterationId: string): string {
     "iteration_base_branch: main\n" +
     "target_branch: main\n" +
     "---\n";
-}
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
 }
 
 interface CommandEnvelope {
@@ -67,31 +60,8 @@ function message(result: RunResult): string {
   return envelope(result).message ?? "";
 }
 
-/**
- * Spawn env with ambient harness env vars pinned out: the CLI
- * resolves harness dirs from MSTAR_HARNESS_DIR / MSTAR_CONTROL_ROOT ahead
- * of probing, and SDD_DIR redirects default outfile paths — ambient values
- * would redirect every fixture spuriously.
- */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (key === "DSH_SESSION_ID") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  env.MSTAR_HOST_SESSION_ID = FIXTURE_SESSION_ID;
-  return env;
-}
-
 function runCli(args: string[], cwd = CLI_ROOT): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd,
-    env: cliEnv(),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+  return spawnCli(args, { cwd, env: { MSTAR_HOST_SESSION_ID: FIXTURE_SESSION_ID } });
 }
 
 function row(id: string): string {

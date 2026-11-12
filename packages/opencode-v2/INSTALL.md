@@ -57,7 +57,7 @@ One `init` pass for the V2 generation produces, in the resolved `opencode.json` 
 - `plugins` — the owned `@mstar-harness/opencode-v2@latest` slot is appended after dedupe; every unrelated entry keeps its position and shape.
 - `agents.<role>.model` — written **only** for overrides you supplied (`--pm-model`, `--strategic-models`, `--dev-models`, `--qc-models`, `--other-models`); without them the key is left to OpenCode's default model.
 - `mcp.servers["morning-star"]` — merged non-destructively; an existing morning-star entry is never rewritten, and other servers and `mcp` keys survive.
-- `$schema` — preserved if your config already has one and never invented (the pinned `2.0.26` schema tag publishes no V2 `$schema` id).
+- `$schema` — preserved if your config already has one and never invented (the pinned `2.2.5` schema tag publishes no V2 `$schema` id).
 
 Repeat runs are idempotent, and the other generation's key (`plugin`, singular) is never deleted or rewritten — see coexistence below.
 

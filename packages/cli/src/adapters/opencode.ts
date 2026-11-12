@@ -28,7 +28,7 @@ const UNRESOLVED_GENERATION_ANNOTATION =
 
 /**
  * V2 MCP server entry mirroring `packages/opencode/mcp.json`'s `morning-star`
- * row (`["npx","@mstar-harness/cli","mcp"]`). The V2 schema (tag v2.0.26
+ * row (`["npx","@mstar-harness/cli","mcp"]`). The V2 schema (tag v2.2.5
  * `Mcp.LocalConfig`) has no `enabled` key \u2014 `disabled` absent means enabled,
  * so the V2 translation carries `type` + `command` only.
  */
@@ -196,7 +196,7 @@ function mergeV2McpServer(config: Record<string, unknown>) {
 }
 
 /**
- * `$schema` pin rule (spec Q3): opencode v2.0.26 publishes no V2 `$schema` id
+ * `$schema` pin rule (spec Q3): opencode v2.2.5 publishes no V2 `$schema` id
  * (`OPENCODE_V2_CONFIG_SCHEMA` is null by the contracted fallback), so the V2
  * pass preserves any existing `$schema` and never invents one \u2014 deliberately
  * no write here.
@@ -318,7 +318,7 @@ function printV1Summary(tag: SummaryTag) {
 }
 
 function printV2Summary(tag: SummaryTag) {
- console.log(tag("v2", "Schema: preserved as-is (opencode v2.0.26 publishes no V2 $schema id \u2014 existing value kept, none invented)"));
+ console.log(tag("v2", "Schema: preserved as-is (opencode v2.2.5 publishes no V2 $schema id \u2014 existing value kept, none invented)"));
  console.log(tag("v2", `Plugin: ${OPENCODE_V2_PLUGIN} (ensured in \`plugins\`; owned slots deduped)`));
  console.log(tag("v2", `MCP: mcp.servers["morning-star"] \u2192 ["npx", "@mstar-harness/cli", "mcp"] (non-destructive merge)`));
  console.log(tag("v2", "Role models: left to OpenCode defaults (set agents.<role>.model in opencode.json only if you want overrides)"));

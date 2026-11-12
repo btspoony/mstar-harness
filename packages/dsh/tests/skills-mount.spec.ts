@@ -334,7 +334,9 @@ describe('skills mount via the plugin (real composition)', () => {
     } finally {
       await ctx.fiber.dispose().catch(() => {})
     }
-  })
+    // This case waits on fiber disposal and re-mount, which overran Bun's 5s
+    // default locally (I-001045; the issue report is the reproduction).
+  }, { timeout: 30_000 })
 })
 
 describe('host adapter attached on ctx (Task 2 reviewer note)', () => {

@@ -42,7 +42,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -54,19 +54,11 @@ import {
   type StoreContext,
 } from "@mstar-harness/engine";
 import { readDashboardView } from "../../commands/src/dashboard/store-read";
-
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+import { cliEnv, runCli as harnessRunCli, type RunResult } from "./harness";
 
 const WORKFLOW_ID = "wf-execution-read";
 const PLAN_ID = "20260920-execution-read-plan";
 const TS = "2026-09-21T00:00:00.000Z";
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
 
 const roots: string[] = [];
 
@@ -96,25 +88,14 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-/** Spawn env with ambient harness env vars pinned out, then the fixture's own. */
-function cliEnv(fixture: Fixture, extra: Record<string, string> = {}): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (key === "MSTAR_HOST_SESSION_ID" || key === "MSTAR_EXECUTION_IDENTITY" || key === "DSH_SESSION_ID") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  return { ...env, MSTAR_HARNESS_DIR: fixture.harnessDir, ...extra };
-}
-
+/** Run the real CLI entry from the fixture root. The shared spawn env pins out
+ * the ambient harness and identity vars; the fixture's harness dir and its
+ * per-case extras go on top. */
 function runCli(args: string[], fixture: Fixture, extraEnv: Record<string, string> = {}): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
+  return harnessRunCli(args, {
     cwd: fixture.root,
-    env: cliEnv(fixture, extraEnv),
-    stdout: "pipe",
-    stderr: "pipe",
+    env: { ...cliEnv({ MSTAR_HARNESS_DIR: fixture.harnessDir }), ...extraEnv },
   });
-  return { exitCode: proc.exitCode, stdout: new TextDecoder().decode(proc.stdout), stderr: new TextDecoder().decode(proc.stderr) };
 }
 
 function jsonOf(result: RunResult): Record<string, unknown> {

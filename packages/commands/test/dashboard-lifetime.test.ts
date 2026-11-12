@@ -283,6 +283,24 @@ describe("dashboard connection lifetime", () => {
     }
   });
 
+  test("a cancelled opener reports cancellation and leaves the delivered listener running", async () => {
+    const harnessDir = await workspace("dashboard-opener-cancel-");
+    const handles: RunningDashboard[] = [];
+    const effects = serviceEffects(handles, async () => {
+      throw Object.assign(new Error("browser opener cancelled"), { code: "command.cancelled" });
+    });
+    try {
+      const result = await dashboardDefinition().execute({ port: 0, open: true }, context(harnessDir, effects));
+      expect(result).toMatchObject({ status: "error", code: "command.cancelled" });
+      expect(handles).toHaveLength(1);
+      const response = await fetch(handles[0]!.url);
+      expect(response.status).toBe(200);
+    } finally {
+      await Promise.all(handles.map((handle) => handle.close()));
+      rmSync(harnessDir, { recursive: true, force: true });
+    }
+  });
+
   test("optional browser failure is typed and closes its unrequested service", async () => {
     const harnessDir = await workspace("dashboard-opener-");
     const handles: RunningDashboard[] = [];

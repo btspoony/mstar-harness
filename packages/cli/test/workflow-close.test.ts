@@ -29,7 +29,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import {
   initializeStore,
   openStore,
@@ -41,18 +41,12 @@ import {
 import { semanticRequestHash } from "../../engine/src/execution-store.js";
 import { PLAN_OPERATION_SEMANTICS, selectSemanticFields } from "../../engine/src/recovery-intent.js";
 
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+import { runCli, type RunResult } from "./harness";
+
 const WORKFLOW_ID = "wf-close";
 const PLAN_ID = "plan-close";
 const COORDINATOR_ID = "coord-close";
 const COMPLETION_POLICY = "acceptance report at plans/plan-close/report.md";
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
 
 interface CommandEnvelope {
   version: number;
@@ -95,32 +89,6 @@ function writeJson(path: string, value: unknown): void {
 
 function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-}
-
-/**
- * Spawn env with ambient harness env vars pinned out: the CLI resolves harness
- * dirs from MSTAR_HARNESS_DIR / MSTAR_CONTROL_ROOT ahead of probing, and
- * SDD_DIR redirects default outfile paths — ambient values would redirect every
- * fixture spuriously.
- */
-function cliEnv(extra: Record<string, string> = {}): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (key === "MSTAR_HOST_SESSION_ID" || key === "MSTAR_EXECUTION_IDENTITY" || key === "DSH_SESSION_ID") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  return { ...env, ...extra };
-}
-
-function runCli(args: string[], cwd: string, extra: Record<string, string> = {}): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd,
-    env: cliEnv(extra),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
 function jsonOf(result: RunResult): Record<string, unknown> {
@@ -215,7 +183,7 @@ async function registerAndBind(fixture: Fixture): Promise<void> {
     "--expect", rootToken,
     "--operation", "register-1",
     "--harness", fixture.harness,
-  ], fixture.root, identityEnv());
+  ], { cwd: fixture.root, env: identityEnv() });
   if (registered.exitCode !== 0) throw new Error(`workflow register failed: ${registered.stdout}${registered.stderr}`);
 
   const state = await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID });
@@ -230,7 +198,7 @@ async function registerAndBind(fixture: Fixture): Promise<void> {
     "--expect", workflow.workflowToken,
     "--operation", "bind-1",
     "--harness", fixture.harness,
-  ], fixture.root, identityEnv());
+  ], { cwd: fixture.root, env: identityEnv() });
   if (bound.exitCode !== 0) throw new Error(`plan bind failed: ${bound.stdout}${bound.stderr}`);
 }
 
@@ -248,13 +216,13 @@ async function driveToDone(fixture: Fixture): Promise<void> {
     "--acceptance-gate", "pm-acceptance",
     "--findings-cleanup", "allow-residual",
     "--harness", fixture.harness,
-  ], fixture.root, identityEnv());
+  ], { cwd: fixture.root, env: identityEnv() });
   if (prepared.exitCode !== 0) throw new Error(`plan prepare failed: ${prepared.stdout}${prepared.stderr}`);
 
   for (const status of ["InProgress", "InReview"]) {
     const payload = join(fixture.root, `progress-${status}.json`);
     writeJson(payload, { status, summary: `${status} for close`, evidence_paths: [fixture.qcReport] });
-    const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", payload, "--harness", fixture.harness], fixture.root, identityEnv());
+    const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", payload, "--harness", fixture.harness], { cwd: fixture.root, env: identityEnv() });
     if (moved.exitCode !== 0) throw new Error(`plan progress ${status} failed: ${moved.stdout}${moved.stderr}`);
   }
 
@@ -266,7 +234,7 @@ async function driveToDone(fixture: Fixture): Promise<void> {
     qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
     acceptance: { gate: "pm-acceptance", decision: "pass", report: fixture.acceptanceReport },
   });
-  const completed = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
+  const completed = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], { cwd: fixture.root, env: identityEnv() });
   if (completed.exitCode !== 0) throw new Error(`plan complete failed: ${completed.stdout}${completed.stderr}`);
 }
 
@@ -319,7 +287,7 @@ describe("mstar status workflow-close — ACTIVE lifecycle close", () => {
     expect((await storedHeader(fixture)).status).toBe("running");
     expect(await servedRoot(fixture)).toHaveLength(1);
 
-    const closed = runCli(closeArgs(fixture, ["--reason", "delivery complete"]), fixture.root, identityEnv());
+    const closed = runCli(closeArgs(fixture, ["--reason", "delivery complete"]), { cwd: fixture.root, env: identityEnv() });
     expect(closed.exitCode, closed.stdout).toBe(0);
     expect(jsonOf(closed)).toMatchObject({ command: "status.workflow-close", status: "ok" });
 
@@ -332,7 +300,7 @@ describe("mstar status workflow-close — ACTIVE lifecycle close", () => {
     expect(await servedRoot(fixture)).toHaveLength(0);
 
     // The read-only phase-6 projection passes on the same lifecycle state.
-    const phase6 = runCli(["iteration", "gate", "--phase", "6", "--workflow", WORKFLOW_ID, "--harness", fixture.harness], fixture.root);
+    const phase6 = runCli(["iteration", "gate", "--phase", "6", "--workflow", WORKFLOW_ID, "--harness", fixture.harness], { cwd: fixture.root });
     expect(phase6.exitCode, phase6.stdout).toBe(0);
     expect(jsonOf(phase6)).toMatchObject({ status: "ok", data: { phase: 6 } });
   }, 30_000);
@@ -342,11 +310,11 @@ describe("mstar status workflow-close — ACTIVE lifecycle close", () => {
     await registerAndBind(fixture);
     await driveToDone(fixture);
 
-    expect(runCli(closeArgs(fixture), fixture.root, identityEnv()).exitCode).toBe(0);
+    expect(runCli(closeArgs(fixture), { cwd: fixture.root, env: identityEnv() }).exitCode).toBe(0);
     const terminal = await storedHeader(fixture);
     const row = await storedRow(fixture);
 
-    const retry = runCli(closeArgs(fixture, ["--reason", "again"]), fixture.root, identityEnv());
+    const retry = runCli(closeArgs(fixture, ["--reason", "again"]), { cwd: fixture.root, env: identityEnv() });
     // Exit 0 with an explicit nothing-to-close receipt: the registry no longer
     // serves the closed lifecycle, and its retained terminal header is reported
     // back instead of a not-found refusal.
@@ -370,8 +338,7 @@ describe("mstar status workflow-close — ACTIVE lifecycle close", () => {
     // unregistered and retained.
     const stopped = runCli(
       ["workflow", "lifecycle", "--workflow", WORKFLOW_ID, "--status", "stopped", "--reason", "fixture stop", "--harness", fixture.harness],
-      fixture.root,
-      identityEnv(),
+      { cwd: fixture.root, env: identityEnv() },
     );
     expect(stopped.exitCode, stopped.stdout).toBe(0);
     expect(await servedRoot(fixture)).toHaveLength(0);
@@ -382,7 +349,7 @@ describe("mstar status workflow-close — ACTIVE lifecycle close", () => {
     // The close requests `completed`: a closed lifecycle is never amended, so the
     // retained `stopped` outcome keeps the not-found refusal it earns and
     // nothing is written.
-    const closed = runCli(closeArgs(fixture), fixture.root, identityEnv());
+    const closed = runCli(closeArgs(fixture), { cwd: fixture.root, env: identityEnv() });
     expect(closed.exitCode).toBe(1);
     expect(envelope(closed).code).toBe("coordination.workflow-not-found");
     expect(envelope(closed).data).toBeUndefined();
@@ -394,7 +361,7 @@ describe("mstar status workflow-close — ACTIVE lifecycle close", () => {
     const fixture = await activeFixture("mstar-close-foreign");
     await registerAndBind(fixture);
     await driveToDone(fixture);
-    expect(runCli(closeArgs(fixture), fixture.root, identityEnv()).exitCode).toBe(0);
+    expect(runCli(closeArgs(fixture), { cwd: fixture.root, env: identityEnv() }).exitCode).toBe(0);
 
     // The caller addresses a workflow this authority never held: there is no
     // coordinator binding to resume here, so the engine refuses before the
@@ -402,8 +369,7 @@ describe("mstar status workflow-close — ACTIVE lifecycle close", () => {
     const foreign = { source: "local", sessionId: "coord-foreign", workflowId: "wf-foreign", role: "coordinator" };
     const result = runCli(
       ["status", "workflow-close", "--workflow", "wf-foreign", "--harness", fixture.harness, "--reason", "foreign"],
-      fixture.root,
-      { MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(foreign) },
+      { cwd: fixture.root, env: { MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(foreign) } },
     );
     expect(result.exitCode).toBe(1);
     expect(envelope(result).status).toBe("refused");
@@ -418,7 +384,7 @@ describe("mstar status workflow-close — prerequisite refusals", () => {
     await registerAndBind(fixture);
 
     const before = await storedHeader(fixture);
-    const result = runCli(closeArgs(fixture, ["--reason", "too early"]), fixture.root, identityEnv());
+    const result = runCli(closeArgs(fixture, ["--reason", "too early"]), { cwd: fixture.root, env: identityEnv() });
     expect(result.exitCode).toBe(1);
     expect(envelope(result).code).toBe("coordination.invalid-transition");
     // Row completion is an explicit close prerequisite, not a transition the
@@ -464,8 +430,7 @@ describe("mstar status workflow-close — prerequisite refusals", () => {
 
     const result = runCli(
       ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--harness", harness, "--reason", "close"],
-      root,
-      identityEnv(),
+      { cwd: root, env: identityEnv() },
     );
     expect(result.exitCode).toBe(1);
     // The retired file route never answers: a control root without a store
@@ -489,7 +454,7 @@ describe("mstar status workflow-close — the report-only row reaches Done witho
 
     const started = join(fixture.root, "progress-report-only.json");
     writeJson(started, { status: "InProgress", summary: "report-only delivery in progress", evidence_paths: [fixture.qcReport] });
-    const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", started, "--harness", fixture.harness], fixture.root, identityEnv());
+    const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", started, "--harness", fixture.harness], { cwd: fixture.root, env: identityEnv() });
     expect(moved.exitCode, moved.stdout).toBe(0);
 
     // The completion carries no source/Git identity: a report-only row has none,
@@ -502,11 +467,11 @@ describe("mstar status workflow-close — the report-only row reaches Done witho
 
     // No fulfilment record is written: the registered policy completes the row
     // and the close without an evidence call.
-    const completed = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
+    const completed = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], { cwd: fixture.root, env: identityEnv() });
     expect(completed.exitCode, completed.stdout).toBe(0);
     expect(dataOf(completed)).toMatchObject({ data: { plan: { status: "Done" } } });
 
-    const closed = runCli(closeArgs(fixture, ["--reason", "report-only delivery complete"]), fixture.root, identityEnv());
+    const closed = runCli(closeArgs(fixture, ["--reason", "report-only delivery complete"]), { cwd: fixture.root, env: identityEnv() });
     expect(closed.exitCode, closed.stdout).toBe(0);
     expect((await storedHeader(fixture)).status).toBe("completed");
     expect(await servedRoot(fixture)).toHaveLength(0);
@@ -518,7 +483,7 @@ test("historical mandatory completion replays only its exact receipt", async () 
   await registerAndBind(fixture);
   const started = join(fixture.root, "progress-legacy-replay.json");
   writeJson(started, { status: "InProgress", summary: "replay fixture", evidence_paths: [fixture.qcReport] });
-  expect(runCli(["plan", "progress", "--plan", PLAN_ID, "--file", started, "--harness", fixture.harness], fixture.root, identityEnv()).exitCode).toBe(0);
+  expect(runCli(["plan", "progress", "--plan", PLAN_ID, "--file", started, "--harness", fixture.harness], { cwd: fixture.root, env: identityEnv() }).exitCode).toBe(0);
 
   const evidence = {
     qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
@@ -526,7 +491,7 @@ test("historical mandatory completion replays only its exact receipt", async () 
   };
   const args = ["plan", "complete", "--plan", PLAN_ID, "--harness", fixture.harness, "--operation", "legacy-complete"];
   const submit = (value: typeof evidence, operationArgs = args) =>
-    runCli([...operationArgs, "--evidence", JSON.stringify(value)], fixture.root, identityEnv());
+    runCli([...operationArgs, "--evidence", JSON.stringify(value)], { cwd: fixture.root, env: identityEnv() });
   const refused = submit(evidence);
   expect(refused.exitCode).not.toBe(0);
   expect(envelope(refused).code).toBe("coordination.invalid-input");
@@ -573,10 +538,10 @@ describe("mstar plan complete — a refusal names the verb that actually advance
     const fixture = await activeFixture("mstar-retired-gate");
     await registerAndBind(fixture);
     const args = ["plan", "prepare", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--harness", fixture.harness, "--acceptance-gate"];
-    const refused = runCli([...args, "mandatory"], fixture.root, identityEnv());
+    const refused = runCli([...args, "mandatory"], { cwd: fixture.root, env: identityEnv() });
     expect(refused.exitCode).not.toBe(0);
     expect(message(refused)).toContain("--acceptance-gate pm-acceptance");
-    const retried = runCli([...args, "pm-acceptance"], fixture.root, identityEnv());
+    const retried = runCli([...args, "pm-acceptance"], { cwd: fixture.root, env: identityEnv() });
     expect(retried.exitCode, retried.stdout).toBe(0);
   }, 30_000);
 
@@ -592,7 +557,7 @@ describe("mstar plan complete — a refusal names the verb that actually advance
 
     const started = join(fixture.root, "progress-sha-mismatch.json");
     writeJson(started, { status: "InProgress", summary: "sha mismatch probe", evidence_paths: [fixture.qcReport] });
-    const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", started, "--harness", fixture.harness], fixture.root, identityEnv());
+    const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", started, "--harness", fixture.harness], { cwd: fixture.root, env: identityEnv() });
     expect(moved.exitCode, moved.stdout).toBe(0);
 
     const completion = join(fixture.root, "completion-sha-mismatch.json");
@@ -601,7 +566,7 @@ describe("mstar plan complete — a refusal names the verb that actually advance
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
       acceptance: { gate: "pm-acceptance", decision: "pass", report: fixture.acceptanceReport },
     });
-    const refused = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
+    const refused = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], { cwd: fixture.root, env: identityEnv() });
     expect(refused.exitCode).toBe(1);
     expect(envelope(refused).code).toBe("coordination.invalid-input");
     // The refusal names the field, and the recovery does not prescribe a path.
@@ -613,7 +578,7 @@ describe("mstar plan complete — a refusal names the verb that actually advance
 describe("mstar status workflow-close — usage and the retired file transports", () => {
   test("missing workflow selector is a usage refusal", async () => {
     const fixture = await activeFixture("mstar-close-usage");
-    const result = runCli(["status", "workflow-close", "--harness", fixture.harness], fixture.root);
+    const result = runCli(["status", "workflow-close", "--harness", fixture.harness], { cwd: fixture.root });
     expect(result.exitCode).toBe(2);
     expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
   }, 30_000);
@@ -624,7 +589,7 @@ describe("mstar status workflow-close — usage and the retired file transports"
 
     for (const [fileInput, flag] of [["--ended-at", "--ended-at"], ["--session", "--session"]] as const) {
       const values = fileInput === "--ended-at" ? ["2026-09-12"] : [join(fixture.harness, "session.json")];
-      const result = runCli(closeArgs(fixture, [fileInput, ...values]), fixture.root, identityEnv());
+      const result = runCli(closeArgs(fixture, [fileInput, ...values]), { cwd: fixture.root, env: identityEnv() });
       expect(result.exitCode).toBe(2);
       expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
       // The refusal names the retired input AND the supported ACTIVE route.
@@ -638,7 +603,7 @@ describe("mstar status workflow-close — usage and the retired file transports"
 
   test("a hostile workflow id is rejected by the shared id guard", async () => {
     const fixture = await activeFixture("mstar-close-hostile");
-    const result = runCli(["status", "workflow-close", "--workflow", "../escape", "--harness", fixture.harness], fixture.root);
+    const result = runCli(["status", "workflow-close", "--workflow", "../escape", "--harness", fixture.harness], { cwd: fixture.root });
     expect(result.exitCode).toBe(1);
     expect(envelope(result).code).toBe("workflow.invalid-id");
     expect(message(result)).toContain("invalid workflow id");
@@ -672,26 +637,25 @@ describe("mstar workflow reopen — the explicit operator route back from a term
     await registerAndBind(fixture);
     const stopped = runCli(
       ["workflow", "lifecycle", "--workflow", WORKFLOW_ID, "--status", "stopped", "--reason", "fixture stop", "--harness", fixture.harness],
-      fixture.root,
-      identityEnv(),
+      { cwd: fixture.root, env: identityEnv() },
     );
     expect(stopped.exitCode, stopped.stdout).toBe(0);
 
     // The close published the terminal header as an identity row; the plan rows
     // it retains stay in the store read and must reappear on the reopened
     // lifecycle below.
-    const closed = runCli(["status", "validate"], fixture.root);
+    const closed = runCli(["status", "validate"], { cwd: fixture.root });
     expect(closed.exitCode, closed.stdout).toBe(0);
     const closedAuthority = dataOf(closed).authority as { terminalUnregistered?: Array<Record<string, unknown>> };
     expect(closedAuthority.terminalUnregistered).toEqual([{ id: WORKFLOW_ID, status: "stopped", revision: expect.any(Number) }]);
 
     // `--expect` is omitted on purpose: the engine resolves the retained terminal
     // header revision inside the guarded transaction and checks it there.
-    const reopened = runCli(reopenArgs(fixture, attestationFile(fixture, "reopen-attestation.json")), fixture.root, identityEnv());
+    const reopened = runCli(reopenArgs(fixture, attestationFile(fixture, "reopen-attestation.json")), { cwd: fixture.root, env: identityEnv() });
     expect(reopened.exitCode, reopened.stdout).toBe(0);
     expect(jsonOf(reopened)).toMatchObject({ command: "workflow.reopen", status: "ok", code: "workflow.reopen.ok" });
 
-    const validated = runCli(["status", "validate"], fixture.root);
+    const validated = runCli(["status", "validate"], { cwd: fixture.root });
     expect(validated.exitCode, validated.stdout).toBe(0);
     const authority = dataOf(validated).authority as {
       workflows?: Array<{ state: { id: string; status: string }; plans: Array<{ plan: { id: string } }> }>;
@@ -707,11 +671,11 @@ describe("mstar workflow reopen — the explicit operator route back from a term
     const fixture = await activeFixture("mstar-reopen-completed");
     await registerAndBind(fixture);
     await driveToDone(fixture);
-    expect(runCli(closeArgs(fixture, ["--reason", "delivery complete"]), fixture.root, identityEnv()).exitCode).toBe(0);
+    expect(runCli(closeArgs(fixture, ["--reason", "delivery complete"]), { cwd: fixture.root, env: identityEnv() }).exitCode).toBe(0);
     const terminal = await storedHeader(fixture);
     expect(terminal.status).toBe("completed");
 
-    const refused = runCli(reopenArgs(fixture, attestationFile(fixture, "reopen-completed.json")), fixture.root, identityEnv());
+    const refused = runCli(reopenArgs(fixture, attestationFile(fixture, "reopen-completed.json")), { cwd: fixture.root, env: identityEnv() });
     expect(refused.exitCode).toBe(1);
     expect(envelope(refused)).toMatchObject({ status: "refused", code: "workflow.reopen-completed" });
     expect(recoveryOf(refused)).toContain("never reopened");

@@ -340,12 +340,11 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "packages/omp/package.json",
       "packages/omp/tsconfig.json",
     ]);
-    // The plugin loads package-root convention mirrors, so they are part of the generated closure, not only `dist`.
-    expect(omp?.generated.trees.map((tree) => tree.root)).toEqual([
-      "packages/omp/dist",
-      "packages/omp/extensions",
-      "packages/omp/hooks",
-    ]);
+    // omp pins no build output either: `dist` plus its `cp -R` mirrors are
+    // environment-dependent bytes.
+    expect(omp?.generated.files).toEqual([]);
+    expect(omp?.generated.trees).toEqual([]);
+    expect(omp?.entrypoint).toBe("packages/omp/dist/hooks/pre/mstar-gates.js");
 
     // DSh's whole `dist` closure is deliberately empty here: rebuilding it
     // changes `index.js`/`invariant.js` bytes even on one machine, so a digest
@@ -360,14 +359,15 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "packages/dsh/src",
       "packages/dsh/workflows",
     ]);
-    // ...and engine's declaration output is inside the recorded dist tree.
-    const engineDist = manifest.consumers
-      .find((consumer) => consumer.id === "engine")
-      ?.generated.trees.find((tree) => tree.root === "packages/engine/dist");
-    expect(engineDist?.files).toBe(4);
+    // ...and engine pins no build output either: `dist` bytes depend on the
+    // build environment, so a manifest written here cannot be verified on a
+    // checkout that was never built.
+    const engine = manifest.consumers.find((consumer) => consumer.id === "engine");
+    expect(engine?.generated.files).toEqual([]);
+    expect(engine?.generated.trees).toEqual([]);
+    expect(engine?.entrypoint).toBe("packages/engine/dist/engine.js");
     // The engine's build scripts are part of its input closure: `build.ts` runs
     // the bundle and `debug-esm.ts` is a bundled build input.
-    const engine = manifest.consumers.find((consumer) => consumer.id === "engine");
     expect(engine?.sources.trees.map((tree) => tree.root)).toEqual([
       "packages/engine/scripts",
       "packages/engine/src",
@@ -396,15 +396,16 @@ describe("execution-consumer-manifest — canonical collection", () => {
   test("refuses to collect when build output is missing or empty instead of fabricating parity", () => {
     const missing = buildFixture();
     unlinkSync(join(missing, "packages/engine/dist/engine.js"));
-    expectRefusal(() => collectExecutionConsumerManifest(missing), "consumer.path-missing");
+    expectRefusal(() => collectExecutionConsumerManifest(missing), "consumer.generated-missing");
 
     const emptyArtifact = buildFixture();
     writeFileSync(join(emptyArtifact, "packages/cli/dist/mstar-harness.js"), "");
     expectRefusal(() => collectExecutionConsumerManifest(emptyArtifact), "consumer.generated-empty");
 
+    // The only consumer that still pins bytes is `zcode`, whose hook is
+    // committed; an empty one refuses.
     const emptyTree = buildFixture();
-    rmSync(join(emptyTree, "packages/omp/extensions"), { recursive: true, force: true });
-    mkdirSync(join(emptyTree, "packages/omp/extensions"), { recursive: true });
+    writeFileSync(join(emptyTree, "hooks/mstar-write-gate.mjs"), "");
     expectRefusal(() => collectExecutionConsumerManifest(emptyTree), "consumer.generated-empty");
 
     // The DSh client bundle is deliberately OUTSIDE the manifest's byte-pinned
@@ -447,23 +448,18 @@ describe("execution-consumer-manifest — canonical collection", () => {
     expectRefusal(() => collectExecutionConsumerManifest(empty), "consumer.generated-empty");
   });
 
-  test("still refuses a consumer whose declared generated tree or artifact is absent", () => {
-    // Only a layout that DECLARES no generated file is relaxed: a consumer
-    // that declares generated trees must still have them built.
-    const missingTree = buildFixture();
-    rmSync(join(missingTree, "packages/engine/dist"), { recursive: true, force: true });
-    expectRefusal(() => collectExecutionConsumerManifest(missingTree), "consumer.path-missing");
+  test("still refuses a consumer whose declared generated artifact is absent", () => {
+    // Only layouts that DECLARE no generated file are relaxed; `zcode` declares
+    // its committed hook, so its absence is still a refusal.
+    const missingArtifact = buildFixture();
+    unlinkSync(join(missingArtifact, "hooks/mstar-write-gate.mjs"));
+    expectRefusal(() => collectExecutionConsumerManifest(missingArtifact), "consumer.path-missing");
 
-    const emptyDeclaredTree = buildFixture();
-    rmSync(join(emptyDeclaredTree, "packages/opencode/dist"), { recursive: true, force: true });
-    mkdirSync(join(emptyDeclaredTree, "packages/opencode/dist"), { recursive: true });
-    expectRefusal(() => collectExecutionConsumerManifest(emptyDeclaredTree), "consumer.generated-empty");
-
-    // A declared artifact can also go missing while its tree stays non-empty:
-    // that is still a refusal, never a silently shortened closure.
-    const missingDeclaredArtifact = buildFixture();
-    unlinkSync(join(missingDeclaredArtifact, "packages/engine/dist/audit.js"));
-    expectRefusal(() => collectExecutionConsumerManifest(missingDeclaredArtifact), "consumer.path-missing");
+    // A declared artifact can also go empty while the tree around it stays
+    // intact: that is still a refusal, never a silently shortened closure.
+    const emptyDeclaredArtifact = buildFixture();
+    writeFileSync(join(emptyDeclaredArtifact, "hooks/mstar-write-gate.mjs"), "");
+    expectRefusal(() => collectExecutionConsumerManifest(emptyDeclaredArtifact), "consumer.generated-empty");
   });
 
   test("refuses a package whose engines floor is not the canonical runtime floor", () => {
@@ -483,12 +479,22 @@ describe("execution-consumer-manifest — verification refusals", () => {
     writeFileSync(join(loaderDrift, ".codex-plugin/mcp.json"), "// stale Codex loader config\n");
     expectRefusal(() => verifyExecutionConsumerManifest(loaderManifest), "consumer.digest-mismatch");
 
-    writeFileSync(join(root, "packages/engine/dist/engine.js"), "// stale engine bundle\n");
-    expectRefusal(() => verifyExecutionConsumerManifest(manifest), "consumer.digest-mismatch");
+    // The engine's `dist` is NOT byte-pinned (its bytes depend on the build
+    // environment), so rewritten bundle or declaration bytes are not drift;
+    // removal of the entrypoint still is.
+    const engineDrift = buildFixture();
+    const engineManifest = collectExecutionConsumerManifest(engineDrift);
+    writeFileSync(join(engineDrift, "packages/engine/dist/engine.js"), "// stale engine bundle\n");
+    writeFileSync(join(engineDrift, "packages/engine/dist/index.d.ts"), "// stale types\n");
+    verifyExecutionConsumerManifest(engineManifest);
+    unlinkSync(join(engineDrift, "packages/engine/dist/engine.js"));
+    expectRefusal(() => verifyExecutionConsumerManifest(engineManifest), "consumer.generated-missing");
 
+    // The declared generated artifact that remains pinned (`zcode`'s committed
+    // hook) still refuses stale bytes.
     const declarationDrift = buildFixture();
     const declarationManifest = collectExecutionConsumerManifest(declarationDrift);
-    writeFileSync(join(declarationDrift, "packages/engine/dist/index.d.ts"), "// stale types\n");
+    writeFileSync(join(declarationDrift, "hooks/mstar-write-gate.mjs"), "// stale zcode hook\n");
     expectRefusal(
       () => verifyExecutionConsumerManifest(declarationManifest),
       "consumer.digest-mismatch",
@@ -516,9 +522,16 @@ describe("execution-consumer-manifest — verification refusals", () => {
     writeFileSync(join(dshSourceDrift, "packages/dsh/src/index.ts"), "// edited dsh source\n");
     expectRefusal(() => verifyExecutionConsumerManifest(dshSourceManifest), "consumer.digest-mismatch");
 
+    // omp's `cp -R` mirrors are build output too: rewriting one is not drift,
+    // and its source closure still catches an edited input.
     const mirrorDrift = buildFixture();
     const mirrorManifest = collectExecutionConsumerManifest(mirrorDrift);
     writeFileSync(join(mirrorDrift, "packages/omp/hooks/pre/mstar-gates.js"), "// stale mirror\n");
+    verifyExecutionConsumerManifest(mirrorManifest);
+    writeFileSync(
+      join(mirrorDrift, "packages/omp/src/hooks/pre/mstar-gates.ts"),
+      "export const gates = 2;\n",
+    );
     expectRefusal(() => verifyExecutionConsumerManifest(mirrorManifest), "consumer.digest-mismatch");
   });
 
@@ -659,8 +672,8 @@ describe("execution-consumer-manifest — verification refusals", () => {
     );
 
     const hashTamper = cloneManifest(manifest);
-    const cliGenerated = consumerIn(hashTamper, "opencode").generated;
-    if (cliGenerated === null) throw new Error("fixture opencode generated set missing");
+    const cliGenerated = consumerIn(hashTamper, "zcode").generated;
+    if (cliGenerated === null) throw new Error("fixture zcode generated set missing");
     cliGenerated.files[0]!.sha256 = "0".repeat(64);
     expectRefusal(() => verifyExecutionConsumerManifest(asManifest(hashTamper)), "consumer.digest-mismatch");
 
@@ -725,14 +738,14 @@ describe("execution-consumer-manifest — verification refusals", () => {
       const manifest = collectExecutionConsumerManifest(root);
 
       const escaped = cloneManifest(manifest);
-      const generated = consumerIn(escaped, "opencode").generated;
-      if (generated === null) throw new Error("fixture opencode generated set missing");
+      const generated = consumerIn(escaped, "zcode").generated;
+      if (generated === null) throw new Error("fixture zcode generated set missing");
       generated.files[0]!.path = "../outside-consumer-artifact.js";
       expectRefusal(() => verifyExecutionConsumerManifest(asManifest(escaped)), "consumer.path-outside-root");
 
       const absolute = cloneManifest(manifest);
-      const absoluteGenerated = consumerIn(absolute, "opencode").generated;
-      if (absoluteGenerated === null) throw new Error("fixture opencode generated set missing");
+      const absoluteGenerated = consumerIn(absolute, "opencode").sources;
+      if (absoluteGenerated === null) throw new Error("fixture opencode source set missing");
       absoluteGenerated.trees[0]!.root = "/etc";
       expectRefusal(() => verifyExecutionConsumerManifest(asManifest(absolute)), "consumer.path-outside-root");
     } finally {
@@ -766,9 +779,11 @@ describe("execution-consumer-manifest — verification refusals", () => {
     try {
       unlinkSync(join(artifactLink, "packages/opencode/dist/mstar.js"));
       symlinkSync(outsideArtifact, join(artifactLink, "packages/opencode/dist/mstar.js"));
+      // opencode's dist is no longer digested, so the entrypoint containment
+      // check is what refuses this link — still a refusal, named as such.
       expectRefusal(
         () => collectExecutionConsumerManifest(artifactLink),
-        "consumer.symlink-escapes-tree",
+        "consumer.path-outside-root",
       );
     } finally {
       rmSync(outsideArtifact, { force: true });

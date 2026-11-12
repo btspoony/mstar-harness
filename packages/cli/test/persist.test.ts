@@ -12,18 +12,10 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { persistPayloadContracts, synthesizeReview } from "@mstar-harness/engine";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
-
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
+import { runCli as spawnCli, type RunResult } from "./harness";
 
 type CommandEnvelope = {
   command: string;
@@ -50,34 +42,10 @@ function persistedPayload(result: RunResult): unknown {
   return data.payload;
 }
 
-/** Spawn env with ambient harness env vars pinned out:
- * dir resolution must never leak into fixtures. MSTAR_STORE_MODULE is
- * pinned too so an ambient module cannot redirect a fixture. */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (
-      key === "MSTAR_HARNESS_DIR" ||
-      key === "MSTAR_CONTROL_ROOT" ||
-      key === "SDD_DIR" ||
-      key === "MSTAR_STORE_MODULE"
-    ) {
-      continue;
-    }
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
-/** Run the real CLI entry as a subprocess; cwd + env overrides. */
-function runCli(args: string[], opts: { cwd?: string; env?: Record<string, string> } = {}): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: opts.cwd ?? CLI_ROOT,
-    env: { ...cliEnv(), ...opts.env },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+/** Run the real CLI entry; cwd + env overrides. An ambient MSTAR_STORE_MODULE
+ * is pinned out so it cannot redirect a fixture; a caller may re-pin it. */
+function runCli(args: string[], opts: { cwd?: string; env?: Record<string, string | undefined> } = {}): RunResult {
+  return spawnCli(args, { ...opts, env: { MSTAR_STORE_MODULE: undefined, ...opts.env } });
 }
 
 
@@ -545,6 +513,35 @@ describe("mstar persist — --store / MSTAR_STORE_MODULE module injection", () =
     });
   });
 
+
+  test("the ambient MSTAR_STORE_MODULE is pinned out, and an explicit re-pin still wins", () => {
+    withTempDir((dir) => {
+      const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
+      const ambient = join(dir, "ambient-store.ts");
+      writeFileSync(ambient, 'export function createArtifactStore() { throw new Error("ambient module loaded"); }', "utf8");
+      const previous = process.env.MSTAR_STORE_MODULE;
+      process.env.MSTAR_STORE_MODULE = ambient;
+      try {
+        // Deleted by the wrapper: the child falls back to the FsStore.
+        const pinnedOut = runCli(["persist", "write", "review", "--key", "pin-1", "--file", payloadFile], { env: harnessEnv(dir) });
+        expect(pinnedOut.exitCode).toBe(0);
+        expect(message(pinnedOut)).not.toContain("ambient module loaded");
+
+        // String re-pin reaches the child ahead of the delete.
+        const moduleFile = join(dir, "store-mod.ts");
+        writeFileSync(moduleFile, storeModuleSource("PERSIST_MODULE_FILE"), "utf8");
+        const outFile = join(dir, "module-out.json");
+        const repinned = runCli(["persist", "write", "review", "--key", "pin-2", "--file", payloadFile], {
+          env: { ...harnessEnv(dir), MSTAR_STORE_MODULE: moduleFile, PERSIST_MODULE_FILE: outFile },
+        });
+        expect(repinned.exitCode).toBe(0);
+        expect(existsSync(outFile)).toBe(true);
+      } finally {
+        if (previous === undefined) delete process.env.MSTAR_STORE_MODULE;
+        else process.env.MSTAR_STORE_MODULE = previous;
+      }
+    });
+  });
 
   test("--store with a URI scheme is rejected before any import", () => {
     withTempDir((dir) => {

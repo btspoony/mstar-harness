@@ -18,8 +18,9 @@ describe("the prototype baseline loader", () => {
   });
 
   test("a missing baseline throws, naming the path", () => {
-    // The regression this pins: a future edit that turns the four checks back into
-    // "warn and exit 0" has to delete this throw, and this test reddens first.
+    // The regression this pins: `loadPrototype` must throw for an unreadable baseline
+    // rather than warn and continue — an edit that swallows the error deletes this
+    // throw, and this test reddens first.
     const missing = join(tmpdir(), "mstar-prototype-absent", "prototype.html");
     expect(() => loadPrototype(missing)).toThrow(missing);
     expect(() => loadPrototype(missing)).toThrow(/is unreadable/);
