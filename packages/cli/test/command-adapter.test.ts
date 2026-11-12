@@ -1261,6 +1261,28 @@ describe("opencode adapter — generation selection", () => {
     expect(opencodeAdapter.validateConfig!({}, { generation: "v2" }).length).toBeGreaterThan(0);
   });
 
+  test("a dual-key write validates the generation it resolved instead of skipping on marker derivation", async () => {
+    const opts: MutateConfigForInitOptions = { presenceRunner: runnerPresent, probeRunner: runnerV2 };
+    const written = await mutateAdapter({ plugin: ["@mstar-harness/opencode@latest"], plugins: ["unrelated"] }, {}, opts);
+    expect(opts.generation).toBe("v2");
+    expect(opencodeAdapter.validateConfig!(written, opts)).toEqual([]);
+    // Both marker keys present: a re-derivation answers null, this answers the v2 surface.
+    const brokenV2Surface = { plugin: ["@mstar-harness/opencode@latest"], plugins: ["unrelated"] };
+    expect(opencodeAdapter.validateConfig!(brokenV2Surface, opts).length).toBeGreaterThan(0);
+  });
+
+  test("the seeded MCP server command is a copy: mutating a written entry leaves later writes intact", async () => {
+    const readSeededCommand = async (): Promise<unknown> => {
+      const written = await mutate({}, {}, { dryRun: false, generation: "v2", probeRunner: runnerV2 });
+      const servers = recordValue(written, "mcp") as Record<string, unknown>;
+      const morningStar = recordValue(servers, "servers") as Record<string, unknown>;
+      return recordValue(morningStar["morning-star"], "command");
+    };
+    const command = await readSeededCommand();
+    (command as string[]).push("--injected");
+    expect(await readSeededCommand()).toEqual(["npx", "@mstar-harness/cli", "mcp"]);
+  });
+
   test("an invalid --opencode-generation value refuses naming the flag before any probe", async () => {
     try {
       await mutate({}, {}, { dryRun: true, generation: "v3" as never });
