@@ -751,6 +751,36 @@ Do the thing, evidence-first.
     expect(codes).toContain('worktree.main.residency-switched')
   })
 
+  it('a SIBLING lifecycle owns the main worktree branch → worktree.main.residency-switched (every active lifecycle is collected)', async () => {
+    const root = tmpRoot('dsh-wt-l1-sibling-')
+    seedL1Topology(root)
+    // The branch main sits on is owned by the OTHER active lifecycle's plan
+    // row only — the governing snapshot records no claim on it. Dropping
+    // sibling lifecycles from the ownership collection hides this collision.
+    git(['checkout', '-q', '-b', 'feature/sibling'], root)
+    const app = booted = await bootApp({ root, dispatchBinding: 'qc-specialist' })
+    const advisories = captureAdvisories(app.ctx)
+    await seedL1Snapshot(app.harnessDir, { branch: { base: 'main' } }, planWithScope(join(root, 'wt-a'), 'feature/a'))
+    await seedActiveWorkflow(
+      app.harnessDir,
+      'wf-2',
+      [{ id: 'sibling-plan', title: 'Sibling plan', status: 'Todo', metadata: { track_branches: ['feature/sibling'] } }],
+      { branch: { base: 'main' } },
+      'seed-wf-2',
+      root,
+      'wf-2',
+    )
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(join(root, 'wt-a'))), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(1)
+    const ownership = advisories[0]!.result.violations
+      .filter((v) => v.code === 'worktree.main.residency-switched')
+      .map((v) => v.message)
+    expect(ownership.some((message) => message.includes('owned by workflow wf-2'))).toBe(true)
+  })
+
   // Disposition — removed unreadable sibling snapshot coverage; ACTIVE workflow state is validated in the execution database, not by scanning snapshot.json files.
 
   // Disposition — removed hostile workflow-id register fixture; ACTIVE workflow ids are owned and validated by database producers, not joined from status.json paths.
