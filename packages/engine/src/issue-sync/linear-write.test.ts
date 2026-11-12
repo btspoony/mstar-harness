@@ -271,6 +271,18 @@ describe("label discovery", () => {
     expect(calls[1]!.arguments.team).toBe("ENG");
   });
 
+  test("a page advertising another page without a usable cursor refuses", async () => {
+    // Silently ending here would return a set known to be truncated, and the
+    // push layer would resolve a real label against it as unresolved.
+    const { write, calls } = side(
+      [{ kind: "ok", payload: { labels: [{ name: "bug" }], hasNextPage: true, cursor: null } }],
+      { team: "ENG" },
+    );
+    const refusal = await write.discoverLabels().catch((caught: unknown) => caught);
+    expect(refusal).toMatchObject({ code: "linear.query-failed" });
+    expect(calls).toHaveLength(1);
+  });
+
   test("a cursor still live after the page bound refuses without a 21st call", async () => {
     // Every page advertises more and never carries the wanted label.
     const pages = Array.from({ length: 20 }, (_unused, index) => ({

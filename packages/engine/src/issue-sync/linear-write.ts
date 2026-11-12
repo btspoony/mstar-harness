@@ -365,15 +365,23 @@ function labelNames(payload: unknown): ReadonlySet<string> | null {
 
 /**
  * The next page of the label envelope. `list_issue_labels` advertises a
- * `cursor` request argument and continues while `hasNextPage` is true, so the
- * page is followed only on that pair — an empty cursor with `hasNextPage: true`
- * ends the walk rather than re-reading page one, and a page that omits both
- * ends it too. Same rule as the listing side, which already reads this pair.
+ * `cursor` request argument and continues only while `hasNextPage` is true, so
+ * the page is followed on that pair alone: no `hasNextPage` ends the walk (the
+ * pre-walk single-page behavior), and an advertised next page with no usable
+ * cursor is refused rather than silently truncating the set — the same rule the
+ * listing side applies to the same envelope defect.
  */
 function labelNextCursor(payload: unknown): string | null {
   if (!isRecord(payload)) return null;
   if (payload.hasNextPage !== true) return null;
-  return nonBlank(payload.cursor);
+  const cursor = nonBlank(payload.cursor);
+  if (cursor === null) {
+    throw new SyncError(
+      "linear.query-failed",
+      "the label page said hasNextPage but carried no usable `cursor`; the run stopped rather than resolving items against a truncated label set",
+    );
+  }
+  return cursor;
 }
 
 /**
