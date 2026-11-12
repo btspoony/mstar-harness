@@ -423,26 +423,6 @@ view reached the authority. A workspace with no resolvable `{HARNESS_DIR}` is th
 separate `no-harness` kind — an inactive workspace, not a store failure, so the
 panel renders its own copy instead of a wire token.
 
-**The shell is a nav band over one product scroller.** `panel-shell.tsx` is a
-thin adapter: the session landing (`focus`) plus the five destinations —
-`overview` / `issues` / `workflows` / `iterations` / `projects` — come from the
-shared `@mstar-harness/ui` `Nav`, and the active destination's screen renders
-inside the panel's ONLY `overflow-y` element (`[data-mstar-scroll]`; no element
-scrolls horizontally). The product owns the markup, styling and copy: the host
-resolves the screen's copy object, maps the engine `ReadEnvelope` through the
-shared view-model builder, and passes the one interactive seat a destination
-owns (`issues`' filter query). The shell carries `container-type: inline-size`,
-so the shared screens' width rules are **container queries** against the pane,
-never a JS layout measurement. Missing fields degrade to explicit
-empty/last-known states (muted, never orange warn boxes); `waiting` keeps the
-muted hint; no harness renders the centered inactive-state card that activates
-automatically on detection.
-
-The workflow picker (「工作流选择」) is never optimistic: a commit posts to
-`mstar/selectWorkflow`, lands as this session's `pending` → `selected` /
-`failed` state, and the selection it renders comes from the next digest's
-`selection` member (the host rebuilds it from the same durable binding).
-
 **Dependency**: the panel's client bundle carries **no graph library** — the
 `@xyflow/react` devDependency (previously inlined into `dist/client.js` at
 build time) was removed with the react-flow rendering layer, and the
@@ -457,9 +437,7 @@ literal `import.meta` is a parse-time SyntaxError (a zustand v4
 `import.meta.env` read is defined away at build; see the iteration
 install-verification guide §6). Current bundle size: **143,686 B
 raw / 28,890 B gzip** (re-measure per the iteration install-verification
-guide — the bundle shrank to ~85 KB when react-flow was removed and grew
-back with the agents page's entity rendering, then again with the
-emphasis-tier styling).
+guide).
 
 Install / verify (the client half rides the same bundle-row install as the
 server half):
@@ -497,11 +475,7 @@ iteration from plan ids (8-digit date prefix) + `doneAt`, a deterministic
 documented heuristic that drops only provably cross-iteration events and never
 back-scans a resumed long log;
 a panel read happens on mount and on an explicit action (a workflow pick, a
-retry; an unmounted seat issues nothing); `knowledge` and `selection` come from
-the apply-scoped catalog cache the pre-step owns (60 s TTL, so a miss rebuilds
-the payload and may refresh projections), which is why that catalog read runs
-AFTER the per-view reads and never beside them — those two members can lag the
-rest of the digest by up to one catalog interval (60 s);
+retry; an unmounted seat issues nothing);
 the engine-status emission still writes `dsh_status_emissions` on change (the
 model-visible anchor), and a resumed session shows the anchor again on its first
 composed step after an app restart — the digest is in-memory — and thereafter

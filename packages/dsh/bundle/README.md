@@ -183,26 +183,6 @@ browser half reads the session digest from `/api/mstar/panelSnapshot`
 and one engine `DashboardView` per screen from `/api/mstar/dashboardView`, and
 renders the answer or an explicit unavailable reason.
 
-**MStar Workflow layout**: `panel-shell.tsx` is a thin adapter over the shared
-`@mstar-harness/ui` product — the session landing (`focus`) plus the five
-destinations (`overview` / `issues` / `workflows` / `iterations` / `projects`)
-in a nav band, with the active destination's screen rendered in the
-panel-owned single scroll body (`[data-mstar-scroll]` — the ONLY `overflow-y`
-element; nothing scrolls horizontally). The product owns markup, styling and
-copy; the host resolves the screen's copy object, maps the engine
-`ReadEnvelope` through the shared view-model builder and passes the one
-interactive seat a destination owns (`issues`' filter query). The shell carries
-`container-type: inline-size`, so the shared screens' width rules are container
-queries against the pane, never a JS layout measurement. Transport states are
-explicit — `waiting` / `loading` / `unavailable` (with its reason) / no-harness
-each carry their own copy — and no harness renders a CENTERED inactive-state
-card that activates automatically once a harness is detected. Missing fields
-degrade to muted empty / last-known states, never orange warn boxes. There is
-no polling: the digest is read when the seat mounts and on an explicit
-`reload()` (a workflow pick, a retry), each request carrying a 5 s deadline that
-cancels the host read. Full realized layout detail:
-`packages/dsh/README.md` (§ Web client plugin).
-
 Build step: `bun run
 build-client` (`scripts/build-client-bundle.ts` — closure-factory CJS,
 CLIENT_EXTERNALS external, CSS modules hashed + `<style data-plugin>`
