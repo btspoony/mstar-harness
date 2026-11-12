@@ -55,7 +55,7 @@ History rewrite / force-with-lease / 改写后证据失效规则 SSOT → `mstar
 
 ### 5.1b Review paths and surfaces（HARD — one path, every attached surface settles）
 
-Phase 5 has exactly **two review paths**; the compass `pr_merge_policy` selects one at Phase 1. They differ only in who produces the review: the local loop **initiates** rounds, the bot path **receives** whatever rounds the bot starts under its own trigger mode (§5.1b) — push-triggered or manual, never assumed.
+Phase 5 has exactly **two review paths**; the compass `pr_merge_policy` selects one at Phase 1. They differ only in who produces the review: the local loop **initiates** rounds, the bot path **receives** whatever rounds the bot starts under its own trigger mode — push-triggered or manual, never assumed.
 
 | `pr_merge_policy` | Review path | Who produces the review | Evidence read |
 |---|---|---|---|
@@ -102,11 +102,11 @@ gh api --paginate "repos/<owner>/<repo>/pulls/<n>/comments?per_page=100" \
 
 1. **Status** — PR mergeable？required CI？unresolved review threads？**任一 CI/AI review 是否仍在跑？**
 2. **Merge conflicts** — blocking 则在 integration 分支**本地**解决；**仅当 §5.1a push gate 满足时**再 push（意图冲突 → **Blocked**）
-3. **Review dispatch（按 compass `pr_merge_policy`）** — `reviewed-auto`：PR 级 review 归 **`mstar-pr-loop`** 所有——它自己跑 review → fix → re-review 循环，并按 §5.1a 的 push cadence 推进；**不要**在每个 §5.1 迭代里另起第二个 review loop。§5.1 在该轮内**暂停第 4 步的 review 修复分派与第 6 步的 push**——这两项由该 loop 一并执行（§5.1a 仍逐次适用，单一 pusher，避免同一 head 两个推手）。**第 5 步的 required-CI 修复保留**：可由 §5.1 本地开工，但其 push 同样走该 loop 的批（§5.1a），不得另起第二推手。§5.1 仍负责 mergeable 与 required-CI 观测。§5.3 读取该 loop 在当前 PR head 上最终 settled、已 posted 的 `ship it` 报告作为授权。`reviewed-bot`：**不**起任何本地 review loop——挂载的 bot 在每个新 head 上自行产出 review，§5.1 只监控该 review 是否已落到当前 head 并达到其自身门（§5.1b），其 findings 走第 4 步普通第三方 triage，push 仍守 §5.1a（该 push 即 bot 的下一轮触发）。`owner-gated`：**完全**不起 PR 级 review loop，**人类 owner** 的 review 就是 gate，Phase 5 停在 merge-ready 等其书面批准
+3. **Review dispatch（按 compass `pr_merge_policy`）** — `reviewed-auto`：PR 级 review 归 **`mstar-pr-loop`** 所有——它自己跑 review → fix → re-review 循环，并按 §5.1a 的 push cadence 推进；**不要**在每个 §5.1 迭代里另起第二个 review loop。§5.1 在该轮内**暂停第 4 步的 review 修复分派与第 6 步的 push**——这两项由该 loop 一并执行（§5.1a 仍逐次适用，单一 pusher，避免同一 head 两个推手）。**第 5 步的 required-CI 修复保留**：可由 §5.1 本地开工，但其 push 同样走该 loop 的批（§5.1a），不得另起第二推手。§5.1 仍负责 mergeable 与 required-CI 观测。§5.3 读取该 loop 在当前 PR head 上最终 settled、已 posted 的 `ship it` 报告作为授权。`reviewed-bot`：**不**起任何本地 review loop——挂载的 bot 按其自身触发模式（push 触发或手动触发）产出 review，§5.1 只监控该 review 是否已落到当前 head 并达到其自身门（§5.1b），其 findings 走第 4 步普通第三方 triage，push 仍守 §5.1a。`owner-gated`：**完全**不起 PR 级 review loop，**人类 owner** 的 review 就是 gate，Phase 5 停在 merge-ready 等其书面批准
 4. **Reviews** — `reviewed-auto`：fetch unresolved threads；triage；dispatch **本地**修复（可在上一波次仍在跑时开工）。`reviewed-bot`：读 bot 在当前 head 上的证据并按 §5.1b Bot evidence 取全量 findings——整体 review comment（全部 finding 块，含被折叠的 omitted 声明）、anchored line comments（行内副本，即可 resolve 的 thread）、`mstar-inspector review` check（结论与 summary）；**不要**只 fetch threads 就当作该 head 的全部 findings。triage 与本地修复同本地路径，bot 已自行 resolve 的线程不重复处理。
 5. **CI** — 失败项在 PR 范围内**本地**修复（可提前开工）；**不**在 CI 仍在跑时 push
 6. **Push** — 仅当 §5.1a 满足：无 in-flight CI，上一波 CI **与** reviews 均已跑完 → **一次** push 本批修复
-7. **Review fix hygiene**（每次 push 后；`reviewed-auto` 轮内即该 loop 的那次 push，`reviewed-bot` 下即触发 bot 新 review 的那次 push）：
+7. **Review fix hygiene**（每次 push 后；`reviewed-auto` 轮内即该 loop 的那次 push，`reviewed-bot` 下即 bot 按自身触发模式开始下一轮的那次 push——手动触发时为该 bot 的文档化重触发）：
    - 在同 thread **comment**（改动 + 验证）
    - **Resolve** when addressed
 8. Return to step 1（CI 结束后若出现 **新** reviews → 继续本地修，再等 idle 后 push）
