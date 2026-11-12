@@ -40,38 +40,20 @@ function args(argv: readonly string[]): { action: string; root: string; shard?: 
   if (!root || !isAbsolute(root)) return fail("--root must be an explicit absolute authorized-view path");
   return { action, root: realpathSync(root), ...(shard ? { shard } : {}), ...(seat ? { seat } : {}) };
 }
-// A supported filesystem failure — at resolution or at the read itself — names the artifact
-// relatively; anything else (a parse error, a programming error) keeps its own identity.
-const UNREADABLE_ARTIFACT_CODES: Record<string, true> = { ENOENT: true, EACCES: true, ENOTDIR: true, EISDIR: true, EPERM: true };
-// A missing artifact has two causes CI must tell apart without echoing host paths: the run root
-// itself is gone, or the directory is intact and the entry (or a whole subdirectory) is absent.
-// Only a lost root earns its own code; every other case keeps jev.artifact-missing with the
-// relative name, plus the basename and entry count of the directory that was searched.
-function unreadableToMissing<T>(root: string, rel: string, run: () => T): T {
-  try { return run(); }
-  catch (error) {
-    const code = (error as NodeJS.ErrnoException).code ?? "";
-    if (UNREADABLE_ARTIFACT_CODES[code] !== true) throw error;
-    const directory = dirname(resolve(root, rel)), name = basename(directory);
-    if (code === "ENOENT" && !existsSync(directory)) {
-      if (directory === resolve(root)) return fail(`jev.artifact-root-missing: ${rel} (run root ${name} does not exist)`);
-      return fail(`jev.artifact-missing: ${rel} (directory ${name} does not exist)`);
-    }
-    if (code !== "ENOENT") return fail(`jev.artifact-missing: ${rel}`);
-    const entries = (() => { try { return `${readdirSync(directory).length} entries`; } catch { return "an unreadable listing"; } })();
-    return fail(`jev.artifact-missing: ${rel} (directory ${name} holds ${entries})`);
-  }
-}
 function artifactPath(root: string, rel: string, invalidMessage: string): string {
   if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) return fail(invalidMessage);
-  return unreadableToMissing(root, rel, () => realpathSync(resolve(root, rel)));
+  try { return realpathSync(resolve(root, rel)); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "EACCES" || code === "ENOTDIR") return fail(`jev.artifact-missing: ${rel}`);
+    throw error;
+  }
 }
 function readArtifact(root: string, rel: string): string {
   const canonical = artifactPath(root, rel, "Invalid artifact path"), relPath = relative(root, canonical);
-  return unreadableToMissing(root, rel, () => {
-    if (relPath === ".." || relPath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || !statSync(canonical).isFile() || statSync(canonical).size > 16_777_216) return fail("Artifact outside authorized root or exceeds limit");
-    return readFileSync(canonical, "utf8");
-  });
+  if (relPath === ".." || relPath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || !statSync(canonical).isFile() || statSync(canonical).size > 16_777_216) return fail("Artifact outside authorized root or exceeds limit");
+  // simplify: reads stay untranslated — translating them caused an end-to-end regression (I-001095).
+  return readFileSync(canonical, "utf8");
 }
 function readJson<T>(root: string, rel: string): T {
   return JSON.parse(readArtifact(root, rel)) as T;
@@ -82,10 +64,8 @@ function readJsonLines<T>(root: string, rel: string): T[] {
 function digest(bytes: Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
 function fileDigest(root: string, rel: string): string {
   const canonical = artifactPath(root, rel, "Manifest path invalid"), relPath = relative(root, canonical);
-  return unreadableToMissing(root, rel, () => {
-    if (relPath === ".." || relPath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || !statSync(canonical).isFile()) return fail("Manifest path escapes authorized root");
-    return digest(readFileSync(canonical));
-  });
+  if (relPath === ".." || relPath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || !statSync(canonical).isFile()) return fail("Manifest path escapes authorized root");
+  return digest(readFileSync(canonical));
 }
 type Manifest = { schema: string; contractRevision: string; files?: Array<{ path: string; sha256: string }> };
 type Corpus = { groups: Array<{ id: string; split: string; sourceSlot?: string; lineageId: string; causalClusterId: string; eligible?: boolean; quarantined?: boolean; quarantineReason?: string; variants: Array<{ id: string; sourceVariant?: string; itemDigest?: string; sourceSha256?: string; primary?: boolean }> }> };
