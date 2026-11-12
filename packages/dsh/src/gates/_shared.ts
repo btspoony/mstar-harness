@@ -399,8 +399,7 @@ export function joinCapped<T>(items: readonly T[], cap: number, separator: strin
  * Resolve the hard-enforcement flag for the artifact gates: explicit
  * Config override wins, else the repo `.mstarc` `[config] enforcement`,
  * else the iteration compass frontmatter (when a harness dir resolves),
- * else warn-only. {@link resolveHard} parity with a
- * null-tolerant harness dir — the skill roots and the artifact
+ * else warn-only. Null-tolerant in the harness dir — the skill roots and the artifact
  * seams (design-md / audit / compound / roles) do not require
  * `{HARNESS_DIR}` (compound scoping is the only seam that does, and only
  * for its knowledge-path matcher).
