@@ -240,6 +240,17 @@ test("an empty readable tail after native activity imports zero rows and leaves 
   } finally { store.close(); }
 });
 
+test("a readable empty tail discloses zero physical rows when an unreadable journal refuses it", async () => {
+  const { context, workflow } = await fixture("empty-tail-refused");
+  writeFileSync(join(workflow, "agent-flow.jsonl"), "");
+  writeFileSync(join(workflow, "agent-flow-ids.jsonl"), '{"id":"ev","d":"d"}\n');
+  // A symlinked journal is not a readable regular file, so the empty tail still refuses.
+  writeFileSync(join(context.harnessDir, "elsewhere-empty.json"), "{}");
+  symlinkSync(join(context.harnessDir, "elsewhere-empty.json"), join(workflow, "agent-flow-compaction.json"));
+  await expect(importDshHostStateFiles({ context, operator: "fixture", operationId: "empty-tail-refused" }))
+    .rejects.toMatchObject({ code: "store.upgrade-dsh-source-refused", message: expect.stringContaining("dsh-ledger:wf-empty-tail-refused: tail rows (0)") });
+});
+
 test("an unreadable tail or a journal without a tail refuses by default and recovers with a scoped acknowledgement", async () => {
   // Unreadable FLOW: a symlinked tail is not a readable regular file.
   const a = await fixture("unreadable-tail");

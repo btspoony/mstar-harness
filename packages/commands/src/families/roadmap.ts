@@ -4,7 +4,6 @@ import path from "node:path";
 import {
   RoadmapError,
   importRoadmapAuthority,
-  parseRoadmapContent,
   queryDashboard,
   readRoadmapAuthority,
   replaceRoadmapAuthority,
@@ -168,11 +167,9 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
     const verb = id.slice("roadmap.".length);
     if (verb === "show") {
       const read = await readRoadmapAuthority(context, usage(input.project, "--project"));
-      // The parsed projections are DERIVED from the stored body, never a
-      // second authority: the roadmap record above stays the source the
-      // content came from (the parse is a read of it, A02).
-      const content = read.roadmap === null ? null : parseRoadmapContent(read.roadmap.contentMarkdown);
-      return success(id, { projectId: read.projectId, projectRevision: read.projectRevision, roadmap: read.roadmap, content });
+      // `content` is the same read's validated parse of `roadmap.contentMarkdown`,
+      // a projection of the stored record rather than a second authority (A02).
+      return success(id, { projectId: read.projectId, projectRevision: read.projectRevision, roadmap: read.roadmap, content: read.roadmap === null ? null : read.content });
     }
     if (verb === "import") {
       if (input.apply) {

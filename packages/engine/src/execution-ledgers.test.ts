@@ -79,8 +79,10 @@ const PLAN_ID = "p-1";
 const COORDINATOR_ID = "host-notes";
 const LEGACY_NOTE_TS = "2026-09-01T00:00:00.000Z";
 
+const LEGACY_TEXT = "legacy migrated note";
+
 /** One migrated historical line, exactly as `migrate.ts` serialized it. */
-const LEGACY_LINE = `${JSON.stringify({ kind: "note", ts: LEGACY_NOTE_TS, text: "legacy migrated note" })}\n`;
+const LEGACY_LINE = `${JSON.stringify({ kind: "note", ts: LEGACY_NOTE_TS, text: LEGACY_TEXT })}\n`;
 
 /** The retained legacy snapshot of this workflow, with inline row notes. */
 const LEGACY_SNAPSHOT = `${JSON.stringify(
@@ -1111,12 +1113,13 @@ describe("execution-ledgers: compaction at the ledger size ceiling", () => {
     let injected = false;
     // The ordinary append is lock-free, so a peer frame can reach the leaf after
     // the compactor took its snapshot. Landing it deterministically inside that
-    // window is what proves the rewrite is abandoned instead of overwriting it.
+    // window — after the compactor's own read of the leaf completes — is what
+    // proves the rewrite is abandoned instead of overwriting it.
     const spy = spyOn(nodeFs, "readFileSync").mockImplementation(((...args: Parameters<typeof nodeFs.readFileSync>) => {
       const bytes = originalReadFileSync(...args);
-      if (!injected && typeof args[0] === "string" && args[0].endsWith("notes.jsonl")) {
+      if (!injected && typeof args[0] === "number" && fdNamesPath(args[0], fixture.ledgerPath)) {
         injected = true;
-        nodeFs.appendFileSync(args[0], framedLineOf(peer));
+        nodeFs.appendFileSync(fixture.ledgerPath, framedLineOf(peer));
       }
       return bytes;
     }) as typeof nodeFs.readFileSync);
@@ -1181,9 +1184,9 @@ describe("execution-ledgers: compaction at the ledger size ceiling", () => {
     // The peer frame lands BEFORE the snapshot is taken, so the compaction does
     // publish — and the trigger is then an interior line over the budget.
     const spy = spyOn(nodeFs, "readFileSync").mockImplementation(((...args: Parameters<typeof nodeFs.readFileSync>) => {
-      if (!injected && typeof args[0] === "string" && args[0].endsWith("notes.jsonl")) {
+      if (!injected && typeof args[0] === "number" && fdNamesPath(args[0], fixture.ledgerPath)) {
         injected = true;
-        nodeFs.appendFileSync(args[0], framedLineOf(peer));
+        nodeFs.appendFileSync(fixture.ledgerPath, framedLineOf(peer));
       }
       return originalReadFileSync(...args);
     }) as typeof nodeFs.readFileSync);
@@ -1200,5 +1203,90 @@ describe("execution-ledgers: compaction at the ledger size ceiling", () => {
     // now sits after it and it alone exceeds the read window.
     expect(byId.get(target.id)?.text).toBe(target.text);
     expect(byId.has(peer.id)).toBe(true);
+  }, 30_000);
+
+  test("a failed compacted write says the triggering note already landed and never asks for a duplicate append", async () => {
+    const fixture = shared;
+    const lineBytes = Buffer.byteLength(LEGACY_LINE, "utf8");
+    const seededLines = Math.ceil(WORKFLOW_NOTES_LEDGER_MAX_BYTES / lineBytes) + 1;
+    fixture.seed({ ledger: LEGACY_LINE.repeat(seededLines) });
+    const target = note("note-compacted-write-fails", "triggering note whose compaction cannot write");
+    // The triggering frame's own write succeeds; every write after it belongs to
+    // the compaction's temporary file and fails short, so the only refusal this
+    // case observes is the compacted-write failure.
+    let frameLanded = false;
+    const spy = spyOn(nodeFs, "writeSync").mockImplementation(((fd: number, buffer: Buffer, offset: number, length: number, position: number | null) => {
+      if (frameLanded) return 0;
+      const written = realWriteSync(fd, buffer, offset, length, position);
+      if (fdNamesPath(fd, fixture.ledgerPath)) frameLanded = true;
+      return written;
+    }) as never);
+    let refusal: { code: string; message: string };
+    try {
+      refusal = await refusalOf(() => appendWorkflowNote(fixture.coordContext, fixture.session, target));
+    } finally {
+      spy.mockRestore();
+    }
+    expect(refusal.code).toBe("execution-ledgers.append-short");
+    // The frame this call committed is retained: the reader still finds the
+    // receipted note whole, on top of the seeded history, with no compaction
+    // disclosure and no second copy of it.
+    const facts = factsOf(fixture);
+    expect(facts.counts).toEqual({ historical: seededLines, records: 1, unrecognized: 0 });
+    expect(facts.records.map((entry) => entry.record.id)).toEqual([target.id]);
+    expect(facts.records[0]!.record.text).toBe(target.text);
+    expect(facts.compaction).toBeNull();
+    // The text must not invite the duplicate the landed frame makes possible.
+    const meaning = refusal.message.toLowerCase();
+    expect(meaning).toContain("already landed");
+    expect(meaning).not.toMatch(/new record id|retry the append/);
+  }, 30_000);
+
+  test("compaction reads the leaf through the trust-checked open, so a leaf rotated to a link refuses", async () => {
+    // Its own store: this case leaves the leaf rotated to a link, and the shared
+    // fixture must stay usable by every other case.
+    const fixture = await notesFixture("read-trust");
+    const lineBytes = Buffer.byteLength(LEGACY_LINE, "utf8");
+    fixture.seed({ ledger: LEGACY_LINE.repeat(Math.ceil(WORKFLOW_NOTES_LEDGER_MAX_BYTES / lineBytes) + 1) });
+    // The link target is short and inside the ceiling: a `readFileSync` of the
+    // leaf would follow it, classify it, see nothing to compact and return as if
+    // it had read the ledger. That is the failure this open exists to stop.
+    const outside = join(fixture.harnessDir, "outside-notes.jsonl");
+    writeFileSync(outside, LEGACY_LINE);
+    const target = note("note-read-trust", "triggering note whose leaf is rotated to a link");
+    const realOpenSync = nodeFs.openSync;
+    const { O_WRONLY } = nodeFs.constants;
+    let frameLanded = false;
+    let rotated = false;
+    const writeSpy = spyOn(nodeFs, "writeSync").mockImplementation(((fd: number, buffer: Buffer, offset: number, length: number, position: number | null) => {
+      const written = realWriteSync(fd, buffer, offset, length, position);
+      if (fdNamesPath(fd, fixture.ledgerPath)) frameLanded = true;
+      return written;
+    }) as never);
+    // The rotation lands exactly at the compaction's own read open: the leaf the
+    // commit fsynced is replaced by a link before that open runs.
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((path: Parameters<typeof nodeFs.openSync>[0], flags: Parameters<typeof nodeFs.openSync>[1], mode?: Parameters<typeof nodeFs.openSync>[2]) => {
+      if (!rotated && frameLanded && path === fixture.ledgerPath && (Number(flags) & O_WRONLY) === 0) {
+        rotated = true;
+        nodeFs.unlinkSync(fixture.ledgerPath);
+        nodeFs.symlinkSync(outside, fixture.ledgerPath);
+      }
+      return mode === undefined ? realOpenSync(path, flags) : realOpenSync(path, flags, mode);
+    }) as never);
+    let refusal: { code: string };
+    try {
+      refusal = await refusalOf(() => appendWorkflowNote(fixture.coordContext, fixture.session, target));
+    } finally {
+      writeSpy.mockRestore();
+      openSpy.mockRestore();
+    }
+    expect(rotated).toBe(true);
+    expect(refusal.code).toBe("execution-ledgers.target-untrusted");
+    // Nothing was rewritten through the link: the target still reads as its one
+    // untouched legacy note, with no compaction disclosure over it.
+    const outsideFacts = normalizeWorkflowNotesCoverage({ workflowId: WF, path: outside, bytes: readFileSync(outside) });
+    expect(outsideFacts.counts).toEqual({ historical: 1, records: 0, unrecognized: 0 });
+    expect(outsideFacts.historical[0]!.record?.text).toBe(LEGACY_TEXT);
+    expect(outsideFacts.compaction).toBeNull();
   }, 30_000);
 });
