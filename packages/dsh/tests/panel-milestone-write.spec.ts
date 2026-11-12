@@ -499,6 +499,45 @@ describe('the client surface — one request per write, arguments intact', () =>
     })
     expect(gateway.calls[0]!.endpoint).toBe(MILESTONE_UPDATE_ENDPOINT)
   })
+
+  it("keeps a `gateway/*` envelope code from the transport, and degrades every other envelope code", async () => {
+    const gateway = stubGateway(
+      { ok: false, error: { code: 'gateway/timeout', message: 'gateway closed' } },
+      { ok: false, error: { message: 'gateway closed' } },
+      { ok: false, error: { code: 'milestone.invalid-input', message: '[milestone.invalid-input] name must not be empty.' } },
+    )
+    const client = new MstarPanelSnapshotClient(gateway.connection)
+    const transport = await client.milestoneAdd({
+      sessionId: 's-1',
+      cwd: '/proj',
+      projectId: '_default',
+      input: { name: '', target: null, ordinal: 0 },
+      mutation: { operationId: 'op-client-3', expectedStoreRevision: 7 },
+    })
+    expect(transport).toEqual({ ok: false, code: 'gateway/timeout', message: 'gateway closed' })
+    const noCode = await client.milestoneAdd({
+      sessionId: 's-1',
+      cwd: '/proj',
+      projectId: '_default',
+      input: { name: 'Third', target: null, ordinal: 2 },
+      mutation: { operationId: 'op-client-4', expectedStoreRevision: 7 },
+    })
+    expect(noCode).toEqual({ ok: false, code: 'transport-error', message: 'gateway closed' })
+    // An engine-domain code that arrives on the envelope is not the transport's
+    // verdict: the write stays ambiguous so the retry channel keeps its id.
+    const foreign = await client.milestoneAdd({
+      sessionId: 's-1',
+      cwd: '/proj',
+      projectId: '_default',
+      input: { name: 'Fourth', target: null, ordinal: 3 },
+      mutation: { operationId: 'op-client-5', expectedStoreRevision: 7 },
+    })
+    expect(foreign).toEqual({
+      ok: false,
+      code: 'transport-error',
+      message: '[milestone.invalid-input] name must not be empty.',
+    })
+  })
 })
 
 describe('milestoneAssign — engine authorization passes through verbatim', () => {

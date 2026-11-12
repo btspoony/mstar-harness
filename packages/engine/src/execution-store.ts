@@ -1334,6 +1334,99 @@ export async function readExecutionState(context: StoreContext): Promise<Executi
   }));
 }
 
+/**
+ * One ACTIVE lifecycle reduced to the facts branch-ownership collection reads
+ * (`collectActiveLifecycleBranches`): the workflow id, its branch anchors and
+ * each plan row's identity plus the branch metadata. `branch` and `metadata`
+ * are passed through verbatim so the collection's own shape guards decide.
+ */
+export type ActiveLifecycleBranchDoc = {
+  id: string;
+  branch?: unknown;
+  plans: Array<{ id: string; metadata?: unknown }>;
+};
+
+/**
+ * §3 the branch-ownership projection of the ACTIVE graph: the same registry
+ * membership, workflow headers and plan rows `readExecutionState` reads, with
+ * only the columns branch ownership uses. Tokens, coordination blocks, merge
+ * leases, sessions, frozen inputs and terminal receipts are NOT read, so cost
+ * follows the ownership question (workflows × plan rows) instead of the whole
+ * graph. Refusals are the same vocabulary as `readExecutionState`
+ * (`execution.not-active`, `store.corrupt`) for every row it does read; a
+ * damaged column this projection does not read is not surfaced here.
+ */
+export async function readActiveLifecycleBranchDocs(context: StoreContext): Promise<ActiveLifecycleBranchDoc[]> {
+  return withExecutionReadTransaction(context, (tx) => {
+    const registry = tx.db
+      .prepare("select workflow_id, entry_json from execution_registry order by rowid")
+      .all() as Array<{ workflow_id?: unknown; entry_json?: unknown }>;
+    const docs: ActiveLifecycleBranchDoc[] = [];
+    for (const row of registry) {
+      const workflowId = storedText(row.workflow_id, "execution_registry.workflow_id");
+      const entry = storedJsonObject(row.entry_json, `execution_registry(${workflowId}).entry_json`);
+      const entryValidation = validateWorkflowEntry(entry);
+      if (!entryValidation.ok) {
+        throw validationRefusal(`execution_registry(${workflowId}).entry_json`, entryValidation.violations);
+      }
+      if (entry.id !== workflowId) {
+        throw corrupt(`execution_registry(${workflowId}).entry_json carries id ${JSON.stringify(entry.id)}`);
+      }
+      const header = tx.db
+        .prepare("select state_json from execution_workflows where workflow_id = ?")
+        .get(workflowId) as { state_json?: unknown } | undefined;
+      if (!header) {
+        throw corrupt(`execution_registry lists workflow ${workflowId} without an execution_workflows row`);
+      }
+      const state = storedJsonObject(header.state_json, `execution_workflows(${workflowId}).state_json`);
+      if (state.id !== workflowId) {
+        throw corrupt(
+          `execution_workflows(${workflowId}).state_json carries id ${JSON.stringify(state.id)} and does not describe its own key`,
+        );
+      }
+      // §2.2 owned members stay refused rather than silently dropped.
+      if (state.plans !== undefined || state.integration_merge_lease !== undefined || state.coordinator_session !== undefined) {
+        throw corrupt(
+          `execution_workflows(${workflowId}).state_json carries plans/integration_merge_lease/coordinator_session, which are owned by ` +
+            `execution_plans/execution_integration_leases/execution_sessions`,
+        );
+      }
+      const workflowValidation = validateWorkflowSnapshot({ ...state, plans: [] });
+      if (!workflowValidation.ok) {
+        throw validationRefusal(`execution_workflows(${workflowId}).state_json`, workflowValidation.violations);
+      }
+      const planRows = tx.db
+        .prepare("select plan_id, state_json from execution_plans where workflow_id = ? order by ordinal")
+        .all(workflowId) as Array<{ plan_id?: unknown; state_json?: unknown }>;
+      const plans: ActiveLifecycleBranchDoc["plans"] = [];
+      for (const planRow of planRows) {
+        const planId = storedText(planRow.plan_id, `execution_plans(${workflowId}).plan_id`);
+        const planState = storedJsonObject(planRow.state_json, `execution_plans(${workflowId},${planId}).state_json`);
+        // §2.2 owned members stay refused rather than silently dropped (same
+        // rule `readWorkflowView` applies to the same row).
+        if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
+          throw corrupt(
+            `execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned ` +
+              `by coordination_json, not by the row state`,
+          );
+        }
+        if (planState.id !== planId) {
+          throw corrupt(
+            `execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`,
+          );
+        }
+        const planValidation = validatePlanRow(planState);
+        if (!planValidation.ok) {
+          throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, planValidation.violations);
+        }
+        plans.push({ id: planId, metadata: planState.metadata });
+      }
+      docs.push({ id: workflowId, branch: state.branch, plans });
+    }
+    return docs;
+  });
+}
+
 /** One governing plan-row candidate projected from the ACTIVE graph. */
 export type ExecutionPlanRowMatch = {
   workflowId: string;

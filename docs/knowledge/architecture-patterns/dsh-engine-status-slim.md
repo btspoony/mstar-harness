@@ -1,7 +1,7 @@
 ---
 module: @mstar-harness/dsh
 date: 2026-08-20
-last_updated: 2026-11-09
+last_updated: 2026-11-12
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: medium
@@ -26,11 +26,11 @@ v3.1.0 capped plan/lease joins (8/4) but the digest was still a repo-wide summar
 
 - Surface: `engineStatusSummary` in `packages/dsh/src/gates/system-prompt.ts` only. Do **not** change `renderEngineStatusCatalog` / pre-step `<mstar_engine_status>`.
 - Idle (no harness, empty `workflows[]`, `selection.kind !== 'active'`): exactly `mstar engine status: v<version>`.
-- Active: second line `workflow <id> (<type>) <status> | plans: <non-Done id(status), cap 8 + +N more | none>`.
+- Active: second line `workflow <id> (<type>) <status> | plans: <non-Done id(status), cap 8 + +N more | none registered>`; the plans segment comes from `plansSegment` in `packages/dsh/src/gates/catalog.ts`, the one assembler the pre-step row also renders, so both surfaces share the wording (`none registered` for an empty registry, `all done` when every plan is Done) and differ only in their cap.
 - Omit residuals, leases, direction, iteration-gate, harness, enforcement from this context (harness/enforcement live in `mstar:harness-rules`).
 - Keep `buildCatalogSources`; renderer ignores non-`active` selection. Trust `workflows[]`; stale-registered terminal snapshots show the snapshot's own status word. Missing snapshot → version-only, no throw.
 - Fields `MstarHarnessState.workflowType` / `workflowStatus` are ALWAYS-present nullable, filled from the already-read snapshot.
-- `DIGEST_PLAN_CAP = 8` (module-private) + the shared `joinCapped` apply **after** the non-Done filter, with the final `+N more` marker. `DIGEST_LEASE_CAP` is gone from the digest. The digest's own cap stays private; the catalog renderer uses its own `CATALOG_STATE_JOIN_LIMIT` and both import `joinCapped` from `gates/_shared.ts`, so the old `system-prompt.ts → catalog.ts` import direction (and its cycle) no longer applies.
+- `DIGEST_PLAN_CAP = 8` (module-private) is passed to `plansSegment` in `gates/catalog.ts`, which applies the non-Done filter and the shared `joinCapped` from `gates/_shared.ts` with the final `+N more` marker. `DIGEST_LEASE_CAP` is gone from the digest. The digest's own cap stays private; the catalog renderer uses its own `CATALOG_STATE_JOIN_LIMIT`. `joinCapped` itself still lives in `_shared.ts`, so neither surface imports it directly from the other; the `system-prompt.ts → catalog.ts` direction now carries `plansSegment` (a value import, no cycle: `catalog.ts` never imports `system-prompt.ts`).
 
 ## What Didn't Work
 

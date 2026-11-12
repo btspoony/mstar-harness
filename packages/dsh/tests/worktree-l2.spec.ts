@@ -45,6 +45,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { mkdir, mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { readActiveLifecycleBranchDocs, storeDbPath } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
@@ -749,6 +751,61 @@ Do the thing, evidence-first.
     expect(advisories).toHaveLength(1)
     const codes = violationCodes(advisories[0])
     expect(codes).toContain('worktree.main.residency-switched')
+  })
+
+  it('a SIBLING lifecycle owns the main worktree branch → worktree.main.residency-switched (every active lifecycle is collected)', async () => {
+    const root = tmpRoot('dsh-wt-l1-sibling-')
+    seedL1Topology(root)
+    // The branch main sits on is owned by the OTHER active lifecycle's plan
+    // row only — the governing snapshot records no claim on it. Dropping
+    // sibling lifecycles from the ownership collection hides this collision.
+    git(['checkout', '-q', '-b', 'feature/sibling'], root)
+    const app = booted = await bootApp({ root, dispatchBinding: 'qc-specialist' })
+    const advisories = captureAdvisories(app.ctx)
+    await seedL1Snapshot(app.harnessDir, { branch: { base: 'main' } }, planWithScope(join(root, 'wt-a'), 'feature/a'))
+    await seedActiveWorkflow(
+      app.harnessDir,
+      'wf-2',
+      [{ id: 'sibling-plan', title: 'Sibling plan', status: 'Todo', metadata: { track_branches: ['feature/sibling'] } }],
+      { branch: { base: 'main' } },
+      'seed-wf-2',
+      root,
+      'wf-2',
+    )
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(join(root, 'wt-a'))), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(1)
+    const ownership = advisories[0]!.result.violations
+      .filter((v) => v.code === 'worktree.main.residency-switched')
+      .map((v) => v.message)
+    expect(ownership.some((message) => message.includes('owned by workflow wf-2'))).toBe(true)
+  })
+
+  it('a plan row state carrying coordination is refused, never trusted as the row state', async () => {
+    const root = tmpRoot('dsh-wt-l1-plan-owned-')
+    seedL1Topology(root)
+    const harnessDir = join(root, 'harness')
+    await seedActiveWorkflow(harnessDir, 'wf-1', [planWithScope(join(root, 'wt-a'), 'feature/a')], { branch: { base: 'main' } }, 'seed-wf-1', root, 'wf-1')
+    // A second authority written into the row state must refuse the whole
+    // projection: silently reading it would let a stale `state_json` coordinate.
+    const db = new DatabaseSync(storeDbPath({ harnessDir }))
+    try {
+      db.prepare('update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?').run(
+        JSON.stringify({ id: 'l1-plan', title: 'L1 fixture', file: 'plans/l1-plan.md', status: 'InProgress', coordination: { prepared: true } }),
+        'wf-1',
+        'l1-plan',
+      )
+    } finally {
+      db.close()
+    }
+    const refusal = await readActiveLifecycleBranchDocs({ harnessDir }).then(
+      () => null,
+      (error: unknown) => error as { code?: string; message?: string },
+    )
+    expect(refusal?.code).toBe('store.corrupt')
+    expect(refusal?.message).toContain('coordination/execution_lease')
   })
 
   // Disposition — removed unreadable sibling snapshot coverage; ACTIVE workflow state is validated in the execution database, not by scanning snapshot.json files.

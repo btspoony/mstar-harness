@@ -21,7 +21,7 @@ import {
   applyEnforcement,
   assignmentHeaderRegion,
   collectActiveLifecycleBranches,
-  readExecutionState,
+  readActiveLifecycleBranchDocs,
   composeDispatchGate,
   executionModeToN,
   isReadOnlyAssignmentRole,
@@ -600,12 +600,7 @@ async function worktreeL1Violations(
   if (!rowWorktreePath || !rowWorkingBranch) return []
   const snapshot = read.snapshot
   try {
-    const graph = (await readExecutionState({ harnessDir })).data
-    const lifecycleSnapshots = graph.workflows.map((workflow) => ({
-      ...workflow.state,
-      plans: workflow.plans.map(({ plan }) => plan),
-    }))
-    const lifecycleBranches = collectActiveLifecycleBranches(lifecycleSnapshots)
+    const lifecycleBranches = collectActiveLifecycleBranches(await readActiveLifecycleBranchDocs({ harnessDir }))
     const expectedMainBranch = assignmentHeaderValue(header, 'Main worktree branch')
       ?? (typeof snapshot.branch?.base === 'string' ? snapshot.branch.base : '')
     return l1PreDispatchCheck({
