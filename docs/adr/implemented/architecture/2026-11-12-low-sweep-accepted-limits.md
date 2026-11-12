@@ -1,6 +1,6 @@
 # ADR: Five store, ledger and annotation limits are accepted at their documented boundary instead of gaining mechanisms
 
-Status: implemented — the limits already hold in the cited modules, so this record is the standing decision the four open reports close against, with `I-000196` accepted under a project-manager waiver.
+Status: implemented — the limits already hold in the cited modules, so this record is the standing decision that accepts them; `I-000196` is carried under a project-manager waiver.
 Date: 2026-11-12
 
 Scope: `executionLifecycleOf` in `packages/engine/src/store-read.ts`, the terminal loop in `packages/engine/src/projection.ts`, `writeLedgerTempFile` in `packages/engine/src/execution-ledgers.ts`, the terminal fixtures in `packages/engine/src/dashboard-view.test.ts` and `packages/engine/src/projection.test.ts`, and the annotation identity fields read by `check-annotations` in `packages/judgment/scripts/evaluate.ts`.
@@ -51,7 +51,7 @@ The terminal loop reads every terminal header in the served graph unconditionall
 
 `packages/judgment/src/annotation-seat-gate.ts` emits `seat`, `shard` and `sessionId`; nothing in this repository writes `model` or `assistance`, and `assistance` has no defined meaning in this tree.
 
-**Reason:** `check-annotations` cannot enforce fields no producer emits, and the landing step the acceptance names does not exist. Populating them would mean inventing identity metadata. The acceptance stays unsatisfied; this record recommends a project-manager waiver of the landing-step population and of `check-annotations` enforcement for those two fields. It is not a resolution and must not be recorded as one.
+**Reason:** `check-annotations` cannot enforce fields no producer emits, and the landing step the acceptance names does not exist. Populating them would mean inventing identity metadata. The acceptance stays unsatisfied; a project-manager waiver of the landing-step population and of `check-annotations` enforcement for those two fields is accepted. It is not a resolution and must not be recorded as one.
 
 **What would change the decision:** a producer for `model` or `assistance` is defined — for example annotation writers that know the model and the assistance level they ran under. Then the acceptance is met by that producer and the waiver is withdrawn.
 
@@ -65,7 +65,7 @@ The terminal loop reads every terminal header in the served graph unconditionall
 ## Consequences
 
 - The ADR gate accepts this record under `implemented/architecture/`: `mstar lint docs/adr --type adr` and `bun scripts/adr-check.ts` (Guard 12) pass with it there, and it names `I-000906`, `I-000907`, `I-000913`, `I-000939` and `I-000196`.
-- The four open reports close with a closure note citing this record; `I-000196` remains waived with its acceptance still unsatisfied, and its closure note says so.
+- `I-000906`, `I-000907`, `I-000913` and `I-000939` are closed as accepted observations, with no mechanism added for them; `I-000196` remains waived with its acceptance still unsatisfied.
 - The module comments that cite this path name the same five boundaries; no source change adds a knob, lifecycle value, sweep or fixture rewrite for them.
 - These limits are documented, not enforced. Nothing fails if a future change adds the retention knob or lets a fixture drift, so each reversal condition above is a review obligation rather than a gate.
 - The costs are real and accepted: refresh time grows with terminal history, crashed compactions leave dead temporaries, an unregistered non-terminal row reads as active, raw-SQL fixtures can encode state no writer produces, and blind-independence attribution for annotation rows depends on supervisor transcripts rather than the rows.
