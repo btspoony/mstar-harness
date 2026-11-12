@@ -42,8 +42,8 @@ if [ "\${LC_ALL:-}" = C ]; then
   if [ -f "$dir/.git" ]; then echo "fatal: invalid gitfile format: $dir/.git" >&2
   else echo "fatal: not a git repository (or any parent): .git" >&2; fi
 else
-  if [ -f "$dir/.git" ]; then echo "fatal: ungültiges Gitfile-Format: $dir/.git" >&2
-  else echo "fatal: Kein Git-Repository (und kein übergeordnetes Verzeichnis): .git" >&2; fi
+  if [ -f "$dir/.git" ]; then echo "fatal: Ungueltiges Gitfile-Format: $dir/.git" >&2
+  else echo "fatal: Kein Git-Repository (und kein uebergeordnetes Verzeichnis): .git" >&2; fi
 fi
 exit 128
 `,

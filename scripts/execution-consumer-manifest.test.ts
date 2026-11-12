@@ -347,17 +347,14 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "packages/omp/hooks",
     ]);
 
-    // The public entry surface includes DSh's `./client` build output — which is
-    // deliberately NOT in this closure: its bytes belong to its declared producer
-    // (`packages/dsh/scripts/build-client-bundle.ts`, inside the source closure
-    // below), so the manifest names it as an exclusion of the dist tree instead
-    // of pinning it. The rest of the dist closure stays byte-pinned.
+    // DSh's whole `dist` closure is deliberately empty here: rebuilding it
+    // changes `index.js`/`invariant.js` bytes even on one machine, so a digest
+    // would record the builder, not the source. Integrity for this consumer is
+    // its source closure plus the entrypoint existence proof; `dist/client.js`
+    // keeps its own re-derivation proof outside this manifest.
     const dsh = manifest.consumers.find((consumer) => consumer.id === "dsh");
-    expect(dsh?.generated.files.map((file) => file.path)).toEqual([
-      "packages/dsh/dist/index.js",
-      "packages/dsh/dist/invariant.js",
-    ]);
-    expect(dsh?.generated.trees[0]?.exclude).toEqual(["client.js", "execution-consumer.json"]);
+    expect(dsh?.generated.files).toEqual([]);
+    expect(dsh?.generated.trees).toEqual([]);
     expect(dsh?.sources.trees.map((tree) => tree.root)).toEqual([
       "packages/dsh/scripts",
       "packages/dsh/src",
@@ -421,7 +418,7 @@ describe("execution-consumer-manifest — canonical collection", () => {
 
     const missingDsh = buildFixture();
     unlinkSync(join(missingDsh, "packages/dsh/dist/index.js"));
-    expectRefusal(() => collectExecutionConsumerManifest(missingDsh), "consumer.path-missing");
+    expectRefusal(() => collectExecutionConsumerManifest(missingDsh), "consumer.generated-missing");
   });
 
   test("accepts an empty generated closure for a consumer that declares one, and still proves its entrypoint", () => {
@@ -506,10 +503,18 @@ describe("execution-consumer-manifest — verification refusals", () => {
     writeFileSync(join(clientDrift, "packages/dsh/dist/client.js"), "// stale client bundle\n");
     verifyExecutionConsumerManifest(clientManifest);
 
+    // Rebuilding or editing DSh's `dist` is not drift either: those bytes change
+    // between builds of the same source, so the manifest proves this consumer
+    // through its source closure instead.
     const dshDrift = buildFixture();
     const dshManifest = collectExecutionConsumerManifest(dshDrift);
     writeFileSync(join(dshDrift, "packages/dsh/dist/index.js"), "// stale dsh bundle\n");
-    expectRefusal(() => verifyExecutionConsumerManifest(dshManifest), "consumer.digest-mismatch");
+    verifyExecutionConsumerManifest(dshManifest);
+
+    const dshSourceDrift = buildFixture();
+    const dshSourceManifest = collectExecutionConsumerManifest(dshSourceDrift);
+    writeFileSync(join(dshSourceDrift, "packages/dsh/src/index.ts"), "// edited dsh source\n");
+    expectRefusal(() => verifyExecutionConsumerManifest(dshSourceManifest), "consumer.digest-mismatch");
 
     const mirrorDrift = buildFixture();
     const mirrorManifest = collectExecutionConsumerManifest(mirrorDrift);
