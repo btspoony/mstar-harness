@@ -411,6 +411,13 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   // The nearest declaration that textually precedes the use wins; a scope that binds the name
   // without a preceding declaration shadows outer ones and fails closed. The owning scope comes
   // back with it so writes to that same binding can be attributed.
+  // Bound: position stands in for execution order, so the proof does not cover a conditional or
+  // lazy var re-declaration with an initializer. `var r = dynamic(); if (c) { var r = "<text>"; }
+  // refuse(r)` proves the branch text as if the block always ran, and a loop-body re-declaration
+  // may never execute at all. Declaration initializers are not tracked writes — assignment,
+  // `++`/`--` and `for (x of …)` are — so the earlier text never decides either way. A
+  // straight-line re-declaration stays sound because it always runs, and a read captured by
+  // another function fails closed on any write to the binding anywhere in the file.
   const resolveDeclaration = (scope: Scope | undefined, name: string, useStart: number): { declaration: ts.VariableDeclaration; owner: Scope } | undefined => {
     for (let current = scope; current; current = current.parent) {
       const declarations = current.declarations.get(name);
