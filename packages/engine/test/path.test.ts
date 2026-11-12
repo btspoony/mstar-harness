@@ -53,7 +53,7 @@ import {
 import type { ReviewRunLevel } from "../src/path.js";
 import { readJson } from "../src/core.js";
 import { parseMstarc } from "../src/mstarc.js";
-import { initializeStore, openStore } from "../src/index.js";
+import { initializeStore, openStore, resolveProcessHarnessDir, storeDbPath } from "../src/index.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
@@ -1202,6 +1202,27 @@ describe("scaffoldHarness", () => {
       for (const dir of ["knowledge", "specs", "adr"]) {
         expect(existsSync(join(root, ".agents", dir))).toBe(true);
       }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("store init, catalog register and workflow register resolve the scaffolded {harness}/store.db, not the `plans/` child (I-000270)", async () => {
+    const root = tmpRoot("path-scaffold-store-path-");
+    try {
+      gitInit(root);
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      await scaffoldHarness(root);
+      // The documented `plans/` dir is still scaffolded; the empty child must
+      // not become the store's harness root. Store init, catalog register and
+      // workflow register all resolve the harness this way (an omitted
+      // `--harness`, or the explicit value it resolved to).
+      const harnessDir = realpathSync(join(root, ".mstar"));
+      const discovered = resolveProcessHarnessDir(root);
+      expect(discovered).toBe(harnessDir);
+      expect(storeDbPath({ harnessDir: discovered! })).toBe(join(harnessDir, "store.db"));
+      expect(storeDbPath({ harnessDir: resolveProcessHarnessDir(root, harnessDir)! })).toBe(join(harnessDir, "store.db"));
+      expect(existsSync(join(harnessDir, "plans"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
