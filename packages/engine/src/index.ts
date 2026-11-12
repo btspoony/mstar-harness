@@ -636,6 +636,7 @@ export { upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./store-upg
 // Coordinator-only execution authority: version tokens, registration,
 // current coordinator binding and required workflow/plan reads.
 export type {
+  ActiveLifecycleBranchDoc,
   ExecutionCaller,
   ExecutionContext,
   ExecutionErrorCode,
@@ -653,6 +654,7 @@ export {
   bindExecutionSession,
   createExecutionWorkflow,
   initializeExecutionAuthority,
+  readActiveLifecycleBranchDocs,
   readExecutionPlan,
   readExecutionState,
   serializeExecutionValue,
