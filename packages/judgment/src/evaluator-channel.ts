@@ -15,8 +15,10 @@ export const SUPERVISOR_OUTPUT_MOUNT = "/mnt/output";
 export const SUPERVISOR_REQUESTS_MOUNT = "/mnt/requests";
 export const SUPERVISOR_STATUS_MOUNT = "/mnt/status.json";
 export const SUPERVISOR_SCRATCH_MOUNT = "/mnt/scratch";
-// The generated worker text in scripts/evaluate.ts inlines the source and runtime mounts; a worker string
-// template cannot import this module, and Task 1 owns that file.
+// These paths are also inlined as string literals at three sites in scripts/evaluate.ts —
+// CALIBRATION_RUNTIME, the generated worker's connectEvaluatorChannel workspace, and the worker
+// argv — because a worker string template cannot import this module. Production callers
+// elsewhere read the constants above.
 
 type MailboxRequest = Readonly<{ schema: "mstar.judgment-request/v1"; requestId: string; runId: string; packBytes: string; pilotDigest: string }>;
 type PublicStatus = Readonly<{ schema: "mstar.judgment-status/v1"; runId: string; requestId?: string; status: "idle" | "pending" | "recorded" | "unavailable" | "invalid" | "cancelled"; code?: string }>;
