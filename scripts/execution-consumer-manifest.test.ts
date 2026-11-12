@@ -360,14 +360,15 @@ describe("execution-consumer-manifest — canonical collection", () => {
       "packages/dsh/src",
       "packages/dsh/workflows",
     ]);
-    // ...and engine's declaration output is inside the recorded dist tree.
-    const engineDist = manifest.consumers
-      .find((consumer) => consumer.id === "engine")
-      ?.generated.trees.find((tree) => tree.root === "packages/engine/dist");
-    expect(engineDist?.files).toBe(4);
+    // ...and engine pins no build output either: `dist` bytes depend on the
+    // build environment, so a manifest written here cannot be verified on a
+    // checkout that was never built.
+    const engine = manifest.consumers.find((consumer) => consumer.id === "engine");
+    expect(engine?.generated.files).toEqual([]);
+    expect(engine?.generated.trees).toEqual([]);
+    expect(engine?.entrypoint).toBe("packages/engine/dist/engine.js");
     // The engine's build scripts are part of its input closure: `build.ts` runs
     // the bundle and `debug-esm.ts` is a bundled build input.
-    const engine = manifest.consumers.find((consumer) => consumer.id === "engine");
     expect(engine?.sources.trees.map((tree) => tree.root)).toEqual([
       "packages/engine/scripts",
       "packages/engine/src",
@@ -396,7 +397,7 @@ describe("execution-consumer-manifest — canonical collection", () => {
   test("refuses to collect when build output is missing or empty instead of fabricating parity", () => {
     const missing = buildFixture();
     unlinkSync(join(missing, "packages/engine/dist/engine.js"));
-    expectRefusal(() => collectExecutionConsumerManifest(missing), "consumer.path-missing");
+    expectRefusal(() => collectExecutionConsumerManifest(missing), "consumer.generated-missing");
 
     const emptyArtifact = buildFixture();
     writeFileSync(join(emptyArtifact, "packages/cli/dist/mstar-harness.js"), "");
@@ -451,7 +452,7 @@ describe("execution-consumer-manifest — canonical collection", () => {
     // Only a layout that DECLARES no generated file is relaxed: a consumer
     // that declares generated trees must still have them built.
     const missingTree = buildFixture();
-    rmSync(join(missingTree, "packages/engine/dist"), { recursive: true, force: true });
+    rmSync(join(missingTree, "packages/opencode/dist"), { recursive: true, force: true });
     expectRefusal(() => collectExecutionConsumerManifest(missingTree), "consumer.path-missing");
 
     const emptyDeclaredTree = buildFixture();
@@ -462,7 +463,8 @@ describe("execution-consumer-manifest — canonical collection", () => {
     // A declared artifact can also go missing while its tree stays non-empty:
     // that is still a refusal, never a silently shortened closure.
     const missingDeclaredArtifact = buildFixture();
-    unlinkSync(join(missingDeclaredArtifact, "packages/engine/dist/audit.js"));
+    write(missingDeclaredArtifact, "packages/opencode/dist/chunk.js", "// extra bundle chunk\n");
+    unlinkSync(join(missingDeclaredArtifact, "packages/opencode/dist/mstar.js"));
     expectRefusal(() => collectExecutionConsumerManifest(missingDeclaredArtifact), "consumer.path-missing");
   });
 
@@ -483,12 +485,24 @@ describe("execution-consumer-manifest — verification refusals", () => {
     writeFileSync(join(loaderDrift, ".codex-plugin/mcp.json"), "// stale Codex loader config\n");
     expectRefusal(() => verifyExecutionConsumerManifest(loaderManifest), "consumer.digest-mismatch");
 
-    writeFileSync(join(root, "packages/engine/dist/engine.js"), "// stale engine bundle\n");
-    expectRefusal(() => verifyExecutionConsumerManifest(manifest), "consumer.digest-mismatch");
+    // The engine's `dist` is NOT byte-pinned (its bytes depend on the build
+    // environment), so rewritten bundle or declaration bytes are not drift;
+    // removal of the entrypoint still is.
+    const engineDrift = buildFixture();
+    const engineManifest = collectExecutionConsumerManifest(engineDrift);
+    writeFileSync(join(engineDrift, "packages/engine/dist/engine.js"), "// stale engine bundle\n");
+    writeFileSync(join(engineDrift, "packages/engine/dist/index.d.ts"), "// stale types\n");
+    verifyExecutionConsumerManifest(engineManifest);
+    unlinkSync(join(engineDrift, "packages/engine/dist/engine.js"));
+    expectRefusal(() => verifyExecutionConsumerManifest(engineManifest), "consumer.generated-missing");
 
+    // A consumer that still pins its `dist` tree refuses stale declaration bytes.
     const declarationDrift = buildFixture();
     const declarationManifest = collectExecutionConsumerManifest(declarationDrift);
-    writeFileSync(join(declarationDrift, "packages/engine/dist/index.d.ts"), "// stale types\n");
+    writeFileSync(
+      join(declarationDrift, "packages/opencode/dist/mstar.d.ts"),
+      "// stale opencode types\n",
+    );
     expectRefusal(
       () => verifyExecutionConsumerManifest(declarationManifest),
       "consumer.digest-mismatch",

@@ -284,8 +284,13 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
     // their own right — same shape as the `cli` layout below.
     sourceTrees: [{ root: "packages/engine/src" }, { root: "packages/engine/scripts" }],
     sourceFiles: ["packages/engine/package.json", "packages/engine/tsconfig.json"],
-    generatedTrees: [{ root: "packages/engine/dist", exclude: BUILD_OUTPUT_EXCLUSIONS }],
-    generatedFiles: ["packages/engine/dist/audit.js", "packages/engine/dist/engine.js"],
+    // Not pinned, same reason as the `cli` and `dsh` consumers: `dist` bytes
+    // depend on the build environment, so a manifest written on one machine
+    // cannot be verified on another (CI checks out without build output). What
+    // is deterministic stays pinned above — the source closure, the runtime
+    // floor — and the entrypoint is proved by existence and non-emptiness.
+    generatedTrees: [],
+    generatedFiles: [],
     copies: [],
   },
   {
