@@ -59,11 +59,11 @@ export type EngineSeamFailure = "import-failed" | "exports-missing";
 export type EngineSeam<T> = { api: T; failure?: undefined } | { api: null; failure: EngineSeamFailure };
 
 /** A rejected import lives only in this process's promise cache, so it is
- * retried by a reload; a missing export is a version mismatch a reload
- * reproduces identically. */
+ * retried by a reload. A missing export is a version mismatch: the reinstall
+ * has to land first, then a reload discards this cached result. */
 export function engineSeamRefusal(failure: EngineSeamFailure, cause?: unknown): string {
   if (failure === "exports-missing") {
-    return "The bundled engine loaded but does not export the gate exports this plugin build requires, so the installed plugin and engine do not match. Reinstall @mstar-harness/opencode-v2, which bundles the matching engine; reloading the host reproduces the same mismatch. The engine is bundled with the plugin, not a runtime dependency.";
+    return "The bundled engine loaded but does not export the gate exports this plugin build requires, so the installed plugin and engine do not match. Reinstall @mstar-harness/opencode-v2, which bundles the matching engine, then reload or restart the OpenCode host to discard this cached result; reloading before the reinstall reproduces the same mismatch. The engine is bundled with the plugin, not a runtime dependency.";
   }
   const reason = cause === undefined ? "the cause is in the host log" : cause instanceof Error ? cause.message : String(cause);
   return `The bundled engine failed to load (${reason}). Reload or restart the OpenCode host to retry the engine import: a failed load is cached for the process lifetime, so upgrading alone does not clear it. The engine is bundled with the plugin, not a runtime dependency.`;

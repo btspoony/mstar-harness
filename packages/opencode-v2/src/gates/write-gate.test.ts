@@ -429,14 +429,17 @@ describe("OpenCode V2 structured-write gate", () => {
       { loadEngine: async () => ({ api: null, failure: "exports-missing" }) },
     ))).rejects.toMatchObject({
       _tag: "Tool.Error",
-      message: expect.stringMatching(/\[write\.engine-unavailable\][\s\S]*Reinstall @mstar-harness\/opencode-v2[\s\S]*reloading the host reproduces the same mismatch[\s\S]*No write was authorized/),
+      message: expect.stringMatching(/\[write\.engine-unavailable\][\s\S]*Reinstall @mstar-harness\/opencode-v2[\s\S]*then reload or restart the OpenCode host to discard this cached result[\s\S]*No write was authorized/),
     });
     const caught = await Effect.runPromise(writeBefore(
       event("write", { filePath: "/tmp/unavailable-engine-target", content: "unauthorized" }),
       { loadEngine: async () => ({ api: null, failure: "exports-missing" }) },
     )).catch((error: Tool.Error) => error);
     expect((caught as Tool.Error).message).toContain(missing);
-    expect((caught as Tool.Error).message).not.toMatch(/reload or restart the OpenCode host/i);
+    // The reload is only the cache flush after the reinstall, never the fix itself.
+    const message = (caught as Tool.Error).message;
+    expect(message.indexOf("Reinstall")).toBeLessThan(message.indexOf("reload or restart the OpenCode host"));
+    expect(message).toContain("reloading before the reinstall reproduces the same mismatch");
   });
   test("retains engine import failure cause and directs a reload", async () => {
     const cause = "Cannot find package '@mstar-harness/engine'";

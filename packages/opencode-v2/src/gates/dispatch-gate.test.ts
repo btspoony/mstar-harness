@@ -207,7 +207,7 @@ describe("OpenCode V2 subagent dispatch gate", () => {
       message: expect.stringMatching(/\[dispatch\.engine-unavailable\][\s\S]*Reload or restart the OpenCode host[\s\S]*cached for the process lifetime[\s\S]*No subagent was spawned/),
     });
   });
-  test("missing engine exports fail closed without offering a reload that cannot fix the mismatch", async () => {
+  test("missing engine exports fail closed with the reinstall and the cache flush that follows it", async () => {
     const caught = await Effect.runPromise(dispatchBefore(
       makeEvent("project-manager", "fullstack-dev", validAssignment()),
       { loadEngine: async () => ({ api: null, failure: "exports-missing" }) },
@@ -216,8 +216,10 @@ describe("OpenCode V2 subagent dispatch gate", () => {
     const message = (caught as Tool.Error).message;
     expect(message).toContain("[dispatch.engine-unavailable]");
     expect(message).toContain("Reinstall @mstar-harness/opencode-v2");
+    // The reload only discards the cached mismatch, so it comes after the reinstall.
+    expect(message.indexOf("Reinstall")).toBeLessThan(message.indexOf("then reload or restart the OpenCode host"));
+    expect(message).toContain("reloading before the reinstall reproduces the same mismatch");
     expect(message).toContain("No subagent was spawned");
-    expect(message).not.toMatch(/Reload or restart the OpenCode host/i);
   });
   test("missing prompt refuses as typed schema drift instead of skipping validation", async () => {
     const harness = await fixture();
