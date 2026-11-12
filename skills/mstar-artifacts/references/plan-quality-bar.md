@@ -46,6 +46,15 @@ Development ACs must not require a live API, provider receipt, named/authenticat
 
 These are examples, not commands to copy into every plan. Resolve actual paths/selectors before locking. No available scoped entry → report the exact gap; do not substitute a package/workspace suite. Non-executable docs/policy use `Verification mode: scoped-check` evidence per `mstar-sdd/references/file-handoffs.md`, with before/after observable criteria for policy changes. Executable changes retain their corresponding unit-test evidence.
 
+The surface map — a Files entry on a code surface must name the check that surface maps to, or `lint.plan-quality.verification-set` fires:
+
+| Files surface | Mapped check |
+|---------------|--------------|
+| `packages/engine/src`, `packages/cli/src`, `hooks/src` code literals | `bun run lint:ascii-literals` |
+| `skills/**` | `bun run validation:drift` |
+| `scripts/**` | that script's own test or run (`bun test scripts/<name>.test.ts`, `bun run <script>`), not `lint:ascii-literals` |
+| prose | scoped-check |
+
 ### 3. Hard boundaries
 
 Each task lists:
@@ -64,13 +73,7 @@ The executor stops and reports instead of improvising. This is what lets a weake
 
 ### 5. Drift check
 
-Stamp the commit the plan was written against. Before execution, the executor (or PM) runs:
-
-```
-git diff --stat <planned-at-sha>..HEAD -- <in-scope-paths>
-```
-
-If any in-scope file changed, the executor compares the plan's "current state" excerpts against live code before proceeding. On mismatch → STOP condition.
+Stamp the commit the plan was written against. Before execution, the executor (or PM) runs `git diff --stat <planned-at-sha>..HEAD -- <in-scope-paths>`. If any in-scope file changed, the executor compares the plan's "current state" excerpts against live code before proceeding. On mismatch → STOP condition.
 
 In SDD, this maps to the `BASE_SHA` recorded before Task 1.
 
@@ -78,14 +81,10 @@ In SDD, this maps to the `BASE_SHA` recorded before Task 1.
 
 All **selected, change-relevant** criteria must hold. Remove inapplicable example rows rather than creating unnecessary work:
 
-```markdown
-## Done criteria
-
-- [ ] Executable bug: `pytest tests/test_orders.py -k rejects_empty_order -v` passes; record the relevant red/green evidence
-- [ ] Docs-only alternative: `rg -n 'new-target' docs/setup.md` matches the changed reference and its target resolves; record scoped-check evidence, no test file needed
-- [ ] `git diff --check -- <in-scope-files>` exits 0
-- [ ] No files outside the in-scope list are modified (`git status --short`)
-```
+- Executable bug: `pytest tests/test_orders.py -k rejects_empty_order -v` passes; record the relevant red/green evidence
+- Docs-only alternative: `rg -n 'new-target' docs/setup.md` matches the changed reference and its target resolves; record scoped-check evidence, no test file needed
+- `git diff --check -- <in-scope-files>` exits 0
+- No files outside the in-scope list are modified (`git status --short`)
 
 Do not add repository-wide build/test/lint/typecheck gates for insurance. Full suites remain CI-owned unless the user explicitly authorizes a bounded local exception; that exception is not inferred from this template.
 
