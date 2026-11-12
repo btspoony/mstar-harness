@@ -215,54 +215,8 @@
         ]
       },
       "generated": {
-        "trees": [
-          {
-            "root": "packages/omp/dist",
-            "files": 4,
-            "sha256": "5d78309e264749fdd59f2919c430014baac1695f70511d0e1f70bc50f7a272db",
-            "exclude": [
-              "execution-consumer.json"
-            ]
-          },
-          {
-            "root": "packages/omp/extensions",
-            "files": 3,
-            "sha256": "8117b465f3046bc2b7bc7a8c4bbda0df87469e59019e1c1066180e940c449bb4",
-            "exclude": [
-              "execution-consumer.json"
-            ]
-          },
-          {
-            "root": "packages/omp/hooks",
-            "files": 1,
-            "sha256": "0c2b2bdd93bbaded6925c324c0f132e00a642736f79e334291562ffc3b5890f3",
-            "exclude": [
-              "execution-consumer.json"
-            ]
-          }
-        ],
-        "files": [
-          {
-            "path": "packages/omp/dist/extensions/model-handoff.js",
-            "sha256": "92954b39fca371aea48ab9026e6a30a9e9ce189d7a818cd2a08dc88fbcf00373"
-          },
-          {
-            "path": "packages/omp/dist/extensions/phase2-orchestration.js",
-            "sha256": "0ae496bf43f036ee984fbf92877dc5aa1a554f52b49b9a34fb6526171b24ac1c"
-          },
-          {
-            "path": "packages/omp/dist/hooks/pre/mstar-gates.js",
-            "sha256": "00418c1b20dcd748d0e563cd83999633c845682c27f1d245cd288ad2f856950a"
-          },
-          {
-            "path": "packages/omp/mcp.json",
-            "sha256": "a25ee5bd467ba0334cd8461096f3e34a3cc87a9fc4f12fe608a45f2537255fd8"
-          },
-          {
-            "path": "packages/omp/plugin.json",
-            "sha256": "f4cd734271ce99a70a7d4c4ec1801f579994dd19d226a4b332fa01e2cf412b61"
-          }
-        ]
+        "trees": [],
+        "files": []
       },
       "copiedInstructions": [
         {
@@ -352,22 +306,8 @@
         ]
       },
       "generated": {
-        "trees": [
-          {
-            "root": "packages/opencode/dist",
-            "files": 1,
-            "sha256": "7e55aa6b1267bb290e10fbe922cf490533d413cc2c51f9411e888c800c641552",
-            "exclude": [
-              "execution-consumer.json"
-            ]
-          }
-        ],
-        "files": [
-          {
-            "path": "packages/opencode/dist/mstar.js",
-            "sha256": "4ff751301eb8421a31420ef7bd805c524e05902d65a035191fd40a43026ef3ae"
-          }
-        ]
+        "trees": [],
+        "files": []
       },
       "copiedInstructions": [
         {
