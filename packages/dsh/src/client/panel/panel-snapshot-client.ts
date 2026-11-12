@@ -243,7 +243,14 @@ export class MstarPanelSnapshotClient {
       if (result === null || typeof result !== 'object') return { ok: false, code: 'internal-error', message: 'malformed-answer' }
       if (result.ok !== true) {
         const error = result.error as { code?: unknown; message?: unknown } | null | undefined
-        return { ok: false, code: 'transport-error', message: str(error?.message) ?? str(error?.code) ?? 'transport-error' }
+        // The engine's own refusal code survives the transport envelope; only an
+        // answer with no usable code degrades to `transport-error` (the retry
+        // policy's ambiguity token).
+        return {
+          ok: false,
+          code: str(error?.code) ?? 'transport-error',
+          message: str(error?.message) ?? str(error?.code) ?? 'transport-error',
+        }
       }
       return parseMilestoneWriteResult(result.value)
     } catch (error) {

@@ -499,6 +499,34 @@ describe('the client surface — one request per write, arguments intact', () =>
     })
     expect(gateway.calls[0]!.endpoint).toBe(MILESTONE_UPDATE_ENDPOINT)
   })
+
+  it("keeps the engine's own refusal code from a transport envelope, and degrades only when it carries none", async () => {
+    const gateway = stubGateway(
+      { ok: false, error: { code: 'milestone.invalid-input', message: '[milestone.invalid-input] name must not be empty.' } },
+      { ok: false, error: { message: 'gateway closed' } },
+    )
+    const client = new MstarPanelSnapshotClient(gateway.connection)
+    const domain = await client.milestoneAdd({
+      sessionId: 's-1',
+      cwd: '/proj',
+      projectId: '_default',
+      input: { name: '', target: null, ordinal: 0 },
+      mutation: { operationId: 'op-client-3', expectedStoreRevision: 7 },
+    })
+    expect(domain).toEqual({
+      ok: false,
+      code: 'milestone.invalid-input',
+      message: '[milestone.invalid-input] name must not be empty.',
+    })
+    const noCode = await client.milestoneAdd({
+      sessionId: 's-1',
+      cwd: '/proj',
+      projectId: '_default',
+      input: { name: 'Third', target: null, ordinal: 2 },
+      mutation: { operationId: 'op-client-4', expectedStoreRevision: 7 },
+    })
+    expect(noCode).toEqual({ ok: false, code: 'transport-error', message: 'gateway closed' })
+  })
 })
 
 describe('milestoneAssign — engine authorization passes through verbatim', () => {
