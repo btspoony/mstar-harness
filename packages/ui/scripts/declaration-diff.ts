@@ -134,6 +134,10 @@ if (rows.length > 0) {
 // diff that compares three hundred print the same sentence, and the breakpoint blocks were
 // silently absent from this comparison until they were keyed by their at-rule context.
 const compared = [...prototype.keys()].filter((key) => ours.has(key));
+if (compared.length === 0) {
+  console.error("declaration-diff: 0 shared selectors compared — the prototype yielded nothing to compare.");
+  process.exit(1);
+}
 const inBlocks = compared.filter((key) => key.startsWith("@"));
 console.log(
   `every shared declaration matches the prototype — ${compared.length} shared selectors, ` +

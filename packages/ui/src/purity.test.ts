@@ -23,11 +23,31 @@ const PACKAGE_ROOT = join(import.meta.dir, "..", "..");
 
 /**
  * A source with its type-only engine imports removed, so any remaining mention of the
- * specifier is a value import. Both import forms must go: one line, or the `import type {`
- * … `} from "@mstar-harness/engine"` block that `view-model/iterations.ts` uses.
+ * specifier is a value import. Every legal `import type` form must go: named (one
+ * line, or the `import type {` … `} from "@mstar-harness/engine"` block that
+ * `view-model/iterations.ts` uses), default, namespace, and default-plus-named.
+ *
+ * One shape is out of scope: a line comment between `from` and the module
+ * specifier, so the string starts on the next line. No file in this repository
+ * writes an import that way, and the guard is advisory — a false positive is
+ * immediately visible and cheap, like the indented imports the anchor rejects.
  */
+// Mask rather than delete: newlines are kept so positions in the result still
+// map to the same source lines (the diagnostic reports the offending line).
+// Between tokens, block comments are as legal as whitespace, so the gap pattern
+// accepts both (`import /*c*/ type /*c*/ { … } /*c*/ from /*c*/ "…"`). The
+// `^import` anchor is deliberate: an import declaration is only legal at module
+// top level, so an indented one is already invalid TypeScript and the guard
+// need not accept it.
+const TOKEN_GAP = String.raw`(?:\s|/\*[\s\S]*?\*/)`;
 const withoutTypeOnlyEngineImports = (source: string): string =>
-  source.replace(/^import type\s*\{[^}]*\}\s*from\s*"@mstar-harness\/engine";?[^\S\n]*\n/gm, "");
+  source.replace(
+    new RegExp(
+      String.raw`^import${TOKEN_GAP}+type${TOKEN_GAP}+(?:[\w$]+(?:${TOKEN_GAP}*,${TOKEN_GAP}*(?:\{[^}]*\}|\*${TOKEN_GAP}+as${TOKEN_GAP}+[\w$]+))?|\*${TOKEN_GAP}+as${TOKEN_GAP}+[\w$]+|\{[^}]*\})${TOKEN_GAP}*from${TOKEN_GAP}*["']@mstar-harness\/engine["'];?[^\S\n]*\n?`,
+      "gm",
+    ),
+    (match) => match.replace(/[^\n]/g, " "),
+  );
 
 describe("the public surface is browser-safe", () => {
   test("it bundles for a browser target with no Node builtin and no host SDK", async () => {
@@ -52,7 +72,7 @@ describe("the public surface is browser-safe", () => {
     // A value import would survive bundling and drag the engine in. Reading the
     // sources is the honest check: the bundle test above would pass for a
     // tree-shaken value import that no screen happens to call yet. Type-only imports
-    // are stripped first, in either form, so a multi-line value import — which the
+    // are stripped first, in every form, so a multi-line value import — which the
     // previous line-by-line scan could not see — is an offender too.
     const files = [...new Bun.Glob("**/*.{ts,tsx}").scanSync({ cwd: import.meta.dir })].filter(
       (file) => !file.endsWith(".test.ts") && !file.endsWith(".test.tsx"),
@@ -60,18 +80,46 @@ describe("the public surface is browser-safe", () => {
     const offenders: string[] = [];
     for (const file of files) {
       const source = readFileSync(join(import.meta.dir, file), "utf8");
-      if (withoutTypeOnlyEngineImports(source).includes("@mstar-harness/engine")) offenders.push(file);
+      const rest = withoutTypeOnlyEngineImports(source);
+      const at = rest.indexOf("@mstar-harness/engine");
+      if (at !== -1) offenders.push(`${file}:${rest.slice(0, at).split("\n").length}`);
     }
     expect(offenders).toEqual([]);
   });
 
-  test("the guard sees a value import written over several lines", () => {
+  test("the guard accepts every legal type-only form and still sees every value form", () => {
     // The blind spot this pins: a multi-line value import mentions the specifier only on
-    // its last line, which the old scan skipped as a bare `} from "…"` line.
-    const value = 'import {\n  engineValue,\n} from "@mstar-harness/engine";\n';
-    expect(withoutTypeOnlyEngineImports(value)).toContain("@mstar-harness/engine");
-    const typeOnly = 'import type {\n  EngineType,\n} from "@mstar-harness/engine";\n';
-    expect(withoutTypeOnlyEngineImports(typeOnly)).not.toContain("@mstar-harness/engine");
+    // its last line, which the old scan skipped as a bare `} from "…"` line; and a
+    // type-only import is any legal `import type` form, not just named braces.
+    const typeOnly = [
+      'import type {\n  EngineType,\n} from "@mstar-harness/engine";\n',
+      'import type EngineType from "@mstar-harness/engine";\n',
+      'import type * as engine from "@mstar-harness/engine";\n',
+      'import type Default, { EngineType } from "@mstar-harness/engine";\n',
+      "import type { EngineType } from '@mstar-harness/engine';\n",
+      "import type EngineType from '@mstar-harness/engine';\n",
+      'import /* why */ type /* still type-only */ { EngineType } /* gap */ from /* gap */ "@mstar-harness/engine";\n',
+    ];
+    for (const source of typeOnly) {
+      expect(withoutTypeOnlyEngineImports(source)).not.toContain("@mstar-harness/engine");
+    }
+    const value = [
+      'import {\n  engineValue,\n} from "@mstar-harness/engine";\n',
+      'import engineValue from "@mstar-harness/engine";\n',
+      'import * as engine from "@mstar-harness/engine";\n',
+      'import /* not type-only */ { engineValue } /* gap */ from /* gap */ "@mstar-harness/engine";\n',
+    ];
+    for (const source of value) {
+      expect(withoutTypeOnlyEngineImports(source)).toContain("@mstar-harness/engine");
+    }
+    // A preceding (possibly multiline) type-only import must not shift the
+    // reported line: masking keeps newlines, so the offender stays on its
+    // original source line.
+    const shifted = withoutTypeOnlyEngineImports(
+      'import type {\n  EngineType,\n} from "@mstar-harness/engine";\nimport { engineValue } from "@mstar-harness/engine";\n',
+    );
+    const at = shifted.indexOf("@mstar-harness/engine");
+    expect(shifted.slice(0, at).split("\n").length).toBe(4);
   });
 
   test("the entry point exposes the consumer surface and nothing host-specific", async () => {

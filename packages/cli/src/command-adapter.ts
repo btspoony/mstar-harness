@@ -26,6 +26,7 @@ import {
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
 import { unionBranchSchemas } from "./schema-branches.js";
+import { openBrowserBounded } from "./browser-opener.js";
 import { detectInstalledPluginVersion } from "./plugin-version-alignment";
 import type { Scope, Target } from "./types";
 
@@ -840,7 +841,7 @@ export function readStdinPayload(stream: StdinSource = process.stdin, idleTimeou
   return promise;
 }
 
-function cliEffects(services: Array<{ close(): Promise<void> }>): CommandEffects {
+function cliEffects(services: Array<{ close(): Promise<void> }>, signal: AbortSignal): CommandEffects {
   let stdin: Promise<string> | undefined;
   return {
     readInput() {
@@ -887,15 +888,7 @@ function cliEffects(services: Array<{ close(): Promise<void> }>): CommandEffects
       }
     },
     openBrowser(url: string) {
-      const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-      const argv = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-      const pending = Promise.withResolvers<void>();
-      const child = spawn(opener, argv, { stdio: "ignore", shell: false });
-      child.once("spawn", () => pending.resolve());
-      child.once("error", (error: NodeJS.ErrnoException) => {
-        pending.reject(Object.assign(new Error(`no platform opener (${opener}) available: ${error.message}`), { code: "capability.browser.unavailable" }));
-      });
-      return pending.promise;
+      return openBrowserBounded(url, signal);
     },
     detectPluginVersion: ({ target, scope }) => detectInstalledPluginVersion(target as Target, scope as Scope),
   };
@@ -989,7 +982,7 @@ export function registerCliCommands(
           ...baseContext,
           ...sessionIdentity,
           signal: controller.signal,
-          effects: cliEffects(services),
+          effects: cliEffects(services, controller.signal),
         });
         writeEnvelope(surfaceAssignmentRecovery(definition.id, envelope), received);
         if (definition.effects.includes("service") && envelope.status === "ok") {

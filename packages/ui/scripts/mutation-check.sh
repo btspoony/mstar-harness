@@ -19,7 +19,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 BACKUP="$(mktemp -d)"
-MUTATED="packages/ui/src/styles/product.css packages/ui/src/styles/base.css packages/ui/scripts/selector-diff.ts packages/cli/web/main.tsx"
+MUTATED="packages/ui/src/styles/product.css packages/ui/src/styles/base.css packages/ui/scripts/selector-diff.ts packages/cli/web/main.tsx packages/ui/design-system/prototype.html"
 # Restore BEFORE dropping the backup: a trap that deletes the copy first leaves the
 # mutation in place when the restore then fails. `cp -p` also puts the touched file's
 # timestamp back, or `check:stale` keeps failing after a clean run.
@@ -33,8 +33,16 @@ restore_all() {
 }
 
 FAIL=0
+BASELINE="packages/ui/design-system/prototype.html"
 expect_fail() {
   local name="$1"; local check="$2"
+  # A missing baseline makes every comparator exit non-zero without comparing anything;
+  # that is the check refusing to run, not the check noticing the defect.
+  if [ ! -f "$BASELINE" ]; then
+    echo "FAIL ${name}: check:${check} cannot run — the prototype baseline $BASELINE is missing (not a detected mutation)" >&2
+    FAIL=1
+    return
+  fi
   local out; out="$(bun run --cwd packages/ui "check:$check" 2>&1)"; local code=$?
   if [ "$code" -eq 0 ]; then
     echo "FAIL ${name}: check:${check} passed with the defect in place" >&2
@@ -48,6 +56,7 @@ save packages/ui/src/styles/product.css
 save packages/ui/src/styles/base.css
 save packages/ui/scripts/selector-diff.ts
 save packages/cli/web/main.tsx
+save "$BASELINE"
 
 # --- 1. a class name the sheets do not define. Every occurrence, in every sheet, because a
 #        prefix-only rename still contains the original as a substring.
@@ -82,6 +91,22 @@ restore_all
 # --- 4. a stale compiled bundle: touch a source file the bundle is built from.
 touch packages/cli/web/main.tsx
 expect_fail "a stale bundle" stale
+restore_all
+
+# --- 5. a readable baseline that yields nothing to compare: strip the prototype's
+#        inline styles. Each comparator fails closed on an empty comparison, so all
+#        three must exit non-zero here rather than print "0 compared, all fine".
+python3 - <<'PY'
+import io, re
+p = "packages/ui/design-system/prototype.html"
+t = io.open(p, encoding="utf-8").read()
+stripped = re.sub(r"<style[^>]*>[\s\S]*?</style>", "", t)
+assert stripped != t, "the prototype carries no inline styles to strip"
+io.open(p, "w", encoding="utf-8").write(stripped)
+PY
+expect_fail "an emptied comparison" declarations
+expect_fail "an emptied comparison" selectors
+expect_fail "an emptied comparison" tones
 restore_all
 
 rm -f packages/ui/src/styles/*.bak

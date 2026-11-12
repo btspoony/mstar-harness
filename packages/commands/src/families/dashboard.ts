@@ -123,6 +123,12 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
     try {
       await context.effects.openBrowser(server.url);
     } catch (error) {
+      if (error !== null && typeof error === "object" && "code" in error && error.code === "command.cancelled") {
+        // A cancelled invocation is not a capability failure, and the listener
+        // has already been handed to the connection: report the cancellation
+        // and leave the handle running, as the abort branch above does.
+        return { version: 1, command: id, status: "error", code: "command.cancelled", exitCode: 1, message: "cancelled" };
+      }
       forget(context, harnessDir, parsed.data.port, parsed.data.project);
       await server.close();
       return { version: 1, command: id, status: "error", code: "capability.browser.unavailable", exitCode: 1, message: error instanceof Error ? error.message : String(error) };
