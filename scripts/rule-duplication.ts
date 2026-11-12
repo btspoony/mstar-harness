@@ -234,25 +234,15 @@ export function checkRuleDuplication(root: string, files: string[]): RuleDuplica
     }
   }
 
-  // An entry that no longer matches a scanned site hides a deletion or a
-  // wording change: name it, matching Guard 9's manifest-stale direction.
+  // One pass: each group's fingerprint is hashed once and feeds both the
+  // stale-entry check and the exemption grouping.
   const liveSites = new Set<string>();
-  for (const [normalized, allHits] of sites) {
-    const hash = ruleFingerprintHash(normalized);
-    for (const hit of allHits) liveSites.add(`${hit.file}\u0000${hash}`);
-  }
-  for (const entry of entries) {
-    if (liveSites.has(`${entry.file}\u0000${entry.normalizedHash}`)) continue;
-    allowlistFailures.push(
-      `${RULE_DUPLICATION_ALLOWLIST}: "${entry.file}" (${entry.normalizedHash}) matches no scanned rule site - drop the entry`,
-    );
-  }
-
   const duplicates: RuleDuplicateGroup[] = [];
   const exemptGroups: RuleDuplicateGroup[] = [];
   for (const [normalized, allHits] of sites) {
-    if (new Set(allHits.map((hit) => hit.file)).size < 2) continue;
     const hash = ruleFingerprintHash(normalized);
+    for (const hit of allHits) liveSites.add(`${hit.file}\u0000${hash}`);
+    if (new Set(allHits.map((hit) => hit.file)).size < 2) continue;
     const exempt = allHits.filter((hit) => allowed.has(`${hit.file}\u0000${hash}`));
     const hits = allHits.filter((hit) => !allowed.has(`${hit.file}\u0000${hash}`));
     // One entry silences its whole group: exempting one site drops the group
@@ -263,6 +253,15 @@ export function checkRuleDuplication(root: string, files: string[]): RuleDuplica
       continue;
     }
     duplicates.push({ normalized, hits, exempt });
+  }
+
+  // An entry that no longer matches a scanned site hides a deletion or a
+  // wording change: name it, matching Guard 9's manifest-stale direction.
+  for (const entry of entries) {
+    if (liveSites.has(`${entry.file}\u0000${entry.normalizedHash}`)) continue;
+    allowlistFailures.push(
+      `${RULE_DUPLICATION_ALLOWLIST}: "${entry.file}" (${entry.normalizedHash}) matches no scanned rule site - drop the entry`,
+    );
   }
 
   duplicates.sort((a, b) => (a.normalized < b.normalized ? -1 : a.normalized > b.normalized ? 1 : 0));
