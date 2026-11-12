@@ -254,6 +254,37 @@ describe("label discovery", () => {
     expect(calls).toEqual([]);
   });
 
+  test("a label on a later page is found by following the cursor", async () => {
+    const { write, calls } = side(
+      [
+        { kind: "ok", payload: { labels: [{ name: "bug" }], hasNextPage: true, cursor: "c-2" } },
+        { kind: "ok", payload: { labels: [{ name: "risk" }], hasNextPage: false, cursor: null } },
+      ],
+      { team: "ENG" },
+    );
+    const names = await write.discoverLabels();
+    expect([...names].sort()).toEqual(["bug", "risk"]);
+    // Exactly one request per page; the second carries page one's cursor.
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.arguments.cursor).toBeUndefined();
+    expect(calls[1]!.arguments.cursor).toBe("c-2");
+    expect(calls[1]!.arguments.team).toBe("ENG");
+  });
+
+  test("a cursor still live after the page bound refuses without a 21st call", async () => {
+    // Every page advertises more and never carries the wanted label.
+    const pages = Array.from({ length: 20 }, (_unused, index) => ({
+      kind: "ok" as const,
+      payload: { labels: [{ name: `other-${index + 1}` }], hasNextPage: true, cursor: `c-${index + 2}` },
+    }));
+    const { write, calls } = side(pages, { team: "ENG" });
+    const refusal = await write.discoverLabels().catch((caught: unknown) => caught);
+    expect(refusal).toMatchObject({ code: "linear.label-unresolved" });
+    // The refusal names the bound it stopped at.
+    expect(String((refusal as Error).message)).toContain("20");
+    expect(calls).toHaveLength(20);
+  });
+
   test("an unmappable discovery response refuses the run", async () => {
     const { write } = side([{ kind: "ok", payload: { items: [] } }]);
     await expect(write.discoverLabels()).rejects.toThrow(/documented envelope/);

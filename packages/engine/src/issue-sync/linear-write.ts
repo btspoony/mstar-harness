@@ -43,8 +43,15 @@ export const LINEAR_LABEL_VERBS: readonly string[] = ["list_issue_labels"];
  */
 export const LINEAR_STATE_VERBS: readonly string[] = ["list_issue_statuses"];
 
-/** One discovery call asks for this many labels; the workspace set is small. */
+/** One discovery PAGE asks for this many labels. */
 const LABEL_PAGE_LIMIT = 250;
+
+/**
+ * The most discovery pages one run reads. A workspace larger than this cannot
+ * have its label set proven, so the run refuses by name instead of resolving
+ * items against a set it knows is truncated — never by raising the page size.
+ */
+const DISCOVERY_PAGE_BOUND = 20;
 
 /**
  * The same page ask for states. A team has a handful of workflow states, so
@@ -135,23 +142,26 @@ export function createLinearWrite(deps: LinearWriteDeps): LinearWriteSide {
     },
 
     async discoverLabels(): Promise<ReadonlySet<string>> {
-      return discover(labelVerbs, "label", labelNames, { limit: LABEL_PAGE_LIMIT });
+      return discover(labelVerbs, "label", labelNames, labelNextCursor, { limit: LABEL_PAGE_LIMIT });
     },
 
     async discoverStates(): Promise<ReadonlySet<string>> {
-      return discover(stateVerbs, "state", stateNames, { limit: STATE_PAGE_LIMIT });
+      // The state envelope is a bare array: one page, no cursor to follow.
+      return discover(stateVerbs, "state", stateNames, () => null, { limit: STATE_PAGE_LIMIT });
     },
   };
 
   /**
-   * One discovery call, shared by labels and states: same handshake rule, same
+   * One discovery walk, shared by labels and states: same handshake rule, same
    * refusal vocabulary, so a host that cannot enumerate one of them says so the
-   * same way. Only the verb candidates, the noun and the envelope parser differ.
+   * same way. Only the verb candidates, the noun, the envelope parser and the
+   * page-continuation reader differ.
    */
   async function discover(
     candidates: readonly string[],
     noun: "label" | "state",
     parse: (payload: unknown) => ReadonlySet<string> | null,
+    nextCursor: (payload: unknown) => string | null,
     baseArguments: Record<string, unknown>,
   ): Promise<ReadonlySet<string>> {
     const listed = deps.listedVerbs();
@@ -166,30 +176,47 @@ export function createLinearWrite(deps: LinearWriteDeps): LinearWriteSide {
     }
     const entry = entryOrRefuse();
     const team = deps.scope?.team;
-    const outcome = await deps.call(entry, {
-      tool,
-      arguments: { ...baseArguments, ...(team === undefined ? {} : { team }) },
-    });
-    if (outcome.kind === "transport-error") {
-      throw new SyncError(
-        "linear.host-unavailable",
-        `the ${noun} discovery call (${tool}) failed (${redactTransportMessage(outcome.message)}); nothing was written`,
-      );
+    const names = new Set<string>();
+    let cursor: string | null = null;
+    for (let page = 1; page <= DISCOVERY_PAGE_BOUND; page += 1) {
+      const outcome = await deps.call(entry, {
+        tool,
+        arguments: {
+          ...baseArguments,
+          ...(team === undefined ? {} : { team }),
+          ...(cursor === null ? {} : { cursor }),
+        },
+      });
+      if (outcome.kind === "transport-error") {
+        throw new SyncError(
+          "linear.host-unavailable",
+          `the ${noun} discovery call (${tool}) failed (${redactTransportMessage(outcome.message)}); nothing was written`,
+        );
+      }
+      if (outcome.kind === "http-status") {
+        throw new SyncError(
+          "linear.host-unavailable",
+          `the ${noun} discovery call (${tool}) answered HTTP ${outcome.status}; nothing was written`,
+        );
+      }
+      const pageNames = parse(outcome.payload);
+      if (pageNames === null) {
+        throw new SyncError(
+          "linear.host-unavailable",
+          `the ${noun} discovery response from ${tool} did not match the documented envelope (${noun === "label" ? "{ labels: [{ name }], hasNextPage?, cursor? }" : "[{ name }]"}); nothing was written`,
+        );
+      }
+      for (const name of pageNames) names.add(name);
+      cursor = nextCursor(outcome.payload);
+      if (cursor === null) return names;
     }
-    if (outcome.kind === "http-status") {
-      throw new SyncError(
-        "linear.host-unavailable",
-        `the ${noun} discovery call (${tool}) answered HTTP ${outcome.status}; nothing was written`,
-      );
-    }
-    const names = parse(outcome.payload);
-    if (names === null) {
-      throw new SyncError(
-        "linear.host-unavailable",
-        `the ${noun} discovery response from ${tool} did not match the documented envelope (${noun === "label" ? "{ labels: [{ name }] }" : "[{ name }]"}); nothing was written`,
-      );
-    }
-    return names;
+    // The page budget ran out with more pages advertised: the set this run
+    // holds is provably truncated, so resolving against it would refuse an item
+    // whose label may live on a page never read.
+    throw new SyncError(
+      noun === "label" ? "linear.label-unresolved" : "linear.state-unresolved",
+      `the ${noun} discovery walk (${tool}) still had more pages after ${DISCOVERY_PAGE_BOUND} pages, so the ${noun} set is incomplete; nothing was written`,
+    );
   }
 }
 
@@ -334,6 +361,19 @@ function labelNames(payload: unknown): ReadonlySet<string> | null {
     names.add(name);
   }
   return names;
+}
+
+/**
+ * The next page of the label envelope. `list_issue_labels` advertises a
+ * `cursor` request argument and continues while `hasNextPage` is true, so the
+ * page is followed only on that pair — an empty cursor with `hasNextPage: true`
+ * ends the walk rather than re-reading page one, and a page that omits both
+ * ends it too. Same rule as the listing side, which already reads this pair.
+ */
+function labelNextCursor(payload: unknown): string | null {
+  if (!isRecord(payload)) return null;
+  if (payload.hasNextPage !== true) return null;
+  return nonBlank(payload.cursor);
 }
 
 /**
