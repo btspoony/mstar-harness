@@ -2851,15 +2851,20 @@ export async function initializeStore(
     options.afterStagingClaim?.();
     db.exec("begin immediate");
     try {
+      // ONE instant for the whole creation transaction, read once. The
+      // migration SQL is immutable and seeds its own rows with SQLite's `now`,
+      // and the runner stamps each version row as it records it, so the
+      // transaction re-stamps every stamp it just wrote: a caller-supplied
+      // clock is then the only clock this store's creation records.
+      const at = (options.now ?? nowRfc3339)();
       applyPendingMigrations(db, {
         alreadyInTransaction: true, attestation, operator: options.operator, processFacts: options.processFacts,
-        now: options.now, busyTimeoutMs: timeout,
+        now: () => at, busyTimeoutMs: timeout,
       });
-      // ONE instant for the whole creation transaction: a caller-supplied clock
-      // is the only clock these stamps read, so one store never carries two.
-      const activatedAt = (options.now ?? nowRfc3339)();
-      db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(activatedAt);
-      db.prepare("update execution_meta set authority_state = 'active', activated_at = ? where id = 1").run(activatedAt);
+      db.prepare("update store_meta set authority_state = 'active', activated_at = ?, created_at = ? where id = 1").run(at, at);
+      db.prepare("update execution_meta set authority_state = 'active', activated_at = ?, root_updated_at = ? where id = 1").run(at, at);
+      db.prepare("update projection_meta set checked_at = ? where id = 1").run(at);
+      db.prepare("update schema_version set applied_at = ?").run(at);
       db.exec("commit");
     } catch (error) {
       try {
