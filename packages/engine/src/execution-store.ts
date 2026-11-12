@@ -1402,6 +1402,14 @@ export async function readActiveLifecycleBranchDocs(context: StoreContext): Prom
       for (const planRow of planRows) {
         const planId = storedText(planRow.plan_id, `execution_plans(${workflowId}).plan_id`);
         const planState = storedJsonObject(planRow.state_json, `execution_plans(${workflowId},${planId}).state_json`);
+        // §2.2 owned members stay refused rather than silently dropped (same
+        // rule `readWorkflowView` applies to the same row).
+        if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
+          throw corrupt(
+            `execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned ` +
+              `by coordination_json, not by the row state`,
+          );
+        }
         if (planState.id !== planId) {
           throw corrupt(
             `execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`,

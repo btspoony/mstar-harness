@@ -45,6 +45,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { mkdir, mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { readActiveLifecycleBranchDocs, storeDbPath } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
@@ -779,6 +781,31 @@ Do the thing, evidence-first.
       .filter((v) => v.code === 'worktree.main.residency-switched')
       .map((v) => v.message)
     expect(ownership.some((message) => message.includes('owned by workflow wf-2'))).toBe(true)
+  })
+
+  it('a plan row state carrying coordination is refused, never trusted as the row state', async () => {
+    const root = tmpRoot('dsh-wt-l1-plan-owned-')
+    seedL1Topology(root)
+    const harnessDir = join(root, 'harness')
+    await seedActiveWorkflow(harnessDir, 'wf-1', [planWithScope(join(root, 'wt-a'), 'feature/a')], { branch: { base: 'main' } }, 'seed-wf-1', root, 'wf-1')
+    // A second authority written into the row state must refuse the whole
+    // projection: silently reading it would let a stale `state_json` coordinate.
+    const db = new DatabaseSync(storeDbPath({ harnessDir }))
+    try {
+      db.prepare('update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?').run(
+        JSON.stringify({ id: 'l1-plan', title: 'L1 fixture', file: 'plans/l1-plan.md', status: 'InProgress', coordination: { prepared: true } }),
+        'wf-1',
+        'l1-plan',
+      )
+    } finally {
+      db.close()
+    }
+    const refusal = await readActiveLifecycleBranchDocs({ harnessDir }).then(
+      () => null,
+      (error: unknown) => error as { code?: string; message?: string },
+    )
+    expect(refusal?.code).toBe('store.corrupt')
+    expect(refusal?.message).toContain('coordination/execution_lease')
   })
 
   // Disposition — removed unreadable sibling snapshot coverage; ACTIVE workflow state is validated in the execution database, not by scanning snapshot.json files.
