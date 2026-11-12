@@ -2,8 +2,8 @@ import { Tool } from "@opencode/schema/tool";
 import { Effect } from "effect";
 import type { ToolHooks } from "@opencode/plugin/effect/tool";
 
-import { loadDispatchGateApi } from "../engine-seams";
-import type { DispatchGateApi } from "../engine-seams";
+import { engineSeamRefusal, loadDispatchGateApi } from "../engine-seams";
+import type { DispatchGateApi, EngineSeam } from "../engine-seams";
 import { defaultStatusLogger, type StatusLogger } from "../log";
 
 /**
@@ -14,7 +14,7 @@ import { defaultStatusLogger, type StatusLogger } from "../log";
  */
 export type DispatchBeforeEvent = ToolHooks["execute.before"];
 export type DispatchGateServices = {
- loadEngine?: () => Promise<DispatchGateApi | null>;
+ loadEngine?: () => Promise<EngineSeam<DispatchGateApi>>;
  logger?: StatusLogger;
 };
 
@@ -104,14 +104,11 @@ export function dispatchBefore(event: DispatchBeforeEvent, services: DispatchGat
  try: () => (services.loadEngine ?? loadDispatchGateApi)(),
  catch: (error) => toolError(
  "dispatch.engine-unavailable",
- `The engine dispatch-gate exports could not be loaded (${error instanceof Error ? error.message : String(error)}). Upgrade @mstar-harness/opencode-v2 (or the host runtime) and retry; no subagent was spawned.`,
+ `${engineSeamRefusal("import-failed", error)} No subagent was spawned.`,
  ),
  }),
- (api) => api === null
- ? Effect.fail(toolError(
- "dispatch.engine-unavailable",
- "The ACTIVE dispatch-gate exports are unavailable. Upgrade @mstar-harness/opencode-v2 (or the host runtime) and retry; no subagent was spawned.",
- ))
- : dispatchEffect(event, api, services.logger ?? defaultStatusLogger),
+ (seam) => seam.api === null
+ ? Effect.fail(toolError("dispatch.engine-unavailable", `${engineSeamRefusal(seam.failure)} No subagent was spawned.`))
+ : dispatchEffect(event, seam.api, services.logger ?? defaultStatusLogger),
  );
 }

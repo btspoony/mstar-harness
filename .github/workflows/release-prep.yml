@@ -76,6 +76,8 @@ jobs:
         run: |
           mkdir -p /tmp/pack-out
           bun run typecheck
+          bun run cli:build
+          bun run opencode:build
           npm pack --workspace @mstar-harness/cli --pack-destination /tmp/pack-out
           npm pack --workspace @mstar-harness/opencode --pack-destination /tmp/pack-out
 

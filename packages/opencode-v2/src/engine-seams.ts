@@ -5,6 +5,8 @@
 
 import type * as Engine from "@mstar-harness/engine";
 
+import { defaultStatusLogger } from "./log";
+
 type EngineModule = typeof Engine;
 type CoordinationValidators = Pick<EngineModule, "validateStatus" | "validateWorkflowSnapshot">;
 type DirectoryResolvers = Pick<EngineModule, "resolveHarnessDir" | "resolveWorkflowDir" | "resolveProjectDir">;
@@ -47,8 +49,51 @@ export type WriteGateApi = Pick<
 let validatorsPromise: Promise<CoordinationValidators | null> | undefined;
 let directoryResolversPromise: Promise<DirectoryResolvers | null> | undefined;
 let activeStoreApiPromise: Promise<ActiveStoreApi | null> | undefined;
-let dispatchGateApiPromise: Promise<DispatchGateApi | null> | undefined;
-let writeGateApiPromise: Promise<WriteGateApi | null> | undefined;
+let dispatchGateApiPromise: Promise<EngineSeam<DispatchGateApi>> | undefined;
+let writeGateApiPromise: Promise<EngineSeam<WriteGateApi>> | undefined;
+
+/** Why a gate seam degraded: the dynamic import rejected, or the engine loaded
+ * but does not export what this plugin build requires. The two need different
+ * recoveries, so the gates name which one happened. */
+export type EngineSeamFailure = "import-failed" | "exports-missing";
+export type EngineSeam<T> = { api: T; failure?: undefined } | { api: null; failure: EngineSeamFailure };
+
+/** A rejected import lives only in this process's promise cache, so it is
+ * retried by a reload. A missing export is a version mismatch: the reinstall
+ * has to land first, then a reload discards this cached result. */
+export function engineSeamRefusal(failure: EngineSeamFailure, cause?: unknown): string {
+  if (failure === "exports-missing") {
+    return "The bundled engine loaded but does not export the gate exports this plugin build requires, so the installed plugin and engine do not match. Reinstall @mstar-harness/opencode-v2, which bundles the matching engine, then reload or restart the OpenCode host to discard this cached result; reloading before the reinstall reproduces the same mismatch. The engine is bundled with the plugin, not a runtime dependency.";
+  }
+  const reason = cause === undefined ? "the cause is in the host log" : cause instanceof Error ? cause.message : String(cause);
+  return `The bundled engine failed to load (${reason}). Reload or restart the OpenCode host to retry the engine import: a failed load is cached for the process lifetime, so upgrading alone does not clear it. The engine is bundled with the plugin, not a runtime dependency.`;
+}
+
+const logLoadFailure = (seam: string, error: unknown): void => {
+  defaultStatusLogger(
+    "error",
+    `${seam} unavailable: ${error instanceof Error ? error.message : String(error)}. Reload or restart the OpenCode host to retry the engine import; the failed load is cached for the process lifetime.`,
+  );
+};
+
+/** A rejected engine import is cached as null for the process lifetime, so the
+ * cause must be logged here or it is lost to the later refusal. The cache is
+ * deliberately kept: clearing it would retry the import on every call. */
+const loadFailure = (seam: string) => (error: unknown): null => {
+  logLoadFailure(seam, error);
+  return null;
+};
+
+const seamFailure = (seam: string) =>
+  (error: unknown): { api: null; failure: "import-failed" } => {
+    logLoadFailure(seam, error);
+    return { api: null, failure: "import-failed" };
+  };
+
+const missingExports = (seam: string): { api: null; failure: "exports-missing" } => {
+  defaultStatusLogger("warn", `${seam} unavailable: ${engineSeamRefusal("exports-missing")}`);
+  return { api: null, failure: "exports-missing" };
+};
 
 
 export function loadCoordinationValidators(): Promise<CoordinationValidators | null> {
@@ -58,7 +103,7 @@ export function loadCoordinationValidators(): Promise<CoordinationValidators | n
       validateStatus: engine.validateStatus,
       validateWorkflowSnapshot: engine.validateWorkflowSnapshot,
     };
-  }).catch(() => null);
+  }).catch(loadFailure("coordination validators"));
   return validatorsPromise;
 }
 
@@ -74,7 +119,7 @@ export function loadDirectoryResolvers(): Promise<DirectoryResolvers | null> {
       resolveWorkflowDir: engine.resolveWorkflowDir,
       resolveProjectDir: engine.resolveProjectDir,
     };
-  }).catch(() => null);
+  }).catch(loadFailure("directory resolvers"));
   return directoryResolversPromise;
 }
 
@@ -96,10 +141,10 @@ export function loadActiveStoreApi(): Promise<ActiveStoreApi | null> {
       readExecutionSource: engine.readExecutionSource,
       resolveExecutionReadRoute: engine.resolveExecutionReadRoute,
     };
-  }).catch(() => null);
+  }).catch(loadFailure("ACTIVE store API"));
   return activeStoreApiPromise;
 }
-export function loadDispatchGateApi(): Promise<DispatchGateApi | null> {
+export function loadDispatchGateApi(): Promise<EngineSeam<DispatchGateApi>> {
   dispatchGateApiPromise ??= import("@mstar-harness/engine").then((engine) => {
     if (
       typeof engine.applyEnforcement !== "function" ||
@@ -108,19 +153,21 @@ export function loadDispatchGateApi(): Promise<DispatchGateApi | null> {
       typeof engine.parseAssignmentFields !== "function" ||
       typeof engine.resolveHarnessDir !== "function" ||
       typeof engine.resolveRepoEnforcement !== "function"
-    ) return null;
+    ) return missingExports("dispatch gate exports");
     return {
-      applyEnforcement: engine.applyEnforcement,
-      composeDispatchGate: engine.composeDispatchGate,
-      isReadOnlyAssignmentRole: engine.isReadOnlyAssignmentRole,
-      parseAssignmentFields: engine.parseAssignmentFields,
-      resolveHarnessDir: engine.resolveHarnessDir,
-      resolveRepoEnforcement: engine.resolveRepoEnforcement,
+      api: {
+        applyEnforcement: engine.applyEnforcement,
+        composeDispatchGate: engine.composeDispatchGate,
+        isReadOnlyAssignmentRole: engine.isReadOnlyAssignmentRole,
+        parseAssignmentFields: engine.parseAssignmentFields,
+        resolveHarnessDir: engine.resolveHarnessDir,
+        resolveRepoEnforcement: engine.resolveRepoEnforcement,
+      },
     };
-  }).catch(() => null);
+  }).catch(seamFailure("dispatch gate exports"));
   return dispatchGateApiPromise;
 }
-export function loadWriteGateApi(): Promise<WriteGateApi | null> {
+export function loadWriteGateApi(): Promise<EngineSeam<WriteGateApi>> {
   writeGateApiPromise ??= import("@mstar-harness/engine").then((engine) => {
     if (
       typeof engine.applyEnforcement !== "function" ||
@@ -136,22 +183,24 @@ export function loadWriteGateApi(): Promise<WriteGateApi | null> {
       typeof engine.resolveWorkflowDir !== "function" ||
       typeof engine.validateStatusWriteDoc !== "function" ||
       typeof engine.withStoreRead !== "function"
-    ) return null;
+    ) return missingExports("write gate exports");
     return {
-      applyEnforcement: engine.applyEnforcement,
-      caseFoldedDocKind: engine.caseFoldedDocKind,
-      harnessDocKindOfTarget: engine.harnessDocKindOfTarget,
-      isStoreAuthorityTarget: engine.isStoreAuthorityTarget,
-      landedPathOf: engine.landedPathOf,
-      queryIssueFlow: engine.queryIssueFlow,
-      resolveExecutionReadRoute: engine.resolveExecutionReadRoute,
-      resolveHarnessDir: engine.resolveHarnessDir,
-      resolveProjectDir: engine.resolveProjectDir,
-      resolveRepoEnforcement: engine.resolveRepoEnforcement,
-      resolveWorkflowDir: engine.resolveWorkflowDir,
-      validateStatusWriteDoc: engine.validateStatusWriteDoc,
-      withStoreRead: engine.withStoreRead,
+      api: {
+        applyEnforcement: engine.applyEnforcement,
+        caseFoldedDocKind: engine.caseFoldedDocKind,
+        harnessDocKindOfTarget: engine.harnessDocKindOfTarget,
+        isStoreAuthorityTarget: engine.isStoreAuthorityTarget,
+        landedPathOf: engine.landedPathOf,
+        queryIssueFlow: engine.queryIssueFlow,
+        resolveExecutionReadRoute: engine.resolveExecutionReadRoute,
+        resolveHarnessDir: engine.resolveHarnessDir,
+        resolveProjectDir: engine.resolveProjectDir,
+        resolveRepoEnforcement: engine.resolveRepoEnforcement,
+        resolveWorkflowDir: engine.resolveWorkflowDir,
+        validateStatusWriteDoc: engine.validateStatusWriteDoc,
+        withStoreRead: engine.withStoreRead,
+      },
     };
-  });
+  }).catch(seamFailure("write gate exports"));
   return writeGateApiPromise;
 }

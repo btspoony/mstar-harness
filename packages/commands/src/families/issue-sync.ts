@@ -249,7 +249,7 @@ const RECOVERY: Record<string, string> = {
   "linear.write-ambiguous":
     "The write was sent but not confirmed, so delivery is unknown and the item stays pending with no external id. The next run reconciles it by correlation marker — exactly one match adopts that issue — and `--adopt <localId>=<issueUrl|externalId>` records the identity when you can see it yourself. When the next run's reconcile scan reports that no remote issue carries the marker and you can confirm the issue is gone, release the residue with `--release <localId>`: that clears it to a retryable failure, so the same run creates it.",
   "linear.label-unresolved":
-    "The mapped kind label does not exist in this Linear workspace and push never creates labels. Create that label in Linear's UI, or redirect it in `.mstarc` with `[linear.mapping] kind.<kind>=<label>`; other items still push.",
+    "Read the cause, which names one of two different situations. When the label discovery walk stopped at its page bound, the workspace advertises more labels than mstar reads: the bound is fixed and the walk restarts from the first page every run, so re-running refuses identically and the label may well exist — do not create one. Bring the workspace's label set within what mstar enumerates (archive or delete unused labels in Linear) and re-run `mstar issue-sync push --project <project-id>`; until then kinds cannot be resolved against a set mstar cannot see. When the walk completed and the label is genuinely absent (push never creates labels), create that label in Linear's UI, or redirect it in `.mstarc` with `[linear.mapping] kind.<kind>=<label>`; other items still push.",
   "linear.state-unresolved":
     "The mapped workflow state does not exist in this Linear team and push never creates or renames states. Rename it in Linear's workflow settings, or redirect it in `.mstarc` with `[linear.mapping] disposition.<key>=<name>`, where <key> is the DEFAULT target state (Todo/Done/Canceled) that the local disposition maps to; other items still push.",
   "sync.identity-conflict":
@@ -257,7 +257,7 @@ const RECOVERY: Record<string, string> = {
   "sync.operator-conflict":
     "The run's own flags contradict each other: one local item cannot be adopted and released in the same run, `--adopt` names one identity per local id, and a `--force-adopt` id must also appear in `--adopt` because the flag only relaxes that entry's replacement. Re-run `mstar issue-sync push --project <project-id>` with one verb per item — `--adopt <localId>=<issueUrl|externalId>` when you can see the remote issue (add `--force-adopt <localId>` only to replace an identity it already records), `--release <localId>` only when reconcile's scan proved no remote issue carries the item's marker. Nothing was written.",
   "sync.illegal-transition":
-    "`--release` names a `pending` push row with no remote id and nothing else. Re-run `mstar issue-sync push --project <project-id>` without it: reconcile adopts the issue when exactly one carries the item's correlation marker, and `--adopt <localId>=<issueUrl|externalId>` records an identity you confirmed.",
+    "Read the cause, which names one of three situations. When `--release` names a row that is not a `pending` push row with no remote id, drop the flag and re-run `mstar issue-sync push --project <project-id>`: reconcile adopts the issue when exactly one carries the item's correlation marker, and `--adopt <localId>=<issueUrl|externalId>` records an identity you confirmed. When the row is a legal release target but the scan was truncated at its page bound, the flag cannot answer a question the scan never read to its end — `--adopt <localId>=<issueUrl|externalId>` is the way in, since it names the identity instead of asking the listing to prove one. When reconcile read several issues carrying the item's marker, name the right one with `--adopt` (add `--force-adopt <localId>` to replace an identity the row already records); one identity per item is the point. Nothing was written.",
   "sync.run-held":
     "Another push run holds this binding. Its start time, pid and host are in the message: wait for it to finish, then re-run `mstar issue-sync push --project <project-id>`. Only after confirming that holder is dead, take the run over with `mstar issue-sync push --project <project-id> --take-run`.",
   "sync.run-taken":
@@ -516,6 +516,13 @@ type PushReport = {
   failed: number;
   /** Rows this run adopted by marker equality after an interrupted create. */
   reconciled: Array<{ localId: string; externalId: string }>;
+  /**
+   * The page bound the reconcile scan stopped at, present only when it stopped
+   * with more listing advertised. Its presence means the scan was PARTIAL: no
+   * residue was adopted or released against it, and the listing a later run
+   * reads may still hold what this one did not.
+   */
+  stoppedAtPageBound?: number;
   /** One row per item that did not converge, with the credential-free cause. */
   items: Array<{ localId: string; outcome: string; externalId: string | null; cause?: string }>;
   /** The workspace label set this run resolved kind labels against. */
@@ -778,11 +785,20 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
     //    `pushItem` reports it as `unresolved` without writing anything. A
     //    `--release` row joins this same scan: the flag acts only on a zero-match
     //    result and drops the row to `failed`, so the candidate loop creates it.
-    const reconciled = await reconcilePendingCreate(db, provider, pushContext, { release: released });
+    const reconciled = await reconcilePendingCreate(db, provider, pushContext, {
+      release: released,
+      // The same bound the import loop stops at: one number, so the two scans
+      // cannot drift.
+      maxPages: DEFAULT_MAX_PAGES,
+    });
     report.reconciled = reconciled.adopted;
     for (const adopted of reconciled.adopted) {
       report.items.push({ localId: adopted.localId, outcome: "reconciled", externalId: adopted.externalId });
     }
+    // The scan's own fact, carried to the envelope. Without it a truncated scan
+    // whose residue happened to be fully adopted reads as a complete one, and
+    // every consumer downstream believes the listing was read to its end.
+    if (reconciled.stoppedAtPageBound !== undefined) report.stoppedAtPageBound = reconciled.stoppedAtPageBound;
 
     // 6. One write per candidate, classified by its receipt.
     for (const candidate of selectPushCandidates(db, bindingId)) {

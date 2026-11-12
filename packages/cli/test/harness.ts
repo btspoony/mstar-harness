@@ -15,6 +15,37 @@ import { join, resolve } from "node:path";
  * (never from the invoking process's cwd). */
 export const CLI_ROOT: string = resolve(import.meta.dir, "..");
 
+/** Every channel an invoking shell can use to hand this process a leaf seat or
+ * an execution identity. A suite that asserts the ABSENCE of one must clear
+ * these first: a real leaf shell exports a marker, and a negative control that
+ * merely omits it would inherit the shell's value instead of testing nothing. */
+export const IDENTITY_CHANNELS = [
+  "DSH_MSTAR_LEAF_SEAT",
+  "MSTAR_LEAF_SEAT",
+  "DSH_SESSION_ID",
+  "MSTAR_HOST_SESSION_ID",
+  "MSTAR_EXECUTION_IDENTITY",
+] as const;
+
+const ambientIdentity = new Map(IDENTITY_CHANNELS.map((key) => [key, process.env[key]]));
+const IDENTITY_KEYS: ReadonlySet<string> = new Set(IDENTITY_CHANNELS);
+
+/** Drop the ambient identity channels from THIS process, so a case that sets
+ * its own state decides the marker rather than inheriting the shell's. */
+export function clearIdentityChannels(): void {
+  for (const key of IDENTITY_CHANNELS) delete process.env[key];
+}
+
+/** Put the shell's identity channels back (the `afterEach` half of
+ * `clearIdentityChannels`), so the snapshot stays the file's only ambient read. */
+export function restoreIdentityChannels(): void {
+  for (const key of IDENTITY_CHANNELS) {
+    const value = ambientIdentity.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
+
 /** Absolute path of the CLI entry source run by every spawned subprocess,
  * unless the suite runs where the CLI is already built: `MSTAR_CLI_ENTRY`
  * then names the built entry `runCli` spawns instead. */
@@ -45,11 +76,7 @@ export function cliEnv(extra?: Record<string, string | undefined>): Record<strin
       key === "MSTAR_WORKING_BRANCH" ||
       key === "MSTAR_CLI_PROJECT_ROOT" ||
       key === "INIT_CWD" ||
-      key === "DSH_MSTAR_LEAF_SEAT" ||
-      key === "MSTAR_LEAF_SEAT" ||
-      key === "MSTAR_HOST_SESSION_ID" ||
-      key === "MSTAR_EXECUTION_IDENTITY" ||
-      key === "DSH_SESSION_ID"
+      IDENTITY_KEYS.has(key)
     ) {
       continue;
     }

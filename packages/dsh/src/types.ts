@@ -82,10 +82,12 @@ export interface MstarEngineStatusPayload {
    */
   readonly iteration?: MstarIterationGateView
   /**
-   * Workspace-state digest section: the plan registry, open residual
-   * counts, branch/policy anchors, active leases, knowledge index digest
-   * and the steering compass direction one-liner. Null when the workspace
-   * has no harness dir or no readable workspace catalog (the state lines are absent).
+   * Workspace-state digest section (the fields of {@link MstarHarnessState}):
+   * the plan registry, the open-residual rollup and detail, branch/policy
+   * anchors, row scopes, the project rollup, the knowledge index digest, the
+   * steering compass direction one-liner and the agent-flow ledger view.
+   * Null when the workspace has no harness dir or no readable workspace
+   * catalog (the state lines are absent).
    */
   readonly state: MstarHarnessState | null
 }
@@ -274,11 +276,12 @@ export type WorkflowSelectionView =
 
 /**
  * The workspace-state digest section of the unified engine-status row: the
- * plan registry, open residual counts, branch/policy anchors, active
- * leases, knowledge index digest and the steering compass direction
- * one-liner. All fields come from the same per-workspace cached build as
- * the rest of the row (one ACTIVE execution graph / compass / knowledge-index read
- * per cache refresh — the TTL-bounded staleness tradeoff documented on
+ * plan registry, open residual counts and detail, branch/policy anchors and
+ * row scopes, the project rollup, the knowledge index digest, the steering
+ * compass direction one-liner and the agent-flow ledger view. All fields come
+ * from the same per-workspace cached build as the rest of the row (one ACTIVE
+ * execution graph / compass / knowledge-index read per cache refresh — the
+ * TTL-bounded staleness tradeoff documented on
  * `buildCatalogPayload`).
  */
 export interface MstarHarnessState {

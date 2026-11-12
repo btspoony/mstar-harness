@@ -1109,6 +1109,23 @@ function gitUnavailable(cwd: string, args: readonly string[], error: unknown): C
   );
 }
 
+/**
+ * The scratch file `gitPatchId` streams the delivery diff through could not be
+ * created. The obstacle is the process `TMPDIR`, not the repository, so the
+ * cause names that write and the setting to move rather than the checkout
+ * sentence `gitUnavailable` states — an operator sent to "repair the checkout"
+ * would never find it.
+ */
+function gitScratchUnavailable(scratch: string, error: unknown): CoordinationError {
+  const code = propertyOf(error, "code");
+  return new CoordinationError(
+    "coordination.git-unavailable",
+    `Git state cannot be read: the delivery diff could not be written to its scratch file ${scratch}` +
+      `${typeof code === "string" ? ` (${code})` : ""}. Point TMPDIR at a writable directory, then retry the close.`,
+    { path: scratch, cause: typeof code === "string" ? code : String(error) },
+  );
+}
+
 /** The raw read; `gitRead` is its trimmed form, `stdin` is how a diff reaches `patch-id`. */
 function gitPipe(cwd: string, args: readonly string[], stdin?: string): string | undefined {
   try {
@@ -1162,11 +1179,19 @@ function gitPatchId(cwd: string, from: string, to: string): string | undefined {
   // large delivery must still prove itself, and no in-memory cap is allowed to
   // become the reason a close refuses. Same failure shape as `gitPipe`: the
   // repository answering with a non-zero exit is `undefined`, git never
-  // answering is `gitUnavailable`.
+  // answering is `gitUnavailable` — while a scratch file that cannot be created
+  // is neither, and names the environment setting that blocked it.
   const scratch = join(tmpdir(), `mstar-patchid-${process.pid}-${randomUUID()}`);
+  // The scratch write is the first thing this proof does, and its failure is
+  // the environment's `TMPDIR` rather than the repository: it is refused as
+  // such, before the read try below, whose own catch keeps stating Git's.
   let diffFd: number | undefined;
   try {
     diffFd = openSync(scratch, "w+");
+  } catch (error) {
+    throw gitScratchUnavailable(scratch, error);
+  }
+  try {
     const diff = spawnSync("git", ["-C", cwd, "diff", "--no-color", "--no-ext-diff", from, to], {
       stdio: ["ignore", diffFd, "pipe"],
       encoding: "utf8",

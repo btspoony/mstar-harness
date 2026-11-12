@@ -12,7 +12,7 @@ tags:
   - d15
   - host-presence
 date: 2026-10-10
-last_updated: 2026-11-09
+last_updated: 2026-11-12
 created: 2026-10-10
 source: {ITERATION_ID}
 status: active
@@ -22,7 +22,7 @@ status: active
 
 ## Context
 
-`mstar init --target opencode` now serves two host generations from one CLI: the V1 package (`@mstar-harness/opencode`, `@opencode-ai/plugin`) and the V2 package (`@mstar-harness/opencode-v2`, `@opencode/plugin` 2.0.26). Six of the seven install targets have a host CLI; zcode has none.
+`mstar init --target opencode` now serves two host generations from one CLI: the V1 package (`@mstar-harness/opencode`, `@opencode-ai/plugin`) and the V2 package (`@mstar-harness/opencode-v2`, `@opencode/plugin` 2.2.5). Six of the seven install targets have a host CLI; zcode has none.
 
 ## Guidance
 

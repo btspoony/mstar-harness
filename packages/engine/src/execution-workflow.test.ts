@@ -25,7 +25,8 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -1171,6 +1172,44 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     const stated = JSON.stringify(refused.details);
     expect(stated).toContain(`records delivery.merge.commit ${absent}, which is not a commit in the plan checkout`);
     expect(stated).toContain("mstar workflow evidence");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("an unwritable TMPDIR refuses the close, naming the scratch write and the TMPDIR recovery", async () => {
+    // Root ignores mode bits, so a mode-locked directory cannot express EACCES
+    // there; the case is unprivileged by construction (no fixture needs root).
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    const fixture = await workflowFixture("merge-scratch-unwritable");
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    await workflowMutation(fixture, "op-scratch-tail", { kind: "delivery", delivery: DELIVERY_TAIL });
+    commitDelivery(fixture, "work the target never received");
+    const before = await workflowFootprint(fixture.context);
+    // Only the close runs under the locked root: every fixture directory above
+    // was created first, and `finally` puts the environment back. Mode 0o500 is
+    // unwritable for an ordinary user too, so the case needs no privilege.
+    const locked = join(ROOT, `scratch-unwritable-${randomUUID()}`);
+    mkdirSync(locked);
+    chmodSync(locked, 0o500);
+    const outer = process.env.TMPDIR;
+    process.env.TMPDIR = locked;
+    let refused: { code?: string; message: string; details: Record<string, unknown> };
+    try {
+      refused = await refusalOf(() =>
+        workflowMutation(fixture, "op-scratch-close", { kind: "lifecycle", status: "completed", reason: "done" }),
+      );
+    } finally {
+      if (outer === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = outer;
+      chmodSync(locked, 0o700);
+    }
+    // The obstacle is the scratch write, not the repository: the cause names the
+    // file it could not create and the setting an operator can move, instead of
+    // sending them to repair a checkout that is fine.
+    expect(refused.code).toBe("coordination.git-unavailable");
+    expect(refused.message).toContain("could not be written to its scratch file");
+    expect(refused.message).toContain("Point TMPDIR at a writable directory");
+    // The cause names the file it could not create, under the locked root.
+    expect(JSON.stringify(refused.details)).toContain(join(locked, "mstar-patchid-"));
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
 

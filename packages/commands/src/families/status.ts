@@ -68,6 +68,32 @@ function isDetailsRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * The one recovery `status.workflow-close` appends to the engine's own message.
+ *
+ * `coordination.git-unavailable` needs the branch: it covers both a Git read
+ * the checkout could not answer (details name the `command`) and the
+ * delivery-diff scratch write that failed under `TMPDIR` (details name only the
+ * file). The engine's second refusal already states its repair, so repeating a
+ * control-root instruction there would answer one refusal with two
+ * incompatible recoveries.
+ */
+export function workflowCloseRecovery(code: string, details: Record<string, unknown> | undefined): string {
+  if (code === "execution.not-active" || code === "store.not-initialized" || code === "store.not-active") {
+    return "Select the control root that holds the workflow's ACTIVE execution authority, or create one with mstar harness scaffold then mstar store init (or mstar store upgrade to import historical file state); the file close route is retired and never falls back.";
+  }
+  if (code === "coordination.git-unavailable" && details !== undefined && !("command" in details)) {
+    return "Point TMPDIR at a writable directory so the delivery-diff scratch file can be written, then rerun mstar status workflow-close.";
+  }
+  if (code === "coordination.scope-mismatch" || code === "coordination.harness-not-found" || code === "coordination.git-unavailable") {
+    return "Select the control root that holds the workflow, then rerun mstar status workflow-close.";
+  }
+  if (code === "coordination.invalid-input" || code === "coordination.workflow-not-found" || code === "coordination.plan-not-found") {
+    return "Select a workflow and plan this control root's ACTIVE authority holds, then rerun mstar status workflow-close.";
+  }
+  return "Correct the reported workflow lifecycle problem, then rerun mstar status workflow-close.";
+}
+
+/**
  * The retained terminal header this control root recorded for a lifecycle it
  * closed and unregistered: the fact the idempotent close hop reports. An id
  * this authority never held (a foreign or malformed scope) has no such header
@@ -309,14 +335,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             error !== null && typeof error === "object" && "details" in error && isDetailsRecord(error.details)
               ? error.details
               : undefined;
-          const recovery =
-            code === "execution.not-active" || code === "store.not-initialized" || code === "store.not-active"
-              ? "Select the control root that holds the workflow's ACTIVE execution authority, or create one with mstar harness scaffold then mstar store init (or mstar store upgrade to import historical file state); the file close route is retired and never falls back."
-              : code === "coordination.scope-mismatch" || code === "coordination.harness-not-found" || code === "coordination.git-unavailable"
-                ? "Select the control root that holds the workflow, then rerun mstar status workflow-close."
-                : code === "coordination.invalid-input" || code === "coordination.workflow-not-found" || code === "coordination.plan-not-found"
-                  ? "Select a workflow and plan this control root's ACTIVE authority holds, then rerun mstar status workflow-close."
-                  : "Correct the reported workflow lifecycle problem, then rerun mstar status workflow-close.";
+          const recovery = workflowCloseRecovery(code, details);
           return refused("status.workflow-close", code || "workflow.close-refused", messageOf(error), details, recovery);
         }
       },

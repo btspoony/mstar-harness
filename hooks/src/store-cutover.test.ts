@@ -18,14 +18,20 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, openStore } from "@mstar-harness/engine";
-import { HOOK_OUTFILE_REL, buildZcodeHooks } from "../../scripts/build-zcode-hooks.ts";
+import { HOOK_ENTRIES, HOOK_OUTFILE_REL, buildZcodeHooks } from "../../scripts/build-zcode-hooks.ts";
 
 const HOOK_SRC = join(import.meta.dir, "mstar-write-gate.ts");
 const HOOK_BUNDLE = join(import.meta.dir, "..", "..", HOOK_OUTFILE_REL);
+/** Tracked bundles as committed; `beforeAll` rebuilds them in place, `afterAll`
+ * puts these exact bytes back so a green run leaves the worktree clean. */
+const COMMITTED_BUNDLES = HOOK_ENTRIES.map(({ outfile }) => {
+  const path = join(import.meta.dir, "..", "..", outfile);
+  return [path, readFileSync(path)] as const;
+});
 const SKILL_POINTER = "(skill: mstar-artifacts/references/status-and-residuals.md)";
 const ENFORCEMENT_LINE =
   "Enforcement: hard \u2014 this repo opts in via .mstarc/compass; disable for this session with MSTAR_WRITE_GATE=off.";
@@ -43,6 +49,9 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  // The suite rebuilds the tracked bundles in `beforeAll`; put the committed
+  // bytes back so a green run does not leave the worktree dirty.
+  for (const [path, bytes] of COMMITTED_BUNDLES) writeFileSync(path, bytes);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 

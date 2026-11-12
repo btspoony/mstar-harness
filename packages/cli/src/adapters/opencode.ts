@@ -191,7 +191,10 @@ function mergeV2McpServer(config: Record<string, unknown>) {
  next.mcp = mcp;
  const servers = ensureObject(mcp.servers);
  mcp.servers = servers;
- if (servers["morning-star"] === undefined) servers["morning-star"] = { ...MORNING_STAR_MCP_SERVER };
+ if (servers["morning-star"] === undefined) {
+ // Structural copy of `command`: a shallow spread would alias the module array.
+ servers["morning-star"] = { ...MORNING_STAR_MCP_SERVER, command: [...MORNING_STAR_MCP_SERVER.command] };
+ }
  return next;
 }
 
@@ -271,6 +274,10 @@ export const opencodeAdapter: AgentAdapter = {
  // Under `--dry-run` neither lookup nor generation probe runs .
  if (opts.dryRun !== true) await ensureHostPresent("opencode", opts.presenceRunner);
  const resolution = await resolveInitGeneration(config, opts);
+ // The caller validates with this same options object, so recording the
+ // resolved generation here is what lets validateConfig check the surface this
+ // run actually wrote — marker derivation returns null on a dual-key config.
+ if (resolution.generation !== null) opts.generation = resolution.generation;
  console.log(resolution.sourceLine);
  if (resolution.warning !== null) console.warn(`Warning: ${resolution.warning}`);
  // Unresolved preview: no write set is selected (no silent default); the
@@ -282,9 +289,9 @@ export const opencodeAdapter: AgentAdapter = {
  : applyV1Init(config, assignments);
  },
  validateConfig: (config, opts = {}) => {
- // Post-mutation configs always carry the markers of their generation, so
- // marker derivation validates the right surface even when the generation
- // was resolved by the probe inside mutateConfigForInit.
+ // `mutateConfigForInit` records the generation it wrote on this same options
+ // object, so a dual-key config (both marker keys present) still validates the
+ // surface this run selected instead of deriving null and skipping.
  const generation = opts.generation ?? detectOpencodeGeneration(config);
  if (generation === "v2") return validateOpencodeConfigV2(config);
  if (generation === "v1") return validateOpencodeConfig(config);

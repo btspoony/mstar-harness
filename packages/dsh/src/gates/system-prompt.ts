@@ -73,8 +73,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { EnforcementFlag } from '@mstar-harness/engine'
 import type { MstarEngineStatusPayload } from '../types.ts'
-import { DEFAULT_CATALOG_TTL_MS, buildCatalogPayload, buildCatalogPayloadWithStore, gateSegment } from './catalog.ts'
-import { joinCapped, stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
+import { DEFAULT_CATALOG_TTL_MS, buildCatalogPayload, buildCatalogPayloadWithStore, gateSegment, plansSegment } from './catalog.ts'
+import { stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
 
 /** Logger label for the harness-prompt injection (dsh logger naming: `<scope>/<subject>`). */
 export const HARNESS_PROMPT_LOGGER = 'mstar/harness-prompt'
@@ -230,9 +230,11 @@ export function registerHarnessPrompt(
   // disposers FIRST, so the fresh apply registers without a duplicate-name
   // throw and no stale closure (old resolver/harness dir) lingers.
   ctx.inject(['systemPrompt'], async (systemPromptCtx) => {
+    let disposeSection: (() => void) | undefined
+    let disposeContext: (() => void) | undefined
     try {
       const view = systemPromptCtx.systemPrompt as unknown as SystemPromptView
-      const disposeSection = view.section({
+      disposeSection = view.section({
         name: HARNESS_RULES_SECTION_NAME,
         order: HARNESS_RULES_SECTION_ORDER,
         // Live text provider (plan:policy precedent — provider text, no
@@ -246,26 +248,14 @@ export function registerHarnessPrompt(
           return harnessRulesText(harnessDir, sectionEnforcement(harnessDir), teamLayerMounted(ctx))
         },
       })
-      const disposeContext = view.context({
+      disposeContext = view.context({
         name: ENGINE_STATUS_CONTEXT_NAME,
         order: ENGINE_STATUS_CONTEXT_ORDER,
         text: await engineStatusProvider(ctx, options.resolver, bootHarnessDir),
       })
       systemPromptCtx.effect(function* () {
         yield () => {
-          // Idempotent + contained: the disposers remove only their own
-          // entries; a throw here would surface in the fiber teardown, so
-          // each is individually guarded (never-throws discipline).
-          try {
-            disposeSection()
-          } catch {
-            // ignore — the layer entry is already gone
-          }
-          try {
-            disposeContext()
-          } catch {
-            // ignore — the layer entry is already gone
-          }
+          disposeCollected(disposeSection, disposeContext)
           // The entries are gone: this registration no longer carries the
           // version / harness dir / enforcement facts, so a fallback consumer
           // must return to its watermark. Called after BOTH removal attempts
@@ -282,9 +272,33 @@ export function registerHarnessPrompt(
       notifyRegistrationHook(options.onRegistered, 'onRegistered')
     } catch (error) {
       log('warn', `mstar:harness-rules registration failed (contained — session boot unaffected): ${errorMessage(error)}`)
+      // Whatever landed before the throw is disposed here: the effect that
+      // owns it is never installed, so leaving it would leak a layer entry
+      // (and its stale closure) for the life of the composition.
+      disposeCollected(disposeSection, disposeContext)
     }
   })
   return true
+}
+
+/**
+ * Invoke the collected registration disposers in registration order with the
+ * module's never-throws discipline: each call removes only its own layer
+ * entry, and a throw (entry already gone) can neither fail the caller nor
+ * escape the fiber teardown. A disposer that never landed (undefined — the
+ * registration threw before obtaining it) is simply absent.
+ */
+function disposeCollected(
+  disposeSection: (() => void) | undefined,
+  disposeContext: (() => void) | undefined,
+): void {
+  for (const dispose of [disposeSection, disposeContext]) {
+    try {
+      dispose?.()
+    } catch {
+      // ignore — the layer entry is already gone
+    }
+  }
 }
 
 /**
@@ -415,11 +429,12 @@ function engineStatusProvider(
 /**
  * Cap on non-Done plan rows joined into the `mstar:engine-status` digest
  * . Module-level and intentionally NOT
- * re-exported — `catalog.ts` must not import it (a reverse import would
- * close a `system-prompt.ts ↔ catalog.ts` cycle). The sibling catalog state
- * lines cap with their OWN constant (`CATALOG_STATE_JOIN_LIMIT`,
- *); the shared `joinCapped` implementation
- * now lives in `_shared.ts`.
+ * re-exported — only the digest's own token budget owns it, while the segment
+ * wording itself comes from `catalog.ts`'s `plansSegment`, which takes this cap
+ * as an argument. The sibling catalog state line caps with its OWN constant
+ * (`CATALOG_STATE_JOIN_LIMIT`); the shared `joinCapped` implementation lives in
+ * `_shared.ts`. The digest pins its own ceiling in
+ * `tests/system-prompt.spec.ts` so an unbounded registry fails there first.
  */
 const DIGEST_PLAN_CAP = 8
 
@@ -434,11 +449,12 @@ const DIGEST_PLAN_CAP = 8
  * structurally unreachable from this surface without touching
  * `resolveReadWorkflow`.
  *
- * The plans join is the selected snapshot's non-Done rows
- * (`status !== 'Done'`), in catalog-array order, capped at
- * {@link DIGEST_PLAN_CAP} with a final `+N more` overflow marker when
- * longer; an empty registry renders `plans: none` and an all-Done workflow
- * `plans: all done` (two different states, never one text).
+ * The plans segment comes from `plansSegment` in `catalog.ts` — the SAME
+ * assembler the pre-step row renders — so the selected snapshot's non-Done
+ * rows arrive in catalog-array order, capped at {@link DIGEST_PLAN_CAP} with a
+ * final `+N more` overflow marker when longer. One wording per state on both
+ * surfaces: an empty registry renders `plans: none registered` and an all-Done
+ * workflow `plans: all done` (two different states, never one text).
  *
  * Division of labour with the pre-step catalog row: this always-on digest is
  * the surface that survives a row-less step AND host-side compaction (the row
@@ -458,9 +474,9 @@ const DIGEST_PLAN_CAP = 8
  * controlled value (workflow id, workflow type/status, plan ids, plan
  * statuses, branch anchors) is screened through `stripInterpolationHazard`
  * before embedding — a hostile `{{…}}` in any of them can never throw the
- * renderer. Engine-derived literals (version, `workflow`, `plans:`, `none`,
- * `all done`, `unknown`, the `+N more` overflow marker) are constants, not
- * operator text, and stay unscreened.
+ * renderer. Engine-derived literals (version, `workflow`, `plans:`,
+ * `none registered`, `all done`, `unknown`, the `+N more` overflow marker) are
+ * constants, not operator text, and stay unscreened.
  */
 function engineStatusSummary(payload: MstarEngineStatusPayload): string {
   const lines = [`mstar engine status: v${payload.version}`]
@@ -468,20 +484,15 @@ function engineStatusSummary(payload: MstarEngineStatusPayload): string {
   if (state !== null) {
     const selection = state.selection
     if (selection.kind === 'active') {
-      const pending = state.plans.filter((p) => p.status !== 'Done')
-      const plans = state.plans.length === 0
-        ? 'none'
-        : pending.length === 0
-          ? 'all done'
-          : joinCapped(pending, DIGEST_PLAN_CAP, ' ', (p) => `${stripInterpolationHazard(p.id)}(${stripInterpolationHazard(p.status)})`)
       const workflowType = stripInterpolationHazard(state.workflowType ?? 'unknown')
       const workflowStatus = stripInterpolationHazard(state.workflowStatus ?? 'unknown')
       // The ROW's segment order (catalog.ts `renderEngineStatusCatalog`): the
       // same facts in the same sequence, so a reader comparing the two surfaces
-      // does not have to re-learn a second layout.
+      // does not have to re-learn a second layout. The plans segment is the
+      // row's own assembler — one wording per state, only the cap differs.
       const segments = [
         `workflow ${stripInterpolationHazard(selection.workflowId)} (${workflowType}) ${workflowStatus}`,
-        `plans: ${plans}`,
+        plansSegment(state.plans, DIGEST_PLAN_CAP),
       ]
       if (state.iterationBaseBranch !== null && state.targetBranch !== null) {
         segments.push(`branch: ${stripInterpolationHazard(state.iterationBaseBranch)} → ${stripInterpolationHazard(state.targetBranch)}`)

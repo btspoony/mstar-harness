@@ -11798,6 +11798,7 @@ __export(exports_execution_store, {
   initializeExecutionAuthority: () => initializeExecutionAuthority,
   parseExecutionToken: () => parseExecutionToken,
   pruneWorkflowOperationReceipts: () => pruneWorkflowOperationReceipts,
+  readActiveLifecycleBranchDocs: () => readActiveLifecycleBranchDocs,
   readExecutionCleanupSnapshots: () => readExecutionCleanupSnapshots,
   readExecutionPlan: () => readExecutionPlan,
   readExecutionPlanAdmission: () => readExecutionPlanAdmission,
@@ -12450,6 +12451,57 @@ async function readExecutionState(context) {
     storeId: tx.storeId,
     epoch: tx.epoch
   }));
+}
+async function readActiveLifecycleBranchDocs(context) {
+  return withExecutionReadTransaction(context, (tx) => {
+    const registry = tx.db.prepare("select workflow_id, entry_json from execution_registry order by rowid").all();
+    const docs = [];
+    for (const row of registry) {
+      const workflowId = storedText(row.workflow_id, "execution_registry.workflow_id");
+      const entry = storedJsonObject(row.entry_json, `execution_registry(${workflowId}).entry_json`);
+      const entryValidation = validateWorkflowEntry(entry);
+      if (!entryValidation.ok) {
+        throw validationRefusal(`execution_registry(${workflowId}).entry_json`, entryValidation.violations);
+      }
+      if (entry.id !== workflowId) {
+        throw corrupt(`execution_registry(${workflowId}).entry_json carries id ${JSON.stringify(entry.id)}`);
+      }
+      const header = tx.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId);
+      if (!header) {
+        throw corrupt(`execution_registry lists workflow ${workflowId} without an execution_workflows row`);
+      }
+      const state = storedJsonObject(header.state_json, `execution_workflows(${workflowId}).state_json`);
+      if (state.id !== workflowId) {
+        throw corrupt(`execution_workflows(${workflowId}).state_json carries id ${JSON.stringify(state.id)} and does not describe its own key`);
+      }
+      if (state.plans !== undefined || state.integration_merge_lease !== undefined || state.coordinator_session !== undefined) {
+        throw corrupt(`execution_workflows(${workflowId}).state_json carries plans/integration_merge_lease/coordinator_session, which are owned by ` + `execution_plans/execution_integration_leases/execution_sessions`);
+      }
+      const workflowValidation = validateWorkflowSnapshot({ ...state, plans: [] });
+      if (!workflowValidation.ok) {
+        throw validationRefusal(`execution_workflows(${workflowId}).state_json`, workflowValidation.violations);
+      }
+      const planRows = tx.db.prepare("select plan_id, state_json from execution_plans where workflow_id = ? order by ordinal").all(workflowId);
+      const plans = [];
+      for (const planRow of planRows) {
+        const planId = storedText(planRow.plan_id, `execution_plans(${workflowId}).plan_id`);
+        const planState = storedJsonObject(planRow.state_json, `execution_plans(${workflowId},${planId}).state_json`);
+        if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
+          throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned ` + `by coordination_json, not by the row state`);
+        }
+        if (planState.id !== planId) {
+          throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`);
+        }
+        const planValidation = validatePlanRow(planState);
+        if (!planValidation.ok) {
+          throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, planValidation.violations);
+        }
+        plans.push({ id: planId, metadata: planState.metadata });
+      }
+      docs.push({ id: workflowId, branch: state.branch, plans });
+    }
+    return docs;
+  });
 }
 async function readExecutionPlanAdmission(context, planId) {
   return withExecutionReadTransaction(context, (tx) => {
@@ -17037,8 +17089,9 @@ function readOn(db, projectId) {
   if (row.project_id !== projectId || typeof row.content_markdown !== "string" || typeof row.content_hash !== "string" || !Number.isInteger(row.revision) || row.revision < 1 || typeof row.updated_at !== "string") {
     throw new RoadmapError("roadmap.corrupt", `Stored roadmap for project ${projectId} is malformed.`);
   }
+  let content3;
   try {
-    const content3 = parseRoadmapContent(row.content_markdown);
+    content3 = parseRoadmapContent(row.content_markdown);
     if (content3.frontmatter.project_id !== projectId) {
       throw new RoadmapError("roadmap.corrupt", `Stored roadmap identity does not match project ${projectId}.`);
     }
@@ -17050,7 +17103,8 @@ function readOn(db, projectId) {
   return {
     projectId,
     projectRevision: project.revision,
-    roadmap: { projectId, revision: row.revision, contentHash: row.content_hash, updatedAt: row.updated_at, contentMarkdown: row.content_markdown }
+    roadmap: { projectId, revision: row.revision, contentHash: row.content_hash, updatedAt: row.updated_at, contentMarkdown: row.content_markdown },
+    content: content3
   };
 }
 function readRoadmapAuthorityOn(db, projectId) {
@@ -17771,6 +17825,7 @@ async function captureExecutionProjectionSources(context) {
     const servedWorkflowById = new Map(graphWorkflows.map((workflow) => [workflow.state.id, workflow]));
     const workflows = servedWorkflowIds.length === 0 ? [] : selectWhereIn(db, (placeholders) => `select workflow_id, state_json from execution_workflows where workflow_id in (${placeholders}) order by workflow_id`, servedWorkflowIds, (id) => [id]);
     const workflowIds = new Set(workflows.map((item) => item.workflow_id));
+    const headerViolations = (state) => validateWorkflowSnapshot({ ...state, plans: [] }).violations.filter((violation16) => violation16.code !== LEGACY_WORKTREE_PATH_CODE);
     for (const item of registry) {
       if (!workflowIds.has(item.workflow_id)) {
         const sourceKey = sourceKeyOf2("root", "harness", "execution/registry");
@@ -17796,8 +17851,7 @@ async function captureExecutionProjectionSources(context) {
         continue;
       }
       const projectionState = servedWorkflow.state;
-      const workflowValidation = validateWorkflowSnapshot({ ...projectionState, plans: [] });
-      const workflowErrors = workflowValidation.violations.filter((violation16) => violation16.code !== LEGACY_WORKTREE_PATH_CODE);
+      const workflowErrors = headerViolations(projectionState);
       if (workflowErrors.length > 0) {
         recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation16) => violation16.code).join(", ")})`);
         continue;
@@ -17838,6 +17892,11 @@ async function captureExecutionProjectionSources(context) {
         if (!isPlainObject(state) || state.type === "iteration") {
           recordInvalid(workflowSpec, item.state_json, "invalid: terminal workflow state has an invalid object, type, or status");
         }
+        continue;
+      }
+      const terminalErrors = headerViolations(state);
+      if (terminalErrors.length > 0) {
+        recordInvalid(workflowSpec, item.state_json, `invalid: terminal workflow state failed validation (${terminalErrors.map((violation16) => violation16.code).join(", ")})`);
         continue;
       }
       record(workflowSpec, item.state_json);
@@ -18295,7 +18354,6 @@ async function refreshProjections(context, hooks = {}) {
   }
   return attempt.report;
 }
-init_roadmap_content();
 init_store_db();
 init_execution_store();
 init_workflow();
@@ -18972,10 +19030,18 @@ function iterationDocumentIds(db) {
     list2.sort();
   return byIteration;
 }
-function iterationMembershipPlanIds(generated, linkIds, iterationIds) {
+function compassesByIteration(generated) {
+  const byIteration = new Map;
+  for (const row of generated.compasses) {
+    if (!byIteration.has(row.iteration_id))
+      byIteration.set(row.iteration_id, row);
+  }
+  return byIteration;
+}
+function iterationMembershipPlanIds(compassByIteration, linkIds, iterationIds) {
   const merged = new Map;
   for (const iterationId of iterationIds) {
-    const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
+    const compassRow = compassByIteration.get(iterationId);
     const mergedIds = new Set([...linkIds.get(iterationId) ?? [], ...parseJsonArray(compassRow?.plans_json)]);
     merged.set(iterationId, [...mergedIds].sort());
   }
@@ -18988,11 +19054,10 @@ function executionLifecycleOf(workflowRow) {
     return "active";
   return WORKFLOW_TERMINAL_STATUSES.find((status) => status === workflowRow.status) ?? "active";
 }
-function composeIteration(iterationId, catalog, generated, planIds, documentIds, identities, projects) {
+function composeIteration(iterationId, catalog, generated, compassRow, planIds, documentIds, identities, projects) {
   const badges = [];
   if (catalog === null)
     badges.push("catalog-missing");
-  const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
   if (generated.generation === null)
     badges.push("execution-unavailable");
   const workflowRow = generated.workflows.find((row) => row.id === iterationId && row.type === "iteration");
@@ -19069,7 +19134,8 @@ function readIterationList(db, filters) {
   const membership = projectMembership(db);
   const catalogRows = db.prepare(`select ${IDENTITY_COLUMNS} from catalog_entities where kind = 'iteration' order by title asc, id asc`).all().filter((row) => projectId === null || belongsTo(membership, "iteration", row.id, projectId));
   const linkPlanIds = iterationPlanIds(db);
-  const planIds = iterationMembershipPlanIds(generated, linkPlanIds, catalogRows.map((row) => row.id));
+  const compassByIteration = compassesByIteration(generated);
+  const planIds = iterationMembershipPlanIds(compassByIteration, linkPlanIds, catalogRows.map((row) => row.id));
   const documentIds = iterationDocumentIds(db);
   const page = catalogRows.slice(offset, offset + limit);
   const identities = catalogIdentities(db, [
@@ -19078,7 +19144,7 @@ function readIterationList(db, filters) {
     ...page.flatMap((row) => (documentIds.get(row.id) ?? []).map((documentId) => ({ kind: "document", id: documentId })))
   ]);
   return {
-    items: page.map((row) => composeIteration(row.id, identities.get(identityToken("iteration", row.id)) ?? null, generated, planIds.get(row.id) ?? [], documentIds.get(row.id) ?? [], identities, [...membership.get(identityToken("iteration", row.id)) ?? []].sort())),
+    items: page.map((row) => composeIteration(row.id, identities.get(identityToken("iteration", row.id)) ?? null, generated, compassByIteration.get(row.id), planIds.get(row.id) ?? [], documentIds.get(row.id) ?? [], identities, [...membership.get(identityToken("iteration", row.id)) ?? []].sort())),
     total: catalogRows.length,
     attribution: iterationAttribution(db)
   };
@@ -19086,9 +19152,10 @@ function readIterationList(db, filters) {
 function readIterationDetail(db, filters) {
   const iterationId = requireId(filters, "iteration-detail");
   const generated = readGeneratedRows(db);
-  const planIds = iterationMembershipPlanIds(generated, iterationPlanIds(db), [iterationId]).get(iterationId) ?? [];
+  const compassByIteration = compassesByIteration(generated);
+  const planIds = iterationMembershipPlanIds(compassByIteration, iterationPlanIds(db), [iterationId]).get(iterationId) ?? [];
   const documentIds = iterationDocumentIds(db).get(iterationId) ?? [];
-  const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
+  const compassRow = compassByIteration.get(iterationId);
   const identities = catalogIdentities(db, [
     { kind: "iteration", id: iterationId },
     ...planIds.map((planId) => ({ kind: "plan", id: planId })),
@@ -19098,7 +19165,7 @@ function readIterationDetail(db, filters) {
   if (catalog === null && compassRow === undefined)
     return null;
   const projects = [...projectMembership(db).get(identityToken("iteration", iterationId)) ?? []].sort();
-  return composeIteration(iterationId, catalog, generated, planIds, documentIds, identities, projects);
+  return composeIteration(iterationId, catalog, generated, compassRow, planIds, documentIds, identities, projects);
 }
 function readOverview(db, filters) {
   const projectId = text5(filters.projectId);
@@ -19178,7 +19245,7 @@ function readRoadmap(db, filters) {
     projectId,
     catalog,
     authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
-    content: parseRoadmapContent(authority.roadmap.contentMarkdown),
+    content: authority.content,
     milestones
   };
 }

@@ -24,7 +24,7 @@
           {
             "root": "packages/cli/src",
             "files": 40,
-            "sha256": "c423aafc3dbb2da35ffd01a0f964c6f4f1d3b1b6ee1165a1c1c662392f6197ce"
+            "sha256": "54f57ce6afeb23416bb31070bead7c670946e577e3c20555ebde216b5ef67711"
           }
         ],
         "files": [
@@ -83,7 +83,7 @@
           {
             "root": "packages/dsh/src",
             "files": 64,
-            "sha256": "c4ee772974c9e812c3f79a61dc67529e6c1b986d0e2c39ff4971842aeb0f825e"
+            "sha256": "7490c371c7cd9ba920b803ffc2d80d5a2c5a917dcaa8c6154fee08580218fd7d"
           },
           {
             "root": "packages/dsh/workflows",
@@ -151,7 +151,7 @@
           {
             "root": "packages/engine/src",
             "files": 134,
-            "sha256": "e49c99505dccd9755e4146162144d8b8e7c6a501db0722c93af0098ea6ee143b"
+            "sha256": "8b33f488125af5a1f97bbd2747fe00ab09bf9df24da8a263f4b4815d8e49c0a2"
           }
         ],
         "files": [
@@ -356,12 +356,12 @@
           {
             "root": "hooks/src",
             "files": 5,
-            "sha256": "6f8f37d011b246f7cd08ec7525b8ef4e9a139798ec2ffc4a87b8c3137f4425d2"
+            "sha256": "dddba41b90ed0cb5c6555f1d6592c3267e518a3d86e6c959f2ff546987f0e1f4"
           },
           {
             "root": "packages/engine/src",
             "files": 134,
-            "sha256": "e49c99505dccd9755e4146162144d8b8e7c6a501db0722c93af0098ea6ee143b"
+            "sha256": "8b33f488125af5a1f97bbd2747fe00ab09bf9df24da8a263f4b4815d8e49c0a2"
           }
         ],
         "files": [
@@ -416,7 +416,7 @@
         "files": [
           {
             "path": "hooks/mstar-write-gate.mjs",
-            "sha256": "af1b708c191c3691cb3a19fe7fca70a24c0d21279ef78d46f528f1c9812641b3"
+            "sha256": "e13a750852f4781608223183c174bc2753c9f1d16d92a91f38e583cf9c8734f2"
           }
         ]
       },

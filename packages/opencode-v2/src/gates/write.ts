@@ -10,7 +10,8 @@ import { Effect } from "effect";
 
 import type * as Engine from "@mstar-harness/engine";
 
-import { loadWriteGateApi } from "../engine-seams";
+import { engineSeamRefusal, loadWriteGateApi } from "../engine-seams";
+import type { EngineSeam } from "../engine-seams";
 import { defaultStatusLogger, type StatusLogger } from "../log";
 
 export type WriteBeforeEvent = ToolHooks["execute.before"];
@@ -34,7 +35,7 @@ export type WriteGateEngineApi = Pick<
 >;
 
 type WriteGateServices = {
- loadEngine?: () => Promise<WriteGateEngineApi | null>;
+ loadEngine?: () => Promise<EngineSeam<WriteGateEngineApi>>;
  logger?: StatusLogger;
 };
 
@@ -180,18 +181,19 @@ async function executeBefore(event: WriteBeforeEvent, services: WriteGateService
  : undefined;
  if (filePath === undefined) throw malformedPath(input.filePath === undefined ? "path" : "filePath");
 
- let api: WriteGateEngineApi | null;
+ let seam: EngineSeam<WriteGateEngineApi>;
  try {
- api = await (services.loadEngine ?? loadWriteGateApi)();
+ seam = await (services.loadEngine ?? loadWriteGateApi)();
  } catch (error) {
  throw refusal(
  "write.engine-unavailable",
- `The bundled engine failed to load (${error instanceof Error ? error.message : String(error)}). Upgrade the OpenCode plugin/host runtime; the engine is bundled with the plugin and is not a runtime dependency. No write was authorized.`,
+ `${engineSeamRefusal("import-failed", error)} No write was authorized.`,
  );
  }
- if (api === null) {
- throw refusal("write.engine-unavailable", "The required ACTIVE-only engine gate exports are unavailable. Upgrade the OpenCode plugin/host runtime; the engine is bundled with the plugin and is not a runtime dependency. No write was authorized.");
+ if (seam.api === null) {
+ throw refusal("write.engine-unavailable", `${engineSeamRefusal(seam.failure)} No write was authorized.`);
  }
+ const api = seam.api;
 
  const requested = resolve(filePath);
  let landed: string;

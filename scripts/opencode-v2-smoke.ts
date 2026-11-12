@@ -42,6 +42,7 @@ requireFile("harness-agents/project-manager.md", "agent asset");
 requireFile("harness-commands/iteration-start.md", "command asset");
 requireFile("harness-skills/mstar-roles/SKILL.md", "skill asset");
 requireFile("harness-skills/mstar-roles/references/project-manager.md", "nested reference asset");
+requireFile("AGENTS.md", "bootstrap asset");
 process.stdout.write(JSON.stringify({
   runtime: "node",
   nodeVersion: process.version,
@@ -91,7 +92,7 @@ export async function runSmoke(): Promise<void> {
     const installedPackage = join(installRoot, "node_modules", ...PACKAGE_NAME.split("/"));
     const result = await inspectInstalledPackage(installedPackage);
     console.log(`opencode-v2-smoke: OK — exercised packed artifact ${tarballName}`);
-    console.log(`opencode-v2-smoke: OK — Node ${result.nodeVersion} imported ${result.id} Effect lifecycle; agent, command, skill, and nested reference resolved from installed package`);
+    console.log(`opencode-v2-smoke: OK — Node ${result.nodeVersion} imported ${result.id} Effect lifecycle; agent, command, skill, nested reference, and AGENTS.md bootstrap resolved from installed package`);
     console.log(`opencode-v2-smoke: engines node=${result.engines.node} bun=${result.engines.bun}`);
     console.log(`opencode-v2-smoke: temp-dir receipt=${receiptRoot} (removed after run)`);
     console.log("opencode-v2-smoke: installed-host behavior unverified");

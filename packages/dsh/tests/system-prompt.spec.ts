@@ -219,7 +219,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(text).not.toContain('done-plan')
   })
 
-  it('(c2) renders plans: all done when every active plan is Done (distinct from `plans: none`)', async () => {
+  it('(c2) renders plans: all done when every active plan is Done (distinct from `plans: none registered`)', async () => {
     const text = await activeDigest([
       { id: 'done-a', title: 'Done A', status: 'Done' },
       { id: 'done-b', title: 'Done B', status: 'Done' },
@@ -237,6 +237,28 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     const text = await activeDigest(plans)
     expect(text).toContain('workflow prompt-digest (plan) running | plans: plan-1(Todo) plan-2(Todo) plan-3(Todo) plan-4(Todo) plan-5(Todo) plan-6(Todo) plan-7(Todo) plan-8(Todo) +1 more')
     expect(text).not.toContain('plan-9')
+  })
+
+  it('(c5) bounds the digest length so an unbounded registry cannot grow it', async () => {
+    // The ceiling is a LENGTH bound, not a wording snapshot: 40 non-Done rows
+    // must render as the capped row list plus the overflow marker, so the
+    // assembled digest stays inside a fixed budget. Removing the cap grows the
+    // line by ~40 rows and fails here first.
+    const plans = Array.from({ length: 40 }, (_, index) => ({
+      id: `plan-${String(index + 1).padStart(4, '0')}`,
+      title: `Plan ${index + 1}`,
+      status: 'Todo',
+    }))
+    const text = await activeDigest(plans)
+    expect(text).toContain('+32 more')
+    expect(text.length).toBeLessThan(300)
+  })
+
+  it('(c6) renders the same empty-registry text as the catalog row (`plans: none registered`)', async () => {
+    // One assembler for both surfaces: the two non-list states must not read
+    // differently per surface.
+    const text = await activeDigest([])
+    expect(text).toContain('workflow prompt-digest (plan) running | plans: none registered')
   })
 
   it('(c4) carries the gate verdict and the branch anchors — the always-on channel after compaction', async () => {
@@ -396,14 +418,50 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
       expect(text.startsWith('<mstar_engine_status>\nmstar version: ')).toBe(true)
       expect(text).toContain(`harness dir: ${booted.harnessDir}`)
       expect(text).toContain('enforcement: soft')
-      // The failure really is a NON-landing: the section only landed for the
-      // context failure, and the engine-status context never landed.
+      // The failure really is a NON-landing: a `section` throw lands nothing,
+      // and a `context` throw after the section landed now disposes that
+      // section again (no leaked entry), so neither path leaves a section —
+      // and the engine-status context never lands in either case.
       const assembly = await booted.ctx.systemPrompt.assemble()
       const sectionLanded = assembly.sections.some((section) => section.name === HARNESS_RULES_SECTION_NAME)
-      expect(sectionLanded).toBe(failure === 'context')
+      expect(sectionLanded).toBe(false)
       expect(assembly.contexts.some((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)).toBe(false)
       await booted.dispose()
       booted = undefined
+    }
+  })
+
+  it('(l) a context() throw after the section landed disposes that section and never fires onRegistered', async () => {
+    // The failure path must not leak what already landed: the `systemPromptCtx.effect`
+    // ownership is never installed when the throw skips it, so the catch has to
+    // dispose the section itself (no stale closure, no phantom live registration).
+    const ctx = new Context()
+    let sectionDisposed = 0
+    const live = new Set<string>()
+    ctx.provide('systemPrompt' as never, {
+      section: (section: { name: string }) => {
+        live.add(section.name)
+        return () => {
+          sectionDisposed += 1
+          live.delete(section.name)
+        }
+      },
+      context: () => {
+        throw new Error('context registration refused')
+      },
+    } as never)
+    try {
+      let registered = 0
+      expect(registerHarnessPrompt(ctx, {
+        resolver: new HarnessResolver(undefined),
+        onRegistered: () => { registered += 1 },
+      })).toBe(true)
+      await settleInjectChild()
+      expect(sectionDisposed).toBe(1)
+      expect(live.has(HARNESS_RULES_SECTION_NAME)).toBe(false)
+      expect(registered).toBe(0)
+    } finally {
+      await ctx.fiber.dispose().catch(() => {})
     }
   })
 

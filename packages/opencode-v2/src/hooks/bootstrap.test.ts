@@ -1,13 +1,35 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Effect } from "effect";
 import type { Context } from "@opencode/plugin/effect/plugin";
 import type { SessionContext } from "@opencode/plugin/effect/session";
 
 import { registerHooks } from "./mod";
-import { addBootstrapToContext, formatBootstrap } from "./bootstrap";
+import { addBootstrapToContext, formatBootstrap, loadBootstrapContent } from "./bootstrap";
 
 type ContextMessage = SessionContext["messages"][number];
 type ContextEvent = Pick<SessionContext, "messages" | "system">;
+
+const roots: string[] = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+const tmpRoot = () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-v2-bootstrap-"));
+  roots.push(root);
+  return root;
+};
+
+/** Write a temp `AGENTS.md` with the given body; returns its path. */
+function writeBootstrapFile(content: string): string {
+  const file = path.join(tmpRoot(), "AGENTS.md");
+  fs.writeFileSync(file, content, "utf8");
+  return file;
+}
 
 const message = (role: ContextMessage["role"], text = "hello"): ContextMessage => ({
   role,
@@ -89,5 +111,26 @@ describe("OpenCode V2 context bootstrap", () => {
     expect(registeredKinds).toEqual(["context"]);
     expect(event.messages[0]?.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("<IMPORTANT_FOR_HARNESS>") });
     expect(event.system).toEqual([{ type: "text", text: "policy" }]);
+  });
+
+  test("setup warns instead of silently skipping a missing or empty bootstrap asset", async () => {
+    const cases: Array<[string, string | null]> = [
+      ["missing file", loadBootstrapContent(path.join(tmpRoot(), "absent-AGENTS.md"))],
+      ["empty file", loadBootstrapContent(writeBootstrapFile("   \n"))],
+    ];
+    for (const [label, content] of cases) {
+      expect(content, label).toBeNull();
+      const warnings: string[] = [];
+      const warn = spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+        warnings.push(args.map(String).join(" "));
+      });
+      try {
+        const context = { session: { hook: () => Effect.succeed({ dispose: Effect.void }) } } as unknown as Context;
+        await Effect.runPromise(Effect.scoped(registerHooks(context, content)));
+      } finally {
+        warn.mockRestore();
+      }
+      expect(warnings.join("\n"), label).toContain("AGENTS.md bootstrap content is missing or empty");
+    }
   });
 });

@@ -243,7 +243,20 @@ export class MstarPanelSnapshotClient {
       if (result === null || typeof result !== 'object') return { ok: false, code: 'internal-error', message: 'malformed-answer' }
       if (result.ok !== true) {
         const error = result.error as { code?: unknown; message?: unknown } | null | undefined
-        return { ok: false, code: 'transport-error', message: str(error?.message) ?? str(error?.code) ?? 'transport-error' }
+        // Only the transport's own `gateway/*` family decides the write is
+        // final; any other envelope code stays `transport-error` so the retry
+        // channel (panel-shell) keeps the id and replays the receipt.
+        const code = str(error?.code)
+        const finalCode = code !== null && code.startsWith('gateway/') ? code : 'transport-error'
+        // shortcut: only the literal `transport-error` is ambiguous to the
+        // retry channel, so a future post-commit throw surfacing as
+        // `gateway/internal` is treated as terminal; upgrade when a milestone
+        // verb can throw after committing.
+        return {
+          ok: false,
+          code: finalCode,
+          message: str(error?.message) ?? code ?? 'transport-error',
+        }
       }
       return parseMilestoneWriteResult(result.value)
     } catch (error) {
