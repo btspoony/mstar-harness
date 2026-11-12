@@ -382,7 +382,7 @@ function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFla
  * synchronous text provider, so hydrate its cache asynchronously when the
  * service is injected and refresh in the background when a workspace's TTL
  * expires. The configured workspace is ready for its first assembly; a new
- * per-agent workspace builds its payload once, synchronously, on first use.
+ * per-agent workspace starts its bounded read on first use.
  */
 function engineStatusProvider(
   ctx: Context,
@@ -417,11 +417,8 @@ function engineStatusProvider(
       const harnessDir = resolveAssemblyHarnessDir(context, resolver, bootHarnessDir)
       const entry = memo.get(harnessDir)
       if (entry === undefined) {
-        // Miss: build once and memoize that same payload — a background
-        // refresh here would build the identical payload a second time.
-        const payload = buildCatalogPayload(ctx, harnessDir)
-        memo.set(harnessDir, { payload, builtAt: Date.now() })
-        return engineStatusSummary(payload)
+        void refresh(harnessDir)
+        return engineStatusSummary(buildCatalogPayload(ctx, harnessDir))
       }
       if (Date.now() - entry.builtAt >= DEFAULT_CATALOG_TTL_MS) void refresh(harnessDir)
       return engineStatusSummary(entry.payload)

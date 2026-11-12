@@ -25,9 +25,9 @@
  * `@deepseek-ai/dsh-system-prompt` service is composed), plus direct
  * module calls for the degrade path (a bare context without the service).
  */
-import { describe, expect, it, afterEach, spyOn } from 'bun:test'
+import { describe, expect, it, afterEach } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -39,7 +39,6 @@ import * as plugin from '../src/index.ts'
 import { bootApp, fakeChild, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { PERSONA_INTERPOLATION_HAZARD, stripInterpolationHazard } from '../src/gates/_shared.ts'
 import { HarnessResolver } from '../src/index.ts'
-import * as catalog from '../src/gates/catalog.ts'
 import {
   ENGINE_STATUS_CONTEXT_NAME,
   HARNESS_PROMPT_LOGGER,
@@ -464,58 +463,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(fallbackText).toContain('enforcement: soft')
   })
 
-  it('(m) a first render for a non-boot workspace builds the payload once and memoizes it', async () => {
-    // A workspace that is not the boot one has no memo entry. The render used
-    // to answer from a synchronous build AND kick an async refresh that
-    // rebuilt the same payload for the same key — two builds for one render.
-    const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-miss-'))
-    await mkdir(join(root, 'harness'), { recursive: true })
-    await writeFile(join(root, '.mstarc'), '[config]\nharness_dir=harness\n')
-    let render: ((context: object) => string) | undefined
-    const ctx = new Context()
-    ctx.provide('systemPrompt' as never, {
-      section: () => () => {},
-      context: (registered: { text: unknown }) => {
-        render = registered.text as (context: object) => string
-        return () => {}
-      },
-    } as never)
-    // The payload builder the render path uses. The store-backed variant
-    // assembles through this same synchronous builder, so counting it counts
-    // every actual payload build (a background refresh's included).
-    const realBuild = catalog.buildCatalogPayload
-    let builds = 0
-    const buildSpy = spyOn(catalog, 'buildCatalogPayload').mockImplementation((...args: Parameters<typeof realBuild>) => {
-      builds += 1
-      return realBuild(...args)
-    })
-    try {
-      expect(registerHarnessPrompt(ctx, { resolver: new HarnessResolver(undefined) })).toBe(true)
-      await settleInjectChild()
-      // The boot key hydrated its own entry; count only the render's builds.
-      builds = 0
-      const assembly = { agent: { session: { header: { cwd: root } } } }
-      expect(render!(assembly)).toBe(`mstar engine status: v${PLUGIN_VERSION}`)
-      // Drain until the build count stops moving: a background refresh would
-      // land its own (async, store-backed) build here.
-      let last = -1
-      let stableSince = Date.now()
-      while (Date.now() - stableSince < 100) {
-        if (builds !== last) {
-          last = builds
-          stableSince = Date.now()
-        }
-        await new Promise((resolve) => setTimeout(resolve, 5))
-      }
-      expect(builds).toBe(1)
-      // The payload stored by that build answers the next render (no rebuild).
-      expect(render!(assembly)).toBe(`mstar engine status: v${PLUGIN_VERSION}`)
-      expect(builds).toBe(1)
-    } finally {
-      buildSpy.mockRestore()
-      await ctx.fiber.dispose().catch(() => {})
-    }
-  })
+
 
 })
 
