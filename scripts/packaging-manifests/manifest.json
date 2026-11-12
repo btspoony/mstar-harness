@@ -23,8 +23,8 @@
           },
           {
             "root": "packages/cli/src",
-            "files": 40,
-            "sha256": "179afefed54fbea56adacb359ac1c191ab3544850efc13c8068ba8c824cbb19f"
+            "files": 39,
+            "sha256": "841e3401efa6e81e7f717374f2e3a857f3d6b99d23f7fb378fb9b33b03770aa9"
           }
         ],
         "files": [
