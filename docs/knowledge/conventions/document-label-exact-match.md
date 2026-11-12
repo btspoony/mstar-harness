@@ -75,7 +75,7 @@ A prefix-tolerant parser turns a *descriptive* line into an *authoritative* one,
 
 ### After
 
-Exact lookup in the consulted set: a plan carrying both labels records the value of `Working branch`; a plan carrying only the policy sentence refuses with the missing-label diagnostic (`coordination.prepare-amendment.invalid-plan` on the amendment route) and byte-identical protected artifacts.
+Exact lookup in the consulted set: a plan carrying both labels records the value of `Working branch`; a plan carrying only the policy sentence records no `Working branch` declaration at all — the exact lookup never records the prose — while the parser leaves protected artifacts byte-identical.
 
 ## Source
 

@@ -28,11 +28,10 @@
  * (`path.ts#resolvePlanDir`), so a `.mstarc` `[config] plan_dir` declaration
  * and an external plan root both work without a second resolution rule.
  *
- * `planDeclaredHeaders` is the fence-aware declaration reader shared with the
- * amendment path: it replaces the private `planHeadersOf` body rather than
- * sitting beside a second parser (P2b owns that integration). The refusal is a
- * typed `PlanPathError` so the engine can map it onto its existing
- * `coordination.prepare-amendment.invalid-plan` vocabulary.
+ * `planDeclaredHeaders` is the one fence-aware declaration reader: registration,
+ * readiness and the path resolver all read plan declarations through it rather
+ * than sitting beside a second parser. The refusal is a typed `PlanPathError`
+ * carrying a `plan-path.*` code, so a caller reports or maps that code itself.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, sep } from "node:path";
@@ -87,8 +86,8 @@ const PLAN_CONSULTED_HEADERS: Record<string, true> = {
  * declaration, and a consulted label twice with different values refuses
  * instead of silently picking one.
  *
- * Behaviourally identical to the amendment path's private `planHeadersOf`; this
- * exported form is what lets registration and the amendment reuse one parser.
+ * This exported form is what lets registration, readiness and the path resolver
+ * share one parser instead of each keeping its own copy.
  */
 export function planDeclaredHeaders(planPath: string): Map<string, string> {
   return planDeclaredHeadersFromContent(readFileSync(planPath, "utf8"), planPath);

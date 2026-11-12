@@ -75,28 +75,6 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.scoped-writer-required",
   "coordination.unknown-operation",
   "coordination.store",
-  // Prepare amendment refusals (the guarded Prepare-stage amendment contract
-  // § Admission and mutation): one code per documented reason, so a caller
-  // branches on the exact refusal instead of parsing the message.
-  "coordination.prepare-amendment.stale",
-  "coordination.prepare-amendment.invalid-patch",
-  "coordination.prepare-amendment.not-prepare",
-  "coordination.prepare-amendment.execution-started",
-  "coordination.prepare-amendment.duplicate-plan",
-  "coordination.prepare-amendment.invalid-plan",
-  "coordination.prepare-amendment.compass-mismatch",
-  "coordination.prepare-amendment.invalid-worktree",
-  // JSON Prepare coordinator-recovery refusals (prerequisite contract §3.3):
-  // one code per documented reason. Deliberately NOT the DB recovery's verb
-  // (`execution-workflow.ts` owns the active-store route with its token and
-  // stop attestation) and not an alias of it — this family is file/JSON only.
-  "coordination.identity-recovery.invalid-request",
-  "coordination.identity-recovery.stale",
-  "coordination.identity-recovery.not-prepare",
-  "coordination.identity-recovery.execution-started",
-  "coordination.identity-recovery.foreign-owner",
-  "coordination.identity-recovery.unauthorized",
-  "coordination.identity-recovery.operation-conflict",
   // ACTIVE-store coordinator recovery: the caller named itself as the prior
   // holder it replaces, so the generated stop evidence and the replacement
   // identity would be the same session. One code for every transport; the CLI
