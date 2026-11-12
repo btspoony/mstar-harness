@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { CONTRACT_REVISION, NATIVE_ENDPOINT, NATIVE_MODEL, PACK_SCHEMA, PILOT_SCHEMA, TOKEN_POLICY_METHOD, TOKEN_RESERVATION_PER_ATTEMPT, validatePack, validatePilot, type JudgmentPilot, type ReviewDecisionPack } from "../src/contracts.js";
 import { buildA05Request, canonicalJsonBytes } from "../src/review-advice.js";
 import { assessShadowRun, buildDockerLaunchArgs, freezeBaseline, recordWorkUnitDisposition, runShadowSupervisor, type ApprovedChild, type ShadowMountPlan } from "../src/shadow-supervisor.js";
+import { assertSupervisorMountInfo, assertSupervisorMountPaths, SUPERVISOR_REQUESTS_MOUNT, SUPERVISOR_STATUS_MOUNT } from "../src/evaluator-channel.js";
 
 import { calibrationBaselineInventory, stageCalibrationSources } from "../scripts/evaluate.js";
 
@@ -194,10 +195,36 @@ describe("trusted shadow supervisor", () => {
   }, 15_000);
 
   test("CI provides the container-only capability instead of silently skipping the witness", () => {
-    if (process.env.CI !== "true") return; // Local hosts may legitimately lack the mounts.
+    // Judgment tests must not import the dsh test harness; this is a local copy of its isCiEnvironment().
+    const isCiEnvironment = (): boolean => (process.env.CI ?? "") !== "" || (process.env.GITHUB_ACTIONS ?? "") !== "";
+    if (!isCiEnvironment()) return; // Local hosts may legitimately lack the mounts.
     if (containerOnlySkipReason !== null) {
       throw new Error(`test-judgment CI lacks the declared container-only capability: ${containerOnlySkipReason}; pre-create a runner-writable /mnt/output so the container-only cases run instead of skipping`);
     }
+  });
+
+  test("refuses a status mount that is not read-only and keeps both layers on the one mount-path authority", async () => {
+    const fixture = inputs(workspace());
+    // Genuine on-disk siblings rather than a shape-only stand-in: the channel accepts the pair.
+    const mounts = assertSupervisorMountPaths(fixture.mountPlan.requests, fixture.mountPlan.publicStatus);
+    expect(mounts.requestDirectory).not.toBe(mounts.statusPath);
+    // The supervisor publishes the status mount read-only at the path the worker attests.
+    const args = buildDockerLaunchArgs(fixture.child, "run-1", fixture.mountPlan);
+    expect(args).toContain(`--mount=type=bind,src=${fixture.mountPlan.publicStatus},dst=${SUPERVISOR_STATUS_MOUNT},readonly`);
+    // The status-mount plan layer refuses a status path that is not a file.
+    const misplanned = { ...fixture.mountPlan, publicStatus: join(fixture.root, "status-directory") };
+    mkdirSync(misplanned.publicStatus);
+    expect(() => assertSupervisorMountPaths(misplanned.requests, misplanned.publicStatus)).toThrow("jev.channel-mount-invalid");
+    await expect(runShadowSupervisor({ ...fixture, mountPlan: misplanned, runRoot: fixture.root, runId: "run-1", evidenceClass: "component", baseline: fixture.baseline }, undefined, testLauncher)).rejects.toThrow("jev.mount-shape-invalid");
+    // Real /proc/self/mountinfo shape; only the status mount's access mode differs. A
+    // writable status mount is the original confinement failure, and this asserts it
+    // without a write attempt, so root's DAC bypass cannot fake the refusal.
+    const mountInfo = (statusMode: "ro" | "rw") => [
+      ["/mnt/source", "ro"], ["/mnt/source/.runtime", "ro"], ["/mnt/output", "rw"],
+      [SUPERVISOR_REQUESTS_MOUNT, "rw"], [SUPERVISOR_STATUS_MOUNT, statusMode], ["/mnt/scratch", "rw"],
+    ].map(([path, mode], index) => `${index + 1} 0 0:1 / ${path} ${mode},nosuid - tmpfs tmpfs ${mode}`).join("\n");
+    expect(() => assertSupervisorMountInfo(mountInfo("ro"))).not.toThrow();
+    expect(() => assertSupervisorMountInfo(mountInfo("rw"))).toThrow("jev.channel-mount-unconfined");
   });
   test.skipIf(containerOnlySkip)("freezes baseline before real probe child and reports component-only measured events (requires Linux container /mnt mounts and /proc)", async () => {
     const args = inputs(workspace());

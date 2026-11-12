@@ -4,7 +4,7 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { buildA05Request, canonicalJsonBytes } from "./review-advice.js";
-import { createEvaluatorMailbox } from "./evaluator-channel.js";
+import { createEvaluatorMailbox, SUPERVISOR_REQUESTS_MOUNT, SUPERVISOR_STATUS_MOUNT } from "./evaluator-channel.js";
 import { evaluateNative, type EvaluatorContext, type JudgmentResult } from "./runtime.js";
 import { validatePack, validatePilot, type JudgmentPilot, type ReviewDecisionPack } from "./contracts.js";
 import { MAX_ARTIFACT_BYTES, assessShadowRun, digest, freezeBaseline, recordWorkUnitDisposition } from "./shadow-receipts.js";
@@ -195,8 +195,8 @@ export function buildDockerLaunchArgs(child: ApprovedChild, runId: string, plan:
     "run", "--rm", "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
     `--user=${child.uid}:${child.gid}`, "--pids-limit=64", "--memory=256m", "--cpus=1", `--tmpfs=/mnt/scratch:rw,nosuid,nodev,noexec,size=16m,uid=${child.uid},gid=${child.gid},mode=0700`,
     `--mount=type=bind,src=${plan.syntheticSource},dst=/mnt/source,readonly`, `--mount=type=bind,src=${plan.runtimeAssets},dst=/mnt/source/.runtime,readonly`, `--mount=type=bind,src=${plan.ordinaryOutput},dst=/mnt/output`,
-    `--mount=type=bind,src=${plan.requests},dst=/mnt/requests`, `--mount=type=bind,src=${plan.publicStatus},dst=/mnt/status.json,readonly`,
-    "--env=JEV_COMPONENT_WORKER=1", "--env=HOME=/mnt/scratch", "--env=JEV_REQUESTS_DIR=/mnt/requests", "--env=JEV_STATUS_PATH=/mnt/status.json", child.imageDigest, child.containerExecutable, ...child.argv, runId,
+    `--mount=type=bind,src=${plan.requests},dst=${SUPERVISOR_REQUESTS_MOUNT}`, `--mount=type=bind,src=${plan.publicStatus},dst=${SUPERVISOR_STATUS_MOUNT},readonly`,
+    "--env=JEV_COMPONENT_WORKER=1", "--env=HOME=/mnt/scratch", `--env=JEV_REQUESTS_DIR=${SUPERVISOR_REQUESTS_MOUNT}`, `--env=JEV_STATUS_PATH=${SUPERVISOR_STATUS_MOUNT}`, child.imageDigest, child.containerExecutable, ...child.argv, runId,
   ]);
 }
 
