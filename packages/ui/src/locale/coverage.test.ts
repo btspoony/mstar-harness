@@ -120,9 +120,8 @@ describe("every screen's copy contract is satisfied by both locales", () => {
   const english = screens(en);
   const chinese = screens(zh);
 
-  test("ten screens, two locales, no missing key", () => {
+  test("two locales, no missing or empty key", () => {
     for (const [locale, copy] of [["en", english], ["zh", chinese]] as const) {
-      expect(Object.keys(copy)).toHaveLength(10);
       for (const [name, value] of Object.entries(copy)) {
         expect(`${locale}.${name}: ${Object.keys(value).length}`).not.toMatch(/^(en|zh)\.\w+: 0$/);
       }
@@ -144,7 +143,10 @@ describe("every screen's copy contract is satisfied by both locales", () => {
     const sections = Object.keys(en);
     const shared = ["state", "common", "shell"];
     const screenSections = sections.filter((section) => !shared.includes(section));
-    expect(new Set(screenSections).size).toBe(Object.keys(english).length);
+    // One dictionary section per screen, as a set relation rather than a count: a
+    // new screen needs a new section and a section without a screen is dead copy,
+    // with no number to edit either way.
+    expect(screenSections.sort()).toEqual(Object.keys(english).sort());
   });
 
   test("the four absence arms and the filtered-empty key all reach a screen", () => {
