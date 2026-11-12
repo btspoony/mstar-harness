@@ -26,6 +26,11 @@ const PACKAGE_ROOT = join(import.meta.dir, "..", "..");
  * specifier is a value import. Every legal `import type` form must go: named (one
  * line, or the `import type {` … `} from "@mstar-harness/engine"` block that
  * `view-model/iterations.ts` uses), default, namespace, and default-plus-named.
+ *
+ * One shape is out of scope: a line comment between `from` and the module
+ * specifier, so the string starts on the next line. No file in this repository
+ * writes an import that way, and the guard is advisory — a false positive is
+ * immediately visible and cheap, like the indented imports the anchor rejects.
  */
 // Mask rather than delete: newlines are kept so positions in the result still
 // map to the same source lines (the diagnostic reports the offending line).
