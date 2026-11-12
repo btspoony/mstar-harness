@@ -34,7 +34,7 @@
  * append is error-contained ; an aborted step returns the delegated
  * decision unchanged . Fiber disposal removes the listener (HMR-safe).
  */
-import { describe, expect, it, afterEach } from 'bun:test'
+import { describe, expect, it, afterEach, spyOn } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -63,6 +63,7 @@ import {
   panelDigestOf,
   renderEngineStatusCatalog,
 } from '../src/gates/catalog.ts'
+import * as catalog from '../src/gates/catalog.ts'
 import { readDshStatusEmission } from '@mstar-harness/engine'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { bootApp, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, selectedGenerationFor, type BootResult } from './harness.ts'
@@ -527,6 +528,32 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
       const later = await app.ctx.waterfall('agent/pre-step', stepPayloadAt(turn), defaultEnter([]))
       expect(later.kind).toBe('enter')
       expect(later.kind === 'enter' && later.messages).toEqual([])
+    }
+  })
+
+  it('derives the panel projection ONCE per cache build — two steps on an unchanged payload re-use it (D2)', async () => {
+    const app = booted = await bootApp()
+    const realDigest = catalog.panelDigestOf
+    let projections = 0
+    const digestSpy = spyOn(catalog, 'panelDigestOf').mockImplementation((input: Parameters<typeof realDigest>[0]) => {
+      projections += 1
+      return realDigest(input)
+    })
+    try {
+      // First step: a cache MISS builds the payload, so the projection is
+      // derived here — exactly once.
+      const first = await app.ctx.waterfall('agent/pre-step', stepAtWorkspace(app.root, 1), defaultEnter([]))
+      expect(catalogRowOf(first).source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
+      expect(projections).toBe(1)
+
+      // Second step inside the TTL: the SAME cache entry answers, so the gate
+      // reads the stored projection instead of re-serializing the payload.
+      const second = await app.ctx.waterfall('agent/pre-step', stepAtWorkspace(app.root, 2), defaultEnter([]))
+      expect(second.kind).toBe('enter')
+      expect(second.kind === 'enter' && second.messages).toEqual([])
+      expect(projections).toBe(1)
+    } finally {
+      digestSpy.mockRestore()
     }
   })
 

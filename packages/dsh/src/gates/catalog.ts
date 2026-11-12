@@ -234,10 +234,16 @@ function engineStatusPayload(harnessDir: string | null, hint?: SessionHint, fact
 
 // Keep generation metadata off the model-facing, JSON-serialized catalog payload.
 const authorityGenerationByPayload = new WeakMap<MstarEngineStatusPayload, DshSelectedGeneration>()
-/** One TTL cache entry: the unified payload plus the build timestamp. */
+/** One TTL cache entry: the unified payload, its build timestamp and its panel projection. */
 export interface CatalogCacheEntry {
   payload: MstarEngineStatusPayload
   builtAt: number
+  /**
+   * The panel projection ({@link panelDigestOf}) of `payload`, computed ONCE
+   * at build: the gate reads it per step, and re-deriving it there would
+   * re-serialize the whole payload on every step of a cache hit.
+   */
+  projection: string
 }
 
 /**
@@ -439,6 +445,8 @@ export interface CatalogPayloadRead {
   readonly payload: MstarEngineStatusPayload
   /** Epoch millis when `payload` was built (a cache hit keeps the ORIGINAL instant). */
   readonly builtAt: number
+  /** The panel projection of `payload` — computed once at build, not per reader. */
+  readonly projection: string
 }
 
 /**
@@ -470,22 +478,31 @@ export async function readCatalogPayload(
   ttlMs: number,
 ): Promise<CatalogPayloadRead> {
   if (sessionId === undefined) {
-    return { payload: await buildCatalogPayloadWithStore(ctx, harnessDir, hint), builtAt: Date.now() }
+    const uncached = await buildCatalogPayloadWithStore(ctx, harnessDir, hint)
+    return { payload: uncached, builtAt: Date.now(), projection: panelDigestOf(uncached) }
   }
   const key = catalogCacheKey(harnessDir, sessionId, cwd, hint)
   const entry = cache.get(key)
   const now = Date.now()
   if (entry !== undefined && now - entry.builtAt < ttlMs) {
     invalidation.register(harnessDir, sessionId, key)
-    return { payload: entry.payload, builtAt: entry.builtAt }
+    return { payload: entry.payload, builtAt: entry.builtAt, projection: entry.projection }
   }
   const payload = await buildCatalogPayloadWithStore(ctx, harnessDir, hint)
-  cache.set(key, { payload, builtAt: now })
+  // The projection is derived ONCE per build (here) and carried on the entry:
+  // the per-step gate reads it instead of re-serializing the payload.
+  const projection = panelDigestOf(payload)
+  cache.set(key, { payload, builtAt: now, projection })
   invalidation.register(harnessDir, sessionId, key)
-  return { payload, builtAt: now }
+  return { payload, builtAt: now, projection }
 }
 
-/** The pre-step's payload-only view of {@link readCatalogPayload}. */
+/**
+ * The pre-step's cached view of {@link readCatalogPayload} — the payload plus
+ * the panel projection the same cache build derived (never recomputed here).
+ * `index.ts` names this function in its apply-scope comments, so it stays the
+ * pre-step's entry point into the ONE cache rule.
+ */
 async function catalogPayloadFor(
   ctx: Context,
   cache: Map<string, CatalogCacheEntry>,
@@ -495,8 +512,8 @@ async function catalogPayloadFor(
   cwd: string,
   hint: SessionHint | undefined,
   ttlMs: number,
-): Promise<MstarEngineStatusPayload> {
-  return (await readCatalogPayload(ctx, cache, invalidation, harnessDir, sessionId, cwd, hint, ttlMs)).payload
+): Promise<CatalogPayloadRead> {
+  return readCatalogPayload(ctx, cache, invalidation, harnessDir, sessionId, cwd, hint, ttlMs)
 }
 
 /**
@@ -1342,7 +1359,8 @@ export async function preStepCatalogListener(
     // a READ path and must still render, so it falls back to the structural
     // hint and reports the degrade once through the logger.
     const hint = sessionHintForCatalog(harnessDir, payload.agent)
-    const catalogPayload = await catalogPayloadFor(ctx, cache, invalidation, harnessDir, sessionId, cwd ?? '', hint, ttlMs)
+    const catalog = await catalogPayloadFor(ctx, cache, invalidation, harnessDir, sessionId, cwd ?? '', hint, ttlMs)
+    const catalogPayload = catalog.payload
     // No resolved `{HARNESS_DIR}` ⇒ the payload carries no state section, and
     // after D1 the rendered block would be an empty `<mstar_engine_status>`
     // wrapper: compose no row and record no digest (there is nothing that could
@@ -1356,7 +1374,7 @@ export async function preStepCatalogListener(
     // on the next step rather than being frozen at boot.
     const includeWatermark = typeof options.showWatermark === 'function' ? options.showWatermark() : options.showWatermark === true
     const text = renderEngineStatusCatalog(catalogPayload, { includeWatermark })
-    const panelKey = panelDigestOf(catalogPayload)
+    const panelKey = catalog.projection
     const digestKey = agentDigestKey(payload.agent, cwd)
     const prior = digests.get(digestKey)
     // TWO independent change decisions (D2), because the model row and the
@@ -1372,6 +1390,9 @@ export async function preStepCatalogListener(
     // - The PANEL's comparison key stays the FULL payload projection
     //   ({@link panelDigestOf}), so a panel-only change still persists the new
     //   payload for the panel. It just does not spend a model-visible row on it.
+    //   The projection was derived by the cache build that produced this
+    //   payload (`readCatalogPayload`), so the gate reads it instead of
+    //   re-serializing the whole payload on every step.
     //
     // A new turn alone is NOT a trigger for either. Per session+workspace, so
     // different sessions/workspaces keep independent digests.
