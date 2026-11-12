@@ -392,21 +392,21 @@ so it survives the docked body's unmount. Labels come from the `mstar-panel`
 locale namespace: **"Morning Star Workflow"** (en) / **"晨星工作流"** (zh).
 
 The panel renders the **control-root `store.db`**, not the model's last
-emission. The host half composes five engine dashboard views — `workflow-detail`,
-`iteration-detail`, `roadmap`, `issues`, `projects` — **sequentially** (the
-store read layer may refresh projections, so two views never overlap) into one
-`PanelSnapshot`, served on `/api/mstar/panelSnapshot`; the browser half polls it
-while the tab is visible. The `mstar` gateway keeps only the picker's durable
+emission. The payload is the **session digest** — `enforcement`, `knowledge`
+(carried, never rendered), `selection`, the delivery fallback (`iteration`) and
+the leaf-signal disclosure — served on `/api/mstar/panelSnapshot`. Everything
+else is a per-view engine `DashboardView` read (`mstar/dashboardView`) by the
+screen that needs it (`workflow-detail` and `iterations` on the Focus landing,
+one view per destination). The `mstar` gateway keeps only the picker's durable
 write (`mstar/selectWorkflow`).
 
-**Poll contract** (`panel-snapshot-client.ts`): 5 s while the tab is visible, at
-most **one** request in flight (a slow answer never stacks a queue), a 5 s
-deadline per request, the last good snapshot kept on screen while a refresh is
-out (no flicker), an immediate refetch on a new connection generation, and
-nothing at all while the tab is not visible. The deadline is a real
-cancellation: the carrier's `AbortSignal` reaches the host read, which checks it
-before every view, so a timed-out request stops paying for store reads and
-projection captures instead of completing unpaid.
+**One-shot reads** (`panel-snapshot-client.ts`, `once-reader.ts`): the digest is
+read when the seat mounts and on an explicit `reload()` (a workflow pick, a
+retry) — NO STATE, NO TIMER, NO SUBSCRIPTION, and no visibility gate. Each
+request carries a 5 s deadline that is a real cancellation: the carrier's
+`AbortSignal` reaches the host read, which checks it before every view, so a
+timed-out request stops paying for store reads and projection captures instead
+of completing unpaid.
 
 **The client sends `{ sessionId, cwd }` and nothing else.** The workflow (the
 session's durable picker record, falling back to the store's single ACTIVE
@@ -437,15 +437,9 @@ pane's definite height with exactly three zones — the **section nav**
 (任务迭代 / 项目路线图 / 事件记录, flex: none), the panel-owned **single scroll
 body** (`[data-mstar-scroll]` — the ONLY `overflow-y` element in the panel; no
 element scrolls horizontally; `data-mstar-graph` rides it), and the pinned
-**meta dock** (version + harness dir; never scrolls). The workspace-state
-digest (plans ≤5 time-desc + `+N more`, open residual findings ≤10 with
-severity chips, policy with **enforcement first** then push / worktree
-mode, `rowScopes` and the integration worktree path, knowledge, direction)
-sits IN FLOW at the end of
-the scroll body — the fixed 300px sibling column and its nested scroller are
-gone — and the freshness footer closes it. The host composer-overlay opt-in is
-no longer needed (the sidebar pane body is a definite-height box) and the
-obsolete viewport media queries are deleted: the shell carries
+**meta dock** (version + harness dir; never scrolls). The host composer-overlay
+opt-in is no longer needed (the sidebar pane body is a definite-height box) and
+the obsolete viewport media queries are deleted: the shell carries
 `container-type: inline-size` and the width rules are **container queries** —
 below 480px container width the padding and group gap tighten (compact rhythm at
 the 300px floor); at ≥720px the shared group grid spreads to two columns
@@ -542,13 +536,13 @@ never guessed; with no steering compass the current-iteration filter infers the
 iteration from plan ids (8-digit date prefix) + `doneAt`, a deterministic
 documented heuristic that drops only provably cross-iteration events and never
 back-scans a resumed long log;
-a store read happens every 5 s while the tab is visible (five sequential
-dashboard views on the host; a collapsed tab reads nothing); a cold or expired
-catalog cache makes the panel REBUILD the payload — the pre-step's own rule,
-TTL-bounded, so at most once a minute per open panel — and that build may
-refresh projections, which is why the retained read runs AFTER the five views
-and never beside them; the retained facts can therefore lag the store read by up
-to one catalog interval (60 s), which `retained.at` discloses instead of hiding;
+a panel read happens on mount and on an explicit action (a workflow pick, a
+retry; an unmounted seat issues nothing); a cold or expired catalog cache makes
+the panel REBUILD the payload — the pre-step's own rule, TTL-bounded, so at most
+once a minute per open panel — and that build may refresh projections, which is
+why the retained catalog read runs AFTER the per-view reads and never beside
+them; the `knowledge` and `selection` members can therefore lag the rest of the
+digest by up to one catalog interval (60 s);
 the engine-status emission still writes `dsh_status_emissions` on change (the
 model-visible anchor), and a resumed session shows the anchor again on its first
 composed step after an app restart — the digest is in-memory — and thereafter

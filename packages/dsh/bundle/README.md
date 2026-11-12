@@ -177,29 +177,19 @@ id (`sidebar.right.pane.tab` + `sidebar.right.pane.tab.title`; the chip is
 the glyph + the title captured at open — it does not follow a mid-session
 locale switch), and a docked body renders NOTHING while `tab.visible ===
 false` (collapsed column or another pane tab active). The tab renders the
-latest `mstar-engine` catalog **anchor** row — the persisted source is the
-producer-owned catalog source
-(`{ kind: 'mstar-engine', form: 'catalog' }`; the anchor
-reader also accepts the V3→V4-migrated legacy kinds `plugin:mstar-engine` and
-`plugin:mstar-engine-status` from persisted logs) — and the payload is fetched from the host's
-`/api/mstar/engineStatus` endpoint (the gateway owns the route; the
-panel's browser half calls
-`connection.rpc.call('/api', 'mstar/engineStatus', { args: { sessionId, cwd } })`
-and renders the session's stored snapshot, or an explicit unavailable
-reason).
+**control-root `store.db`**, not the latest catalog anchor row: the panel's
+browser half reads the session digest from `/api/mstar/panelSnapshot`
+(`connection.rpc.call('/api', 'mstar/panelSnapshot', { args: { sessionId, cwd } })`)
+and one engine `DashboardView` per screen from `/api/mstar/dashboardView`, and
+renders the answer or an explicit unavailable reason.
 
 **MStar Workflow layout**: a narrow-column shell bound to the sidebar
 pane's definite height — exactly three zones: the **section nav** (任务迭代
 / 代理执行 / 事件记录; `data-mstar-tab-nav`), the panel-owned **single
 scroll body** (`[data-mstar-scroll]` — the ONLY `overflow-y` element in
 the panel; nothing scrolls horizontally; `data-mstar-graph` rides it), and
-the pinned **meta dock** (version + harness dir; never scrolls). The
-workspace-state digest (plans ≤5 time-desc + `+N more`, open residual
-findings ≤10 with severity chips + overflow hint, policy with enforcement
-first then push / worktree mode, `rowScopes` and the integration worktree
-path, knowledge, direction) renders IN FLOW at the end of the scroll body,
-closed by the identity line (`built {time}` / `read {time}` — the
-projection's build time and this read's instant, never "live"). The shell carries `container-type:
+the pinned **meta dock** (version + harness dir; never scrolls). The shell
+carries `container-type:
 inline-size`: below 480px container width padding and group gap tighten;
 at ≥720px the shared group grid spreads to two columns
 (`repeat(auto-fit, minmax(280px, 1fr))`) — the only structural change any
