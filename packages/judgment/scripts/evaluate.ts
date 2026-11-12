@@ -271,7 +271,7 @@ async function calibrateDevelopment(root: string, protocol: Record<string, unkno
   const variantIds = new Set(groups.flatMap((group) => group.variants.map((variant) => variant.id)));
   const gold = new Map<string, { groupId: string; label: string }>();
   // Filter by opaque development item ID before parsing gold; no holdout label enters the tuner view.
-  for (const line of readFileSync(resolve(root, "gold/adjudicated.jsonl"), "utf8").split(/\r?\n/)) {
+  for (const line of readArtifact(root, "gold/adjudicated.jsonl").split(/\r?\n/)) {
     const item = /^{"itemId":"([^"]+)"/.exec(line)?.[1];
     if (item && variantIds.has(item)) gold.set(item, JSON.parse(line));
   }
@@ -279,7 +279,7 @@ async function calibrateDevelopment(root: string, protocol: Record<string, unkno
   const sourceSlots = new Set(groups.map((group) => group.sourceSlot));
   const sources = new Map<string, SyntheticGroup>();
   for (let shard = 1; shard <= 4; shard++) {
-    for (const line of readFileSync(resolve(root, `sources/shard-${shard}.jsonl`), "utf8").split(/\r?\n/)) {
+    for (const line of readArtifact(root, `sources/shard-${shard}.jsonl`).split(/\r?\n/)) {
       const slot = /^{"id":"([^"]+)"/.exec(line)?.[1];
       if (slot && sourceSlots.has(slot)) sources.set(slot, JSON.parse(line));
     }

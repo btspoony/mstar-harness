@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runEvaluationCommand } from "../scripts/evaluate.js";
+import { frozenBudget, frozenRoot } from "./fixtures/qualification-root.js";
 
 async function capture(args: string[]): Promise<{ code: number; stderr: string }> {
   const output: string[] = [];
@@ -32,6 +33,29 @@ function rootMissingAnnotationShard(): string {
   return root;
 }
 
+// Calibration admits only a bound protocol, budget and permission, and reads no source shard before the frozen split.
+function calibrateRoot(): string {
+  return frozenRoot({
+    developmentVariantSources: true,
+    calibrationArtifacts: {
+      "protocol.json": JSON.stringify({
+        schema: "mstar.qualification-protocol/v1", contractRevision: "phase3a-native-20260924",
+        mode: "shadow", transport: "native-typesafe",
+        providerEndpoint: "https://provider.invalid/v1/judge", requestedModel: "jev-1.13.0",
+      }),
+      "budget.json": JSON.stringify(frozenBudget),
+      "permission.json": JSON.stringify({
+        contractRevision: "phase3a-native-20260924",
+        status: "synthetic-only-policy-declaration; not a self-authorizing pilot",
+        dataClass: "newly authored synthetic source claims and bounded literal evidence excerpts only",
+        endpoint: "https://provider.invalid/v1/judge", model: "jev-1.13.0",
+        mode: "shadow", transport: "native-typesafe",
+        authorizedBy: "synthetic-policy-owner", permissionRef: "permission.json", isolation: "run-manifest.json#docker-mount-plan",
+      }),
+    },
+  });
+}
+
 describe("evaluation artifact refusals", () => {
   test("names a missing JSON artifact relative to the run root and keeps the fail-closed exit code", async () => {
     const root = mkdtempSync(join(tmpdir(), "qualification-artifact-missing-"));
@@ -50,6 +74,29 @@ describe("evaluation artifact refusals", () => {
       const { code, stderr } = await capture(["check-annotations", "--root", root, "--seat", "A", "--shard", "1"]);
       expect(code).toBe(2);
       expect(stderr).toContain("jev.artifact-missing: annotations/A-1.jsonl");
+      expect(stderr).not.toContain(root);
+      expect(stderr).not.toContain("ENOENT");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("calibrate names a missing gold artifact relative to the run root instead of surfacing ENOENT", async () => {
+    const root = calibrateRoot();
+    rmSync(join(root, "gold/adjudicated.jsonl"));
+    try {
+      const { code, stderr } = await capture(["calibrate-preflight", "--root", root]);
+      expect(code).toBe(2);
+      expect(stderr).toContain("jev.artifact-missing: gold/adjudicated.jsonl");
+      expect(stderr).not.toContain(root);
+      expect(stderr).not.toContain("ENOENT");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("calibrate names a missing source shard relative to the run root instead of surfacing ENOENT", async () => {
+    const root = calibrateRoot();
+    try {
+      const { code, stderr } = await capture(["calibrate-preflight", "--root", root]);
+      expect(code).toBe(2);
+      expect(stderr).toContain("jev.artifact-missing: sources/shard-1.jsonl");
       expect(stderr).not.toContain(root);
       expect(stderr).not.toContain("ENOENT");
     } finally { rmSync(root, { recursive: true, force: true }); }
