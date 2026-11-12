@@ -444,6 +444,11 @@ const deliveryEvidenceSchema: z.ZodType<WorkflowDeliveryEvidence> = z.union([
  * `base === work` makes the delivery branch the source of its own change. The
  * registration still succeeds - the warning rides in the ok envelope's
  * `data.warnings` and never refuses.
+ *
+ * Both conditions are symmetric while the repair is not: either anchor may be
+ * the mis-recorded one, and `delivery-anchors` accepts a re-recorded anchor
+ * that is already correct. Each arm therefore names both corrections, so no
+ * accepted repair leaves the collision in place.
  */
 function deliveryAnchorWarnings(deliveryKind: string, base: string | undefined, work: string | undefined, target: string | undefined): string[] {
   if (deliveryKind !== "development" || work === undefined) return [];
@@ -452,7 +457,8 @@ function deliveryAnchorWarnings(deliveryKind: string, base: string | undefined, 
       `--branch-work/--branch-target: both were recorded as ${JSON.stringify(work)}, so branch.work === branch.target and the anchors name no delivery PR. ` +
       "--branch-work is the branch the delivery PR comes from, normally the plan's own feature branch; " +
       "`mstar plan complete` compares it with the plan row's recorded working branch. " +
-      "Repair the registered workflow with `mstar workflow delivery-anchors --workflow <id> --branch-work <branch> --reason <text>`.",
+      "Either anchor may be the wrong one: if branch.work is the real delivery branch, record the branch it merges into with `mstar workflow delivery-anchors --workflow <id> --branch-target <branch> --reason <text>`; " +
+      "if branch.target is right, record the delivery branch instead with `mstar workflow delivery-anchors --workflow <id> --branch-work <branch> --reason <text>`.",
     ];
   }
   if (base !== work) return [];
@@ -460,7 +466,8 @@ function deliveryAnchorWarnings(deliveryKind: string, base: string | undefined, 
     `--branch-base/--branch-work: both were recorded as ${JSON.stringify(work)}, so branch.base === branch.work and the delivery branch is the source of the change. ` +
     "--branch-base is the protected branch the work was created from, not the delivery branch; " +
     "`mstar plan complete` compares branch.work with the plan row's recorded working branch. " +
-    "Repair the registered workflow with `mstar workflow delivery-anchors --workflow <id> --branch-base <branch> --reason <text>`.",
+    "Either anchor may be the wrong one: if branch.work is the real delivery branch, record its creation base with `mstar workflow delivery-anchors --workflow <id> --branch-base <branch> --reason <text>`; " +
+    "if branch.base is the real creation base, record the delivery branch instead with `mstar workflow delivery-anchors --workflow <id> --branch-work <branch> --reason <text>`.",
   ];
 }
 
@@ -519,7 +526,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       expect: `Optional checked CAS constraint: ${TOKEN_SUPPLIES.root}`,
       planTitle: "Must match the selected plan document's H1; that document is the registration authority.",
       branchWork: "The delivery branch recorded as branch.work: the branch the delivery PR comes from, normally the plan's own feature branch. `mstar plan complete` compares it with the plan row's recorded working branch, so a default/protected branch name here is normally wrong — and a wrong value is repairable on a running workflow with mstar workflow delivery-anchors.",
-      branchBase: "The branch this workflow was created from, recorded as branch.base: the protected merge anchor. It is not the delivery branch.",
+      branchBase: "The branch this workflow was created from, recorded as branch.base: the protected merge anchor. It is not the delivery branch, so recording the same branch as --branch-work is advised against; a wrong value is repairable on a running workflow with mstar workflow delivery-anchors.",
       branchSource: "Deprecated alias of --branch-work: it records the same delivery branch (branch.work).",
       branchTarget: "The delivery target anchor recorded as branch.target: the branch the delivery merges into. A wrong value is repairable on a running workflow with mstar workflow delivery-anchors.",
     }),
