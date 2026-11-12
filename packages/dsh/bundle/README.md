@@ -196,10 +196,10 @@ the panel; nothing scrolls horizontally; `data-mstar-graph` rides it), and
 the pinned **meta dock** (version + harness dir; never scrolls). The
 workspace-state digest (plans ≤5 time-desc + `+N more`, open residual
 findings ≤10 with severity chips + overflow hint, policy with enforcement
-first then push / worktree / control worktree, leases, knowledge,
-direction) renders IN FLOW at the end of the scroll body, closed by the
-freshness footer (`snapshot {time} · turn {turn}` — the served snapshot's
-own timestamp + turn, never "live"). The shell carries `container-type:
+first then push / worktree mode, `rowScopes` and the integration worktree
+path, knowledge, direction) renders IN FLOW at the end of the scroll body,
+closed by the identity line (`built {time}` / `read {time}` — the
+projection's build time and this read's instant, never "live"). The shell carries `container-type:
 inline-size`: below 480px container width padding and group gap tighten;
 at ≥720px the shared group grid spreads to two columns
 (`repeat(auto-fit, minmax(280px, 1fr))`) — the only structural change any
