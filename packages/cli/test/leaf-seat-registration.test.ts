@@ -16,17 +16,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeCommand, type InvocationContext } from "@mstar-harness/commands";
 import { resolveCliSessionIdentity } from "../src/command-adapter";
+import { clearIdentityChannels, restoreIdentityChannels } from "./harness";
 
-const MARKS = ["DSH_MSTAR_LEAF_SEAT", "MSTAR_LEAF_SEAT", "DSH_SESSION_ID", "MSTAR_HOST_SESSION_ID", "MSTAR_EXECUTION_IDENTITY"] as const;
-const saved = new Map(MARKS.map((key) => [key, process.env[key]]));
-
-afterEach(() => {
-  for (const key of MARKS) {
-    const value = saved.get(key);
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
-});
+afterEach(restoreIdentityChannels);
 
 /** An EMPTY control root: the leaf refusal must land before any store is read. */
 function harnessFixture(): { root: string; cwd: string } {
@@ -105,6 +97,8 @@ describe("the shell leaf marker reaches the engine refusal on a CLI registration
   test("without a marker the same call is NOT refused by the leaf rule (the stamp is load-bearing)", async () => {
     const { root, cwd } = harnessFixture();
     try {
+      // The shell may itself be a leaf seat; clearing is what makes this a control.
+      clearIdentityChannels();
       const { envelope, identity } = await bindThroughCli(cwd, root);
       expect(identity.leafSeat).toBeUndefined();
       expect(envelope.code).not.toBe("coordination.leaf-seat");
