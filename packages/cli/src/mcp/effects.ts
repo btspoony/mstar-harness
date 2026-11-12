@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:os";
 import { startDashboard, type CommandEffects } from "@mstar-harness/commands";
+import { openBrowserBounded } from "../browser-opener.js";
 
 type ProcessRequest = {
   argv: readonly string[];
@@ -59,16 +60,7 @@ export function createMcpEffects(services: Array<{ close(): Promise<void> }>): M
       return handle;
     },
     async openBrowser(url) {
-      const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-      const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-      await new Promise<void>((resolve, reject) => {
-        const child = nodeSpawn(opener, args, { shell: false, stdio: "ignore" });
-        child.once("spawn", resolve);
-        child.once("error", (error: NodeJS.ErrnoException) => reject(Object.assign(
-          new Error(`no platform opener (${opener}) available: ${error.message}`),
-          { code: "capability.browser.unavailable" },
-        )));
-      });
+      await openBrowserBounded(url, inputs.getStore()?.signal);
     },
   };
 }
