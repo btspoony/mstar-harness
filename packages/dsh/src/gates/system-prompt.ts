@@ -230,9 +230,11 @@ export function registerHarnessPrompt(
   // disposers FIRST, so the fresh apply registers without a duplicate-name
   // throw and no stale closure (old resolver/harness dir) lingers.
   ctx.inject(['systemPrompt'], async (systemPromptCtx) => {
+    let disposeSection: (() => void) | undefined
+    let disposeContext: (() => void) | undefined
     try {
       const view = systemPromptCtx.systemPrompt as unknown as SystemPromptView
-      const disposeSection = view.section({
+      disposeSection = view.section({
         name: HARNESS_RULES_SECTION_NAME,
         order: HARNESS_RULES_SECTION_ORDER,
         // Live text provider (plan:policy precedent — provider text, no
@@ -246,26 +248,14 @@ export function registerHarnessPrompt(
           return harnessRulesText(harnessDir, sectionEnforcement(harnessDir), teamLayerMounted(ctx))
         },
       })
-      const disposeContext = view.context({
+      disposeContext = view.context({
         name: ENGINE_STATUS_CONTEXT_NAME,
         order: ENGINE_STATUS_CONTEXT_ORDER,
         text: await engineStatusProvider(ctx, options.resolver, bootHarnessDir),
       })
       systemPromptCtx.effect(function* () {
         yield () => {
-          // Idempotent + contained: the disposers remove only their own
-          // entries; a throw here would surface in the fiber teardown, so
-          // each is individually guarded (never-throws discipline).
-          try {
-            disposeSection()
-          } catch {
-            // ignore — the layer entry is already gone
-          }
-          try {
-            disposeContext()
-          } catch {
-            // ignore — the layer entry is already gone
-          }
+          disposeCollected(disposeSection, disposeContext)
           // The entries are gone: this registration no longer carries the
           // version / harness dir / enforcement facts, so a fallback consumer
           // must return to its watermark. Called after BOTH removal attempts
@@ -282,9 +272,33 @@ export function registerHarnessPrompt(
       notifyRegistrationHook(options.onRegistered, 'onRegistered')
     } catch (error) {
       log('warn', `mstar:harness-rules registration failed (contained — session boot unaffected): ${errorMessage(error)}`)
+      // Whatever landed before the throw is disposed here: the effect that
+      // owns it is never installed, so leaving it would leak a layer entry
+      // (and its stale closure) for the life of the composition.
+      disposeCollected(disposeSection, disposeContext)
     }
   })
   return true
+}
+
+/**
+ * Invoke the collected registration disposers in registration order with the
+ * module's never-throws discipline: each call removes only its own layer
+ * entry, and a throw (entry already gone) can neither fail the caller nor
+ * escape the fiber teardown. A disposer that never landed (undefined — the
+ * registration threw before obtaining it) is simply absent.
+ */
+function disposeCollected(
+  disposeSection: (() => void) | undefined,
+  disposeContext: (() => void) | undefined,
+): void {
+  for (const dispose of [disposeSection, disposeContext]) {
+    try {
+      dispose?.()
+    } catch {
+      // ignore — the layer entry is already gone
+    }
+  }
 }
 
 /**

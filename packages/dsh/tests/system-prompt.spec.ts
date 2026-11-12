@@ -396,14 +396,50 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
       expect(text.startsWith('<mstar_engine_status>\nmstar version: ')).toBe(true)
       expect(text).toContain(`harness dir: ${booted.harnessDir}`)
       expect(text).toContain('enforcement: soft')
-      // The failure really is a NON-landing: the section only landed for the
-      // context failure, and the engine-status context never landed.
+      // The failure really is a NON-landing: a `section` throw lands nothing,
+      // and a `context` throw after the section landed now disposes that
+      // section again (no leaked entry), so neither path leaves a section —
+      // and the engine-status context never lands in either case.
       const assembly = await booted.ctx.systemPrompt.assemble()
       const sectionLanded = assembly.sections.some((section) => section.name === HARNESS_RULES_SECTION_NAME)
-      expect(sectionLanded).toBe(failure === 'context')
+      expect(sectionLanded).toBe(false)
       expect(assembly.contexts.some((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)).toBe(false)
       await booted.dispose()
       booted = undefined
+    }
+  })
+
+  it('(l) a context() throw after the section landed disposes that section and never fires onRegistered', async () => {
+    // The failure path must not leak what already landed: the `systemPromptCtx.effect`
+    // ownership is never installed when the throw skips it, so the catch has to
+    // dispose the section itself (no stale closure, no phantom live registration).
+    const ctx = new Context()
+    let sectionDisposed = 0
+    const live = new Set<string>()
+    ctx.provide('systemPrompt' as never, {
+      section: (section: { name: string }) => {
+        live.add(section.name)
+        return () => {
+          sectionDisposed += 1
+          live.delete(section.name)
+        }
+      },
+      context: () => {
+        throw new Error('context registration refused')
+      },
+    } as never)
+    try {
+      let registered = 0
+      expect(registerHarnessPrompt(ctx, {
+        resolver: new HarnessResolver(undefined),
+        onRegistered: () => { registered += 1 },
+      })).toBe(true)
+      await settleInjectChild()
+      expect(sectionDisposed).toBe(1)
+      expect(live.has(HARNESS_RULES_SECTION_NAME)).toBe(false)
+      expect(registered).toBe(0)
+    } finally {
+      await ctx.fiber.dispose().catch(() => {})
     }
   })
 
