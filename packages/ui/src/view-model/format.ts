@@ -21,7 +21,7 @@ export const NOT_KNOWN = "Not known";
 export const NOT_DECLARED = "Not declared";
 
 /**
- * A stored timestamp in the prototype's own display form (`design-v1.html:1444`):
+ * A stored timestamp in the prototype's own display form (`prototype.html:1444`):
  * `2026-10-23 09:14`.
  *
  * One formatter for every timestamp, because a timestamp on a detail line is the
@@ -41,7 +41,7 @@ export function formatDate(value: string | null | undefined): string {
 }
 
 /**
- * The short form a list cell shows (`design-v1.html:1215`): `10-25 13:58`.
+ * The short form a list cell shows (`prototype.html:1215`): `10-25 13:58`.
  *
  * The prototype's table cells print month-day and the time, not the year and not
  * an ISO string. A date with no time part keeps just the month-day, and a value

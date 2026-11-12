@@ -361,7 +361,7 @@
 .ms-container .chart-wrap { padding: 4px 12px 6px; }
 
 /* `height` is fixed, not `auto`: the prototype's own drawing code sets an explicit
-   height on the svg (`design-v1.html:3229`, `compact ? 88 : 132`), and its
+   height on the svg (`prototype.html:3229`, `compact ? 88 : 132`), and its
    generator never had to survive a `height: auto` reading of this rule. Ours does:
    with `auto` the chart sized by the viewBox's 100:40 ratio, so it grew with its
    container — 339px in the overview card, 540px across the issues screen. */

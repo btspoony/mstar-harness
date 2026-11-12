@@ -6,7 +6,7 @@
  * that card, so a screen composes a panel instead of re-deriving the same three
  * rules in its own module.
  *
- * Values are the prototype's own (`design-v1.html:215-224`): the surface, the
+ * Values are the prototype's own (`prototype.html:215-224`): the surface, the
  * hairline border and `--ms-radius-md`; a head of `min-height: 32px` with
  * `padding: 0 12px` and its bottom rule; a body of `padding: 10px 12px` (or none,
  * for a table that draws its own cell padding); a foot of `padding: 6px 12px`

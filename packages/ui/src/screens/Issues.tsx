@@ -203,7 +203,7 @@ export function Issues(props: IssuesProps) {
       <div className={"screen-head"}>
         <h1>{copy.pageTitle}</h1>
         {/* The prototype's screen meta: the count, its scope, and the ordering
-            the read applies (`design-v1.html:1094-1101`). The count lives here
+            the read applies (`prototype.html:1094-1101`). The count lives here
             AND in the filter row, so neither is the only place it appears. */}
         <div className={"screen-meta"} data-ms-summary="">
           <span className={"t-num"} data-ms-count={model.total}>

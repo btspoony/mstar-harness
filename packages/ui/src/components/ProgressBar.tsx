@@ -31,7 +31,7 @@ export function ProgressBar(props: ProgressBarProps) {
   return (
     <span
       // The prototype paints the completed bar through this class, not the tone attribute
-      // (`design-v1.html:291`: `.bar.is-done > i`); the module that carried the attribute's
+      // (`prototype.html:291`: `.bar.is-done > i`); the module that carried the attribute's
       // own success rule was deleted, so a complete bar otherwise stayed accent-coloured.
       className={complete ? "bar is-done" : "bar"}
       role="progressbar"
