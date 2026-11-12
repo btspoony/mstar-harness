@@ -290,7 +290,7 @@ function evaluate(context: StoreContext, now: string): Evaluation {
       // are not simply absent: unreadable FLOW, a journal present without FLOW, and
       // an unreadable journal all refuse. Only a truly absent FLOW with no journal
       // and no read failure is a no-op; a readable empty FLOW is zero physical rows.
-      const tailFacts = knownTailLines === 0 ? "display tail (unavailable; row count unknown)" : `tail rows (${knownTailLines})`;
+      const tailFacts = present[FLOW] !== undefined ? `tail rows (${knownTailLines})` : "display tail (unavailable; row count unknown)";
       const tailLoss = `the display rows held back for ${entry.name} were not imported`;
       if (tailRefusal !== null) {
         refusals.push({ selector: `dsh-ledger:${entry.name}`, category: "tail", facts: tailFacts, discarded: tailLoss, reason: tailRefusal, source });
