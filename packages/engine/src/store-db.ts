@@ -2855,8 +2855,11 @@ export async function initializeStore(
         alreadyInTransaction: true, attestation, operator: options.operator, processFacts: options.processFacts,
         now: options.now, busyTimeoutMs: timeout,
       });
-      db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
-      db.prepare("update execution_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
+      // ONE instant for the whole creation transaction: a caller-supplied clock
+      // is the only clock these stamps read, so one store never carries two.
+      const activatedAt = (options.now ?? nowRfc3339)();
+      db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(activatedAt);
+      db.prepare("update execution_meta set authority_state = 'active', activated_at = ? where id = 1").run(activatedAt);
       db.exec("commit");
     } catch (error) {
       try {

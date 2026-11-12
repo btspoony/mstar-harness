@@ -353,6 +353,17 @@ describe("store-db L2 fix round", () => {
     handle.close();
   });
 
+  test("a caller-supplied clock is the ONE instant for both init activation stamps", async () => {
+    const dir = mkdtempSync(join(ROOT, "init-clock-"));
+    const at = "2026-10-30T12:00:00.000Z";
+    const handle = await initializeStore({ harnessDir: dir }, { now: () => at });
+    // One creation transaction carries one clock: the two rows the creation
+    // activates record the caller's instant, never a second ambient reading.
+    expect(handle.db.prepare("select activated_at from store_meta where id = 1").get()).toEqual({ activated_at: at });
+    expect(handle.db.prepare("select activated_at from execution_meta where id = 1").get()).toEqual({ activated_at: at });
+    handle.close();
+  });
+
   test("the published bounded wait is the default when no option is passed", async () => {
     const dir = mkdtempSync(join(ROOT, "busy-"));
     const handle = await initializeStore({ harnessDir: dir });
