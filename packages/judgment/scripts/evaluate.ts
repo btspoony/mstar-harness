@@ -43,20 +43,32 @@ function args(argv: readonly string[]): { action: string; root: string; shard?: 
 // A supported filesystem failure — at resolution or at the read itself — names the artifact
 // relatively; anything else (a parse error, a programming error) keeps its own identity.
 const UNREADABLE_ARTIFACT_CODES: Record<string, true> = { ENOENT: true, EACCES: true, ENOTDIR: true, EISDIR: true, EPERM: true };
-function unreadableToMissing<T>(rel: string, run: () => T): T {
+// A missing artifact has two causes CI must tell apart without echoing host paths: the run root
+// itself is gone, or the directory is intact and the entry (or a whole subdirectory) is absent.
+// Only a lost root earns its own code; every other case keeps jev.artifact-missing with the
+// relative name, plus the basename and entry count of the directory that was searched.
+function unreadableToMissing<T>(root: string, rel: string, run: () => T): T {
   try { return run(); }
   catch (error) {
-    if (UNREADABLE_ARTIFACT_CODES[(error as NodeJS.ErrnoException).code ?? ""] !== true) throw error;
-    return fail(`jev.artifact-missing: ${rel}`);
+    const code = (error as NodeJS.ErrnoException).code ?? "";
+    if (UNREADABLE_ARTIFACT_CODES[code] !== true) throw error;
+    const directory = dirname(resolve(root, rel)), name = basename(directory);
+    if (code === "ENOENT" && !existsSync(directory)) {
+      if (directory === resolve(root)) return fail(`jev.artifact-root-missing: ${rel} (run root ${name} does not exist)`);
+      return fail(`jev.artifact-missing: ${rel} (directory ${name} does not exist)`);
+    }
+    if (code !== "ENOENT") return fail(`jev.artifact-missing: ${rel}`);
+    const entries = (() => { try { return `${readdirSync(directory).length} entries`; } catch { return "an unreadable listing"; } })();
+    return fail(`jev.artifact-missing: ${rel} (directory ${name} holds ${entries})`);
   }
 }
 function artifactPath(root: string, rel: string, invalidMessage: string): string {
   if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) return fail(invalidMessage);
-  return unreadableToMissing(rel, () => realpathSync(resolve(root, rel)));
+  return unreadableToMissing(root, rel, () => realpathSync(resolve(root, rel)));
 }
 function readArtifact(root: string, rel: string): string {
   const canonical = artifactPath(root, rel, "Invalid artifact path"), relPath = relative(root, canonical);
-  return unreadableToMissing(rel, () => {
+  return unreadableToMissing(root, rel, () => {
     if (relPath === ".." || relPath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || !statSync(canonical).isFile() || statSync(canonical).size > 16_777_216) return fail("Artifact outside authorized root or exceeds limit");
     return readFileSync(canonical, "utf8");
   });
@@ -70,7 +82,7 @@ function readJsonLines<T>(root: string, rel: string): T[] {
 function digest(bytes: Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
 function fileDigest(root: string, rel: string): string {
   const canonical = artifactPath(root, rel, "Manifest path invalid"), relPath = relative(root, canonical);
-  return unreadableToMissing(rel, () => {
+  return unreadableToMissing(root, rel, () => {
     if (relPath === ".." || relPath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || !statSync(canonical).isFile()) return fail("Manifest path escapes authorized root");
     return digest(readFileSync(canonical));
   });
