@@ -439,19 +439,28 @@ const deliveryEvidenceSchema: z.ZodType<WorkflowDeliveryEvidence> = z.union([
 ]);
 
 /**
- * Non-blocking advisory for a `development` registration whose delivery
- * branch and target name the same branch: such a pair cannot describe a
- * delivery PR. The registration still succeeds - the warning rides in the ok
- * envelope's `data.warnings` and never refuses.
+ * Non-blocking advisory for a `development` registration whose anchors cannot
+ * describe a delivery: `work === target` names no delivery PR, and
+ * `base === work` makes the delivery branch the source of its own change. The
+ * registration still succeeds - the warning rides in the ok envelope's
+ * `data.warnings` and never refuses.
  */
-function deliveryAnchorWarnings(deliveryKind: string, work: string | undefined, target: string | undefined): string[] {
-  if (deliveryKind !== "development") return [];
-  if (work === undefined || target === undefined || work !== target) return [];
+function deliveryAnchorWarnings(deliveryKind: string, base: string | undefined, work: string | undefined, target: string | undefined): string[] {
+  if (deliveryKind !== "development" || work === undefined) return [];
+  if (work === target) {
+    return [
+      `--branch-work/--branch-target: both were recorded as ${JSON.stringify(work)}, so branch.work === branch.target and the anchors name no delivery PR. ` +
+      "--branch-work is the branch the delivery PR comes from, normally the plan's own feature branch; " +
+      "`mstar plan complete` compares it with the plan row's recorded working branch. " +
+      "Repair the registered workflow with `mstar workflow delivery-anchors --workflow <id> --branch-work <branch> --reason <text>`.",
+    ];
+  }
+  if (base !== work) return [];
   return [
-    `--branch-work/--branch-target: both were recorded as ${JSON.stringify(work)}, so branch.work === branch.target and the anchors name no delivery PR. ` +
-    "--branch-work is the branch the delivery PR comes from, normally the plan's own feature branch; " +
-    "`mstar plan complete` compares it with the plan row's recorded working branch. " +
-    "Repair the registered workflow with `mstar workflow delivery-anchors --workflow <id> --branch-work <branch> --reason <text>`.",
+    `--branch-base/--branch-work: both were recorded as ${JSON.stringify(work)}, so branch.base === branch.work and the delivery branch is the source of the change. ` +
+    "--branch-base is the protected branch the work was created from, not the delivery branch; " +
+    "`mstar plan complete` compares branch.work with the plan row's recorded working branch. " +
+    "Repair the registered workflow with `mstar workflow delivery-anchors --workflow <id> --branch-base <branch> --reason <text>`.",
   ];
 }
 
@@ -501,7 +510,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
             ...(input.operation === undefined ? {} : { operationId: input.operation }),
           },
         );
-        const warnings = deliveryAnchorWarnings(input.deliveryKind!, branchWork, input.branchTarget);
+        const warnings = deliveryAnchorWarnings(input.deliveryKind!, input.branchBase, branchWork, input.branchTarget);
         return ok("workflow.register", warnings.length === 0 ? result : { ...result, warnings });
       } catch (error) {
         return engineRefusal("workflow.register", error);
