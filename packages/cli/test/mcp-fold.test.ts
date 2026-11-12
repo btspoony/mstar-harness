@@ -638,6 +638,12 @@ describe("folded MCP command families", () => {
     });
   });
 
+  /**
+   * When this trips: measure the new surface in the checkout that holds the
+   * change (this same reduce, never a throwaway probe against another build),
+   * decide whether the growth is intended, and re-take the ceiling with that
+   * reason recorded next to it — never silently raise the number to go green.
+   */
   test("the published surface stays within its budget", async () => {
     await withClient(async (_client, tools) => {
       const surface = tools.reduce((total, tool) =>

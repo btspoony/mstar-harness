@@ -60,7 +60,7 @@ export const FAMILY_PURPOSE: Readonly<Record<string, string>> = {
   persist: "Read and replace persisted review or JSON documents.",
   migrate: "Retired legacy-plan migration; refuses without mutating.",
   iteration: "Iteration phase gates, push cadence and registration.",
-  plan: "Coordinator plan rows: bind, progress, complete and issue links. bind writes the engine row only; a dsh-coordinating session that needs dsh-local ledger attribution uses the native mstar_plan_bind.",
+  plan: "Coordinator plan rows: bind, progress, complete and issue links. bind writes the engine row only; a host that keeps its own ledger uses that host's own binding entry point for ledger attribution.",
   session: "Launch or recover a coordinator session identity.",
   linear: "Linear authorization: run the OAuth flow, report the stored credential, or remove it. The credential is host state, not project state.",
   workflow: "Workflow lifecycle: register, evidence, phase, policy and branch anchors.",
