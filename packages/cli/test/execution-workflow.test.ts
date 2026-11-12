@@ -23,7 +23,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   ACTIVATION_PROTOCOL_VERSION,
@@ -37,9 +37,7 @@ import {
   type ExecutionState,
   type StoreContext,
 } from "@mstar-harness/engine";
-
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+import { CLI_ROOT, runCli as spawnCli, type RunResult } from "./harness";
 
 type EngineManifest = { engines?: { node?: string } };
 // Repo manifest read at runtime: no test pins the runtime floor, and
@@ -58,12 +56,6 @@ const ITERATION_ID = "iter-exec-workflow";
 const INTEGRATION_BRANCH = "iteration/exec-workflow";
 /** The completion policy a `verification/report-only` registration records. */
 const REPORT_ONLY_POLICY = `acceptance report at plans/${PLAN_ID}/report.md`;
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
 
 interface Fixture {
   root: string;
@@ -87,26 +79,15 @@ function writeJson(path: string, value: unknown): void {
   writeText(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function cliEnv(fixture: Fixture, identity?: ExecutionIdentity): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (key === "MSTAR_HOST_SESSION_ID" || key === "MSTAR_EXECUTION_IDENTITY" || key === "DSH_SESSION_ID") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  env.MSTAR_HARNESS_DIR = fixture.harnessDir;
-  if (identity !== undefined) env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(identity);
-  return env;
-}
-
+/** Run the shared runner against this fixture's root, harness and identity. */
 function runCli(args: string[], fixture: Fixture, identity?: ExecutionIdentity): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
+  return spawnCli(args, {
     cwd: fixture.root,
-    env: cliEnv(fixture, identity),
-    stdout: "pipe",
-    stderr: "pipe",
+    env: {
+      MSTAR_HARNESS_DIR: fixture.harnessDir,
+      ...(identity === undefined ? {} : { MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(identity) }),
+    },
   });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
 function jsonOf(result: RunResult): Record<string, unknown> {
@@ -1169,8 +1150,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
  */
 describe("mstar workflow \u2014 published payload contracts", () => {
   function readOnly(args: string[]): RunResult {
-    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], { cwd: CLI_ROOT, stdout: "pipe", stderr: "pipe" });
-    return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+    return spawnCli(args, { cwd: CLI_ROOT });
   }
   function descriptorOf(command: string): Record<string, any> {
     const result = readOnly(["schema", "--command", command]);
