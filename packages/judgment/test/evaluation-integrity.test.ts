@@ -143,16 +143,24 @@ function annotationRoot(rowText: string, seat = "A", shard = 1): string {
   });
 }
 
-async function captureCommand(args: string[]): Promise<{ code: number; stdout: string }> {
+async function captureCommand(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   const output: string[] = [];
+  const errors: string[] = [];
   const originalWrite = process.stdout.write;
+  const originalErrorWrite = process.stderr.write;
   process.stdout.write = ((chunk: string | Uint8Array) => { output.push(chunk.toString()); return true; }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => { errors.push(chunk.toString()); return true; }) as typeof process.stderr.write;
   try {
-    return { code: await runEvaluationCommand(args), stdout: output.join("") };
+    return { code: await runEvaluationCommand(args), stdout: output.join(""), stderr: errors.join("") };
   } finally {
     process.stdout.write = originalWrite;
+    process.stderr.write = originalErrorWrite;
   }
 }
+
+
+const refusal = ({ code, stderr, stdout }: { code: number; stdout: string; stderr: string }): string =>
+  `exit ${code}; stderr: ${stderr.trim() || "<empty>"}; stdout: ${stdout.trim().slice(0, 400) || "<empty>"}`;
 
 
 describe("qualification integrity", () => {
@@ -285,7 +293,7 @@ describe("qualification integrity", () => {
     const root = frozenRoot();
     try {
       const result = await captureCommand(["check-corpus", "--root", root]);
-      expect(result.code).toBe(0);
+      expect(result.code, refusal(result)).toBe(0);
       const report = JSON.parse(result.stdout);
       expect(report.status).toBe("quarantined-collision");
       expect(report.assignmentCounts).toEqual({ developmentGroups: 60, holdoutGroups: 300, totalGroups: 360 });
@@ -321,7 +329,7 @@ describe("qualification integrity", () => {
       for (let index = 0; index < cases.length; index++) {
         const { seat, shard } = cases[index]!;
         const result = await captureCommand(["check-annotations", "--root", roots[index]!, "--seat", seat, "--shard", String(shard)]);
-        expect(result.code).toBe(0);
+        expect(result.code, refusal(result)).toBe(0);
         const report = JSON.parse(result.stdout);
         expect(report.annotations).toBe(1);
         expect(report.identityMetadata.sessionId.status).toBe("undeclared");
@@ -418,7 +426,8 @@ describe("qualification integrity", () => {
     const missingMethod = makeRoot({ ...budget, tokenPolicy: { ...budget.tokenPolicy, method: "" } });
     const contradictory = makeRoot({ ...budget, tokenPolicy: { ...budget.tokenPolicy, providerContextPolicy: `${budget.tokenPolicy.providerContextPolicy}; local tokenizer estimate enabled` } });
     try {
-      expect(await runEvaluationCommand(["check-protocol", "--root", valid])).toBe(0);
+      const result = await captureCommand(["check-protocol", "--root", valid]);
+      expect(result.code, refusal(result)).toBe(0);
       expect(await runEvaluationCommand(["check-protocol", "--root", missingMethod])).toBe(2);
       expect(await runEvaluationCommand(["check-protocol", "--root", contradictory])).toBe(2);
     } finally { for (const root of [valid, missingMethod, contradictory]) rmSync(root, { recursive: true, force: true }); }
@@ -431,7 +440,8 @@ describe("qualification integrity", () => {
     const invalidFrozenAt = frozenRoot({ frozenAt: "not-a-timestamp" });
     const roots = [valid, wrongManifestSchema, missingManifestSchema, invalidFreezeId, invalidFrozenAt];
     try {
-      expect(await runEvaluationCommand(["check-freeze", "--root", valid])).toBe(0);
+      const result = await captureCommand(["check-freeze", "--root", valid]);
+      expect(result.code, refusal(result)).toBe(0);
       for (const root of roots.slice(1)) expect(await runEvaluationCommand(["check-freeze", "--root", root])).toBe(2);
     } finally {
       for (const root of roots) rmSync(root, { recursive: true, force: true });
