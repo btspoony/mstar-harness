@@ -17,15 +17,8 @@ import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
-
-const CLI_ROOT = resolve(import.meta.dir, "..");
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
+import { basename, join } from "node:path";
+import { runCli, type RunResult } from "./harness";
 
 interface PathEnvelope {
   command: string;
@@ -62,33 +55,8 @@ function data(result: RunResult): NonNullable<PathEnvelope["data"]> {
   return value;
 }
 
-/**
- * Spawn env with ambient MSTAR_HARNESS_DIR pinned out: the CLI
- * resolves harness dirs from that env var ahead of probing, so an ambient
- * value would redirect every fixture to the env dir and fail spuriously.
- */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
 function runResolve(args: string[]): RunResult {
   return runCli(["path", "resolve", ...args]);
-}
-
-/** Run an arbitrary CLI verb; `cwd` is the directory the caller stands in. */
-function runCli(args: string[], cwd: string = CLI_ROOT, env: Record<string, string> = cliEnv()): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", join(CLI_ROOT, "src", "index.ts"), ...args], {
-    cwd,
-    env,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
 /** Empty temp root; `.mstar/` and specs content added per test. */
@@ -303,7 +271,7 @@ describe("mstar path check \u2014 verdict from Git state", () => {
       commitIgnore(root, TRACKED_RESULTS_IGNORE);
       mkdirSync(join(root, ".mstar"), { recursive: true });
       const worktree = addWorktree(root, root);
-      const result = runCli(["path", "check"], worktree, { ...cliEnv(), MSTAR_HARNESS_DIR: join(root, ".mstar") });
+      const result = runCli(["path", "check"], { cwd: worktree, env: { MSTAR_HARNESS_DIR: join(root, ".mstar") } });
       expect(result.exitCode).toBe(0);
       expect(data(result).trackedHarness).toBe(join(realpathSync(worktree), ".mstar"));
       expect(data(result).specsDir).toBe(join(realpathSync(worktree), ".agents", "specs"));
@@ -317,7 +285,7 @@ describe("mstar path check \u2014 verdict from Git state", () => {
       writeFileSync(join(root, ".gitignore"), ".mstar/\n");
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
-      const result = runCli(["path", "check"], root);
+      const result = runCli(["path", "check"], { cwd: root });
       expect(result.exitCode).toBe(0);
       const okEnvelope = envelope(result);
       expect(okEnvelope).toMatchObject({ command: "path.check", status: "ok", code: "path.check.ok" });
@@ -343,7 +311,7 @@ describe("mstar path check \u2014 verdict from Git state", () => {
       writeFileSync(join(root, ".mstar", "knowledge", "kb.md"), "# kb\n");
       mkdirSync(join(root, ".mstar", "adr"), { recursive: true });
       writeFileSync(join(root, ".mstar", "adr", "0001.md"), "# adr\n");
-      const result = runCli(["path", "check"], root);
+      const result = runCli(["path", "check"], { cwd: root });
       expect(result.exitCode).toBe(0);
       expect(data(result).ok).toBe(true);
       expect(data(result).findings).toEqual([]);
@@ -364,12 +332,12 @@ describe("mstar path check \u2014 verdict from Git state", () => {
       writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
       mkdirSync(join(root, "docs", "adr"), { recursive: true });
       writeFileSync(join(root, "docs", "adr", "0001.md"), "# adr\n");
-      const ignored = runCli(["path", "check", ".mstar/specs"], root);
+      const ignored = runCli(["path", "check", ".mstar/specs"], { cwd: root });
       expect(ignored.exitCode).toBe(0);
       expect(envelope(ignored).status).toBe("ok");
       expect(data(ignored).warnings?.map((warning) => warning.code)).toEqual(["path.result-ignored"]);
 
-      const okDir = runCli(["path", "check", "docs/adr"], root);
+      const okDir = runCli(["path", "check", "docs/adr"], { cwd: root });
       expect(okDir.exitCode).toBe(0);
       expect(data(okDir).ok).toBe(true);
       expect(data(okDir).warnings).toEqual([]);
@@ -382,7 +350,7 @@ describe("mstar path check \u2014 verdict from Git state", () => {
       writeFileSync(join(root, ".gitignore"), ".mstar/\n");
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(root, ".mstar", "specs", "0001.md"), "# spec\n");
-      const result = runCli(["path", "check", ".mstar/specs/0001.md"], root);
+      const result = runCli(["path", "check", ".mstar/specs/0001.md"], { cwd: root });
       expect(result.exitCode).toBe(0);
       expect(data(result).warnings?.map((warning) => warning.path)).toEqual([realpathSync(join(root, ".mstar", "specs", "0001.md"))]);
     });
@@ -391,7 +359,7 @@ describe("mstar path check \u2014 verdict from Git state", () => {
   test("outside any Git checkout the named probe refuses as path.unverifiable", () => {
     withRoot((root) => {
       mkdirSync(join(root, "docs", "adr"), { recursive: true });
-      const result = runCli(["path", "check", "docs/adr"], root);
+      const result = runCli(["path", "check", "docs/adr"], { cwd: root });
       expect(result.exitCode).toBe(1);
       expect(envelope(result).code).toBe("path.unverifiable");
     });
@@ -410,7 +378,7 @@ describe("mstar path check \u2014 verdict from Git state", () => {
       // Committable results live in the caller's checkout (the branch it carries).
       mkdirSync(join(worktree, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(worktree, ".mstar", "specs", "0001.md"), "# spec\n");
-      const result = runCli(["path", "check"], worktree);
+      const result = runCli(["path", "check"], { cwd: worktree });
       expect(result.exitCode).toBe(0);
       expect(realpathSync(data(result).trackedHarness!)).toBe(realpathSync(join(worktree, ".mstar")));
       expect(realpathSync(data(result).processHarness!)).toBe(realpathSync(join(control, ".mstar")));
@@ -427,7 +395,7 @@ describe("mstar path check \u2014 verdict from Git state", () => {
       commitIgnore(control, TRACKED_RESULTS_IGNORE);
       const worktree = addWorktree(root, control);
       mkdirSync(join(worktree, ".mstar", "plans"), { recursive: true });
-      const result = runCli(["path", "check", join(worktree, ".mstar", "plans")], worktree);
+      const result = runCli(["path", "check", join(worktree, ".mstar", "plans")], { cwd: worktree });
       expect(result.exitCode).toBe(1);
       expect(envelope(result).code).toBe("path.process-outside-control");
     });
@@ -442,7 +410,7 @@ describe("mstar path check \u2014 verdict from Git state", () => {
       const worktree = addWorktree(root, control);
       mkdirSync(join(control, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(control, ".mstar", "specs", "0001.md"), "# spec\n");
-      const result = runCli(["path", "check", join(control, ".mstar", "specs")], worktree);
+      const result = runCli(["path", "check", join(control, ".mstar", "specs")], { cwd: worktree });
       expect(result.exitCode).toBe(1);
       expect(envelope(result).code).toBe("path.result-outside-worktree");
     });

@@ -31,8 +31,9 @@ import { readDeclaredNodeFloor } from "@mstar-harness/engine";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { executeCommand } from "@mstar-harness/commands";
+import { runCli as runCliProcess, SRC_ENTRY, type RunResult } from "./harness";
 import {
   encodeExecutionSessionRef,
   getCatalog,
@@ -47,27 +48,20 @@ import {
   type StoreContext,
 } from "@mstar-harness/engine";
 
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = process.env.MSTAR_CLI_ENTRY ?? join(CLI_ROOT, "src/index.ts");
-
 /** Injected current runtime for a `node` consumer: at/above the declared floor. */
 const atOrAboveRuntime = (() => {
   const floor = readDeclaredNodeFloor() ?? "0.0.0";
   return `${Number.parseInt(floor.split(".")[0]!, 10) + 1}.0.0`;
 })();
 
+/** Built entry when the suite runs against a built CLI (CI); else the source entry. */
+const CLI_ENTRY = process.env.MSTAR_CLI_ENTRY ?? SRC_ENTRY;
+
 const WORKFLOW_ID = "wf-exec-session";
 const PLAN_ID = "20260921-execution-session-plan";
 const COORDINATOR_ID = "coord-exec-session";
 const SUCCESSOR_ID = "coord-exec-session-2";
 const WIRE_PREFIX = "exec-session-v1:";
-
-interface RunResult {
-  exitCode: number | null;
-  signalCode: string | null;
-  stdout: string;
-  stderr: string;
-}
 
 interface Fixture {
   root: string;
@@ -94,32 +88,15 @@ function writeJson(path: string, value: unknown): void {
   writeText(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-/** Spawn env with ambient harness/identity env vars pinned out, then the fixture's own. */
+/** The fixture's own env over the harness runner's ambient scrub. */
 function cliEnv(fixture: Fixture, identity?: ExecutionIdentity): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (key === "MSTAR_HOST_SESSION_ID" || key === "MSTAR_EXECUTION_IDENTITY" || key === "DSH_SESSION_ID") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  env.MSTAR_HARNESS_DIR = fixture.harnessDir;
+  const env: Record<string, string> = { MSTAR_HARNESS_DIR: fixture.harnessDir };
   if (identity !== undefined) env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(identity);
   return env;
 }
 
 function spawnCli(args: string[], fixture: Fixture, env: Record<string, string>): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: fixture.root,
-    env,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return {
-    exitCode: proc.exitCode,
-    signalCode: proc.signalCode ?? null,
-    stdout: proc.stdout.toString(),
-    stderr: proc.stderr.toString(),
-  };
+  return runCliProcess(args, { cwd: fixture.root, env });
 }
 
 /**
@@ -641,7 +618,7 @@ describe("mstar session run — inherited identity transport", () => {
     // MSTAR_HOST_SESSION_ID; the child CLI runs a real coordinator read with it.
     const launched = runCli(
       ["session", "run", "--workflow", WORKFLOW_ID, "--role", "coordinator", "--harness", fixture.harnessDir,
-        "--", process.execPath, "run", SRC_ENTRY, "plan", "show", "--plan", PLAN_ID, "--harness", fixture.harnessDir],
+        "--", process.execPath, "run", CLI_ENTRY, "plan", "show", "--plan", PLAN_ID, "--harness", fixture.harnessDir],
       fixture,
       identity,
     );

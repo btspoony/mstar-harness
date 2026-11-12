@@ -9,26 +9,8 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-/** Run the real CLI entry as a subprocess. */
-function runCli(args: string[]): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: CLI_ROOT,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
-}
+import { join } from "node:path";
+import { runCli, type RunResult } from "./harness";
 
 function envelope(result: RunResult): Record<string, unknown> {
   return JSON.parse(result.stdout) as Record<string, unknown>;

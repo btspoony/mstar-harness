@@ -22,10 +22,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createExecutionWorkflow, initializeStore, readExecutionState, registerCatalogEntity } from "@mstar-harness/engine";
+import { cliEnv, runCli, SRC_ENTRY, type RunResult } from "./harness";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
 
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+/** Built entry when the suite runs against a built CLI (CI); else the source entry. */
+const CLI_ENTRY = process.env.MSTAR_CLI_ENTRY ?? SRC_ENTRY;
 
 /** Sample plan mirroring the engine fixture: fenced fake headings + real ones. */
 const SAMPLE_PLAN = `# Fixture Plan
@@ -54,40 +55,6 @@ This block must not be treated as the Task 2 heading.
 - [ ] step five
 `;
 
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-/**
- * Spawn env with ambient harness env vars pinned out: the CLI
- * resolves harness dirs from MSTAR_HARNESS_DIR / MSTAR_CONTROL_ROOT ahead
- * of probing (an ambient value would redirect every fixture to the env dir
- * and fail spuriously), and SDD_DIR redirects default outfile paths.
- */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
-/** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
-function runCli(
-  args: string[],
-  opts: { cwd?: string; env?: Record<string, string> } = {},
-): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: opts.cwd ?? CLI_ROOT,
-    env: { ...cliEnv(), ...opts.env },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
-}
 function envelopeOf(result: RunResult): {
   status: string;
   code: string;
@@ -664,7 +631,7 @@ describe("mstar sdd exec — bound argv launcher (spec A3)", () => {
           "setInterval(() => {}, 1000);\n",
       );
       const proc = Bun.spawn(
-        [process.execPath, "run", SRC_ENTRY, "sdd", "exec", "--context", f.ctxFile, "--", process.execPath, childScript],
+        [process.execPath, "run", CLI_ENTRY, "sdd", "exec", "--context", f.ctxFile, "--", process.execPath, childScript],
         { cwd: f.control, env: cliEnv(), stdin: "ignore", stdout: "ignore", stderr: "ignore" },
       );
       const deadline = Date.now() + 10_000;

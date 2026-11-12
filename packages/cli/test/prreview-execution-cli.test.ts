@@ -15,28 +15,8 @@ import { execFileSync } from "node:child_process";
 import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, chmodSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { cliEnv, runCli, type RunResult } from "./harness";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
-
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
-
-/** Spawn env with ambient harness env vars pinned out. */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR" || key === "MSTAR_WORKING_BRANCH") {
-      continue;
-    }
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
 
 interface CommandEnvelope {
   command: string;
@@ -85,17 +65,6 @@ function violationCodes(result: RunResult): string[] {
 
 function message(result: RunResult): string {
   return envelope(result).message ?? "";
-}
-
-/** Run the real CLI entry as a subprocess. `env` overrides the pinned env. */
-function runCli(args: string[], opts: { cwd?: string; env?: Record<string, string> } = {}): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: opts.cwd ?? CLI_ROOT,
-    env: opts.env ?? cliEnv(),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
 /** Temp scratch dir cleaned up after `fn`. */
@@ -919,13 +888,7 @@ describe("mstar pr-review worktree-setup — branch mode snapshot (three-dot ran
 describe("mstar pr-review worktree-setup — pr mode snapshot (mock gh)", () => {
   /** Run the CLI with a mock gh bin dir on PATH, from a chosen cwd. */
   function runCliWithMockGhCwd(args: string[], mockBinDir: string, cwd: string, extraEnv: Record<string, string> = {}): RunResult {
-    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-      cwd,
-      env: { ...cliEnv(), PATH: `${mockBinDir}:${process.env.PATH ?? ""}`, ...extraEnv },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+    return runCli(args, { cwd, env: { PATH: `${mockBinDir}:${process.env.PATH ?? ""}`, ...extraEnv } });
   }
 
   test("pr mode writes the snapshot with the pr-mode range form (header main..pull/9/head)", () => {
@@ -1173,17 +1136,13 @@ describe("mstar pr-review post", () => {
       writeFileSync(body, "## Review body\ncontent\n");
       const findings = join(dir, "inline.json");
       writeFileSync(findings, JSON.stringify([{ path: "src/x.ts", line: 3, body: "off-by-one" }]));
-      const noGhProc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, "pr-review", "post", "--pr", "42", "--body-file", body, "--findings", findings], {
-        cwd: CLI_ROOT,
-        // PATH is a throwaway dir that symlinks only git (harness probing
-        // needs it) — gh is unreachable on any platform regardless of where
-        // the runner installed it, and no system prefix is trusted.
-        env: { ...cliEnv(), PATH: ghlessPath() },
-        stdout: "pipe",
-        stderr: "pipe",
+      // PATH is a throwaway dir that symlinks only git (harness probing
+      // needs it) — gh is unreachable on any platform regardless of where
+      // the runner installed it, and no system prefix is trusted.
+      const result = runCli(["pr-review", "post", "--pr", "42", "--body-file", body, "--findings", findings], {
+        env: { PATH: ghlessPath() },
       });
-      const result: RunResult = { exitCode: noGhProc.exitCode, stdout: noGhProc.stdout.toString(), stderr: noGhProc.stderr.toString() };
-      expect(noGhProc.exitCode).toBe(1);
+      expect(result.exitCode).toBe(1);
       expect(envelope(result).code).toBe("process.not-found");
       expect(message(result)).toContain("executable not found in $PATH: gh");
     });
@@ -1280,13 +1239,7 @@ describe("mstar pr-review post — 422 fallback (fix round)", () => {
 
 
   function runCliWithMockGh(args: string[], mockBinDir: string, extraEnv: Record<string, string>): RunResult {
-    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-      cwd: CLI_ROOT,
-      env: { ...cliEnv(), PATH: `${mockBinDir}:${process.env.PATH ?? ""}`, ...extraEnv },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+    return runCli(args, { env: { PATH: `${mockBinDir}:${process.env.PATH ?? ""}`, ...extraEnv } });
   }
 
   test("422 on STDERR triggers exactly one retry without inline comments, folding dropped entries into the body", () => {
