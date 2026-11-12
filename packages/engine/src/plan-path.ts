@@ -38,7 +38,7 @@ import { isAbsolute, join, normalize, sep } from "node:path";
 import { canonicalTarget } from "./coordination-write.js";
 import { assertSafePathComponent, canonicalizeNearestExisting, resolvePlanDir } from "./path.js";
 
-/** Why a plan pointer was refused. P2b maps these onto the engine's refusal vocabulary. */
+/** Why a plan pointer was refused; these codes propagate unmapped. */
 export type PlanPathRefusalCode =
   | "plan-path.invalid-pointer"
   | "plan-path.not-a-file"
