@@ -8,13 +8,13 @@
  * `--store` / `MSTAR_STORE_MODULE` path loads a self-contained temp module
  * (no engine import — the loader accepts a plain factory).
  *
- * Ordering: run this suite only after `bun run --cwd packages/engine build` has
- * finished — never beside a concurrent engine build. The engine import below
- * resolves through `packages/engine/dist`, and that build begins with
- * `rm -rf dist`, so a build overlapping this file can take the module out from
- * under it: the run then dies with `Cannot find module @mstar-harness/engine`
- * instead of reporting a test result. `bun run test` in this package builds the
- * engine first; `packages/cli/AGENTS.md` owns the rule.
+ * Ordering: run this suite only after `bun run --cwd ../engine build` (run from
+ * `packages/cli`) has finished — never beside a concurrent engine build. The
+ * engine import below resolves through `packages/engine/dist`, and that build
+ * begins with `rm -rf dist`, so a build overlapping this file can take the
+ * module out from under it: the run then dies with `Cannot find module
+ * @mstar-harness/engine` instead of reporting a test result. `bun run test` in
+ * this package builds the engine first; `packages/cli/AGENTS.md` owns the rule.
  */
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
