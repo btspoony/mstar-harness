@@ -27,9 +27,11 @@
  * paragraph is caught by its individual lines, not by the block fingerprint.
  *
  * `scripts/rule-duplication.allowlist.json` records accepted exceptions, one
- * `{ file, normalizedHash, reason }` entry each. A reason that does not name
- * the file it covers fails that entry: the allowlist holds exceptions, never
- * parked duplicates.
+ * `{ file, normalizedHash, reason }` entry each. A reason must name the owner
+ * of the rule: another `skills/` path, or the covered file itself together
+ * with the word `owner`. A reason that only repeats the covered file parks a
+ * duplicate instead of recording an exception, so it fails that entry; so
+ * does an entry whose `file` + `normalizedHash` matches no scanned site.
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -166,10 +168,25 @@ export function collectRuleCandidates(text: string): RuleCandidate[] {
   return candidates;
 }
 
+/** A `skills/...` path inside a reason: the owner an exception names. */
+const SKILL_PATH = /skills\/[\w./-]+/g;
+
+/**
+ * Whether a reason identifies the owning rule site: a `skills/` path other
+ * than the covered file, or the covered file together with the word `owner`.
+ * A reason that only repeats the covered file parks a duplicate instead of
+ * recording an accepted exception, so it fails.
+ */
+function namesOwner(file: string, reason: string): boolean {
+  const paths = (reason.match(SKILL_PATH) ?? []).map((path) => path.replace(/[.,;:]+$/, ""));
+  if (paths.some((path) => path !== file)) return true;
+  return paths.includes(file) && /\bowner\b/i.test(reason);
+}
+
 /**
  * Read the allowlist. A malformed shape throws (the file is SSOT, so an
  * unreadable one must not silently exempt nothing); an entry whose reason
- * does not name its own file is reported per entry.
+ * names no owner is reported per entry.
  */
 export function readRuleDuplicationAllowlist(root: string): {
   entries: RuleDuplicationAllowlistEntry[];
@@ -189,9 +206,9 @@ export function readRuleDuplicationAllowlist(root: string): {
     if (typeof normalizedHash !== "string" || normalizedHash === "") {
       throw new Error(`${RULE_DUPLICATION_ALLOWLIST}: "${file}" needs a normalizedHash`);
     }
-    if (typeof reason !== "string" || !reason.includes(file)) {
+    if (typeof reason !== "string" || !namesOwner(file, reason)) {
       failures.push(
-        `${RULE_DUPLICATION_ALLOWLIST}: "${file}" (${normalizedHash}) needs a reason naming that file - the allowlist records accepted exceptions, never parked duplicates`,
+        `${RULE_DUPLICATION_ALLOWLIST}: "${file}" (${normalizedHash}) needs a reason naming the owner - another skills/ path, or this file plus the word "owner"; the allowlist records accepted exceptions, never parked duplicates`,
       );
       continue;
     }
@@ -215,6 +232,20 @@ export function checkRuleDuplication(root: string, files: string[]): RuleDuplica
       if (hits) hits.push({ file, line: candidate.line });
       else sites.set(candidate.normalized, [{ file, line: candidate.line }]);
     }
+  }
+
+  // An entry that no longer matches a scanned site hides a deletion or a
+  // wording change: name it, matching Guard 9's manifest-stale direction.
+  const liveSites = new Set<string>();
+  for (const [normalized, allHits] of sites) {
+    const hash = ruleFingerprintHash(normalized);
+    for (const hit of allHits) liveSites.add(`${hit.file}\u0000${hash}`);
+  }
+  for (const entry of entries) {
+    if (liveSites.has(`${entry.file}\u0000${entry.normalizedHash}`)) continue;
+    allowlistFailures.push(
+      `${RULE_DUPLICATION_ALLOWLIST}: "${entry.file}" (${entry.normalizedHash}) matches no scanned rule site - drop the entry`,
+    );
   }
 
   const duplicates: RuleDuplicateGroup[] = [];
