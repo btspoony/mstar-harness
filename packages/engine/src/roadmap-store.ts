@@ -2,7 +2,7 @@ export type { RoadmapContent } from "./roadmap-content.js";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { StoreError, openStore, type StoreContext, type StoreDb } from "./store-db.js";
-import { parseRoadmapContent, validateRoadmapContent } from "./roadmap-content.js";
+import { parseRoadmapContent, type RoadmapContent, validateRoadmapContent } from "./roadmap-content.js";
 
 export type RoadmapExpected = number | "absent";
 export type RoadmapOperation = { operationId: string; actor?: string };
@@ -13,7 +13,14 @@ export type RoadmapRecord = {
   updatedAt: string;
   contentMarkdown: string;
 };
-export type RoadmapRead = { projectId: string; projectRevision: number; roadmap: RoadmapRecord | null };
+/**
+ * One roadmap read. The present arm carries the read's own validated parse of
+ * the stored Markdown, so a present read parses once; it is a projection of
+ * `roadmap`, never a second authority and never written back.
+ */
+export type RoadmapRead =
+  | { projectId: string; projectRevision: number; roadmap: null }
+  | { projectId: string; projectRevision: number; roadmap: RoadmapRecord; content: RoadmapContent };
 export type RoadmapWriteReceipt = { projectId: string; revision: number; contentHash: string; storeRevision: number };
 export type RoadmapImportReview = {
   version: 1;
@@ -96,8 +103,9 @@ function readOn(db: StoreDb, projectId: string): RoadmapRead {
       typeof row.updated_at !== "string") {
     throw new RoadmapError("roadmap.corrupt", `Stored roadmap for project ${projectId} is malformed.`);
   }
+  let content: RoadmapContent;
   try {
-    const content = parseRoadmapContent(row.content_markdown);
+    content = parseRoadmapContent(row.content_markdown);
     if (content.frontmatter.project_id !== projectId) {
       throw new RoadmapError("roadmap.corrupt", `Stored roadmap identity does not match project ${projectId}.`);
     }
@@ -109,6 +117,7 @@ function readOn(db: StoreDb, projectId: string): RoadmapRead {
     projectId,
     projectRevision: project.revision,
     roadmap: { projectId, revision: row.revision, contentHash: row.content_hash, updatedAt: row.updated_at, contentMarkdown: row.content_markdown },
+    content,
   };
 }
 

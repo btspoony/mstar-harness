@@ -45,7 +45,7 @@ import {
 } from "./issue.js";
 import { readMilestonesOn, type MilestoneRead } from "./milestone-store.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
-import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
+import type { RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
 import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
@@ -1877,7 +1877,7 @@ function readRoadmap(db: StoreDb, filters: DashboardFilters): RoadmapDTO | null 
     projectId,
     catalog,
     authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
-    content: parseRoadmapContent(authority.roadmap.contentMarkdown),
+    content: authority.content,
     milestones,
   };
 }
