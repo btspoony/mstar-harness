@@ -551,6 +551,26 @@ export interface RenderEngineStatusOptions {
 const DONE_PLAN_STATUS = 'Done'
 
 /**
+ * The `plans: …` segment both model-facing surfaces render — the compact
+ * catalog row ({@link renderEngineStatusCatalog}) and the always-on
+ * `mstar:engine-status` digest (`system-prompt.ts`). One assembler, so the two
+ * states that are NOT a plan list can never read differently per surface: an
+ * EMPTY registry is `none registered` (nothing to pick up yet) and an all-Done
+ * workflow is `all done` (nothing left). Only the row cap differs per caller
+ * (each surface owns its own token budget).
+ *
+ * Every operator-controlled value is screened through
+ * `stripInterpolationHazard`; the two state literals and the `+N more` overflow
+ * marker are engine constants.
+ */
+export function plansSegment(plans: readonly HarnessPlanView[], cap: number): string {
+  const pending = plans.filter((plan) => plan.status !== DONE_PLAN_STATUS)
+  if (plans.length === 0) return 'plans: none registered'
+  if (pending.length === 0) return 'plans: all done'
+  return `plans: ${joinCapped(pending, cap, ' ', (plan) => `${stripInterpolationHazard(plan.id)}(${stripInterpolationHazard(plan.status)})`)}`
+}
+
+/**
  * Model-facing rendering of the unified engine-status catalog (the
  * `<mstar_engine_status>` block): the wrapper plus ONE compact delta line.
  *
@@ -612,19 +632,11 @@ export function renderEngineStatusCatalog(
       lines.push(`workflow selection: ERROR (${state.selection.code}) ${state.selection.message}`)
     } else {
       const segments = [`workflow: ${state.selection.workflowId} (${state.selection.kind})`]
-      // Non-Done rows only: a completed plan is not a decision the next step
-      // makes, and the always-on digest (`system-prompt.ts`) renders the same
-      // non-Done filter — the two surfaces never duplicate a Done row. An
-      // EMPTY registry and an all-Done workflow must not share one text: "none
-      // registered" (nothing to pick up yet) and "all done" (nothing left) are
-      // different states for the next step.
-      const pending = state.plans.filter((plan) => plan.status !== DONE_PLAN_STATUS)
-      const plans = state.plans.length === 0
-        ? 'none registered'
-        : pending.length === 0
-          ? 'all done'
-          : joinCapped(pending, CATALOG_STATE_JOIN_LIMIT, ' ', (plan) => `${plan.id}(${plan.status})`)
-      segments.push(`plans: ${plans}`)
+      // Non-Done rows only, via the assembler the always-on digest shares:
+      // an EMPTY registry (`none registered`) and an all-Done workflow
+      // (`all done`) must not share one text, and neither may read differently
+      // per surface.
+      segments.push(plansSegment(state.plans, CATALOG_STATE_JOIN_LIMIT))
       if (state.iterationBaseBranch !== null && state.targetBranch !== null) {
         segments.push(`branch: ${state.iterationBaseBranch} → ${state.targetBranch}`)
       }

@@ -239,6 +239,28 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(text).not.toContain('plan-9')
   })
 
+  it('(c5) bounds the digest length so an unbounded registry cannot grow it', async () => {
+    // The ceiling is a LENGTH bound, not a wording snapshot: 40 non-Done rows
+    // must render as the capped row list plus the overflow marker, so the
+    // assembled digest stays inside a fixed budget. Removing the cap grows the
+    // line by ~40 rows and fails here first.
+    const plans = Array.from({ length: 40 }, (_, index) => ({
+      id: `plan-${String(index + 1).padStart(4, '0')}`,
+      title: `Plan ${index + 1}`,
+      status: 'Todo',
+    }))
+    const text = await activeDigest(plans)
+    expect(text).toContain('+32 more')
+    expect(text.length).toBeLessThan(300)
+  })
+
+  it('(c6) renders the same empty-registry text as the catalog row (`plans: none registered`)', async () => {
+    // One assembler for both surfaces: the two non-list states must not read
+    // differently per surface.
+    const text = await activeDigest([])
+    expect(text).toContain('workflow prompt-digest (plan) running | plans: none registered')
+  })
+
   it('(c4) carries the gate verdict and the branch anchors — the always-on channel after compaction', async () => {
     // The catalog row is a change-driven DELTA and is not re-anchored per turn,
     // so after host-side context compaction this digest is the only always-on

@@ -73,8 +73,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { EnforcementFlag } from '@mstar-harness/engine'
 import type { MstarEngineStatusPayload } from '../types.ts'
-import { DEFAULT_CATALOG_TTL_MS, buildCatalogPayload, buildCatalogPayloadWithStore, gateSegment } from './catalog.ts'
-import { joinCapped, stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
+import { DEFAULT_CATALOG_TTL_MS, buildCatalogPayload, buildCatalogPayloadWithStore, gateSegment, plansSegment } from './catalog.ts'
+import { stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
 
 /** Logger label for the harness-prompt injection (dsh logger naming: `<scope>/<subject>`). */
 export const HARNESS_PROMPT_LOGGER = 'mstar/harness-prompt'
@@ -429,11 +429,12 @@ function engineStatusProvider(
 /**
  * Cap on non-Done plan rows joined into the `mstar:engine-status` digest
  * . Module-level and intentionally NOT
- * re-exported — `catalog.ts` must not import it (a reverse import would
- * close a `system-prompt.ts ↔ catalog.ts` cycle). The sibling catalog state
- * lines cap with their OWN constant (`CATALOG_STATE_JOIN_LIMIT`,
- *); the shared `joinCapped` implementation
- * now lives in `_shared.ts`.
+ * re-exported — only the digest's own token budget owns it, while the segment
+ * wording itself comes from `catalog.ts`'s `plansSegment`, which takes this cap
+ * as an argument. The sibling catalog state line caps with its OWN constant
+ * (`CATALOG_STATE_JOIN_LIMIT`); the shared `joinCapped` implementation lives in
+ * `_shared.ts`. The digest pins its own ceiling in
+ * `tests/system-prompt.spec.ts` so an unbounded registry fails there first.
  */
 const DIGEST_PLAN_CAP = 8
 
@@ -448,11 +449,12 @@ const DIGEST_PLAN_CAP = 8
  * structurally unreachable from this surface without touching
  * `resolveReadWorkflow`.
  *
- * The plans join is the selected snapshot's non-Done rows
- * (`status !== 'Done'`), in catalog-array order, capped at
- * {@link DIGEST_PLAN_CAP} with a final `+N more` overflow marker when
- * longer; an empty registry renders `plans: none` and an all-Done workflow
- * `plans: all done` (two different states, never one text).
+ * The plans segment comes from `plansSegment` in `catalog.ts` — the SAME
+ * assembler the pre-step row renders — so the selected snapshot's non-Done
+ * rows arrive in catalog-array order, capped at {@link DIGEST_PLAN_CAP} with a
+ * final `+N more` overflow marker when longer. One wording per state on both
+ * surfaces: an empty registry renders `plans: none registered` and an all-Done
+ * workflow `plans: all done` (two different states, never one text).
  *
  * Division of labour with the pre-step catalog row: this always-on digest is
  * the surface that survives a row-less step AND host-side compaction (the row
@@ -482,20 +484,15 @@ function engineStatusSummary(payload: MstarEngineStatusPayload): string {
   if (state !== null) {
     const selection = state.selection
     if (selection.kind === 'active') {
-      const pending = state.plans.filter((p) => p.status !== 'Done')
-      const plans = state.plans.length === 0
-        ? 'none'
-        : pending.length === 0
-          ? 'all done'
-          : joinCapped(pending, DIGEST_PLAN_CAP, ' ', (p) => `${stripInterpolationHazard(p.id)}(${stripInterpolationHazard(p.status)})`)
       const workflowType = stripInterpolationHazard(state.workflowType ?? 'unknown')
       const workflowStatus = stripInterpolationHazard(state.workflowStatus ?? 'unknown')
       // The ROW's segment order (catalog.ts `renderEngineStatusCatalog`): the
       // same facts in the same sequence, so a reader comparing the two surfaces
-      // does not have to re-learn a second layout.
+      // does not have to re-learn a second layout. The plans segment is the
+      // row's own assembler — one wording per state, only the cap differs.
       const segments = [
         `workflow ${stripInterpolationHazard(selection.workflowId)} (${workflowType}) ${workflowStatus}`,
-        `plans: ${plans}`,
+        plansSegment(state.plans, DIGEST_PLAN_CAP),
       ]
       if (state.iterationBaseBranch !== null && state.targetBranch !== null) {
         segments.push(`branch: ${stripInterpolationHazard(state.iterationBaseBranch)} → ${stripInterpolationHazard(state.targetBranch)}`)
