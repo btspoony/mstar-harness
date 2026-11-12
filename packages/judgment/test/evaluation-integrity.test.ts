@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { summarizeQualification, validateFreezeGroups, validateFreezeLabels, type QualificationRow } from "../src/evaluation.js";
@@ -31,6 +31,8 @@ function fixtureRoot(artifacts: Record<string, string>, manifestSchema: string |
       annotationSha256: sha256(JSON.stringify(annotationCommitments)),
     }));
   }
+  const listing = readdirSync(root);
+  if (!listing.includes("protocol.json")) throw new Error(`fixture root is missing its default protocol.json; root listing: ${JSON.stringify(listing)}`);
   return root;
 }
 
