@@ -18,6 +18,22 @@ describe("bounded browser opener", () => {
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 
+  test("rejects with command.cancelled and kills the child when the request aborts", async () => {
+    let killed = false;
+    const child = Object.assign(new EventEmitter(), {
+      kill: () => {
+        killed = true;
+        return true;
+      },
+    }) as unknown as ChildProcess;
+    const controller = new AbortController();
+    const pending = startBounded("opener", () => child, controller.signal, 5_000);
+    controller.abort();
+    const error = await pending.catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ code: "command.cancelled" });
+    expect(killed).toBe(true);
+  });
+
   test("resolves once the opener reports spawn", async () => {
     const child = fakeChild();
     const pending = startBounded("opener", () => child, undefined, 5_000);
