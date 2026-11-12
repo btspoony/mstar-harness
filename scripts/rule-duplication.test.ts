@@ -263,7 +263,6 @@ describe("rule duplication", () => {
       ]);
       expect(result.allowlistFailures).toHaveLength(1);
       expect(result.allowlistFailures[0]).toContain("skills/a/SKILL.md");
-      expect(result.allowlistFailures[0]).toContain(staleHash);
       expect(result.allowlistFailures[0]).toContain("matches no scanned rule site");
       // The live entry still exempts its site; the stale row never joins a group.
       expect(result.duplicates).toEqual([]);

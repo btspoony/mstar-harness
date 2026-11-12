@@ -842,6 +842,16 @@ describe("planQualityBar verification-set", () => {
     expect(violations.map((v) => v.code)).toEqual(["lint.plan-quality.verification-set"]);
     expect(violations[0]!.message).toContain("bun test scripts/adr-check.test.ts");
   });
+
+  test("a fenced Files example names no surface", () => {
+    const plan = "# Plan\n\n- [ ] Rewrite the rationale paragraph.\n\n```markdown\n- Modify: `skills/example/SKILL.md`\n```\n";
+    expect(planQualityBar(plan).violations).toEqual([]);
+  });
+
+  test("a fenced command satisfies no missing check", () => {
+    const plan = "# Plan\n\n**Files:**\n- Modify: `skills/mstar-artifacts/SKILL.md`\n\n```\n- [ ] Run: `bun run validation:drift`\n```\n";
+    expect(planQualityBar(plan).violations.map((v) => v.code)).toEqual(["lint.plan-quality.verification-set"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
