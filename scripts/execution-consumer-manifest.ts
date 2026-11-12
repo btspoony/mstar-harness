@@ -335,18 +335,16 @@ export const CONSUMER_LAYOUTS: readonly ConsumerLayout[] = [
       { root: "packages/dsh/workflows" },
     ],
     sourceFiles: ["packages/dsh/package.json", "packages/dsh/tsconfig.json"],
-    // `dist/client.js` is the one artifact this manifest does NOT pin: it is
-    // built from a declared producer + declared mode, so its bytes belong to
-    // its producer, not to a recorded digest (a digest recorded wherever the
-    // build happened to run records that machine). It is excluded from the
-    // generated tree digest and proved by RE-DERIVATION instead — the bundle is
-    // rebuilt from `scripts/build-client-bundle.ts` (inside this consumer's
-    // source closure) and must come out byte-identical
-    // (`packages/dsh/tests/build-client-bundle.spec.ts`).
-    generatedTrees: [
-      { root: "packages/dsh/dist", exclude: [...BUILD_OUTPUT_EXCLUSIONS, "client.js"] },
-    ],
-    generatedFiles: ["packages/dsh/dist/index.js", "packages/dsh/dist/invariant.js"],
+    // `packages/dsh/dist` is not pinned. Rebuilding it in place changes
+    // `index.js`/`invariant.js` bytes even on the same machine, so a recorded
+    // digest records the machine that built it, not the source: any check that
+    // rebuilds first can only report the build's non-determinism. The
+    // integrity this consumer keeps is the source closure above (an edited or
+    // missing input still fails) plus the entrypoint existence proof; the one
+    // artifact with a real re-derivation proof, `dist/client.js`, keeps that
+    // proof in `packages/dsh/tests/build-client-bundle.spec.ts`.
+    generatedTrees: [],
+    generatedFiles: [],
     copies: HARNESS_ASSET_COPIES.map((copy) => ({
       from: copy.from,
       to: `packages/dsh/${copy.to}`,
