@@ -167,8 +167,8 @@ boot the web app serves the closure-factory CJS bundle at
 
 The client entry registers a right-Sidebar page tab type (`id:
 '@mstar-harness/dsh'`, `kind: 'mstar-workflow'`, one guide-page capsule at
-`order: 20`), labeled **"MStar 工作流" / "MStar
-Workflow"**; clicking the capsule opens the panel in that pane's slot
+`order: 20`), labeled **"Morning Star Workflow"** (en) / **"晨星工作流"**
+(zh); clicking the capsule opens the panel in that pane's slot
 (replacing the guide tab, expanding the sidebar) and a second click focuses
 the existing tab (the host's page-dedup rule). The former
 `conversation.view` view-ring tab is REMOVED (migration, not a second
@@ -183,57 +183,25 @@ browser half reads the session digest from `/api/mstar/panelSnapshot`
 and one engine `DashboardView` per screen from `/api/mstar/dashboardView`, and
 renders the answer or an explicit unavailable reason.
 
-**MStar Workflow layout**: a narrow-column shell bound to the sidebar
-pane's definite height — exactly three zones: the **section nav** (任务迭代
-/ 代理执行 / 事件记录; `data-mstar-tab-nav`), the panel-owned **single
-scroll body** (`[data-mstar-scroll]` — the ONLY `overflow-y` element in
-the panel; nothing scrolls horizontally; `data-mstar-graph` rides it), and
-the pinned **meta dock** (version + harness dir; never scrolls). The shell
-carries `container-type:
-inline-size`: below 480px container width padding and group gap tighten;
-at ≥720px the shared group grid spreads to two columns
-(`repeat(auto-fit, minmax(280px, 1fr))`) — the only structural change any
-width makes (one DOM, one tree; no JS layout measurement). The three
-sections stack in the scroll body: the tasks page (iteration head +
-**vertical** 5-step stepper with the FOUR-STATE `current` / `next` /
-`done` / `idle` machine + the branch panel + five stacked status groups —
-the merged「受阻/未知」/「Blocked / Unknown」column kept, `PLAN_CAP` render
-caps + the clickable 「更多」/「收起」 expand button (`data-kanban-more`) —
-then the project rollup), the events page (two partitions — Agent 流转事件
-/ 违规记录 — as flow rows, every row an expandable native `<details>`
-carrying the full catalog fields, missing fields render 「—」 never a
-guessed value), and the agents page — a **vertical grouped list** (the
-react-flow canvas, its SVG edge layer, card ports and pointer pan are
-REMOVED): two Phase groups in constant order (Phase 1 review-edit-chain
-above; Phase 2 sdd-implement → qc-tri → qa-gate below, its label
-annotating the CURRENT plan — `data-agent-group-plan` + `+N more`),
-`sdd-implement` split into implementor / reviewer sub-partitions, the
-`general` bucket sunk into an `unknown` sub-bucket, the full 14-role
-roster as full-width flow rows (idle rows dashed muted — the roster is
-never hidden) with role chip / status point / `×N` count / record line,
-the `N executing · M pending` summary, and the three-entry legend in flow
-below the list; rows carry the projected **emphasis tier**
-(`--mstar-canvas-emphasis-*` chrome alpha mix — never a whole-row
-`opacity`, so the status point + running glow stay opaque), settled
-entities get the standalone GREEN done frame + ✓ (`data-agent-done="true"`)
-ONLY when `emphasis ≠ 'off'`; the agents page contains zero `<svg>`, zero
-`data-agent-port` / `data-canvas-*` anchors and no pan transform. The
-**iteration info section is shared by the tasks AND agents pages** (one
-`IterationInfoSection`, both render the same `view.iteration` block).
-Empty branches are explicit states — `waiting` / `loading` /
-`unavailable` (with its reason) / no-harness each carry their OWN anchor
-and copy and render no tabs, no digest and no meta dock; no harness
-renders a CENTERED inactive-state card that activates automatically once a
-harness is detected. Projection is the pure `projectGraph(source)`
-function (schema constants vs catalog evidence strictly separated; never
-throws; explicit degraded states — muted empty states, never orange warn
-boxes). Refresh follows the newest emitted anchor row, no polling — a
-ledger record (dispatch/settle) invalidates the workspace's TTL-cached
-catalog row, so the next step rebuilds and re-emits only if the row's text
-or panel projection changed, and the panel then re-reads that session's
-stored snapshot; an unchanged step emits nothing, and while the main agent
-idles the panel keeps the last snapshot (no live push channel). Full
-realized layout detail: `packages/dsh/README.md` (§ Web client plugin).
+**MStar Workflow layout**: `panel-shell.tsx` is a thin adapter over the shared
+`@mstar-harness/ui` product — the session landing (`focus`) plus the five
+destinations (`overview` / `issues` / `workflows` / `iterations` / `projects`)
+in a nav band, with the active destination's screen rendered in the
+panel-owned single scroll body (`[data-mstar-scroll]` — the ONLY `overflow-y`
+element; nothing scrolls horizontally). The product owns markup, styling and
+copy; the host resolves the screen's copy object, maps the engine
+`ReadEnvelope` through the shared view-model builder and passes the one
+interactive seat a destination owns (`issues`' filter query). The shell carries
+`container-type: inline-size`, so the shared screens' width rules are container
+queries against the pane, never a JS layout measurement. Transport states are
+explicit — `waiting` / `loading` / `unavailable` (with its reason) / no-harness
+each carry their own copy — and no harness renders a CENTERED inactive-state
+card that activates automatically once a harness is detected. Missing fields
+degrade to muted empty / last-known states, never orange warn boxes. There is
+no polling: the digest is read when the seat mounts and on an explicit
+`reload()` (a workflow pick, a retry), each request carrying a 5 s deadline that
+cancels the host read. Full realized layout detail:
+`packages/dsh/README.md` (§ Web client plugin).
 
 Build step: `bun run
 build-client` (`scripts/build-client-bundle.ts` — closure-factory CJS,
