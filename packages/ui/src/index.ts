@@ -50,7 +50,6 @@ export { FieldGroup } from "./components/FieldGroup.tsx";
 export { Row } from "./components/Row.tsx";
 export { Collapsible } from "./components/Collapsible.tsx";
 export { Nav } from "./components/Nav.tsx";
-export { Breadcrumb } from "./components/Breadcrumb.tsx";
 export { Tabs } from "./components/Tabs.tsx";
 export { FilterBar } from "./components/FilterBar.tsx";
 
@@ -68,7 +67,6 @@ export type { FieldGroupProps } from "./components/FieldGroup.tsx";
 export type { RowProps } from "./components/Row.tsx";
 export type { CollapsibleProps } from "./components/Collapsible.tsx";
 export type { NavItem, NavProps } from "./components/Nav.tsx";
-export type { BreadcrumbProps, Crumb } from "./components/Breadcrumb.tsx";
 export type { TabItem, TabsProps } from "./components/Tabs.tsx";
 export type { AppliedFilter, FilterBarProps, FilterField, FilterOption } from "./components/FilterBar.tsx";
 

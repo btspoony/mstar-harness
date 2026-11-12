@@ -83,7 +83,7 @@ The prototype is **design context**, not a frozen spec, code/API implementation,
 
 ## 1.3 Author the iteration package + compass
 
-After §1.2.5, write **`delivery-compass.md`** into the existing `{ITERATION_DIR}/<iteration-id>/` package (canonical; never a new flat `<id>-delivery-compass.md`). Use the full `references/iteration-compass-template.md` structure (YAML frontmatter, `## Roadmap Position`, close sections). Fill `end_date` only at iteration-close; prose completion does not replace frontmatter `status`. Create `guides/`, `specs/` and an optional package `README.md` as needed. Link the retained prototype baseline from compass and affected plans; use existing `metadata.iteration_refs` through the normal producer path, not a new field or `primary_spec`/`spec_refs` for a prototype.
+After §1.2.5, write **`delivery-compass.md`** into the existing `{ITERATION_DIR}/<iteration-id>/` package (canonical; never a new flat `<id>-delivery-compass.md`). Use the full `references/iteration-compass-template.md` structure (YAML frontmatter, `## Roadmap Position`, close sections). Fill `end_date` only at iteration-close; prose completion does not replace frontmatter `status`. Create `guides/`, `specs/` and an optional package `README.md` as needed (shape it per `references/iteration-workspace-readme-template.md`). Link the retained prototype baseline from compass and affected plans; use existing `metadata.iteration_refs` through the normal producer path, not a new field or `primary_spec`/`spec_refs` for a prototype.
 
 ```markdown
 ---

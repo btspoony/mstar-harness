@@ -29,7 +29,7 @@ import {
   type RoadmapModel,
 } from "../view-model/projects.ts";
 import type { Resolved } from "../view-model/state.ts";
-import type { Tone } from "../view-model/status.ts";
+import { milestoneStatusTone, type Tone } from "../view-model/status.ts";
 
 /** The closed status set the engine accepts for a milestone patch. */
 const MILESTONE_STATUSES = ["planned", "active", "delivered", "dropped"] as const;
@@ -392,13 +392,6 @@ function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal
       </button>
     </form>
   );
-}
-
-/** Milestone status → tone. Local because the board is the only caller. */
-function milestoneStatusTone(status: string): Tone {
-  if (status === "delivered") return "success";
-  if (status === "dropped") return "purple";
-  return "neutral";
 }
 
 /**

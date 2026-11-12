@@ -13,7 +13,6 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { Badge } from "./Badge.tsx";
-import { Breadcrumb } from "./Breadcrumb.tsx";
 import { Collapsible } from "./Collapsible.tsx";
 import { DataTable, type DataTableColumn } from "./DataTable.tsx";
 import { EmptyState, listEmptyFamily } from "./EmptyState.tsx";
@@ -478,22 +477,6 @@ describe("Nav and Tabs — the active state is text plus a marker", () => {
     expect(html.match(/aria-selected="true"/g)?.length).toBe(1);
     expect(html).toContain("aria-controls=\"ms-tabpanel-issues\"");
     expect(html).toContain(">14<");
-  });
-});
-
-describe("Breadcrumb — a detail can always say where it came from", () => {
-  test("the trail is links and the current record is not", () => {
-    const html = render(
-      <Breadcrumb
-        trail={[{ id: "projects", label: "Projects" }]}
-        onSelect={() => {}}
-        label="Breadcrumb"
-        current="engine"
-      />,
-    );
-    expect(html).toContain("Projects");
-    expect(html).toContain('aria-current="page"');
-    expect(html).toContain("engine");
   });
 });
 
