@@ -62,6 +62,10 @@ const ours = new Set([
   ...selectors(readFileSync(join(stylesDir, "base.css"), "utf8")),
 ]);
 const prototypeKeys = new Set(selectors(prototypeCss));
+if (prototypeKeys.size === 0) {
+  console.error("selector-diff: 0 prototype selectors compared — the prototype yielded nothing to compare.");
+  process.exit(1);
+}
 const unexplained = [...prototypeKeys]
   .filter((selector) => !ours.has(selector))
   .filter((selector) => !NOT_APPLICABLE.some((rule) => rule.match(selector)))
