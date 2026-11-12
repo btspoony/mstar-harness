@@ -14,42 +14,19 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { readExecutionState, validateStatusV2 } from "@mstar-harness/engine";
 import { resolveActiveWorkflow, resolveReadWorkflow } from "../../dsh/src/gates/workflow-selection.js";
+import { CLI_ROOT, cliEnv, runCli as spawnCli, SRC_ENTRY, type RunResult } from "./harness";
 
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+/** Entry the shared runner spawns, for the shell recipe that fakes `mstar`. */
+const CLI_ENTRY = process.env.MSTAR_CLI_ENTRY ?? SRC_ENTRY;
+
 /** Reuse the engine's committed v1 snapshot fixture (single v1 source). */
 const V1_FIXTURE = join(CLI_ROOT, "..", "engine", "test", "fixtures", "migrate-real");
 
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-/**
- * Spawn env with ambient harness env vars pinned out: an ambient value must
- * never redirect a fixture.
- */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
 function runCli(args: string[], opts: { cwd?: string; env?: Record<string, string> } = {}): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: opts.cwd ?? CLI_ROOT,
-    env: { ...cliEnv(), ...opts.env },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+  return spawnCli(args, opts);
 }
 
 function fixtureTree(): string {
@@ -108,7 +85,7 @@ function recoveryRecipe(message: string): string {
 
 function runRecoveryRecipe(recipe: string): CliEnvelope {
   const result = execFileSync("/bin/sh", ["-c",
-    `mstar() { ${shellQuote(process.execPath)} run ${shellQuote(SRC_ENTRY)} "$@"; }; ${recipe}`,
+    `mstar() { ${shellQuote(process.execPath)} run ${shellQuote(CLI_ENTRY)} "$@"; }; ${recipe}`,
   ], { cwd: CLI_ROOT, env: cliEnv(), encoding: "utf8" });
   return JSON.parse(result) as CliEnvelope;
 }

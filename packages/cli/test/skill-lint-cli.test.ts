@@ -30,12 +30,11 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { runCli as runOwnerCli, withTempDir } from "./harness";
+import { runCli, withTempDir, type RunResult } from "./harness";
 import { cliEnvelope, violationCodes } from "./support/cli-assertions";
 import { SKILL_GOOD, SKILL_EPHEMERAL, SKILL_PLACEHOLDERS } from "./support/cli-content-fixtures";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
 const FIXTURE_PATH = join(CLI_ROOT, "..", "engine", "test", "fixtures", "skill-lint-profiles.json");
 
 type FixtureRow = {
@@ -52,33 +51,6 @@ const FIXTURES = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as {
   schemaVersion: number;
   rows: FixtureRow[];
 };
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-/** Spawn env with ambient harness env vars pinned out (sdd-cli.test.ts parity). */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
-/** Run the real CLI entry as a subprocess. */
-function runCli(args: string[]): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: CLI_ROOT,
-    env: cliEnv(),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
-}
 
 /** The lint decision fields, taken from the structured command response. */
 type CheckVerdict = "OK" | "FAIL" | "EXEMPT";
@@ -207,7 +179,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
     withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_GOOD);
-      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(0);
       expect(cliEnvelope(result, "ok", "skill.lint.ok").data?.ok).toBe(true);
     });
@@ -220,7 +192,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
         join(dir, "skill", "SKILL.md"),
         "---\nname: sample-skill\ndescription: Validates harness fixtures during CLI smoke tests.\n---\n\n## Intro\n\nNo sections here.\n",
       );
-      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toEqual(expect.arrayContaining(["skill-authoring.five-question.load-order", "skill-authoring.five-question.evidence"]));
     });
@@ -230,7 +202,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
     withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
       writeFileSync(join(dir, "skill", "SKILL.md"), "---\nname: Bad-Name\n---\n\n## Load Order\n## Workflow\n## Decision Rules\n## Evidence\n## References\n");
-      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toContain("lint.frontmatter.name.format");
     });
@@ -239,14 +211,14 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
   test("missing SKILL.md → exit 1", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
-      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(1);
       expect(cliEnvelope(result, "refused").message).toContain("SKILL.md");
     });
   });
 
   test("missing <skill-dir> arg → usage, exit 2", () => {
-    const result = runOwnerCli(["skill", "lint"]);
+    const result = runCli(["skill", "lint"]);
     expect(result.exitCode).toBe(2);
     expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("skillDir");
   });
@@ -255,7 +227,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
     withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_EPHEMERAL);
-      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(1);
       const envelope = cliEnvelope(result, "refused");
       expect(violationCodes(result)).toContain("skill.ephemeral.task-artifact");
@@ -267,7 +239,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
     withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_EPHEMERAL);
-      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(1);
       const envelope = cliEnvelope(result, "refused");
       expect(violationCodes(result)).toContain("skill.ephemeral.sdd-deeplink");
@@ -279,7 +251,7 @@ describe("mstar skill lint — frontmatter + five-question body + ephemeral cita
     withTempDir("mstar-slice4-cli-", (dir) => {
       mkdirSync(join(dir, "skill"));
       writeFileSync(join(dir, "skill", "SKILL.md"), SKILL_PLACEHOLDERS);
-      const result = runOwnerCli(["skill", "lint", join(dir, "skill")]);
+      const result = runCli(["skill", "lint", join(dir, "skill")]);
       expect(result.exitCode).toBe(0);
       expect(cliEnvelope(result, "ok", "skill.lint.ok").data?.ok).toBe(true);
     });

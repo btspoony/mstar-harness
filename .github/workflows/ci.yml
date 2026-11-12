@@ -262,6 +262,10 @@ jobs:
   # shards' critical path instead of dominating one combined run.
   test-cli-coordination:
     runs-on: ubuntu-latest
+    env:
+      # The shared CLI test runner spawns the built entry instead of running
+      # src/index.ts through bun's transpiler; this job builds it above.
+      MSTAR_CLI_ENTRY: ${{ github.workspace }}/packages/cli/dist/mstar-harness.js
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -341,6 +345,10 @@ jobs:
   # the header block): ~129s vs ~132s of tests.
   test-cli-ops-a:
     runs-on: ubuntu-latest
+    env:
+      # The shared CLI test runner spawns the built entry instead of running
+      # src/index.ts through bun's transpiler; this job builds it above.
+      MSTAR_CLI_ENTRY: ${{ github.workspace }}/packages/cli/dist/mstar-harness.js
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -400,6 +408,10 @@ jobs:
 
   test-cli-ops-b:
     runs-on: ubuntu-latest
+    env:
+      # The shared CLI test runner spawns the built entry instead of running
+      # src/index.ts through bun's transpiler; this job builds it above.
+      MSTAR_CLI_ENTRY: ${{ github.workspace }}/packages/cli/dist/mstar-harness.js
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -474,6 +486,10 @@ jobs:
   # own batch (test-cli-web) per owner decision.
   test-cli-suite-a:
     runs-on: ubuntu-latest
+    env:
+      # The shared CLI test runner spawns the built entry instead of running
+      # src/index.ts through bun's transpiler; this job builds it above.
+      MSTAR_CLI_ENTRY: ${{ github.workspace }}/packages/cli/dist/mstar-harness.js
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -590,6 +606,10 @@ jobs:
 
   test-cli-suite-b:
     runs-on: ubuntu-latest
+    env:
+      # The shared CLI test runner spawns the built entry instead of running
+      # src/index.ts through bun's transpiler; this job builds it above.
+      MSTAR_CLI_ENTRY: ${{ github.workspace }}/packages/cli/dist/mstar-harness.js
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

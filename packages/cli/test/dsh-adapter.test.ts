@@ -41,33 +41,11 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { dshAdapter } from "../src/adapters/dsh";
 import { dshFallbacksSpec, dshFallbacksVersion } from "@mstar-harness/commands";
 import { readHarnessVersion } from "../src/utils";
-
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
-
-/** Spawn env with ambient harness env vars pinned out (same convention as
- * the other cli suites): the CLI would otherwise resolve harness dirs from
- * MSTAR_HARNESS_DIR and redirect fixtures. */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR" || key === "MSTAR_WORKING_BRANCH") {
-      continue;
-    }
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
+import { runCli, type RunResult } from "./harness";
 
 interface CommandEnvelope {
   command: string;
@@ -87,17 +65,6 @@ function responseData(result: RunResult): Record<string, unknown> {
   const payload = value.data ?? value.details;
   if (!payload) throw new Error("expected command response data");
   return payload;
-}
-
-/** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
-function runCli(args: string[], opts: { env?: Record<string, string> } = {}): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: CLI_ROOT,
-    env: { ...cliEnv(), ...opts.env },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
 interface FakeDsh {

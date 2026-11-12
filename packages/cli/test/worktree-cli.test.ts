@@ -26,35 +26,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { runCli as runOwnerCli, withTempDir } from "./harness";
+import { cliEnv, runCli, withTempDir, type RunResult } from "./harness";
 import { cliEnvelope, expectUsageDiagnostic, violationCodes } from "./support/cli-assertions";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
 const WORKFLOW_ID = "wf-1";
-
-/**
- * Spawn env with ambient harness env vars pinned out: the CLI
- * resolves harness dirs from MSTAR_HARNESS_DIR ahead of probing — an
- * ambient value would redirect every fixture spuriously.
- */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR" || key === "MSTAR_WORKING_BRANCH") {
-      continue;
-    }
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
 
 interface CommandOutput {
   version: number;
@@ -85,17 +61,6 @@ function expectOutput(
   const output = commandOutput(result);
   expect(output).toMatchObject({ version: 1, command, status, code, exitCode });
   return output;
-}
-
-/** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
-function runCli(args: string[], cwd: string = CLI_ROOT): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd,
-    env: cliEnv(),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
 function tmpRoot(prefix: string): string {
@@ -194,7 +159,7 @@ function writeSnapshot(dir: string, doc: Record<string, unknown>, workflowId: st
     "plan", "bind", "--execution", "--workflow", workflowId, "--coordinator",
     "--expect", workflowToken, "--operation", `bind-${workflowId}`,
     "--harness", dir, "--session-id", `fixture-creator-${workflowId}`,
-  ], dir);
+  ], { cwd: dir });
   if (bound.exitCode !== 0) throw new Error(`ACTIVE coordinator bind failed: ${bound.stdout}${bound.stderr}`);
 }
 
@@ -250,9 +215,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       const topo = topologyFixture(root);
       writeSnapshot(root, iterationSnapshotDoc(topo, [PLAN_A(topo.linked)]));
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
-        root,
-      );
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch], { cwd: root });
       const output = expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(output.data).toMatchObject({ ok: true, violations: [] });
       expect(result.stderr).toBe("");
@@ -268,9 +231,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       writeSnapshot(root, iterationSnapshotDoc(topo, [PLAN_A(topo.linked)]));
       git(["checkout", "-q", "-b", "feature/main-switch"], root);
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
-        root,
-      );
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch], { cwd: root });
       expectOutput(result, "refused", "worktree.main.residency-switched", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -283,9 +244,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       const topo = topologyFixture(root);
       writeSnapshot(root, snapshotDoc([PLAN_A(topo.linked)], { integration_worktree_path: topo.integration }));
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root],
-        root,
-      );
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], { cwd: root });
       expectOutput(result, "refused", "worktree.main.expected-branch-missing", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -297,7 +256,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
     try {
       const topo = topologyFixture(root);
       writeSnapshot(root, iterationSnapshotDoc(topo, [PLAN_A(topo.linked)]));
-      const result = runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], root);
+      const result = runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], { cwd: root });
       expectOutput(result, "ok", "worktree.check.ok", 0);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -318,9 +277,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         [
           "worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root,
           "--main-branch", topo.mainBranch, "--integration", topo.integration,
-        ],
-        root,
-      );
+        ], { cwd: root });
       expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toBe("");
     } finally {
@@ -340,9 +297,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         [
           "worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root,
           "--main-branch", topo.mainBranch, "--control", topo.integration,
-        ],
-        root,
-      );
+        ], { cwd: root });
       expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toContain("--control");
       expect(result.stderr).toContain("deprecated");
@@ -355,9 +310,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
     const root = tmpRoot("mstar-wt-l1-bothflags-");
     try {
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--integration", root, "--control", root],
-        root,
-      );
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--integration", root, "--control", root], { cwd: root });
       const output = expectOutput(result, "usage", "usage", 2);
       expect(output.message).toContain("usage: worktree check <plan-id>");
       expect(output.message).toContain("--control");
@@ -372,9 +325,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       const topo = topologyFixture(root);
       writeSnapshot(root, iterationSnapshotDoc(topo, [PLAN_A(root, topo.mainBranch)]));
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
-        root,
-      );
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch], { cwd: root });
       const output = expectOutput(result, "refused", "worktree.l1.feature-equals-main", 1);
       expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.l1.feature-equals-main", severity: "critical" }));
     } finally {
@@ -389,9 +340,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       const mainBranch = git(["branch", "--show-current"], root);
       writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [PLAN_A(join(root, "no-such-worktree"))]));
       const result = runCli(
-        ["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
-        root,
-      );
+        ["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch], { cwd: root });
       expectOutput(result, "refused", "worktree.l1.feature-missing", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -405,9 +354,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       const mainBranch = git(["branch", "--show-current"], root);
       writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [PLAN_A(linked, "feature/wrong")]));
       const result = runCli(
-        ["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
-        root,
-      );
+        ["worktree", "check", "--plan", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch], { cwd: root });
       expectOutput(result, "refused", "worktree.l1.branch-mismatch", 1);
       expect(commandOutput(result).message).toContain("feature/plan-a");
       expect(commandOutput(result).message).toContain("feature/wrong");
@@ -433,9 +380,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       const topo = topologyFixture(root);
       writeSnapshot(root, snapshotDoc([PLAN_A(topo.linked)], { branch: { base: topo.mainBranch } }));
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
-        root,
-      );
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch], { cwd: root });
       expectOutput(result, "refused", "worktree.l1.integration-missing", 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -462,9 +407,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       const topo = topologyFixture(root);
       writeSnapshot(root, iterationSnapshotDoc(topo, [PLAN_A(topo.linked)]));
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
-        root,
-      );
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch], { cwd: root });
       expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toBe("");
     } finally {
@@ -491,9 +434,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       const topo = topologyFixture(root, { nested: true });
       writeSnapshot(root, iterationSnapshotDoc(topo, [PLAN_A(topo.linked)]));
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
-        root,
-      );
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch], { cwd: root });
       expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toBe("");
     } finally {
@@ -515,9 +456,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       const mainBranch = git(["branch", "--show-current"], root);
       writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [PLAN_A(subdir, mainBranch)]));
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
-        root,
-      );
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch], { cwd: root });
       const output = expectOutput(result, "refused", "worktree.l1.feature-equals-main", 1);
       expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.l1.feature-equals-main", severity: "critical" }));
     } finally {
@@ -539,9 +478,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
       const mainBranch = git(["branch", "--show-current"], root);
       writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [PLAN_A(alias, mainBranch)]));
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
-        root,
-      );
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch], { cwd: root });
       const output = expectOutput(result, "refused", "worktree.l1.feature-equals-main", 1);
       expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.l1.feature-equals-main", severity: "critical" }));
     } finally {
@@ -563,9 +500,7 @@ describe("mstar worktree check — lifecycle-owned branches from ALL active work
       // sibling snapshot, not only the governing one.
       writeSnapshot(root, snapshotDoc([], { id: "wf-2", type: "plan", branch: { integration: mainBranch } }), "wf-2");
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", "recorded-main"],
-        root,
-      );
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", "recorded-main"], { cwd: root });
       const output = expectOutput(result, "refused", "worktree.main.residency-switched", 1);
       expect(output.details?.violations).toContainEqual(expect.objectContaining({
         code: "worktree.main.residency-switched",
@@ -614,9 +549,7 @@ describe("mstar worktree check — process-harness discovery starts at the verif
       );
       // No --harness: discovery must start at the verified main worktree.
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--main-branch", mainBranch],
-        linked,
-      );
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--main-branch", mainBranch], { cwd: linked });
       expectOutput(result, "ok", "worktree.check.ok", 0);
       expect(result.stderr).toBe("");
     } finally {
@@ -706,14 +639,12 @@ test("degraded Git refuses a linked checkout marker before local harness discove
   try {
     writeFileSync(join(root, ".git"), "gitdir: /unavailable/worktrees/linked\n");
     mkdirSync(join(root, ".mstar"));
-    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, "status", "validate"], {
-      cwd: root, env: { ...cliEnv(), PATH: root }, stdout: "pipe", stderr: "pipe",
-    });
+    const proc = runCli(["status", "validate"], { cwd: root, env: { PATH: root } });
     expect(proc.exitCode).toBe(1);
     // The refusal text is engine-owned (`resolveProcessHarnessDir` in
     // engine/coordination.ts): the CLI no longer rewords the linked-checkout
     // marker, so the assertion tracks the engine's own reason string.
-    expect(proc.stderr.toString()).toContain("The linked checkout's main worktree cannot be read.");
+    expect(proc.stderr).toContain("The linked checkout's main worktree cannot be read.");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -750,7 +681,7 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
       for (const name of ["qc1.md", "qc2.md", "qc3.md"]) {
         writeFileSync(join(dir, name), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
       }
-      const result = runOwnerCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md"), join(dir, "qc3.md")]);
+      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md"), join(dir, "qc3.md")]);
       expect(result.exitCode).toBe(0);
       expect(cliEnvelope(result, "ok", "worktree.qc-alignment.ok").data?.assignments).toHaveLength(3);
     });
@@ -760,7 +691,7 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
     withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "qc1.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
       writeFileSync(join(dir, "qc2.md"), qcAssignmentSeparateFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
-      const result = runOwnerCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
+      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
       expect(result.exitCode).toBe(0);
       expect(cliEnvelope(result, "ok", "worktree.qc-alignment.ok").data?.assignments).toHaveLength(2);
     });
@@ -770,7 +701,7 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
     withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "qc1.md"), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD"));
       writeFileSync(join(dir, "qc2.md"), qcAssignmentFixture("20260816-audit-004", "merge-base: main + tip: HEAD~1"));
-      const result = runOwnerCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
+      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md"), join(dir, "qc2.md")]);
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toEqual(["qc.alignment.mismatch", "qc.alignment.mismatch"]);
     });
@@ -784,14 +715,14 @@ describe("mstar worktree qc-alignment — QC/QA alignment fields (audit-004)", (
         "",
       );
       writeFileSync(join(dir, "qc1.md"), incomplete);
-      const result = runOwnerCli(["worktree", "qc-alignment", join(dir, "qc1.md")]);
+      const result = runCli(["worktree", "qc-alignment", join(dir, "qc1.md")]);
       expect(result.exitCode).toBe(1);
       expect(violationCodes(result)).toEqual(["qc.alignment.field.missing"]);
     });
   });
 
   test("no assignment files is a usage error (exit 2)", () => {
-    const result = runOwnerCli(["worktree", "qc-alignment"]);
+    const result = runCli(["worktree", "qc-alignment"]);
     expect(result.exitCode).toBe(2);
     expectUsageDiagnostic(result, "files");
   });

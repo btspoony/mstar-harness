@@ -19,6 +19,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { cliEnv as cliEnvBase, runCli as runCliBase, type RunResult } from "./harness";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -36,9 +37,6 @@ import {
   type WorkflowSnapshot,
 } from "@mstar-harness/engine";
 
-const CLI_ROOT = join(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
-
 /**
  * Fixture git env: commit signing is disabled in-process via
  * GIT_CONFIG_COUNT (never by touching global/user git config).
@@ -49,22 +47,14 @@ const GIT_FIXTURE_ENV = {
   GIT_CONFIG_VALUE_0: "false",
 };
 
-/** Spawn env with ambient harness env vars pinned out (see worktree-cli.test.ts). */
+/** Fixture git env plus the shared CLI scrub; commit signing stays off. */
 function cliEnv(extra: Record<string, string> = {}): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR" || key === "MSTAR_WORKING_BRANCH") {
-      continue;
-    }
-    if (value !== undefined) env[key] = value;
-  }
-  return { ...env, ...GIT_FIXTURE_ENV, ...extra };
+  return cliEnvBase({ ...GIT_FIXTURE_ENV, ...extra });
 }
 
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
+/** Shared runner plus the fixture git env every case needs. */
+function runCli(args: string[], cwd: string, extraEnv: Record<string, string> = {}): RunResult {
+  return runCliBase(args, { cwd, env: cliEnv(extraEnv) });
 }
 
 interface CommandEnvelope<T = { decisions?: unknown }> {
@@ -82,17 +72,6 @@ function envelope<T = { decisions?: unknown }>(result: RunResult): CommandEnvelo
 
 function message(result: RunResult): string {
   return envelope(result).message ?? "";
-}
-
-/** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
-function runCli(args: string[], cwd: string, extraEnv: Record<string, string> = {}): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd,
-    env: cliEnv(extraEnv),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
 function tmpRoot(prefix: string): string {

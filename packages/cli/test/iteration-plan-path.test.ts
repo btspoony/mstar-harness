@@ -18,43 +18,20 @@ import {
 } from "@mstar-harness/engine";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname } from "node:path";
+import { runCli as spawnCli, type RunResult } from "./harness";
 
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
 const PLAN_ID = "20260918-plan-alpha";
 /** The reviewed compass pointer of one registered iteration (its own id names the package). */
 function compassRefFor(workflowId: string): string {
   return `iterations/${workflowId}/delivery-compass.md`;
 }
 
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-/** Spawn env with ambient harness env vars pinned out (see iteration-register). */
-function cliEnv(harness: string, identity: ExecutionIdentity): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (key === "MSTAR_EXECUTION_IDENTITY" || key === "DSH_SESSION_ID") continue;
-    if (value !== undefined) env[key] = value;
-  }
-  env.MSTAR_HARNESS_DIR = harness;
-  env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(identity);
-  return env;
-}
-
 function runCli(args: string[], harness: string, identity: ExecutionIdentity): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
+  return spawnCli(args, {
     cwd: harness,
-    env: cliEnv(harness, identity),
-    stdout: "pipe",
-    stderr: "pipe",
+    env: { MSTAR_HARNESS_DIR: harness, MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(identity) },
   });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
 function identityFor(workflowId: string): ExecutionIdentity {

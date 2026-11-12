@@ -13,30 +13,10 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { PR_REVIEW_NUDGE_CADENCE, PR_REVIEW_TIER_BUDGETS } from "@mstar-harness/engine";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
-
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
-
-/** Spawn env with ambient harness env vars pinned out. */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR" || key === "MSTAR_WORKING_BRANCH" || key === "MSTAR_CLI_PROJECT_ROOT" || key === "INIT_CWD") {
-      continue;
-    }
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
+import { runCli, type RunResult } from "./harness";
 
 interface CommandEnvelope {
   version: number;
@@ -66,17 +46,6 @@ function violationCodes(result: RunResult): string[] {
   return Array.isArray(violations)
     ? violations.flatMap((value) => value && typeof value === "object" && typeof (value as { code?: unknown }).code === "string" ? [(value as { code: string }).code] : [])
     : [];
-}
-
-/** Run the real CLI entry as a subprocess. */
-function runCli(args: string[], opts: { cwd?: string } = {}): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: opts.cwd ?? CLI_ROOT,
-    env: cliEnv(),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
 /** Temp scratch dir cleaned up after `fn`. */

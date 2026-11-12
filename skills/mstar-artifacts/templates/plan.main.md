@@ -53,6 +53,8 @@ Semantics, routes, and failure behavior → `mstar-artifacts/references/plan-wor
 
 Use the executable path below only for executable behavior. For non-executable documentation/policy, replace Steps 1–4 with the scoped-check alternative; do not invent tests.
 
+Verification surface map — each Files entry on a code surface names its mapped check: `packages/engine/src`, `packages/cli/src`, `hooks/src` literals → `bun run lint:ascii-literals`; `skills/**` → `bun run validation:drift`; `scripts/**` → that script's own test or run; prose → scoped-check. No repository-wide suite for insurance (`mstar-artifacts/references/plan-quality-bar.md` items 2 and 6).
+
 - [ ] **Step 1: Write the failing unit test**
 
 ```python

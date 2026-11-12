@@ -772,6 +772,76 @@ describe("planQualityBar", () => {
     const result = planQualityBar("---\n- [ ] Version: TBD\n");
     expect(result.findings).toEqual([{ token: "TBD", line: 2, text: "- [ ] Version: TBD" }]);
   });
+
+  test("lifecycle Todo is domain state, an unowned TODO still fails", () => {
+    const lifecycle = planQualityBar("# Plan\n\nstatus: open maps to Todo\n\n- [ ] Phase: Todo\n");
+    expect(lifecycle.findings).toEqual([]);
+    const unowned = planQualityBar("# Plan\n- [ ] Status: Todo\n- [ ] TODO: wire the gate\n");
+    expect(unowned.findings).toEqual([{ token: "TODO", line: 3, text: "- [ ] TODO: wire the gate" }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// planQualityBar — verification set (plan-quality-bar.md § Verification gates
+// surface map): a Files entry on a code surface names its mapped check.
+// ---------------------------------------------------------------------------
+
+describe("planQualityBar verification-set", () => {
+  const ENGINE_PLAN = `# Plan
+
+**Files:**
+- Modify: \`packages/engine/src/lint.ts\`
+
+- [ ] Run: \`bun test packages/engine/test/lint.test.ts\`
+`;
+
+  test("a code surface without its mapped check is flagged", () => {
+    const result = planQualityBar(ENGINE_PLAN);
+    expect(result.violations.map((v) => v.code)).toEqual(["lint.plan-quality.verification-set"]);
+    expect(result.violations[0]!.message).toContain("bun run lint:ascii-literals");
+  });
+
+  test("the same plan passes once it names the mapped check", () => {
+    const covered = ENGINE_PLAN.replace("- [ ] Run: ", "- [ ] Run: `bun run lint:ascii-literals`; ");
+    expect(planQualityBar(covered).violations).toEqual([]);
+  });
+
+  test("skills and scripts surfaces map to the drift check and the script's own test", () => {
+    const plan = "# Plan\n\n**Files:**\n- Modify: `skills/mstar-artifacts/SKILL.md`\n- Modify: `scripts/rule-duplication.ts`\n";
+    const codes = planQualityBar(plan).violations;
+    expect(codes).toHaveLength(2);
+    expect(codes.every((v) => v.code === "lint.plan-quality.verification-set")).toBe(true);
+    expect(codes.map((v) => v.message).join("\n")).toContain("bun run validation:drift");
+    expect(codes.map((v) => v.message).join("\n")).toContain("bun test scripts/rule-duplication.test.ts");
+  });
+
+  test("a prose-only plan names no code surface and is not flagged", () => {
+    expect(planQualityBar("# Plan\n\n- [ ] Rewrite the rationale paragraph.\n- [ ] Read the referenced contract.\n").violations).toEqual([]);
+  });
+
+  test("a script's own run counts as its check; a mention outside a verification line does not", () => {
+    const run = "**Files:**\n- Modify: `scripts/lint-refusal-quality.ts`\n\n- [ ] Scoped-check: `bun run lint:refusal-quality` exits 0.\n";
+    expect(planQualityBar(run).violations).toEqual([]);
+    const mention = "**Files:**\n- Modify: `scripts/rule-duplication.ts`\n\nGlobal constraint: `bun test scripts/rule-duplication.test.ts` exists.\n";
+    expect(planQualityBar(mention).violations.map((v) => v.code)).toEqual(["lint.plan-quality.verification-set"]);
+  });
+
+  test("a package-local scripts path is not the root surface (no invented root command)", () => {
+    const plan = "**Files:**\n- Modify: `packages/ui/scripts/declaration-diff.ts`, `packages/judgment/scripts/evaluate.ts`\n\n- [ ] Run: `bun test packages/ui/test/declaration-diff.test.ts`\n";
+    expect(planQualityBar(plan).violations).toEqual([]);
+  });
+
+  test("a Files entry quoting a command names no surface", () => {
+    const plan = "**Files:**\n- Modify: only paths `bun scripts/execution-consumer-manifest.ts --repo . --write` changes under `scripts/packaging-manifests/`\n\n- [ ] From the integration checkout, run `--write` once, then `--check`.\n";
+    expect(planQualityBar(plan).violations).toEqual([]);
+  });
+
+  test("a root script path with no check, no test and no run entry is still flagged", () => {
+    const plan = "**Files:**\n- Modify: `scripts/adr-check.ts`\n\n- [ ] Run: `bun test packages/engine/test/lint.test.ts`\n";
+    const violations = planQualityBar(plan).violations;
+    expect(violations.map((v) => v.code)).toEqual(["lint.plan-quality.verification-set"]);
+    expect(violations[0]!.message).toContain("bun test scripts/adr-check.test.ts");
+  });
 });
 
 // ---------------------------------------------------------------------------

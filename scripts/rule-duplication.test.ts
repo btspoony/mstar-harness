@@ -16,6 +16,7 @@ import {
   RULE_DUPLICATION_ALLOWLIST,
   checkRuleDuplication,
   normalizeRuleLine,
+  readRuleDuplicationAllowlist,
   ruleFingerprintHash,
 } from "./rule-duplication.ts";
 
@@ -169,9 +170,9 @@ describe("rule duplication", () => {
       },
       [
         {
-          file: "skills/a/SKILL.md",
+          file: "skills/b/SKILL.md",
           normalizedHash: hash,
-          reason: "skills/a/SKILL.md owns the canonical wording; the copy is frozen history",
+          reason: "skills/a/SKILL.md owns the canonical wording; this copy is frozen history",
         },
       ],
     );
@@ -183,12 +184,12 @@ describe("rule duplication", () => {
       expect(result.allowlistFailures).toEqual([]);
       expect(result.duplicates).toEqual([]);
       expect(result.exemptGroups).toHaveLength(1);
-      expect(result.exemptGroups[0].exempt).toEqual([{ file: "skills/a/SKILL.md", line: 1 }]);
+      expect(result.exemptGroups[0].exempt).toEqual([{ file: "skills/b/SKILL.md", line: 1 }]);
     } finally {
       repo.close();
     }
 
-    // An exception whose reason does not name the owning file fails the entry.
+    // An exception whose reason names no owner fails the entry.
     const unreasoned = fixture(
       {
         "skills/a/SKILL.md": `${RULE}\n`,
@@ -205,6 +206,70 @@ describe("rule duplication", () => {
       expect(result.duplicates).toHaveLength(1);
     } finally {
       unreasoned.close();
+    }
+  });
+
+  test("an allowlist reason names the owner, never just the entry's own file", () => {
+    const hash = ruleFingerprintHash(normalizeRuleLine(RULE));
+    const read = (reason: string) => {
+      const repo = fixture(
+        {
+          "skills/a/SKILL.md": `${RULE}\n`,
+          "skills/b/SKILL.md": `${RULE}\n`,
+        },
+        [{ file: "skills/b/SKILL.md", normalizedHash: hash, reason }],
+      );
+      try {
+        return readRuleDuplicationAllowlist(repo.root);
+      } finally {
+        repo.close();
+      }
+    };
+
+    // The owner is another skill file: naming that path is the owner claim.
+    const ownerPath = read("skills/a/SKILL.md owns the canonical wording; this copy is frozen history");
+    expect(ownerPath.failures).toEqual([]);
+    expect(ownerPath.entries).toHaveLength(1);
+
+    // This entry is itself the owner: its own file plus the word `owner` passes.
+    const selfOwned = read("skills/b/SKILL.md is the owner; the duplicate site was retired");
+    expect(selfOwned.failures).toEqual([]);
+    expect(selfOwned.entries).toHaveLength(1);
+
+    // Naming only the covered file identifies no owner, so the entry fails.
+    const selfNamed = read("skills/b/SKILL.md keeps a frozen copy");
+    expect(selfNamed.entries).toEqual([]);
+    expect(selfNamed.failures).toHaveLength(1);
+    expect(selfNamed.failures[0]).toContain("skills/b/SKILL.md");
+  });
+
+  test("an allowlist entry whose site is gone is reported by name", () => {
+    const hash = ruleFingerprintHash(normalizeRuleLine(RULE));
+    const staleHash = ruleFingerprintHash("- NEVER retire a rule site.");
+    const repo = fixture(
+      {
+        "skills/a/SKILL.md": `${RULE}\n`,
+        "skills/b/SKILL.md": `${RULE}\n`,
+      },
+      [
+        { file: "skills/b/SKILL.md", normalizedHash: hash, reason: "skills/a/SKILL.md owns the canonical wording" },
+        { file: "skills/a/SKILL.md", normalizedHash: staleHash, reason: "skills/b/SKILL.md owns the retired wording" },
+      ],
+    );
+    try {
+      const result = checkRuleDuplication(repo.root, [
+        "skills/a/SKILL.md",
+        "skills/b/SKILL.md",
+      ]);
+      expect(result.allowlistFailures).toHaveLength(1);
+      expect(result.allowlistFailures[0]).toContain("skills/a/SKILL.md");
+      expect(result.allowlistFailures[0]).toContain(staleHash);
+      expect(result.allowlistFailures[0]).toContain("matches no scanned rule site");
+      // The live entry still exempts its site; the stale row never joins a group.
+      expect(result.duplicates).toEqual([]);
+      expect(result.exemptGroups).toHaveLength(1);
+    } finally {
+      repo.close();
     }
   });
 
@@ -301,7 +366,7 @@ describe("Guard 10 blocking (drift-lint executable)", () => {
         {
           file: "skills/mstar-gamma/SKILL.md",
           normalizedHash: ruleFingerprintHash(normalizeRuleLine(RULE)),
-          reason: "skills/mstar-gamma/SKILL.md keeps a frozen copy; mstar-alpha owns the rule",
+          reason: "skills/mstar-gamma/SKILL.md keeps a frozen copy; skills/mstar-alpha/SKILL.md owns the rule",
         },
       ],
       (dir) => {

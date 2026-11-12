@@ -454,12 +454,61 @@ export type PlanQualityResult = GateResult & { findings: PlanQualityFinding[] };
 
 /** Placeholder word tokens (mstar-artifacts/templates/plan.main.md
  * self-review "Placeholder scan: no TBD" + plan-quality-bar.md): TBD, TODO,
- * TBA (singular/plural) — word-boundary, case-insensitive. `FIXME`/`XXX` are
+ * TBA (singular/plural) — word-boundary, case-insensitive; the lifecycle
+ * value `Todo` is skipped at the match site. `FIXME`/`XXX` are
  * deliberately NOT flagged (code-marker territory, not plan placeholders). */
 const PLACEHOLDER_TOKEN_RE = /\b(TBDs?|TODOs?|TBAs?)\b/gi;
 /** Prose ellipsis placeholder ("a.ts, b.ts, ..."). Intentional ellipsis can
  * use U+2026 `…`, which is exempt. */
 const ELLIPSIS_RE = /\.\.\./;
+
+/** Verification-set surface map (plan-quality-bar.md § Verification gates):
+ * a Files entry on one of these code surfaces must pair with the check that
+ * surface maps to, or `plan-quality-bar` reports
+ * `lint.plan-quality.verification-set`. Prose-only plans map to nothing.
+ * `scripts/**` maps to that script's own test or its own run — never to
+ * `lint:ascii-literals`, which scans nothing under `scripts/`. The
+ * `scripts/` surface is the repository root only: `packages/ui/scripts/x.ts`
+ * is package-local code whose tests live beside it. A repository-root script
+ * path is a path whose left boundary is not a name character or `/`, so a
+ * nested `scripts/` directory yields no match. */
+const ROOT_SCRIPT_PATH_RE = /(?<![\w/.-])scripts\/[\w.-]+?\.ts\b/;
+const SURFACE_CHECKS: ReadonlyArray<{ surface: RegExp; missing: (filesText: string, verificationText: string) => string[] }> = [
+  {
+    surface: /\bpackages\/(?:engine|cli)\/src\b|\bhooks\/src\b/,
+    missing: (_files, verification) => (verification.includes("bun run lint:ascii-literals") ? [] : ["bun run lint:ascii-literals"]),
+  },
+  {
+    surface: /\bskills\//,
+    missing: (_files, verification) => (verification.includes("bun run validation:drift") ? [] : ["bun run validation:drift"]),
+  },
+  {
+    surface: ROOT_SCRIPT_PATH_RE,
+    missing: (files, verification) => {
+      // A script's own check is its test or its own `bun run` entry name
+      // (npm scripts spell `:` where the file has `-`).
+      const runNames = [...verification.matchAll(/\bbun run ([\w:.-]+)/g)].map((m) => m[1]!.replace(/:/g, "-"));
+      return [...new Set([...files.matchAll(new RegExp(ROOT_SCRIPT_PATH_RE, "g"))].map((m) => m[0]))]
+        .filter((path) => !path.endsWith(".test.ts"))
+        .filter((path) => !verification.includes(path) && !verification.includes(path.replace(/\.ts$/, ".test.ts")) && !runNames.includes(path.slice("scripts/".length, -".ts".length)))
+        .map((path) => `bun test ${path.replace(/\.ts$/, ".test.ts")}`);
+    },
+  },
+];
+/** Files-list entry labels (`- Modify: \`path\``) in a task's **Files:**
+ * block. `Out of scope` is an exclusion, not a surface the plan checks. */
+const FILES_ENTRY_RE = /^\s*[-*]\s*\**\s*(?:Create|Modify|Test|Delete|Rename)\s*\**\s*:/i;
+/** A Files entry declares surfaces only when its subject is a quoted path
+ * list — the first thing after the label is a backticked span. An entry that
+ * opens with prose (`only paths …`) or quotes a full command line names no
+ * modified surface. */
+const FILES_ENTRY_PATH_START_RE = /^[ \t]*`/;
+/** A quoted path: a backticked span with no whitespace. */
+const QUOTED_PATH_RE = /`([^`\s]+)`/g;
+/** Verification lines: a step checkbox or an explicit `Run:` label. Only
+ * these count as "the plan verifies this surface" — a command named in
+ * constraints prose is a mention, not a gate. */
+const VERIFICATION_LINE_RE = /^\s*(?:[-*]\s*\[[ xX]\]|Run\s*:)/;
 /** Negation words that turn a token mention into an absence assertion
  * ("no TBD/placeholder/TODO" in a constraints section states the rule rather
  * than marking a placeholder). */
@@ -489,7 +538,13 @@ function stripInlineCode(line: string): string {
  * - exemptions: fenced code blocks (```` ``` ```` / `~~~`) and inline code
  * spans are skipped — `...` in a file-list or example is not a placeholder;
  * a leading `---`-fenced frontmatter block is skipped too (a plan's
- * `status: Todo` value is not a placeholder — issue #499 item 5).
+ * `status: Todo` value is not a placeholder — issue #499 item 5); a
+ * lifecycle `Todo` anywhere (capital T, lower `odo`) is domain state, while
+ * upper-case `TODO`/`TBD`/`TBA` still fail.
+ * - verification set: a Files entry on a mapped code surface that names
+ * none of that surface's mapped commands yields
+ * `lint.plan-quality.verification-set` (surface map in
+ * `plan-quality-bar.md` § Verification gates).
  * - out of scope (judgment stays prompt): "add tests" without code, and
  * `FIXME`/`XXX` code markers.
  */
@@ -533,6 +588,9 @@ export function planQualityBar(planText: string): PlanQualityResult {
     let token: string | null = null;
     for (const wordMatch of stripped.matchAll(PLACEHOLDER_TOKEN_RE)) {
       if (wordMatch.index === undefined) continue;
+      // A lifecycle `Todo` (capital T, lower odo) is domain state, not a
+      // placeholder; only the upper-case token fails.
+      if (wordMatch[0] === "Todo") continue;
       const negated = NEGATION_RE.test(stripped.slice(segmentStartBefore(wordMatch.index) + 1, wordMatch.index));
       if (!negated) {
         token = wordMatch[0].replace(/s$/i, "").toUpperCase();
@@ -554,6 +612,30 @@ export function planQualityBar(planText: string): PlanQualityResult {
         ),
       );
     }
+  }
+  // Verification set: a Files entry on a mapped code surface must be paired
+  // with the check that surface maps to, on a verification line. Only the
+  // paths a Files entry lists as its subject are surfaces; prose or a quoted
+  // command around them is a mention.
+  const filesText = lines
+    .filter((line) => FILES_ENTRY_RE.test(line))
+    .map((line) => line.replace(FILES_ENTRY_RE, ""))
+    .filter((entry) => FILES_ENTRY_PATH_START_RE.test(entry))
+    .flatMap((entry) => [...entry.matchAll(QUOTED_PATH_RE)].map((m) => m[1]!))
+    .join("\n");
+  const verificationText = lines.filter((line) => VERIFICATION_LINE_RE.test(line)).join("\n");
+  for (const { surface, missing } of SURFACE_CHECKS) {
+    if (!surface.test(filesText)) continue;
+    const missingChecks = missing(filesText, verificationText);
+    if (missingChecks.length === 0) continue;
+    violations.push(
+      violation(
+        "medium",
+        "lint.plan-quality.verification-set",
+        `code surface named in Files without its mapped verification: expected ${missingChecks.map((command) => `\`${command}\``).join(", ")}`,
+        "name the mapped local check for each code surface the task touches (mstar-artifacts/references/plan-quality-bar.md \u00a7 Verification gates surface map)",
+      ),
+    );
   }
   return { ok: violations.length === 0, violations, findings };
 }

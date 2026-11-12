@@ -15,7 +15,9 @@ import { join, resolve } from "node:path";
  * (never from the invoking process's cwd). */
 export const CLI_ROOT: string = resolve(import.meta.dir, "..");
 
-/** Absolute path of the CLI entry source run by every spawned subprocess. */
+/** Absolute path of the CLI entry source run by every spawned subprocess,
+ * unless the suite runs where the CLI is already built: `MSTAR_CLI_ENTRY`
+ * then names the built entry `runCli` spawns instead. */
 export const SRC_ENTRY: string = join(CLI_ROOT, "src/index.ts");
 
 /** Spawn env with ambient harness env vars pinned out (same as the CLI
@@ -27,9 +29,12 @@ export const SRC_ENTRY: string = join(CLI_ROOT, "src/index.ts");
  * ambient TZ is propagated; the default is UTC). The leaf-seat markers are
  * pinned out as well: a subagent shell exports one, and any registration verb
  * a fixture runs would then refuse with `coordination.leaf-seat` before
- * reaching the behaviour under test. `extra` is applied after
- * the scrub: a string re-pins or adds a variable, `undefined` deletes one
- * (a suite may deliberately re-introduce a scrubbed variable per case). */
+ * reaching the behaviour under test. The execution-identity channel is pinned
+ * out too: a launcher-set `MSTAR_HOST_SESSION_ID` / `MSTAR_EXECUTION_IDENTITY`
+ * / `DSH_SESSION_ID` would otherwise authorize the child as the invoking
+ * session. `extra` is applied after the scrub: a string re-pins or adds a
+ * variable, `undefined` deletes one (a suite may deliberately re-introduce a
+ * scrubbed variable per case). */
 export function cliEnv(extra?: Record<string, string | undefined>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -41,7 +46,10 @@ export function cliEnv(extra?: Record<string, string | undefined>): Record<strin
       key === "MSTAR_CLI_PROJECT_ROOT" ||
       key === "INIT_CWD" ||
       key === "DSH_MSTAR_LEAF_SEAT" ||
-      key === "MSTAR_LEAF_SEAT"
+      key === "MSTAR_LEAF_SEAT" ||
+      key === "MSTAR_HOST_SESSION_ID" ||
+      key === "MSTAR_EXECUTION_IDENTITY" ||
+      key === "DSH_SESSION_ID"
     ) {
       continue;
     }
@@ -64,17 +72,20 @@ export interface RunResult {
 }
 
 /** Run the real CLI entry as a subprocess; cwd + env overrides per test.
- * `stdin` is forwarded to the child when given (persist-style suites). */
+ * The entry is `MSTAR_CLI_ENTRY` when the suite runs where the CLI is already
+ * built, else the source entry. `stdin` is forwarded to the child when given
+ * (persist-style suites); `timeout` bounds a child that hangs. */
 export function runCli(
   args: string[],
-  opts: { cwd?: string; env?: Record<string, string>; stdin?: string } = {},
+  opts: { cwd?: string; env?: Record<string, string>; stdin?: string; timeout?: number } = {},
 ): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
+  const proc = Bun.spawnSync([process.execPath, "run", process.env.MSTAR_CLI_ENTRY ?? SRC_ENTRY, ...args], {
     cwd: opts.cwd ?? CLI_ROOT,
     env: { ...cliEnv(), ...opts.env },
     stdout: "pipe",
     stderr: "pipe",
     ...(opts.stdin !== undefined ? { stdin: new Blob([opts.stdin]) } : {}),
+    ...(opts.timeout !== undefined ? { timeout: opts.timeout } : {}),
   });
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
