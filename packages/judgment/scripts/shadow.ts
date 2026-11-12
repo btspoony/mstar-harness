@@ -27,16 +27,21 @@ type StudyResult = Readonly<{
   childOutputBytes: number;
   exitStatus: "completed" | "failed";
 }>;
-function artifactPath(root: string, rel: string): string {
-  try { return realpathSync(resolve(root, rel)); }
+// A supported filesystem failure — at resolution or at the read itself — names the artifact
+// relatively; a parse error or a programming error keeps its own identity.
+const UNREADABLE_ARTIFACT_CODES: Record<string, true> = { ENOENT: true, EACCES: true, ENOTDIR: true, EISDIR: true, EPERM: true };
+function unreadableToMissing<T>(rel: string, run: () => T): T {
+  try { return run(); }
   catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "EACCES" || code === "ENOTDIR") return fail(`jev.artifact-missing: ${rel}`);
-    throw error;
+    if (UNREADABLE_ARTIFACT_CODES[(error as NodeJS.ErrnoException).code ?? ""] !== true) throw error;
+    return fail(`jev.artifact-missing: ${rel}`);
   }
 }
+function readJsonArtifact<T>(root: string, rel: string): T {
+  return JSON.parse(unreadableToMissing(rel, () => readFileSync(realpathSync(resolve(root, rel)), "utf8"))) as T;
+}
 function readStudyResult(root: string, manifest: StudyManifest, baseline: FrozenBaseline): StudyResult {
-  const value = JSON.parse(readFileSync(artifactPath(root, "study-result.json"), "utf8")) as Partial<StudyResult>;
+  const value = readJsonArtifact<Partial<StudyResult>>(root, "study-result.json");
   if (value.schema !== "mstar.shadow-study-result/v1" || typeof value.runId !== "string" ||
       (value.evidenceClass !== "component" && value.evidenceClass !== "synthetic-offline") ||
       typeof value.elapsedMs !== "number" || !Number.isFinite(value.elapsedMs) || value.elapsedMs < 0 || value.elapsedMs > 86_400_000 ||
@@ -54,20 +59,23 @@ function rootFromArgs(args: readonly string[]): string {
   return root;
 }
 function readManifest(root: string): StudyManifest {
-  const canonicalPath = artifactPath(root, "study-manifest.json");
-  if (!canonicalPath.startsWith(`${root}/`) || statSync(canonicalPath).size > 1_048_576) return fail("Study manifest path or size is invalid");
-  const value = JSON.parse(readFileSync(canonicalPath, "utf8")) as Partial<StudyManifest>;
+  const text = unreadableToMissing("study-manifest.json", () => {
+    const canonicalPath = realpathSync(resolve(root, "study-manifest.json"));
+    if (!canonicalPath.startsWith(`${root}/`) || statSync(canonicalPath).size > 1_048_576) return fail("Study manifest path or size is invalid");
+    return readFileSync(canonicalPath, "utf8");
+  });
+  const value = JSON.parse(text) as Partial<StudyManifest>;
   if (value.schema !== "mstar.shadow-study/v1" || typeof value.runId !== "string" || !value.child || !value.mountPlan || !value.baseline) return fail("Invalid study manifest");
   return value as StudyManifest;
 }
 function baselineFrom(root: string): FrozenBaseline {
-  return JSON.parse(readFileSync(artifactPath(root, "baseline.json"), "utf8")) as FrozenBaseline;
+  return readJsonArtifact<FrozenBaseline>(root, "baseline.json");
 }
 function receiptsFrom(root: string): readonly WorkUnitReceipt[] {
-  return JSON.parse(readFileSync(artifactPath(root, "receipts.json"), "utf8")) as WorkUnitReceipt[];
+  return readJsonArtifact<readonly WorkUnitReceipt[]>(root, "receipts.json");
 }
 function eventsFrom(root: string): readonly ProbeEvent[] {
-  return JSON.parse(readFileSync(artifactPath(root, "probe-events.json"), "utf8")) as ProbeEvent[];
+  return readJsonArtifact<readonly ProbeEvent[]>(root, "probe-events.json");
 }
 export async function runShadowCommand(args = process.argv.slice(2), launcher?: ProbeLauncher): Promise<number> {
   const [command, ...options] = args;

@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type * as FsModule from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { runEvaluationCommand } from "../scripts/evaluate.js";
 
 async function capture(args: string[]): Promise<{ code: number; stderr: string }> {
@@ -53,5 +54,29 @@ describe("evaluation artifact refusals", () => {
       expect(stderr).not.toContain(root);
       expect(stderr).not.toContain("ENOENT");
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  // A file that resolves but denies the open. Injected through a path-scoped readFileSync so
+  // the case stays discriminating on an account that could read a mode-000 file anyway.
+  test("names an artifact whose read is denied, relative to the run root", async () => {
+    const root = rootMissingAnnotationShard();
+    const fs = { ...require("node:fs") } as typeof FsModule;
+    mock.module("node:fs", () => ({
+      ...fs,
+      readFileSync: (path: Parameters<typeof FsModule.readFileSync>[0], options?: Parameters<typeof FsModule.readFileSync>[1]) => {
+        if (String(path).endsWith(`${sep}protocol.json`)) throw Object.assign(new Error(`EACCES: permission denied, open '${String(path)}'`), { code: "EACCES" });
+        return (options === undefined ? fs.readFileSync(path) : fs.readFileSync(path, options as never)) as never;
+      },
+    }));
+    try {
+      const { code, stderr } = await capture(["check-protocol", "--root", root]);
+      expect(code).toBe(2);
+      expect(stderr).toContain("jev.artifact-missing: protocol.json");
+      expect(stderr).not.toContain(root);
+      expect(stderr).not.toContain("EACCES");
+    } finally {
+      mock.restore();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

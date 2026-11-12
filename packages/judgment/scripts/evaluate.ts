@@ -40,19 +40,26 @@ function args(argv: readonly string[]): { action: string; root: string; shard?: 
   if (!root || !isAbsolute(root)) return fail("--root must be an explicit absolute authorized-view path");
   return { action, root: realpathSync(root), ...(shard ? { shard } : {}), ...(seat ? { seat } : {}) };
 }
+// A supported filesystem failure — at resolution or at the read itself — names the artifact
+// relatively; anything else (a parse error, a programming error) keeps its own identity.
+const UNREADABLE_ARTIFACT_CODES: Record<string, true> = { ENOENT: true, EACCES: true, ENOTDIR: true, EISDIR: true, EPERM: true };
+function unreadableToMissing<T>(rel: string, run: () => T): T {
+  try { return run(); }
+  catch (error) {
+    if (UNREADABLE_ARTIFACT_CODES[(error as NodeJS.ErrnoException).code ?? ""] !== true) throw error;
+    return fail(`jev.artifact-missing: ${rel}`);
+  }
+}
 function artifactPath(root: string, rel: string, invalidMessage: string): string {
   if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) return fail(invalidMessage);
-  try { return realpathSync(resolve(root, rel)); }
-  catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "EACCES" || code === "ENOTDIR") return fail(`jev.artifact-missing: ${rel}`);
-    throw error;
-  }
+  return unreadableToMissing(rel, () => realpathSync(resolve(root, rel)));
 }
 function readArtifact(root: string, rel: string): string {
   const canonical = artifactPath(root, rel, "Invalid artifact path"), relPath = relative(root, canonical);
-  if (relPath === ".." || relPath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || !statSync(canonical).isFile() || statSync(canonical).size > 16_777_216) return fail("Artifact outside authorized root or exceeds limit");
-  return readFileSync(canonical, "utf8");
+  return unreadableToMissing(rel, () => {
+    if (relPath === ".." || relPath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || !statSync(canonical).isFile() || statSync(canonical).size > 16_777_216) return fail("Artifact outside authorized root or exceeds limit");
+    return readFileSync(canonical, "utf8");
+  });
 }
 function readJson<T>(root: string, rel: string): T {
   return JSON.parse(readArtifact(root, rel)) as T;
@@ -63,8 +70,10 @@ function readJsonLines<T>(root: string, rel: string): T[] {
 function digest(bytes: Uint8Array): string { return createHash("sha256").update(bytes).digest("hex"); }
 function fileDigest(root: string, rel: string): string {
   const canonical = artifactPath(root, rel, "Manifest path invalid"), relPath = relative(root, canonical);
-  if (relPath === ".." || relPath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || !statSync(canonical).isFile()) return fail("Manifest path escapes authorized root");
-  return digest(readFileSync(canonical));
+  return unreadableToMissing(rel, () => {
+    if (relPath === ".." || relPath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || !statSync(canonical).isFile()) return fail("Manifest path escapes authorized root");
+    return digest(readFileSync(canonical));
+  });
 }
 type Manifest = { schema: string; contractRevision: string; files?: Array<{ path: string; sha256: string }> };
 type Corpus = { groups: Array<{ id: string; split: string; sourceSlot?: string; lineageId: string; causalClusterId: string; eligible?: boolean; quarantined?: boolean; quarantineReason?: string; variants: Array<{ id: string; sourceVariant?: string; itemDigest?: string; sourceSha256?: string; primary?: boolean }> }> };
