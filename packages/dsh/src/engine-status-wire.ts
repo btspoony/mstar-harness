@@ -51,7 +51,10 @@ export const MSTAR_CONTRIBUTING_PACKAGE = '@mstar-harness/dsh'
 export const MSTAR_PANEL_SNAPSHOT_NAMESPACE = 'mstar'
 /** Wire method of the store-backed panel read → `/api/mstar/panelSnapshot`. */
 export const MSTAR_PANEL_SNAPSHOT_METHOD = 'panelSnapshot'
-/** The endpoint path the panel calls on every poll tick. */
+/**
+ * The endpoint path the panel's one-shot digest read calls — on seat mount and
+ * on an explicit `reload()` only; there is no poll timer behind it.
+ */
 export const PANEL_SNAPSHOT_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_PANEL_SNAPSHOT_METHOD}`
 /**
  * Wire method of the per-view read → `/api/mstar/dashboardView`.
