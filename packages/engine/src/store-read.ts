@@ -1522,6 +1522,15 @@ function iterationDocumentIds(db: StoreDb): Map<string, string[]> {
   return byIteration;
 }
 
+/** The one compass row per iteration; first row wins, so a duplicated compass row keeps first-match semantics. */
+function compassesByIteration(generated: GeneratedRows): Map<string, ProjectedCompassRow> {
+  const byIteration = new Map<string, ProjectedCompassRow>();
+  for (const row of generated.compasses) {
+    if (!byIteration.has(row.iteration_id)) byIteration.set(row.iteration_id, row);
+  }
+  return byIteration;
+}
+
 /**
  * The iteration's plan membership (C2): the de-duplicated, sorted union of the
  * compass frontmatter `plans:` ids and the catalog `plan belongs-to iteration`
@@ -1529,16 +1538,10 @@ function iterationDocumentIds(db: StoreDb): Map<string, string[]> {
  * registration projection — neither side alone is the answer.
  */
 function iterationMembershipPlanIds(
-  generated: GeneratedRows,
+  compassByIteration: Map<string, ProjectedCompassRow>,
   linkIds: Map<string, string[]>,
   iterationIds: readonly string[],
 ): Map<string, string[]> {
-  // One map before the loop; first row wins, so a duplicated compass row keeps
-  // first-match semantics.
-  const compassByIteration = new Map<string, ProjectedCompassRow>();
-  for (const row of generated.compasses) {
-    if (!compassByIteration.has(row.iteration_id)) compassByIteration.set(row.iteration_id, row);
-  }
   const merged = new Map<string, string[]>();
   for (const iterationId of iterationIds) {
     const compassRow = compassByIteration.get(iterationId);
@@ -1558,7 +1561,7 @@ function iterationMembershipPlanIds(
  * `active` IS that closed non-terminal arm, including a non-terminal projected
  * status on a row the registry does not list as active (`active_registration`
  * is the registry's only claim). Accepted limit, not a corruption code to
- * encode: docs/adr/proposed/architecture/2026-11-12-low-sweep-accepted-limits.md
+ * encode: docs/adr/implemented/architecture/2026-11-12-low-sweep-accepted-limits.md
  */
 function executionLifecycleOf(workflowRow: ProjectedWorkflowRow | undefined): IterationExecutionLifecycle {
   if (workflowRow === undefined) return "none";
@@ -1570,6 +1573,7 @@ function composeIteration(
   iterationId: string,
   catalog: CatalogIdentityDTO | null,
   generated: GeneratedRows,
+  compassRow: ProjectedCompassRow | undefined,
   planIds: readonly string[],
   documentIds: readonly string[],
   identities: Map<string, CatalogIdentityDTO>,
@@ -1577,8 +1581,6 @@ function composeIteration(
 ): IterationDTO {
   const badges: DashboardBadge[] = [];
   if (catalog === null) badges.push("catalog-missing");
-
-  const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
   if (generated.generation === null) badges.push("execution-unavailable");
   const workflowRow = generated.workflows.find((row) => row.id === iterationId && row.type === "iteration");
 
@@ -1698,7 +1700,8 @@ function readIterationList(db: StoreDb, filters: DashboardFilters): IterationLis
   ).filter((row) => projectId === null || belongsTo(membership, "iteration", row.id, projectId));
 
   const linkPlanIds = iterationPlanIds(db);
-  const planIds = iterationMembershipPlanIds(generated, linkPlanIds, catalogRows.map((row) => row.id));
+  const compassByIteration = compassesByIteration(generated);
+  const planIds = iterationMembershipPlanIds(compassByIteration, linkPlanIds, catalogRows.map((row) => row.id));
   const documentIds = iterationDocumentIds(db);
   const page = catalogRows.slice(offset, offset + limit);
   const identities = catalogIdentities(db, [
@@ -1712,6 +1715,7 @@ function readIterationList(db: StoreDb, filters: DashboardFilters): IterationLis
         row.id,
         identities.get(identityToken("iteration", row.id)) ?? null,
         generated,
+        compassByIteration.get(row.id),
         planIds.get(row.id) ?? [],
         documentIds.get(row.id) ?? [],
         identities,
@@ -1730,9 +1734,10 @@ function readIterationList(db: StoreDb, filters: DashboardFilters): IterationLis
 function readIterationDetail(db: StoreDb, filters: DashboardFilters): IterationDTO | null {
   const iterationId = requireId(filters, "iteration-detail");
   const generated = readGeneratedRows(db);
-  const planIds = iterationMembershipPlanIds(generated, iterationPlanIds(db), [iterationId]).get(iterationId) ?? [];
+  const compassByIteration = compassesByIteration(generated);
+  const planIds = iterationMembershipPlanIds(compassByIteration, iterationPlanIds(db), [iterationId]).get(iterationId) ?? [];
   const documentIds = iterationDocumentIds(db).get(iterationId) ?? [];
-  const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
+  const compassRow = compassByIteration.get(iterationId);
   const identities = catalogIdentities(db, [
     { kind: "iteration", id: iterationId },
     ...planIds.map((planId) => ({ kind: "plan" as const, id: planId })),
@@ -1741,7 +1746,7 @@ function readIterationDetail(db: StoreDb, filters: DashboardFilters): IterationD
   const catalog = identities.get(identityToken("iteration", iterationId)) ?? null;
   if (catalog === null && compassRow === undefined) return null;
   const projects = [...(projectMembership(db).get(identityToken("iteration", iterationId)) ?? [])].sort();
-  return composeIteration(iterationId, catalog, generated, planIds, documentIds, identities, projects);
+  return composeIteration(iterationId, catalog, generated, compassRow, planIds, documentIds, identities, projects);
 }
 
 // ---------------------------------------------------------------------------

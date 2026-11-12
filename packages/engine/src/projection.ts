@@ -658,7 +658,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     // pruning rule and no depth knob. The cost is linear in the store's whole
     // terminal history, paid by every refresh that reads it; that growth is an
     // accepted limit, not a defect to bound here. See
-    // docs/adr/proposed/architecture/2026-11-12-low-sweep-accepted-limits.md
+    // docs/adr/implemented/architecture/2026-11-12-low-sweep-accepted-limits.md
     const terminalGraphIds = [
       ...(servedGraph.terminalUnregistered ?? []),
       ...(servedGraph.terminalAdoptions ?? []),

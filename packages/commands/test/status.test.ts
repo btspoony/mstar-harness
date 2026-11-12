@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test } from "bun:test";
 import { MIGRATIONS, encodeExecutionSessionRef, initializeStore } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
+import { workflowCloseRecovery } from "../src/families/status.js";
 import type { InvocationContext } from "../src/types.js";
 
 function context(cwd: string): InvocationContext {
@@ -163,6 +164,21 @@ describe("status command family", () => {
       helpRoute: "mstar status workflow-close --help",
       recovery: "Run mstar status workflow-close --help and correct the flagged input. Owning skill: mstar-iteration.",
     });
+  });
+
+  /**
+   * One code, one recovery: `coordination.git-unavailable` covers both a Git
+   * read the checkout could not answer and the delivery-diff scratch write that
+   * failed under `TMPDIR`. The status layer must not answer the scratch case
+   * with a control-root instruction that contradicts the engine's own.
+   */
+  test("the close recovery for a scratch write names TMPDIR instead of the control root", () => {
+    const scratch = workflowCloseRecovery("coordination.git-unavailable", { path: "/tmp/mstar-patchid-1", cause: "EACCES" });
+    expect(scratch).toContain("TMPDIR");
+    expect(scratch).not.toContain("control root");
+    const read = workflowCloseRecovery("coordination.git-unavailable", { command: "git status", cause: "ENOENT" });
+    expect(read).toContain("control root");
+    expect(read).not.toContain("TMPDIR");
   });
 
   test("a status engine refusal appends help and recovery without rewriting the engine line", async () => {

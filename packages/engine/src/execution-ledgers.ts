@@ -585,7 +585,7 @@ function readLedgerBytes(path: string): Buffer | null {
  * `.compaction-*.tmp` file beside the ledger. That residue is an accepted cost:
  * the next maintenance pass does not sweep it, because a sweep cannot tell a
  * dead writer's temp file from one a live writer is about to rename. See
- * `docs/adr/proposed/architecture/2026-11-12-low-sweep-accepted-limits.md`.
+ * `docs/adr/implemented/architecture/2026-11-12-low-sweep-accepted-limits.md`.
  */
 function writeLedgerTempFile(path: string, content: Buffer): string {
   const temp = join(dirname(path), `${basename(path)}.compaction-${randomUUID()}.tmp`);

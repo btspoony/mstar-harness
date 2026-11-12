@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -22,6 +22,7 @@ import { getCommandDefinitions, type CommandEnvelope, type InvocationContext } f
 import { registerMcpCommands, type ResolveContext } from "../src/mcp/register";
 import { actionOf, familyOf, familyToolName } from "../src/mcp/fold";
 import { registerCliCommands } from "../src/command-adapter";
+import { clearIdentityChannels, restoreIdentityChannels } from "./harness";
 import { createMcpServer } from "../src/mcp/server";
 import { createContextResolver, resolveContext } from "../src/mcp/stdio";
 
@@ -227,6 +228,11 @@ const recoveryInput = (attestation: string) => ({
   workflow: "wf-missing-recovery", priorSession: "stopped-holder", reason: "restart",
   attestation, expect: "token", operation: `recover-${randomUUID()}`,
 });
+
+// Every case below asserts the identity the fixture supplied, not the shell's.
+// Clearing the channels per case keeps a real leaf shell from deciding it.
+beforeEach(clearIdentityChannels);
+afterEach(restoreIdentityChannels);
 
 describe("MCP session identity", () => {
   test("per-call identity passes its format gate and reaches workflow lookup", async () => {

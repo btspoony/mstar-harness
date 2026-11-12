@@ -353,14 +353,26 @@ describe("store-db L2 fix round", () => {
     handle.close();
   });
 
-  test("a caller-supplied clock is the ONE instant for both init activation stamps", async () => {
+  test("a caller-supplied clock is the ONE instant for every stamp the creation transaction writes", async () => {
     const dir = mkdtempSync(join(ROOT, "init-clock-"));
-    const at = "2026-10-30T12:00:00.000Z";
+    // A 2020 instant no ambient reading can produce, so a stamp that fell back
+    // to the wall clock cannot pass this comparison.
+    const at = "2020-01-01T00:00:00.000Z";
     const handle = await initializeStore({ harnessDir: dir }, { now: () => at });
-    // One creation transaction carries one clock: the two rows the creation
-    // activates record the caller's instant, never a second ambient reading.
-    expect(handle.db.prepare("select activated_at from store_meta where id = 1").get()).toEqual({ activated_at: at });
-    expect(handle.db.prepare("select activated_at from execution_meta where id = 1").get()).toEqual({ activated_at: at });
+    // One creation transaction carries one clock: the rows the migration SQL
+    // seeds and the rows this transaction activates all record the caller's
+    // instant, never a second ambient reading.
+    expect(
+      handle.db.prepare("select created_at, activated_at from store_meta where id = 1").get(),
+    ).toEqual({ created_at: at, activated_at: at });
+    expect(
+      handle.db.prepare("select root_updated_at, activated_at from execution_meta where id = 1").get(),
+    ).toEqual({ root_updated_at: at, activated_at: at });
+    expect(handle.db.prepare("select checked_at from projection_meta where id = 1").get()).toEqual({ checked_at: at });
+    // The version ledger the runner records inside this same transaction is
+    // stamped from that one reading too, so no row dates the schema apart from
+    // the creation it belongs to.
+    expect(handle.db.prepare("select distinct applied_at from schema_version").all()).toEqual([{ applied_at: at }]);
     handle.close();
   });
 
