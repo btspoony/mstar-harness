@@ -51,7 +51,7 @@ The terminal loop reads every terminal header in the served graph unconditionall
 
 `packages/judgment/src/annotation-seat-gate.ts` emits `seat`, `shard` and `sessionId`; nothing in this repository writes `model` or `assistance`, and `assistance` has no defined meaning in this tree.
 
-**Reason:** `check-annotations` cannot enforce fields no producer emits, and the landing step the acceptance names does not exist. Populating them would mean inventing identity metadata. The acceptance stays unsatisfied; a project-manager waiver of the landing-step population and of `check-annotations` enforcement for those two fields is accepted. It is not a resolution and must not be recorded as one.
+**Reason:** `check-annotations` cannot enforce fields no producer emits, and the landing step the acceptance names does not exist. Populating them would mean inventing identity metadata. The acceptance stays unsatisfied; a project-manager waiver of `model` and `assistance` only — their population at a landing step that does not exist, and `check-annotations` enforcement of those two fields — is accepted. The waiver does not reach `seat`, `shard` or `sessionId`: `check-annotations` still rejects a declared seat or shard that disagrees with the shard being read, and still reports all three per shard. It is not a resolution and must not be recorded as one.
 
 **What would change the decision:** a producer for `model` or `assistance` is defined — for example annotation writers that know the model and the assistance level they ran under. Then the acceptance is met by that producer and the waiver is withdrawn.
 
@@ -66,7 +66,7 @@ The terminal loop reads every terminal header in the served graph unconditionall
 
 - The ADR gate accepts this record under `implemented/architecture/`: `mstar lint docs/adr --type adr` and `bun scripts/adr-check.ts` (Guard 12) pass with it there, and it names `I-000906`, `I-000907`, `I-000913`, `I-000939` and `I-000196`.
 - `I-000906`, `I-000907`, `I-000913` and `I-000939` are closed as accepted observations, with no mechanism added for them; `I-000196` remains waived with its acceptance still unsatisfied.
-- The module comments that cite this path name the same five boundaries; no source change adds a knob, lifecycle value, sweep or fixture rewrite for them.
+- Three of the five boundaries carry an in-code reference to this path: `I-000907` in `store-read.ts`, `I-000913` in `projection.ts`, `I-000939` in `execution-ledgers.ts`. `I-000906` (the terminal fixtures) and `I-000196` (the annotation identity fields) are recorded here only, with no comment in the modules they describe. No source change adds a knob, lifecycle value, sweep or fixture rewrite for any of them.
 - These limits are documented, not enforced. Nothing fails if a future change adds the retention knob or lets a fixture drift, so each reversal condition above is a review obligation rather than a gate.
 - The costs are real and accepted: refresh time grows with terminal history, crashed compactions leave dead temporaries, an unregistered non-terminal row reads as active, raw-SQL fixtures can encode state no writer produces, and blind-independence attribution for annotation rows depends on supervisor transcripts rather than the rows.
 - `I-000196` carries the largest gap: the waiver accepts weaker attribution than its acceptance wanted, and nothing in the repository closes that gap without a producer for `model` and `assistance`.
