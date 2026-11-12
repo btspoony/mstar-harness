@@ -1,6 +1,6 @@
 # @mstar-harness/opencode-v2
 
-Morning Star harness plugin for [OpenCode](https://opencode.ai) 2.x, authored on the OpenCode V2 plugin SDK (`@opencode/plugin`, pinned to the exact `2.0.26` release).
+Morning Star harness plugin for [OpenCode](https://opencode.ai) 2.x, authored on the OpenCode V2 plugin SDK (`@opencode/plugin`, pinned to the exact `2.2.5` release).
 
 This is the harness's second, independent host package. It projects the same canonical assets — `mstar-*` skills, role agents, iteration commands — and the same engine-backed runtime gates as [`@mstar-harness/opencode`](../opencode/README.md), which stays the entry for OpenCode 1.x hosts on the V1 plugin API (`@opencode-ai/plugin` 1.4.8). The two packages share no runtime entry: install the one that matches your host generation.
 
@@ -55,7 +55,7 @@ For the V2 generation, one `init` pass writes:
 - **`plugins`** — the canonical `@mstar-harness/opencode-v2@latest` entry, appended after owned-slot dedupe. Owned slots are the V2 npm entries (string and `{package}` object forms), the V1 npm entries, and the legacy `morning-star@git+…` entries; every other entry keeps its position and shape.
 - **`agents.<role>.model`** — only for model overrides you supplied (`--pm-model`, `--dev-models`, …): the plural `agents` key, other keys preserved.
 - **`mcp.servers["morning-star"]`** — merged non-destructively with `{"type":"local","command":["npx","@mstar-harness/cli","mcp"]}`; an existing morning-star entry is never rewritten, and other servers and `mcp` keys survive.
-- **`$schema`** — preserved when present, never invented: the pinned `2.0.26` schema tag publishes no V2 `$schema` id, so the installer writes none. The V1 `$schema` pin is untouched and V1-only.
+- **`$schema`** — preserved when present, never invented: the pinned `2.2.5` schema tag publishes no V2 `$schema` id, so the installer writes none. The V1 `$schema` pin is untouched and V1-only.
 
 Preservation guarantees: repeat initialization is idempotent; the other generation's key (`plugin` vs `plugins`) is never deleted or rewritten; unrelated plugin entries — **including V2 `{package, options}` objects, not just strings** — keep their positions and shapes.
 
@@ -73,7 +73,7 @@ Claimed coverage is exactly:
 - **`subagent`** dispatch — Assignment validation on `input.prompt`. The caller is the host-provided `event.agent` (readonly) and the spawn target is `input.agent`; neither is inferred from the other. Because V2 exposes the caller, the anti-recursion leg is **active** on this host (the V1 package skips it), and an empty/absent caller binding fails closed.
 - **Authority-class refusals** (`store.direct-write-refused`, `project.register.retired`, `store.authority-unavailable`, `execution.direct-write-refused`) refuse unconditionally in both enforcement modes; document-validity violations follow the repo's enforcement axis (hard → typed refusal, soft → logged warning). A missing or malformed required input on a claimed seam is a typed refusal naming the field and the recovery, never a silent skip.
 
-Explicit **non-claims**: **`patch`** (its `2.0.26` input shape is not contract-verified, so no interception or enforcement claim is made), and **`shell`** / Code Mode's `execute` / `opencode` / `browser` namespaces (arbitrary-execution surfaces outside structured-write interception — there is no arbitrary shell-write protection claim). The coverage statement is “any call that reaches `execute.before` with tool name `write`/`edit`/`subagent`”, and nothing broader.
+Explicit **non-claims**: **`patch`** (its input shape at the pinned SDK tag is not contract-verified, so no interception or enforcement claim is made), and **`shell`** / Code Mode's `execute` / `opencode` / `browser` namespaces (arbitrary-execution surfaces outside structured-write interception — there is no arbitrary shell-write protection claim). The coverage statement is “any call that reaches `execute.before` with tool name `write`/`edit`/`subagent`”, and nothing broader.
 
 ## Runtime floors
 
@@ -82,7 +82,7 @@ Explicit **non-claims**: **`patch`** (its `2.0.26` input shape is not contract-v
 
 ## Verification status
 
-These claims are declaration- and source-grounded at the pinned SDK tag `2.0.26`, and the packaged artifact is exercised by a reproducible smoke (`npm pack` → temp-prefix install → a real Node child imports the installed entry and asserts the plugin id, the Effect lifecycle, the bundled agent/command/skill assets, a nested skill reference, and the engine metadata). **Installed-host behavior is not verified**: no OpenCode 2.x host run is claimed here.
+These claims are declaration- and source-grounded at the pinned SDK tag `2.2.5`, and the packaged artifact is exercised by a reproducible smoke (`npm pack` → temp-prefix install → a real Node child imports the installed entry and asserts the plugin id, the Effect lifecycle, the bundled agent/command/skill assets, a nested skill reference, and the engine metadata). **Installed-host behavior is not verified**: no OpenCode 2.x host run is claimed here.
 
 ## Docs
 

@@ -347,7 +347,7 @@ export function WorkflowDetail(props: WorkflowDetailProps) {
               ) : (
                 /* The prototype's lease table: fixed pixel widths and a scroller, so a
                    narrow pane scrolls instead of squeezing the expiry into 14% of the
-                   card (`design-v1.html:1699-1706`). */
+                   card (`prototype.html`, the Leases table's `data-narrow-cols` colgroup). */
                 <div className="table-wrap">
                   <table className="table" data-ms-leases="" data-narrow-cols="2">
                     <colgroup>

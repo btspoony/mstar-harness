@@ -30,6 +30,12 @@
  *   - a comparison used for an explicitly reviewed record-only purpose is
  *     reported as advisory, never silently excused.
  *
+ * Authorized gates: the one escape hatch is an inline
+ * `// hash-gate: authorized — <justification>` marker. Its syntax, the
+ * justification bar and the review path are documented next to
+ * AUTHORIZED_MARKER_PREFIX below; the durable exception class is
+ * docs/knowledge/best-practices/frozen-invariant-lints-need-ci-at-landing.md.
+ *
  * CLI:
  *   bun scripts/lint-hash-gates.ts                    scan production src
  *   bun scripts/lint-hash-gates.ts --dir <path> ...  scan other roots
@@ -640,7 +646,29 @@ export function scanSource(rel: string, text: string): HashGateFinding[] {
   return applyAuthorizedMarkers(sf, text, findings).sort((a, b) => (a.line - b.line) || (a.column - b.column));
 }
 
-/** The authorized-gate marker prefix (em-dash U+2014). */
+/**
+ * The authorized-gate marker prefix (em-dash U+2014).
+ *
+ * Contract — this marker is the lint's only escape hatch, and it is a review
+ * instrument, not a silencer:
+ *
+ * - Syntax: a single-line comment `// hash-gate: authorized — <justification>`
+ *   with the prefix below, one em-dash, then the justification. One marker
+ *   authorizes exactly one site (binding rules on `applyAuthorizedMarkers`). An
+ *   empty or whitespace-only justification is itself a violation.
+ * - Justification bar: it must name the integrity fact the comparison
+ *   establishes — which recorded bytes/hash are being identified and why
+ *   refusing on mismatch is correct for that fact. A restatement of the code
+ *   ("check the hash") does not meet the bar. Model: the authorized comments in
+ *   `packages/engine/src/host-state-import.ts`.
+ * - Review path: a newly authorized gate lands only as part of a change that
+ *   adds the marker *and* reviews that site. The durable exception class and
+ *   the evidence bar for exemptions are recorded in
+ *   `docs/knowledge/best-practices/frozen-invariant-lints-need-ci-at-landing.md`;
+ *   treat it as the policy this constant implements.
+ *
+ * Match grammar is fixed here: only the prefix string below is recognized.
+ */
 const AUTHORIZED_MARKER_PREFIX = "// hash-gate: authorized \u2014";
 
 /**

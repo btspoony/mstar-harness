@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 /** Native tool.execute.before coverage is limited to write/edit; patch, shell,
  * and Code Mode remain outside this gate. SDK pin receipt: the installed
- * @opencode/plugin@2.1.3/dist/effect/tool.d.ts:1 imports Tool from
+ * @opencode/plugin@2.2.5/dist/effect/tool.d.ts:1 imports Tool from
  * @opencode/schema/tool, whose pinned dist/tool.d.ts:40 declares Tool.Error. */
 import type { ToolHooks } from "@opencode/plugin/effect/tool";
 import { Tool } from "@opencode/schema/tool";
@@ -61,7 +61,7 @@ function refusal(code: string, message: string): Tool.Error {
 function malformedPath(field: "filePath" | "path"): Tool.Error {
  return refusal(
  "write.input-path-invalid",
- `input.${field} must be a non-empty string. Align the OpenCode 2.0.26 tool input schema and retry; no write was authorized.`,
+ `input.${field} must be a non-empty string. Align the OpenCode 2.2.5 tool input schema and retry; no write was authorized.`,
  );
 }
 

@@ -29,7 +29,7 @@
 | `types.ts` | 载荷/视图类型（`MstarEngineStatusSource`/`MstarEngineStatusPayload`/`MstarHarnessState`/`MstarIterationGateView` + agent-flow 视图类型） | |
 | `invariant.ts` | 包伴随入口（`@mstar-harness/dsh/invariant`）；dsh 0.2.1 移除 `invariants` 服务与 `./invariant` 约定后为文档化 no-op（可加载、无需宿主服务） | |
 | `engine-status-wire.ts` | **新增**：引擎状态信道的**唯一**线上地址声明（`/api` + `mstar/engineStatus` + namespace/method 字面量） | 无 import、无副作用 → 宿主半体与浏览器半体各自内联；两侧测试互钉 |
-| `engine-status-store.ts` | **新增**：`{HARNESS_DIR}/snapshots/engine-status.json` 持久化存储（写入 = 目录写锁 + 临时文件 rename；读取 = 显式 `unavailable` 原因） | 见 §0.3 依赖边 |
+| `engine-status-store.ts` | **新增**：control-root `store.db` 的引擎状态存储——发射 payload 按会话 UPSERT 为 `dsh_status_emissions` 的最新行，工作流选择 CONTROL 记录写 `dsh_session_bindings`（每次操作一个事务；无插件自有文件、无目录锁） | 见 §0.3 依赖边 |
 | `engine-status-endpoint.ts` | **新增**：宿主半体 `/api/mstar/engineStatus`（typert 服务 + invocation descriptor + 可选单元安装/去重） | 同上 |
 
 - **`gates/tools.ts` 已不存在**（§1 row 15、§3.1 表、§3.3/§3.4 中的该模块条目均为历史记录）：随 MCP
@@ -42,7 +42,7 @@
 
 ```
 index.ts ──> gates/* + service + types + engine-status-{wire,endpoint}
-gates/catalog.ts ──> engine-status-store.ts            （发射时持久化快照）
+gates/catalog.ts ──> engine-status-store.ts            （发射时持久化 payload 行）
 engine-status-store.ts ──> gates/agent-flow.ts         （复用 withWorkflowDirLock）
 engine-status-endpoint.ts ──> engine-status-store.ts + engine-status-wire.ts + gates/_shared.ts（type-only）
 gates/* ──> gates/_shared.ts
@@ -57,7 +57,7 @@ gates/* ──> gates/_shared.ts
 
 ### 0.5 浏览器半体（`src/client/`）
 
-`§3` 未覆盖：`src/client/index.ts` 是客户端插件入口（`inject` + `apply`），`src/client/panel/**` 是面板（`PanelView`/`TabNav`/`sidebar`/`state-section`/`panel-meta`/`definition`/`panel-store` + `pages/`（AgentList / EventLog / IterationTask / IterationInfo）+ `zones/`（Legend / ProjectRollup / TaskBoard）+ `graph/`（project-graph / event-log / schema））。数据路径见上表 `engine-status-client.ts`/`use-mstar-engine-status.ts`/`guards.ts`（缓存、锚点行——锚点标识为 `mstar-engine`，读取方同时兼容已写日志中旧标识 `mstar-engine-status`、线载荷校验）。
+`§3` 未覆盖：`src/client/index.ts` 是客户端插件入口（`inject` + `apply`），`src/client/panel/**` 是面板（`PanelView`/`MstarPanelTitle`/`panel-shell`（两个席位共用的唯一实现）/`destinations`/`definition`/`panel-store`/`once-reader`/`locale`）。数据路径为**一次性读取**（挂载时一次 + 显式 `reload()`；无轮询、无定时器）：`panel-snapshot-client.ts` 提供 digest（enforcement / knowledge / selection）与按屏 `mstar/dashboardView` 两类读取，`use-mstar-session-digest.ts` / `use-mstar-dashboard-view.ts` 各缓存一次结果，`use-mstar-workflow-picker.ts` + `workflow-picker-client.ts` 承载 picker 的提交，`guards.ts` 做字段级降级并完整校验 picker 的不可信线应答。
 
 ---
 

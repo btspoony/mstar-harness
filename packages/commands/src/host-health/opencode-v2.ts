@@ -11,13 +11,16 @@ import {
 /**
  * V2 `$schema` pin decision — preserve-don't-invent (spec Q3 `$schema` pin rule).
  *
- * Source: anomalyco/opencode tag [`v2.0.26`](https://github.com/anomalyco/opencode/tree/v2.0.26)
+ * Source: `@opencode/schema@2.2.5` (anomalyco/opencode tag
+ * [`v2.2.5`](https://github.com/anomalyco/opencode/tree/v2.2.5))
  * `packages/schema/src/config.ts` declares `$schema` as `optional(Schema.String)`
- * with **no published default id/URL**, so no publishable V2 `$schema` id exists
- * at the pinned tag. Per the contracted fallback: the V2 write pass preserves
- * any existing `$schema` and never invents one, and the V2 validator checks the
- * plural-key contract instead of a `$schema` requirement. The V1 validator and
- * `OPENCODE_CONFIG_SCHEMA` stay untouched in `host-health/opencode.ts`.
+ * with only a description annotation — **no published default id/URL** — so no
+ * publishable V2 `$schema` id exists at the pinned tag. Package-level receipt:
+ * `dist/config.d.ts:19` / `dist/config.js:25`. Per the contracted fallback: the
+ * V2 write pass preserves any existing `$schema` and never invents one, and the
+ * V2 validator checks the plural-key contract instead of a `$schema`
+ * requirement. The V1 validator and `OPENCODE_CONFIG_SCHEMA` stay untouched in
+ * `host-health/opencode.ts`.
  */
 export const OPENCODE_V2_CONFIG_SCHEMA: string | null = null;
 
@@ -38,7 +41,7 @@ export type OpencodeGeneration = "v1" | "v2";
 /**
  * Match the owned V2 plugin slot in the plural `plugins` array — string form
  * (`@mstar-harness/opencode-v2[@version]`) and the V2 `{package, options}`
- * object form (tag v2.0.26 `ConfigPlugin.Entry`).
+ * object form (tag v2.2.5 `ConfigPlugin.Entry`).
  */
 export function isMstarHarnessOpencodeV2Slot(plugin: unknown): boolean {
  if (typeof plugin === "string") return isV2SlotName(plugin);
