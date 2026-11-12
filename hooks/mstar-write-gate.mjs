@@ -15,16 +15,39 @@ import { dirname as dirname3, join as join3, sep } from "node:path";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
 import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
 import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { basename as basename3, dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync as existsSync4, realpathSync as realpathSync4 } from "node:fs";
+import { createHash as createHash4 } from "node:crypto";
+import {
+  copyFileSync,
+  existsSync as existsSync6,
+  lstatSync as lstatSync3,
+  mkdirSync as mkdirSync3,
+  readFileSync as readFileSync6,
+  readdirSync as readdirSync3,
+  realpathSync as realpathSync5,
+  renameSync as renameSync2,
+  rmSync,
+  statSync as statSync3,
+  unlinkSync as unlinkSync2,
+  writeFileSync as writeFileSync3
+} from "node:fs";
+import { createRequire } from "node:module";
+import { basename as basename7, dirname as dirname7, join as join9, resolve as resolve10, sep as sep4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+import { createHash as createHash5 } from "node:crypto";
+import { lstatSync as lstatSync4, readdirSync as readdirSync4 } from "node:fs";
+import { dirname as dirname8, join as join10 } from "node:path";
+import { randomUUID as randomUUID3 } from "node:crypto";
 import { existsSync as existsSync8, readFileSync as readFileSync7, readdirSync as readdirSync5, realpathSync as realpathSync6 } from "node:fs";
 import { dirname as dirname9, join as join11, resolve as resolve11, sep as sep5 } from "node:path";
 import { existsSync as existsSync10, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync7, statSync as statSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { execFileSync as execFileSync4 } from "node:child_process";
 import { basename as basename8, dirname as dirname10, isAbsolute as isAbsolute6, join as join14, relative as relative3, resolve as resolve12 } from "node:path";
 import { basename as basename9, isAbsolute as isAbsolute8, join as join16, relative as relative4, resolve as resolve13, sep as sep7 } from "node:path";
+import { createHash as createHash9, randomUUID as randomUUID4 } from "node:crypto";
 import { closeSync, existsSync as existsSync13, fstatSync, openSync, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
 import { dirname as dirname11, isAbsolute as isAbsolute10, join as join18, resolve as resolve15, sep as sep9 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
@@ -52,22 +75,18 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
-var __esm = (fn, res, err) => () => {
-  if (fn)
-    try {
-      res = fn(fn = 0);
-    } catch (e) {
-      err = [e];
-    }
-  if (err)
-    throw err[0];
-  return res;
-};
+var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
+}
+function assertExactKeys(value, allowed, what) {
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    throw new CoordinationError("coordination.forbidden-field", "Payload contains unexpected keys. See the allowed and unexpected key lists; inspect registered state with mstar status validate.", { what, unexpected: extra, allowed: [...allowed] });
+  }
 }
 function invalid(code, message) {
   return { ok: false, severity: "high", code, message };
@@ -322,7 +341,7 @@ var SHA256_HEX;
 var GIT_SHA;
 var HASH_RE;
 var init_coordination_write = __esm(() => {
-  CoordinationError = class CoordinationError extends Error {
+  CoordinationError = class CoordinationError2 extends Error {
     code;
     details;
     constructor(code, message, details = {}) {
@@ -540,7 +559,7 @@ var init_catalog = __esm(() => {
     "derived-from": true,
     supersedes: true
   };
-  CatalogError = class CatalogError extends Error {
+  CatalogError = class CatalogError2 extends Error {
     code;
     constructor(code, message) {
       super(`[${code}] ${message}`);
@@ -564,14 +583,14 @@ function parseMstarc(text) {
       continue;
     }
     if (section === LINEAR_SECTION || section === LINEAR_MAPPING_SECTION) {
-      const eq = line.indexOf("=");
-      if (eq === -1)
+      const eq2 = line.indexOf("=");
+      if (eq2 === -1)
         continue;
-      const key = line.slice(0, eq).trim();
-      const value = line.slice(eq + 1).trim();
-      if (key === "" || value === "")
+      const key = line.slice(0, eq2).trim();
+      const value2 = line.slice(eq2 + 1).trim();
+      if (key === "" || value2 === "")
         continue;
-      (section === LINEAR_SECTION ? linear : linearMapping)[key] = value;
+      (section === LINEAR_SECTION ? linear : linearMapping)[key] = value2;
       continue;
     }
     if (section !== MSTARC_SECTION)
@@ -685,7 +704,7 @@ var AssertionError;
 var init_development = __esm(() => {
   init_dist();
   codesWarned = new Set;
-  AssertionError = class AssertionError extends Error {
+  AssertionError = class AssertionError2 extends Error {
     name = "Assertion";
     code = "ERR_ASSERTION";
     constructor(message, actual, expected, operator, generated) {
@@ -3316,18 +3335,18 @@ var init_dev = __esm(() => {
   init_default();
 });
 function combineExtensions(extensions) {
-  const all = {};
+  const all2 = {};
   let index = -1;
   while (++index < extensions.length) {
-    syntaxExtension(all, extensions[index]);
+    syntaxExtension(all2, extensions[index]);
   }
-  return all;
+  return all2;
 }
-function syntaxExtension(all, extension) {
+function syntaxExtension(all2, extension) {
   let hook;
   for (hook in extension) {
-    const maybe = hasOwnProperty.call(all, hook) ? all[hook] : undefined;
-    const left = maybe || (all[hook] = {});
+    const maybe = hasOwnProperty.call(all2, hook) ? all2[hook] : undefined;
+    const left = maybe || (all2[hook] = {});
     const right = extension[hook];
     let code;
     if (right) {
@@ -3406,7 +3425,7 @@ var init_dev4 = __esm(() => {
   unicodePunctuation = regexCheck(/\p{P}|\p{S}/u);
   unicodeWhitespace = regexCheck(/\s/);
 });
-function factorySpace(effects, ok, type, max) {
+function factorySpace(effects, ok2, type, max) {
   const limit = max ? max - 1 : Infinity;
   let size = 0;
   return start;
@@ -3415,7 +3434,7 @@ function factorySpace(effects, ok, type, max) {
       effects.enter(type);
       return prefix(code);
     }
-    return ok(code);
+    return ok2(code);
   }
   function prefix(code) {
     if (markdownSpace(code) && size++ < limit) {
@@ -3423,10 +3442,10 @@ function factorySpace(effects, ok, type, max) {
       return prefix;
     }
     effects.exit(type);
-    return ok(code);
+    return ok2(code);
   }
 }
-function factorySpaceMinMax(effects, ok, nok, type, min, max) {
+function factorySpaceMinMax(effects, ok2, nok, type, min, max) {
   let size = 0;
   return start;
   function start(code) {
@@ -3446,7 +3465,7 @@ function factorySpaceMinMax(effects, ok, nok, type, min, max) {
     return after(code);
   }
   function after(code) {
-    return size >= min ? ok(code) : nok(code);
+    return size >= min ? ok2(code) : nok(code);
   }
 }
 var init_dev5 = __esm(() => {
@@ -3775,14 +3794,14 @@ var init_dev6 = __esm(() => {
   init_dev4();
   init_default();
 });
-function resolveAll(constructs, events, context) {
+function resolveAll(constructs2, events, context) {
   const called = [];
   let index = -1;
-  while (++index < constructs.length) {
-    const resolve = constructs[index].resolveAll;
-    if (resolve && !called.includes(resolve)) {
-      events = resolve(events, context);
-      called.push(resolve);
+  while (++index < constructs2.length) {
+    const resolve42 = constructs2[index].resolveAll;
+    if (resolve42 && !called.includes(resolve42)) {
+      events = resolve42(events, context);
+      called.push(resolve42);
     }
   }
   return events;
@@ -4016,13 +4035,13 @@ var init_autolink = __esm(() => {
   init_default();
   autolink = { name: "autolink", tokenize: tokenizeAutolink };
 });
-function tokenizeBlankLine(effects, ok, nok) {
+function tokenizeBlankLine(effects, ok2, nok) {
   return start;
   function start(code) {
     return markdownSpace(code) ? factorySpace(effects, after, types.linePrefix)(code) : after(code);
   }
   function after(code) {
-    return code === codes.eof || markdownLineEnding(code) ? ok(code) : nok(code);
+    return code === codes.eof || markdownLineEnding(code) ? ok2(code) : nok(code);
   }
 }
 var blankLine;
@@ -4333,46 +4352,46 @@ function tokenizeCodeFenced(effects, ok2, nok) {
     effects.exit(types.codeFenced);
     return ok2(code);
   }
-  function tokenizeCloseStart(effects, ok2, nok) {
+  function tokenizeCloseStart(effects2, ok3, nok2) {
     let size = 0;
     return startBefore;
     function startBefore(code) {
       ok(markdownLineEnding(code), "expected eol");
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      return start;
+      effects2.enter(types.lineEnding);
+      effects2.consume(code);
+      effects2.exit(types.lineEnding);
+      return start2;
     }
-    function start(code) {
+    function start2(code) {
       ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-      effects.enter(types.codeFencedFence);
-      return markdownSpace(code) ? factorySpace(effects, beforeSequenceClose, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : beforeSequenceClose(code);
+      effects2.enter(types.codeFencedFence);
+      return markdownSpace(code) ? factorySpace(effects2, beforeSequenceClose, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : beforeSequenceClose(code);
     }
     function beforeSequenceClose(code) {
       if (code === marker) {
-        effects.enter(types.codeFencedFenceSequence);
+        effects2.enter(types.codeFencedFenceSequence);
         return sequenceClose(code);
       }
-      return nok(code);
+      return nok2(code);
     }
     function sequenceClose(code) {
       if (code === marker) {
         size++;
-        effects.consume(code);
+        effects2.consume(code);
         return sequenceClose;
       }
       if (size >= sizeOpen) {
-        effects.exit(types.codeFencedFenceSequence);
-        return markdownSpace(code) ? factorySpace(effects, sequenceCloseAfter, types.whitespace)(code) : sequenceCloseAfter(code);
+        effects2.exit(types.codeFencedFenceSequence);
+        return markdownSpace(code) ? factorySpace(effects2, sequenceCloseAfter, types.whitespace)(code) : sequenceCloseAfter(code);
       }
-      return nok(code);
+      return nok2(code);
     }
     function sequenceCloseAfter(code) {
       if (code === codes.eof || markdownLineEnding(code)) {
-        effects.exit(types.codeFencedFence);
-        return ok2(code);
+        effects2.exit(types.codeFencedFence);
+        return ok3(code);
       }
-      return nok(code);
+      return nok2(code);
     }
   }
 }
@@ -4419,10 +4438,10 @@ function tokenizeCodeIndented(effects, ok2, nok) {
     return ok2(code);
   }
 }
-function tokenizeFurtherStart(effects, ok, nok) {
+function tokenizeFurtherStart(effects, ok2, nok) {
   const self = this;
-  return furtherStart;
-  function furtherStart(code) {
+  return furtherStart2;
+  function furtherStart2(code) {
     if (self.parser.lazy[self.now().line]) {
       return nok(code);
     }
@@ -4430,12 +4449,12 @@ function tokenizeFurtherStart(effects, ok, nok) {
       effects.enter(types.lineEnding);
       effects.consume(code);
       effects.exit(types.lineEnding);
-      return furtherStart;
+      return furtherStart2;
     }
-    return factorySpaceMinMax(effects, ok, onNotEnoughPrefix, types.linePrefix, constants.tabSize, constants.tabSize)(code);
+    return factorySpaceMinMax(effects, ok2, onNotEnoughPrefix, types.linePrefix, constants.tabSize, constants.tabSize)(code);
   }
   function onNotEnoughPrefix(code) {
-    return markdownLineEnding(code) ? furtherStart(code) : nok(code);
+    return markdownLineEnding(code) ? furtherStart2(code) : nok(code);
   }
 }
 var codeIndented;
@@ -4743,7 +4762,7 @@ function subcontent(events, eventIndex) {
   const jumps = [];
   const gaps = {};
   let stream;
-  let previous;
+  let previous2;
   let index = -1;
   let current = token;
   let adjust = 0;
@@ -4751,15 +4770,15 @@ function subcontent(events, eventIndex) {
   const breaks = [start];
   while (current) {
     while (events.get(++startPosition)[1] !== current) {}
-    ok(!previous || current.previous === previous, "expected previous to match");
-    ok(!previous || previous.next === current, "expected next to match");
+    ok(!previous2 || current.previous === previous2, "expected previous to match");
+    ok(!previous2 || previous2.next === current, "expected next to match");
     startPositions.push(startPosition);
     if (!current._tokenizer) {
       stream = context.sliceStream(current);
       if (!current.next) {
         stream.push(codes.eof);
       }
-      if (previous) {
+      if (previous2) {
         tokenizer.defineSkip(current.start);
       }
       if (current._isInFirstContentOfListItem) {
@@ -4770,7 +4789,7 @@ function subcontent(events, eventIndex) {
         tokenizer._gfmTasklistFirstContentOfListItem = undefined;
       }
     }
-    previous = current;
+    previous2 = current;
     current = current.next;
   }
   current = token;
@@ -4795,10 +4814,10 @@ function subcontent(events, eventIndex) {
   index = breaks.length;
   while (index--) {
     const slice = childEvents.slice(breaks[index], breaks[index + 1]);
-    const start = startPositions.pop();
-    ok(start !== undefined, "expected a start position when splicing");
-    jumps.push([start, start + slice.length - 1]);
-    events.splice(start, 2, slice);
+    const start2 = startPositions.pop();
+    ok(start2 !== undefined, "expected a start position when splicing");
+    jumps.push([start2, start2 + slice.length - 1]);
+    events.splice(start2, 2, slice);
   }
   jumps.reverse();
   index = -1;
@@ -4819,12 +4838,12 @@ function resolveContent(events) {
   return events;
 }
 function tokenizeContent(effects, ok2) {
-  let previous;
+  let previous2;
   return chunkStart;
   function chunkStart(code) {
     ok(code !== codes.eof && !markdownLineEnding(code), "expected no eof or eol");
     effects.enter(types.content);
-    previous = effects.enter(types.chunkContent, {
+    previous2 = effects.enter(types.chunkContent, {
       contentType: constants.contentTypeContent
     });
     return chunkInside(code);
@@ -4848,12 +4867,12 @@ function tokenizeContent(effects, ok2) {
     ok(markdownLineEnding(code), "expected eol");
     effects.consume(code);
     effects.exit(types.chunkContent);
-    ok(previous, "expected previous token");
-    previous.next = effects.enter(types.chunkContent, {
+    ok(previous2, "expected previous token");
+    previous2.next = effects.enter(types.chunkContent, {
       contentType: constants.contentTypeContent,
-      previous
+      previous: previous2
     });
-    previous = previous.next;
+    previous2 = previous2.next;
     return chunkInside;
   }
 }
@@ -4891,7 +4910,7 @@ var init_content2 = __esm(() => {
   content2 = { resolve: resolveContent, tokenize: tokenizeContent };
   continuationConstruct = { partial: true, tokenize: tokenizeContinuation };
 });
-function factoryDestination(effects, ok, nok, type, literalType, literalMarkerType, rawType, stringType, max) {
+function factoryDestination(effects, ok2, nok, type, literalType, literalMarkerType, rawType, stringType, max) {
   const limit = max || Number.POSITIVE_INFINITY;
   let balance = 0;
   return start;
@@ -4920,7 +4939,7 @@ function factoryDestination(effects, ok, nok, type, literalType, literalMarkerTy
       effects.exit(literalMarkerType);
       effects.exit(literalType);
       effects.exit(type);
-      return ok;
+      return ok2;
     }
     effects.enter(stringType);
     effects.enter(types.chunkString, { contentType: constants.contentTypeString });
@@ -4951,7 +4970,7 @@ function factoryDestination(effects, ok, nok, type, literalType, literalMarkerTy
       effects.exit(stringType);
       effects.exit(rawType);
       effects.exit(type);
-      return ok(code);
+      return ok2(code);
     }
     if (balance < limit && code === codes.leftParenthesis) {
       effects.consume(code);
@@ -5040,7 +5059,7 @@ var init_dev9 = __esm(() => {
   init_dev4();
   init_default();
 });
-function factoryTitle(effects, ok, nok, type, markerType, stringType) {
+function factoryTitle(effects, ok2, nok, type, markerType, stringType) {
   let marker;
   return start;
   function start(code) {
@@ -5060,7 +5079,7 @@ function factoryTitle(effects, ok, nok, type, markerType, stringType) {
       effects.consume(code);
       effects.exit(markerType);
       effects.exit(type);
-      return ok;
+      return ok2;
     }
     effects.enter(stringType);
     return atBreak(code);
@@ -5103,7 +5122,7 @@ var init_dev10 = __esm(() => {
   init_dev4();
   init_default();
 });
-function factoryWhitespace(effects, ok) {
+function factoryWhitespace(effects, ok2) {
   let seen;
   return start;
   function start(code) {
@@ -5117,7 +5136,7 @@ function factoryWhitespace(effects, ok) {
     if (markdownSpace(code)) {
       return factorySpace(effects, start, seen ? types.linePrefix : types.lineSuffix)(code);
     }
-    return ok(code);
+    return ok2(code);
   }
 }
 var init_dev11 = __esm(() => {
@@ -5168,9 +5187,9 @@ function tokenizeDefinition(effects, ok2, nok) {
     return nok(code);
   }
 }
-function tokenizeTitleBefore(effects, ok, nok) {
-  return titleBefore;
-  function titleBefore(code) {
+function tokenizeTitleBefore(effects, ok2, nok) {
+  return titleBefore2;
+  function titleBefore2(code) {
     return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, beforeMarker)(code) : nok(code);
   }
   function beforeMarker(code) {
@@ -5180,7 +5199,7 @@ function tokenizeTitleBefore(effects, ok, nok) {
     return markdownSpace(code) ? factorySpace(effects, titleAfterOptionalWhitespace, types.whitespace)(code) : titleAfterOptionalWhitespace(code);
   }
   function titleAfterOptionalWhitespace(code) {
-    return code === codes.eof || markdownLineEnding(code) ? ok(code) : nok(code);
+    return code === codes.eof || markdownLineEnding(code) ? ok2(code) : nok(code);
   }
 }
 var definition;
@@ -5237,7 +5256,7 @@ function resolveHeadingAtx(events, context) {
     contentEnd -= contentStart + 1 === contentEnd ? 2 : 4;
   }
   if (contentEnd > contentStart) {
-    const content = {
+    const content3 = {
       type: types.atxHeadingText,
       start: events[contentStart][1].start,
       end: events[contentEnd][1].end
@@ -5249,10 +5268,10 @@ function resolveHeadingAtx(events, context) {
       contentType: constants.contentTypeText
     };
     splice(events, contentStart, contentEnd - contentStart + 1, [
-      ["enter", content, context],
+      ["enter", content3, context],
       ["enter", text, context],
       ["exit", text, context],
-      ["exit", content, context]
+      ["exit", content3, context]
     ]);
   }
   return events;
@@ -6596,13 +6615,13 @@ var init_list = __esm(() => {
 function resolveToSetextUnderline(events, context) {
   const editMap = new EditMap;
   let index = events.length;
-  let content;
+  let content3;
   let text;
-  let definition;
+  let definition2;
   while (index--) {
     if (events[index][0] === "enter") {
       if (events[index][1].type === types.content) {
-        content = index;
+        content3 = index;
         break;
       }
       if (events[index][1].type === types.paragraph) {
@@ -6612,27 +6631,27 @@ function resolveToSetextUnderline(events, context) {
       if (events[index][1].type === types.content) {
         editMap.add(index, 1, []);
       }
-      if (!definition && events[index][1].type === types.definition) {
-        definition = index;
+      if (!definition2 && events[index][1].type === types.definition) {
+        definition2 = index;
       }
     }
   }
   ok(text !== undefined, "expected a `text` index to be found");
-  ok(content !== undefined, "expected a `text` index to be found");
-  ok(events[content][2] === context, "enter context should be same");
+  ok(content3 !== undefined, "expected a `text` index to be found");
+  ok(events[content3][2] === context, "enter context should be same");
   ok(events[events.length - 1][2] === context, "enter context should be same");
   const heading = {
     type: types.setextHeading,
-    start: { ...events[content][1].start },
+    start: { ...events[content3][1].start },
     end: { ...events[events.length - 1][1].end }
   };
   events[text][1].type = types.setextHeadingText;
-  if (definition) {
+  if (definition2) {
     editMap.add(text, 0, [["enter", heading, context]]);
-    editMap.add(definition + 1, 0, [["exit", events[content][1], context]]);
-    events[content][1].end = { ...events[definition][1].end };
+    editMap.add(definition2 + 1, 0, [["exit", events[content3][1], context]]);
+    events[content3][1].end = { ...events[definition2][1].end };
   } else {
-    events[content][1] = heading;
+    events[content3][1] = heading;
   }
   editMap.add(events.length, 0, [["exit", heading, context]]);
   editMap.consume(events);
@@ -6760,11 +6779,11 @@ function initializeFactory(field) {
   };
   function initializeText(effects) {
     const self = this;
-    const constructs = this.parser.constructs[field];
-    const text = effects.attempt(constructs, start, notText);
+    const constructs2 = this.parser.constructs[field];
+    const text2 = effects.attempt(constructs2, start, notText);
     return start;
     function start(code) {
-      return atBreak(code) ? text(code) : notText(code);
+      return atBreak(code) ? text2(code) : notText(code);
     }
     function notText(code) {
       if (code === codes.eof) {
@@ -6778,7 +6797,7 @@ function initializeFactory(field) {
     function data(code) {
       if (atBreak(code)) {
         effects.exit(types.data);
-        return text(code);
+        return text2(code);
       }
       effects.consume(code);
       return data;
@@ -6787,12 +6806,12 @@ function initializeFactory(field) {
       if (code === codes.eof) {
         return true;
       }
-      const list = constructs[code];
+      const list2 = constructs2[code];
       let index = -1;
-      if (list) {
-        ok(Array.isArray(list), "expected `disable.null` to be populated");
-        while (++index < list.length) {
-          const item = list[index];
+      if (list2) {
+        ok(Array.isArray(list2), "expected `disable.null` to be populated");
+        while (++index < list2.length) {
+          const item = list2[index];
           if (!item.previous || item.previous.call(self, self.previous)) {
             return true;
           }
@@ -7008,7 +7027,7 @@ function createTokenizer(parser, initialize, from) {
     check: constructFactory(onsuccessfulcheck),
     consume,
     enter,
-    exit,
+    exit: exit2,
     interrupt: constructFactory(onsuccessfulcheck, { interrupt: true })
   };
   const context = {
@@ -7116,7 +7135,7 @@ function createTokenizer(parser, initialize, from) {
     stack.push(token);
     return token;
   }
-  function exit(type) {
+  function exit2(type) {
     ok(typeof type === "string", "expected string type");
     ok(type.length > 0, "expected non-empty string");
     const token = stack.pop();
@@ -7136,32 +7155,32 @@ function createTokenizer(parser, initialize, from) {
   }
   function constructFactory(onreturn, fields) {
     return hook;
-    function hook(constructs, returnState, bogusState) {
+    function hook(constructs2, returnState, bogusState) {
       let listOfConstructs;
       let constructIndex;
       let currentConstruct;
       let info;
-      return Array.isArray(constructs) ? handleListOfConstructs(constructs) : ("tokenize" in constructs) ? handleListOfConstructs([constructs]) : handleMapOfConstructs(constructs);
+      return Array.isArray(constructs2) ? handleListOfConstructs(constructs2) : ("tokenize" in constructs2) ? handleListOfConstructs([constructs2]) : handleMapOfConstructs(constructs2);
       function handleMapOfConstructs(map) {
         return start;
         function start(code) {
           const left = code !== null && map[code];
-          const all = code !== null && map.null;
-          const list = [
+          const all2 = code !== null && map.null;
+          const list2 = [
             ...Array.isArray(left) ? left : left ? [left] : [],
-            ...Array.isArray(all) ? all : all ? [all] : []
+            ...Array.isArray(all2) ? all2 : all2 ? [all2] : []
           ];
-          return handleListOfConstructs(list)(code);
+          return handleListOfConstructs(list2)(code);
         }
       }
-      function handleListOfConstructs(list) {
-        listOfConstructs = list;
+      function handleListOfConstructs(list2) {
+        listOfConstructs = list2;
         constructIndex = 0;
-        if (list.length === 0) {
+        if (list2.length === 0) {
           ok(bogusState, "expected `bogusState` to be given");
           return bogusState;
         }
-        return handleConstruct(list[constructIndex]);
+        return handleConstruct(list2[constructIndex]);
       }
       function handleConstruct(construct) {
         return start;
@@ -7195,12 +7214,12 @@ function createTokenizer(parser, initialize, from) {
       }
     }
   }
-  function addResult(construct, from) {
+  function addResult(construct, from2) {
     if (construct.resolveAll && !resolveAllConstructs.includes(construct)) {
       resolveAllConstructs.push(construct);
     }
     if (construct.resolve) {
-      splice(context.events, from, context.events.length - from, construct.resolve(context.events.slice(from), context));
+      splice(context.events, from2, context.events.length - from2, construct.resolve(context.events.slice(from2), context));
     }
     if (construct.resolveTo) {
       context.events = construct.resolveTo(context.events, context);
@@ -7313,9 +7332,9 @@ var init_create_tokenizer = __esm(() => {
 });
 function parse(options) {
   const settings = options || {};
-  const constructs = combineExtensions([exports_constructs, ...settings.extensions || []]);
+  const constructs2 = combineExtensions([exports_constructs, ...settings.extensions || []]);
   const parser = {
-    constructs,
+    constructs: constructs2,
     content: create(content),
     defined: [],
     document: create(document),
@@ -7444,8 +7463,8 @@ function decode($0, $1, $2) {
   }
   const head = $2.charCodeAt(0);
   if (head === codes.numberSign) {
-    const head = $2.charCodeAt(1);
-    const hex = head === codes.lowercaseX || head === codes.uppercaseX;
+    const head2 = $2.charCodeAt(1);
+    const hex = head2 === codes.lowercaseX || head2 === codes.uppercaseX;
     return decodeNumericCharacterReference($2.slice(hex ? 2 : 1), hex ? constants.numericBaseHexadecimal : constants.numericBaseDecimal);
   }
   return decodeNamedCharacterReference($2) || $0;
@@ -7472,8 +7491,8 @@ function stringifyPosition(value) {
   }
   return "";
 }
-function point(point) {
-  return index(point && point.line) + ":" + index(point && point.column);
+function point(point2) {
+  return index(point2 && point2.line) + ":" + index(point2 && point2.column);
 }
 function position(pos) {
   return point(pos && pos.start) + "-" + point(pos && pos.end);
@@ -7500,18 +7519,18 @@ function compiler(options) {
       autolinkProtocol: onenterdata,
       autolinkEmail: onenterdata,
       atxHeading: opener(heading),
-      blockQuote: opener(blockQuote),
+      blockQuote: opener(blockQuote2),
       characterEscape: onenterdata,
       characterReference: onenterdata,
       codeFenced: opener(codeFlow),
       codeFencedFenceInfo: buffer,
       codeFencedFenceMeta: buffer,
       codeIndented: opener(codeFlow, buffer),
-      codeText: opener(codeText, buffer),
+      codeText: opener(codeText2, buffer),
       codeTextData: onenterdata,
       data: onenterdata,
       codeFlowValue: onenterdata,
-      definition: opener(definition),
+      definition: opener(definition2),
       definitionDestinationString: buffer,
       definitionLabelString: buffer,
       definitionTitleString: buffer,
@@ -7527,8 +7546,8 @@ function compiler(options) {
       link: opener(link),
       listItem: opener(listItem),
       listItemValue: onenterlistitemvalue,
-      listOrdered: opener(list, onenterlistordered),
-      listUnordered: opener(list),
+      listOrdered: opener(list2, onenterlistordered),
+      listUnordered: opener(list2),
       paragraph: opener(paragraph),
       reference: onenterreference,
       referenceString: buffer,
@@ -7536,7 +7555,7 @@ function compiler(options) {
       resourceTitleString: buffer,
       setextHeading: opener(heading),
       strong: opener(strong),
-      thematicBreak: opener(thematicBreak)
+      thematicBreak: opener(thematicBreak2)
     },
     exit: {
       atxHeading: closer(),
@@ -7600,18 +7619,18 @@ function compiler(options) {
       tokenStack: [],
       config,
       enter,
-      exit,
+      exit: exit2,
       buffer,
       resume,
       data
     };
     const listStack = [];
     const prepared = [];
-    let index = -1;
-    while (++index < events.length) {
-      prepared.push(events[index]);
-      if (events[index][1].type === types.listOrdered || events[index][1].type === types.listUnordered) {
-        if (events[index][0] === "enter") {
+    let index2 = -1;
+    while (++index2 < events.length) {
+      prepared.push(events[index2]);
+      if (events[index2][1].type === types.listOrdered || events[index2][1].type === types.listUnordered) {
+        if (events[index2][0] === "enter") {
           listStack.push(prepared.length - 1);
         } else {
           const tail = listStack.pop();
@@ -7621,17 +7640,17 @@ function compiler(options) {
       }
     }
     events = prepared;
-    index = -1;
-    while (++index < events.length) {
-      const handler = config[events[index][0]];
-      if (events[index][0] === "enter" && config.beforeEnter.length > 0) {
-        callListeners(config.beforeEnter, { ...context, sliceSerialize: events[index][2].sliceSerialize }, events[index][1]);
+    index2 = -1;
+    while (++index2 < events.length) {
+      const handler = config[events[index2][0]];
+      if (events[index2][0] === "enter" && config.beforeEnter.length > 0) {
+        callListeners(config.beforeEnter, { ...context, sliceSerialize: events[index2][2].sliceSerialize }, events[index2][1]);
       }
-      if (own2.call(handler, events[index][1].type)) {
-        handler[events[index][1].type].call({ ...context, sliceSerialize: events[index][2].sliceSerialize }, events[index][1]);
+      if (own2.call(handler, events[index2][1].type)) {
+        handler[events[index2][1].type].call({ ...context, sliceSerialize: events[index2][2].sliceSerialize }, events[index2][1]);
       }
-      if (events[index][0] === "exit" && config.afterExit.length > 0) {
-        callListeners(config.afterExit, { ...context, sliceSerialize: events[index][2].sliceSerialize }, events[index][1]);
+      if (events[index2][0] === "exit" && config.afterExit.length > 0) {
+        callListeners(config.afterExit, { ...context, sliceSerialize: events[index2][2].sliceSerialize }, events[index2][1]);
       }
     }
     if (context.tokenStack.length > 0) {
@@ -7643,30 +7662,30 @@ function compiler(options) {
       start: point2(events.length > 0 ? events[0][1].start : { line: 1, column: 1, offset: 0 }),
       end: point2(events.length > 0 ? events[events.length - 2][1].end : { line: 1, column: 1, offset: 0 })
     };
-    index = -1;
-    while (++index < config.transforms.length) {
-      tree = config.transforms[index](tree) || tree;
+    index2 = -1;
+    while (++index2 < config.transforms.length) {
+      tree = config.transforms[index2](tree) || tree;
     }
     return tree;
   }
   function callListeners(listeners, context, token) {
-    let index = -1;
-    while (++index < listeners.length) {
-      listeners[index].call(context, token);
+    let index2 = -1;
+    while (++index2 < listeners.length) {
+      listeners[index2].call(context, token);
     }
   }
   function prepareList(events, start) {
     const end = events.length - 1;
-    let index = start - 1;
+    let index2 = start - 1;
     let containerBalance = -1;
     let listSpread = false;
-    let listItem;
+    let listItem2;
     let lineIndex;
     let firstBlankLineIndex;
     let atMarker;
     const insertions = [];
-    while (++index <= end) {
-      const event = events[index];
+    while (++index2 <= end) {
+      const event = events[index2];
       switch (event[1].type) {
         case types.listUnordered:
         case types.listOrdered:
@@ -7681,8 +7700,8 @@ function compiler(options) {
         }
         case types.lineEndingBlank: {
           if (event[0] === "enter") {
-            if (listItem && !atMarker && !containerBalance && !firstBlankLineIndex) {
-              firstBlankLineIndex = index;
+            if (listItem2 && !atMarker && !containerBalance && !firstBlankLineIndex) {
+              firstBlankLineIndex = index2;
             }
             atMarker = undefined;
           }
@@ -7700,8 +7719,8 @@ function compiler(options) {
         }
       }
       if (!containerBalance && event[0] === "enter" && event[1].type === types.listItemPrefix || containerBalance === -1 && event[0] === "exit" && (event[1].type === types.listUnordered || event[1].type === types.listOrdered)) {
-        if (listItem) {
-          let tailIndex = index;
+        if (listItem2) {
+          let tailIndex = index2;
           lineIndex = undefined;
           while (tailIndex--) {
             const tailEvent = events[tailIndex];
@@ -7719,12 +7738,12 @@ function compiler(options) {
             }
           }
           if (firstBlankLineIndex && (!lineIndex || firstBlankLineIndex < lineIndex)) {
-            listItem._spread = true;
+            listItem2._spread = true;
           }
-          listItem.end = Object.assign({}, lineIndex ? events[lineIndex][1].start : event[1].end);
+          listItem2.end = Object.assign({}, lineIndex ? events[lineIndex][1].start : event[1].end);
           insertions.push({
-            at: lineIndex || index,
-            event: ["exit", listItem, event[2]]
+            at: lineIndex || index2,
+            event: ["exit", listItem2, event[2]]
           });
         }
         if (event[1].type === types.listItemPrefix) {
@@ -7734,8 +7753,8 @@ function compiler(options) {
             start: Object.assign({}, event[1].start),
             end: undefined
           };
-          listItem = item;
-          insertions.push({ at: index, event: ["enter", item, event[2]] });
+          listItem2 = item;
+          insertions.push({ at: index2, event: ["enter", item, event[2]] });
           firstBlankLineIndex = undefined;
           atMarker = true;
         }
@@ -7743,12 +7762,12 @@ function compiler(options) {
     }
     const listEvents = events.splice(start);
     let insertion = 0;
-    index = -1;
-    while (++index < listEvents.length) {
-      while (insertion < insertions.length && insertions[insertion].at === start + index) {
+    index2 = -1;
+    while (++index2 < listEvents.length) {
+      while (insertion < insertions.length && insertions[insertion].at === start + index2) {
         events.push(insertions[insertion++].event);
       }
-      events.push(listEvents[index]);
+      events.push(listEvents[index2]);
     }
     ok(insertion === insertions.length, "expected insertions to be merged");
     events[start][1]._spread = listSpread;
@@ -7764,15 +7783,15 @@ function compiler(options) {
   function buffer() {
     this.stack.push({ type: "fragment", children: [] });
   }
-  function enter(node, token, errorHandler) {
+  function enter(node2, token, errorHandler) {
     const parent = this.stack[this.stack.length - 1];
     ok(parent, "expected `parent`");
     ok("children" in parent, "expected `parent`");
     const siblings = parent.children;
-    siblings.push(node);
-    this.stack.push(node);
+    siblings.push(node2);
+    this.stack.push(node2);
     this.tokenStack.push([token, errorHandler || undefined]);
-    node.position = {
+    node2.position = {
       start: point2(token.start),
       end: undefined
     };
@@ -7782,12 +7801,12 @@ function compiler(options) {
     function close(token) {
       if (and)
         and.call(this, token);
-      exit.call(this, token);
+      exit2.call(this, token);
     }
   }
-  function exit(token, onExitError) {
-    const node = this.stack.pop();
-    ok(node, "expected `node`");
+  function exit2(token, onExitError) {
+    const node2 = this.stack.pop();
+    ok(node2, "expected `node`");
     const open = this.tokenStack.pop();
     if (!open) {
       throw new Error("Cannot close `" + token.type + "` (" + stringifyPosition({ start: token.start, end: token.end }) + "): it’s not open");
@@ -7800,9 +7819,9 @@ function compiler(options) {
         handler.call(this, token, open[0]);
       }
     }
-    ok(node.type !== "fragment", "unexpected fragment `exit`ed");
-    ok(node.position, "expected `position` to be defined");
-    node.position.end = point2(token.end);
+    ok(node2.type !== "fragment", "unexpected fragment `exit`ed");
+    ok(node2.position, "expected `position` to be defined");
+    node2.position.end = point2(token.end);
   }
   function resume() {
     return toString(this.stack.pop());
@@ -7820,18 +7839,18 @@ function compiler(options) {
     }
   }
   function onexitcodefencedfenceinfo() {
-    const data = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "code", "expected code on stack");
-    node.lang = data;
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "code", "expected code on stack");
+    node2.lang = data2;
   }
   function onexitcodefencedfencemeta() {
-    const data = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "code", "expected code on stack");
-    node.meta = data;
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "code", "expected code on stack");
+    node2.meta = data2;
   }
   function onexitcodefencedfence() {
     if (this.data.flowCodeInside)
@@ -7840,72 +7859,72 @@ function compiler(options) {
     this.data.flowCodeInside = true;
   }
   function onexitcodefenced() {
-    const data = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "code", "expected code on stack");
-    node.value = data.replace(/^(\r?\n|\r)|(\r?\n|\r)$/g, "");
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "code", "expected code on stack");
+    node2.value = data2.replace(/^(\r?\n|\r)|(\r?\n|\r)$/g, "");
     this.data.flowCodeInside = undefined;
   }
   function onexitcodeindented() {
-    const data = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "code", "expected code on stack");
-    node.value = data.replace(/(\r?\n|\r)$/g, "");
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "code", "expected code on stack");
+    node2.value = data2.replace(/(\r?\n|\r)$/g, "");
   }
   function onexitdefinitionlabelstring(token) {
     const label = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "definition", "expected definition on stack");
-    node.label = label;
-    node.identifier = normalizeIdentifier(this.sliceSerialize(token)).toLowerCase();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "definition", "expected definition on stack");
+    node2.label = label;
+    node2.identifier = normalizeIdentifier(this.sliceSerialize(token)).toLowerCase();
   }
   function onexitdefinitiontitlestring() {
-    const data = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "definition", "expected definition on stack");
-    node.title = data;
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "definition", "expected definition on stack");
+    node2.title = data2;
   }
   function onexitdefinitiondestinationstring() {
-    const data = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "definition", "expected definition on stack");
-    node.url = data;
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "definition", "expected definition on stack");
+    node2.url = data2;
   }
   function onexitatxheadingsequence(token) {
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "heading", "expected heading on stack");
-    if (!node.depth) {
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "heading", "expected heading on stack");
+    if (!node2.depth) {
       const depth = this.sliceSerialize(token).length;
       ok(depth === 1 || depth === 2 || depth === 3 || depth === 4 || depth === 5 || depth === 6, "expected `depth` between `1` and `6`");
-      node.depth = depth;
+      node2.depth = depth;
     }
   }
   function onexitsetextheadingtext() {
     this.data.setextHeadingSlurpLineEnding = true;
   }
   function onexitsetextheadinglinesequence(token) {
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "heading", "expected heading on stack");
-    node.depth = this.sliceSerialize(token).codePointAt(0) === codes.equalsTo ? 1 : 2;
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "heading", "expected heading on stack");
+    node2.depth = this.sliceSerialize(token).codePointAt(0) === codes.equalsTo ? 1 : 2;
   }
   function onexitsetextheading() {
     this.data.setextHeadingSlurpLineEnding = undefined;
   }
   function onenterdata(token) {
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok("children" in node, "expected parent on stack");
-    const siblings = node.children;
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok("children" in node2, "expected parent on stack");
+    const siblings = node2.children;
     let tail = siblings[siblings.length - 1];
     if (!tail || tail.type !== "text") {
-      tail = text();
+      tail = text3();
       tail.position = {
         start: point2(token.start),
         end: undefined
@@ -7942,95 +7961,95 @@ function compiler(options) {
     this.data.atHardBreak = true;
   }
   function onexithtmlflow() {
-    const data = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "html", "expected html on stack");
-    node.value = data;
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "html", "expected html on stack");
+    node2.value = data2;
   }
   function onexithtmltext() {
-    const data = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "html", "expected html on stack");
-    node.value = data;
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "html", "expected html on stack");
+    node2.value = data2;
   }
   function onexitcodetext() {
-    const data = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "inlineCode", "expected inline code on stack");
-    node.value = data;
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "inlineCode", "expected inline code on stack");
+    node2.value = data2;
   }
   function onexitlink() {
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "link", "expected link on stack");
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "link", "expected link on stack");
     if (this.data.inReference) {
       const referenceType = this.data.referenceType || "shortcut";
-      node.type += "Reference";
-      node.referenceType = referenceType;
-      delete node.url;
-      delete node.title;
+      node2.type += "Reference";
+      node2.referenceType = referenceType;
+      delete node2.url;
+      delete node2.title;
     } else {
-      delete node.identifier;
-      delete node.label;
+      delete node2.identifier;
+      delete node2.label;
     }
     this.data.referenceType = undefined;
   }
   function onexitimage() {
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "image", "expected image on stack");
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "image", "expected image on stack");
     if (this.data.inReference) {
       const referenceType = this.data.referenceType || "shortcut";
-      node.type += "Reference";
-      node.referenceType = referenceType;
-      delete node.url;
-      delete node.title;
+      node2.type += "Reference";
+      node2.referenceType = referenceType;
+      delete node2.url;
+      delete node2.title;
     } else {
-      delete node.identifier;
-      delete node.label;
+      delete node2.identifier;
+      delete node2.label;
     }
     this.data.referenceType = undefined;
   }
   function onexitlabeltext(token) {
-    const string = this.sliceSerialize(token);
+    const string3 = this.sliceSerialize(token);
     const ancestor = this.stack[this.stack.length - 2];
     ok(ancestor, "expected ancestor on stack");
     ok(ancestor.type === "image" || ancestor.type === "link", "expected image or link on stack");
-    ancestor.label = decodeString(string);
-    ancestor.identifier = normalizeIdentifier(string).toLowerCase();
+    ancestor.label = decodeString(string3);
+    ancestor.identifier = normalizeIdentifier(string3).toLowerCase();
   }
   function onexitlabel() {
     const fragment = this.stack[this.stack.length - 1];
     ok(fragment, "expected node on stack");
     ok(fragment.type === "fragment", "expected fragment on stack");
     const value = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "image" || node.type === "link", "expected image or link on stack");
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "image" || node2.type === "link", "expected image or link on stack");
     this.data.inReference = true;
-    if (node.type === "link") {
+    if (node2.type === "link") {
       const children = fragment.children;
-      node.children = children;
+      node2.children = children;
     } else {
-      node.alt = value;
+      node2.alt = value;
     }
   }
   function onexitresourcedestinationstring() {
-    const data = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "image" || node.type === "link", "expected image or link on stack");
-    node.url = data;
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "image" || node2.type === "link", "expected image or link on stack");
+    node2.url = data2;
   }
   function onexitresourcetitlestring() {
-    const data = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "image" || node.type === "link", "expected image or link on stack");
-    node.title = data;
+    const data2 = this.resume();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "image" || node2.type === "link", "expected image or link on stack");
+    node2.title = data2;
   }
   function onexitresource() {
     this.data.inReference = undefined;
@@ -8040,11 +8059,11 @@ function compiler(options) {
   }
   function onexitreferencestring(token) {
     const label = this.resume();
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "image" || node.type === "link", "expected image reference or link reference on stack");
-    node.label = label;
-    node.identifier = normalizeIdentifier(this.sliceSerialize(token)).toLowerCase();
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "image" || node2.type === "link", "expected image reference or link reference on stack");
+    node2.label = label;
+    node2.identifier = normalizeIdentifier(this.sliceSerialize(token)).toLowerCase();
     this.data.referenceType = "full";
   }
   function onexitcharacterreferencemarker(token) {
@@ -8052,14 +8071,14 @@ function compiler(options) {
     this.data.characterReferenceType = token.type;
   }
   function onexitcharacterreferencevalue(token) {
-    const data = this.sliceSerialize(token);
+    const data2 = this.sliceSerialize(token);
     const type = this.data.characterReferenceType;
     let value;
     if (type) {
-      value = decodeNumericCharacterReference(data, type === types.characterReferenceMarkerNumeric ? constants.numericBaseDecimal : constants.numericBaseHexadecimal);
+      value = decodeNumericCharacterReference(data2, type === types.characterReferenceMarkerNumeric ? constants.numericBaseDecimal : constants.numericBaseHexadecimal);
       this.data.characterReferenceType = undefined;
     } else {
-      const result = decodeNamedCharacterReference(data);
+      const result = decodeNamedCharacterReference(data2);
       ok(result !== false, "expected reference to decode");
       value = result;
     }
@@ -8076,19 +8095,19 @@ function compiler(options) {
   }
   function onexitautolinkprotocol(token) {
     onexitdata.call(this, token);
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "link", "expected link on stack");
-    node.url = this.sliceSerialize(token);
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "link", "expected link on stack");
+    node2.url = this.sliceSerialize(token);
   }
   function onexitautolinkemail(token) {
     onexitdata.call(this, token);
-    const node = this.stack[this.stack.length - 1];
-    ok(node, "expected node on stack");
-    ok(node.type === "link", "expected link on stack");
-    node.url = "mailto:" + this.sliceSerialize(token);
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2, "expected node on stack");
+    ok(node2.type === "link", "expected link on stack");
+    node2.url = "mailto:" + this.sliceSerialize(token);
   }
-  function blockQuote() {
+  function blockQuote2() {
     return { type: "blockquote", children: [], position: undefined };
   }
   function codeFlow() {
@@ -8100,10 +8119,10 @@ function compiler(options) {
       position: undefined
     };
   }
-  function codeText() {
+  function codeText2() {
     return { type: "inlineCode", value: "", position: undefined };
   }
-  function definition() {
+  function definition2() {
     return {
       type: "definition",
       identifier: "",
@@ -8148,7 +8167,7 @@ function compiler(options) {
       position: undefined
     };
   }
-  function list(token) {
+  function list2(token) {
     return {
       type: "list",
       ordered: token.type === "listOrdered",
@@ -8173,10 +8192,10 @@ function compiler(options) {
   function strong() {
     return { type: "strong", children: [], position: undefined };
   }
-  function text() {
+  function text3() {
     return { type: "text", value: "", position: undefined };
   }
-  function thematicBreak() {
+  function thematicBreak2() {
     return { type: "thematicBreak", position: undefined };
   }
 }
@@ -8184,9 +8203,9 @@ function point2(d) {
   return { line: d.line, column: d.column, offset: d.offset };
 }
 function configure(combined, extensions) {
-  let index = -1;
-  while (++index < extensions.length) {
-    const value = extensions[index];
+  let index2 = -1;
+  while (++index2 < extensions.length) {
+    const value = extensions[index2];
     if (Array.isArray(value)) {
       configure(combined, value);
     } else {
@@ -8194,20 +8213,20 @@ function configure(combined, extensions) {
     }
   }
 }
-function extension(combined, extension) {
+function extension(combined, extension2) {
   let key;
-  for (key in extension) {
-    if (own2.call(extension, key)) {
+  for (key in extension2) {
+    if (own2.call(extension2, key)) {
       switch (key) {
         case "canContainEols": {
-          const right = extension[key];
+          const right = extension2[key];
           if (right) {
             combined[key].push(...right);
           }
           break;
         }
         case "transforms": {
-          const right = extension[key];
+          const right = extension2[key];
           if (right) {
             combined[key].push(...right);
           }
@@ -8215,7 +8234,7 @@ function extension(combined, extension) {
         }
         case "afterExit":
         case "beforeEnter": {
-          const right = extension[key];
+          const right = extension2[key];
           if (right) {
             combined[key].push(right);
           }
@@ -8223,7 +8242,7 @@ function extension(combined, extension) {
         }
         case "enter":
         case "exit": {
-          const right = extension[key];
+          const right = extension2[key];
           if (right) {
             Object.assign(combined[key], right);
           }
@@ -8261,30 +8280,30 @@ function ccount(value, character) {
     throw new TypeError("Expected character");
   }
   let count = 0;
-  let index = source.indexOf(character);
-  while (index !== -1) {
+  let index2 = source.indexOf(character);
+  while (index2 !== -1) {
     count++;
-    index = source.indexOf(character, index + character.length);
+    index2 = source.indexOf(character, index2 + character.length);
   }
   return count;
 }
-function escapeStringRegexp(string) {
-  if (typeof string !== "string") {
+function escapeStringRegexp(string3) {
+  if (typeof string3 !== "string") {
     throw new TypeError("Expected a string");
   }
-  return string.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&").replace(/-/g, "\\x2d");
+  return string3.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&").replace(/-/g, "\\x2d");
 }
 function anyFactory(tests) {
   const checks = [];
-  let index = -1;
-  while (++index < tests.length) {
-    checks[index] = convert(tests[index]);
+  let index2 = -1;
+  while (++index2 < tests.length) {
+    checks[index2] = convert(tests[index2]);
   }
   return castFactory(any);
   function any(...parameters) {
-    let index = -1;
-    while (++index < checks.length) {
-      if (checks[index].apply(this, parameters))
+    let index3 = -1;
+    while (++index3 < checks.length) {
+      if (checks[index3].apply(this, parameters))
         return true;
     }
     return false;
@@ -8292,9 +8311,9 @@ function anyFactory(tests) {
 }
 function propertiesFactory(check) {
   const checkAsRecord = check;
-  return castFactory(all);
-  function all(node) {
-    const nodeAsRecord = node;
+  return castFactory(all2);
+  function all2(node2) {
+    const nodeAsRecord = node2;
     let key;
     for (key in check) {
       if (nodeAsRecord[key] !== checkAsRecord[key])
@@ -8305,14 +8324,14 @@ function propertiesFactory(check) {
 }
 function typeFactory(check) {
   return castFactory(type);
-  function type(node) {
-    return node && node.type === check;
+  function type(node2) {
+    return node2 && node2.type === check;
   }
 }
 function castFactory(testFunction) {
   return check;
-  function check(value, index, parent) {
-    return Boolean(looksLikeANode(value) && testFunction.call(this, value, typeof index === "number" ? index : undefined, parent || undefined));
+  function check(value, index2, parent) {
+    return Boolean(looksLikeANode(value) && testFunction.call(this, value, typeof index2 === "number" ? index2 : undefined, parent || undefined));
   }
 }
 function ok2() {
@@ -8348,15 +8367,15 @@ function visitParents(tree, test, visitor, reverse) {
   } else {
     check = test;
   }
-  const is = convert(check);
+  const is2 = convert(check);
   const step = reverse ? -1 : 1;
   factory(tree, undefined, [])();
-  function factory(node, index, parents) {
-    const value = node && typeof node === "object" ? node : {};
+  function factory(node2, index2, parents) {
+    const value = node2 && typeof node2 === "object" ? node2 : {};
     if (typeof value.type === "string") {
       const name = typeof value.tagName === "string" ? value.tagName : typeof value.name === "string" ? value.name : undefined;
       Object.defineProperty(visit, "name", {
-        value: "node (" + color(node.type + (name ? "<" + name + ">" : "")) + ")"
+        value: "node (" + color(node2.type + (name ? "<" + name + ">" : "")) + ")"
       });
     }
     return visit;
@@ -8365,14 +8384,14 @@ function visitParents(tree, test, visitor, reverse) {
       let subresult;
       let offset;
       let grandparents;
-      if (!test || is(node, index, parents[parents.length - 1] || undefined)) {
-        result = toResult(visitor(node, parents));
+      if (!test || is2(node2, index2, parents[parents.length - 1] || undefined)) {
+        result = toResult(visitor(node2, parents));
         if (result[0] === EXIT) {
           return result;
         }
       }
-      if ("children" in node && node.children) {
-        const nodeAsParent = node;
+      if ("children" in node2 && node2.children) {
+        const nodeAsParent = node2;
         if (nodeAsParent.children && result[0] !== SKIP) {
           offset = (reverse ? nodeAsParent.children.length : -1) + step;
           grandparents = parents.concat(nodeAsParent);
@@ -8410,19 +8429,19 @@ var init_lib3 = __esm(() => {
 var init_unist_util_visit_parents = __esm(() => {
   init_lib3();
 });
-function findAndReplace(tree, list, options) {
+function findAndReplace(tree, list2, options) {
   const settings = options || {};
   const ignored = convert(settings.ignore || []);
-  const pairs = toPairs(list);
+  const pairs = toPairs(list2);
   let pairIndex = -1;
   while (++pairIndex < pairs.length) {
     visitParents(tree, "text", visitor);
   }
-  function visitor(node, parents) {
-    let index = -1;
+  function visitor(node2, parents) {
+    let index2 = -1;
     let grandparent;
-    while (++index < parents.length) {
-      const parent = parents[index];
+    while (++index2 < parents.length) {
+      const parent = parents[index2];
       const siblings = grandparent ? grandparent.children : undefined;
       if (ignored(parent, siblings ? siblings.indexOf(parent) : undefined, grandparent)) {
         return;
@@ -8430,36 +8449,36 @@ function findAndReplace(tree, list, options) {
       grandparent = parent;
     }
     if (grandparent) {
-      return handler(node, parents);
+      return handler(node2, parents);
     }
   }
-  function handler(node, parents) {
+  function handler(node2, parents) {
     const parent = parents[parents.length - 1];
     const find = pairs[pairIndex][0];
     const replace = pairs[pairIndex][1];
     let start = 0;
     const siblings = parent.children;
-    const index = siblings.indexOf(node);
+    const index2 = siblings.indexOf(node2);
     let change = false;
     let nodes = [];
     find.lastIndex = 0;
-    let match = find.exec(node.value);
+    let match = find.exec(node2.value);
     while (match) {
-      const position = match.index;
+      const position2 = match.index;
       const matchObject = {
         index: match.index,
         input: match.input,
-        stack: [...parents, node]
+        stack: [...parents, node2]
       };
       let value = replace(...match, matchObject);
       if (typeof value === "string") {
         value = value.length > 0 ? { type: "text", value } : undefined;
       }
       if (value === false) {
-        find.lastIndex = position + 1;
+        find.lastIndex = position2 + 1;
       } else {
-        if (start !== position) {
-          add({ type: "text", value: node.value.slice(start, position) });
+        if (start !== position2) {
+          add({ type: "text", value: node2.value.slice(start, position2) });
         }
         if (Array.isArray(value)) {
           for (const child of value)
@@ -8467,27 +8486,27 @@ function findAndReplace(tree, list, options) {
         } else if (value) {
           add(value);
         }
-        start = position + match[0].length;
+        start = position2 + match[0].length;
         change = true;
       }
       if (!find.global) {
         break;
       }
-      match = find.exec(node.value);
+      match = find.exec(node2.value);
     }
     if (change) {
-      if (start < node.value.length) {
-        add({ type: "text", value: node.value.slice(start) });
+      if (start < node2.value.length) {
+        add({ type: "text", value: node2.value.slice(start) });
       }
-      parent.children.splice(index, 1, ...nodes);
+      parent.children.splice(index2, 1, ...nodes);
     } else {
-      nodes = [node];
+      nodes = [node2];
     }
-    return index + nodes.length;
+    return index2 + nodes.length;
     function add(child) {
-      const previous = nodes[nodes.length - 1];
-      if (previous && previous.type === "text" && child.type === "text") {
-        previous.value += child.value;
+      const previous2 = nodes[nodes.length - 1];
+      if (previous2 && previous2.type === "text" && child.type === "text") {
+        previous2.value += child.value;
       } else {
         nodes.push(child);
       }
@@ -8499,10 +8518,10 @@ function toPairs(tupleOrList) {
     throw new TypeError("Expected find and replace tuple or list of tuples");
   }
   const result = [];
-  const list = !tupleOrList[0] || Array.isArray(tupleOrList[0]) ? tupleOrList : [tupleOrList];
-  let index = -1;
-  while (++index < list.length) {
-    const tuple = list[index];
+  const list2 = !tupleOrList[0] || Array.isArray(tupleOrList[0]) ? tupleOrList : [tupleOrList];
+  let index2 = -1;
+  while (++index2 < list2.length) {
+    const tuple = list2[index2];
     result.push([toExpression(tuple[0]), toFunction(tuple[1])]);
   }
   return result;
@@ -8550,9 +8569,9 @@ function exitLiteralAutolinkHttp(token) {
 }
 function exitLiteralAutolinkWww(token) {
   this.config.exit.data.call(this, token);
-  const node = this.stack[this.stack.length - 1];
-  ok(node.type === "link");
-  node.url = "http://" + this.sliceSerialize(token);
+  const node2 = this.stack[this.stack.length - 1];
+  ok(node2.type === "link");
+  node2.url = "http://" + this.sliceSerialize(token);
 }
 function exitLiteralAutolinkEmail(token) {
   this.config.exit.autolinkEmail.call(this, token);
@@ -8655,20 +8674,20 @@ function enterFootnoteDefinition(token) {
 }
 function exitFootnoteCallString(token) {
   const label = this.resume();
-  const node = this.stack[this.stack.length - 1];
-  ok(node.type === "footnoteReference");
-  node.identifier = normalizeIdentifier(this.sliceSerialize(token)).toLowerCase();
-  node.label = label;
+  const node2 = this.stack[this.stack.length - 1];
+  ok(node2.type === "footnoteReference");
+  node2.identifier = normalizeIdentifier(this.sliceSerialize(token)).toLowerCase();
+  node2.label = label;
 }
 function exitFootnoteCall(token) {
   this.exit(token);
 }
 function exitFootnoteDefinitionLabelString(token) {
   const label = this.resume();
-  const node = this.stack[this.stack.length - 1];
-  ok(node.type === "footnoteDefinition");
-  node.identifier = normalizeIdentifier(this.sliceSerialize(token)).toLowerCase();
-  node.label = label;
+  const node2 = this.stack[this.stack.length - 1];
+  ok(node2.type === "footnoteDefinition");
+  node2.identifier = normalizeIdentifier(this.sliceSerialize(token)).toLowerCase();
+  node2.label = label;
 }
 function exitFootnoteDefinition(token) {
   this.exit(token);
@@ -8676,14 +8695,14 @@ function exitFootnoteDefinition(token) {
 function footnoteReferencePeek() {
   return "[";
 }
-function footnoteReference(node, _, state, info) {
+function footnoteReference(node2, _, state, info) {
   const tracker = state.createTracker(info);
   let value = tracker.move("[^");
-  const exit = state.enter("footnoteReference");
+  const exit2 = state.enter("footnoteReference");
   const subexit = state.enter("reference");
-  value += tracker.move(state.safe(state.associationId(node), { after: "]", before: value }));
+  value += tracker.move(state.safe(state.associationId(node2), { after: "]", before: value }));
   subexit();
-  exit();
+  exit2();
   value += tracker.move("]");
   return value;
 }
@@ -8724,18 +8743,18 @@ function enterStrikethrough(token) {
 function exitStrikethrough(token) {
   this.exit(token);
 }
-function handleDelete(node, _, state, info) {
+function handleDelete(node2, _, state, info) {
   const tracker = state.createTracker(info);
   const sequence = state.stack.includes("strikethrough") ? "~" : "~~";
-  const exit = state.enter("strikethrough");
+  const exit2 = state.enter("strikethrough");
   let value = tracker.move(sequence);
-  value += state.containerPhrasing(node, {
+  value += state.containerPhrasing(node2, {
     ...tracker.current(),
     before: value,
     after: "~"
   });
   value += tracker.move(sequence);
-  exit();
+  exit2();
   return value;
 }
 function attentionDelete() {
@@ -8798,9 +8817,9 @@ function exitCodeText(token) {
   if (this.data.inTable) {
     value = value.replace(/\\([\\|])/g, replace);
   }
-  const node = this.stack[this.stack.length - 1];
-  ok(node.type === "inlineCode");
-  node.value = value;
+  const node2 = this.stack[this.stack.length - 1];
+  ok(node2.type === "inlineCode");
+  node2.value = value;
   this.exit(token);
 }
 function replace($0, $1) {
@@ -8822,35 +8841,35 @@ function gfmTaskListItemFromMarkdown() {
   };
 }
 function exitCheck(token) {
-  const node = this.stack[this.stack.length - 2];
-  ok(node.type === "listItem");
-  node.checked = token.type === "taskListCheckValueChecked";
+  const node2 = this.stack[this.stack.length - 2];
+  ok(node2.type === "listItem");
+  node2.checked = token.type === "taskListCheckValueChecked";
 }
 function exitParagraphWithTaskListItem(token) {
   const parent = this.stack[this.stack.length - 2];
   if (parent && parent.type === "listItem" && typeof parent.checked === "boolean") {
-    const node = this.stack[this.stack.length - 1];
-    ok(node.type === "paragraph");
-    const head = node.children[0];
+    const node2 = this.stack[this.stack.length - 1];
+    ok(node2.type === "paragraph");
+    const head = node2.children[0];
     if (head && head.type === "text") {
       const siblings = parent.children;
-      let index = -1;
+      let index2 = -1;
       let firstParaghraph;
-      while (++index < siblings.length) {
-        const sibling = siblings[index];
+      while (++index2 < siblings.length) {
+        const sibling = siblings[index2];
         if (sibling.type === "paragraph") {
           firstParaghraph = sibling;
           break;
         }
       }
-      if (firstParaghraph === node) {
+      if (firstParaghraph === node2) {
         head.value = head.value.slice(1);
         if (head.value.length === 0) {
-          node.children.shift();
-        } else if (node.position && head.position && typeof head.position.start.offset === "number") {
+          node2.children.shift();
+        } else if (node2.position && head.position && typeof head.position.start.offset === "number") {
           head.position.start.column++;
           head.position.start.offset++;
-          node.position.start = Object.assign({}, head.position.start);
+          node2.position.start = Object.assign({}, head.position.start);
         }
       }
     }
@@ -8885,272 +8904,272 @@ var init_mdast_util_gfm = __esm(() => {
 function gfmAutolinkLiteral() {
   return { text: text3 };
 }
-function tokenizeEmailAutolink(effects, ok, nok) {
+function tokenizeEmailAutolink(effects, ok3, nok) {
   const self = this;
   let dot;
   let data;
   return start;
-  function start(code) {
-    if (!gfmAtext(code) || !previousEmail.call(self, self.previous) || previousUnbalanced(self.events)) {
-      return nok(code);
+  function start(code2) {
+    if (!gfmAtext(code2) || !previousEmail.call(self, self.previous) || previousUnbalanced(self.events)) {
+      return nok(code2);
     }
     effects.enter("literalAutolink");
     effects.enter("literalAutolinkEmail");
-    return atext(code);
+    return atext(code2);
   }
-  function atext(code) {
-    if (gfmAtext(code)) {
-      effects.consume(code);
+  function atext(code2) {
+    if (gfmAtext(code2)) {
+      effects.consume(code2);
       return atext;
     }
-    if (code === codes.atSign) {
-      effects.consume(code);
+    if (code2 === codes.atSign) {
+      effects.consume(code2);
       return emailDomain;
     }
-    return nok(code);
+    return nok(code2);
   }
-  function emailDomain(code) {
-    if (code === codes.dot) {
-      return effects.check(emailDomainDotTrail, emailDomainAfter, emailDomainDot)(code);
+  function emailDomain(code2) {
+    if (code2 === codes.dot) {
+      return effects.check(emailDomainDotTrail, emailDomainAfter, emailDomainDot)(code2);
     }
-    if (code === codes.dash || code === codes.underscore || asciiAlphanumeric(code)) {
+    if (code2 === codes.dash || code2 === codes.underscore || asciiAlphanumeric(code2)) {
       data = true;
-      effects.consume(code);
+      effects.consume(code2);
       return emailDomain;
     }
-    return emailDomainAfter(code);
+    return emailDomainAfter(code2);
   }
-  function emailDomainDot(code) {
-    effects.consume(code);
+  function emailDomainDot(code2) {
+    effects.consume(code2);
     dot = true;
     return emailDomain;
   }
-  function emailDomainAfter(code) {
+  function emailDomainAfter(code2) {
     if (data && dot && asciiAlpha(self.previous)) {
       effects.exit("literalAutolinkEmail");
       effects.exit("literalAutolink");
-      return ok(code);
+      return ok3(code2);
     }
-    return nok(code);
+    return nok(code2);
   }
 }
-function tokenizeWwwAutolink(effects, ok, nok) {
+function tokenizeWwwAutolink(effects, ok3, nok) {
   const self = this;
   return wwwStart;
-  function wwwStart(code) {
-    if (code !== codes.uppercaseW && code !== codes.lowercaseW || !previousWww.call(self, self.previous) || previousUnbalanced(self.events)) {
-      return nok(code);
+  function wwwStart(code2) {
+    if (code2 !== codes.uppercaseW && code2 !== codes.lowercaseW || !previousWww.call(self, self.previous) || previousUnbalanced(self.events)) {
+      return nok(code2);
     }
     effects.enter("literalAutolink");
     effects.enter("literalAutolinkWww");
-    return effects.check(wwwPrefix, effects.attempt(domain, effects.attempt(path, wwwAfter), nok), nok)(code);
+    return effects.check(wwwPrefix, effects.attempt(domain, effects.attempt(path, wwwAfter), nok), nok)(code2);
   }
-  function wwwAfter(code) {
+  function wwwAfter(code2) {
     effects.exit("literalAutolinkWww");
     effects.exit("literalAutolink");
-    return ok(code);
+    return ok3(code2);
   }
 }
-function tokenizeProtocolAutolink(effects, ok, nok) {
+function tokenizeProtocolAutolink(effects, ok3, nok) {
   const self = this;
   let buffer = "";
   let seen = false;
   return protocolStart;
-  function protocolStart(code) {
-    if ((code === codes.uppercaseH || code === codes.lowercaseH) && previousProtocol.call(self, self.previous) && !previousUnbalanced(self.events)) {
+  function protocolStart(code2) {
+    if ((code2 === codes.uppercaseH || code2 === codes.lowercaseH) && previousProtocol.call(self, self.previous) && !previousUnbalanced(self.events)) {
       effects.enter("literalAutolink");
       effects.enter("literalAutolinkHttp");
-      buffer += String.fromCodePoint(code);
-      effects.consume(code);
+      buffer += String.fromCodePoint(code2);
+      effects.consume(code2);
       return protocolPrefixInside;
     }
-    return nok(code);
+    return nok(code2);
   }
-  function protocolPrefixInside(code) {
-    if (asciiAlpha(code) && buffer.length < 5) {
-      buffer += String.fromCodePoint(code);
-      effects.consume(code);
+  function protocolPrefixInside(code2) {
+    if (asciiAlpha(code2) && buffer.length < 5) {
+      buffer += String.fromCodePoint(code2);
+      effects.consume(code2);
       return protocolPrefixInside;
     }
-    if (code === codes.colon) {
+    if (code2 === codes.colon) {
       const protocol = buffer.toLowerCase();
       if (protocol === "http" || protocol === "https") {
-        effects.consume(code);
+        effects.consume(code2);
         return protocolSlashesInside;
       }
     }
-    return nok(code);
+    return nok(code2);
   }
-  function protocolSlashesInside(code) {
-    if (code === codes.slash) {
-      effects.consume(code);
+  function protocolSlashesInside(code2) {
+    if (code2 === codes.slash) {
+      effects.consume(code2);
       if (seen) {
         return afterProtocol;
       }
       seen = true;
       return protocolSlashesInside;
     }
-    return nok(code);
+    return nok(code2);
   }
-  function afterProtocol(code) {
-    return code === codes.eof || asciiControl(code) || markdownLineEndingOrSpace(code) || unicodeWhitespace(code) || unicodePunctuation(code) ? nok(code) : effects.attempt(domain, effects.attempt(path, protocolAfter), nok)(code);
+  function afterProtocol(code2) {
+    return code2 === codes.eof || asciiControl(code2) || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2) || unicodePunctuation(code2) ? nok(code2) : effects.attempt(domain, effects.attempt(path, protocolAfter), nok)(code2);
   }
-  function protocolAfter(code) {
+  function protocolAfter(code2) {
     effects.exit("literalAutolinkHttp");
     effects.exit("literalAutolink");
-    return ok(code);
+    return ok3(code2);
   }
 }
-function tokenizeWwwPrefix(effects, ok, nok) {
+function tokenizeWwwPrefix(effects, ok3, nok) {
   let size = 0;
   return wwwPrefixInside;
-  function wwwPrefixInside(code) {
-    if ((code === codes.uppercaseW || code === codes.lowercaseW) && size < 3) {
+  function wwwPrefixInside(code2) {
+    if ((code2 === codes.uppercaseW || code2 === codes.lowercaseW) && size < 3) {
       size++;
-      effects.consume(code);
+      effects.consume(code2);
       return wwwPrefixInside;
     }
-    if (code === codes.dot && size === 3) {
-      effects.consume(code);
+    if (code2 === codes.dot && size === 3) {
+      effects.consume(code2);
       return wwwPrefixAfter;
     }
-    return nok(code);
+    return nok(code2);
   }
-  function wwwPrefixAfter(code) {
-    return code === codes.eof ? nok(code) : ok(code);
+  function wwwPrefixAfter(code2) {
+    return code2 === codes.eof ? nok(code2) : ok3(code2);
   }
 }
-function tokenizeDomain(effects, ok, nok) {
+function tokenizeDomain(effects, ok3, nok) {
   let underscoreInLastSegment;
   let underscoreInLastLastSegment;
   let seen;
   return domainInside;
-  function domainInside(code) {
-    if (code === codes.dot || code === codes.underscore) {
-      return effects.check(trail, domainAfter, domainAtPunctuation)(code);
+  function domainInside(code2) {
+    if (code2 === codes.dot || code2 === codes.underscore) {
+      return effects.check(trail, domainAfter, domainAtPunctuation)(code2);
     }
-    if (code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code) || code !== codes.dash && unicodePunctuation(code)) {
-      return domainAfter(code);
+    if (code2 === codes.eof || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2) || code2 !== codes.dash && unicodePunctuation(code2)) {
+      return domainAfter(code2);
     }
     seen = true;
-    effects.consume(code);
+    effects.consume(code2);
     return domainInside;
   }
-  function domainAtPunctuation(code) {
-    if (code === codes.underscore) {
+  function domainAtPunctuation(code2) {
+    if (code2 === codes.underscore) {
       underscoreInLastSegment = true;
     } else {
       underscoreInLastLastSegment = underscoreInLastSegment;
       underscoreInLastSegment = undefined;
     }
-    effects.consume(code);
+    effects.consume(code2);
     return domainInside;
   }
-  function domainAfter(code) {
+  function domainAfter(code2) {
     if (underscoreInLastLastSegment || underscoreInLastSegment || !seen) {
-      return nok(code);
+      return nok(code2);
     }
-    return ok(code);
+    return ok3(code2);
   }
 }
-function tokenizePath(effects, ok) {
+function tokenizePath(effects, ok3) {
   let sizeOpen = 0;
   let sizeClose = 0;
   return pathInside;
-  function pathInside(code) {
-    if (code === codes.leftParenthesis) {
+  function pathInside(code2) {
+    if (code2 === codes.leftParenthesis) {
       sizeOpen++;
-      effects.consume(code);
+      effects.consume(code2);
       return pathInside;
     }
-    if (code === codes.rightParenthesis && sizeClose < sizeOpen) {
-      return pathAtPunctuation(code);
+    if (code2 === codes.rightParenthesis && sizeClose < sizeOpen) {
+      return pathAtPunctuation(code2);
     }
-    if (code === codes.exclamationMark || code === codes.quotationMark || code === codes.ampersand || code === codes.apostrophe || code === codes.rightParenthesis || code === codes.asterisk || code === codes.comma || code === codes.dot || code === codes.colon || code === codes.semicolon || code === codes.lessThan || code === codes.questionMark || code === codes.rightSquareBracket || code === codes.underscore || code === codes.tilde) {
-      return effects.check(trail, ok, pathAtPunctuation)(code);
+    if (code2 === codes.exclamationMark || code2 === codes.quotationMark || code2 === codes.ampersand || code2 === codes.apostrophe || code2 === codes.rightParenthesis || code2 === codes.asterisk || code2 === codes.comma || code2 === codes.dot || code2 === codes.colon || code2 === codes.semicolon || code2 === codes.lessThan || code2 === codes.questionMark || code2 === codes.rightSquareBracket || code2 === codes.underscore || code2 === codes.tilde) {
+      return effects.check(trail, ok3, pathAtPunctuation)(code2);
     }
-    if (code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
-      return ok(code);
+    if (code2 === codes.eof || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2)) {
+      return ok3(code2);
     }
-    effects.consume(code);
+    effects.consume(code2);
     return pathInside;
   }
-  function pathAtPunctuation(code) {
-    if (code === codes.rightParenthesis) {
+  function pathAtPunctuation(code2) {
+    if (code2 === codes.rightParenthesis) {
       sizeClose++;
     }
-    effects.consume(code);
+    effects.consume(code2);
     return pathInside;
   }
 }
-function tokenizeTrail(effects, ok, nok) {
-  return trail;
-  function trail(code) {
-    if (code === codes.exclamationMark || code === codes.quotationMark || code === codes.apostrophe || code === codes.rightParenthesis || code === codes.asterisk || code === codes.comma || code === codes.dot || code === codes.colon || code === codes.semicolon || code === codes.questionMark || code === codes.underscore || code === codes.tilde) {
-      effects.consume(code);
-      return trail;
+function tokenizeTrail(effects, ok3, nok) {
+  return trail2;
+  function trail2(code2) {
+    if (code2 === codes.exclamationMark || code2 === codes.quotationMark || code2 === codes.apostrophe || code2 === codes.rightParenthesis || code2 === codes.asterisk || code2 === codes.comma || code2 === codes.dot || code2 === codes.colon || code2 === codes.semicolon || code2 === codes.questionMark || code2 === codes.underscore || code2 === codes.tilde) {
+      effects.consume(code2);
+      return trail2;
     }
-    if (code === codes.ampersand) {
-      effects.consume(code);
+    if (code2 === codes.ampersand) {
+      effects.consume(code2);
       return trailCharacterReferenceStart;
     }
-    if (code === codes.rightSquareBracket) {
-      effects.consume(code);
+    if (code2 === codes.rightSquareBracket) {
+      effects.consume(code2);
       return trailBracketAfter;
     }
-    if (code === codes.lessThan || code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
-      return ok(code);
+    if (code2 === codes.lessThan || code2 === codes.eof || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2)) {
+      return ok3(code2);
     }
-    return nok(code);
+    return nok(code2);
   }
-  function trailBracketAfter(code) {
-    if (code === codes.eof || code === codes.leftParenthesis || code === codes.leftSquareBracket || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
-      return ok(code);
+  function trailBracketAfter(code2) {
+    if (code2 === codes.eof || code2 === codes.leftParenthesis || code2 === codes.leftSquareBracket || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2)) {
+      return ok3(code2);
     }
-    return trail(code);
+    return trail2(code2);
   }
-  function trailCharacterReferenceStart(code) {
-    return asciiAlpha(code) ? trailCharacterReferenceInside(code) : nok(code);
+  function trailCharacterReferenceStart(code2) {
+    return asciiAlpha(code2) ? trailCharacterReferenceInside(code2) : nok(code2);
   }
-  function trailCharacterReferenceInside(code) {
-    if (code === codes.semicolon) {
-      effects.consume(code);
-      return trail;
+  function trailCharacterReferenceInside(code2) {
+    if (code2 === codes.semicolon) {
+      effects.consume(code2);
+      return trail2;
     }
-    if (asciiAlpha(code)) {
-      effects.consume(code);
+    if (asciiAlpha(code2)) {
+      effects.consume(code2);
       return trailCharacterReferenceInside;
     }
-    return nok(code);
+    return nok(code2);
   }
 }
-function tokenizeEmailDomainDotTrail(effects, ok, nok) {
+function tokenizeEmailDomainDotTrail(effects, ok3, nok) {
   return start;
-  function start(code) {
-    effects.consume(code);
+  function start(code2) {
+    effects.consume(code2);
     return after;
   }
-  function after(code) {
-    return asciiAlphanumeric(code) ? nok(code) : ok(code);
+  function after(code2) {
+    return asciiAlphanumeric(code2) ? nok(code2) : ok3(code2);
   }
 }
-function previousWww(code) {
-  return code === codes.eof || code === codes.leftParenthesis || code === codes.asterisk || code === codes.underscore || code === codes.leftSquareBracket || code === codes.rightSquareBracket || code === codes.tilde || markdownLineEndingOrSpace(code);
+function previousWww(code2) {
+  return code2 === codes.eof || code2 === codes.leftParenthesis || code2 === codes.asterisk || code2 === codes.underscore || code2 === codes.leftSquareBracket || code2 === codes.rightSquareBracket || code2 === codes.tilde || markdownLineEndingOrSpace(code2);
 }
-function previousProtocol(code) {
-  return !asciiAlpha(code);
+function previousProtocol(code2) {
+  return !asciiAlpha(code2);
 }
-function previousEmail(code) {
-  return !(code === codes.slash || gfmAtext(code));
+function previousEmail(code2) {
+  return !(code2 === codes.slash || gfmAtext(code2));
 }
-function gfmAtext(code) {
-  return code === codes.plusSign || code === codes.dash || code === codes.dot || code === codes.underscore || asciiAlphanumeric(code);
+function gfmAtext(code2) {
+  return code2 === codes.plusSign || code2 === codes.dash || code2 === codes.dot || code2 === codes.underscore || asciiAlphanumeric(code2);
 }
 function previousUnbalanced(events) {
-  let index = events.length;
+  let index2 = events.length;
   let result = false;
-  while (index--) {
-    const token = events[index][1];
+  while (index2--) {
+    const token = events[index2][1];
     if ((token.type === "labelLink" || token.type === "labelImage") && !token._balanced) {
       result = true;
       break;
@@ -9247,13 +9266,13 @@ function gfmFootnote() {
     }
   };
 }
-function tokenizePotentialGfmFootnoteCall(effects, ok2, nok) {
+function tokenizePotentialGfmFootnoteCall(effects, ok3, nok) {
   const self = this;
-  let index = self.events.length;
+  let index2 = self.events.length;
   const defined = self.parser.gfmFootnotes || (self.parser.gfmFootnotes = []);
   let labelStart;
-  while (index--) {
-    const token = self.events[index][1];
+  while (index2--) {
+    const token = self.events[index2][1];
     if (token.type === types.labelImage) {
       labelStart = token;
       break;
@@ -9263,47 +9282,47 @@ function tokenizePotentialGfmFootnoteCall(effects, ok2, nok) {
     }
   }
   return start;
-  function start(code) {
-    ok(code === codes.rightSquareBracket, "expected `]`");
+  function start(code2) {
+    ok(code2 === codes.rightSquareBracket, "expected `]`");
     if (!labelStart || !labelStart._balanced) {
-      return nok(code);
+      return nok(code2);
     }
     const id = normalizeIdentifier(self.sliceSerialize({ start: labelStart.end, end: self.now() }));
     if (id.codePointAt(0) !== codes.caret || !defined.includes(id.slice(1))) {
-      return nok(code);
+      return nok(code2);
     }
     effects.enter("gfmFootnoteCallLabelMarker");
-    effects.consume(code);
+    effects.consume(code2);
     effects.exit("gfmFootnoteCallLabelMarker");
-    return ok2(code);
+    return ok3(code2);
   }
 }
 function resolveToPotentialGfmFootnoteCall(events, context) {
-  let index = events.length;
+  let index2 = events.length;
   let labelStart;
-  while (index--) {
-    if (events[index][1].type === types.labelImage && events[index][0] === "enter") {
-      labelStart = events[index][1];
+  while (index2--) {
+    if (events[index2][1].type === types.labelImage && events[index2][0] === "enter") {
+      labelStart = events[index2][1];
       break;
     }
   }
   ok(labelStart, "expected `labelStart` to resolve");
-  events[index + 1][1].type = types.data;
-  events[index + 3][1].type = "gfmFootnoteCallLabelMarker";
+  events[index2 + 1][1].type = types.data;
+  events[index2 + 3][1].type = "gfmFootnoteCallLabelMarker";
   const call = {
     type: "gfmFootnoteCall",
-    start: Object.assign({}, events[index + 3][1].start),
+    start: Object.assign({}, events[index2 + 3][1].start),
     end: Object.assign({}, events[events.length - 1][1].end)
   };
   const marker = {
     type: "gfmFootnoteCallMarker",
-    start: Object.assign({}, events[index + 3][1].end),
-    end: Object.assign({}, events[index + 3][1].end)
+    start: Object.assign({}, events[index2 + 3][1].end),
+    end: Object.assign({}, events[index2 + 3][1].end)
   };
   marker.end.column++;
   marker.end.offset++;
   marker.end._bufferIndex++;
-  const string = {
+  const string3 = {
     type: "gfmFootnoteCallString",
     start: Object.assign({}, marker.end),
     end: Object.assign({}, events[events.length - 1][1].start)
@@ -9311,168 +9330,168 @@ function resolveToPotentialGfmFootnoteCall(events, context) {
   const chunk = {
     type: types.chunkString,
     contentType: "string",
-    start: Object.assign({}, string.start),
-    end: Object.assign({}, string.end)
+    start: Object.assign({}, string3.start),
+    end: Object.assign({}, string3.end)
   };
   const replacement = [
-    events[index + 1],
-    events[index + 2],
+    events[index2 + 1],
+    events[index2 + 2],
     ["enter", call, context],
-    events[index + 3],
-    events[index + 4],
+    events[index2 + 3],
+    events[index2 + 4],
     ["enter", marker, context],
     ["exit", marker, context],
-    ["enter", string, context],
+    ["enter", string3, context],
     ["enter", chunk, context],
     ["exit", chunk, context],
-    ["exit", string, context],
+    ["exit", string3, context],
     events[events.length - 2],
     events[events.length - 1],
     ["exit", call, context]
   ];
-  events.splice(index, events.length - index + 1, ...replacement);
+  events.splice(index2, events.length - index2 + 1, ...replacement);
   return events;
 }
-function tokenizeGfmFootnoteCall(effects, ok2, nok) {
+function tokenizeGfmFootnoteCall(effects, ok3, nok) {
   const self = this;
   const defined = self.parser.gfmFootnotes || (self.parser.gfmFootnotes = []);
   let size = 0;
   let data;
   return start;
-  function start(code) {
-    ok(code === codes.leftSquareBracket, "expected `[`");
+  function start(code2) {
+    ok(code2 === codes.leftSquareBracket, "expected `[`");
     effects.enter("gfmFootnoteCall");
     effects.enter("gfmFootnoteCallLabelMarker");
-    effects.consume(code);
+    effects.consume(code2);
     effects.exit("gfmFootnoteCallLabelMarker");
     return callStart;
   }
-  function callStart(code) {
-    if (code !== codes.caret)
-      return nok(code);
+  function callStart(code2) {
+    if (code2 !== codes.caret)
+      return nok(code2);
     effects.enter("gfmFootnoteCallMarker");
-    effects.consume(code);
+    effects.consume(code2);
     effects.exit("gfmFootnoteCallMarker");
     effects.enter("gfmFootnoteCallString");
     effects.enter("chunkString").contentType = "string";
     return callData;
   }
-  function callData(code) {
-    if (size > constants.linkReferenceSizeMax || code === codes.rightSquareBracket && !data || code === codes.eof || code === codes.leftSquareBracket || markdownLineEndingOrSpace(code)) {
-      return nok(code);
+  function callData(code2) {
+    if (size > constants.linkReferenceSizeMax || code2 === codes.rightSquareBracket && !data || code2 === codes.eof || code2 === codes.leftSquareBracket || markdownLineEndingOrSpace(code2)) {
+      return nok(code2);
     }
-    if (code === codes.rightSquareBracket) {
+    if (code2 === codes.rightSquareBracket) {
       effects.exit("chunkString");
       const token = effects.exit("gfmFootnoteCallString");
       if (!defined.includes(normalizeIdentifier(self.sliceSerialize(token)))) {
-        return nok(code);
+        return nok(code2);
       }
       effects.enter("gfmFootnoteCallLabelMarker");
-      effects.consume(code);
+      effects.consume(code2);
       effects.exit("gfmFootnoteCallLabelMarker");
       effects.exit("gfmFootnoteCall");
-      return ok2;
+      return ok3;
     }
-    if (!markdownLineEndingOrSpace(code)) {
+    if (!markdownLineEndingOrSpace(code2)) {
       data = true;
     }
     size++;
-    effects.consume(code);
-    return code === codes.backslash ? callEscape : callData;
+    effects.consume(code2);
+    return code2 === codes.backslash ? callEscape : callData;
   }
-  function callEscape(code) {
-    if (code === codes.leftSquareBracket || code === codes.backslash || code === codes.rightSquareBracket) {
-      effects.consume(code);
+  function callEscape(code2) {
+    if (code2 === codes.leftSquareBracket || code2 === codes.backslash || code2 === codes.rightSquareBracket) {
+      effects.consume(code2);
       size++;
       return callData;
     }
-    return callData(code);
+    return callData(code2);
   }
 }
-function tokenizeDefinitionStart(effects, ok2, nok) {
+function tokenizeDefinitionStart(effects, ok3, nok) {
   const self = this;
   const defined = self.parser.gfmFootnotes || (self.parser.gfmFootnotes = []);
   let identifier;
   let size = 0;
   let data;
   return start;
-  function start(code) {
-    ok(code === codes.leftSquareBracket, "expected `[`");
+  function start(code2) {
+    ok(code2 === codes.leftSquareBracket, "expected `[`");
     effects.enter("gfmFootnoteDefinition")._container = true;
     effects.enter("gfmFootnoteDefinitionLabel");
     effects.enter("gfmFootnoteDefinitionLabelMarker");
-    effects.consume(code);
+    effects.consume(code2);
     effects.exit("gfmFootnoteDefinitionLabelMarker");
     return labelAtMarker;
   }
-  function labelAtMarker(code) {
-    if (code === codes.caret) {
+  function labelAtMarker(code2) {
+    if (code2 === codes.caret) {
       effects.enter("gfmFootnoteDefinitionMarker");
-      effects.consume(code);
+      effects.consume(code2);
       effects.exit("gfmFootnoteDefinitionMarker");
       effects.enter("gfmFootnoteDefinitionLabelString");
       effects.enter("chunkString").contentType = "string";
       return labelInside;
     }
-    return nok(code);
+    return nok(code2);
   }
-  function labelInside(code) {
-    if (size > constants.linkReferenceSizeMax || code === codes.rightSquareBracket && !data || code === codes.eof || code === codes.leftSquareBracket || markdownLineEndingOrSpace(code)) {
-      return nok(code);
+  function labelInside(code2) {
+    if (size > constants.linkReferenceSizeMax || code2 === codes.rightSquareBracket && !data || code2 === codes.eof || code2 === codes.leftSquareBracket || markdownLineEndingOrSpace(code2)) {
+      return nok(code2);
     }
-    if (code === codes.rightSquareBracket) {
+    if (code2 === codes.rightSquareBracket) {
       effects.exit("chunkString");
       const token = effects.exit("gfmFootnoteDefinitionLabelString");
       identifier = normalizeIdentifier(self.sliceSerialize(token));
       effects.enter("gfmFootnoteDefinitionLabelMarker");
-      effects.consume(code);
+      effects.consume(code2);
       effects.exit("gfmFootnoteDefinitionLabelMarker");
       effects.exit("gfmFootnoteDefinitionLabel");
       return labelAfter;
     }
-    if (!markdownLineEndingOrSpace(code)) {
+    if (!markdownLineEndingOrSpace(code2)) {
       data = true;
     }
     size++;
-    effects.consume(code);
-    return code === codes.backslash ? labelEscape : labelInside;
+    effects.consume(code2);
+    return code2 === codes.backslash ? labelEscape : labelInside;
   }
-  function labelEscape(code) {
-    if (code === codes.leftSquareBracket || code === codes.backslash || code === codes.rightSquareBracket) {
-      effects.consume(code);
+  function labelEscape(code2) {
+    if (code2 === codes.leftSquareBracket || code2 === codes.backslash || code2 === codes.rightSquareBracket) {
+      effects.consume(code2);
       size++;
       return labelInside;
     }
-    return labelInside(code);
+    return labelInside(code2);
   }
-  function labelAfter(code) {
-    if (code === codes.colon) {
+  function labelAfter(code2) {
+    if (code2 === codes.colon) {
       effects.enter("definitionMarker");
-      effects.consume(code);
+      effects.consume(code2);
       effects.exit("definitionMarker");
       if (!defined.includes(identifier)) {
         defined.push(identifier);
       }
       return factorySpace(effects, whitespaceAfter, "gfmFootnoteDefinitionWhitespace");
     }
-    return nok(code);
+    return nok(code2);
   }
-  function whitespaceAfter(code) {
-    return ok2(code);
+  function whitespaceAfter(code2) {
+    return ok3(code2);
   }
 }
-function tokenizeDefinitionContinuation(effects, ok, nok) {
-  return effects.check(blankLine, ok, effects.attempt(indent, ok, nok));
+function tokenizeDefinitionContinuation(effects, ok3, nok) {
+  return effects.check(blankLine, ok3, effects.attempt(indent, ok3, nok));
 }
 function gfmFootnoteDefinitionEnd(effects) {
   effects.exit("gfmFootnoteDefinition");
 }
-function tokenizeIndent2(effects, ok, nok) {
+function tokenizeIndent2(effects, ok3, nok) {
   const self = this;
   return factorySpace(effects, afterPrefix, "gfmFootnoteDefinitionIndent", constants.tabSize + 1);
-  function afterPrefix(code) {
+  function afterPrefix(code2) {
     const tail = self.events[self.events.length - 1];
-    return tail && tail[1].type === "gfmFootnoteDefinitionIndent" && tail[2].sliceSerialize(tail[1], true).length === constants.tabSize ? ok(code) : nok(code);
+    return tail && tail[1].type === "gfmFootnoteDefinitionIndent" && tail[2].sliceSerialize(tail[1], true).length === constants.tabSize ? ok3(code2) : nok(code2);
   }
 }
 var indent;
@@ -9505,84 +9524,84 @@ function gfmStrikethrough(options) {
     attentionMarkers: { null: [codes.tilde] }
   };
   function resolveAllStrikethrough(events, context) {
-    let index = -1;
-    while (++index < events.length) {
-      if (events[index][0] === "enter" && events[index][1].type === "strikethroughSequenceTemporary" && events[index][1]._close) {
-        let open = index;
+    let index2 = -1;
+    while (++index2 < events.length) {
+      if (events[index2][0] === "enter" && events[index2][1].type === "strikethroughSequenceTemporary" && events[index2][1]._close) {
+        let open = index2;
         while (open--) {
-          if (events[open][0] === "exit" && events[open][1].type === "strikethroughSequenceTemporary" && events[open][1]._open && events[index][1].end.offset - events[index][1].start.offset === events[open][1].end.offset - events[open][1].start.offset) {
-            events[index][1].type = "strikethroughSequence";
+          if (events[open][0] === "exit" && events[open][1].type === "strikethroughSequenceTemporary" && events[open][1]._open && events[index2][1].end.offset - events[index2][1].start.offset === events[open][1].end.offset - events[open][1].start.offset) {
+            events[index2][1].type = "strikethroughSequence";
             events[open][1].type = "strikethroughSequence";
             const strikethrough = {
               type: "strikethrough",
               start: Object.assign({}, events[open][1].start),
-              end: Object.assign({}, events[index][1].end)
+              end: Object.assign({}, events[index2][1].end)
             };
-            const text = {
+            const text4 = {
               type: "strikethroughText",
               start: Object.assign({}, events[open][1].end),
-              end: Object.assign({}, events[index][1].start)
+              end: Object.assign({}, events[index2][1].start)
             };
             const nextEvents = [
               ["enter", strikethrough, context],
               ["enter", events[open][1], context],
               ["exit", events[open][1], context],
-              ["enter", text, context]
+              ["enter", text4, context]
             ];
-            const insideSpan = context.parser.constructs.insideSpan.null;
-            if (insideSpan) {
-              splice(nextEvents, nextEvents.length, 0, resolveAll(insideSpan, events.slice(open + 1, index), context));
+            const insideSpan2 = context.parser.constructs.insideSpan.null;
+            if (insideSpan2) {
+              splice(nextEvents, nextEvents.length, 0, resolveAll(insideSpan2, events.slice(open + 1, index2), context));
             }
             splice(nextEvents, nextEvents.length, 0, [
-              ["exit", text, context],
-              ["enter", events[index][1], context],
-              ["exit", events[index][1], context],
+              ["exit", text4, context],
+              ["enter", events[index2][1], context],
+              ["exit", events[index2][1], context],
               ["exit", strikethrough, context]
             ]);
-            splice(events, open - 1, index - open + 3, nextEvents);
-            index = open + nextEvents.length - 2;
+            splice(events, open - 1, index2 - open + 3, nextEvents);
+            index2 = open + nextEvents.length - 2;
             break;
           }
         }
       }
     }
-    index = -1;
-    while (++index < events.length) {
-      if (events[index][1].type === "strikethroughSequenceTemporary") {
-        events[index][1].type = types.data;
+    index2 = -1;
+    while (++index2 < events.length) {
+      if (events[index2][1].type === "strikethroughSequenceTemporary") {
+        events[index2][1].type = types.data;
       }
     }
     return events;
   }
-  function tokenizeStrikethrough(effects, ok2, nok) {
-    const previous = this.previous;
+  function tokenizeStrikethrough(effects, ok3, nok) {
+    const previous3 = this.previous;
     const events = this.events;
     let size = 0;
     return start;
-    function start(code) {
-      ok(code === codes.tilde, "expected `~`");
-      if (previous === codes.tilde && events[events.length - 1][1].type !== types.characterEscape) {
-        return nok(code);
+    function start(code2) {
+      ok(code2 === codes.tilde, "expected `~`");
+      if (previous3 === codes.tilde && events[events.length - 1][1].type !== types.characterEscape) {
+        return nok(code2);
       }
       effects.enter("strikethroughSequenceTemporary");
-      return more(code);
+      return more(code2);
     }
-    function more(code) {
-      const before = classifyCharacter(previous);
-      if (code === codes.tilde) {
+    function more(code2) {
+      const before = classifyCharacter(previous3);
+      if (code2 === codes.tilde) {
         if (size > 1)
-          return nok(code);
-        effects.consume(code);
+          return nok(code2);
+        effects.consume(code2);
         size++;
         return more;
       }
       if (size < 2 && !single)
-        return nok(code);
+        return nok(code2);
       const token = effects.exit("strikethroughSequenceTemporary");
-      const after = classifyCharacter(code);
+      const after = classifyCharacter(code2);
       token._open = !after || after === constants.attentionSideAfter && Boolean(before);
       token._close = !before || before === constants.attentionSideAfter && Boolean(after);
-      return ok2(code);
+      return ok3(code2);
     }
   }
 }
@@ -9601,8 +9620,8 @@ class EditMap2 {
     this.map = [];
     this.index = new Map;
   }
-  add(index, remove, add) {
-    addImplementation2(this, index, remove, add);
+  add(index2, remove, add) {
+    addImplementation2(this, index2, remove, add);
   }
   consume(events) {
     this.map.sort(function(a, b) {
@@ -9611,12 +9630,12 @@ class EditMap2 {
     if (this.map.length === 0) {
       return;
     }
-    let index = this.map.length;
+    let index2 = this.map.length;
     const vecs = [];
-    while (index > 0) {
-      index -= 1;
-      vecs.push(events.slice(this.map[index][0] + this.map[index][1]), this.map[index][2]);
-      events.length = this.map[index][0];
+    while (index2 > 0) {
+      index2 -= 1;
+      vecs.push(events.slice(this.map[index2][0] + this.map[index2][1]), this.map[index2][2]);
+      events.length = this.map[index2][0];
     }
     vecs.push(events.slice());
     events.length = 0;
@@ -9645,19 +9664,19 @@ function addImplementation2(editMap, at, remove, add) {
   editMap.map.push(change);
   editMap.index.set(at, change);
 }
-function gfmTableAlign(events, index) {
-  ok(events[index][1].type === "table", "expected table");
+function gfmTableAlign(events, index2) {
+  ok(events[index2][1].type === "table", "expected table");
   let inDelimiterRow = false;
   const align = [];
-  while (index < events.length) {
-    const event = events[index];
+  while (index2 < events.length) {
+    const event = events[index2];
     if (inDelimiterRow) {
       if (event[0] === "enter") {
         if (event[1].type === "tableContent") {
-          align.push(events[index + 1][1].type === "tableDelimiterMarker" ? "left" : "none");
+          align.push(events[index2 + 1][1].type === "tableDelimiterMarker" ? "left" : "none");
         }
       } else if (event[1].type === "tableContent") {
-        if (events[index - 1][1].type === "tableDelimiterMarker") {
+        if (events[index2 - 1][1].type === "tableDelimiterMarker") {
           const alignIndex = align.length - 1;
           align[alignIndex] = align[alignIndex] === "left" ? "center" : "right";
         }
@@ -9667,7 +9686,7 @@ function gfmTableAlign(events, index) {
     } else if (event[0] === "enter" && event[1].type === "tableDelimiterRow") {
       inDelimiterRow = true;
     }
-    index += 1;
+    index2 += 1;
   }
   return align;
 }
@@ -9681,226 +9700,226 @@ function gfmTable() {
     }
   };
 }
-function tokenizeTable(effects, ok2, nok) {
+function tokenizeTable(effects, ok3, nok) {
   const self = this;
   let size = 0;
   let sizeB = 0;
   let seen;
   return start;
-  function start(code) {
-    let index = self.events.length - 1;
-    while (index > -1) {
-      const { type } = self.events[index][1];
+  function start(code2) {
+    let index2 = self.events.length - 1;
+    while (index2 > -1) {
+      const { type } = self.events[index2][1];
       if (type === types.lineEnding || type === types.linePrefix) {
-        index--;
+        index2--;
       } else {
         break;
       }
     }
-    const tail = index > -1 ? self.events[index][1].type : null;
+    const tail = index2 > -1 ? self.events[index2][1].type : null;
     const next = tail === "tableHead" || tail === "tableRow" ? bodyRowStart : headRowBefore;
     if (next === bodyRowStart && self.parser.lazy[self.now().line]) {
-      return nok(code);
+      return nok(code2);
     }
-    return next(code);
+    return next(code2);
   }
-  function headRowBefore(code) {
+  function headRowBefore(code2) {
     effects.enter("tableHead");
     effects.enter("tableRow");
-    return headRowStart(code);
+    return headRowStart(code2);
   }
-  function headRowStart(code) {
-    if (code === codes.verticalBar) {
-      return headRowBreak(code);
+  function headRowStart(code2) {
+    if (code2 === codes.verticalBar) {
+      return headRowBreak(code2);
     }
     seen = true;
     sizeB += 1;
-    return headRowBreak(code);
+    return headRowBreak(code2);
   }
-  function headRowBreak(code) {
-    if (code === codes.eof) {
-      return nok(code);
+  function headRowBreak(code2) {
+    if (code2 === codes.eof) {
+      return nok(code2);
     }
-    if (markdownLineEnding(code)) {
+    if (markdownLineEnding(code2)) {
       if (sizeB > 1) {
         sizeB = 0;
         self.interrupt = true;
         effects.exit("tableRow");
         effects.enter(types.lineEnding);
-        effects.consume(code);
+        effects.consume(code2);
         effects.exit(types.lineEnding);
         return headDelimiterStart;
       }
-      return nok(code);
+      return nok(code2);
     }
-    if (markdownSpace(code)) {
-      return factorySpace(effects, headRowBreak, types.whitespace)(code);
+    if (markdownSpace(code2)) {
+      return factorySpace(effects, headRowBreak, types.whitespace)(code2);
     }
     sizeB += 1;
     if (seen) {
       seen = false;
       size += 1;
     }
-    if (code === codes.verticalBar) {
+    if (code2 === codes.verticalBar) {
       effects.enter("tableCellDivider");
-      effects.consume(code);
+      effects.consume(code2);
       effects.exit("tableCellDivider");
       seen = true;
       return headRowBreak;
     }
     effects.enter(types.data);
-    return headRowData(code);
+    return headRowData(code2);
   }
-  function headRowData(code) {
-    if (code === codes.eof || code === codes.verticalBar || markdownLineEndingOrSpace(code)) {
+  function headRowData(code2) {
+    if (code2 === codes.eof || code2 === codes.verticalBar || markdownLineEndingOrSpace(code2)) {
       effects.exit(types.data);
-      return headRowBreak(code);
+      return headRowBreak(code2);
     }
-    effects.consume(code);
-    return code === codes.backslash ? headRowEscape : headRowData;
+    effects.consume(code2);
+    return code2 === codes.backslash ? headRowEscape : headRowData;
   }
-  function headRowEscape(code) {
-    if (code === codes.backslash || code === codes.verticalBar) {
-      effects.consume(code);
+  function headRowEscape(code2) {
+    if (code2 === codes.backslash || code2 === codes.verticalBar) {
+      effects.consume(code2);
       return headRowData;
     }
-    return headRowData(code);
+    return headRowData(code2);
   }
-  function headDelimiterStart(code) {
+  function headDelimiterStart(code2) {
     self.interrupt = false;
     if (self.parser.lazy[self.now().line]) {
-      return nok(code);
+      return nok(code2);
     }
     effects.enter("tableDelimiterRow");
     seen = false;
-    if (markdownSpace(code)) {
+    if (markdownSpace(code2)) {
       ok(self.parser.constructs.disable.null, "expected `disabled.null`");
-      return factorySpace(effects, headDelimiterBefore, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
+      return factorySpace(effects, headDelimiterBefore, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code2);
     }
-    return headDelimiterBefore(code);
+    return headDelimiterBefore(code2);
   }
-  function headDelimiterBefore(code) {
-    if (code === codes.dash || code === codes.colon) {
-      return headDelimiterValueBefore(code);
+  function headDelimiterBefore(code2) {
+    if (code2 === codes.dash || code2 === codes.colon) {
+      return headDelimiterValueBefore(code2);
     }
-    if (code === codes.verticalBar) {
+    if (code2 === codes.verticalBar) {
       seen = true;
       effects.enter("tableCellDivider");
-      effects.consume(code);
+      effects.consume(code2);
       effects.exit("tableCellDivider");
       return headDelimiterCellBefore;
     }
-    return headDelimiterNok(code);
+    return headDelimiterNok(code2);
   }
-  function headDelimiterCellBefore(code) {
-    if (markdownSpace(code)) {
-      return factorySpace(effects, headDelimiterValueBefore, types.whitespace)(code);
+  function headDelimiterCellBefore(code2) {
+    if (markdownSpace(code2)) {
+      return factorySpace(effects, headDelimiterValueBefore, types.whitespace)(code2);
     }
-    return headDelimiterValueBefore(code);
+    return headDelimiterValueBefore(code2);
   }
-  function headDelimiterValueBefore(code) {
-    if (code === codes.colon) {
+  function headDelimiterValueBefore(code2) {
+    if (code2 === codes.colon) {
       sizeB += 1;
       seen = true;
       effects.enter("tableDelimiterMarker");
-      effects.consume(code);
+      effects.consume(code2);
       effects.exit("tableDelimiterMarker");
       return headDelimiterLeftAlignmentAfter;
     }
-    if (code === codes.dash) {
+    if (code2 === codes.dash) {
       sizeB += 1;
-      return headDelimiterLeftAlignmentAfter(code);
+      return headDelimiterLeftAlignmentAfter(code2);
     }
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return headDelimiterCellAfter(code);
+    if (code2 === codes.eof || markdownLineEnding(code2)) {
+      return headDelimiterCellAfter(code2);
     }
-    return headDelimiterNok(code);
+    return headDelimiterNok(code2);
   }
-  function headDelimiterLeftAlignmentAfter(code) {
-    if (code === codes.dash) {
+  function headDelimiterLeftAlignmentAfter(code2) {
+    if (code2 === codes.dash) {
       effects.enter("tableDelimiterFiller");
-      return headDelimiterFiller(code);
+      return headDelimiterFiller(code2);
     }
-    return headDelimiterNok(code);
+    return headDelimiterNok(code2);
   }
-  function headDelimiterFiller(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
+  function headDelimiterFiller(code2) {
+    if (code2 === codes.dash) {
+      effects.consume(code2);
       return headDelimiterFiller;
     }
-    if (code === codes.colon) {
+    if (code2 === codes.colon) {
       seen = true;
       effects.exit("tableDelimiterFiller");
       effects.enter("tableDelimiterMarker");
-      effects.consume(code);
+      effects.consume(code2);
       effects.exit("tableDelimiterMarker");
       return headDelimiterRightAlignmentAfter;
     }
     effects.exit("tableDelimiterFiller");
-    return headDelimiterRightAlignmentAfter(code);
+    return headDelimiterRightAlignmentAfter(code2);
   }
-  function headDelimiterRightAlignmentAfter(code) {
-    if (markdownSpace(code)) {
-      return factorySpace(effects, headDelimiterCellAfter, types.whitespace)(code);
+  function headDelimiterRightAlignmentAfter(code2) {
+    if (markdownSpace(code2)) {
+      return factorySpace(effects, headDelimiterCellAfter, types.whitespace)(code2);
     }
-    return headDelimiterCellAfter(code);
+    return headDelimiterCellAfter(code2);
   }
-  function headDelimiterCellAfter(code) {
-    if (code === codes.verticalBar) {
-      return headDelimiterBefore(code);
+  function headDelimiterCellAfter(code2) {
+    if (code2 === codes.verticalBar) {
+      return headDelimiterBefore(code2);
     }
-    if (code === codes.eof || markdownLineEnding(code)) {
+    if (code2 === codes.eof || markdownLineEnding(code2)) {
       if (!seen || size !== sizeB) {
-        return headDelimiterNok(code);
+        return headDelimiterNok(code2);
       }
       effects.exit("tableDelimiterRow");
       effects.exit("tableHead");
-      return ok2(code);
+      return ok3(code2);
     }
-    return headDelimiterNok(code);
+    return headDelimiterNok(code2);
   }
-  function headDelimiterNok(code) {
-    return nok(code);
+  function headDelimiterNok(code2) {
+    return nok(code2);
   }
-  function bodyRowStart(code) {
+  function bodyRowStart(code2) {
     effects.enter("tableRow");
-    return bodyRowBreak(code);
+    return bodyRowBreak(code2);
   }
-  function bodyRowBreak(code) {
-    if (code === codes.verticalBar) {
+  function bodyRowBreak(code2) {
+    if (code2 === codes.verticalBar) {
       effects.enter("tableCellDivider");
-      effects.consume(code);
+      effects.consume(code2);
       effects.exit("tableCellDivider");
       return bodyRowBreak;
     }
-    if (code === codes.eof || markdownLineEnding(code)) {
+    if (code2 === codes.eof || markdownLineEnding(code2)) {
       effects.exit("tableRow");
-      return ok2(code);
+      return ok3(code2);
     }
-    if (markdownSpace(code)) {
-      return factorySpace(effects, bodyRowBreak, types.whitespace)(code);
+    if (markdownSpace(code2)) {
+      return factorySpace(effects, bodyRowBreak, types.whitespace)(code2);
     }
     effects.enter(types.data);
-    return bodyRowData(code);
+    return bodyRowData(code2);
   }
-  function bodyRowData(code) {
-    if (code === codes.eof || code === codes.verticalBar || markdownLineEndingOrSpace(code)) {
+  function bodyRowData(code2) {
+    if (code2 === codes.eof || code2 === codes.verticalBar || markdownLineEndingOrSpace(code2)) {
       effects.exit(types.data);
-      return bodyRowBreak(code);
+      return bodyRowBreak(code2);
     }
-    effects.consume(code);
-    return code === codes.backslash ? bodyRowEscape : bodyRowData;
+    effects.consume(code2);
+    return code2 === codes.backslash ? bodyRowEscape : bodyRowData;
   }
-  function bodyRowEscape(code) {
-    if (code === codes.backslash || code === codes.verticalBar) {
-      effects.consume(code);
+  function bodyRowEscape(code2) {
+    if (code2 === codes.backslash || code2 === codes.verticalBar) {
+      effects.consume(code2);
       return bodyRowData;
     }
-    return bodyRowData(code);
+    return bodyRowData(code2);
   }
 }
 function resolveTable(events, context) {
-  let index = -1;
+  let index2 = -1;
   let inFirstCellAwaitingPipe = true;
   let rowKind = 0;
   let lastCell = [0, 0, 0, 0];
@@ -9911,8 +9930,8 @@ function resolveTable(events, context) {
   let currentBody;
   let currentCell;
   const map = new EditMap2;
-  while (++index < events.length) {
-    const event = events[index];
+  while (++index2 < events.length) {
+    const event = events[index2];
     const token = event[1];
     if (event[0] === "enter") {
       if (token.type === "tableHead") {
@@ -9928,12 +9947,12 @@ function resolveTable(events, context) {
           start: Object.assign({}, token.start),
           end: Object.assign({}, token.end)
         };
-        map.add(index, 0, [["enter", currentTable, context]]);
+        map.add(index2, 0, [["enter", currentTable, context]]);
       } else if (token.type === "tableRow" || token.type === "tableDelimiterRow") {
         inFirstCellAwaitingPipe = true;
         currentCell = undefined;
         lastCell = [0, 0, 0, 0];
-        cell = [0, index + 1, 0, 0];
+        cell = [0, index2 + 1, 0, 0];
         if (afterHeadAwaitingFirstBodyRow) {
           afterHeadAwaitingFirstBodyRow = false;
           currentBody = {
@@ -9941,7 +9960,7 @@ function resolveTable(events, context) {
             start: Object.assign({}, token.start),
             end: Object.assign({}, token.end)
           };
-          map.add(index, 0, [["enter", currentBody, context]]);
+          map.add(index2, 0, [["enter", currentBody, context]]);
         }
         rowKind = token.type === "tableDelimiterRow" ? 2 : currentBody ? 3 : 1;
       } else if (rowKind && (token.type === types.data || token.type === "tableDelimiterMarker" || token.type === "tableDelimiterFiller")) {
@@ -9952,7 +9971,7 @@ function resolveTable(events, context) {
             currentCell = flushCell(map, context, lastCell, rowKind, undefined, currentCell);
             lastCell = [0, 0, 0, 0];
           }
-          cell[2] = index;
+          cell[2] = index2;
         }
       } else if (token.type === "tableCellDivider") {
         if (inFirstCellAwaitingPipe) {
@@ -9963,23 +9982,23 @@ function resolveTable(events, context) {
             currentCell = flushCell(map, context, lastCell, rowKind, undefined, currentCell);
           }
           lastCell = cell;
-          cell = [lastCell[1], index, 0, 0];
+          cell = [lastCell[1], index2, 0, 0];
         }
       }
     } else if (token.type === "tableHead") {
       afterHeadAwaitingFirstBodyRow = true;
-      lastTableEnd = index;
+      lastTableEnd = index2;
     } else if (token.type === "tableRow" || token.type === "tableDelimiterRow") {
-      lastTableEnd = index;
+      lastTableEnd = index2;
       if (lastCell[1] !== 0) {
         cell[0] = cell[1];
-        currentCell = flushCell(map, context, lastCell, rowKind, index, currentCell);
+        currentCell = flushCell(map, context, lastCell, rowKind, index2, currentCell);
       } else if (cell[1] !== 0) {
-        currentCell = flushCell(map, context, cell, rowKind, index, currentCell);
+        currentCell = flushCell(map, context, cell, rowKind, index2, currentCell);
       }
       rowKind = 0;
     } else if (rowKind && (token.type === types.data || token.type === "tableDelimiterMarker" || token.type === "tableDelimiterFiller")) {
-      cell[3] = index;
+      cell[3] = index2;
     }
   }
   if (lastTableEnd !== 0) {
@@ -9987,11 +10006,11 @@ function resolveTable(events, context) {
     flushTableEnd(map, context, lastTableEnd, currentTable, currentBody);
   }
   map.consume(context.events);
-  index = -1;
-  while (++index < context.events.length) {
-    const event = context.events[index];
+  index2 = -1;
+  while (++index2 < context.events.length) {
+    const event = context.events[index2];
     if (event[0] === "enter" && event[1].type === "table") {
-      event[1]._align = gfmTableAlign(context.events, index);
+      event[1]._align = gfmTableAlign(context.events, index2);
     }
   }
   return events;
@@ -10042,19 +10061,19 @@ function flushCell(map, context, range, rowKind, rowEnd, previousCell) {
   }
   return previousCell;
 }
-function flushTableEnd(map, context, index, table, tableBody) {
+function flushTableEnd(map, context, index2, table, tableBody) {
   const exits = [];
-  const related = getPoint(context.events, index);
+  const related = getPoint(context.events, index2);
   if (tableBody) {
     tableBody.end = Object.assign({}, related);
     exits.push(["exit", tableBody, context]);
   }
   table.end = Object.assign({}, related);
   exits.push(["exit", table, context]);
-  map.add(index + 1, 0, exits);
+  map.add(index2 + 1, 0, exits);
 }
-function getPoint(events, index) {
-  const event = events[index];
+function getPoint(events, index2) {
+  const event = events[index2];
   const side = event[0] === "enter" ? "start" : "end";
   return event[1][side];
 }
@@ -10073,59 +10092,59 @@ function gfmTaskListItem() {
     text: { [codes.leftSquareBracket]: tasklistCheck }
   };
 }
-function tokenizeTasklistCheck(effects, ok2, nok) {
+function tokenizeTasklistCheck(effects, ok3, nok) {
   const self = this;
   return open;
-  function open(code) {
-    ok(code === codes.leftSquareBracket, "expected `[`");
+  function open(code2) {
+    ok(code2 === codes.leftSquareBracket, "expected `[`");
     if (self.previous !== codes.eof || !self._gfmTasklistFirstContentOfListItem) {
-      return nok(code);
+      return nok(code2);
     }
     effects.enter("taskListCheck");
     effects.enter("taskListCheckMarker");
-    effects.consume(code);
+    effects.consume(code2);
     effects.exit("taskListCheckMarker");
     return inside;
   }
-  function inside(code) {
-    if (markdownLineEndingOrSpace(code)) {
+  function inside(code2) {
+    if (markdownLineEndingOrSpace(code2)) {
       effects.enter("taskListCheckValueUnchecked");
-      effects.consume(code);
+      effects.consume(code2);
       effects.exit("taskListCheckValueUnchecked");
       return close;
     }
-    if (code === codes.uppercaseX || code === codes.lowercaseX) {
+    if (code2 === codes.uppercaseX || code2 === codes.lowercaseX) {
       effects.enter("taskListCheckValueChecked");
-      effects.consume(code);
+      effects.consume(code2);
       effects.exit("taskListCheckValueChecked");
       return close;
     }
-    return nok(code);
+    return nok(code2);
   }
-  function close(code) {
-    if (code === codes.rightSquareBracket) {
+  function close(code2) {
+    if (code2 === codes.rightSquareBracket) {
       effects.enter("taskListCheckMarker");
-      effects.consume(code);
+      effects.consume(code2);
       effects.exit("taskListCheckMarker");
       effects.exit("taskListCheck");
       return after;
     }
-    return nok(code);
+    return nok(code2);
   }
-  function after(code) {
-    if (markdownLineEnding(code)) {
-      return ok2(code);
+  function after(code2) {
+    if (markdownLineEnding(code2)) {
+      return ok3(code2);
     }
-    if (markdownSpace(code)) {
-      return effects.check({ tokenize: spaceThenNonSpace }, ok2, nok)(code);
+    if (markdownSpace(code2)) {
+      return effects.check({ tokenize: spaceThenNonSpace }, ok3, nok)(code2);
     }
-    return nok(code);
+    return nok(code2);
   }
 }
-function spaceThenNonSpace(effects, ok, nok) {
+function spaceThenNonSpace(effects, ok3, nok) {
   return factorySpace(effects, after, types.whitespace);
-  function after(code) {
-    return code === codes.eof ? nok(code) : ok(code);
+  function after(code2) {
+    return code2 === codes.eof ? nok(code2) : ok3(code2);
   }
 }
 var tasklistCheck;
@@ -10159,13 +10178,28 @@ var init_micromark_extension_gfm = __esm(() => {
 function readJson(filePath) {
   if (!existsSync3(filePath))
     return {};
-  const content = readFileSync3(filePath, "utf8").trim();
-  if (!content)
+  const content3 = readFileSync3(filePath, "utf8").trim();
+  if (!content3)
     return {};
   try {
-    return JSON.parse(content);
+    return JSON.parse(content3);
   } catch (error) {
     throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
+  }
+}
+function writeJson(filePath, value) {
+  const parent = dirname5(filePath);
+  mkdirSync(parent, { recursive: true });
+  const tmp = join5(parent, `.${basename3(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}
+`, "utf8");
+    renameSync(tmp, filePath);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {}
+    throw error;
   }
 }
 function findRootPackageJson(startDir) {
@@ -10182,6 +10216,26 @@ function findRootPackageJson(startDir) {
       return null;
     dir = parent;
   }
+}
+function harnessVersionOrNullFrom(moduleDir) {
+  const ownManifest = join5(moduleDir, "..", "package.json");
+  try {
+    const pkg = JSON.parse(readFileSync3(ownManifest, "utf8"));
+    if (typeof pkg.version === "string" && pkg.version !== "")
+      return pkg.version;
+  } catch {}
+  const root = findRootPackageJson(moduleDir);
+  if (root === null)
+    return null;
+  try {
+    const pkg = JSON.parse(readFileSync3(root, "utf8"));
+    return typeof pkg.version === "string" && pkg.version !== "" ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+function readHarnessVersionOrNull() {
+  return harnessVersionOrNullFrom(dirname5(fileURLToPath(import.meta.url)));
 }
 function warnUncheckableNodeFloor() {
   process.stderr.write("mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " + "so the Node version is not compared (the native node:sqlite capability check still applies). " + "Recovery: run this from an installed package or a full checkout so the manifest that declares the floor is reachable " + "(`npm i -g @mstar-harness/cli` for the CLI; the harness checkout, not a copied bundle, for a hook entrypoint).\n");
@@ -10219,13 +10273,14 @@ function readDeclaredNodeFloor() {
     const engines = manifest["engines"];
     if (engines === null || typeof engines !== "object" || !("node" in engines))
       continue;
-    const node = engines.node;
-    if (typeof node === "string" && node !== "")
-      return node.replace(/^\D+/, "");
+    const node2 = engines.node;
+    if (typeof node2 === "string" && node2 !== "")
+      return node2.replace(/^\D+/, "");
   }
   return null;
 }
 var SEVERITY_ORDER;
+var ACTIVATION_PROTOCOL_VERSION = 1;
 var init_core = __esm(() => {
   SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
 });
@@ -10266,14 +10321,14 @@ function enforcementValue(raw) {
   const unquoted = value.replace(/^(['"])(.*)\1$/, "$2");
   return unquoted.trim().toLowerCase();
 }
-function parseEnforcementFlag(text) {
-  const bold = text.match(ASSIGNMENT_ENFORCEMENT_BOLD_RE);
+function parseEnforcementFlag(text4) {
+  const bold = text4.match(ASSIGNMENT_ENFORCEMENT_BOLD_RE);
   if (bold !== null)
     return { hard: enforcementValue(bold[1]) === "hard", source: "assignment" };
-  const plain = text.match(ASSIGNMENT_ENFORCEMENT_PLAIN_RE);
+  const plain = text4.match(ASSIGNMENT_ENFORCEMENT_PLAIN_RE);
   if (plain !== null)
     return { hard: enforcementValue(plain[1]) === "hard", source: "assignment" };
-  const compass = text.match(COMPASS_ENFORCEMENT_RE);
+  const compass = text4.match(COMPASS_ENFORCEMENT_RE);
   if (compass !== null)
     return { hard: enforcementValue(compass[1]) === "hard", source: "compass" };
   return { hard: false, source: "none" };
@@ -10414,6 +10469,17 @@ var init_audit = __esm(() => {
   DEFAULT_IGNORABLE_RE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
   LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 });
+function unresolvedRecovery(input) {
+  return {
+    outcome: "unresolved",
+    target: input.target,
+    applied: [],
+    unresolved: [...input.unresolved],
+    resolvedFrom: [...input.resolvedFrom ?? []],
+    warnings: [...input.warnings ?? []],
+    commitState: "none"
+  };
+}
 var PLAN_OPERATION_SEMANTICS;
 var WORKFLOW_OPERATION_SEMANTICS;
 var init_recovery_intent = __esm(() => {
@@ -10442,6 +10508,92 @@ var init_recovery_intent = __esm(() => {
     "compass-ref": ["workflowId", "operation.kind", "operation.compassPath", "operation.reason"]
   };
 });
+function resolveRelativePath(raw, label) {
+  if (typeof raw !== "string" || raw.trim() === "")
+    return { ok: false, reason: `${label} must be a nonblank relative path` };
+  const value = raw.trim().replace(/\\/g, "/");
+  if (value.includes("\x00"))
+    return { ok: false, reason: `${label} contains a NUL byte` };
+  if (value.startsWith("/") || /^[A-Za-z]:\//.test(value))
+    return { ok: false, reason: `${label} must be relative to its catalog root` };
+  const parts = [];
+  for (const part of value.split("/")) {
+    if (part === "" || part === ".")
+      continue;
+    if (part === "..")
+      return { ok: false, reason: `${label} must not traverse outside its catalog root` };
+    parts.push(part);
+  }
+  if (parts.length === 0)
+    return { ok: false, reason: `${label} must name a path inside its catalog root` };
+  return { ok: true, relativePath: parts.join("/") };
+}
+function cellsOf(line) {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+function isDelimiterRow(line) {
+  if (!line.trim().startsWith("|"))
+    return false;
+  const cells = cellsOf(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell.replace(/\s/g, "")));
+}
+function readTables(text4) {
+  const lines = text4.split(/\r?\n/);
+  const tables = [];
+  for (let i = 0;i < lines.length - 1; i += 1) {
+    const line = lines[i];
+    if (!line.trim().startsWith("|") || !isDelimiterRow(lines[i + 1] ?? ""))
+      continue;
+    const rows = [];
+    let last = i + 1;
+    for (let j = i + 2;j < lines.length; j += 1) {
+      const row = lines[j];
+      if (!row.trim().startsWith("|"))
+        break;
+      rows.push({ cells: cellsOf(row), line: j + 1 });
+      last = j;
+    }
+    tables.push({ header: cellsOf(line), headerLine: i + 1, firstLine: i + 1, lastLine: last + 1, rows });
+    i = last;
+  }
+  return tables;
+}
+function cellText(cell) {
+  return cell.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/`/g, "").trim();
+}
+function cellLinkTarget(cell) {
+  const match = /\[[^\]]*\]\(([^)]+)\)/.exec(cell);
+  return match === null ? null : match[1].trim();
+}
+function cellBacktickToken(cell) {
+  const match = /^`([^`]+)`$/.exec(cell.trim());
+  return match === null ? null : match[1].trim();
+}
+function cellReference(cell) {
+  return cellLinkTarget(cell) ?? cellBacktickToken(cell);
+}
+function detectIndexFamily(header) {
+  const keys = header.map((cell) => cellText(cell).toLowerCase());
+  const has = (token) => keys.includes(token);
+  if (has("iteration"))
+    return "iteration-rows";
+  if (has("document") && has("kind"))
+    return "package-documents";
+  if (has("document"))
+    return "document-rows";
+  return null;
+}
+function indexRowIdentity(family, cells, owner) {
+  if (family === "iteration-rows")
+    return cellBacktickToken(cells[0] ?? "");
+  const reference = cellReference(cells[0] ?? "");
+  if (reference === null)
+    return null;
+  const trimmed = reference.replace(/^\.\//, "").replace(/\/+$/, "");
+  const resolved = resolveRelativePath(family === "package-documents" && owner !== null ? `${owner}/${trimmed}` : trimmed, "index row path");
+  return resolved.ok ? resolved.relativePath : null;
+}
 var ENTITY_KINDS2;
 var ROOT_KINDS2;
 var DOCUMENT_KINDS2;
@@ -10487,37 +10639,1134 @@ var init_catalog_import = __esm(() => {
     supersedes: true
   };
   ORDINARY_FILES = { "readme.md": true, "install.md": true, "index.md": true };
-  CatalogImportError = class CatalogImportError extends Error {
+  CatalogImportError = class CatalogImportError2 extends Error {
     code;
     partial;
-    constructor(code, message, partial = null) {
-      super(`[${code}] ${message}`);
+    constructor(code2, message, partial = null) {
+      super(`[${code2}] ${message}`);
       this.name = "CatalogImportError";
-      this.code = code;
+      this.code = code2;
       this.partial = partial;
     }
   };
 });
+function currentProcessFacts() {
+  return {
+    entrypoint: process.argv[1],
+    runtimeVersion: process.versions.node,
+    isBun: process.versions.bun !== undefined
+  };
+}
+function provisionActivationDocument(input, facts = currentProcessFacts()) {
+  if (facts.isBun) {
+    return {
+      ok: false,
+      cause: "bun-runtime",
+      message: "the running process is Bun, which is never an admissible consumer runtime, so a Node consumer row cannot be attested"
+    };
+  }
+  if (facts.entrypoint === undefined || facts.entrypoint.trim() === "") {
+    return {
+      ok: false,
+      cause: "missing-entrypoint",
+      message: "the executing entrypoint is not identifiable (`process.argv[1]` is absent)"
+    };
+  }
+  const version = facts.harnessVersion === undefined ? readHarnessVersionOrNull() : facts.harnessVersion;
+  if (version === null || version.trim() === "") {
+    return {
+      ok: false,
+      cause: "missing-manifest",
+      message: "no visible manifest declares the installed harness version (`packages/*/package.json` or the repo root), so the consumer row's version cannot be attested"
+    };
+  }
+  return {
+    ok: true,
+    document: {
+      version: ACTIVATION_PROTOCOL_VERSION,
+      attestedAt: input.attestedAt,
+      operator: { actor: input.actor, authorizationRef: input.authorizationRef },
+      consumers: [
+        {
+          entryId: basename6(facts.entrypoint),
+          kind: "coordinator",
+          entrypoint: facts.entrypoint,
+          runtime: "node",
+          runtimeVersion: facts.runtimeVersion,
+          version,
+          current: true,
+          disposition: "reloaded"
+        }
+      ],
+      stoppedSessions: [...input.stoppedSessions]
+    }
+  };
+}
+function provisionRecoveryDocument(input) {
+  return {
+    version: ACTIVATION_PROTOCOL_VERSION,
+    attestedAt: input.attestedAt,
+    operator: { actor: input.actor, authorizationRef: input.authorizationRef },
+    consumers: [],
+    stoppedSessions: [...input.stoppedSessions]
+  };
+}
+function basename6(entrypoint) {
+  const normalized = entrypoint.replaceAll("\\", "/");
+  const last = normalized.lastIndexOf("/");
+  return last === -1 ? normalized : normalized.slice(last + 1);
+}
 var init_activation_provisioning = __esm(() => {
   init_core();
 });
+var exports_store_activation = {};
+__export(exports_store_activation, {
+  ACTIVATION_PROTOCOL_VERSION: () => ACTIVATION_PROTOCOL_VERSION,
+  BACKUP_RECEIPT_VERSION: () => BACKUP_RECEIPT_VERSION,
+  CONSUMER_KINDS: () => CONSUMER_KINDS,
+  DISPOSITIONS: () => DISPOSITIONS,
+  SESSION_STATES: () => SESSION_STATES,
+  StoreActivationError: () => StoreActivationError,
+  activateStore: () => activateStore,
+  activationReceiptFor: () => activationReceiptFor,
+  appliedReceiptFor: () => appliedReceiptFor,
+  assertAuthorityCurrent: () => assertAuthorityCurrent,
+  assertBackupDescribesStore: () => assertBackupDescribesStore,
+  backupStore: () => backupStore,
+  canonicalPath: () => canonicalPath,
+  currentAuthorityHandle: () => currentAuthorityHandle,
+  inspectBackupCopy: () => inspectBackupCopy,
+  isPathWithin: () => isPathWithin,
+  retireStoreSources: () => retireStoreSources,
+  validateActivationAttestation: () => validateActivationAttestation,
+  validateRecoveryAttestation: () => validateRecoveryAttestation
+});
+function sha256Bytes2(bytes) {
+  return createHash4("sha256").update(bytes).digest("hex");
+}
+function readIfExists(path2) {
+  try {
+    return readFileSync6(path2);
+  } catch {
+    return;
+  }
+}
+function scalar2(db, sql) {
+  const row = db.prepare(sql).get();
+  return typeof row?.n === "number" ? row.n : 0;
+}
+function writeTextAtomic(path2, text4) {
+  mkdirSync3(dirname7(path2), { recursive: true });
+  const tmp = join9(dirname7(path2), `.${basename7(path2)}.${process.pid}.tmp`);
+  try {
+    writeFileSync3(tmp, text4, "utf8");
+    renameSync2(tmp, path2);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+function readMetaRow(db) {
+  const row = db.prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1").get();
+  if (!row || typeof row.store_id !== "string" || row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.authority_epoch !== "number" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
+    throw new StoreError("store.corrupt", "store_meta is missing or malformed; the authority generation cannot be verified");
+  }
+  return {
+    storeId: row.store_id,
+    authorityState: row.authority_state,
+    epoch: row.authority_epoch,
+    revision: row.revision,
+    catalogRevision: row.catalog_revision
+  };
+}
+function schemaVersionOf(db) {
+  const max = scalar2(db, "select max(version) as n from schema_version");
+  const applied = scalar2(db, "select count(*) as n from schema_version");
+  if (max < 1 || applied !== max) {
+    throw new StoreError("store.schema-drift", "applied schema versions are not contiguous; the store cannot be backed up or activated");
+  }
+  return max;
+}
+function countsOf(db) {
+  const tables = new Set(db.prepare("select name from sqlite_master where type = 'table'").all().map((row) => row.name));
+  const counts = {
+    issues: scalar2(db, "select count(*) as n from issues"),
+    occurrences: scalar2(db, "select count(*) as n from occurrences"),
+    transitions: scalar2(db, "select count(*) as n from issue_transitions"),
+    migrationReceipts: scalar2(db, "select count(*) as n from migration_receipts")
+  };
+  if (tables.has("catalog_entities"))
+    counts.catalogEntities = scalar2(db, "select count(*) as n from catalog_entities");
+  if (tables.has("catalog_links"))
+    counts.catalogLinks = scalar2(db, "select count(*) as n from catalog_links");
+  return counts;
+}
+function readExecutionMetaOfCopy(db, schemaVersion) {
+  if (schemaVersion < EXECUTION_MIGRATION_VERSION)
+    return null;
+  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at " + "from execution_meta where id = 1").get();
+  if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
+    throw new StoreActivationError("store.activation-stale", `the copy records migration ${EXECUTION_MIGRATION_VERSION} (execution-authority) but its execution metadata is ` + `missing or malformed; the copy cannot be verified as an execution-bearing recovery point.`);
+  }
+  return {
+    protocolVersion: row.protocol_version,
+    authorityState: row.authority_state,
+    revision: row.revision,
+    rootUpdatedAt: row.root_updated_at,
+    manifestId: row.manifest_id ?? null,
+    activatedAt: row.activated_at ?? null
+  };
+}
+function liveExecutionMeta(meta) {
+  if (meta === null)
+    return null;
+  return {
+    protocolVersion: meta.protocolVersion,
+    authorityState: meta.authorityState,
+    revision: meta.revision,
+    rootUpdatedAt: meta.rootUpdatedAt,
+    manifestId: meta.manifestId,
+    activatedAt: meta.activatedAt
+  };
+}
+function sameExecution(a, b) {
+  if (a === null || b === null)
+    return a === b;
+  return a.protocolVersion === b.protocolVersion && a.authorityState === b.authorityState && a.revision === b.revision && a.rootUpdatedAt === b.rootUpdatedAt && a.manifestId === b.manifestId && a.activatedAt === b.activatedAt;
+}
+function canonicalPath(value) {
+  let current = resolve10(value);
+  const trailing = [];
+  for (;; ) {
+    try {
+      return join9(realpathSync5(current), ...[...trailing].reverse());
+    } catch {
+      const parent = dirname7(current);
+      if (parent === current)
+        return resolve10(value);
+      trailing.push(basename7(current));
+      current = parent;
+    }
+  }
+}
+function isPathWithin(root, candidate) {
+  const parent = canonicalPath(root);
+  const child = canonicalPath(candidate);
+  if (child === parent)
+    return true;
+  return child.startsWith(parent.endsWith(sep4) ? parent : `${parent}${sep4}`);
+}
+function refuseUnlessSameGeneration(live, expected, what) {
+  if (live.storeId !== expected.storeId) {
+    throw new StoreActivationError("store.activation-stale", `${what} belongs to store_id ${expected.storeId}, but the live store is ${live.storeId}; ` + `re-resolve the control root and re-attest. Nothing was changed.`);
+  }
+  if (live.epoch !== expected.epoch) {
+    throw new StoreActivationError("store.stale-epoch", `${what} belongs to authority epoch ${expected.epoch}, but the live store is epoch ${live.epoch}; the generation it ` + `was admitted under has been superseded. Resume with the current activation receipt. Nothing was changed.`);
+  }
+}
+async function currentAuthorityHandle(context) {
+  const handle = await openStore(context, "read");
+  try {
+    const meta = readMetaRow(handle.db);
+    return { storeId: meta.storeId, epoch: meta.epoch };
+  } finally {
+    handle.close();
+  }
+}
+async function assertAuthorityCurrent(context, handle) {
+  refuseUnlessSameGeneration(await currentAuthorityHandle(context), handle, "the handle");
+}
+function assertCopyIsConsistent(db, backupPath) {
+  const integrity = db.prepare("pragma integrity_check").all().map((row) => String(Object.values(row)[0] ?? ""));
+  if (integrity.length !== 1 || integrity[0] !== "ok") {
+    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} fails SQLite integrity_check ` + `(${integrity.slice(0, 3).join("; ") || "no result"}); it is not a verified recovery point.`);
+  }
+  const violations = db.prepare("pragma foreign_key_check").all();
+  if (violations.length > 0) {
+    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} holds ${violations.length} row(s) violating the schema's foreign keys ` + `(first: ${JSON.stringify(violations[0])}); it is not a verified recovery point.`);
+  }
+}
+function assertCopySchemaIsThisBuild(db, backupPath) {
+  const rows = db.prepare("select version from schema_version order by version").all();
+  if (rows.length === 0) {
+    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records no applied migration; it is not a store this build can verify.`);
+  }
+  if (rows.length > MIGRATIONS.length) {
+    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records migration ${String(rows[rows.length - 1]?.version)}, which this build does not ` + `have (it knows ${MIGRATIONS.length}); the copy was written by a newer build and is not a recovery point for this one.`);
+  }
+  for (const [index2, row] of rows.entries()) {
+    const migration = MIGRATIONS[index2];
+    if (row.version !== migration.version) {
+      throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records migration ${String(row.version)} at position ${index2 + 1}, not this build's ` + `${migration.version}; the copy is not this build's store.`);
+    }
+  }
+}
+async function inspectBackupCopy(backupPath) {
+  assertStoreRuntimeSupported();
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
+  const db = new DatabaseSync(backupPath, { readOnly: true });
+  try {
+    db.exec("pragma query_only=ON");
+    assertCopyIsConsistent(db, backupPath);
+    assertCopySchemaIsThisBuild(db, backupPath);
+    const schemaVersion = schemaVersionOf(db);
+    return {
+      ...readMetaRow(db),
+      schemaVersion,
+      execution: readExecutionMetaOfCopy(db, schemaVersion),
+      counts: countsOf(db)
+    };
+  } finally {
+    db.close();
+  }
+}
+function sameCounts(a, b) {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key]);
+}
+function defaultBackupPath(context, meta, label) {
+  const name = label === undefined ? `${meta.storeId.slice(0, 8)}-e${meta.epoch}-r${meta.revision}.db` : `${label}.db`;
+  return join9(dirname7(storeDbPath(context)), "archived", "store-migration", "backups", name);
+}
+async function takeVerifiedBackup(context, options) {
+  const dbPath = storeDbPath(context);
+  const handle = await openStore(context, "write");
+  try {
+    const meta = readMetaRow(handle.db);
+    let walPending = false;
+    try {
+      walPending = statSync3(`${dbPath}-wal`).size > 0;
+    } catch {
+      walPending = false;
+    }
+    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve10(options.out);
+    if (existsSync6(targetPath)) {
+      if (!options.reuseMatchingIdentity) {
+        throw new StoreActivationError("store.activation-stale", `a backup already exists at ${targetPath}; pass --out <path> for a different target instead of overwriting a ` + `recorded recovery point.`);
+      }
+      const existing = await inspectBackupCopy(targetPath).catch((error) => {
+        throw new StoreActivationError("store.activation-stale", `the existing backup at ${targetPath} cannot be verified (${error.message}). Refusing to overwrite a ` + `recorded recovery point.`);
+      });
+      const execution = liveExecutionMeta(handle.execution);
+      if (existing.storeId !== meta.storeId || existing.epoch !== meta.epoch || existing.revision !== meta.revision || existing.catalogRevision !== meta.catalogRevision || existing.authorityState !== meta.authorityState || existing.schemaVersion !== schemaVersionOf(handle.db) || !sameExecution(existing.execution, execution)) {
+        throw new StoreActivationError("store.activation-stale", `the existing backup at ${targetPath} does not describe this store (identity/epoch/revision/schema/execution mismatch). ` + `Refusing to overwrite a recorded recovery point.`);
+      }
+      return {
+        receiptVersion: BACKUP_RECEIPT_VERSION,
+        backupPath: targetPath,
+        ...existing,
+        walPending,
+        bytes: statSync3(targetPath).size,
+        takenAt: new Date().toISOString()
+      };
+    }
+    mkdirSync3(dirname7(targetPath), { recursive: true });
+    handle.db.prepare("vacuum into ?").run(targetPath);
+    const verified = await inspectBackupCopy(targetPath).catch((error) => {
+      rmSync(targetPath, { force: true });
+      throw new StoreActivationError("store.activation-stale", `the backup written to ${targetPath} could not be reopened for verification (${error.message}); ` + `the unverified copy was removed. Nothing was activated.`);
+    });
+    if (verified.storeId !== meta.storeId) {
+      rmSync(targetPath, { force: true });
+      throw new StoreActivationError("store.activation-stale", `the backup written to ${targetPath} describes store ${verified.storeId}, not the live store ${meta.storeId}; ` + `the unverified copy was removed. Nothing was activated.`);
+    }
+    return {
+      receiptVersion: BACKUP_RECEIPT_VERSION,
+      backupPath: targetPath,
+      ...verified,
+      walPending,
+      bytes: statSync3(targetPath).size,
+      takenAt: new Date().toISOString()
+    };
+  } finally {
+    handle.close();
+  }
+}
+async function backupStore(context, options = {}) {
+  return takeVerifiedBackup(context, { out: options.out, reuseMatchingIdentity: false });
+}
+async function assertBackupDescribesStore(context, receipt, reviewed) {
+  const stale = (detail) => {
+    throw new StoreActivationError("store.activation-stale", detail);
+  };
+  if (!receipt || receipt.receiptVersion !== ACTIVATION_PROTOCOL_VERSION && receipt.receiptVersion !== BACKUP_RECEIPT_VERSION || typeof receipt.backupPath !== "string" || receipt.backupPath.trim() === "") {
+    stale("the supplied recovery point is not a backup receipt of this protocol version; take one with `backupStore` and " + "apply the manifest that names it.");
+  }
+  const controlRoot = dirname7(storeDbPath(context));
+  if (!isPathWithin(controlRoot, receipt.backupPath)) {
+    stale(`the recovery point ${receipt.backupPath} is outside the authorized control root ${controlRoot}; a migration ` + `recovery point must live inside the root it protects.`);
+  }
+  const liveStore = canonicalPath(storeDbPath(context));
+  const candidate = canonicalPath(receipt.backupPath);
+  if (candidate === liveStore || candidate === `${liveStore}-wal` || candidate === `${liveStore}-shm`) {
+    stale(`the recovery point ${receipt.backupPath} names the live store database (${liveStore}), not an independent copy. ` + `A migration recovery point must be taken with \`backupStore\` (SQLite \`VACUUM INTO\`); the live database and its ` + `WAL/SHM sidecars cannot be their own recovery point.`);
+  }
+  if (receipt.storeId !== reviewed.storeId || receipt.epoch !== reviewed.epoch || receipt.schemaVersion !== reviewed.schemaVersion || receipt.catalogRevision !== reviewed.catalogRevision) {
+    stale(`the recovery point ${receipt.backupPath} belongs to store ${receipt.storeId} epoch ${receipt.epoch} schema ` + `${receipt.schemaVersion} catalog revision ${receipt.catalogRevision}, not to the reviewed authority ` + `${reviewed.storeId} epoch ${reviewed.epoch} schema ${reviewed.schemaVersion} catalog revision ` + `${reviewed.catalogRevision}; take a recovery point of the reviewed authority.`);
+  }
+  let copy;
+  try {
+    copy = await inspectBackupCopy(receipt.backupPath);
+  } catch (error) {
+    throw new StoreActivationError("store.activation-stale", `the recovery point ${receipt.backupPath} cannot be reopened for verification (${error.message}).`);
+  }
+  if (copy.storeId !== receipt.storeId || copy.epoch !== receipt.epoch || copy.revision !== receipt.revision || copy.catalogRevision !== receipt.catalogRevision || copy.authorityState !== receipt.authorityState || copy.schemaVersion !== receipt.schemaVersion || !sameExecution(copy.execution, receipt.execution ?? null) || !sameCounts(copy.counts, receipt.counts)) {
+    stale(`the copy at ${receipt.backupPath} does not match the receipt recorded for it; the receipt is not evidence for ` + `these bytes, so it is not a verified recovery point.`);
+  }
+  const handle = await openStore(context, "read");
+  try {
+    const meta = readMetaRow(handle.db);
+    const counts = countsOf(handle.db);
+    if (meta.authorityState !== receipt.authorityState || !sameCounts(counts, receipt.counts)) {
+      stale(`the recovery point ${receipt.backupPath} no longer describes the live issue/catalog authority ` + `(${meta.authorityState}, ${counts.issues} issue(s) / ${counts.catalogEntities} catalog entit(ies) live). ` + `Issue/catalog work committed after the point would be silently outside its coverage; take a fresh backup.`);
+    }
+  } finally {
+    handle.close();
+  }
+}
+function attestationRefusal(message) {
+  throw new StoreActivationError("store.attestation-invalid", message);
+}
+function activationBlocked(message) {
+  throw new StoreActivationError("store.activation-blocked", message);
+}
+function attestationObject(value, what) {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    attestationRefusal(`${what} must be an object`);
+  return value;
+}
+function attestationKeys(object, allowed, what) {
+  for (const key of Object.keys(object)) {
+    if (!allowed.includes(key)) {
+      attestationRefusal(`${what} declares an undeclared field "${key}"; the attestation records only installed entrypoints/versions, ` + `quiesced sessions and the approving operator — never session credentials or other data.`);
+    }
+  }
+}
+function attestationString(object, key, what) {
+  const value = object[key];
+  if (typeof value !== "string" || value.trim() === "")
+    attestationRefusal(`${what}.${key} must be a nonblank string`);
+  return value;
+}
+function attestationHeader(raw) {
+  if (raw.version !== ACTIVATION_PROTOCOL_VERSION) {
+    attestationRefusal(`the attestation version must be ${ACTIVATION_PROTOCOL_VERSION}`);
+  }
+  const attestedAt = attestationString(raw, "attestedAt", "the attestation");
+  if (!Number.isFinite(Date.parse(attestedAt)))
+    attestationRefusal("the attestation.attestedAt must be an ISO/RFC3339 instant");
+  const operator = attestationObject(raw.operator, "the attestation.operator");
+  attestationKeys(operator, ["actor", "authorizationRef"], "the attestation.operator");
+  return {
+    attestedAt,
+    operator: {
+      actor: attestationString(operator, "actor", "the attestation.operator"),
+      authorizationRef: attestationString(operator, "authorizationRef", "the attestation.operator")
+    }
+  };
+}
+function stoppedSessionsOf(raw) {
+  if (!Array.isArray(raw.stoppedSessions))
+    attestationRefusal("the attestation.stoppedSessions must be an array (possibly empty)");
+  return raw.stoppedSessions.map((entry, index2) => {
+    const what = `the attestation.stoppedSessions[${index2}]`;
+    const session = attestationObject(entry, what);
+    attestationKeys(session, ["sessionId", "host", "state"], what);
+    const state = session.state;
+    if (typeof state !== "string" || !Object.hasOwn(SESSION_STATES, state)) {
+      activationBlocked(`${what}.state must be "stopped" or "reloaded"; a running or queued session is not quiesced and stops the barrier`);
+    }
+    return {
+      sessionId: attestationString(session, "sessionId", what),
+      host: attestationString(session, "host", what),
+      state
+    };
+  });
+}
+function validateActivationAttestation(value) {
+  const raw = attestationObject(value, "the attestation");
+  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
+  const { attestedAt, operator } = attestationHeader(raw);
+  if (!Array.isArray(raw.consumers))
+    attestationRefusal("the attestation.consumers must be an array");
+  if (raw.consumers.length === 0) {
+    activationBlocked("the attestation must attest at least one installed consumer (entrypoint, version and disposition); a merely merged " + "source tree is not installed-consumer readiness");
+  }
+  const consumers = raw.consumers.map((entry, index2) => {
+    const what = `the attestation.consumers[${index2}]`;
+    const consumer = attestationObject(entry, what);
+    attestationKeys(consumer, ["entryId", "kind", "entrypoint", "runtime", "runtimeVersion", "version", "current", "disposition"], what);
+    const kind = consumer.kind;
+    if (typeof kind !== "string" || !Object.hasOwn(CONSUMER_KINDS, kind)) {
+      attestationRefusal(`${what}.kind must be one of ${Object.keys(CONSUMER_KINDS).join(", ")}`);
+    }
+    const runtime = consumer.runtime;
+    if (runtime !== "node") {
+      attestationRefusal(`${what}.runtime must be "node" (got ${JSON.stringify(runtime)}); a consumer is an installed entrypoint that opens the store, ` + "and Bun is this project's development toolchain, not a runtime a consumer runs on. Attest the Node entrypoint that opens the store");
+    }
+    const entryId = attestationString(consumer, "entryId", what);
+    const runtimeVersion = attestationString(consumer, "runtimeVersion", what);
+    const floor = readDeclaredNodeFloor();
+    if (floor === null) {
+      attestationRefusal(`${what} cannot be checked for runtime compatibility: no visible manifest declares engines.node (run this from an installed CLI or a full checkout, ` + "not from a copied bundle), so the consumer's Node version cannot be compared against the floor");
+    }
+    if (compareVersions(runtimeVersion, floor) < 0) {
+      activationBlocked(`${what} (${entryId}) reports ${runtime} ${runtimeVersion}, below the ${floor} floor; an old binary is not a ` + `compatible consumer. Upgrade/reload it or exclude it explicitly.`);
+    }
+    const disposition = consumer.disposition;
+    if (typeof disposition !== "string" || !Object.hasOwn(DISPOSITIONS, disposition)) {
+      activationBlocked(`${what}.disposition must be one of ${Object.keys(DISPOSITIONS).join(", ")}; a consumer left running/unattested ` + `stops the barrier — if a host cannot reload safely, stop at the exact user-restart step instead`);
+    }
+    if (typeof consumer.current !== "boolean")
+      attestationRefusal(`${what}.current must be a boolean`);
+    return {
+      entryId,
+      kind,
+      entrypoint: attestationString(consumer, "entrypoint", what),
+      runtime,
+      runtimeVersion,
+      version: attestationString(consumer, "version", what),
+      current: consumer.current,
+      disposition
+    };
+  });
+  const current = consumers.filter((consumer) => consumer.current);
+  if (current.length === 0) {
+    activationBlocked("the attestation does not mark a current coordinator; the coordinator driving this activation must attest its own " + "reloaded/upgraded entry, including its queued/reused sessions");
+  }
+  if (current.length > 1)
+    attestationRefusal(`${current.length} consumers are marked current; exactly one current coordinator is allowed`);
+  if (current[0].kind !== "coordinator") {
+    attestationRefusal(`the current consumer is attested as "${current[0].kind}"; the current-coordinator attestation must be a coordinator entry`);
+  }
+  if (!Array.isArray(raw.stoppedSessions))
+    attestationRefusal("the attestation.stoppedSessions must be an array (possibly empty)");
+  const stoppedSessions = stoppedSessionsOf(raw);
+  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator, consumers, stoppedSessions };
+}
+function validateRecoveryAttestation(value) {
+  const raw = attestationObject(value, "the attestation");
+  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
+  const { attestedAt, operator } = attestationHeader(raw);
+  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator, consumers: [], stoppedSessions: stoppedSessionsOf(raw) };
+}
+function currentRegisterSources(context) {
+  const projectsRoot = catalogRootDir(context, "projects");
+  let entries;
+  try {
+    entries = readdirSync3(projectsRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const sources = [];
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.isSymbolicLink() || !entry.isDirectory())
+      continue;
+    const absolutePath = join9(projectsRoot, entry.name, "residuals.json");
+    let info;
+    try {
+      info = lstatSync3(absolutePath);
+    } catch {
+      continue;
+    }
+    if (info.isSymbolicLink() || !info.isFile())
+      continue;
+    sources.push({ project: entry.name, absolutePath, relativePath: `${entry.name}/residuals.json` });
+  }
+  return sources;
+}
+function revalidateSources(context, manifest, mode) {
+  const reviewed = new Set(manifest.sources.map((source) => source.relativePath));
+  const retired = new Set(manifest.retirement.registers.map((register) => register.relativePath));
+  const changed = (detail) => {
+    throw new StoreActivationError(mode === "activation" ? "store.migration-source-changed" : "store.legacy-write-detected", `${detail} ` + (mode === "activation" ? "Nothing was activated; re-run the preview, review the final manifest, apply it and re-attest." : "Nothing was retired; re-preview and re-apply, then resume retirement."));
+  };
+  for (const source of currentRegisterSources(context)) {
+    if (!reviewed.has(source.relativePath) && !retired.has(source.relativePath)) {
+      changed(`an unreviewed legacy register appeared at ${source.relativePath}.`);
+    }
+  }
+  for (const reviewedSource of manifest.sources) {
+    const live = readIfExists(join9(catalogRootDir(context, "projects"), reviewedSource.relativePath));
+    if (live === undefined && !retired.has(reviewedSource.relativePath)) {
+      changed(`register ${reviewedSource.relativePath} is gone.`);
+    }
+  }
+}
+function readReceiptRows(db, where, param) {
+  const statement = db.prepare(`select ${RECEIPT_COLUMNS} from migration_receipts where ${where} order by id`);
+  return param === undefined ? statement.all() : statement.all(param);
+}
+async function appliedReceiptFor(context, manifest) {
+  const handle = await openStore(context, "read");
+  try {
+    if (resolve10(manifest.controlRoot) !== resolve10(context.harnessDir)) {
+      throw new StoreActivationError("store.activation-stale", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`);
+    }
+    const row = readReceiptRows(handle.db, "phase = 'applied'").at(-1);
+    if (!row) {
+      throw new StoreActivationError("store.activation-stale", "this store has no recorded apply receipt; apply the reviewed manifest first (store migrate --apply --manifest <path>).");
+    }
+    const storedMapping = JSON.parse(row.mapping_json);
+    const counts = JSON.parse(row.source_counts_json);
+    if (typeof counts.storeRevision !== "number") {
+      throw new StoreActivationError("store.activation-stale", "the recorded apply receipt carries no store revision; the staged store cannot be checked against the reviewed apply.");
+    }
+    return {
+      receiptId: row.id,
+      manifestHash: row.manifest_hash,
+      phase: "applied",
+      replayed: true,
+      issueIds: storedMapping.filter((entry) => entry.issueId !== "").map((entry) => ({ source: entry.source, issueId: entry.issueId })),
+      historyRows: storedMapping.filter((entry) => entry.issueId === "" && (entry.classification === "history" || entry.classification === "excluded")).map((entry) => ({
+        source: entry.source,
+        classification: entry.classification,
+        rationale: entry.rationale ?? "",
+        legacyJson: entry.legacyJson ?? ""
+      })),
+      counts: { ...counts, history: counts.history ?? 0, excluded: counts.excluded ?? 0, created: 0, updated: 0 },
+      storeRevision: counts.storeRevision,
+      appliedAt: row.applied_at
+    };
+  } finally {
+    handle.close();
+  }
+}
+function activationReceiptOfRow(row, replayed) {
+  const stored = JSON.parse(row.manifest_json);
+  return { ...stored, receiptId: row.id, phase: "activated", replayed, activatedAt: row.activated_at ?? row.applied_at };
+}
+async function activationReceiptFor(context, manifest) {
+  const apply = await appliedReceiptFor(context, manifest);
+  const handle = await openStore(context, "read");
+  try {
+    const row = findActivationRow(readReceiptRows(handle.db, "phase = 'activated'"), apply.receiptId);
+    if (!row) {
+      throw new StoreActivationError("store.activation-stale", `the applied receipt #${apply.receiptId} has no recorded activation; run "store activate" ` + `with the reviewed manifest and attestation first.`);
+    }
+    return activationReceiptOfRow(row, true);
+  } finally {
+    handle.close();
+  }
+}
+function findActivationRow(rows, applyReceiptId) {
+  for (const row of [...rows].reverse()) {
+    let stored;
+    try {
+      stored = JSON.parse(row.manifest_json);
+    } catch {
+      continue;
+    }
+    if (stored === null || typeof stored !== "object" || !("applyReceiptId" in stored))
+      continue;
+    if (typeof stored.applyReceiptId === "number" && stored.applyReceiptId === applyReceiptId)
+      return row;
+  }
+  return;
+}
+function activationHashOf(parts) {
+  return sha256Bytes2(Buffer.from(`activation\x00${JSON.stringify(parts)}`, "utf8"));
+}
+function findRetirementRow(rows, activationReceiptId, live) {
+  for (const row of [...rows].reverse()) {
+    let stored;
+    try {
+      stored = JSON.parse(row.manifest_json);
+    } catch {
+      continue;
+    }
+    if (stored === null || typeof stored !== "object")
+      continue;
+    const candidate = stored;
+    if (candidate.activationReceiptId !== activationReceiptId)
+      continue;
+    if (candidate.storeId !== live.storeId || candidate.epoch !== live.epoch)
+      continue;
+    return row;
+  }
+  return;
+}
+function requireGeneratedOperator(operator) {
+  if (operator === undefined || operator.trim() === "") {
+    throw Object.assign(new StoreActivationError("store.operator-required", "the activation generates its operator attestation when --attestation is omitted, and the generated document records the invoking operator; pass --operator <name> (or --attestation <absolute-json> to supply the document explicitly)"), { recovery: "run mstar store activate --manifest <path> --operator <name> (add --attestation <absolute-json> to override the generated document)" });
+  }
+  return operator;
+}
+async function activateStore(context, receipt, attestation, hooks = {}, options = {}) {
+  if (!receipt || receipt.phase !== "applied" || typeof receipt.receiptId !== "number" || typeof receipt.manifestHash !== "string" || typeof receipt.storeRevision !== "number") {
+    throw new StoreActivationError("store.activation-stale", "the activation requires the reviewed apply receipt (receiptId, storeRevision; manifestHash is provenance); re-apply the reviewed manifest.");
+  }
+  const validated = attestation === undefined ? undefined : validateActivationAttestation(attestation);
+  const inspection = await openStore(context, "write");
+  let meta;
+  let manifest;
+  try {
+    meta = readMetaRow(inspection.db);
+    if (meta.authorityState === "active") {
+      const row = findActivationRow(readReceiptRows(inspection.db, "phase = 'activated'"), receipt.receiptId);
+      if (!row) {
+        throw new StoreActivationError("store.activation-stale", "the store is already active under a different activation; the authority generation cannot be replaced by a new receipt.");
+      }
+      const recorded = activationReceiptOfRow(row, true);
+      if (recorded.storeId !== meta.storeId || recorded.epoch !== meta.epoch) {
+        throw new StoreActivationError("store.activation-stale", `the recorded activation #${recorded.receiptId} belongs to store ${recorded.storeId} epoch ${recorded.epoch}, ` + `not this live store ${meta.storeId} epoch ${meta.epoch}; it cannot be served as this store's activation.`);
+      }
+      return recorded;
+    }
+    const appliedRow = readReceiptRows(inspection.db, "id = ? and phase = 'applied'", receipt.receiptId)[0];
+    if (!appliedRow) {
+      throw new StoreActivationError("store.activation-stale", `the supplied receipt (#${receipt.receiptId}) is not a recorded apply receipt of this store; ` + `re-apply the reviewed manifest and use its receipt. Nothing was activated.`);
+    }
+    const applied = readReceiptRows(inspection.db, "phase = 'applied'");
+    if (applied.at(-1).id !== appliedRow.id) {
+      throw new StoreActivationError("store.activation-stale", `the supplied receipt is not the FINAL applied manifest (a later apply, receipt #${applied.at(-1).id}, is recorded); ` + `revalidate the final manifest, re-apply it and re-attest. Nothing was activated.`);
+    }
+    manifest = JSON.parse(appliedRow.manifest_json);
+    if (resolve10(manifest.controlRoot) !== resolve10(context.harnessDir)) {
+      throw new StoreActivationError("store.activation-stale", `the applied manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}. Nothing was activated.`);
+    }
+    if (meta.revision !== receipt.storeRevision) {
+      throw new StoreActivationError("store.activation-stale", `the staged store is at revision ${meta.revision}, but the reviewed apply committed revision ` + `${receipt.storeRevision}; the staged store changed after the reviewed apply. Re-apply the final manifest first.`);
+    }
+    revalidateSources(context, manifest, "activation");
+  } finally {
+    inspection.close();
+  }
+  const generatedOperator = validated === undefined ? requireGeneratedOperator(options.operator) : "";
+  const backup = await takeVerifiedBackup(context, {
+    label: `pre-activation-${meta.storeId.slice(0, 8)}-r${meta.revision}`,
+    reuseMatchingIdentity: true
+  });
+  hooks.afterStage?.("inspection", 0);
+  const flip = await openStore(context, "write");
+  try {
+    const at = (options.now ?? (() => new Date().toISOString()))();
+    flip.db.exec("begin immediate");
+    try {
+      const current = readMetaRow(flip.db);
+      if (current.authorityState !== "staged" || current.storeId !== meta.storeId || current.revision !== meta.revision) {
+        throw new StoreActivationError("store.activation-stale", "the staged store changed while the barrier was running; the activation was rolled back. Re-check and retry.");
+      }
+      revalidateSources(context, manifest, "activation");
+      let activationValidated = validated;
+      if (activationValidated === undefined) {
+        const stoppedRows = flip.db.prepare("select session_id from execution_sessions where state = 'active' and epoch = ?").all(current.epoch);
+        const provisioned = provisionActivationDocument({
+          actor: generatedOperator,
+          authorizationRef: `migration-receipt:${receipt.receiptId}`,
+          attestedAt: at,
+          stoppedSessions: stoppedRows.filter((row) => typeof row.session_id === "string" && row.session_id !== "").map((row) => ({ sessionId: row.session_id, host: "local", state: "stopped" }))
+        }, options.processFacts);
+        if (!provisioned.ok) {
+          throw Object.assign(new StoreActivationError("store.attestation-invalid", provisioned.message), { recovery: "run the same verb through the installed Node CLI: mstar store activate --manifest <path> --operator <name> (an explicit --attestation <absolute-json> also overrides)" });
+        }
+        activationValidated = validateActivationAttestation(provisioned.document);
+      }
+      const attestationHash = sha256Bytes2(Buffer.from(`attestation\x00${JSON.stringify(activationValidated)}`, "utf8"));
+      const epoch = current.epoch + 1;
+      const revision = current.revision + 1;
+      const activationHash = activationHashOf({
+        applyManifestHash: receipt.manifestHash,
+        applyReceiptId: receipt.receiptId,
+        storeId: current.storeId,
+        previousEpoch: current.epoch,
+        epoch,
+        attestationHash,
+        backupPath: backup.backupPath
+      });
+      flip.db.prepare("update store_meta set authority_state = 'active', authority_epoch = ?, revision = ?, activated_at = ? where id = 1").run(epoch, revision, at);
+      flip.db.prepare("update migration_receipts set activated_at = ? where id = ?").run(at, receipt.receiptId);
+      hooks.afterStage?.("flip", 0);
+      const stored = {
+        receiptVersion: ACTIVATION_PROTOCOL_VERSION,
+        activationHash,
+        applyReceiptId: receipt.receiptId,
+        applyManifestHash: receipt.manifestHash,
+        storeId: current.storeId,
+        previousEpoch: current.epoch,
+        epoch,
+        revision,
+        catalogRevision: current.catalogRevision,
+        attestationHash,
+        attestation: activationValidated,
+        backup
+      };
+      const result = flip.db.prepare("insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at, activated_at) " + "values (?, 'activated', ?, '[]', ?, ?, ?)").run(activationHash, JSON.stringify(stored), JSON.stringify({ consumers: activationValidated.consumers.length, stoppedSessions: activationValidated.stoppedSessions.length }), at, at);
+      const receiptId = Number(result.lastInsertRowid);
+      flip.db.exec("commit");
+      return { ...stored, receiptId, phase: "activated", replayed: false, activatedAt: at };
+    } catch (error) {
+      try {
+        flip.db.exec("rollback");
+      } catch {}
+      throw error;
+    }
+  } finally {
+    flip.close();
+  }
+}
+function relativePathSegments(relativePath) {
+  const segments = relativePath.split(/[\\/]+/);
+  if (segments.length === 0 || segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    throw new StoreActivationError("store.migration-source-changed", `the catalog source path "${relativePath}" is not a safe root-relative path; nothing was retired.`);
+  }
+  return segments;
+}
+function readLedger(path2) {
+  const bytes = readIfExists(path2);
+  if (bytes === undefined)
+    return;
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw new StoreActivationError("store.activation-stale", `the retirement ledger at ${path2} is unreadable (${error.message}); refusing to guess at partial retirement state.`);
+  }
+}
+function writeLedger(path2, ledger) {
+  ledger.updatedAt = new Date().toISOString();
+  writeJson(path2, ledger);
+}
+function markerText(ledger, receipt) {
+  return [
+    `# Legacy source archive — activation receipt #${ledger.activationReceiptId}`,
+    "",
+    "Retired from the live control root by `mstar store retire`, after the activation barrier passed.",
+    "",
+    `- successor authority: \`${ledger.successorDbPath}\` (store_id \`${ledger.storeId}\`, authority epoch ${ledger.epoch})`,
+    `- activation receipt: #${ledger.activationReceiptId} (\`${ledger.activationHash}\`)`,
+    `- retirement receipt: ${receipt === null ? "pending" : `#${receipt.receiptId} (\`${receipt.retirementHash}\`)`}`,
+    `- recovery point: \`${ledger.backupPath}\``,
+    `- archived: ${ledger.registers.length} residual register(s), ${ledger.sections.length} reviewed index section(s)`,
+    `- last updated: ${ledger.updatedAt}`,
+    "",
+    "These archived bytes are historical migration input, not a post-activation rollback path: they were the",
+    "pre-activation authority and are superseded history, and restoring them would recreate a second authority.",
+    "Recovery after activation uses the verified SQLite-consistent `VACUUM INTO` backup above plus reconciliation.",
+    "",
+    "The per-item retirement ledger (`ledger.json`, same directory) is the resumable record of exactly which",
+    "bytes and sections were moved and verified.",
+    ""
+  ].join(`
+`);
+}
+function retirementReceiptOfRow(row, replayed) {
+  const stored = JSON.parse(row.manifest_json);
+  return { ...stored, receiptId: row.id, phase: "retired", replayed, retiredAt: row.retired_at ?? row.applied_at };
+}
+function finalizeDisclosure(ledgerPath, ledger, receipt) {
+  writeLedger(ledgerPath, ledger);
+  writeTextAtomic(join9(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
+}
+function retireRegister(context, ledgerPath, ledger, item) {
+  const livePath = join9(catalogRootDir(context, "projects"), item.relativePath);
+  const liveBytes = readIfExists(livePath);
+  if (liveBytes !== undefined) {
+    mkdirSync3(dirname7(item.archivePath), { recursive: true });
+    rmSync(item.archivePath, { force: true });
+    copyFileSync(livePath, item.archivePath);
+    item.state = "archived";
+    writeLedger(ledgerPath, ledger);
+    unlinkSync2(livePath);
+  } else if (readIfExists(item.archivePath) === undefined) {
+    throw new StoreActivationError("store.migration-source-changed", `register ${item.relativePath} is gone and no archive copy exists; the reviewed source cannot be retired truthfully. ` + `Nothing was retired.`);
+  }
+  item.state = "verified";
+  writeLedger(ledgerPath, ledger);
+}
+function verifyArchivedRegister(item) {
+  if (readIfExists(item.archivePath) === undefined) {
+    throw new StoreActivationError("store.migration-source-changed", `the archived register ${item.relativePath} is missing; refusing to claim retirement.`);
+  }
+}
+function matchedRowsIn(table, owner, wanted) {
+  const family = detectIndexFamily(table.header);
+  if (family === null || family !== wanted.family)
+    return [];
+  const hits = [];
+  for (const row of table.rows) {
+    const identity = indexRowIdentity(family, row.cells, owner);
+    if (identity !== null && wanted.identities.has(identity))
+      hits.push({ identity, line: row.line });
+  }
+  return hits;
+}
+function selectReviewedSection(live, item) {
+  const wanted = { family: item.family, identities: new Set(item.retiredRows ?? item.reviewedRows) };
+  if (wanted.identities.size === 0)
+    return;
+  const slash = item.relativePath.indexOf("/");
+  const owner = slash === -1 ? null : item.relativePath.slice(0, slash);
+  let best;
+  for (const table of readTables(live)) {
+    const hits = matchedRowsIn(table, owner, wanted);
+    if (hits.length === 0)
+      continue;
+    if (best === undefined || hits.length > best.hits.length)
+      best = { table, hits };
+  }
+  return best;
+}
+function retireSection(context, ledgerPath, ledger, item, hooks) {
+  const livePath = join9(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
+  const live = readIfExists(livePath)?.toString("utf8");
+  if (live === undefined) {
+    throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; the reviewed section cannot be retired truthfully. ` + `Nothing was retired.`);
+  }
+  const selection = selectReviewedSection(live, item);
+  if (selection === undefined) {
+    item.removedLines ??= 0;
+    verifyRetiredSection(livePath, item);
+    item.state = "verified";
+    writeLedger(ledgerPath, ledger);
+    return;
+  }
+  const reviewedLines = new Set(selection.hits.map((hit) => hit.line));
+  const survivingRows = selection.table.rows.filter((row) => !reviewedLines.has(row.line));
+  const dropped = new Set;
+  if (survivingRows.length === 0) {
+    for (let line = selection.table.firstLine;line <= selection.table.lastLine; line += 1)
+      dropped.add(line);
+  } else {
+    for (const line of reviewedLines)
+      dropped.add(line);
+  }
+  const excised = live.split(`
+`).filter((_line, index2) => !dropped.has(index2 + 1)).join(`
+`);
+  mkdirSync3(dirname7(item.archivePath), { recursive: true });
+  rmSync(item.archivePath, { force: true });
+  copyFileSync(livePath, item.archivePath);
+  item.retiredRows = [...new Set(selection.hits.map((hit) => hit.identity))].sort();
+  item.removedLines = dropped.size;
+  item.expectedLiveSha256 = sha256Bytes2(Buffer.from(excised, "utf8"));
+  writeLedger(ledgerPath, ledger);
+  writeTextAtomic(livePath, excised);
+  item.state = "verified";
+  hooks.afterStage?.("section-write", 0);
+  verifyRetiredSection(livePath, item);
+  writeLedger(ledgerPath, ledger);
+}
+function verifyRetiredSection(livePath, item) {
+  const live = readIfExists(livePath)?.toString("utf8");
+  if (live === undefined) {
+    throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; refusing to claim retirement.`);
+  }
+  if (selectReviewedSection(live, item) !== undefined) {
+    throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} still holds a reviewed row of the retired section; refusing to claim retirement.`);
+  }
+  if (readIfExists(item.archivePath) === undefined) {
+    throw new StoreActivationError("store.migration-source-changed", `the archived original of ${item.relativePath} is missing; refusing to claim retirement.`);
+  }
+}
+async function retireStoreSources(context, activationReceipt, hooks = {}) {
+  if (!activationReceipt || activationReceipt.phase !== "activated" || typeof activationReceipt.receiptId !== "number" || typeof activationReceipt.activationHash !== "string" || typeof activationReceipt.storeId !== "string" || typeof activationReceipt.epoch !== "number") {
+    throw new StoreActivationError("store.activation-stale", 'retirement requires the recorded activation receipt (receiptId, activationHash, storeId, epoch); run "store activate" first.');
+  }
+  const handle = await openStore(context, "write");
+  try {
+    const meta = readMetaRow(handle.db);
+    if (meta.authorityState !== "active") {
+      throw new StoreActivationError("store.not-active", `the store is ${meta.authorityState}; legacy sources are retired only after the activation barrier made the store active. ` + `Nothing was retired.`);
+    }
+    refuseUnlessSameGeneration({ storeId: meta.storeId, epoch: meta.epoch }, { storeId: activationReceipt.storeId, epoch: activationReceipt.epoch }, "the activation receipt");
+    const activationRow = readReceiptRows(handle.db, "id = ? and phase = 'activated'", activationReceipt.receiptId)[0];
+    if (!activationRow) {
+      throw new StoreActivationError("store.activation-stale", `no activation receipt #${activationReceipt.receiptId} is recorded for this store; nothing was retired.`);
+    }
+    const activationRowReceipt = activationReceiptOfRow(activationRow, true);
+    if (activationRowReceipt.storeId !== meta.storeId || activationRowReceipt.epoch !== meta.epoch || activationRowReceipt.applyReceiptId !== activationReceipt.applyReceiptId) {
+      throw new StoreActivationError("store.activation-stale", `the recorded activation #${activationReceipt.receiptId} belongs to store ${activationRowReceipt.storeId} epoch ` + `${activationRowReceipt.epoch} over apply receipt #${activationRowReceipt.applyReceiptId}, not this store ` + `${meta.storeId} epoch ${meta.epoch} over apply receipt #${activationReceipt.applyReceiptId}; nothing was retired.`);
+    }
+    const appliedRow = readReceiptRows(handle.db, "id = ? and phase = 'applied'", activationReceipt.applyReceiptId)[0];
+    if (!appliedRow) {
+      throw new StoreActivationError("store.activation-stale", `the applied receipt #${activationReceipt.applyReceiptId} behind this activation is missing; nothing was retired.`);
+    }
+    const manifest = JSON.parse(appliedRow.manifest_json);
+    const registers = manifest.retirement.registers;
+    const sections = manifest.catalog.retirementSections;
+    const archiveDir = join9(dirname7(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
+    const ledgerPath = join9(archiveDir, "ledger.json");
+    const retirementHash = sha256Bytes2(Buffer.from(`retirement\x00${JSON.stringify({
+      activationReceiptId: activationReceipt.receiptId,
+      activationHash: activationReceipt.activationHash,
+      storeId: meta.storeId,
+      epoch: meta.epoch,
+      registers: registers.map((register) => ({ relativePath: register.relativePath, sha256: register.sha256 })),
+      sections: sections.map((section) => ({
+        rootKind: section.rootKind,
+        relativePath: section.relativePath,
+        startLine: section.startLine,
+        endLine: section.endLine,
+        sha256: section.sha256
+      }))
+    })}`, "utf8"));
+    const recorded = findRetirementRow(readReceiptRows(handle.db, "phase = 'retired'"), activationReceipt.receiptId, meta);
+    if (recorded) {
+      const receipt2 = retirementReceiptOfRow(recorded, true);
+      const existing = readLedger(ledgerPath);
+      if (existing)
+        finalizeDisclosure(ledgerPath, existing, receipt2);
+      return receipt2;
+    }
+    const existingLedger = readLedger(ledgerPath);
+    if (existingLedger && (existingLedger.storeId !== meta.storeId || existingLedger.epoch !== meta.epoch)) {
+      throw new StoreActivationError("store.activation-stale", `the retirement ledger at ${ledgerPath} belongs to a different activation generation; refusing to resume another ` + `generation's partial retirement. Nothing was retired.`);
+    }
+    revalidateSources(context, manifest, "retirement");
+    const resumed = existingLedger !== undefined;
+    const ledger = existingLedger ?? {
+      version: ACTIVATION_PROTOCOL_VERSION,
+      activationReceiptId: activationReceipt.receiptId,
+      activationHash: activationReceipt.activationHash,
+      storeId: meta.storeId,
+      epoch: meta.epoch,
+      archiveDir,
+      successorDbPath: storeDbPath(context),
+      backupPath: activationReceipt.backup.backupPath,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      retirementReceiptId: null,
+      registers: registers.map((register) => ({
+        project: register.project,
+        relativePath: register.relativePath,
+        sha256: register.sha256,
+        archivePath: join9(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
+        state: "pending"
+      })).sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
+      sections: sections.map((section) => ({
+        rootKind: section.rootKind,
+        relativePath: section.relativePath,
+        header: section.header,
+        startLine: section.startLine,
+        endLine: section.endLine,
+        sha256: section.sha256,
+        preservedLines: section.preservedLines,
+        family: section.family,
+        reviewedRows: section.rows,
+        retiredRows: null,
+        removedLines: null,
+        archivePath: join9(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
+        expectedLiveSha256: null,
+        state: "pending"
+      })).sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine)
+    };
+    for (const item of ledger.sections) {
+      const section = sections.find((candidate) => candidate.rootKind === item.rootKind && candidate.relativePath === item.relativePath && candidate.startLine === item.startLine);
+      if (section === undefined)
+        continue;
+      item.family = section.family;
+      item.reviewedRows = section.rows;
+    }
+    mkdirSync3(archiveDir, { recursive: true });
+    writeLedger(ledgerPath, ledger);
+    let completed = 0;
+    for (const item of ledger.registers) {
+      if (item.state === "verified") {
+        verifyArchivedRegister(item);
+        continue;
+      }
+      retireRegister(context, ledgerPath, ledger, item);
+      completed += 1;
+      hooks.afterStage?.("retirement", completed);
+    }
+    for (const item of ledger.sections) {
+      retireSection(context, ledgerPath, ledger, item, hooks);
+      completed += 1;
+      hooks.afterStage?.("retirement", completed);
+    }
+    const at = new Date().toISOString();
+    const retiredRegisters = ledger.registers.map((item) => ({
+      project: item.project,
+      relativePath: item.relativePath,
+      sha256: item.sha256,
+      bytes: statSync3(item.archivePath).size,
+      archivedPath: item.archivePath
+    }));
+    const retiredSections = ledger.sections.map((item) => ({
+      rootKind: item.rootKind,
+      relativePath: item.relativePath,
+      header: item.header,
+      startLine: item.startLine,
+      endLine: item.endLine,
+      sha256: item.sha256,
+      archivedPath: item.archivePath,
+      liveSha256: item.expectedLiveSha256,
+      preservedLines: item.preservedLines,
+      removedLines: item.removedLines ?? item.endLine - item.startLine + 1
+    }));
+    handle.db.exec("begin immediate");
+    let receiptId;
+    try {
+      handle.db.prepare("update migration_receipts set retired_at = ? where id in (?, ?)").run(at, activationReceipt.receiptId, activationReceipt.applyReceiptId);
+      const stored = {
+        receiptVersion: ACTIVATION_PROTOCOL_VERSION,
+        retirementHash,
+        activationReceiptId: activationReceipt.receiptId,
+        activationHash: activationReceipt.activationHash,
+        storeId: meta.storeId,
+        epoch: meta.epoch,
+        archiveDir,
+        markerPath: join9(archiveDir, "MARKER.md"),
+        registers: retiredRegisters,
+        sections: retiredSections,
+        resumed
+      };
+      const result = handle.db.prepare("insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at, retired_at) " + "values (?, 'retired', ?, '[]', ?, ?, ?)").run(retirementHash, JSON.stringify(stored), JSON.stringify({
+        registers: retiredRegisters.length,
+        sections: retiredSections.length,
+        bytes: retiredRegisters.reduce((total, item) => total + item.bytes, 0),
+        resumed
+      }), at, at);
+      receiptId = Number(result.lastInsertRowid);
+      handle.db.exec("commit");
+    } catch (error) {
+      try {
+        handle.db.exec("rollback");
+      } catch {}
+      throw error;
+    }
+    ledger.retirementReceiptId = receiptId;
+    const receipt = {
+      receiptVersion: ACTIVATION_PROTOCOL_VERSION,
+      receiptId,
+      phase: "retired",
+      replayed: false,
+      retirementHash,
+      activationReceiptId: activationReceipt.receiptId,
+      activationHash: activationReceipt.activationHash,
+      storeId: meta.storeId,
+      epoch: meta.epoch,
+      archiveDir,
+      markerPath: join9(archiveDir, "MARKER.md"),
+      registers: retiredRegisters,
+      sections: retiredSections,
+      resumed,
+      retiredAt: at
+    };
+    finalizeDisclosure(ledgerPath, ledger, receipt);
+    return receipt;
+  } finally {
+    handle.close();
+  }
+}
+var BACKUP_RECEIPT_VERSION = 2;
 var StoreActivationError;
 var EXECUTION_MIGRATION_VERSION;
 var CONSUMER_KINDS;
 var DISPOSITIONS;
 var SESSION_STATES;
+var RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at";
 var init_store_activation = __esm(() => {
   init_catalog();
   init_catalog_import();
   init_core();
   init_activation_provisioning();
   init_store_db();
-  StoreActivationError = class StoreActivationError extends Error {
+  StoreActivationError = class StoreActivationError2 extends Error {
     code;
-    constructor(code, message) {
-      super(`[${code}] ${message}`);
+    constructor(code2, message) {
+      super(`[${code2}] ${message}`);
       this.name = "StoreActivationError";
-      this.code = code;
+      this.code = code2;
     }
   };
   EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
@@ -10531,18 +11780,73 @@ var init_store_activation = __esm(() => {
   };
   SESSION_STATES = { stopped: true, reloaded: true };
 });
+var exports_execution_store = {};
+__export(exports_execution_store, {
+  ExecutionError: () => ExecutionError,
+  adoptTerminalWorkflow: () => adoptTerminalWorkflow,
+  advancePlanOperationRevisions: () => advancePlanOperationRevisions,
+  advanceWorkflowHeaderRevision: () => advanceWorkflowHeaderRevision,
+  assertAuthorityGeneration: () => assertAuthorityGeneration,
+  assertExecutionToken: () => assertExecutionToken,
+  assertOperationId: () => assertOperationId,
+  bindExecutionSession: () => bindExecutionSession,
+  bindRecoveredSession: () => bindRecoveredSession,
+  claimIntegrationMergeLease: () => claimIntegrationMergeLease,
+  createExecutionWorkflow: () => createExecutionWorkflow,
+  executionRootTokenOf: () => executionRootTokenOf,
+  executionToken: () => executionToken,
+  initializeExecutionAuthority: () => initializeExecutionAuthority,
+  parseExecutionToken: () => parseExecutionToken,
+  pruneWorkflowOperationReceipts: () => pruneWorkflowOperationReceipts,
+  readExecutionCleanupSnapshots: () => readExecutionCleanupSnapshots,
+  readExecutionPlan: () => readExecutionPlan,
+  readExecutionPlanAdmission: () => readExecutionPlanAdmission,
+  readExecutionPlanWitness: () => readExecutionPlanWitness,
+  readExecutionSealedInput: () => readExecutionSealedInput,
+  readExecutionSession: () => readExecutionSession,
+  readExecutionState: () => readExecutionState,
+  readExecutionStateGraph: () => readExecutionStateGraph,
+  readExecutionWorkflowWitness: () => readExecutionWorkflowWitness,
+  readLiveSessionIdentities: () => readLiveSessionIdentities,
+  readOperationReplay: () => readOperationReplay,
+  readOwnExecutionSession: () => readOwnExecutionSession,
+  readPlanOperationReplay: () => readPlanOperationReplay,
+  readPlanOperationReplayBeforeProof: () => readPlanOperationReplayBeforeProof,
+  readWorkflowOperationReplayBeforeProof: () => readWorkflowOperationReplayBeforeProof,
+  readWorkflowSessionRows: () => readWorkflowSessionRows,
+  recordRootMembershipLoss: () => recordRootMembershipLoss,
+  releaseIntegrationMergeLease: () => releaseIntegrationMergeLease,
+  requireWorkflowState: () => requireWorkflowState,
+  resolveCreateWorkflow: () => resolveCreateWorkflow,
+  resolvePlanRead: () => resolvePlanRead,
+  resolveTokenFreshness: () => resolveTokenFreshness,
+  resolveWorkflowSession: () => resolveWorkflowSession,
+  resolveWorkflowWrite: () => resolveWorkflowWrite,
+  revokeSessionRow: () => revokeSessionRow,
+  semanticRequestHash: () => semanticRequestHash,
+  serializeExecutionValue: () => serializeExecutionValue,
+  suppliedCatalogPin: () => suppliedCatalogPin,
+  withExecutionTransaction: () => withExecutionTransaction,
+  withRecoveryDetails: () => withRecoveryDetails,
+  writeExecutionCreation: () => writeExecutionCreation,
+  writeExecutionInputPin: () => writeExecutionInputPin,
+  writeOperationReceipt: () => writeOperationReceipt,
+  writePlanCoordinationRow: () => writePlanCoordinationRow,
+  writePlanOperationReceipt: () => writePlanOperationReceipt,
+  writeWorkflowState: () => writeWorkflowState
+});
 function canonicalRefusal(detail) {
   return new ExecutionError("execution.canonical-value", `${detail} is not a canonical execution value`);
 }
 function canonicalString(value) {
-  for (let index = 0;index < value.length; index++) {
-    const code = value.charCodeAt(index);
-    if (code >= 55296 && code <= 56319) {
-      const next = value.charCodeAt(index + 1);
+  for (let index2 = 0;index2 < value.length; index2++) {
+    const code2 = value.charCodeAt(index2);
+    if (code2 >= 55296 && code2 <= 56319) {
+      const next = value.charCodeAt(index2 + 1);
       if (!(next >= 56320 && next <= 57343))
         throw canonicalRefusal("a string carrying an unpaired high surrogate");
-      index++;
-    } else if (code >= 56320 && code <= 57343) {
+      index2++;
+    } else if (code2 >= 56320 && code2 <= 57343) {
       throw canonicalRefusal("a string carrying an unpaired low surrogate");
     }
   }
@@ -10560,8 +11864,8 @@ function canonicalArray(value, ancestors) {
     throw canonicalRefusal("a cyclic structure");
   ancestors.add(value);
   const parts = [];
-  for (let index = 0;index < value.length; index++)
-    parts.push(canonical(value[index], ancestors));
+  for (let index2 = 0;index2 < value.length; index2++)
+    parts.push(canonical(value[index2], ancestors));
   ancestors.delete(value);
   return `[${parts.join(",")}]`;
 }
@@ -10613,6 +11917,18 @@ function canonicalIntegerText(value, what) {
   }
   return String(value);
 }
+function positiveDecimal(text4, what) {
+  if (!DECIMAL_RE.test(text4)) {
+    throw tokenRefusal(`${what} must be a plain decimal without sign, whitespace or leading zeros — got ${JSON.stringify(text4)}`);
+  }
+  const value = Number(text4);
+  if (value === 0)
+    throw tokenRefusal(`${what} must be greater than 0 — got ${JSON.stringify(text4)}`);
+  if (value > Number.MAX_SAFE_INTEGER) {
+    throw tokenRefusal(`${what} exceeds Number.MAX_SAFE_INTEGER — got ${JSON.stringify(text4)}`);
+  }
+  return value;
+}
 function assertKeyShape(kind, key) {
   const expected = KIND_KEY_LENGTHS[kind];
   if (key.length !== expected) {
@@ -10629,6 +11945,22 @@ function assertKeyShape(kind, key) {
 function encodeTokenKey(key) {
   return Buffer.from(serializeExecutionValue(key), "utf8").toString("base64url");
 }
+function decodeTokenKey(key64, kind) {
+  if (!BASE64URL_RE.test(key64))
+    throw tokenRefusal("a token key must be unpadded base64url");
+  let decoded;
+  try {
+    decoded = JSON.parse(TOKEN_KEY_DECODER.decode(Buffer.from(key64, "base64url")));
+  } catch {
+    throw tokenRefusal("a token key must be base64url-wrapped UTF-8 JSON");
+  }
+  if (!Array.isArray(decoded) || decoded.some((part) => typeof part !== "string")) {
+    throw tokenRefusal("a token key must decode to a JSON array of strings");
+  }
+  const key = decoded;
+  assertKeyShape(kind, key);
+  return key;
+}
 function executionToken(kind, storeId, epoch, key, revision) {
   if (!isExecutionKind(kind))
     throw tokenRefusal(`unknown execution kind ${JSON.stringify(kind)}`);
@@ -10638,6 +11970,151 @@ function executionToken(kind, storeId, epoch, key, revision) {
   const epochText = canonicalIntegerText(epoch, "the epoch");
   const revisionText = canonicalIntegerText(revision, "the revision");
   return `${TOKEN_PREFIX}:${kind}:${storeId}:${epochText}:${encodeTokenKey(key)}:${revisionText}`;
+}
+function parseExecutionToken(value) {
+  if (typeof value !== "string")
+    throw tokenRefusal(`an execution token must be a string — got ${typeof value}`);
+  const parts = value.split(":");
+  if (parts.length !== 6)
+    throw tokenRefusal(`an execution token has 6 colon-separated parts — got ${parts.length}`);
+  const [prefix, kindText, storeId, epochText, key64, revisionText] = parts;
+  if (prefix !== TOKEN_PREFIX)
+    throw tokenRefusal(`an execution token starts with ${TOKEN_PREFIX} — got ${JSON.stringify(prefix)}`);
+  if (!isExecutionKind(kindText))
+    throw tokenRefusal(`unknown execution kind ${JSON.stringify(kindText)}`);
+  const kind = kindText;
+  if (!STORE_UUID_RE.test(storeId))
+    throw tokenRefusal(`a store identity must be a lowercase UUID — got ${JSON.stringify(storeId)}`);
+  const epoch = positiveDecimal(epochText, "the epoch");
+  const revision = positiveDecimal(revisionText, "the revision");
+  return { kind, storeId, epoch, key: decodeTokenKey(key64, kind), revision };
+}
+function assertExecutionToken(value, expected) {
+  const parsed = parseTokenForAddress(value, expected);
+  if (parsed.epoch !== expected.epoch) {
+    throw authorityEpochRefusal({
+      source: "the token",
+      presentedEpoch: parsed.epoch,
+      currentEpoch: expected.epoch,
+      detail: `the token carries epoch ${parsed.epoch}; the current epoch is ${expected.epoch}. Reopen the store and re-read before retrying.`
+    });
+  }
+  if (expected.revision !== undefined && parsed.revision !== expected.revision) {
+    throw new ExecutionError("execution.stale-token", `the token carries revision ${parsed.revision}; the current revision is ${expected.revision}. Re-read and retry with the current token.`, {
+      component: "revision",
+      path: "expected",
+      current_revision: expected.revision,
+      presented_revision: parsed.revision
+    });
+  }
+  return parsed;
+}
+function tokenKindReadPointer(expected) {
+  if (expected.kind === "root") {
+    return " Read the current root token with `mstar status validate` (output field data.token).";
+  }
+  if (expected.kind === "workflow") {
+    return ` Read the current workflow token with \`mstar status validate\` (the data.workflows[] entry for workflow ${JSON.stringify(expected.key[0] ?? "")} → token).`;
+  }
+  if (expected.kind === "plan") {
+    return ` Read the current plan token with \`mstar status validate\` (the data.authority.workflows[] entry for workflow ${JSON.stringify(expected.key[0] ?? "")} → planTokens[${JSON.stringify(expected.key[1] ?? "")}]).`;
+  }
+  return "";
+}
+function parseTokenForAddress(value, expected) {
+  const parsed = parseExecutionToken(value);
+  if (parsed.kind !== expected.kind) {
+    throw new ExecutionError("execution.token-kind", `expected a ${expected.kind} token — got a ${parsed.kind} token. The address kind is never inferred from a supplied token.${tokenKindReadPointer(expected)}`);
+  }
+  const sameKey = parsed.key.length === expected.key.length && parsed.key.every((part, index2) => part === expected.key[index2]);
+  if (parsed.storeId !== expected.storeId || !sameKey) {
+    throw new ExecutionError("execution.scope-mismatch", parsed.storeId !== expected.storeId ? `the token belongs to store ${parsed.storeId}, not to ${expected.storeId}` : `the token addresses ${JSON.stringify(parsed.key)}, not ${JSON.stringify(expected.key)}`, { expected: expected.key, actual: parsed.key });
+  }
+  return parsed;
+}
+function authorityEpochRefusal(input) {
+  const problem = {
+    component: "authority",
+    path: "epoch",
+    code: "store.stale-epoch",
+    sourcesTried: [input.source, "store_meta.authority_epoch, read in this transaction"],
+    currentFacts: [
+      `${input.source} carries epoch ${input.presentedEpoch}`,
+      `the store's current authority epoch is ${input.currentEpoch}`
+    ],
+    needed: `re-resolve the current authority generation and re-acquire your own identity at epoch ${input.currentEpoch} ` + `(resume or rebind the session row of that epoch), then retry against the current token`,
+    withheldEffect: `only the addressed effect: nothing was written, no revision advanced and no receipt was replayed from epoch ` + `${input.presentedEpoch}`,
+    availableWork: [
+      `read the current state at epoch ${input.currentEpoch}`,
+      `resume or rebind your own execution session at epoch ${input.currentEpoch}`,
+      "retry the operation with the token and reference of the current epoch"
+    ]
+  };
+  return new ExecutionError("store.stale-epoch", input.detail, {
+    component: problem.component,
+    path: problem.path,
+    current_epoch: input.currentEpoch,
+    presented_epoch: input.presentedEpoch,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    needed: problem.needed,
+    available_work: problem.availableWork,
+    recoveryFacts: unresolvedRecovery({
+      target: input.target ?? {},
+      unresolved: [problem],
+      resolvedFrom: [{ path: "epoch", source: input.source }]
+    })
+  });
+}
+function assertAuthorityGeneration(tx, input) {
+  if (input.referenceStoreId !== tx.storeId) {
+    throw new ExecutionError("execution.scope-mismatch", `the session reference belongs to store ${input.referenceStoreId}, not to ${tx.storeId}`);
+  }
+  if (input.referenceEpoch !== tx.epoch) {
+    throw authorityEpochRefusal({
+      source: "the session reference",
+      presentedEpoch: input.referenceEpoch,
+      currentEpoch: tx.epoch,
+      target: input.target,
+      detail: `the session reference carries epoch ${input.referenceEpoch}; the current epoch is ${tx.epoch}. Rebind the session and retry.`
+    });
+  }
+}
+function resolveTokenFreshness(value, current, options = {}) {
+  const parsed = parseTokenForAddress(value, current);
+  if (parsed.epoch !== current.epoch) {
+    throw authorityEpochRefusal({
+      source: "the comparison token",
+      presentedEpoch: parsed.epoch,
+      currentEpoch: current.epoch,
+      target: options.target,
+      detail: `the token carries epoch ${parsed.epoch}; the current epoch is ${current.epoch}. Reopen the store and re-read before retrying.`
+    });
+  }
+  return {
+    readRevision: parsed.revision,
+    currentRevision: current.revision,
+    current: parsed.revision === current.revision
+  };
+}
+function semanticRequestHash(input) {
+  return createHash5("sha256").update(serializeExecutionValue({
+    operation: input.operation,
+    address: input.address,
+    caller: {
+      session_id: input.caller.sessionId,
+      role: input.caller.role,
+      workflow_id: input.caller.workflowId
+    },
+    intent: input.intent
+  }), "utf8").digest("hex");
+}
+function withRecoveryDetails(error, details) {
+  if (!(error instanceof Error))
+    return error;
+  const target = error;
+  target.details = { ...target.details ?? {}, ...details };
+  return error;
 }
 function corrupt(detail) {
   return new StoreError("store.corrupt", `${detail}; the execution authority cannot be verified`);
@@ -10663,12 +12140,12 @@ function readExecutionMetaRow(db) {
     activatedAt: row.activated_at ?? null
   };
 }
-function storedJsonObject(text, what) {
-  if (typeof text !== "string")
+function storedJsonObject(text4, what) {
+  if (typeof text4 !== "string")
     throw corrupt(`${what} is not a JSON string`);
   let parsed;
   try {
-    parsed = JSON.parse(text);
+    parsed = JSON.parse(text4);
   } catch (error) {
     throw corrupt(`${what} is not valid JSON (${error.message})`);
   }
@@ -10901,6 +12378,44 @@ function readExecutionGraph(db, store, meta) {
     ...terminalAdoptions.length === 0 ? {} : { terminalAdoptions }
   };
 }
+function withExecutionTransaction(context, transition) {
+  const dbPath = storeDbPath(context);
+  const held = ownedTransactions.getStore();
+  if (held?.has(dbPath)) {
+    throw new ExecutionError("execution.reentrant", `this async context already owns a transaction on ${dbPath}. A domain operation opens exactly one ` + `transaction; a nested call would commit or roll back the outer one's work and is refused before anything runs.`);
+  }
+  return ownedTransactions.run(new Set([...held ?? [], dbPath]), async () => {
+    const handle = await openStore(context, "write");
+    try {
+      if (handle.execution === null) {
+        throw new ExecutionError("execution.not-active", `the store at ${dbPath} predates the execution schema (migration ${handle.schemaVersion} applied). ` + `There is no execution authority to transact against; nothing was written.`);
+      }
+      handle.db.exec("begin immediate");
+      const execution = readExecutionMetaRow(handle.db);
+      const identity = readStoreIdentity(handle.db);
+      try {
+        const result = transition({
+          db: handle.db,
+          storeId: identity.storeId,
+          epoch: identity.epoch,
+          execution
+        });
+        if (typeof result?.then === "function") {
+          throw new ExecutionError("execution.reentrant", "the transition body returned a promise. An execution transaction body is synchronous: nothing " + "awaits, launches or reads outside the transaction between BEGIN and COMMIT.");
+        }
+        handle.db.exec("commit");
+        return result;
+      } catch (error) {
+        try {
+          handle.db.exec("rollback");
+        } catch {}
+        throw error;
+      }
+    } finally {
+      handle.close();
+    }
+  });
+}
 async function withExecutionReadTransaction(context, body, requires = "ordinary execution reads require an active authority") {
   const handle = await openStore(context, "read");
   try {
@@ -10936,6 +12451,329 @@ async function readExecutionState(context) {
     epoch: tx.epoch
   }));
 }
+async function readExecutionPlanAdmission(context, planId) {
+  return withExecutionReadTransaction(context, (tx) => {
+    const graph = readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.execution);
+    const matches = [];
+    for (const workflow of graph.workflows) {
+      for (const view of workflow.plans) {
+        if (rowPlanIds(view.plan).includes(planId)) {
+          matches.push({ workflowId: workflow.state.id, row: view.plan, state: workflow.state });
+          break;
+        }
+      }
+    }
+    if (matches.length === 0)
+      return { kind: "absent", graph };
+    if (matches.length > 1) {
+      return { kind: "ambiguous", graph, workflowIds: matches.map((match) => match.workflowId) };
+    }
+    return { kind: "row", graph, ...matches[0] };
+  });
+}
+async function readExecutionCleanupSnapshots(context, workflowId) {
+  if (!isNonEmptyString(workflowId))
+    throw new CoordinationError("coordination.invalid-input", "Invalid workflowId: provide a non-empty value. Inspect registered workflows with mstar status validate.");
+  return withExecutionReadTransaction(context, (tx) => {
+    const store = { storeId: tx.storeId, epoch: tx.epoch };
+    const registered = readExecutionGraph(tx.db, store, tx.execution);
+    const byId = new Map;
+    for (const workflow of registered.workflows)
+      byId.set(workflow.state.id, cleanupSnapshot(workflow));
+    const retained = tx.db.prepare("select workflow_id from execution_workflows order by rowid").all();
+    for (const row of retained) {
+      const id = storedText(row.workflow_id, "execution_workflows.workflow_id");
+      if (!byId.has(id))
+        byId.set(id, cleanupSnapshot(readWorkflowView(tx.db, store, id)));
+    }
+    const selected = byId.get(workflowId);
+    if (selected === undefined) {
+      throw new CoordinationError("coordination.workflow-not-found", "The requested workflow is not registered in this execution authority. Inspect registered workflows with mstar status validate; if none remain, no workflow-scoped cleanup can be selected.", { workflow_id: workflowId });
+    }
+    return { selected, workflows: [...byId.values()] };
+  });
+}
+function cleanupSnapshot(workflow) {
+  return {
+    ...workflow.state,
+    ...workflow.integrationLease === null ? {} : { integration_merge_lease: workflow.integrationLease },
+    plans: workflow.plans.map(({ plan, coordination }) => ({
+      ...plan,
+      ...coordination === null ? {} : { coordination }
+    }))
+  };
+}
+function readExecutionStateGraph(tx) {
+  const meta = readExecutionMetaRow(tx.db);
+  return {
+    data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, meta),
+    token: executionToken("root", tx.storeId, tx.epoch, [], meta.revision),
+    storeId: tx.storeId,
+    epoch: tx.epoch
+  };
+}
+function assertNoLegacyExecutionSources(context) {
+  const harnessDir = dirname8(storeDbPath(context));
+  const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
+  const sources = [];
+  const statusPath = join10(harnessDir, "status.json");
+  try {
+    lstatSync4(statusPath);
+    sources.push(statusPath);
+  } catch (error) {
+    if (error.code !== "ENOENT")
+      sources.push(`${statusPath} (unreadable)`);
+  }
+  let workflowRootIsDirectory = false;
+  try {
+    const info = lstatSync4(workflowDir);
+    workflowRootIsDirectory = info.isDirectory() && !info.isSymbolicLink();
+    if (!workflowRootIsDirectory)
+      sources.push(workflowDir);
+  } catch (error) {
+    if (error.code !== "ENOENT")
+      sources.push(`${workflowDir} (unreadable)`);
+  }
+  if (workflowRootIsDirectory) {
+    let entries;
+    try {
+      entries = readdirSync4(workflowDir, { withFileTypes: true });
+    } catch {
+      entries = [];
+      sources.push(`${workflowDir} (unreadable)`);
+    }
+    for (const entry of entries) {
+      const dir = join10(workflowDir, entry.name);
+      if (entry.isSymbolicLink()) {
+        sources.push(dir);
+        continue;
+      }
+      if (!entry.isDirectory())
+        continue;
+      const path2 = join10(dir, WORKFLOW_SNAPSHOT_FILE);
+      try {
+        lstatSync4(path2);
+        sources.push(path2);
+      } catch (error) {
+        if (error.code !== "ENOENT")
+          sources.push(`${path2} (unreadable)`);
+      }
+      const sessionsDir = join10(dir, "sessions");
+      try {
+        const info = lstatSync4(sessionsDir);
+        if (info.isSymbolicLink() || !info.isDirectory()) {
+          sources.push(sessionsDir);
+        } else {
+          let sessions;
+          try {
+            sessions = readdirSync4(sessionsDir, { withFileTypes: true });
+          } catch {
+            sessions = [];
+            sources.push(`${sessionsDir} (unreadable)`);
+          }
+          for (const session of sessions) {
+            if (session.name.endsWith(".json"))
+              sources.push(join10(sessionsDir, session.name));
+          }
+        }
+      } catch (error) {
+        if (error.code !== "ENOENT")
+          sources.push(`${sessionsDir} (unreadable)`);
+      }
+    }
+  }
+  if (sources.length > 0) {
+    throw new ExecutionError("execution.not-empty", `the control harness at ${harnessDir} still holds live execution sources: ${sources.join(", ")}. ` + `Import these sources with the supported \`mstar store upgrade --operator <name>\` operation; the retired ` + `staged migration writer is unavailable. Nothing was created or modified.`);
+  }
+}
+function assertActiveStoreAuthority(db) {
+  const row = db.prepare("select authority_state from store_meta where id = 1").get();
+  if (!row || typeof row.authority_state !== "string")
+    throw corrupt("store_meta is missing");
+  if (row.authority_state !== "active") {
+    throw new ExecutionError("store.not-active", `the issue/catalog store is ${row.authority_state}; run \`mstar store upgrade --operator <name>\` to import legacy ` + "workspace rows and activate both authorities; nothing was modified.");
+  }
+}
+function assertExecutionDomainEmpty(db, meta) {
+  if (meta.authorityState === "staged") {
+    throw new ExecutionError("execution.not-active", "the execution authority is staged. Run `mstar store upgrade --operator <name>` to import workspace records " + "and complete the minimal cutover; nothing was modified.");
+  }
+  if (meta.authorityState === "active") {
+    throw new ExecutionError("execution.not-empty", "the execution authority is already active. Initialization is create-only and never resets a live " + "execution domain; nothing was modified.");
+  }
+  const tables = [
+    "execution_workflows",
+    "execution_registry",
+    "execution_plans",
+    "execution_sessions",
+    "execution_integration_leases",
+    "execution_inputs",
+    "execution_operations",
+    "execution_migrations",
+    "catalog_execution_bindings"
+  ];
+  for (const table of tables) {
+    const row = db.prepare(`select count(*) as n from ${table}`).get();
+    const count = typeof row?.n === "number" ? row.n : 0;
+    if (count > 0) {
+      throw new ExecutionError("execution.not-empty", `${table} already holds ${count} row(s). Initialization creates an empty execution authority and never ` + `clears or adopts existing records; nothing was modified.`);
+    }
+  }
+}
+async function initializeExecutionAuthority(context) {
+  assertNoLegacyExecutionSources(context);
+  await withExecutionTransaction(context, (tx) => {
+    assertActiveStoreAuthority(tx.db);
+    assertExecutionDomainEmpty(tx.db, tx.execution);
+    const now = new Date().toISOString();
+    tx.db.prepare("update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, " + "activated_at = ? where id = 1").run(now, now);
+    tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
+    assertNoLegacyExecutionSources(context);
+    tx.db.prepare("delete from execution_operations where epoch < ?").run(tx.epoch + 1);
+  });
+  return readExecutionState(context);
+}
+function assertOperationId(value) {
+  if (typeof value !== "string" || !OPERATION_ID_RE.test(value)) {
+    throw new CoordinationError("coordination.invalid-input", "Invalid operation id: provide 1-128 ASCII characters from [A-Za-z0-9._:-]. Inspect workflow authority with mstar status validate.", { rejectedValue: value });
+  }
+  return value;
+}
+function invalidInput(detail) {
+  return new CoordinationError("coordination.invalid-input", detail);
+}
+function notNewLifecycle(detail) {
+  return new ExecutionError("execution.not-empty", detail);
+}
+function suppliedCatalogPin(row, workflowId, planId) {
+  const metadata = isPlainObject(row.metadata) ? row.metadata : null;
+  const raw = metadata === null ? undefined : metadata.catalog_pin;
+  if (raw === undefined || raw === null)
+    return null;
+  const what = `plan ${planId}'s metadata.catalog_pin`;
+  const details = { workflow_id: workflowId, plan_id: planId };
+  if (!isPlainObject(raw) || Object.keys(raw).length !== 4) {
+    throw new ExecutionPinConflictError(`${what} is not a complete catalog execution pin (store_id, entity_revision, document_hash, relation_hash); ` + "a malformed selection is never sealed as authority", details);
+  }
+  if (!isNonEmptyString(raw.store_id) || !STORE_UUID_RE.test(raw.store_id) || typeof raw.entity_revision !== "number" || !Number.isSafeInteger(raw.entity_revision) || raw.entity_revision <= 0 || !isNonEmptyString(raw.document_hash) || !isNonEmptyString(raw.relation_hash)) {
+    throw new ExecutionPinConflictError(`${what} is not a complete catalog execution pin (store_id, entity_revision, document_hash, relation_hash) ` + `— got ${JSON.stringify(raw)}`, details);
+  }
+  return {
+    store_id: raw.store_id,
+    entity_revision: raw.entity_revision,
+    document_hash: raw.document_hash,
+    relation_hash: raw.relation_hash
+  };
+}
+function resolveCreateWorkflow(caller, entry, snapshot, operationId) {
+  if (!isPlainObject(caller)) {
+    throw invalidInput("Invalid execution caller: provide a coordinator caller object. Inspect workflow authority with mstar status validate.");
+  }
+  assertOperationId(operationId);
+  const entryGate = validateWorkflowEntry(entry);
+  const snapshotGate = validateWorkflowSnapshot(snapshot);
+  const violations = [...entryGate.violations, ...snapshotGate.violations];
+  if (violations.length > 0) {
+    throw new CoordinationError("coordination.invalid-input", "Workflow entry/snapshot is invalid. Inspect registered workflow state with mstar status validate.", { violations: violations.map(({ code: code2, message }) => ({ code: code2, message })) });
+  }
+  const workflow = entry;
+  const doc = snapshot;
+  const workflowId = workflow.id;
+  if (caller.role !== "coordinator") {
+    throw new ExecutionError("execution.scope-mismatch", "creating a workflow is a coordinator operation");
+  }
+  if (caller.workflowId !== workflowId) {
+    throw new ExecutionError("execution.scope-mismatch", `the caller belongs to workflow ${caller.workflowId}, not to the workflow ${workflowId} this request creates`);
+  }
+  for (const field of ["id", "type", "started_at"]) {
+    if (workflow[field] !== doc[field]) {
+      throw invalidInput(`the workflow entry and its snapshot disagree on ${field}: entry ${JSON.stringify(workflow[field])}, ` + `snapshot ${JSON.stringify(doc[field])}. Registration fixes the identity anchors; creation never reconciles them.`);
+    }
+  }
+  if (doc.coordination !== undefined || doc.integration_merge_lease !== undefined || doc.delivery !== undefined) {
+    throw notNewLifecycle(`snapshot ${workflowId} already carries a coordinator binding, an integration merge lease or delivery evidence. ` + `Creation writes a NEW, unbound, unleased lifecycle that owns no accepted evidence; an existing lifecycle ` + `belongs on the staged migration route. Nothing was created.`);
+  }
+  if (isTerminalSnapshot(doc)) {
+    throw notNewLifecycle(`snapshot ${workflowId} is ${doc.status}. Registry membership selects an ACTIVE lifecycle, so a terminal snapshot ` + `is never created into the root register; nothing was created.`);
+  }
+  const plans = [];
+  const seen = new Set;
+  for (const row of doc.plans) {
+    const planId = rowPlanId(row);
+    if (seen.has(planId)) {
+      throw new CoordinationError("coordination.invalid-input", "Snapshot contains a duplicate plan identity. Inspect workflow rows with mstar status validate.", { workflow_id: workflowId, plan_id: planId });
+    }
+    seen.add(planId);
+    if (row.execution_lease !== undefined || row.coordination !== undefined) {
+      throw notNewLifecycle(`plan ${planId} of snapshot ${workflowId} already carries a coordination block or an execution lease. ` + `Creation writes unbound, unleased rows that own no accepted evidence; nothing was created.`);
+    }
+    plans.push({ planId, row, pin: suppliedCatalogPin(row, workflowId, planId) });
+  }
+  return { workflowId, entry: workflow, snapshot: doc, plans };
+}
+function createWorkflowRequestHash(caller, creation, expected) {
+  return createHash5("sha256").update(serializeExecutionValue({
+    operation: CREATE_WORKFLOW_OPERATION,
+    workflow_id: creation.workflowId,
+    expected,
+    caller: {
+      session_id: caller.sessionId,
+      role: caller.role,
+      workflow_id: caller.workflowId
+    },
+    entry: creation.entry,
+    snapshot: creation.snapshot
+  }), "utf8").digest("hex");
+}
+function readCommittedOperation(db, epoch, operationId) {
+  const row = db.prepare("select request_hash, store_id, workflow_id, result_json from execution_operations where epoch = ? and operation_id = ?").get(epoch, operationId);
+  if (!row)
+    return null;
+  const what = `execution_operations(${epoch},${operationId})`;
+  return {
+    requestHash: storedText(row.request_hash, `${what}.request_hash`),
+    storeId: storedText(row.store_id, `${what}.store_id`),
+    workflowId: storedText(row.workflow_id, `${what}.workflow_id`),
+    resultJson: storedText(row.result_json, `${what}.result_json`)
+  };
+}
+function readCommittedReceipt(recorded, tx, operationId, workflowId, token) {
+  const what = `execution_operations(${tx.epoch},${operationId})`;
+  if (recorded.storeId !== tx.storeId || recorded.workflowId !== workflowId) {
+    throw corrupt(`${what} records store ${JSON.stringify(recorded.storeId)} and workflow ${JSON.stringify(recorded.workflowId)}, ` + `which is not the workflow ${workflowId} this request addresses`);
+  }
+  const receipt = storedJsonObject(recorded.resultJson, `${what}.result_json`);
+  const recordedToken = receipt.token;
+  const parsed = parseExecutionToken(recordedToken);
+  const sameKey = parsed.key.length === token.key.length && parsed.key.every((part, index2) => part === token.key[index2]);
+  if (parsed.kind !== token.kind || parsed.storeId !== tx.storeId || parsed.epoch !== tx.epoch || !sameKey) {
+    throw corrupt(`${what}.result_json carries a token that does not address ${token.kind} ${JSON.stringify(token.key)} of this ` + `store in this epoch`);
+  }
+  if (!isNonEmptyString(receipt.storeId) || receipt.storeId !== tx.storeId || typeof receipt.epoch !== "number") {
+    throw corrupt(`${what}.result_json does not record the store identity it was committed under`);
+  }
+  if (receipt.slim !== true && !isPlainObject(receipt.data))
+    throw corrupt(`${what}.result_json carries no execution state`);
+  const recovery = receipt.operationRecovery;
+  if (recovery !== undefined) {
+    if (!isPlainObject(recovery) || !["applied", "already-satisfied", "partial", "unresolved"].includes(String(recovery.outcome)) || !["none", "committed", "partial", "unknown"].includes(String(recovery.commitState)) || !isPlainObject(recovery.target) || !Array.isArray(recovery.applied) || !Array.isArray(recovery.unresolved) || !Array.isArray(recovery.resolvedFrom) || !Array.isArray(recovery.warnings)) {
+      throw corrupt(`${what}.result_json carries an invalid recovery sidecar`);
+    }
+  }
+  const storedRecovery = recovery;
+  if (receipt.slim === true) {
+    const live = readExecutionStateGraph(tx);
+    return { ...live, ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }, ...storedReceiptFacts(receipt) };
+  }
+  return {
+    data: receipt.data,
+    token: recordedToken,
+    storeId: receipt.storeId,
+    epoch: receipt.epoch,
+    ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery },
+    ...storedReceiptFacts(receipt)
+  };
+}
 function holderLiveWarningOf(value) {
   return isPlainObject(value) && value.code === "recovery.holder-live" && isNonEmptyString(value.holder) && typeof value.epoch === "number" && value.observed_state === "active" && isNonEmptyString(value.attested_at) ? value : undefined;
 }
@@ -10948,6 +12786,881 @@ function storedReceiptFacts(receipt) {
     ...warning === undefined ? {} : { holder_live_warning: warning }
   };
 }
+function assertWorkflowIdentityIsNew(db, workflowId) {
+  const row = db.prepare("select revision from execution_workflows where workflow_id = ?").get(workflowId);
+  if (!row)
+    return;
+  throw notNewLifecycle(`execution_workflows already holds workflow ${workflowId} (revision ${String(row.revision)}). A workflow identity is ` + `create-only: re-creating it never restores registry membership, resets revisions or rewrites its rows. ` + `Nothing was created.`);
+}
+function assertSelectedCatalogEntities(db, storeId, workflowId, plans) {
+  const entity = db.prepare("select revision from catalog_entities where kind = 'plan' and id = ?");
+  for (const plan of plans) {
+    const { pin } = plan;
+    if (pin === null)
+      continue;
+    const details = { workflow_id: workflowId, plan_id: plan.planId, pin };
+    if (pin.store_id !== storeId) {
+      throw new ExecutionPinConflictError(`plan ${plan.planId} selects catalog store ${pin.store_id}, which is not this store (${storeId}) — a foreign ` + `selection is never sealed as this store's frozen input`, details);
+    }
+    if (entity.get(plan.planId) === undefined) {
+      throw new ExecutionPinConflictError(`plan ${plan.planId} is pinned to catalog plan entity ${plan.planId} at revision ${pin.entity_revision}, but the ` + `catalog does not hold that entity. Creation binds existing catalog identities and never fabricates one; ` + `register the plan or drop the pin`, details);
+    }
+  }
+}
+function writeCreatedWorkflow(db, input) {
+  const { workflowId, entry, snapshot, plans, creatorSessionId, now } = input;
+  const header = { ...snapshot };
+  delete header.plans;
+  db.prepare("insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) " + "values (?, 1, ?, ?, ?, ?)").run(workflowId, creatorSessionId, JSON.stringify(header), now, now);
+  db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(workflowId, JSON.stringify(entry));
+  const insertPlan = db.prepare("insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) " + "values (?, ?, 1, ?, ?, '{}')");
+  const insertInput = db.prepare("insert into execution_inputs(workflow_id, plan_id, revision, input_json, input_hash, catalog_pin_json) " + "values (?, ?, 1, ?, ?, ?)");
+  plans.forEach((plan, ordinal) => {
+    const state = { ...plan.row, id: plan.planId };
+    delete state.coordination;
+    delete state.execution_lease;
+    insertPlan.run(workflowId, plan.planId, ordinal, JSON.stringify(state));
+    insertInput.run(workflowId, plan.planId, JSON.stringify(executionInputSelection(plan.row, plan.planId)), executionInputHash(plan.row, plan.planId), plan.pin === null ? null : JSON.stringify(plan.pin));
+  });
+}
+function writeExecutionCreation(tx, input) {
+  assertWorkflowIdentityIsNew(tx.db, input.creation.workflowId);
+  assertSelectedCatalogEntities(tx.db, tx.storeId, input.creation.workflowId, input.creation.plans);
+  writeCreatedWorkflow(tx.db, {
+    workflowId: input.creation.workflowId,
+    entry: input.creation.entry,
+    snapshot: input.creation.snapshot,
+    plans: input.creation.plans,
+    creatorSessionId: isNonEmptyString(input.caller.sessionId) ? input.caller.sessionId : null,
+    now: input.now
+  });
+  tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(input.now);
+  tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+}
+function executionRootTokenOf(tx) {
+  return executionToken("root", tx.storeId, tx.epoch, [], readExecutionMetaRow(tx.db).revision);
+}
+async function adoptTerminalWorkflow(context, input) {
+  const caller = context.caller;
+  if (caller.role !== "coordinator" || caller.workflowId !== input.workflowId || !isNonEmptyString(caller.sessionId)) {
+    throw new ExecutionError("execution.scope-mismatch", "terminal adoption requires an acquired coordinator identity addressing the selected workflow");
+  }
+  if (!isNonEmptyString(input.workflowId) || input.expectedRevision !== undefined && (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) || !isNonEmptyString(input.reason) || !isNonEmptyString(input.operationId)) {
+    throw new ExecutionError("execution.adoption-invalid", "workflowId, an optional positive expectedRevision, non-empty reason, and operationId are required");
+  }
+  const attestation = input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
+  const requestHash2 = semanticRequestHash({
+    operation: "workflow.adopt-terminal",
+    address: { workflowId: input.workflowId },
+    caller,
+    intent: {
+      expectedRevision: input.expectedRevision ?? "current",
+      reason: input.reason,
+      ...attestation === undefined ? {} : { attestation }
+    }
+  });
+  return withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; terminal adoption requires an active authority`);
+    }
+    const replay = readOperationReplay(tx, {
+      operationId: input.operationId,
+      requestHash: requestHash2,
+      workflowId: input.workflowId,
+      planId: null,
+      token: { kind: "root", key: [] }
+    });
+    if (replay !== null) {
+      const { operationRecovery: operationRecovery2, ...recorded } = replay;
+      return { ...recorded, ...operationRecovery2 === undefined ? {} : { recovery: operationRecovery2 } };
+    }
+    const row = tx.db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(input.workflowId);
+    if (row === undefined) {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no header to adopt; register the workflow through the supported workflow registration route`);
+    }
+    const revision = storedRevision(row.revision, `execution_workflows(${input.workflowId}).revision`);
+    if (input.expectedRevision !== undefined && revision !== input.expectedRevision) {
+      throw new ExecutionError("execution.header-revision-conflict", `workflow ${input.workflowId} header revision is ${revision}, not expected revision ${input.expectedRevision}; re-read status validate and retry with its listed revision`);
+    }
+    const registered = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(input.workflowId);
+    if (registered !== undefined) {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is already registered; finish its lifecycle through mstar status workflow-close`);
+    }
+    const state = storedJsonObject(row.state_json, `execution_workflows(${input.workflowId}).state_json`);
+    const unclosed = state.status !== "completed" && state.status !== "stopped" && state.status !== "failed";
+    if (state.lifecycle_adopted_at !== undefined || state.adopt_reason !== undefined) {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} already has a terminal-adoption record; read status validate and use the recorded result`);
+    }
+    const now = new Date().toISOString();
+    const activeHolders = readWorkflowSessionRows(tx, input.workflowId, "coordinator").filter((row2) => row2.state === "active" && row2.ref.epoch === tx.epoch).map((row2) => row2.ref.sessionId).sort();
+    const proof = attestation ?? validateRecoveryAttestation(provisionRecoveryDocument({
+      actor: caller.sessionId,
+      authorizationRef: input.operationId,
+      attestedAt: now,
+      stoppedSessions: activeHolders.map((sessionId) => ({ sessionId, host: "local", state: "stopped" }))
+    }));
+    if (proof.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
+      throw new ExecutionError("execution.adoption-refused", `the adopting caller ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded by this adoption's proof; terminal ` + `adoption settles a workflow's ACTIVE holder rows and never the identity making the call, so the attested stop must come ` + `from a distinct operator identity. Rerun from a session id other than the one the proof names stopped, with a stop list ` + `covering only the addressed workflow's ACTIVE holder(s).`, { workflow_id: input.workflowId, caller_session_id: caller.sessionId, adoption_refusal: "self-settlement" });
+    }
+    if (activeHolders.length > 0) {
+      const attested = new Set(proof.stoppedSessions.map((session) => session.sessionId));
+      const unattested = activeHolders.filter((sessionId) => !attested.has(sessionId));
+      if (unattested.length > 0) {
+        throw new ExecutionError("execution.adoption-refused", `this attestation does not name ${unattested.map((sessionId) => JSON.stringify(sessionId)).join(", ")} — the ACTIVE ` + `coordinator session(s) of workflow ${input.workflowId} at epoch ${tx.epoch} — as stopped/reloaded, so the settlement ` + `cannot proceed: every addressed ACTIVE holder needs its own stop evidence, and the engine cannot observe a dead ` + `process itself. Omit --attestation and the engine generates that document from these rows itself; alternatively add ` + `each listed session to the supplied document's stoppedSessions and retry.`, {
+          workflow_id: input.workflowId,
+          epoch: tx.epoch,
+          active_holder_sessions: activeHolders,
+          unattested_sessions: unattested,
+          adoption_refusal: "active-session-proof-incomplete"
+        });
+      }
+      for (const sessionId of activeHolders) {
+        revokeSessionRow(tx, { workflowId: input.workflowId, role: "coordinator", sessionId });
+      }
+    }
+    const nextState = {
+      ...state,
+      ...unclosed ? { status: "stopped", ended_at: now, updated_at: now } : {},
+      lifecycle_adopted_at: now,
+      adopt_reason: input.reason,
+      adoption_actor_session_id: caller.sessionId,
+      adoption_operation_id: input.operationId
+    };
+    const expectedRevision = input.expectedRevision ?? revision;
+    tx.db.prepare("update execution_workflows set revision = revision + 1, state_json = ?, updated_at = ? where workflow_id = ? and revision = ?").run(JSON.stringify(nextState), now, input.workflowId, expectedRevision);
+    tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(now);
+    tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    const settlement = {
+      outcome: activeHolders.length === 0 ? "already-satisfied" : "applied",
+      target: { workflowId: input.workflowId },
+      applied: activeHolders.map((sessionId) => `execution_sessions(${input.workflowId}, coordinator, ${sessionId}) revoked`),
+      unresolved: [],
+      resolvedFrom: [
+        { path: "attestation.operator", source: `${proof.operator.actor} (${proof.operator.authorizationRef})` },
+        { path: "attestation.attestedAt", source: proof.attestedAt },
+        {
+          path: "attestation.stoppedSessions",
+          source: proof.stoppedSessions.length === 0 ? "none" : proof.stoppedSessions.map((session) => session.sessionId).join(", ")
+        }
+      ],
+      warnings: activeHolders.length === 0 && attestation !== undefined ? [{
+        code: "execution.adoption.nothing-to-settle",
+        message: `the supplied attestation named no ACTIVE coordinator session of workflow ${input.workflowId}; the adoption was recorded without a settlement`
+      }] : [],
+      commitState: "committed"
+    };
+    const receipt = {
+      data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, readExecutionMetaRow(tx.db)),
+      token: executionRootTokenOf(tx),
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      ...settlement === undefined ? {} : { operationRecovery: settlement }
+    };
+    writeOperationReceipt(tx, { operationId: input.operationId, requestHash: requestHash2, workflowId: input.workflowId, planId: null, receipt, now, slim: true });
+    pruneWorkflowOperationReceipts(tx, input.workflowId, input.operationId);
+    const { operationRecovery, ...publicReceipt } = receipt;
+    return {
+      ...publicReceipt,
+      operationId: input.operationId,
+      replayed: false,
+      ...operationRecovery === undefined ? {} : { recovery: operationRecovery }
+    };
+  });
+}
+async function createExecutionWorkflow(context, input) {
+  const creation = resolveCreateWorkflow(context.caller, input?.entry, input?.snapshot, input?.operationId);
+  const operationId = input.operationId;
+  const requestHash2 = createWorkflowRequestHash(context.caller, creation, input.expected);
+  return withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; domain creation requires an active authority. ` + `A staged store is inspectable only through migration diagnostics.`);
+    }
+    const recorded = readCommittedOperation(tx.db, tx.epoch, operationId);
+    if (recorded !== null) {
+      if (recorded.requestHash !== requestHash2) {
+        throw new ExecutionError("execution.operation-conflict", `operation id ${JSON.stringify(operationId)} is already committed on this store epoch for a different request ` + `(kind, scope, expected token, caller or payload). An operation id is an idempotency key, not a reusable ` + `slot — retry the committed request unchanged or use a new id. Nothing was created.`);
+      }
+      return {
+        ...readCommittedReceipt(recorded, tx, operationId, creation.workflowId, { kind: "root", key: [] }),
+        operationId,
+        replayed: true
+      };
+    }
+    assertExecutionToken(input.expected, {
+      kind: "root",
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      key: [],
+      revision: tx.execution.revision
+    });
+    const now = new Date().toISOString();
+    writeExecutionCreation(tx, { caller: context.caller, creation, now });
+    const meta = readExecutionMetaRow(tx.db);
+    const store = { storeId: tx.storeId, epoch: tx.epoch };
+    const receipt = {
+      data: readExecutionGraph(tx.db, store, meta),
+      token: executionToken("root", store.storeId, store.epoch, [], meta.revision),
+      storeId: store.storeId,
+      epoch: store.epoch
+    };
+    writeOperationReceipt(tx, { operationId, requestHash: requestHash2, workflowId: creation.workflowId, planId: null, receipt, now, slim: true });
+    return { ...receipt, operationId, replayed: false };
+  });
+}
+function resolveBindRequest(caller, input) {
+  if (!isPlainObject(input))
+    throw invalidInput("Invalid session bind: provide a request object. Inspect workflow authority with mstar status validate.");
+  if (!isNonEmptyString(caller?.sessionId))
+    throw invalidInput("Invalid execution caller: provide a non-empty session identity. Inspect workflow authority with mstar status validate.");
+  const { workflowId } = input;
+  const operationId = assertOperationId(input.operationId);
+  if (!isNonEmptyString(workflowId))
+    throw invalidInput("Invalid session bind: provide a non-empty workflowId. Inspect registered workflows with mstar status validate.");
+  if (caller.role !== "coordinator" || caller.workflowId !== workflowId) {
+    throw new ExecutionError("execution.scope-mismatch", "the session bind must address the trusted caller's coordinator workflow");
+  }
+  return { role: "coordinator", workflowId, sessionId: caller.sessionId, operationId };
+}
+function bindFreshnessIntent(expected) {
+  return expected === undefined ? { freshness: "omitted" } : { freshness: "supplied", token: expected };
+}
+function bindSessionRequestHash(caller, bind, expected) {
+  return createHash5("sha256").update(serializeExecutionValue({
+    operation: BIND_SESSION_OPERATION,
+    workflow_id: bind.workflowId,
+    role: bind.role,
+    expected: bindFreshnessIntent(expected),
+    caller: { session_id: caller.sessionId, role: caller.role, workflow_id: caller.workflowId }
+  }), "utf8").digest("hex");
+}
+function storedSessionState(value, what) {
+  if (!EXECUTION_SESSION_STATES.includes(value)) {
+    throw corrupt(`${what} is ${JSON.stringify(value)}, which is not a session state`);
+  }
+  return value;
+}
+function readSessionRows(db, store, workflowId) {
+  const rows = db.prepare("select role, session_id, epoch, revision, state from execution_sessions where workflow_id = ? and role = 'coordinator'").all(workflowId);
+  return rows.map((row) => {
+    const ref = sessionRef(store, workflowId, row);
+    return {
+      ref,
+      revision: storedRevision(row.revision, `execution_sessions(${workflowId},${ref.sessionId}).revision`),
+      state: storedSessionState(row.state, `execution_sessions(${workflowId},${ref.sessionId}).state`)
+    };
+  });
+}
+function readWorkflowHeaderRow(db, workflowId) {
+  const row = db.prepare("select revision, creator_session_id from execution_workflows where workflow_id = ?").get(workflowId);
+  if (row === undefined) {
+    throw new CoordinationError("coordination.workflow-not-found", `workflow ${workflowId} is not in the execution authority. A session binds only to a registered lifecycle; ` + `nothing was bound.`, { workflow_id: workflowId });
+  }
+  if (row.creator_session_id !== null && row.creator_session_id !== undefined && !isNonEmptyString(row.creator_session_id)) {
+    throw corrupt(`execution_workflows(${workflowId}).creator_session_id is not a session identity`);
+  }
+  return {
+    revision: storedRevision(row.revision, `execution_workflows(${workflowId}).revision`),
+    creatorSessionId: isNonEmptyString(row.creator_session_id) ? row.creator_session_id : null
+  };
+}
+function sessionRefusalDetails(input) {
+  return {
+    component: input.problem.component,
+    path: input.problem.path,
+    ...input.facts,
+    sources_tried: input.problem.sourcesTried,
+    current_facts: input.problem.currentFacts,
+    available_work: input.problem.availableWork,
+    recoveryFacts: unresolvedRecovery({ target: input.target ?? {}, unresolved: [input.problem] })
+  };
+}
+function coordinatorRecoveryWork(input) {
+  const live = input.rows.find((row) => row.state === "active" && row.ref.epoch === input.epoch);
+  if (live !== undefined) {
+    return [
+      `recovering over this row by naming it is refused while workflow ${JSON.stringify(input.workflowId)} holds the ` + `ACTIVE coordinator session ${JSON.stringify(live.ref.sessionId)} at epoch ${input.epoch}: ` + `recoverExecutionCoordinator replaces only the holder it names, and a normal bind never revives this ` + `${input.rowState} row (epoch ${input.rowEpoch}) — run the addressed effect through ` + `${JSON.stringify(live.ref.sessionId)}'s own live reference, or recover over that holder: the recovery names ` + `${JSON.stringify(live.ref.sessionId)} as the prior holder and carries a valid operator attestation with its ` + `stopped/reloaded entry — the attestation is the stop evidence, and no change to the holder's row is ` + `needed first`
+    ];
+  }
+  return [
+    `recovery is the coordinator recovery transition recoverExecutionCoordinator: it takes the workflow token ` + `of the current epoch, an operation id and a non-empty reason, names ${JSON.stringify(input.sessionId)} ` + `as the prior holder it replaces and carries a valid operator attestation — exactly one installed ` + `current-coordinator consumer plus an entry naming that holder stopped/reloaded — and it reactivates ` + `this ${input.rowState} row (epoch ${input.rowEpoch}) at the current epoch; a normal bind never revives it`
+  ];
+}
+function liveSession(tx, address) {
+  const store = { storeId: tx.storeId, epoch: tx.epoch };
+  const rows = readSessionRows(tx.db, store, address.workflowId);
+  const mine = rows.find((row) => row.ref.sessionId === address.sessionId);
+  if (mine === undefined || mine.state !== "active" || mine.ref.epoch !== tx.epoch) {
+    const problem = {
+      component: "session",
+      path: "session",
+      code: "execution.session-unavailable",
+      sourcesTried: [`the coordinator session rows of workflow ${JSON.stringify(address.workflowId)}, read in this transaction`],
+      currentFacts: [
+        `the reference names coordinator session ${JSON.stringify(address.sessionId)} of workflow ${JSON.stringify(address.workflowId)}`,
+        mine === undefined ? `the store holds no coordinator session row for ${JSON.stringify(address.sessionId)} at the current epoch ${tx.epoch}` : `session ${JSON.stringify(address.sessionId)}'s row is ${mine.state} in epoch ${mine.ref.epoch}, while the store's ` + `current authority epoch is ${tx.epoch}`
+      ],
+      needed: `a session reference the store holds ACTIVE for the coordinator of workflow ${JSON.stringify(address.workflowId)} ` + `at the current epoch ${tx.epoch}`,
+      withheldEffect: "only the addressed effect: authority was withheld, so nothing was written, no revision advanced and no receipt " + "was committed under this operation",
+      availableWork: [
+        `present the session reference of a binding the store holds ACTIVE for the coordinator of workflow ` + `${JSON.stringify(address.workflowId)} at epoch ${tx.epoch}`,
+        ...mine === undefined ? ["bind the coordinator session first — the bind verb takes the workflow, the full execution token and an operation id"] : coordinatorRecoveryWork({
+          rows,
+          workflowId: address.workflowId,
+          epoch: tx.epoch,
+          sessionId: address.sessionId,
+          rowState: mine.state,
+          rowEpoch: mine.ref.epoch
+        }),
+        "retry the operation with the reference and token of the current epoch"
+      ]
+    };
+    throw new ExecutionError("execution.session-unavailable", `workflow ${address.workflowId} holds no ACTIVE coordinator session ${address.sessionId} in epoch ${tx.epoch}` + `${mine === undefined ? "" : ` (its row is ${mine.state} in epoch ${mine.ref.epoch})`}. An execution session ` + `reference authorizes only the binding the store records at the current epoch; a legacy session envelope is ` + `never consulted.`, sessionRefusalDetails({
+      problem,
+      target: { workflowId: address.workflowId },
+      facts: {
+        session_id: address.sessionId,
+        workflow_id: address.workflowId,
+        role: address.role,
+        current_epoch: tx.epoch,
+        ...mine === undefined ? {} : { row_state: mine.state, row_epoch: mine.ref.epoch }
+      }
+    }));
+  }
+  return mine;
+}
+function assertReferenceAuthority(tx, referenceStoreId, referenceEpoch, target) {
+  assertAuthorityGeneration(tx, { referenceStoreId, referenceEpoch, ...target === undefined ? {} : { target } });
+}
+function writeExecutionSession(db, input) {
+  db.prepare("insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) " + "values (?, 'coordinator', ?, ?, 1, 'active', ?)").run(input.workflowId, input.address.sessionId, input.epoch, input.now);
+}
+function writePlanCoordinationRow(tx, input) {
+  tx.db.prepare("update execution_plans set state_json = ?, coordination_json = ?, revision = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(input.state), JSON.stringify(input.coordination), input.revision, input.workflowId, input.planId);
+}
+function readExecutionSealedInput(tx, workflowId, planId) {
+  const row = tx.db.prepare("select revision, input_hash, catalog_pin_json from execution_inputs where workflow_id = ? and plan_id = ?").get(workflowId, planId);
+  if (row === undefined) {
+    throw corrupt(`plan ${planId} has no sealed execution input in workflow ${workflowId}`);
+  }
+  return {
+    revision: storedRevision(row.revision, `execution_inputs(${workflowId},${planId}).revision`),
+    inputHash: storedText(row.input_hash, `execution_inputs(${workflowId},${planId}).input_hash`),
+    pin: readFrozenInput(row.catalog_pin_json, `execution_inputs(${workflowId},${planId}).catalog_pin_json`)
+  };
+}
+function writeExecutionInputPin(tx, input) {
+  const sealed = readExecutionSealedInput(tx, input.workflowId, input.planId);
+  const storedPinJson = sealed.pin === null ? null : serializeExecutionValue(sealed.pin);
+  const nextPinJson = input.pin === null ? null : serializeExecutionValue(input.pin);
+  if (storedPinJson === nextPinJson)
+    return;
+  tx.db.prepare("update execution_inputs set catalog_pin_json = ?, revision = ? where workflow_id = ? and plan_id = ?").run(nextPinJson, sealed.revision + 1, input.workflowId, input.planId);
+}
+function advancePlanOperationRevisions(tx, input) {
+  tx.db.prepare("update execution_workflows set revision = revision + 1, updated_at = ? where workflow_id = ?").run(input.now, input.workflowId);
+  tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+}
+function advanceWorkflowHeaderRevision(tx, input) {
+  tx.db.prepare("update execution_workflows set revision = revision + 1, updated_at = ? where workflow_id = ?").run(input.now, input.workflowId);
+  tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+}
+function recordRootMembershipLoss(tx, input) {
+  tx.db.prepare("delete from execution_registry where workflow_id = ?").run(input.workflowId);
+  tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(input.now);
+}
+function requireWorkflowState(tx, workflowId) {
+  const row = tx.db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(workflowId);
+  if (row === undefined) {
+    throw new CoordinationError("coordination.workflow-not-found", "Workflow is not in the execution authority. Inspect registered workflows with mstar status validate.", { workflow_id: workflowId });
+  }
+  return {
+    revision: storedRevision(row.revision, `execution_workflows(${workflowId}).revision`),
+    state: storedJsonObject(row.state_json, `execution_workflows(${workflowId}).state_json`)
+  };
+}
+function writeWorkflowState(tx, input) {
+  tx.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(input.state), input.workflowId);
+}
+function readLiveSessionIdentities(tx, workflowId) {
+  const rows = tx.db.prepare("select session_id from execution_sessions where workflow_id = ? and state = 'active' and epoch = ?").all(workflowId, tx.epoch);
+  return new Set(rows.map((row) => storedText(row.session_id, `execution_sessions(${workflowId}).session_id`)));
+}
+function readWorkflowSessionRows(tx, workflowId, role) {
+  if (role !== "coordinator") {
+    throw new CoordinationError("coordination.identity-mismatch", "Execution authority supports coordinator session rows only. Inspect registered workflow authority with mstar status validate.", {
+      role
+    });
+  }
+  return readSessionRows(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, workflowId);
+}
+function revokeSessionRow(tx, input) {
+  if (input.role !== "coordinator") {
+    throw new CoordinationError("coordination.identity-mismatch", "Execution authority can revoke coordinator session rows only. Inspect registered workflow authority with mstar status validate.", { role: input.role });
+  }
+  tx.db.prepare("update execution_sessions set state = 'revoked', revision = revision + 1 " + "where workflow_id = ? and role = 'coordinator' and session_id = ? and state <> 'revoked'").run(input.workflowId, input.sessionId);
+}
+function bindRecoveredSession(tx, input) {
+  const existing = tx.db.prepare("select revision from execution_sessions where workflow_id=? and role='coordinator' and session_id=?").get(input.workflowId, input.sessionId);
+  if (existing === undefined) {
+    writeExecutionSession(tx.db, {
+      workflowId: input.workflowId,
+      address: { workflowId: input.workflowId, role: "coordinator", sessionId: input.sessionId },
+      epoch: input.epoch,
+      now: input.now
+    });
+    return 1;
+  }
+  const revision = storedRevision(existing.revision, `execution_sessions(${input.workflowId},${input.sessionId}).revision`) + 1;
+  tx.db.prepare("update execution_sessions set state='active', epoch=?, revision=?, bound_at=? where workflow_id=? and role='coordinator' and session_id=?").run(input.epoch, revision, input.now, input.workflowId, input.sessionId);
+  return revision;
+}
+function claimIntegrationMergeLease(tx, input) {
+  const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
+  tx.db.prepare("insert or replace into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, ?, ?, ?)").run(input.workflowId, existing === null ? 1 : existing.revision + 1, tx.epoch, JSON.stringify({ ...input.lease, status: "held" }));
+}
+function releaseIntegrationMergeLease(tx, input) {
+  const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
+  if (existing === null || existing.status === "released")
+    return;
+  const tombstone = {
+    ...input.claim,
+    status: "released",
+    prior_holder: input.claim.holder,
+    released_by: input.releasedBy,
+    released_at: input.now,
+    release_reason: input.reason
+  };
+  tx.db.prepare("update execution_integration_leases set revision = ?, lease_json = ? where workflow_id = ?").run(existing.revision + 1, JSON.stringify(tombstone), input.workflowId);
+}
+function readPlanOperationReplay(tx, input) {
+  const replay = readOperationReplay(tx, {
+    ...input,
+    token: { kind: "plan", key: [input.workflowId, input.planId] }
+  });
+  if (replay === null)
+    return null;
+  const { operationRecovery, ...receipt } = replay;
+  return { ...receipt, ...operationRecovery === undefined ? {} : { recovery: operationRecovery } };
+}
+async function readPlanOperationReplayBeforeProof(context, read, input) {
+  const caller = context.caller;
+  if (caller.role !== "coordinator" || caller.sessionId !== read.sessionId || caller.workflowId !== read.workflowId) {
+    throw new CoordinationError("coordination.identity-mismatch", "Trusted caller does not match the coordinator session resolved for this plan address. Inspect workflow authority with mstar status validate.", { session_id: read.sessionId, workflow_id: read.workflowId });
+  }
+  return withExecutionReadTransaction(context, (tx) => {
+    assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
+    liveSession(tx, { workflowId: read.workflowId, role: "coordinator", sessionId: read.sessionId });
+    return readPlanOperationReplay(tx, {
+      ...input,
+      workflowId: read.workflowId,
+      planId: read.planId
+    });
+  });
+}
+async function readWorkflowOperationReplayBeforeProof(context, read, input) {
+  return withExecutionReadTransaction(context, (tx) => {
+    assertAuthorityGeneration(tx, {
+      referenceStoreId: read.referenceStoreId,
+      referenceEpoch: read.referenceEpoch,
+      target: { workflowId: read.workflowId }
+    });
+    resolveWorkflowSession(tx, read);
+    const replay = readOperationReplay(tx, {
+      ...input,
+      workflowId: read.workflowId,
+      planId: null,
+      token: { kind: "root", key: [] }
+    });
+    if (replay === null)
+      return null;
+    return { replay, storeId: tx.storeId, epoch: tx.epoch, revision: requireWorkflowState(tx, read.workflowId).revision };
+  }, "a workflow transition requires an active authority");
+}
+function readOperationReplay(tx, input) {
+  const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
+  if (recorded === null)
+    return null;
+  const legacyHashes = input.legacyRequestHash === undefined || input.legacyRequestHash === null ? [] : Array.isArray(input.legacyRequestHash) ? input.legacyRequestHash : [input.legacyRequestHash];
+  if (recorded.requestHash !== input.requestHash && !legacyHashes.includes(recorded.requestHash)) {
+    const problem = {
+      component: "operation",
+      path: "operationId",
+      code: "execution.operation-conflict",
+      sourcesTried: [
+        `execution_operations(epoch ${tx.epoch}, ${JSON.stringify(input.operationId)})`,
+        "the requested operation's semantic selection"
+      ],
+      currentFacts: [
+        `operation id ${JSON.stringify(input.operationId)} is committed for workflow ${recorded.workflowId} ` + `with request fingerprint ${recorded.requestHash}`,
+        `the requested operation's fingerprint is ${input.requestHash}`
+      ],
+      needed: "retry the committed request unchanged (an operation id is an idempotency key, not a reusable slot), or use a " + "new operation id for the new effect",
+      withheldEffect: "the requested effect, exactly as sent: no state was restored from the committed receipt either",
+      availableWork: [
+        `read the current state of workflow ${recorded.workflowId}`,
+        "retry the committed request unchanged under its own operation id",
+        "express the new effect under a new operation id"
+      ]
+    };
+    throw new ExecutionError("execution.operation-conflict", `operation id ${JSON.stringify(input.operationId)} is already committed on this store epoch for a different semantic ` + `request (its addressed record, caller or business payload). An operation id is an idempotency key, not a reusable ` + `slot — retry the committed request unchanged or use a new id. Nothing was written.`, {
+      component: problem.component,
+      path: problem.path,
+      operation_id: input.operationId,
+      recorded_fingerprint: recorded.requestHash,
+      requested_fingerprint: input.requestHash,
+      sources_tried: problem.sourcesTried,
+      current_facts: problem.currentFacts,
+      available_work: problem.availableWork,
+      recoveryFacts: unresolvedRecovery({
+        target: { workflowId: input.workflowId, ...input.planId === null ? {} : { planId: input.planId } },
+        unresolved: [problem]
+      })
+    });
+  }
+  const receipt = readCommittedReceipt(recorded, tx, input.operationId, input.workflowId, input.token);
+  return { ...receipt, operationId: input.operationId, replayed: true };
+}
+function writePlanOperationReceipt(tx, input) {
+  writeOperationReceipt(tx, input);
+}
+function receiptFacts(receipt) {
+  return {
+    ...receipt.operationRecovery === undefined ? {} : { operationRecovery: receipt.operationRecovery },
+    ...receipt.actor_session_id === undefined ? {} : { actor_session_id: receipt.actor_session_id },
+    ...receipt.reason === undefined ? {} : { reason: receipt.reason },
+    ...receipt.holder_live_warning === undefined ? {} : { holder_live_warning: receipt.holder_live_warning }
+  };
+}
+function writeOperationReceipt(tx, input) {
+  tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " + "values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.slim === true ? { slim: true, token: input.receipt.token, storeId: tx.storeId, epoch: tx.epoch, ...receiptFacts(input.receipt) } : input.receipt), input.now);
+}
+function pruneWorkflowOperationReceipts(tx, workflowId, keepOperationId) {
+  tx.db.prepare("delete from execution_operations where workflow_id = ? and (epoch != ? or operation_id != ?)").run(workflowId, tx.epoch, keepOperationId);
+}
+function resolvePlanRead(caller, session, planId) {
+  if (!isPlainObject(session))
+    throw invalidInput("Invalid plan read: provide an execution session reference. Inspect workflow authority with mstar status validate.");
+  const { storeId, epoch, workflowId, role, sessionId } = session;
+  if (!isNonEmptyString(storeId) || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= 0 || !isNonEmptyString(workflowId) || !isNonEmptyString(sessionId) || role !== "coordinator") {
+    throw invalidInput("Invalid coordinator session reference: provide storeId, positive epoch, workflowId, role, and sessionId. Inspect workflow authority with mstar status validate.");
+  }
+  if (!isNonEmptyString(planId))
+    throw invalidInput("Invalid plan read: provide the explicit plan id. Inspect workflow rows with mstar status validate.");
+  if (caller.role !== "coordinator" || caller.sessionId !== sessionId || caller.workflowId !== workflowId) {
+    throw new CoordinationError("coordination.identity-mismatch", "Trusted caller does not match the coordinator session reference. Inspect workflow authority with mstar status validate.");
+  }
+  return { workflowId, role, sessionId, planId, referenceStoreId: storeId, referenceEpoch: epoch };
+}
+async function bindExecutionSession(context, input) {
+  const bind = resolveBindRequest(context.caller, input);
+  const requestHash2 = bindSessionRequestHash(context.caller, bind, input.expected);
+  return withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; binding a session requires an active authority. ` + `A staged store is inspectable only through migration diagnostics.`);
+    }
+    const recorded = readCommittedOperation(tx.db, tx.epoch, bind.operationId);
+    if (recorded !== null) {
+      if (recorded.requestHash !== requestHash2) {
+        throw new ExecutionError("execution.operation-conflict", `operation id ${JSON.stringify(bind.operationId)} is already committed on this store epoch for a different request. ` + `An operation id is an idempotency key, not a reusable slot — retry the committed request unchanged, or express the ` + `new effect under a new operation id. Nothing was bound.`, { operation_id: bind.operationId, recorded_fingerprint: recorded.requestHash, requested_fingerprint: requestHash2 });
+      }
+      const receipt2 = readCommittedReceipt(recorded, tx, bind.operationId, bind.workflowId, {
+        kind: "session",
+        key: [bind.workflowId, "coordinator", bind.sessionId]
+      });
+      assertReferenceAuthority(tx, receipt2.data.storeId, receipt2.data.epoch);
+      liveSession(tx, { workflowId: bind.workflowId, role: "coordinator", sessionId: bind.sessionId });
+      return { ...receipt2, operationId: bind.operationId, replayed: true };
+    }
+    const header = readWorkflowHeaderRow(tx.db, bind.workflowId);
+    const expected = input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [bind.workflowId], header.revision);
+    assertExecutionToken(expected, {
+      kind: "workflow",
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      key: [bind.workflowId],
+      revision: header.revision
+    });
+    const view = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);
+    if (view.state.status !== "running") {
+      throw new CoordinationError("coordination.invalid-transition", "Coordinator session binding requires a running workflow lifecycle. Inspect current workflow state with mstar status validate.", { workflow_id: bind.workflowId, status: view.state.status });
+    }
+    const rows = readSessionRows(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);
+    const live = rows.find((row) => row.state === "active" && row.ref.epoch === tx.epoch);
+    if (live !== undefined) {
+      throw sessionBindRefusal({
+        code: "coordination.identity-mismatch",
+        detail: `workflow ${bind.workflowId} already holds the ACTIVE coordinator session ${JSON.stringify(live.ref.sessionId)} at ` + `epoch ${tx.epoch}. Ownership is not replaceable by a bind: resume that holder's own binding, or run ` + `recoverExecutionCoordinator naming ${JSON.stringify(live.ref.sessionId)} with its stop/reload attestation. Nothing was bound.`,
+        workflowId: bind.workflowId,
+        sessionId: bind.sessionId,
+        holder: live.ref.sessionId,
+        holderEpoch: live.ref.epoch,
+        facts: { holder: live.ref.sessionId, holder_epoch: live.ref.epoch, current_epoch: tx.epoch }
+      });
+    }
+    const mine = rows.find((row) => row.ref.sessionId === bind.sessionId);
+    if (mine !== undefined && (mine.state !== "active" || mine.ref.epoch !== tx.epoch)) {
+      throw sessionBindRefusal({
+        code: "execution.session-unavailable",
+        detail: `workflow ${bind.workflowId} records session ${JSON.stringify(bind.sessionId)} in state ${mine.state} at epoch ` + `${mine.ref.epoch}; the current epoch is ${tx.epoch}. A suspended, revoked or epoch-invalidated binding is never revived ` + `by a normal bind — run recoverExecutionCoordinator, which takes the workflow token, an operation id, a reason and the ` + `prior holder ${JSON.stringify(bind.sessionId)} with its stop/reload attestation. Nothing was bound.`,
+        workflowId: bind.workflowId,
+        sessionId: bind.sessionId,
+        holder: bind.sessionId,
+        holderEpoch: mine.ref.epoch,
+        facts: { row_state: mine.state, row_epoch: mine.ref.epoch, current_epoch: tx.epoch }
+      });
+    }
+    if (header.creatorSessionId !== null && header.creatorSessionId !== bind.sessionId) {
+      const recorded2 = rows[0];
+      throw sessionBindRefusal({
+        code: "coordination.identity-mismatch",
+        detail: `workflow ${bind.workflowId} was created by session ${JSON.stringify(header.creatorSessionId)}; the trusted caller is ` + `${JSON.stringify(bind.sessionId)}. A coordinator session binds only through the creating identity` + (recorded2 === undefined ? `, and this workflow records NO coordinator session row to recover — its supported route is recoverExecutionCoordinator ` + `with priorSessionId: null, a reason and a valid activation attestation` : `, or through recoverExecutionCoordinator naming the recorded coordinator ${JSON.stringify(recorded2.ref.sessionId)} ` + `(epoch ${recorded2.ref.epoch}) with stop attestation`) + `. Nothing was bound.`,
+        workflowId: bind.workflowId,
+        sessionId: bind.sessionId,
+        holder: recorded2 === undefined ? null : recorded2.ref.sessionId,
+        holderEpoch: recorded2 === undefined ? tx.epoch : recorded2.ref.epoch,
+        facts: {
+          creator_session_id: header.creatorSessionId,
+          caller_session_id: bind.sessionId,
+          recorded_coordinator_rows: rows.length
+        }
+      });
+    }
+    if (header.creatorSessionId === null) {
+      if (rows.length > 0) {
+        const recorded2 = rows[0];
+        throw sessionBindRefusal({
+          code: "coordination.identity-mismatch",
+          detail: `workflow ${bind.workflowId} records ${String(rows.length)} coordinator session row(s) while its creator identity is ` + `unset, so first-bind adoption is unavailable — use recoverExecutionCoordinator naming the recorded coordinator ` + `${JSON.stringify(recorded2.ref.sessionId)} (epoch ${recorded2.ref.epoch}) with its stop/reload attestation, the current ` + `workflow token, an operation id, a reason and a valid activation attestation. Nothing was bound.`,
+          workflowId: bind.workflowId,
+          sessionId: bind.sessionId,
+          holder: recorded2.ref.sessionId,
+          holderEpoch: recorded2.ref.epoch,
+          facts: { coordinator_rows: rows.length }
+        });
+      }
+      tx.db.prepare("update execution_workflows set creator_session_id = ? where workflow_id = ?").run(bind.sessionId, bind.workflowId);
+    }
+    const now = new Date().toISOString();
+    const address = { workflowId: bind.workflowId, role: "coordinator", sessionId: bind.sessionId };
+    writeExecutionSession(tx.db, { workflowId: bind.workflowId, address, epoch: tx.epoch, now });
+    advanceWorkflowHeaderRevision(tx, { workflowId: bind.workflowId, now });
+    const data = {
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      workflowId: bind.workflowId,
+      role: "coordinator",
+      sessionId: bind.sessionId
+    };
+    const receipt = {
+      data,
+      token: executionToken("session", tx.storeId, tx.epoch, [bind.workflowId, "coordinator", bind.sessionId], 1),
+      storeId: tx.storeId,
+      epoch: tx.epoch
+    };
+    writeOperationReceipt(tx, { operationId: bind.operationId, requestHash: requestHash2, workflowId: bind.workflowId, planId: null, receipt, now });
+    return { ...receipt, operationId: bind.operationId, replayed: false };
+  });
+}
+function sessionBindRefusal(input) {
+  const problem = {
+    component: "session",
+    path: "session",
+    code: input.code,
+    sourcesTried: [`the coordinator session rows of workflow ${JSON.stringify(input.workflowId)}, read in this transaction`],
+    currentFacts: [input.detail],
+    needed: input.holder === null ? `the supported route for a workflow with no recorded coordinator row: recoverExecutionCoordinator with priorSessionId: null, ` + `a non-empty reason and a valid activation attestation, or — while the workflow is still unbound — a bind by the creating identity` : `the supported coordinator recovery: run recoverExecutionCoordinator naming the RECORDED coordinator ` + `${JSON.stringify(input.holder)} (epoch ${input.holderEpoch}) with its stop/reload attestation, or resume that holder's own ` + `live reference while it is current`,
+    withheldEffect: "the session binding and its revision: authority was withheld, so no row, revision or receipt changed under this operation",
+    availableWork: input.holder === null ? [
+      `run recoverExecutionCoordinator with priorSessionId: null once the workflow needs a new coordinator`,
+      "independent operations on other workflows continue"
+    ] : [
+      `resume the recorded coordinator's own binding through resumeExecutionSession while its row is current`,
+      `run recoverExecutionCoordinator for that recorded holder once its stop/reload is attested`,
+      "independent operations on other workflows continue"
+    ]
+  };
+  return new ExecutionError("execution.session-unavailable", input.detail, {
+    component: problem.component,
+    path: problem.path,
+    workflow_id: input.workflowId,
+    session_id: input.sessionId,
+    ...input.holder === null ? {} : { holder: input.holder },
+    ...input.facts,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    needed: problem.needed,
+    available_work: problem.availableWork,
+    recoveryFacts: unresolvedRecovery({ target: { workflowId: input.workflowId }, unresolved: [problem] })
+  });
+}
+function readExecutionPlanWitness(tx, read) {
+  assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
+  const live = liveSession(tx, {
+    workflowId: read.workflowId,
+    role: "coordinator",
+    sessionId: read.sessionId
+  });
+  const workflow = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, read.workflowId);
+  const view = workflow.plans.find((candidate) => candidate.plan.id === read.planId);
+  const token = workflow.planTokens[read.planId];
+  if (view === undefined || token === undefined) {
+    throw new CoordinationError("coordination.plan-not-found", "The addressed workflow holds no matching plan. Inspect plan rows with mstar status validate.", { workflow_id: read.workflowId, plan_id: read.planId });
+  }
+  return {
+    workflowId: read.workflowId,
+    planId: read.planId,
+    view,
+    siblings: workflow.plans.filter((candidate) => candidate.plan.id !== read.planId),
+    token,
+    revision: parseExecutionToken(token).revision,
+    workflowToken: workflow.workflowToken,
+    session: live.ref
+  };
+}
+function resolveWorkflowWrite(caller, session, workflowId) {
+  if (caller?.role !== "coordinator")
+    throw new ExecutionError("execution.scope-mismatch", "workflow writes require the coordinator identity");
+  if (!isNonEmptyString(caller.sessionId))
+    throw invalidInput("Invalid execution caller: provide a non-empty session identity. Inspect workflow authority with mstar status validate.");
+  if (!isNonEmptyString(workflowId))
+    throw invalidInput("Invalid workflow operation: provide the non-empty workflow id it addresses. Inspect registered workflows with mstar status validate.");
+  if (!isPlainObject(session))
+    throw invalidInput("Invalid workflow operation: provide an execution session reference. Inspect workflow authority with mstar status validate.");
+  const { storeId, epoch, workflowId: boundWorkflowId, role, sessionId } = session;
+  if (!isNonEmptyString(storeId) || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= 0 || !isNonEmptyString(boundWorkflowId) || !isNonEmptyString(sessionId) || role !== "coordinator") {
+    throw invalidInput("Invalid workflow operation: provide a valid coordinator session reference. Inspect workflow authority with mstar status validate.");
+  }
+  if (caller.sessionId !== sessionId || caller.workflowId !== boundWorkflowId) {
+    throw new ExecutionError("execution.scope-mismatch", "the trusted caller does not match the supplied coordinator reference");
+  }
+  if (caller.workflowId !== workflowId)
+    throw new ExecutionError("execution.scope-mismatch", "the caller does not own the addressed workflow");
+  return { workflowId, sessionId, referenceStoreId: storeId, referenceEpoch: epoch };
+}
+function resolveWorkflowSession(tx, read) {
+  assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
+  return liveSession(tx, { workflowId: read.workflowId, role: "coordinator", sessionId: read.sessionId }).ref;
+}
+function readExecutionWorkflowWitness(tx, read) {
+  const session = resolveWorkflowSession(tx, read);
+  const registered = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(read.workflowId);
+  if (registered === undefined) {
+    throw new CoordinationError("coordination.workflow-not-found", `workflow ${read.workflowId} is not registered as an ACTIVE lifecycle — a terminal or unregistered workflow stays ` + `as history and is never amended`, { workflow_id: read.workflowId });
+  }
+  const view = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, read.workflowId);
+  return {
+    workflowId: read.workflowId,
+    view,
+    token: view.workflowToken,
+    revision: parseExecutionToken(view.workflowToken).revision,
+    session
+  };
+}
+async function readExecutionPlan(context, sessionOrPlanId, addressedPlanId) {
+  const planId = typeof sessionOrPlanId === "string" ? sessionOrPlanId : addressedPlanId;
+  if (!isNonEmptyString(planId))
+    throw invalidInput("Invalid plan read: provide the plan id it selects. Inspect plan rows with mstar status validate.");
+  const session = typeof sessionOrPlanId === "string" ? (await readOwnExecutionSession(context)).data : sessionOrPlanId;
+  const read = resolvePlanRead(context.caller, session, planId);
+  return withExecutionReadTransaction(context, (tx) => {
+    const witness = readExecutionPlanWitness(tx, read);
+    return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
+  });
+}
+async function readExecutionSession(context, session) {
+  if (!isPlainObject(session) || !isNonEmptyString(session.storeId) || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) {
+    throw invalidInput("Invalid execution session reference: provide a store id and positive safe-integer epoch. Inspect workflow authority with mstar status validate.");
+  }
+  if (session.workflowId !== context.caller.workflowId || session.role !== context.caller.role || session.sessionId !== context.caller.sessionId) {
+    throw new CoordinationError("coordination.identity-mismatch", "Trusted caller does not independently match the supplied execution session reference. Inspect workflow authority with mstar status validate.");
+  }
+  return withExecutionReadTransaction(context, (tx) => {
+    assertReferenceAuthority(tx, session.storeId, session.epoch);
+    const live = liveSession(tx, {
+      workflowId: session.workflowId,
+      role: "coordinator",
+      sessionId: session.sessionId
+    });
+    return {
+      data: live.ref,
+      token: executionToken("session", tx.storeId, tx.epoch, [live.ref.workflowId, live.ref.role, live.ref.sessionId], live.revision),
+      storeId: tx.storeId,
+      epoch: tx.epoch
+    };
+  });
+}
+function ownSessionAddress(caller) {
+  if (!isPlainObject(caller) || !isNonEmptyString(caller.sessionId) || !isNonEmptyString(caller.workflowId)) {
+    throw invalidInput("Coordinator session reconstruction requires workflowId and sessionId from the trusted caller. Inspect workflow authority with mstar status validate.");
+  }
+  if (caller.role !== "coordinator") {
+    throw invalidInput("Invalid execution session role: expected coordinator. Inspect workflow authority with mstar status validate.");
+  }
+  return { workflowId: caller.workflowId, role: "coordinator", sessionId: caller.sessionId };
+}
+function unresolvedOwnSession(address, rows) {
+  const holder = rows.find((row) => row.state === "active");
+  const code2 = holder === undefined ? "coordination.session-not-found" : "coordination.identity-mismatch";
+  const currentFacts = [
+    `the trusted caller is coordinator session ${address.sessionId} of workflow ${address.workflowId}`,
+    holder === undefined ? `workflow ${address.workflowId} records no coordinator session ${address.sessionId} and holds no ACTIVE coordinator session` : `workflow ${address.workflowId} holds an ACTIVE coordinator session at epoch ${holder.ref.epoch}`
+  ];
+  const problem = {
+    component: "session",
+    path: "session",
+    code: code2,
+    sourcesTried: [
+      `execution_sessions rows of workflow ${address.workflowId} for role coordinator`,
+      "the trusted caller identity (workflow, role, session)"
+    ],
+    currentFacts,
+    needed: holder === undefined ? `a binding this identity can resume: bind coordinator session ${address.sessionId} to workflow ${address.workflowId}` : `the stop/recovery decision for the live coordinator: the named coordinator recovery with ` + `stop evidence for that holder`,
+    withheldEffect: `only this identity's own session binding and reference — no row was written, and the coordinator scope of ` + `workflow ${address.workflowId} is never taken over by another name here`,
+    availableWork: [
+      `read the state of workflow ${address.workflowId} and every plan row it holds`,
+      ...holder === undefined ? ["establish an authorized coordinator binding for the caller identity"] : [
+        "continue the active holder's own binding from that holder's identity",
+        "complete the registered coordinator-recovery flow after the holder stop is attested"
+      ]
+    ]
+  };
+  throw new CoordinationError(code2, "The caller has no usable coordinator session binding. Inspect workflow state with mstar status validate.", {
+    component: problem.component,
+    path: problem.path,
+    workflow_id: address.workflowId,
+    role: address.role,
+    session_id: address.sessionId,
+    ...holder === undefined ? {} : { holder_epoch: holder.ref.epoch },
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    available_work: problem.availableWork,
+    recoveryFacts: unresolvedRecovery({
+      target: { workflowId: address.workflowId },
+      unresolved: [problem],
+      resolvedFrom: [
+        { path: "workflowId", source: "caller.identity" },
+        { path: "role", source: "caller.identity" },
+        { path: "sessionId", source: "caller.identity" }
+      ]
+    })
+  });
+}
+async function readOwnExecutionSession(context) {
+  const address = ownSessionAddress(context?.caller);
+  return withExecutionReadTransaction(context, (tx) => {
+    const store = { storeId: tx.storeId, epoch: tx.epoch };
+    const rows = readSessionRows(tx.db, store, address.workflowId);
+    if (rows.every((row) => row.ref.sessionId !== address.sessionId))
+      unresolvedOwnSession(address, rows);
+    const live = liveSession(tx, address);
+    return {
+      data: live.ref,
+      token: executionToken("session", tx.storeId, tx.epoch, [live.ref.workflowId, live.ref.role, live.ref.sessionId], live.revision),
+      storeId: tx.storeId,
+      epoch: tx.epoch
+    };
+  });
+}
 var ExecutionError;
 var KIND_KEY_LENGTHS;
 var TOKEN_PREFIX = "exec-v1";
@@ -10957,6 +13670,8 @@ var BASE64URL_RE;
 var TOKEN_KEY_DECODER;
 var ownedTransactions;
 var OPERATION_ID_RE;
+var CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow";
+var BIND_SESSION_OPERATION = "bindExecutionSession";
 var EXECUTION_SESSION_STATES;
 var init_execution_store = __esm(() => {
   init_coordination();
@@ -10969,13 +13684,13 @@ var init_execution_store = __esm(() => {
   init_activation_provisioning();
   init_store_db();
   init_workflow();
-  ExecutionError = class ExecutionError extends Error {
+  ExecutionError = class ExecutionError2 extends Error {
     code;
     details;
-    constructor(code, message, details) {
-      super(`[${code}] ${message}`);
+    constructor(code2, message, details) {
+      super(`[${code2}] ${message}`);
       this.name = "ExecutionError";
-      this.code = code;
+      this.code = code2;
       this.details = details;
     }
   };
@@ -10995,10 +13710,171 @@ var init_execution_store = __esm(() => {
   OPERATION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
   EXECUTION_SESSION_STATES = ["active", "suspended", "revoked"];
 });
+function assertSafeSessionId(value, what = "session id") {
+  if (!isNonEmptyString(value)) {
+    throw new CoordinationError("coordination.invalid-session-id", "Invalid public session id: provide one safe path component using [A-Za-z0-9._-], at most 128 characters. Inspect coordinator identity with mstar status validate.", { form: typeof value, field: what });
+  }
+  if (value.length > SESSION_ID_MAX_LENGTH) {
+    throw new CoordinationError("coordination.invalid-session-id", "Invalid public session id: the value exceeds 128 characters and is not echoed. Inspect coordinator identity with mstar status validate.", { length: value.length, max_length: SESSION_ID_MAX_LENGTH, field: what });
+  }
+  try {
+    assertSafePathComponent(value, what);
+  } catch {
+    throw new CoordinationError("coordination.invalid-session-id", `${what} is not a safe path component — a single safe path component ([A-Za-z0-9._-]+) of at most ` + `${SESSION_ID_MAX_LENGTH} characters, not "", ".", ".." or a value containing "/" or "\\"; the rejected value is not echoed in this diagnostic`, { length: value.length });
+  }
+  return value;
+}
+function isRole(value) {
+  return value === "coordinator";
+}
+function isSource(value) {
+  return value === "host" || value === "local";
+}
+function validateExecutionIdentity(identity, scope, options = {}) {
+  if (!isPlainObject(identity)) {
+    throw new CoordinationError("coordination.identity-missing", "Invalid execution identity: provide the identity tuple. Inspect coordinator identity with mstar status validate.");
+  }
+  const value = identity;
+  assertExactKeys(value, ["source", "sessionId", "workflowId", "role", ...value.leafSeat === true ? ["leafSeat"] : []], "execution identity");
+  if (value.leafSeat === true) {
+    throw new CoordinationError("coordination.leaf-seat", 'the execution identity attests a leaf/delegated seat (session header origin "subagent" or a delegationDepth > 0); ' + "a leaf seat cannot mint or mutate a workflow coordinator registration, even under an ambient identity that would " + "otherwise satisfy the call. Recovery: the non-leaf coordinating session must acquire its own identity and perform " + "the registration; this seat continues with its permitted actions (issue.*, plan.prepare, plan.progress and the reads).", { leaf_seat: true });
+  }
+  if (!isSource(value.source)) {
+    const missing = value.source === undefined || value.source === null;
+    throw new CoordinationError(missing ? "coordination.identity-missing" : "coordination.identity-mismatch", missing ? "the execution identity carries no provenance source — an adapter states `host` or `local`, and it is never inferred" : `the execution identity source ${JSON.stringify(value.source)} is not \`host\` or \`local\``, { source: value.source });
+  }
+  if (!isNonEmptyString(value.workflowId)) {
+    throw new CoordinationError("coordination.identity-missing", "Invalid execution identity: provide a workflow id. Inspect registered workflows with mstar status validate.", { workflow_id: value.workflowId });
+  }
+  if (!isNonEmptyString(value.sessionId)) {
+    if (!(options.allowUnsetSessionId === true && typeof value.sessionId === "string")) {
+      throw new CoordinationError("coordination.identity-missing", "the execution identity carries no session id — an identity is acquired explicitly and is never generated; " + "supply a native or local id (CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: the host must pass sessionId per call)", { workflow_id: value.workflowId });
+    }
+  }
+  if (isNonEmptyString(value.sessionId))
+    assertSafeSessionId(value.sessionId);
+  if (!isRole(value.role)) {
+    throw new CoordinationError("coordination.identity-mismatch", "Invalid execution identity role; expected coordinator. Inspect the recorded identity with mstar status validate.", { expected: "coordinator", actual: value.role });
+  }
+  const role = value.role;
+  if (value.workflowId !== scope.workflowId) {
+    throw new CoordinationError("coordination.identity-mismatch", "Execution identity does not address the expected workflow. Inspect the recorded identity with mstar status validate.", { expected: scope.workflowId, actual: value.workflowId });
+  }
+  if (role !== scope.role) {
+    throw new CoordinationError("coordination.identity-mismatch", "Execution identity role does not match the expected seat. Inspect the recorded identity with mstar status validate.", { expected: scope.role, actual: role });
+  }
+}
+var SESSION_ID_MAX_LENGTH = 128;
 var init_session_identity = __esm(() => {
   init_coordination_write();
   init_path();
 });
+var exports_execution_session = {};
+__export(exports_execution_session, {
+  assertExecutionSessionCurrent: () => assertExecutionSessionCurrent,
+  createLocalExecutionIdentity: () => createLocalExecutionIdentity,
+  decodeExecutionSessionRef: () => decodeExecutionSessionRef,
+  encodeExecutionSessionRef: () => encodeExecutionSessionRef,
+  executionContextFor: () => executionContextFor,
+  resumeExecutionSession: () => resumeExecutionSession
+});
+function scopeOf(scope) {
+  return { workflowId: scope.workflowId, role: scope.role };
+}
+function assertRefShape(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference must be an object");
+  }
+  const record = value;
+  const keys = Object.keys(record).sort();
+  if (keys.length !== SESSION_KEYS.length || keys.some((key, index2) => key !== [...SESSION_KEYS].sort()[index2])) {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference has unknown or missing fields");
+  }
+  if (typeof record.storeId !== "string" || record.storeId.length === 0 || typeof record.workflowId !== "string" || record.workflowId.length === 0) {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference has empty identity fields");
+  }
+  if (typeof record.epoch !== "number" || !Number.isSafeInteger(record.epoch) || record.epoch <= 0) {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference has an invalid epoch");
+  }
+  if (record.role !== "coordinator") {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference has an unknown role");
+  }
+  assertSafeSessionId(record.sessionId, "execution session reference session id");
+}
+function createLocalExecutionIdentity(scope) {
+  const identity = { source: "local", sessionId: randomUUID3(), ...scope };
+  validateExecutionIdentity(identity, scopeOf(scope));
+  assertSafeSessionId(identity.sessionId);
+  return identity;
+}
+function executionContextFor(context, identity, options = {}) {
+  const caller = {
+    sessionId: isNonEmptyString(identity.sessionId) ? identity.sessionId : "",
+    workflowId: identity.workflowId,
+    role: identity.role
+  };
+  validateExecutionIdentity({ ...identity, sessionId: caller.sessionId }, scopeOf(identity), options);
+  if (caller.sessionId !== "")
+    assertSafeSessionId(caller.sessionId);
+  return {
+    ...context,
+    caller
+  };
+}
+function encodeExecutionSessionRef(ref) {
+  assertRefShape(ref);
+  const bytes = serializeExecutionValue(ref);
+  return `${SESSION_WIRE_PREFIX}${Buffer.from(bytes, "utf8").toString("base64url")}`;
+}
+function decodeExecutionSessionRef(wire) {
+  if (typeof wire !== "string" || !wire.startsWith(SESSION_WIRE_PREFIX)) {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference has an invalid wire prefix");
+  }
+  let text4;
+  try {
+    const encoded = wire.slice(SESSION_WIRE_PREFIX.length);
+    if (encoded.length === 0 || !/^[A-Za-z0-9_-]+$/.test(encoded) || encoded.length % 4 === 1)
+      throw new Error("invalid base64url");
+    const padded = encoded.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - encoded.length % 4) % 4);
+    const bytes = Buffer.from(padded, "base64");
+    text4 = SESSION_DECODER.decode(bytes);
+  } catch {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid UTF-8 base64url");
+  }
+  let value;
+  try {
+    value = JSON.parse(text4);
+  } catch {
+    throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid JSON");
+  }
+  assertRefShape(value);
+  return value;
+}
+async function resumeExecutionSession(context, ref) {
+  if (ref === undefined || ref === null)
+    return readOwnExecutionSession(context);
+  assertRefShape(ref);
+  if (context.caller.sessionId !== ref.sessionId || context.caller.workflowId !== ref.workflowId || context.caller.role !== ref.role) {
+    throw new ExecutionError("execution.scope-mismatch", "the independently acquired caller does not match the session reference");
+  }
+  return readExecutionSession(context, ref);
+}
+function assertExecutionSessionCurrent(context, session) {
+  assertRefShape(session);
+  if (context.caller.sessionId !== session.sessionId || context.caller.workflowId !== session.workflowId || context.caller.role !== session.role) {
+    throw new ExecutionError("execution.scope-mismatch", "the current caller does not match the execution session");
+  }
+  withExecutionReadGuard(context, (db, authority) => {
+    if (authority.storeId !== session.storeId || authority.epoch !== session.epoch) {
+      throw new ExecutionError("store.stale-epoch", "the execution session reference is not current");
+    }
+    const row = db.prepare("select epoch, state from execution_sessions where workflow_id = ? and role = ? and session_id = ?").get(session.workflowId, session.role, session.sessionId);
+    if (row?.state !== "active" || row.epoch !== session.epoch) {
+      throw new ExecutionError("execution.session-unavailable", "the execution session is not the active current binding");
+    }
+  });
+}
+var SESSION_WIRE_PREFIX = "exec-session-v1:";
 var SESSION_DECODER;
 var SESSION_KEYS;
 var init_execution_session = __esm(() => {
@@ -11009,8 +13885,8 @@ var init_execution_session = __esm(() => {
   SESSION_DECODER = new TextDecoder("utf-8", { fatal: true });
   SESSION_KEYS = ["storeId", "epoch", "workflowId", "role", "sessionId"];
 });
-function vocabularyMap(values) {
-  return Object.fromEntries(values.map((value) => [value, true]));
+function vocabularyMap(values2) {
+  return Object.fromEntries(values2.map((value) => [value, true]));
 }
 function assertIssueProvenanceSchema(db) {
   const schema = db.prepare("select max(version) as version from schema_version").get();
@@ -11169,13 +14045,13 @@ var init_issue = __esm(() => {
     export: { payload: null, read: true, cas: false, disposition: null }
   };
   ISSUE_ACTION_NAMES = Object.keys(ISSUE_ACTIONS);
-  IssueError = class IssueError extends Error {
+  IssueError = class IssueError2 extends Error {
     code;
     details = {};
-    constructor(code, message) {
-      super(`[${code}] ${message}`);
+    constructor(code2, message) {
+      super(`[${code2}] ${message}`);
       this.name = "IssueError";
-      this.code = code;
+      this.code = code2;
     }
   };
   DISPOSITIONS2 = vocabularyMap(ISSUE_DISPOSITIONS);
@@ -11228,8 +14104,8 @@ function rowPlanId(row) {
 function residualLifecycles() {
   return ISSUE_DISPOSITIONS;
 }
-function violation4(severity, code, message, fix) {
-  return { ok: false, severity, code, message, fix };
+function violation4(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
 }
 function validateNonEmptyString(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
@@ -11477,13 +14353,13 @@ function resolveCompassEnforcement(harnessDir) {
     const compassPath = join11(iterationsDir, entry.name, "delivery-compass.md");
     if (!existsSync8(compassPath))
       continue;
-    let content;
+    let content3;
     try {
-      content = readFileSync7(compassPath, "utf8");
+      content3 = readFileSync7(compassPath, "utf8");
     } catch {
       continue;
     }
-    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    const frontmatter = content3.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     const fm = frontmatter !== null ? frontmatter[1] : "";
     if (!/^status[ \t]*:[ \t]*(?:active|locked)[ \t]*$/m.test(fm))
       continue;
@@ -11566,11 +14442,11 @@ function validateCompassShape(doc) {
     if (!Array.isArray(plans)) {
       issues.push({ path: ["plans"], message: `expected array, received ${typeName(plans)}` });
     } else {
-      plans.forEach((entry, index) => {
+      plans.forEach((entry, index2) => {
         if (typeof entry !== "string") {
-          issues.push({ path: ["plans", index], message: `expected string, received ${typeName(entry)}` });
+          issues.push({ path: ["plans", index2], message: `expected string, received ${typeName(entry)}` });
         } else if (entry.length < 1) {
-          issues.push({ path: ["plans", index], message: "string must contain at least 1 character(s)" });
+          issues.push({ path: ["plans", index2], message: "string must contain at least 1 character(s)" });
         }
       });
     }
@@ -11598,8 +14474,8 @@ function validateCompassShape(doc) {
     }
   };
 }
-function violation5(severity, code, message, fix) {
-  return { ok: false, severity, code, message, fix };
+function violation5(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
 }
 function isPlainObject3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -11633,8 +14509,8 @@ function validateCompassFrontmatter(doc) {
   }
   return { ok: violations.length === 0, violations };
 }
-function parseCompassFrontmatterText(content, filePath) {
-  const lines = content.split(/\r?\n/);
+function parseCompassFrontmatterText(content3, filePath) {
+  const lines = content3.split(/\r?\n/);
   if (lines[0]?.trim() !== "---") {
     throw new Error(`no YAML frontmatter fence in ${filePath} (expected first line "---")`);
   }
@@ -11714,8 +14590,8 @@ var init_iteration = __esm(() => {
     document: "catalog.discovery.missing-document"
   };
 });
-function violation6(severity, code, message) {
-  return { ok: false, severity, code, message };
+function violation6(severity, code2, message) {
+  return { ok: false, severity, code: code2, message };
 }
 function validateNonEmptyString2(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
@@ -11724,43 +14600,43 @@ function validateNonEmptyString2(violations, value, field, missingCode, invalidC
     violations.push(violation6("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
-function frontmatterEnd(content) {
-  const lines = content.split(/\r?\n/);
+function frontmatterEnd(content3) {
+  const lines = content3.split(/\r?\n/);
   if (lines[0]?.trim() !== "---")
     return 0;
   let offset = lines[0].length;
-  const newlineWidth = content.startsWith(`\r
-`, offset) ? 2 : content[offset] === `
+  const newlineWidth = content3.startsWith(`\r
+`, offset) ? 2 : content3[offset] === `
 ` ? 1 : 0;
   offset += newlineWidth;
-  for (let index = 1;index < lines.length; index += 1) {
-    const line = lines[index];
-    const nextNewline = content.indexOf(`
+  for (let index2 = 1;index2 < lines.length; index2 += 1) {
+    const line = lines[index2];
+    const nextNewline = content3.indexOf(`
 `, offset);
-    const end = nextNewline === -1 ? content.length : nextNewline;
-    const lineEnd = content[end - 1] === "\r" ? end - 1 : end;
-    if (content.slice(offset, lineEnd) === "---") {
-      return nextNewline === -1 ? content.length : nextNewline + 1;
+    const end = nextNewline === -1 ? content3.length : nextNewline;
+    const lineEnd = content3[end - 1] === "\r" ? end - 1 : end;
+    if (content3.slice(offset, lineEnd) === "---") {
+      return nextNewline === -1 ? content3.length : nextNewline + 1;
     }
-    offset = nextNewline === -1 ? content.length : nextNewline + 1;
+    offset = nextNewline === -1 ? content3.length : nextNewline + 1;
   }
   return 0;
 }
-function plainText(node) {
-  if (node.type === "text" || node.type === "inlineCode")
-    return node.value ?? "";
-  if (node.type === "break")
+function plainText(node2) {
+  if (node2.type === "text" || node2.type === "inlineCode")
+    return node2.value ?? "";
+  if (node2.type === "break")
     return " ";
-  return (node.children ?? []).map(plainText).join("");
+  return (node2.children ?? []).map(plainText).join("");
 }
-function isPositioned(node) {
-  return node.position !== undefined;
+function isPositioned(node2) {
+  return node2.position !== undefined;
 }
-function validateRoadmapContent(content, sourceLabel) {
+function validateRoadmapContent(content3, sourceLabel) {
   const violations = [];
   let doc;
   try {
-    doc = parseCompassFrontmatterText(content, sourceLabel);
+    doc = parseCompassFrontmatterText(content3, sourceLabel);
   } catch (err) {
     const message = err instanceof Error ? err.message : `invalid roadmap frontmatter in ${sourceLabel}`;
     return { ok: false, violations: [violation6("high", "project.roadmap.invalid-frontmatter", message)], warnings: [] };
@@ -11788,8 +14664,8 @@ function validateRoadmapContent(content, sourceLabel) {
     violations.push(violation6("medium", "project.roadmap.invalid-residuals-ref", "residuals_ref must be a non-empty string"));
   }
   const warnings = [];
-  const end = frontmatterEnd(content);
-  const body = content.slice(end);
+  const end = frontmatterEnd(content3);
+  const body = content3.slice(end);
   if (!/^##\s+Direction\s*$/m.test(body)) {
     warnings.push(violation6("low", "project.roadmap.body.missing-direction", "roadmap body has no `## Direction` section (documented body convention) — state the project direction there"));
   }
@@ -11811,37 +14687,37 @@ function parseRoadmapContent(contentMarkdown) {
   const sections = [];
   const headings = [];
   const blocks = tree.children ?? [];
-  for (const node of blocks) {
-    if (node.type === "heading" && node.depth !== undefined && isPositioned(node))
-      headings.push(node);
+  for (const node2 of blocks) {
+    if (node2.type === "heading" && node2.depth !== undefined && isPositioned(node2))
+      headings.push(node2);
   }
   const firstHeadingOffset = headings[0]?.position.start.offset ?? bodySource.length;
   if (firstHeadingOffset > 0)
     sections.push({ level: 0, heading: "", body: bodySource.slice(0, firstHeadingOffset) });
-  for (let index = 0;index < headings.length; index += 1) {
-    const headingNode = headings[index];
-    const nextHeading = headings.slice(index + 1).find((candidate) => candidate.depth <= headingNode.depth);
+  for (let index2 = 0;index2 < headings.length; index2 += 1) {
+    const headingNode = headings[index2];
+    const nextHeading = headings.slice(index2 + 1).find((candidate) => candidate.depth <= headingNode.depth);
     const endOffset = nextHeading?.position.start.offset ?? bodySource.length;
     const heading = (headingNode.children ?? []).map(plainText).join("");
     sections.push({ level: headingNode.depth, heading, body: bodySource.slice(headingNode.position.end.offset, endOffset) });
   }
   const goals = [];
-  const visit = (node, parentOrdinal) => {
-    if (node.type === "listItem" && node.checked !== undefined && node.checked !== null && isPositioned(node)) {
+  const visit = (node2, parentOrdinal) => {
+    if (node2.type === "listItem" && node2.checked !== undefined && node2.checked !== null && isPositioned(node2)) {
       const ordinal = goals.length;
-      const firstParagraph = (node.children ?? []).find((child) => child.type === "paragraph");
+      const firstParagraph = (node2.children ?? []).find((child) => child.type === "paragraph");
       goals.push({
         ordinal,
         parentOrdinal,
-        checked: node.checked,
+        checked: node2.checked,
         title: firstParagraph ? plainText(firstParagraph).trim() : "",
-        body: bodySource.slice(node.position.start.offset, node.position.end.offset)
+        body: bodySource.slice(node2.position.start.offset, node2.position.end.offset)
       });
-      for (const child of node.children ?? [])
+      for (const child of node2.children ?? [])
         visit(child, ordinal);
       return;
     }
-    for (const child of node.children ?? [])
+    for (const child of node2.children ?? [])
       visit(child, parentOrdinal);
   };
   visit(tree, null);
@@ -11864,8 +14740,8 @@ var init_roadmap_content = __esm(() => {
   ROADMAP_STATUSES = ["active", "paused", "completed"];
   DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
 });
-function violation7(severity, code, message, fix) {
-  return { ok: false, severity, code, message, fix };
+function violation7(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
 }
 function validateNonEmptyString3(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
@@ -11925,12 +14801,12 @@ var init_project = __esm(() => {
   init_issue();
   init_status();
   DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
-  BindingError = class BindingError extends Error {
+  BindingError = class BindingError2 extends Error {
     code;
-    constructor(code, message) {
-      super(`[${code}] ${message}`);
+    constructor(code2, message) {
+      super(`[${code2}] ${message}`);
       this.name = "BindingError";
-      this.code = code;
+      this.code = code2;
     }
   };
 });
@@ -12042,6 +14918,11 @@ function resolvePlanDir(harnessDir) {
   if (name === ".plans" || name === "plans")
     return dir;
   return join14(dir, "plans");
+}
+function assertSafePathComponent(value, what) {
+  if (value === "" || value === "." || value === ".." || !/^[A-Za-z0-9._-]+$/.test(value)) {
+    throw new Error(`${what} must be a single safe path component ([A-Za-z0-9._-]+; not "", ".", "..", or containing "/" or "\\") — got ${JSON.stringify(value)}`);
+  }
 }
 function resolveIterationDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "iterationDir");
@@ -12168,13 +15049,13 @@ var PLAN_CONSULTED_HEADERS;
 var init_plan_path = __esm(() => {
   init_coordination_write();
   init_path();
-  PlanPathError = class PlanPathError extends Error {
+  PlanPathError = class PlanPathError2 extends Error {
     code;
     details;
-    constructor(code, message, details = {}) {
+    constructor(code2, message, details = {}) {
       super(message);
       this.name = "PlanPathError";
-      this.code = code;
+      this.code = code2;
       this.details = details;
     }
   };
@@ -12230,8 +15111,17 @@ function rowValidationRoute(snapshot, row) {
   }
   return "integration";
 }
-function violation8(severity, code, message, fix) {
-  return { ok: false, severity, code, message, fix };
+function stableJson(value) {
+  if (Array.isArray(value))
+    return `[${value.map(stableJson).join(",")}]`;
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
+function violation8(severity, code2, message, fix) {
+  return { ok: false, severity, code: code2, message, fix };
 }
 function validateNonEmptyString4(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
@@ -12247,46 +15137,46 @@ function validateWorktreePathValue(violations, value, field) {
 }
 function deliveryEvidenceViolations(value, what) {
   const violations = [];
-  const invalid = (message) => {
+  const invalid3 = (message) => {
     violations.push(violation8("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
   };
   if (!isPlainObject(value)) {
-    invalid("must be an object");
+    invalid3("must be an object");
     return violations;
   }
   const members = ["compound", "merge"];
   const unknownMembers = Object.keys(value).filter((key) => !members.includes(key));
   if (unknownMembers.length > 0)
-    invalid(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
+    invalid3(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
   const compound = value.compound;
   if (compound !== undefined) {
     if (!isPlainObject(compound))
-      invalid("compound must be an object");
+      invalid3("compound must be an object");
     else {
       const unknown = Object.keys(compound).filter((key) => key !== "outcome" && key !== "reason");
       if (unknown.length > 0)
-        invalid(`compound has unknown key(s) ${unknown.join(", ")}`);
+        invalid3(`compound has unknown key(s) ${unknown.join(", ")}`);
       if (typeof compound.outcome !== "string" || !WORKFLOW_COMPOUND_OUTCOMES.includes(compound.outcome)) {
-        invalid(`compound.outcome must be one of ${WORKFLOW_COMPOUND_OUTCOMES.join(" | ")} — got ${JSON.stringify(compound.outcome)}`);
+        invalid3(`compound.outcome must be one of ${WORKFLOW_COMPOUND_OUTCOMES.join(" | ")} — got ${JSON.stringify(compound.outcome)}`);
       } else if (compound.outcome === "skipped" && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
-        invalid("compound reason is required when the disposition outcome is 'skipped' (contract §4c)");
+        invalid3("compound reason is required when the disposition outcome is 'skipped' (contract §4c)");
       } else if (compound.reason !== undefined && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
-        invalid("compound.reason must be a non-empty string when given");
+        invalid3("compound.reason must be a non-empty string when given");
       }
     }
   }
   const merge = value.merge;
   if (merge !== undefined) {
     if (!isPlainObject(merge))
-      invalid("merge must be an object");
+      invalid3("merge must be an object");
     else {
       const unknown = Object.keys(merge).filter((key) => key !== "commit");
       if (unknown.length > 0)
-        invalid(`merge has unknown key(s) ${unknown.join(", ")} — expected commit`);
+        invalid3(`merge has unknown key(s) ${unknown.join(", ")} — expected commit`);
       else if (merge.commit === undefined) {
-        invalid("merge must record its commit — an empty merge carries no fact; record a full commit id, or omit the member when the delivery branch tip is contained in the registered target");
+        invalid3("merge must record its commit — an empty merge carries no fact; record a full commit id, or omit the member when the delivery branch tip is contained in the registered target");
       } else if (typeof merge.commit !== "string" || !DELIVERY_COMMIT_RE.test(merge.commit)) {
-        invalid(`merge.commit must be a full lowercase 40- or 64-hex Git object id — got ${JSON.stringify(merge.commit)}`);
+        invalid3(`merge.commit must be a full lowercase 40- or 64-hex Git object id — got ${JSON.stringify(merge.commit)}`);
       }
     }
   }
@@ -12416,6 +15306,9 @@ function validateWorkflowSnapshot(doc) {
   }
   return { ok: violations.length === 0, violations };
 }
+function isTerminalSnapshot(doc) {
+  return WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
+}
 function nonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
 }
@@ -12446,7 +15339,7 @@ var init_workflow = __esm(() => {
   RFC3339_Z_RE = new RegExp(String.raw`^${DATE_PART}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`);
   DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
   DELIVERY_COMMIT_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
-  WorkflowSnapshotValidationError = class WorkflowSnapshotValidationError extends Error {
+  WorkflowSnapshotValidationError = class WorkflowSnapshotValidationError2 extends Error {
     violations;
     constructor(message, violations) {
       super(message);
@@ -12496,12 +15389,12 @@ var init_catalog_registration = __esm(() => {
   init_store_db();
   init_status();
   init_workflow();
-  CatalogRegistrationError = class CatalogRegistrationError extends Error {
+  CatalogRegistrationError = class CatalogRegistrationError2 extends Error {
     code;
-    constructor(code, message) {
-      super(`[${code}] ${message}`);
+    constructor(code2, message) {
+      super(`[${code2}] ${message}`);
       this.name = "CatalogRegistrationError";
-      this.code = code;
+      this.code = code2;
     }
   };
   ENTITY_KINDS3 = {
@@ -12552,8 +15445,8 @@ var init_qcreview_schema = __esm(() => {
 });
 function errorCode(error) {
   if (error !== null && typeof error === "object" && "code" in error) {
-    const code = error.code;
-    return typeof code === "string" ? code : undefined;
+    const code2 = error.code;
+    return typeof code2 === "string" ? code2 : undefined;
   }
   return;
 }
@@ -12572,8 +15465,8 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
         return resolveHarnessDir(start, { workspaceRoot: dir });
       linked = marker.isFile();
     } catch (error) {
-      const code = errorCode(error);
-      if (code !== "ENOENT" && code !== "ENOTDIR")
+      const code2 = errorCode(error);
+      if (code2 !== "ENOENT" && code2 !== "ENOTDIR")
         throw error;
     }
     if (linked) {
@@ -12588,6 +15481,24 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
     dir = parent;
   }
   return resolveHarnessDir(start);
+}
+function executionInputSelection(row, planId) {
+  const selection = { plan_id: planId };
+  if (isPlainObject(row)) {
+    const metadata = isPlainObject(row.metadata) ? row.metadata : {};
+    for (const key of FROZEN_ROW_FIELDS) {
+      if (row[key] !== undefined)
+        selection[key] = row[key];
+    }
+    for (const key of FROZEN_METADATA_FIELDS) {
+      if (metadata[key] !== undefined)
+        selection[key] = metadata[key];
+    }
+  }
+  return selection;
+}
+function executionInputHash(row, planId) {
+  return createHash9("sha256").update(stableJson(executionInputSelection(row, planId)), "utf8").digest("hex");
 }
 var PERSIST_PAYLOAD_CONTRACTS;
 var EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict";
@@ -12618,7 +15529,7 @@ var init_coordination = __esm(() => {
       alternative: "Use review for governed artifacts."
     }
   };
-  ExecutionPinConflictError = class ExecutionPinConflictError extends Error {
+  ExecutionPinConflictError = class ExecutionPinConflictError2 extends Error {
     code = EXECUTION_PIN_CONFLICT_CODE;
     details;
     constructor(message, details = {}) {
@@ -12686,6 +15597,17 @@ async function loadSqliteDriver() {
     throw new StoreError("store.runtime-unsupported", `Failed to load the native "node:sqlite" module: ${error.message}`);
   }
 }
+function loadSqliteDriverSync() {
+  try {
+    const mod = createRequire2(import.meta.url)("node:sqlite");
+    if (typeof mod.DatabaseSync !== "function")
+      throw new Error("DatabaseSync is missing");
+    return mod;
+  } catch (error) {
+    assertStoreRuntimeSupported({ ...detectStoreRuntime(), hasSqlite: false });
+    throw new StoreError("store.runtime-unsupported", `Failed to load the native "node:sqlite" module synchronously: ${error.message}`);
+  }
+}
 function storeDbPath(context) {
   if (!context?.harnessDir)
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
@@ -12708,10 +15630,10 @@ function isBusyError(error) {
   const err = error;
   return err?.errcode === 5 || err?.errcode === "SQLITE_BUSY" || err?.code === "SQLITE_BUSY" || /database is locked|SQLITE_BUSY/.test(String(err?.message ?? ""));
 }
-function busyAware(db, path, timeout) {
+function busyAware(db, path2, timeout) {
   const refuseBusy = (error) => {
     if (isBusyError(error)) {
-      throw new StoreError("store.busy", `Another writer held ${path} past the bounded wait (${timeout}ms). ` + `The statement was refused — roll back the current transaction and retry when the ` + `competing writer is done; no write was accepted.`);
+      throw new StoreError("store.busy", `Another writer held ${path2} past the bounded wait (${timeout}ms). ` + `The statement was refused — roll back the current transaction and retry when the ` + `competing writer is done; no write was accepted.`);
     }
     throw error;
   };
@@ -12750,8 +15672,8 @@ function assertAbsentOrRegularStoreFile(dbPath) {
   try {
     stats = lstatSync6(dbPath);
   } catch (error) {
-    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
-    if (code === "ENOENT")
+    const code2 = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    if (code2 === "ENOENT")
       return;
     examineError = error;
   }
@@ -12855,8 +15777,8 @@ function openConnection(dbPath, mode, DatabaseSync, timeout = DEFAULT_BUSY_TIMEO
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function parseStoredRecord(text, what) {
-  const parsed = typeof text === "string" ? JSON.parse(text) : undefined;
+function parseStoredRecord(text4, what) {
+  const parsed = typeof text4 === "string" ? JSON.parse(text4) : undefined;
   if (!isRecord(parsed))
     throw new StoreError("store.corrupt", `${what} is not a stored JSON object; the store was left unchanged`);
   return parsed;
@@ -13016,9 +15938,9 @@ function settleRetiredPlanPmIntegrationClaims(db, context) {
       continue;
     }
     const attested = attestation.stoppedSessions.find((session) => session.sessionId === holder);
-    const attestedInstant = parsedInstant(attestation.attestedAt);
+    const attestedInstant2 = parsedInstant(attestation.attestedAt);
     const claimedInstant = parsedInstant(claim.claimed_at);
-    const settled = attestation !== undefined && attested !== undefined && (attested.state === "stopped" || attested.state === "reloaded") && claimedInstant !== null && attestedInstant !== null && cutoverInstant !== null && claimedInstant <= attestedInstant && attestedInstant <= cutoverInstant;
+    const settled = attestation !== undefined && attested !== undefined && (attested.state === "stopped" || attested.state === "reloaded") && claimedInstant !== null && attestedInstant2 !== null && cutoverInstant !== null && claimedInstant <= attestedInstant2 && attestedInstant2 <= cutoverInstant;
     if (!settled) {
       throw new StoreError("store.upgrade-attestation-missing", `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder} (claimed_at ${String(claim.claimed_at ?? "?")}) that this cutover's attestation does not cover: the stop evidence must be dated at or after the claim and at or before this cutover (the generated document attests the cutover instant itself). The store was left at schema 8 unchanged. Recovery: rerun the same \`mstar store upgrade --operator <name>\` with --attestation <absolute-json> whose attestedAt is at or after the claim instant.`);
     }
@@ -13123,6 +16045,12 @@ function readExecutionMeta(db, schemaVersion) {
     activatedAt: row.activated_at ?? null
   };
 }
+function isOpenLevelFailure(error) {
+  const err = error;
+  if (err?.errcode === 14 || err?.errcode === 10)
+    return true;
+  return /unable to open database file|disk I\/O error/i.test(String(err?.message ?? ""));
+}
 function isRawCantOpen(error) {
   return error !== null && typeof error === "object" && "errcode" in error && error.errcode === 14;
 }
@@ -13132,6 +16060,86 @@ function isTransientReadOpenFailure(error, dbPath) {
   if (!isRawCantOpen(error))
     return false;
   return existsSync14(dbPath);
+}
+function dropProbeConnection() {
+  const current = probeConnection;
+  probeConnection = null;
+  if (current === null)
+    return;
+  try {
+    current.db.close();
+  } catch {}
+}
+function probeConnectionFor(dbPath) {
+  let dev;
+  let ino;
+  try {
+    const stats = statSync8(dbPath);
+    dev = stats.dev;
+    ino = stats.ino;
+  } catch {
+    dropProbeConnection();
+    return null;
+  }
+  const cached = probeConnection;
+  if (cached !== null && cached.dbPath === dbPath && cached.dev === dev && cached.ino === ino)
+    return cached.db;
+  dropProbeConnection();
+  const db = openConnection(dbPath, "read", loadSqliteDriverSync().DatabaseSync);
+  probeConnection = { dbPath, dev, ino, db };
+  return db;
+}
+function probeExecutionAuthority(dbPath) {
+  assertAbsentOrRegularStoreFile(dbPath);
+  if (!existsSync14(dbPath)) {
+    dropProbeConnection();
+    return { kind: "absent", dbPath };
+  }
+  assertStoreRuntimeSupported();
+  let db;
+  try {
+    db = probeConnectionFor(dbPath);
+  } catch (error) {
+    dropProbeConnection();
+    if (isOpenLevelFailure(error) || isBusyError(error))
+      return { kind: "unreadable", dbPath, error };
+    return refuseOpenFailure(error, dbPath);
+  }
+  if (db === null)
+    return { kind: "absent", dbPath };
+  try {
+    const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
+    readStoreMeta(db);
+    const state = readExecutionMeta(db, schemaVersion)?.authorityState ?? null;
+    return state === "active" ? { kind: "active", dbPath } : { kind: "not-active", dbPath, state };
+  } catch (error) {
+    dropProbeConnection();
+    if (isOpenLevelFailure(error) || isBusyError(error))
+      return { kind: "unreadable", dbPath, error };
+    return refuseOpenFailure(error, dbPath);
+  }
+}
+function withExecutionReadGuard(context, body) {
+  const probe = probeExecutionAuthority(storeDbPath(context));
+  if (probe.kind === "absent") {
+    throw new StoreError("store.not-initialized", 'No execution store exists. Run "mstar harness scaffold" then "mstar store init"; for legacy state run "mstar store upgrade".');
+  }
+  if (probe.kind === "unreadable")
+    refuseOpenFailure(probe.error, probe.dbPath);
+  if (probe.kind !== "active") {
+    const recovery = probe.state === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : 'Run "mstar store upgrade" to import legacy state and activate the authority.';
+    throw new StoreError("store.not-active", `The execution authority is ${probe.state ?? "missing"}. ${recovery}`);
+  }
+  const db = probeConnectionFor(probe.dbPath);
+  if (db === null) {
+    throw new StoreError("store.not-initialized", "The execution store disappeared before the read-only assertion.");
+  }
+  const store = db.prepare("select store_id, authority_epoch from store_meta where id = 1").get();
+  const execution = db.prepare("select authority_state from execution_meta where id = 1").get();
+  if (store === undefined || typeof store.store_id !== "string" || typeof store.authority_epoch !== "number" || execution?.authority_state !== "active") {
+    throw new StoreError("store.corrupt", "The active execution authority metadata is missing or malformed.");
+  }
+  return body(db, { storeId: store.store_id, epoch: store.authority_epoch });
 }
 async function openStore(context, mode, options = {}) {
   assertStoreRuntimeSupported();
@@ -13921,23 +16929,24 @@ var EXECUTION_TABLE_NAMES;
 var EXECUTION_MIGRATION;
 var READ_OPEN_ATTEMPTS = 5;
 var READ_OPEN_BACKOFF_MS = 5;
+var probeConnection = null;
 var dshTransactions;
 var init_store_db = __esm(() => {
   init_coordination();
   init_core();
-  StoreError = class StoreError extends Error {
+  StoreError = class StoreError2 extends Error {
     code;
     details;
-    constructor(code, message, details) {
-      super(`[${code}] ${message}`);
+    constructor(code2, message, details) {
+      super(`[${code2}] ${message}`);
       this.name = "StoreError";
-      this.code = code;
+      this.code = code2;
       if (details !== undefined)
         this.details = details;
     }
   };
   RUNTIME_GLOBAL = globalThis;
-  SettlementAttestationNeeded = class SettlementAttestationNeeded extends Error {
+  SettlementAttestationNeeded = class SettlementAttestationNeeded2 extends Error {
     holders;
     stopped;
     attestedAt;
@@ -13990,10 +16999,10 @@ init_roadmap_content();
 
 class RoadmapError extends Error {
   code;
-  constructor(code, message) {
-    super(`[${code}] ${message}`);
+  constructor(code2, message) {
+    super(`[${code2}] ${message}`);
     this.name = "RoadmapError";
-    this.code = code;
+    this.code = code2;
   }
 }
 function requireRoadmapSchema(db) {
@@ -14029,8 +17038,8 @@ function readOn(db, projectId) {
     throw new RoadmapError("roadmap.corrupt", `Stored roadmap for project ${projectId} is malformed.`);
   }
   try {
-    const content = parseRoadmapContent(row.content_markdown);
-    if (content.frontmatter.project_id !== projectId) {
+    const content3 = parseRoadmapContent(row.content_markdown);
+    if (content3.frontmatter.project_id !== projectId) {
       throw new RoadmapError("roadmap.corrupt", `Stored roadmap identity does not match project ${projectId}.`);
     }
   } catch (error) {
@@ -14137,24 +17146,24 @@ function harnessDocKindOfTarget(targetPath) {
   const name = basename12(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
-  const classify = (harnessDir) => {
-    const rel = relative7(harnessDir, resolved);
+  const classify = (harnessDir2) => {
+    const rel = relative7(harnessDir2, resolved);
     if (name === STATUS_FILE && rel === STATUS_FILE)
-      return { harnessDir, kind: "status" };
+      return { harnessDir: harnessDir2, kind: "status" };
     let workflowDir;
     let projectDir;
     try {
-      workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
-      projectDir = resolveProjectDir(harnessDir, { harnessDir });
+      workflowDir = resolveWorkflowDir(harnessDir2, { harnessDir: harnessDir2 });
+      projectDir = resolveProjectDir(harnessDir2, { harnessDir: harnessDir2 });
     } catch {
-      workflowDir = join21(harnessDir, "workflows");
-      projectDir = join21(harnessDir, "projects");
+      workflowDir = join21(harnessDir2, "workflows");
+      projectDir = join21(harnessDir2, "projects");
     }
     if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative7(workflowDir, resolved))) {
-      return { harnessDir, kind: "snapshot" };
+      return { harnessDir: harnessDir2, kind: "snapshot" };
     }
     if (name === REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(relative7(projectDir, resolved))) {
-      return { harnessDir, kind: "register" };
+      return { harnessDir: harnessDir2, kind: "register" };
     }
     return null;
   };
@@ -14172,8 +17181,8 @@ function harnessDocKindOfTarget(targetPath) {
     return null;
   return classify(fallbackDir);
 }
-function violationLine(violation) {
-  return `[${violation.severity}] ${violation.code}: ${violation.message}${violation.fix ? ` (fix: ${violation.fix})` : ""}`;
+function violationLine(violation9) {
+  return `[${violation9.severity}] ${violation9.code}: ${violation9.message}${violation9.fix ? ` (fix: ${violation9.fix})` : ""}`;
 }
 var MAX_STATUS_CONTENT_LENGTH = 2 * 1024 * 1024;
 function oversizedViolation(filePath) {
@@ -14184,15 +17193,15 @@ function oversizedViolation(filePath) {
     message: `${basename12(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
-function validateStatusWriteDoc(content, filePath, kind, options = {}) {
+function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
   const oversized = options.oversized ?? "pass";
-  if (typeof content === "string") {
-    if (content.length > MAX_STATUS_CONTENT_LENGTH) {
+  if (typeof content3 === "string") {
+    if (content3.length > MAX_STATUS_CONTENT_LENGTH) {
       return oversized === "violate" ? [oversizedViolation(filePath)] : [];
     }
-    let doc;
+    let doc2;
     try {
-      doc = JSON.parse(content);
+      doc2 = JSON.parse(content3);
     } catch (error) {
       return [
         {
@@ -14203,7 +17212,7 @@ function validateStatusWriteDoc(content, filePath, kind, options = {}) {
         }
       ];
     }
-    if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
+    if (doc2 === null || typeof doc2 !== "object" || Array.isArray(doc2)) {
       return [
         {
           ok: false,
@@ -14213,7 +17222,7 @@ function validateStatusWriteDoc(content, filePath, kind, options = {}) {
         }
       ];
     }
-    return validateDocByKind(doc, kind);
+    return validateDocByKind(doc2, kind);
   }
   if (!existsSync15(filePath))
     return [];
@@ -14435,14 +17444,14 @@ init_issue();
 
 class MilestoneError extends Error {
   code;
-  constructor(code, message) {
-    super(`[${code}] ${message}`);
+  constructor(code2, message) {
+    super(`[${code2}] ${message}`);
     this.name = "MilestoneError";
-    this.code = code;
+    this.code = code2;
   }
 }
-var fail = (code, message) => {
-  throw new MilestoneError(code, message);
+var fail = (code2, message) => {
+  throw new MilestoneError(code2, message);
 };
 function guard(db) {
   const schema = db.prepare("select max(version) as version from schema_version").get();
@@ -14489,29 +17498,29 @@ var PROJECTION_FORMAT_VERSION = 3;
 
 class ProjectionError extends Error {
   code;
-  constructor(code, message) {
-    super(`[${code}] ${message}`);
+  constructor(code2, message) {
+    super(`[${code2}] ${message}`);
     this.name = "ProjectionError";
-    this.code = code;
+    this.code = code2;
   }
 }
 function readCompassSource(spec) {
-  let content;
+  let content3;
   try {
-    content = readFileSync24(spec.absolutePath, "utf8");
+    content3 = readFileSync24(spec.absolutePath, "utf8");
   } catch (error) {
-    const code = error.code ?? "";
-    if (code === "ENOENT" || code === "ENOTDIR") {
+    const code2 = error.code ?? "";
+    if (code2 === "ENOENT" || code2 === "ENOTDIR") {
       return { state: "missing", sha256: null, content: null, diagnostic: `missing: no file at ${spec.relativePath}` };
     }
     return {
       state: "inaccessible",
       sha256: null,
       content: null,
-      diagnostic: `inaccessible: read refused (${code === "" ? "unknown" : code}) at ${spec.relativePath}`
+      diagnostic: `inaccessible: read refused (${code2 === "" ? "unknown" : code2}) at ${spec.relativePath}`
     };
   }
-  return { state: "ok", sha256: createHash16("sha256").update(content, "utf8").digest("hex"), content, diagnostic: null };
+  return { state: "ok", sha256: createHash16("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
 }
 function sourceKeyOf2(kind, rootKind, relativePath) {
   return `${kind}:${rootKind}:${relativePath}`;
@@ -14598,10 +17607,10 @@ async function readCatalogInputs(context) {
     handle.close();
   }
 }
-function bodyOf(content) {
-  const lines = content.split(/\r?\n/);
+function bodyOf(content3) {
+  const lines = content3.split(/\r?\n/);
   if (lines[0]?.trim() !== "---")
-    return content;
+    return content3;
   const end = lines.indexOf("---", 1);
   return end === -1 ? "" : lines.slice(end + 1).join(`
 `);
@@ -14613,15 +17622,15 @@ function sectionText(body, heading) {
     return null;
   const rest = lines.slice(start + 1);
   const end = rest.findIndex((line) => /^##\s+/.test(line));
-  const text = (end === -1 ? rest : rest.slice(0, end)).join(`
+  const text5 = (end === -1 ? rest : rest.slice(0, end)).join(`
 `).trim();
-  return text === "" ? null : text;
+  return text5 === "" ? null : text5;
 }
 function firstParagraph(body) {
   for (const block of body.split(/\r?\n\s*\r?\n/)) {
-    const text = block.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith("#")).join(" ");
-    if (text !== "")
-      return text;
+    const text5 = block.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith("#")).join(" ");
+    if (text5 !== "")
+      return text5;
   }
   return null;
 }
@@ -14651,17 +17660,17 @@ function parseMilestoneTable(body) {
   }
   return rows;
 }
-function deriveCompass(iterationId, content, relativePath) {
+function deriveCompass(iterationId, content3, relativePath) {
   let frontmatter;
   try {
-    frontmatter = parseCompassFrontmatterText(content, relativePath);
+    frontmatter = parseCompassFrontmatterText(content3, relativePath);
   } catch {
     return { diagnostic: "invalid: compass frontmatter is not parseable" };
   }
-  const gate = validateCompassFrontmatter(frontmatter);
-  if (!gate.ok)
-    return { diagnostic: `invalid: ${gate.violations.map((violation) => violation.code).join(", ")}` };
-  const body = bodyOf(content);
+  const gate2 = validateCompassFrontmatter(frontmatter);
+  if (!gate2.ok)
+    return { diagnostic: `invalid: ${gate2.violations.map((violation16) => violation16.code).join(", ")}` };
+  const body = bodyOf(content3);
   return {
     iterationId,
     summary: firstParagraph(body),
@@ -14715,14 +17724,14 @@ async function captureExecutionProjectionSources(context) {
     const sources = [];
     const diagnostics = [];
     const rows = { workflows: [], plans: [], leases: [], compasses: [] };
-    const recordInvalid = (sourceSpec, content, message, readState = "ok") => {
-      const sha256 = readState === "invalid" ? null : createHash16("sha256").update(content, "utf8").digest("hex");
-      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256, state: "invalid", diagnostic: message, declared: true });
+    const recordInvalid = (sourceSpec, content3, message, readState = "ok") => {
+      const sha2564 = readState === "invalid" ? null : createHash16("sha256").update(content3, "utf8").digest("hex");
+      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "invalid", diagnostic: message, declared: true });
       diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
     };
-    const record = (sourceSpec, content, shaText = content) => {
-      const sha256 = createHash16("sha256").update(shaText, "utf8").digest("hex");
-      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256, state: "ok", diagnostic: null, declared: sourceSpec.declared });
+    const record = (sourceSpec, content3, shaText = content3) => {
+      const sha2564 = createHash16("sha256").update(shaText, "utf8").digest("hex");
+      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "ok", diagnostic: null, declared: sourceSpec.declared });
     };
     const spec = (kind, rel) => ({
       source: "database",
@@ -14788,9 +17797,9 @@ async function captureExecutionProjectionSources(context) {
       }
       const projectionState = servedWorkflow.state;
       const workflowValidation = validateWorkflowSnapshot({ ...projectionState, plans: [] });
-      const workflowErrors = workflowValidation.violations.filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE);
+      const workflowErrors = workflowValidation.violations.filter((violation16) => violation16.code !== LEGACY_WORKTREE_PATH_CODE);
       if (workflowErrors.length > 0) {
-        recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation) => violation.code).join(", ")})`);
+        recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation16) => violation16.code).join(", ")})`);
         continue;
       }
       record(workflowSpec, item.state_json);
@@ -14867,8 +17876,8 @@ async function captureExecutionProjectionSources(context) {
       const plan = isPlainObject(state) ? { ...state, coordination } : state;
       const validation = validatePlanRow(plan);
       if (!isPlainObject(coordination) || !validation.ok) {
-        const codes = validation.violations.map((item) => item.code);
-        recordInvalid(sourceSpec, `${row.state_json}\x00${row.coordination_json}`, `invalid: plan state or coordination failed validation${codes.length ? ` (${codes.join(", ")})` : ""}`);
+        const codes2 = validation.violations.map((item) => item.code);
+        recordInvalid(sourceSpec, `${row.state_json}\x00${row.coordination_json}`, `invalid: plan state or coordination failed validation${codes2.length ? ` (${codes2.join(", ")})` : ""}`);
         continue;
       }
       const planState = state;
@@ -14993,9 +18002,9 @@ function readPublishedFingerprints(db, generation) {
     sha256: text4(row.sha256)
   }));
 }
-function changedSourceKeys(previous, next) {
+function changedSourceKeys(previous3, next) {
   const fingerprint = (entry) => `${entry.state}\x00${entry.sha256 ?? "-"}`;
-  const before = new Map(previous.map((entry) => [entry.sourceKey, fingerprint(entry)]));
+  const before = new Map(previous3.map((entry) => [entry.sourceKey, fingerprint(entry)]));
   const after = new Map(next.map((entry) => [entry.sourceKey, fingerprint(entry)]));
   const keys = new Set([...before.keys(), ...after.keys()]);
   return [...keys].filter((key) => before.get(key) !== after.get(key)).sort();
@@ -15080,9 +18089,9 @@ function projectionRenders(db, rowsOf) {
     const rows = rowsOf(spec, columns).map((row) => columns.map((column) => (column in row) ? row[column] : "\x00unrendered"));
     const keyIndexes = spec.primaryKey.map((key) => columns.indexOf(key));
     rows.sort((left, right) => {
-      for (const index of keyIndexes) {
-        const a = String(left[index]);
-        const b = String(right[index]);
+      for (const index2 of keyIndexes) {
+        const a = String(left[index2]);
+        const b = String(right[index2]);
         if (a !== b)
           return a < b ? -1 : 1;
       }
@@ -15194,8 +18203,8 @@ function publishGeneration(db, capture, transactionOpen = false) {
         diagnostics: []
       }, capture, [], false);
     }
-    const previous = readPublishedFingerprints(db, meta.generation);
-    const changedKeys = changedSourceKeys(previous, capture.sources);
+    const previous3 = readPublishedFingerprints(db, meta.generation);
+    const changedKeys = changedSourceKeys(previous3, capture.sources);
     const generation = (meta.generation ?? 0) + 1;
     for (const table of PROJECTION_TABLES)
       db.exec(`delete from ${table}`);
@@ -15293,10 +18302,10 @@ init_workflow();
 
 class StoreReadError extends Error {
   code;
-  constructor(code, message) {
-    super(`[${code}] ${message}`);
+  constructor(code2, message) {
+    super(`[${code2}] ${message}`);
     this.name = "StoreReadError";
-    this.code = code;
+    this.code = code2;
   }
 }
 var DASHBOARD_VIEWS = {
@@ -15900,9 +18909,9 @@ function readWorkflowList(db, filters) {
   const projectId = text5(filters.projectId);
   const plansByWorkflow = new Map;
   for (const plan of generated.plans) {
-    const list = plansByWorkflow.get(plan.workflow_id) ?? [];
-    list.push(plan);
-    plansByWorkflow.set(plan.workflow_id, list);
+    const list2 = plansByWorkflow.get(plan.workflow_id) ?? [];
+    list2.push(plan);
+    plansByWorkflow.set(plan.workflow_id, list2);
   }
   const membership = projectMembership(db);
   const scoped = generated.workflows.filter((workflow) => {
@@ -15943,24 +18952,24 @@ function iterationPlanIds(db) {
   const rows = db.prepare("select from_id as planId, to_id as iterationId from catalog_links where relation = 'belongs-to' and from_kind = 'plan' and to_kind = 'iteration'").all();
   const byIteration = new Map;
   for (const row of rows) {
-    const list = byIteration.get(row.iterationId) ?? [];
-    list.push(row.planId);
-    byIteration.set(row.iterationId, list);
+    const list2 = byIteration.get(row.iterationId) ?? [];
+    list2.push(row.planId);
+    byIteration.set(row.iterationId, list2);
   }
-  for (const list of byIteration.values())
-    list.sort();
+  for (const list2 of byIteration.values())
+    list2.sort();
   return byIteration;
 }
 function iterationDocumentIds(db) {
   const rows = db.prepare("select from_id as iterationId, to_id as documentId from catalog_links where relation = 'documents' and from_kind = 'iteration' and to_kind = 'document'").all();
   const byIteration = new Map;
   for (const row of rows) {
-    const list = byIteration.get(row.iterationId) ?? [];
-    list.push(row.documentId);
-    byIteration.set(row.iterationId, list);
+    const list2 = byIteration.get(row.iterationId) ?? [];
+    list2.push(row.documentId);
+    byIteration.set(row.iterationId, list2);
   }
-  for (const list of byIteration.values())
-    list.sort();
+  for (const list2 of byIteration.values())
+    list2.sort();
   return byIteration;
 }
 function iterationMembershipPlanIds(generated, linkIds, iterationIds) {
@@ -15990,17 +18999,17 @@ function composeIteration(iterationId, catalog, generated, planIds, documentIds,
   const plans = planIds.map((planId) => {
     const planCatalog = identities.get(identityToken("plan", planId)) ?? null;
     const executionRow = generated.plans.find((plan) => plan.plan_id === planId && plan.workflow_id === iterationId) ?? generated.plans.find((plan) => plan.plan_id === planId && plan.workflow_id === planId);
-    const planBadges = [];
+    const planBadges2 = [];
     if (planCatalog === null)
-      planBadges.push("catalog-missing");
+      planBadges2.push("catalog-missing");
     if (executionRow === undefined) {
-      planBadges.push("execution-unavailable");
-      return { planId, catalog: planCatalog, execution: null, catalogPinRevision: null, badges: planBadges };
+      planBadges2.push("execution-unavailable");
+      return { planId, catalog: planCatalog, execution: null, catalogPinRevision: null, badges: planBadges2 };
     }
     if (executionRow.catalog_pin_revision === null)
-      planBadges.push("catalog-pin-missing");
+      planBadges2.push("catalog-pin-missing");
     else if (planCatalog !== null && planCatalog.revision !== executionRow.catalog_pin_revision) {
-      planBadges.push("catalog-pin-conflict");
+      planBadges2.push("catalog-pin-conflict");
     }
     return {
       planId,
@@ -16013,7 +19022,7 @@ function composeIteration(iterationId, catalog, generated, planIds, documentIds,
         doneAt: executionRow.done_at
       },
       catalogPinRevision: executionRow.catalog_pin_revision,
-      badges: planBadges
+      badges: planBadges2
     };
   });
   return {
@@ -16037,8 +19046,8 @@ function composeIteration(iterationId, catalog, generated, planIds, documentIds,
     projects: [...projects],
     plans,
     documents: documentIds.flatMap((documentId) => {
-      const document = identities.get(identityToken("document", documentId));
-      return document === undefined ? [] : [document];
+      const document3 = identities.get(identityToken("document", documentId));
+      return document3 === undefined ? [] : [document3];
     }),
     gateStep: gateStepOf(compassRow?.status, plans),
     badges
@@ -16120,8 +19129,8 @@ function projectionFailureReason(db) {
   const reasons = projection.diagnostics.map((diagnostic) => diagnostic.message).filter((message) => message !== "");
   return reasons.length > 0 ? reasons.join("; ") : "no projection generation has been published and the refresh could not read a coherent source set";
 }
-function activeWorkflows(list) {
-  return { ...list, items: list.items.filter((item) => item.activeRegistration) };
+function activeWorkflows(list2) {
+  return { ...list2, items: list2.items.filter((item) => item.activeRegistration) };
 }
 function readResidualCounts(db) {
   const bySeverity = { critical: 0, high: 0, medium: 0, low: 0, nit: 0 };
@@ -16134,10 +19143,10 @@ function readResidualCounts(db) {
   return { open, bySeverity };
 }
 function readLatestIteration(db, projectId) {
-  const list = readIterationList(db, { projectId, limit: 200 });
+  const list2 = readIterationList(db, { projectId, limit: 200 });
   let latest = null;
   let latestKey = "";
-  for (const item of list.items) {
+  for (const item of list2.items) {
     const key = item.compass?.startedAt ?? item.catalog?.updatedAt ?? "";
     if (latest === null || key > latestKey || key === latestKey && item.iterationId < latest.iterationId) {
       latest = item;
@@ -16253,8 +19262,8 @@ var PRE_ACTIVATION_CODES = ["store.not-initialized", "store.not-active"];
 var storeRuntimeProbe = { info: detectStoreRuntime };
 function refusalOf(error) {
   const message = error instanceof Error ? error.message : String(error);
-  const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "";
-  return { code: code === "" ? "store.authority-unreadable" : code, message };
+  const code2 = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "";
+  return { code: code2 === "" ? "store.authority-unreadable" : code2, message };
 }
 async function readAuthorityRoute(harnessDir) {
   try {
@@ -16284,8 +19293,8 @@ function landedRegisterDirOf(resolved, landed) {
     return aliased.harnessDir;
   return caseFoldedRegisterRoot(landed);
 }
-function authorityViolation(code, message) {
-  return { ok: false, severity: "high", code, message };
+function authorityViolation(code2, message) {
+  return { ok: false, severity: "high", code: code2, message };
 }
 function storeDirectWriteRefusal(targetPath) {
   return authorityViolation(STORE_DIRECT_WRITE_CODE, `${targetPath} is the issue/catalog authority database and is owned by the runtime — a direct hand write ` + "is refused (the schema and its WAL are managed in-process). Schema changes go through `mstar store " + "init|upgrade|migrate`, findings through `mstar issue add|close`, catalog rows through `mstar catalog " + "register|update`");
@@ -16319,8 +19328,8 @@ function blockAuthorityWrite(toolName, display, violations) {
   process.exit(2);
 }
 var MAX_GATED_TARGETS = 32;
-function displaySafe(text) {
-  return text.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`);
+function displaySafe(text6) {
+  return text6.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`);
 }
 function displayTarget(targetPath, harnessDir) {
   const rel = relative2(harnessDir, targetPath);
@@ -16341,15 +19350,15 @@ function readStdinJson() {
 }
 function writeTargetPaths(toolInput) {
   const paths = [];
-  const push = (value) => {
+  const push2 = (value) => {
     if (typeof value === "string" && value.trim() !== "")
       paths.push(value);
   };
-  push(toolInput.file_path);
-  push(toolInput.path);
+  push2(toolInput.file_path);
+  push2(toolInput.path);
   if (Array.isArray(toolInput.paths)) {
     for (const value of toolInput.paths)
-      push(value);
+      push2(value);
   }
   return paths.slice(0, MAX_GATED_TARGETS);
 }
@@ -16464,8 +19473,8 @@ try {
       }
     }
     const gated = target ?? { harnessDir: registerDir, kind: "register" };
-    const content = typeof tool.content === "string" ? tool.content : reconstructEditContent(tool, targetPath) ?? tool.content;
-    const violations = validateStatusWriteDoc(content, targetPath, gated.kind, { oversized: "violate" });
+    const content3 = typeof tool.content === "string" ? tool.content : reconstructEditContent(tool, targetPath) ?? tool.content;
+    const violations = validateStatusWriteDoc(content3, targetPath, gated.kind, { oversized: "violate" });
     if (violations.length === 0)
       continue;
     const enforcement = resolveRepoEnforcement(gated.harnessDir);
