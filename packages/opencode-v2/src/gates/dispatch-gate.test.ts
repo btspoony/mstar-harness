@@ -90,7 +90,7 @@ describe("OpenCode V2 subagent dispatch gate", () => {
     const logs: string[] = [];
     const warn = await fixture((_level, message) => logs.push(message));
     const missingBranch = validAssignment().replace("Working branch: feature/opencode-v2-dispatch-test", "");
-    const engine = await loadDispatchGateApi();
+    const engine = (await loadDispatchGateApi()).api;
     expect(engine).not.toBeNull();
     expect(engine?.parseAssignmentFields(missingBranch).workingBranch).toBeUndefined();
     expect(engine?.composeDispatchGate(missingBranch, { caller: "project-manager", callerRequired: true }).violations.map((violation) => violation.code)).toContain("assignment.field.branch-missing");
@@ -198,14 +198,26 @@ describe("OpenCode V2 subagent dispatch gate", () => {
   });
 
 
-  test("null engine seam fails closed and names the recovery that clears the cached load", async () => {
+  test("a rejected engine import fails closed and names the reload that clears the cached load", async () => {
     await expect(Effect.runPromise(dispatchBefore(
       makeEvent("project-manager", "fullstack-dev", validAssignment()),
-      { loadEngine: async () => null },
+      { loadEngine: async () => ({ api: null, failure: "import-failed" }) },
     ))).rejects.toMatchObject({
       _tag: "Tool.Error",
-      message: expect.stringMatching(/\[dispatch\.engine-unavailable\][\s\S]*reload or restart the OpenCode host/i),
+      message: expect.stringMatching(/\[dispatch\.engine-unavailable\][\s\S]*Reload or restart the OpenCode host[\s\S]*cached for the process lifetime[\s\S]*No subagent was spawned/),
     });
+  });
+  test("missing engine exports fail closed without offering a reload that cannot fix the mismatch", async () => {
+    const caught = await Effect.runPromise(dispatchBefore(
+      makeEvent("project-manager", "fullstack-dev", validAssignment()),
+      { loadEngine: async () => ({ api: null, failure: "exports-missing" }) },
+    )).catch((error: Tool.Error) => error);
+    expect(caught).toBeInstanceOf(Tool.Error);
+    const message = (caught as Tool.Error).message;
+    expect(message).toContain("[dispatch.engine-unavailable]");
+    expect(message).toContain("Reinstall @mstar-harness/opencode-v2");
+    expect(message).toContain("No subagent was spawned");
+    expect(message).not.toMatch(/Reload or restart the OpenCode host/i);
   });
   test("missing prompt refuses as typed schema drift instead of skipping validation", async () => {
     const harness = await fixture();

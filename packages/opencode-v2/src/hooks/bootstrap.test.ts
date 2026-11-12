@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +12,17 @@ import { addBootstrapToContext, formatBootstrap, loadBootstrapContent } from "./
 type ContextMessage = SessionContext["messages"][number];
 type ContextEvent = Pick<SessionContext, "messages" | "system">;
 
-const tmpRoot = () => fs.mkdtempSync(path.join(os.tmpdir(), "opencode-v2-bootstrap-"));
+const roots: string[] = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+const tmpRoot = () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-v2-bootstrap-"));
+  roots.push(root);
+  return root;
+};
 
 /** Write a temp `AGENTS.md` with the given body; returns its path. */
 function writeBootstrapFile(content: string): string {
