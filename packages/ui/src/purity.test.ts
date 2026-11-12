@@ -29,9 +29,18 @@ const PACKAGE_ROOT = join(import.meta.dir, "..", "..");
  */
 // Mask rather than delete: newlines are kept so positions in the result still
 // map to the same source lines (the diagnostic reports the offending line).
+// Between tokens, block comments are as legal as whitespace, so the gap pattern
+// accepts both (`import /*c*/ type /*c*/ { … } /*c*/ from /*c*/ "…"`). The
+// `^import` anchor is deliberate: an import declaration is only legal at module
+// top level, so an indented one is already invalid TypeScript and the guard
+// need not accept it.
+const TOKEN_GAP = String.raw`(?:\s|/\*[\s\S]*?\*/)`;
 const withoutTypeOnlyEngineImports = (source: string): string =>
   source.replace(
-    /^import\s+type\s+(?:[\w$]+(?:\s*,\s*(?:\{[^}]*\}|\*\s+as\s+[\w$]+))?|\*\s+as\s+[\w$]+|\{[^}]*\})\s*from\s*["']@mstar-harness\/engine["'];?[^\S\n]*\n?/gm,
+    new RegExp(
+      String.raw`^import${TOKEN_GAP}+type${TOKEN_GAP}+(?:[\w$]+(?:${TOKEN_GAP}*,${TOKEN_GAP}*(?:\{[^}]*\}|\*${TOKEN_GAP}+as${TOKEN_GAP}+[\w$]+))?|\*${TOKEN_GAP}+as${TOKEN_GAP}+[\w$]+|\{[^}]*\})${TOKEN_GAP}*from${TOKEN_GAP}*["']@mstar-harness\/engine["'];?[^\S\n]*\n?`,
+      "gm",
+    ),
     (match) => match.replace(/[^\n]/g, " "),
   );
 
@@ -84,6 +93,7 @@ describe("the public surface is browser-safe", () => {
       'import type Default, { EngineType } from "@mstar-harness/engine";\n',
       "import type { EngineType } from '@mstar-harness/engine';\n",
       "import type EngineType from '@mstar-harness/engine';\n",
+      'import /* why */ type /* still type-only */ { EngineType } /* gap */ from /* gap */ "@mstar-harness/engine";\n',
     ];
     for (const source of typeOnly) {
       expect(withoutTypeOnlyEngineImports(source)).not.toContain("@mstar-harness/engine");
@@ -92,6 +102,7 @@ describe("the public surface is browser-safe", () => {
       'import {\n  engineValue,\n} from "@mstar-harness/engine";\n',
       'import engineValue from "@mstar-harness/engine";\n',
       'import * as engine from "@mstar-harness/engine";\n',
+      'import /* not type-only */ { engineValue } /* gap */ from /* gap */ "@mstar-harness/engine";\n',
     ];
     for (const source of value) {
       expect(withoutTypeOnlyEngineImports(source)).toContain("@mstar-harness/engine");
