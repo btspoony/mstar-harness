@@ -23,45 +23,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { runCli, type RunResult } from "./harness";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
 
-const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
-
-/**
- * Spawn env with ambient harness env vars pinned out: the CLI
- * resolves harness dirs from MSTAR_HARNESS_DIR ahead of probing, and
- * `dispatch validate` reads the branch from MSTAR_WORKING_BRANCH — an
- * ambient value would redirect every fixture spuriously.
- */
-function cliEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR" || key === "MSTAR_WORKING_BRANCH") {
-      continue;
-    }
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
-}
-
-interface RunResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-/** Run the real CLI entry as a subprocess; cwd + env overrides per test. */
-function runCli(args: string[], opts: { env?: Record<string, string>; cwd?: string } = {}): RunResult {
-  const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: opts.cwd ?? CLI_ROOT,
-    env: { ...cliEnv(), ...opts.env },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
-}
 function expectEnvelope(result: RunResult, status: string, code?: string): Record<string, unknown> {
   const envelope = JSON.parse(result.stdout) as Record<string, unknown>;
   expect(envelope.status).toBe(status);
@@ -122,6 +87,24 @@ function assignment(overrides: Record<string, string>): string {
 }
 
 describe("mstar dispatch validate — Assignment field + default-branch gate", () => {
+  test("the shared runner spawns MSTAR_CLI_ENTRY when set, else the source entry", () => {
+    // A built-entry path that cannot execute: the spawn reaches the selector
+    // and fails on the named entry, so the child's own argv is never the
+    // source entry a hardcoded runner would have launched.
+    const prior = process.env.MSTAR_CLI_ENTRY;
+    process.env.MSTAR_CLI_ENTRY = join(tmpdir(), "no-such-built-entry.js");
+    try {
+      withAssignment(VALID_ASSIGNMENT, (file) => {
+        const result = runCli(["dispatch", "validate", file]);
+        expect(result.exitCode).not.toBe(0);
+        expect(`${result.stdout}${result.stderr}`).toContain("no-such-built-entry.js");
+      });
+    } finally {
+      if (prior === undefined) delete process.env.MSTAR_CLI_ENTRY;
+      else process.env.MSTAR_CLI_ENTRY = prior;
+    }
+  });
+
   test("valid writable assignment → OK, exit 0", () => {
     withAssignment(VALID_ASSIGNMENT, (file) => {
       const result = runCli(["dispatch", "validate", file]);

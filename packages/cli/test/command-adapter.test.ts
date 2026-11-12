@@ -969,6 +969,7 @@ import { opencodeAdapter } from "../src/adapters/opencode";
 import { HOST_PRESENCE_BINARIES, ensureHostPresent, HostPresenceRefusal } from "../src/adapters/host-presence";
 import { OpencodeVersionProbeRefusal, probeOpencodeGeneration } from "../src/adapters/opencode-version-probe";
 import type { MutateConfigForInitOptions, ProbeCommandRunner } from "../src/types";
+import { CLI_ROOT, cliEnv, runCli } from "./harness";
 
 const runnerV2: ProbeCommandRunner = async () => "opencode v2.0.24";
 const runnerV1: ProbeCommandRunner = async () => "opencode v1.0.0";
@@ -1371,38 +1372,23 @@ describe("opencode adapter — generation selection", () => {
 });
 
 describe("opencode init CLI wiring (real entry, stubbed/absent opencode on PATH)", () => {
-  const CLI_ROOT = resolve(import.meta.dir, "..");
-  const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
   const ISOLATED_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
-  function cliEnv(pathValue: string, projectRoot: string, home: string): Record<string, string> {
-    const env: Record<string, string> = { PATH: pathValue, HOME: home, MSTAR_CLI_PROJECT_ROOT: projectRoot };
-    for (const [key, value] of Object.entries(process.env)) {
-      if (["MSTAR_HARNESS_DIR", "MSTAR_CONTROL_ROOT", "SDD_DIR", "MSTAR_WORKING_BRANCH", "MSTAR_CLI_PROJECT_ROOT"].includes(key)) continue;
-      if (value !== undefined) env[key] = env[key] ?? value;
-    }
-    return env;
-  }
-
   function runDoctorCli(args: string[], pathValue: string, home: string, projectRoot: string): { exitCode: number | null; stdout: string; stderr: string } {
-    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
+    const result = runCli(args, {
       cwd: projectRoot,
-      env: cliEnv(pathValue, projectRoot, home),
-      stdout: "pipe",
-      stderr: "pipe",
+      env: cliEnv({ PATH: pathValue, HOME: home, MSTAR_CLI_PROJECT_ROOT: projectRoot }),
       timeout: 15_000,
     });
-    return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+    return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
   }
 
   function runInit(args: string[], pathValue: string, projectRoot: string, home = tmpdir()): { exitCode: number | null; stdout: string; stderr: string } {
-    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, "init", ...args], {
+    const result = runCli(["init", ...args], {
       cwd: projectRoot,
-      env: cliEnv(pathValue, projectRoot, home),
-      stdout: "pipe",
-      stderr: "pipe",
+      env: cliEnv({ PATH: pathValue, HOME: home, MSTAR_CLI_PROJECT_ROOT: projectRoot }),
     });
-    return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+    return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
   }
 
   function stubNode(version: string): string {
@@ -1654,13 +1640,9 @@ describe("owning-skill pointer renderings", () => {
   });
 
   test("top-level --help carries the agent pointer and exits 0", () => {
-    const CLI_ROOT = resolve(import.meta.dir, "..");
-    const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
-    const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, "--help"], {
-      cwd: CLI_ROOT, stdout: "pipe", stderr: "pipe", timeout: 30_000,
-    });
-    const output = proc.stdout.toString();
-    expect(proc.exitCode).toBe(0);
+    const result = runCli(["--help"], { cwd: CLI_ROOT, timeout: 30_000 });
+    const output = result.stdout;
+    expect(result.exitCode).toBe(0);
     expect(output).toContain("mstar-use-cli");
     expect(output).toContain("schema --command");
   });
