@@ -15,39 +15,16 @@ import { dirname as dirname3, join as join3, sep } from "node:path";
 import { readFileSync as readFileSync2, statSync } from "node:fs";
 import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
 import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
 import { basename as basename3, dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync as existsSync4, realpathSync as realpathSync4 } from "node:fs";
-import { createHash as createHash4 } from "node:crypto";
-import {
-  copyFileSync,
-  existsSync as existsSync6,
-  lstatSync as lstatSync3,
-  mkdirSync as mkdirSync3,
-  readFileSync as readFileSync6,
-  readdirSync as readdirSync3,
-  realpathSync as realpathSync5,
-  renameSync as renameSync2,
-  rmSync,
-  statSync as statSync3,
-  unlinkSync as unlinkSync2,
-  writeFileSync as writeFileSync3
-} from "node:fs";
-import { createRequire } from "node:module";
-import { basename as basename7, dirname as dirname7, join as join9, resolve as resolve10, sep as sep4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { createHash as createHash5 } from "node:crypto";
-import { lstatSync as lstatSync4, readdirSync as readdirSync4 } from "node:fs";
-import { dirname as dirname8, join as join10 } from "node:path";
-import { randomUUID as randomUUID3 } from "node:crypto";
 import { existsSync as existsSync8, readFileSync as readFileSync7, readdirSync as readdirSync5, realpathSync as realpathSync6 } from "node:fs";
 import { dirname as dirname9, join as join11, resolve as resolve11, sep as sep5 } from "node:path";
 import { existsSync as existsSync10, mkdirSync as mkdirSync4, readdirSync as readdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync7, statSync as statSync4, writeFileSync as writeFileSync4 } from "node:fs";
 import { execFileSync as execFileSync4 } from "node:child_process";
 import { basename as basename8, dirname as dirname10, isAbsolute as isAbsolute6, join as join14, relative as relative3, resolve as resolve12 } from "node:path";
 import { basename as basename9, isAbsolute as isAbsolute8, join as join16, relative as relative4, resolve as resolve13, sep as sep7 } from "node:path";
-import { createHash as createHash9, randomUUID as randomUUID4 } from "node:crypto";
 import { closeSync, existsSync as existsSync13, fstatSync, openSync, readFileSync as readFileSync14, readdirSync as readdirSync9, statSync as statSync7, unlinkSync as unlinkSync3 } from "node:fs";
 import { dirname as dirname11, isAbsolute as isAbsolute10, join as join18, resolve as resolve15, sep as sep9 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
@@ -75,18 +52,22 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
-var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
+var __esm = (fn, res, err) => () => {
+  if (fn)
+    try {
+      res = fn(fn = 0);
+    } catch (e) {
+      err = [e];
+    }
+  if (err)
+    throw err[0];
+  return res;
+};
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
-}
-function assertExactKeys(value, allowed, what) {
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) {
-    throw new CoordinationError("coordination.forbidden-field", "Payload contains unexpected keys. See the allowed and unexpected key lists; inspect registered state with mstar status validate.", { what, unexpected: extra, allowed: [...allowed] });
-  }
 }
 function invalid(code, message) {
   return { ok: false, severity: "high", code, message };
@@ -3798,10 +3779,10 @@ function resolveAll(constructs2, events, context) {
   const called = [];
   let index = -1;
   while (++index < constructs2.length) {
-    const resolve42 = constructs2[index].resolveAll;
-    if (resolve42 && !called.includes(resolve42)) {
-      events = resolve42(events, context);
-      called.push(resolve42);
+    const resolve5 = constructs2[index].resolveAll;
+    if (resolve5 && !called.includes(resolve5)) {
+      events = resolve5(events, context);
+      called.push(resolve5);
     }
   }
   return events;
@@ -4352,7 +4333,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
     effects.exit(types.codeFenced);
     return ok2(code);
   }
-  function tokenizeCloseStart(effects2, ok3, nok2) {
+  function tokenizeCloseStart(effects2, ok22, nok2) {
     let size = 0;
     return startBefore;
     function startBefore(code) {
@@ -4389,7 +4370,7 @@ function tokenizeCodeFenced(effects, ok2, nok) {
     function sequenceCloseAfter(code) {
       if (code === codes.eof || markdownLineEnding(code)) {
         effects2.exit(types.codeFencedFence);
-        return ok3(code);
+        return ok22(code);
       }
       return nok2(code);
     }
@@ -4440,8 +4421,8 @@ function tokenizeCodeIndented(effects, ok2, nok) {
 }
 function tokenizeFurtherStart(effects, ok2, nok) {
   const self = this;
-  return furtherStart2;
-  function furtherStart2(code) {
+  return furtherStart;
+  function furtherStart(code) {
     if (self.parser.lazy[self.now().line]) {
       return nok(code);
     }
@@ -4449,12 +4430,12 @@ function tokenizeFurtherStart(effects, ok2, nok) {
       effects.enter(types.lineEnding);
       effects.consume(code);
       effects.exit(types.lineEnding);
-      return furtherStart2;
+      return furtherStart;
     }
     return factorySpaceMinMax(effects, ok2, onNotEnoughPrefix, types.linePrefix, constants.tabSize, constants.tabSize)(code);
   }
   function onNotEnoughPrefix(code) {
-    return markdownLineEnding(code) ? furtherStart2(code) : nok(code);
+    return markdownLineEnding(code) ? furtherStart(code) : nok(code);
   }
 }
 var codeIndented;
@@ -5188,8 +5169,8 @@ function tokenizeDefinition(effects, ok2, nok) {
   }
 }
 function tokenizeTitleBefore(effects, ok2, nok) {
-  return titleBefore2;
-  function titleBefore2(code) {
+  return titleBefore;
+  function titleBefore(code) {
     return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, beforeMarker)(code) : nok(code);
   }
   function beforeMarker(code) {
@@ -6780,10 +6761,10 @@ function initializeFactory(field) {
   function initializeText(effects) {
     const self = this;
     const constructs2 = this.parser.constructs[field];
-    const text2 = effects.attempt(constructs2, start, notText);
+    const text = effects.attempt(constructs2, start, notText);
     return start;
     function start(code) {
-      return atBreak(code) ? text2(code) : notText(code);
+      return atBreak(code) ? text(code) : notText(code);
     }
     function notText(code) {
       if (code === codes.eof) {
@@ -6797,7 +6778,7 @@ function initializeFactory(field) {
     function data(code) {
       if (atBreak(code)) {
         effects.exit(types.data);
-        return text2(code);
+        return text(code);
       }
       effects.consume(code);
       return data;
@@ -8367,7 +8348,7 @@ function visitParents(tree, test, visitor, reverse) {
   } else {
     check = test;
   }
-  const is2 = convert(check);
+  const is = convert(check);
   const step = reverse ? -1 : 1;
   factory(tree, undefined, [])();
   function factory(node2, index2, parents) {
@@ -8384,7 +8365,7 @@ function visitParents(tree, test, visitor, reverse) {
       let subresult;
       let offset;
       let grandparents;
-      if (!test || is2(node2, index2, parents[parents.length - 1] || undefined)) {
+      if (!test || is(node2, index2, parents[parents.length - 1] || undefined)) {
         result = toResult(visitor(node2, parents));
         if (result[0] === EXIT) {
           return result;
@@ -8909,65 +8890,65 @@ function tokenizeEmailAutolink(effects, ok3, nok) {
   let dot;
   let data;
   return start;
-  function start(code2) {
-    if (!gfmAtext(code2) || !previousEmail.call(self, self.previous) || previousUnbalanced(self.events)) {
-      return nok(code2);
+  function start(code) {
+    if (!gfmAtext(code) || !previousEmail.call(self, self.previous) || previousUnbalanced(self.events)) {
+      return nok(code);
     }
     effects.enter("literalAutolink");
     effects.enter("literalAutolinkEmail");
-    return atext(code2);
+    return atext(code);
   }
-  function atext(code2) {
-    if (gfmAtext(code2)) {
-      effects.consume(code2);
+  function atext(code) {
+    if (gfmAtext(code)) {
+      effects.consume(code);
       return atext;
     }
-    if (code2 === codes.atSign) {
-      effects.consume(code2);
+    if (code === codes.atSign) {
+      effects.consume(code);
       return emailDomain;
     }
-    return nok(code2);
+    return nok(code);
   }
-  function emailDomain(code2) {
-    if (code2 === codes.dot) {
-      return effects.check(emailDomainDotTrail, emailDomainAfter, emailDomainDot)(code2);
+  function emailDomain(code) {
+    if (code === codes.dot) {
+      return effects.check(emailDomainDotTrail, emailDomainAfter, emailDomainDot)(code);
     }
-    if (code2 === codes.dash || code2 === codes.underscore || asciiAlphanumeric(code2)) {
+    if (code === codes.dash || code === codes.underscore || asciiAlphanumeric(code)) {
       data = true;
-      effects.consume(code2);
+      effects.consume(code);
       return emailDomain;
     }
-    return emailDomainAfter(code2);
+    return emailDomainAfter(code);
   }
-  function emailDomainDot(code2) {
-    effects.consume(code2);
+  function emailDomainDot(code) {
+    effects.consume(code);
     dot = true;
     return emailDomain;
   }
-  function emailDomainAfter(code2) {
+  function emailDomainAfter(code) {
     if (data && dot && asciiAlpha(self.previous)) {
       effects.exit("literalAutolinkEmail");
       effects.exit("literalAutolink");
-      return ok3(code2);
+      return ok3(code);
     }
-    return nok(code2);
+    return nok(code);
   }
 }
 function tokenizeWwwAutolink(effects, ok3, nok) {
   const self = this;
   return wwwStart;
-  function wwwStart(code2) {
-    if (code2 !== codes.uppercaseW && code2 !== codes.lowercaseW || !previousWww.call(self, self.previous) || previousUnbalanced(self.events)) {
-      return nok(code2);
+  function wwwStart(code) {
+    if (code !== codes.uppercaseW && code !== codes.lowercaseW || !previousWww.call(self, self.previous) || previousUnbalanced(self.events)) {
+      return nok(code);
     }
     effects.enter("literalAutolink");
     effects.enter("literalAutolinkWww");
-    return effects.check(wwwPrefix, effects.attempt(domain, effects.attempt(path, wwwAfter), nok), nok)(code2);
+    return effects.check(wwwPrefix, effects.attempt(domain, effects.attempt(path, wwwAfter), nok), nok)(code);
   }
-  function wwwAfter(code2) {
+  function wwwAfter(code) {
     effects.exit("literalAutolinkWww");
     effects.exit("literalAutolink");
-    return ok3(code2);
+    return ok3(code);
   }
 }
 function tokenizeProtocolAutolink(effects, ok3, nok) {
@@ -8975,68 +8956,68 @@ function tokenizeProtocolAutolink(effects, ok3, nok) {
   let buffer = "";
   let seen = false;
   return protocolStart;
-  function protocolStart(code2) {
-    if ((code2 === codes.uppercaseH || code2 === codes.lowercaseH) && previousProtocol.call(self, self.previous) && !previousUnbalanced(self.events)) {
+  function protocolStart(code) {
+    if ((code === codes.uppercaseH || code === codes.lowercaseH) && previousProtocol.call(self, self.previous) && !previousUnbalanced(self.events)) {
       effects.enter("literalAutolink");
       effects.enter("literalAutolinkHttp");
-      buffer += String.fromCodePoint(code2);
-      effects.consume(code2);
+      buffer += String.fromCodePoint(code);
+      effects.consume(code);
       return protocolPrefixInside;
     }
-    return nok(code2);
+    return nok(code);
   }
-  function protocolPrefixInside(code2) {
-    if (asciiAlpha(code2) && buffer.length < 5) {
-      buffer += String.fromCodePoint(code2);
-      effects.consume(code2);
+  function protocolPrefixInside(code) {
+    if (asciiAlpha(code) && buffer.length < 5) {
+      buffer += String.fromCodePoint(code);
+      effects.consume(code);
       return protocolPrefixInside;
     }
-    if (code2 === codes.colon) {
+    if (code === codes.colon) {
       const protocol = buffer.toLowerCase();
       if (protocol === "http" || protocol === "https") {
-        effects.consume(code2);
+        effects.consume(code);
         return protocolSlashesInside;
       }
     }
-    return nok(code2);
+    return nok(code);
   }
-  function protocolSlashesInside(code2) {
-    if (code2 === codes.slash) {
-      effects.consume(code2);
+  function protocolSlashesInside(code) {
+    if (code === codes.slash) {
+      effects.consume(code);
       if (seen) {
         return afterProtocol;
       }
       seen = true;
       return protocolSlashesInside;
     }
-    return nok(code2);
+    return nok(code);
   }
-  function afterProtocol(code2) {
-    return code2 === codes.eof || asciiControl(code2) || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2) || unicodePunctuation(code2) ? nok(code2) : effects.attempt(domain, effects.attempt(path, protocolAfter), nok)(code2);
+  function afterProtocol(code) {
+    return code === codes.eof || asciiControl(code) || markdownLineEndingOrSpace(code) || unicodeWhitespace(code) || unicodePunctuation(code) ? nok(code) : effects.attempt(domain, effects.attempt(path, protocolAfter), nok)(code);
   }
-  function protocolAfter(code2) {
+  function protocolAfter(code) {
     effects.exit("literalAutolinkHttp");
     effects.exit("literalAutolink");
-    return ok3(code2);
+    return ok3(code);
   }
 }
 function tokenizeWwwPrefix(effects, ok3, nok) {
   let size = 0;
   return wwwPrefixInside;
-  function wwwPrefixInside(code2) {
-    if ((code2 === codes.uppercaseW || code2 === codes.lowercaseW) && size < 3) {
+  function wwwPrefixInside(code) {
+    if ((code === codes.uppercaseW || code === codes.lowercaseW) && size < 3) {
       size++;
-      effects.consume(code2);
+      effects.consume(code);
       return wwwPrefixInside;
     }
-    if (code2 === codes.dot && size === 3) {
-      effects.consume(code2);
+    if (code === codes.dot && size === 3) {
+      effects.consume(code);
       return wwwPrefixAfter;
     }
-    return nok(code2);
+    return nok(code);
   }
-  function wwwPrefixAfter(code2) {
-    return code2 === codes.eof ? nok(code2) : ok3(code2);
+  function wwwPrefixAfter(code) {
+    return code === codes.eof ? nok(code) : ok3(code);
   }
 }
 function tokenizeDomain(effects, ok3, nok) {
@@ -9044,126 +9025,126 @@ function tokenizeDomain(effects, ok3, nok) {
   let underscoreInLastLastSegment;
   let seen;
   return domainInside;
-  function domainInside(code2) {
-    if (code2 === codes.dot || code2 === codes.underscore) {
-      return effects.check(trail, domainAfter, domainAtPunctuation)(code2);
+  function domainInside(code) {
+    if (code === codes.dot || code === codes.underscore) {
+      return effects.check(trail, domainAfter, domainAtPunctuation)(code);
     }
-    if (code2 === codes.eof || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2) || code2 !== codes.dash && unicodePunctuation(code2)) {
-      return domainAfter(code2);
+    if (code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code) || code !== codes.dash && unicodePunctuation(code)) {
+      return domainAfter(code);
     }
     seen = true;
-    effects.consume(code2);
+    effects.consume(code);
     return domainInside;
   }
-  function domainAtPunctuation(code2) {
-    if (code2 === codes.underscore) {
+  function domainAtPunctuation(code) {
+    if (code === codes.underscore) {
       underscoreInLastSegment = true;
     } else {
       underscoreInLastLastSegment = underscoreInLastSegment;
       underscoreInLastSegment = undefined;
     }
-    effects.consume(code2);
+    effects.consume(code);
     return domainInside;
   }
-  function domainAfter(code2) {
+  function domainAfter(code) {
     if (underscoreInLastLastSegment || underscoreInLastSegment || !seen) {
-      return nok(code2);
+      return nok(code);
     }
-    return ok3(code2);
+    return ok3(code);
   }
 }
 function tokenizePath(effects, ok3) {
   let sizeOpen = 0;
   let sizeClose = 0;
   return pathInside;
-  function pathInside(code2) {
-    if (code2 === codes.leftParenthesis) {
+  function pathInside(code) {
+    if (code === codes.leftParenthesis) {
       sizeOpen++;
-      effects.consume(code2);
+      effects.consume(code);
       return pathInside;
     }
-    if (code2 === codes.rightParenthesis && sizeClose < sizeOpen) {
-      return pathAtPunctuation(code2);
+    if (code === codes.rightParenthesis && sizeClose < sizeOpen) {
+      return pathAtPunctuation(code);
     }
-    if (code2 === codes.exclamationMark || code2 === codes.quotationMark || code2 === codes.ampersand || code2 === codes.apostrophe || code2 === codes.rightParenthesis || code2 === codes.asterisk || code2 === codes.comma || code2 === codes.dot || code2 === codes.colon || code2 === codes.semicolon || code2 === codes.lessThan || code2 === codes.questionMark || code2 === codes.rightSquareBracket || code2 === codes.underscore || code2 === codes.tilde) {
-      return effects.check(trail, ok3, pathAtPunctuation)(code2);
+    if (code === codes.exclamationMark || code === codes.quotationMark || code === codes.ampersand || code === codes.apostrophe || code === codes.rightParenthesis || code === codes.asterisk || code === codes.comma || code === codes.dot || code === codes.colon || code === codes.semicolon || code === codes.lessThan || code === codes.questionMark || code === codes.rightSquareBracket || code === codes.underscore || code === codes.tilde) {
+      return effects.check(trail, ok3, pathAtPunctuation)(code);
     }
-    if (code2 === codes.eof || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2)) {
-      return ok3(code2);
+    if (code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
+      return ok3(code);
     }
-    effects.consume(code2);
+    effects.consume(code);
     return pathInside;
   }
-  function pathAtPunctuation(code2) {
-    if (code2 === codes.rightParenthesis) {
+  function pathAtPunctuation(code) {
+    if (code === codes.rightParenthesis) {
       sizeClose++;
     }
-    effects.consume(code2);
+    effects.consume(code);
     return pathInside;
   }
 }
 function tokenizeTrail(effects, ok3, nok) {
-  return trail2;
-  function trail2(code2) {
-    if (code2 === codes.exclamationMark || code2 === codes.quotationMark || code2 === codes.apostrophe || code2 === codes.rightParenthesis || code2 === codes.asterisk || code2 === codes.comma || code2 === codes.dot || code2 === codes.colon || code2 === codes.semicolon || code2 === codes.questionMark || code2 === codes.underscore || code2 === codes.tilde) {
-      effects.consume(code2);
-      return trail2;
+  return trail;
+  function trail(code) {
+    if (code === codes.exclamationMark || code === codes.quotationMark || code === codes.apostrophe || code === codes.rightParenthesis || code === codes.asterisk || code === codes.comma || code === codes.dot || code === codes.colon || code === codes.semicolon || code === codes.questionMark || code === codes.underscore || code === codes.tilde) {
+      effects.consume(code);
+      return trail;
     }
-    if (code2 === codes.ampersand) {
-      effects.consume(code2);
+    if (code === codes.ampersand) {
+      effects.consume(code);
       return trailCharacterReferenceStart;
     }
-    if (code2 === codes.rightSquareBracket) {
-      effects.consume(code2);
+    if (code === codes.rightSquareBracket) {
+      effects.consume(code);
       return trailBracketAfter;
     }
-    if (code2 === codes.lessThan || code2 === codes.eof || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2)) {
-      return ok3(code2);
+    if (code === codes.lessThan || code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
+      return ok3(code);
     }
-    return nok(code2);
+    return nok(code);
   }
-  function trailBracketAfter(code2) {
-    if (code2 === codes.eof || code2 === codes.leftParenthesis || code2 === codes.leftSquareBracket || markdownLineEndingOrSpace(code2) || unicodeWhitespace(code2)) {
-      return ok3(code2);
+  function trailBracketAfter(code) {
+    if (code === codes.eof || code === codes.leftParenthesis || code === codes.leftSquareBracket || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
+      return ok3(code);
     }
-    return trail2(code2);
+    return trail(code);
   }
-  function trailCharacterReferenceStart(code2) {
-    return asciiAlpha(code2) ? trailCharacterReferenceInside(code2) : nok(code2);
+  function trailCharacterReferenceStart(code) {
+    return asciiAlpha(code) ? trailCharacterReferenceInside(code) : nok(code);
   }
-  function trailCharacterReferenceInside(code2) {
-    if (code2 === codes.semicolon) {
-      effects.consume(code2);
-      return trail2;
+  function trailCharacterReferenceInside(code) {
+    if (code === codes.semicolon) {
+      effects.consume(code);
+      return trail;
     }
-    if (asciiAlpha(code2)) {
-      effects.consume(code2);
+    if (asciiAlpha(code)) {
+      effects.consume(code);
       return trailCharacterReferenceInside;
     }
-    return nok(code2);
+    return nok(code);
   }
 }
 function tokenizeEmailDomainDotTrail(effects, ok3, nok) {
   return start;
-  function start(code2) {
-    effects.consume(code2);
+  function start(code) {
+    effects.consume(code);
     return after;
   }
-  function after(code2) {
-    return asciiAlphanumeric(code2) ? nok(code2) : ok3(code2);
+  function after(code) {
+    return asciiAlphanumeric(code) ? nok(code) : ok3(code);
   }
 }
-function previousWww(code2) {
-  return code2 === codes.eof || code2 === codes.leftParenthesis || code2 === codes.asterisk || code2 === codes.underscore || code2 === codes.leftSquareBracket || code2 === codes.rightSquareBracket || code2 === codes.tilde || markdownLineEndingOrSpace(code2);
+function previousWww(code) {
+  return code === codes.eof || code === codes.leftParenthesis || code === codes.asterisk || code === codes.underscore || code === codes.leftSquareBracket || code === codes.rightSquareBracket || code === codes.tilde || markdownLineEndingOrSpace(code);
 }
-function previousProtocol(code2) {
-  return !asciiAlpha(code2);
+function previousProtocol(code) {
+  return !asciiAlpha(code);
 }
-function previousEmail(code2) {
-  return !(code2 === codes.slash || gfmAtext(code2));
+function previousEmail(code) {
+  return !(code === codes.slash || gfmAtext(code));
 }
-function gfmAtext(code2) {
-  return code2 === codes.plusSign || code2 === codes.dash || code2 === codes.dot || code2 === codes.underscore || asciiAlphanumeric(code2);
+function gfmAtext(code) {
+  return code === codes.plusSign || code === codes.dash || code === codes.dot || code === codes.underscore || asciiAlphanumeric(code);
 }
 function previousUnbalanced(events) {
   let index2 = events.length;
@@ -9266,7 +9247,7 @@ function gfmFootnote() {
     }
   };
 }
-function tokenizePotentialGfmFootnoteCall(effects, ok3, nok) {
+function tokenizePotentialGfmFootnoteCall(effects, ok22, nok) {
   const self = this;
   let index2 = self.events.length;
   const defined = self.parser.gfmFootnotes || (self.parser.gfmFootnotes = []);
@@ -9294,7 +9275,7 @@ function tokenizePotentialGfmFootnoteCall(effects, ok3, nok) {
     effects.enter("gfmFootnoteCallLabelMarker");
     effects.consume(code2);
     effects.exit("gfmFootnoteCallLabelMarker");
-    return ok3(code2);
+    return ok22(code2);
   }
 }
 function resolveToPotentialGfmFootnoteCall(events, context) {
@@ -9352,7 +9333,7 @@ function resolveToPotentialGfmFootnoteCall(events, context) {
   events.splice(index2, events.length - index2 + 1, ...replacement);
   return events;
 }
-function tokenizeGfmFootnoteCall(effects, ok3, nok) {
+function tokenizeGfmFootnoteCall(effects, ok22, nok) {
   const self = this;
   const defined = self.parser.gfmFootnotes || (self.parser.gfmFootnotes = []);
   let size = 0;
@@ -9390,7 +9371,7 @@ function tokenizeGfmFootnoteCall(effects, ok3, nok) {
       effects.consume(code2);
       effects.exit("gfmFootnoteCallLabelMarker");
       effects.exit("gfmFootnoteCall");
-      return ok3;
+      return ok22;
     }
     if (!markdownLineEndingOrSpace(code2)) {
       data = true;
@@ -9408,7 +9389,7 @@ function tokenizeGfmFootnoteCall(effects, ok3, nok) {
     return callData(code2);
   }
 }
-function tokenizeDefinitionStart(effects, ok3, nok) {
+function tokenizeDefinitionStart(effects, ok22, nok) {
   const self = this;
   const defined = self.parser.gfmFootnotes || (self.parser.gfmFootnotes = []);
   let identifier;
@@ -9477,7 +9458,7 @@ function tokenizeDefinitionStart(effects, ok3, nok) {
     return nok(code2);
   }
   function whitespaceAfter(code2) {
-    return ok3(code2);
+    return ok22(code2);
   }
 }
 function tokenizeDefinitionContinuation(effects, ok3, nok) {
@@ -9573,7 +9554,7 @@ function gfmStrikethrough(options) {
     }
     return events;
   }
-  function tokenizeStrikethrough(effects, ok3, nok) {
+  function tokenizeStrikethrough(effects, ok22, nok) {
     const previous3 = this.previous;
     const events = this.events;
     let size = 0;
@@ -9601,7 +9582,7 @@ function gfmStrikethrough(options) {
       const after = classifyCharacter(code2);
       token._open = !after || after === constants.attentionSideAfter && Boolean(before);
       token._close = !before || before === constants.attentionSideAfter && Boolean(after);
-      return ok3(code2);
+      return ok22(code2);
     }
   }
 }
@@ -9700,7 +9681,7 @@ function gfmTable() {
     }
   };
 }
-function tokenizeTable(effects, ok3, nok) {
+function tokenizeTable(effects, ok22, nok) {
   const self = this;
   let size = 0;
   let sizeB = 0;
@@ -9874,7 +9855,7 @@ function tokenizeTable(effects, ok3, nok) {
       }
       effects.exit("tableDelimiterRow");
       effects.exit("tableHead");
-      return ok3(code2);
+      return ok22(code2);
     }
     return headDelimiterNok(code2);
   }
@@ -9894,7 +9875,7 @@ function tokenizeTable(effects, ok3, nok) {
     }
     if (code2 === codes.eof || markdownLineEnding(code2)) {
       effects.exit("tableRow");
-      return ok3(code2);
+      return ok22(code2);
     }
     if (markdownSpace(code2)) {
       return factorySpace(effects, bodyRowBreak, types.whitespace)(code2);
@@ -10092,7 +10073,7 @@ function gfmTaskListItem() {
     text: { [codes.leftSquareBracket]: tasklistCheck }
   };
 }
-function tokenizeTasklistCheck(effects, ok3, nok) {
+function tokenizeTasklistCheck(effects, ok22, nok) {
   const self = this;
   return open;
   function open(code2) {
@@ -10133,10 +10114,10 @@ function tokenizeTasklistCheck(effects, ok3, nok) {
   }
   function after(code2) {
     if (markdownLineEnding(code2)) {
-      return ok3(code2);
+      return ok22(code2);
     }
     if (markdownSpace(code2)) {
-      return effects.check({ tokenize: spaceThenNonSpace }, ok3, nok)(code2);
+      return effects.check({ tokenize: spaceThenNonSpace }, ok22, nok)(code2);
     }
     return nok(code2);
   }
@@ -10187,21 +10168,6 @@ function readJson(filePath) {
     throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
   }
 }
-function writeJson(filePath, value) {
-  const parent = dirname5(filePath);
-  mkdirSync(parent, { recursive: true });
-  const tmp = join5(parent, `.${basename3(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  try {
-    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}
-`, "utf8");
-    renameSync(tmp, filePath);
-  } catch (error) {
-    try {
-      unlinkSync(tmp);
-    } catch {}
-    throw error;
-  }
-}
 function findRootPackageJson(startDir) {
   let dir = startDir;
   for (;; ) {
@@ -10216,26 +10182,6 @@ function findRootPackageJson(startDir) {
       return null;
     dir = parent;
   }
-}
-function harnessVersionOrNullFrom(moduleDir) {
-  const ownManifest = join5(moduleDir, "..", "package.json");
-  try {
-    const pkg = JSON.parse(readFileSync3(ownManifest, "utf8"));
-    if (typeof pkg.version === "string" && pkg.version !== "")
-      return pkg.version;
-  } catch {}
-  const root = findRootPackageJson(moduleDir);
-  if (root === null)
-    return null;
-  try {
-    const pkg = JSON.parse(readFileSync3(root, "utf8"));
-    return typeof pkg.version === "string" && pkg.version !== "" ? pkg.version : null;
-  } catch {
-    return null;
-  }
-}
-function readHarnessVersionOrNull() {
-  return harnessVersionOrNullFrom(dirname5(fileURLToPath(import.meta.url)));
 }
 function warnUncheckableNodeFloor() {
   process.stderr.write("mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " + "so the Node version is not compared (the native node:sqlite capability check still applies). " + "Recovery: run this from an installed package or a full checkout so the manifest that declares the floor is reachable " + "(`npm i -g @mstar-harness/cli` for the CLI; the harness checkout, not a copied bundle, for a hook entrypoint).\n");
@@ -10280,7 +10226,6 @@ function readDeclaredNodeFloor() {
   return null;
 }
 var SEVERITY_ORDER;
-var ACTIVATION_PROTOCOL_VERSION = 1;
 var init_core = __esm(() => {
   SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
 });
@@ -10469,17 +10414,6 @@ var init_audit = __esm(() => {
   DEFAULT_IGNORABLE_RE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
   LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 });
-function unresolvedRecovery(input) {
-  return {
-    outcome: "unresolved",
-    target: input.target,
-    applied: [],
-    unresolved: [...input.unresolved],
-    resolvedFrom: [...input.resolvedFrom ?? []],
-    warnings: [...input.warnings ?? []],
-    commitState: "none"
-  };
-}
 var PLAN_OPERATION_SEMANTICS;
 var WORKFLOW_OPERATION_SEMANTICS;
 var init_recovery_intent = __esm(() => {
@@ -10508,92 +10442,6 @@ var init_recovery_intent = __esm(() => {
     "compass-ref": ["workflowId", "operation.kind", "operation.compassPath", "operation.reason"]
   };
 });
-function resolveRelativePath(raw, label) {
-  if (typeof raw !== "string" || raw.trim() === "")
-    return { ok: false, reason: `${label} must be a nonblank relative path` };
-  const value = raw.trim().replace(/\\/g, "/");
-  if (value.includes("\x00"))
-    return { ok: false, reason: `${label} contains a NUL byte` };
-  if (value.startsWith("/") || /^[A-Za-z]:\//.test(value))
-    return { ok: false, reason: `${label} must be relative to its catalog root` };
-  const parts = [];
-  for (const part of value.split("/")) {
-    if (part === "" || part === ".")
-      continue;
-    if (part === "..")
-      return { ok: false, reason: `${label} must not traverse outside its catalog root` };
-    parts.push(part);
-  }
-  if (parts.length === 0)
-    return { ok: false, reason: `${label} must name a path inside its catalog root` };
-  return { ok: true, relativePath: parts.join("/") };
-}
-function cellsOf(line) {
-  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  return trimmed.split("|").map((cell) => cell.trim());
-}
-function isDelimiterRow(line) {
-  if (!line.trim().startsWith("|"))
-    return false;
-  const cells = cellsOf(line);
-  return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell.replace(/\s/g, "")));
-}
-function readTables(text4) {
-  const lines = text4.split(/\r?\n/);
-  const tables = [];
-  for (let i = 0;i < lines.length - 1; i += 1) {
-    const line = lines[i];
-    if (!line.trim().startsWith("|") || !isDelimiterRow(lines[i + 1] ?? ""))
-      continue;
-    const rows = [];
-    let last = i + 1;
-    for (let j = i + 2;j < lines.length; j += 1) {
-      const row = lines[j];
-      if (!row.trim().startsWith("|"))
-        break;
-      rows.push({ cells: cellsOf(row), line: j + 1 });
-      last = j;
-    }
-    tables.push({ header: cellsOf(line), headerLine: i + 1, firstLine: i + 1, lastLine: last + 1, rows });
-    i = last;
-  }
-  return tables;
-}
-function cellText(cell) {
-  return cell.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/`/g, "").trim();
-}
-function cellLinkTarget(cell) {
-  const match = /\[[^\]]*\]\(([^)]+)\)/.exec(cell);
-  return match === null ? null : match[1].trim();
-}
-function cellBacktickToken(cell) {
-  const match = /^`([^`]+)`$/.exec(cell.trim());
-  return match === null ? null : match[1].trim();
-}
-function cellReference(cell) {
-  return cellLinkTarget(cell) ?? cellBacktickToken(cell);
-}
-function detectIndexFamily(header) {
-  const keys = header.map((cell) => cellText(cell).toLowerCase());
-  const has = (token) => keys.includes(token);
-  if (has("iteration"))
-    return "iteration-rows";
-  if (has("document") && has("kind"))
-    return "package-documents";
-  if (has("document"))
-    return "document-rows";
-  return null;
-}
-function indexRowIdentity(family, cells, owner) {
-  if (family === "iteration-rows")
-    return cellBacktickToken(cells[0] ?? "");
-  const reference = cellReference(cells[0] ?? "");
-  if (reference === null)
-    return null;
-  const trimmed = reference.replace(/^\.\//, "").replace(/\/+$/, "");
-  const resolved = resolveRelativePath(family === "package-documents" && owner !== null ? `${owner}/${trimmed}` : trimmed, "index row path");
-  return resolved.ok ? resolved.relativePath : null;
-}
 var ENTITY_KINDS2;
 var ROOT_KINDS2;
 var DOCUMENT_KINDS2;
@@ -10650,1111 +10498,14 @@ var init_catalog_import = __esm(() => {
     }
   };
 });
-function currentProcessFacts() {
-  return {
-    entrypoint: process.argv[1],
-    runtimeVersion: process.versions.node,
-    isBun: process.versions.bun !== undefined
-  };
-}
-function provisionActivationDocument(input, facts = currentProcessFacts()) {
-  if (facts.isBun) {
-    return {
-      ok: false,
-      cause: "bun-runtime",
-      message: "the running process is Bun, which is never an admissible consumer runtime, so a Node consumer row cannot be attested"
-    };
-  }
-  if (facts.entrypoint === undefined || facts.entrypoint.trim() === "") {
-    return {
-      ok: false,
-      cause: "missing-entrypoint",
-      message: "the executing entrypoint is not identifiable (`process.argv[1]` is absent)"
-    };
-  }
-  const version = facts.harnessVersion === undefined ? readHarnessVersionOrNull() : facts.harnessVersion;
-  if (version === null || version.trim() === "") {
-    return {
-      ok: false,
-      cause: "missing-manifest",
-      message: "no visible manifest declares the installed harness version (`packages/*/package.json` or the repo root), so the consumer row's version cannot be attested"
-    };
-  }
-  return {
-    ok: true,
-    document: {
-      version: ACTIVATION_PROTOCOL_VERSION,
-      attestedAt: input.attestedAt,
-      operator: { actor: input.actor, authorizationRef: input.authorizationRef },
-      consumers: [
-        {
-          entryId: basename6(facts.entrypoint),
-          kind: "coordinator",
-          entrypoint: facts.entrypoint,
-          runtime: "node",
-          runtimeVersion: facts.runtimeVersion,
-          version,
-          current: true,
-          disposition: "reloaded"
-        }
-      ],
-      stoppedSessions: [...input.stoppedSessions]
-    }
-  };
-}
-function provisionRecoveryDocument(input) {
-  return {
-    version: ACTIVATION_PROTOCOL_VERSION,
-    attestedAt: input.attestedAt,
-    operator: { actor: input.actor, authorizationRef: input.authorizationRef },
-    consumers: [],
-    stoppedSessions: [...input.stoppedSessions]
-  };
-}
-function basename6(entrypoint) {
-  const normalized = entrypoint.replaceAll("\\", "/");
-  const last = normalized.lastIndexOf("/");
-  return last === -1 ? normalized : normalized.slice(last + 1);
-}
 var init_activation_provisioning = __esm(() => {
   init_core();
 });
-var exports_store_activation = {};
-__export(exports_store_activation, {
-  ACTIVATION_PROTOCOL_VERSION: () => ACTIVATION_PROTOCOL_VERSION,
-  BACKUP_RECEIPT_VERSION: () => BACKUP_RECEIPT_VERSION,
-  CONSUMER_KINDS: () => CONSUMER_KINDS,
-  DISPOSITIONS: () => DISPOSITIONS,
-  SESSION_STATES: () => SESSION_STATES,
-  StoreActivationError: () => StoreActivationError,
-  activateStore: () => activateStore,
-  activationReceiptFor: () => activationReceiptFor,
-  appliedReceiptFor: () => appliedReceiptFor,
-  assertAuthorityCurrent: () => assertAuthorityCurrent,
-  assertBackupDescribesStore: () => assertBackupDescribesStore,
-  backupStore: () => backupStore,
-  canonicalPath: () => canonicalPath,
-  currentAuthorityHandle: () => currentAuthorityHandle,
-  inspectBackupCopy: () => inspectBackupCopy,
-  isPathWithin: () => isPathWithin,
-  retireStoreSources: () => retireStoreSources,
-  validateActivationAttestation: () => validateActivationAttestation,
-  validateRecoveryAttestation: () => validateRecoveryAttestation
-});
-function sha256Bytes2(bytes) {
-  return createHash4("sha256").update(bytes).digest("hex");
-}
-function readIfExists(path2) {
-  try {
-    return readFileSync6(path2);
-  } catch {
-    return;
-  }
-}
-function scalar2(db, sql) {
-  const row = db.prepare(sql).get();
-  return typeof row?.n === "number" ? row.n : 0;
-}
-function writeTextAtomic(path2, text4) {
-  mkdirSync3(dirname7(path2), { recursive: true });
-  const tmp = join9(dirname7(path2), `.${basename7(path2)}.${process.pid}.tmp`);
-  try {
-    writeFileSync3(tmp, text4, "utf8");
-    renameSync2(tmp, path2);
-  } finally {
-    rmSync(tmp, { force: true });
-  }
-}
-function readMetaRow(db) {
-  const row = db.prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1").get();
-  if (!row || typeof row.store_id !== "string" || row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.authority_epoch !== "number" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
-    throw new StoreError("store.corrupt", "store_meta is missing or malformed; the authority generation cannot be verified");
-  }
-  return {
-    storeId: row.store_id,
-    authorityState: row.authority_state,
-    epoch: row.authority_epoch,
-    revision: row.revision,
-    catalogRevision: row.catalog_revision
-  };
-}
-function schemaVersionOf(db) {
-  const max = scalar2(db, "select max(version) as n from schema_version");
-  const applied = scalar2(db, "select count(*) as n from schema_version");
-  if (max < 1 || applied !== max) {
-    throw new StoreError("store.schema-drift", "applied schema versions are not contiguous; the store cannot be backed up or activated");
-  }
-  return max;
-}
-function countsOf(db) {
-  const tables = new Set(db.prepare("select name from sqlite_master where type = 'table'").all().map((row) => row.name));
-  const counts = {
-    issues: scalar2(db, "select count(*) as n from issues"),
-    occurrences: scalar2(db, "select count(*) as n from occurrences"),
-    transitions: scalar2(db, "select count(*) as n from issue_transitions"),
-    migrationReceipts: scalar2(db, "select count(*) as n from migration_receipts")
-  };
-  if (tables.has("catalog_entities"))
-    counts.catalogEntities = scalar2(db, "select count(*) as n from catalog_entities");
-  if (tables.has("catalog_links"))
-    counts.catalogLinks = scalar2(db, "select count(*) as n from catalog_links");
-  return counts;
-}
-function readExecutionMetaOfCopy(db, schemaVersion) {
-  if (schemaVersion < EXECUTION_MIGRATION_VERSION)
-    return null;
-  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at " + "from execution_meta where id = 1").get();
-  if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
-    throw new StoreActivationError("store.activation-stale", `the copy records migration ${EXECUTION_MIGRATION_VERSION} (execution-authority) but its execution metadata is ` + `missing or malformed; the copy cannot be verified as an execution-bearing recovery point.`);
-  }
-  return {
-    protocolVersion: row.protocol_version,
-    authorityState: row.authority_state,
-    revision: row.revision,
-    rootUpdatedAt: row.root_updated_at,
-    manifestId: row.manifest_id ?? null,
-    activatedAt: row.activated_at ?? null
-  };
-}
-function liveExecutionMeta(meta) {
-  if (meta === null)
-    return null;
-  return {
-    protocolVersion: meta.protocolVersion,
-    authorityState: meta.authorityState,
-    revision: meta.revision,
-    rootUpdatedAt: meta.rootUpdatedAt,
-    manifestId: meta.manifestId,
-    activatedAt: meta.activatedAt
-  };
-}
-function sameExecution(a, b) {
-  if (a === null || b === null)
-    return a === b;
-  return a.protocolVersion === b.protocolVersion && a.authorityState === b.authorityState && a.revision === b.revision && a.rootUpdatedAt === b.rootUpdatedAt && a.manifestId === b.manifestId && a.activatedAt === b.activatedAt;
-}
-function canonicalPath(value) {
-  let current = resolve10(value);
-  const trailing = [];
-  for (;; ) {
-    try {
-      return join9(realpathSync5(current), ...[...trailing].reverse());
-    } catch {
-      const parent = dirname7(current);
-      if (parent === current)
-        return resolve10(value);
-      trailing.push(basename7(current));
-      current = parent;
-    }
-  }
-}
-function isPathWithin(root, candidate) {
-  const parent = canonicalPath(root);
-  const child = canonicalPath(candidate);
-  if (child === parent)
-    return true;
-  return child.startsWith(parent.endsWith(sep4) ? parent : `${parent}${sep4}`);
-}
-function refuseUnlessSameGeneration(live, expected, what) {
-  if (live.storeId !== expected.storeId) {
-    throw new StoreActivationError("store.activation-stale", `${what} belongs to store_id ${expected.storeId}, but the live store is ${live.storeId}; ` + `re-resolve the control root and re-attest. Nothing was changed.`);
-  }
-  if (live.epoch !== expected.epoch) {
-    throw new StoreActivationError("store.stale-epoch", `${what} belongs to authority epoch ${expected.epoch}, but the live store is epoch ${live.epoch}; the generation it ` + `was admitted under has been superseded. Resume with the current activation receipt. Nothing was changed.`);
-  }
-}
-async function currentAuthorityHandle(context) {
-  const handle = await openStore(context, "read");
-  try {
-    const meta = readMetaRow(handle.db);
-    return { storeId: meta.storeId, epoch: meta.epoch };
-  } finally {
-    handle.close();
-  }
-}
-async function assertAuthorityCurrent(context, handle) {
-  refuseUnlessSameGeneration(await currentAuthorityHandle(context), handle, "the handle");
-}
-function assertCopyIsConsistent(db, backupPath) {
-  const integrity = db.prepare("pragma integrity_check").all().map((row) => String(Object.values(row)[0] ?? ""));
-  if (integrity.length !== 1 || integrity[0] !== "ok") {
-    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} fails SQLite integrity_check ` + `(${integrity.slice(0, 3).join("; ") || "no result"}); it is not a verified recovery point.`);
-  }
-  const violations = db.prepare("pragma foreign_key_check").all();
-  if (violations.length > 0) {
-    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} holds ${violations.length} row(s) violating the schema's foreign keys ` + `(first: ${JSON.stringify(violations[0])}); it is not a verified recovery point.`);
-  }
-}
-function assertCopySchemaIsThisBuild(db, backupPath) {
-  const rows = db.prepare("select version from schema_version order by version").all();
-  if (rows.length === 0) {
-    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records no applied migration; it is not a store this build can verify.`);
-  }
-  if (rows.length > MIGRATIONS.length) {
-    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records migration ${String(rows[rows.length - 1]?.version)}, which this build does not ` + `have (it knows ${MIGRATIONS.length}); the copy was written by a newer build and is not a recovery point for this one.`);
-  }
-  for (const [index2, row] of rows.entries()) {
-    const migration = MIGRATIONS[index2];
-    if (row.version !== migration.version) {
-      throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records migration ${String(row.version)} at position ${index2 + 1}, not this build's ` + `${migration.version}; the copy is not this build's store.`);
-    }
-  }
-}
-async function inspectBackupCopy(backupPath) {
-  assertStoreRuntimeSupported();
-  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
-  const db = new DatabaseSync(backupPath, { readOnly: true });
-  try {
-    db.exec("pragma query_only=ON");
-    assertCopyIsConsistent(db, backupPath);
-    assertCopySchemaIsThisBuild(db, backupPath);
-    const schemaVersion = schemaVersionOf(db);
-    return {
-      ...readMetaRow(db),
-      schemaVersion,
-      execution: readExecutionMetaOfCopy(db, schemaVersion),
-      counts: countsOf(db)
-    };
-  } finally {
-    db.close();
-  }
-}
-function sameCounts(a, b) {
-  const keys = Object.keys(a);
-  return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key]);
-}
-function defaultBackupPath(context, meta, label) {
-  const name = label === undefined ? `${meta.storeId.slice(0, 8)}-e${meta.epoch}-r${meta.revision}.db` : `${label}.db`;
-  return join9(dirname7(storeDbPath(context)), "archived", "store-migration", "backups", name);
-}
-async function takeVerifiedBackup(context, options) {
-  const dbPath = storeDbPath(context);
-  const handle = await openStore(context, "write");
-  try {
-    const meta = readMetaRow(handle.db);
-    let walPending = false;
-    try {
-      walPending = statSync3(`${dbPath}-wal`).size > 0;
-    } catch {
-      walPending = false;
-    }
-    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve10(options.out);
-    if (existsSync6(targetPath)) {
-      if (!options.reuseMatchingIdentity) {
-        throw new StoreActivationError("store.activation-stale", `a backup already exists at ${targetPath}; pass --out <path> for a different target instead of overwriting a ` + `recorded recovery point.`);
-      }
-      const existing = await inspectBackupCopy(targetPath).catch((error) => {
-        throw new StoreActivationError("store.activation-stale", `the existing backup at ${targetPath} cannot be verified (${error.message}). Refusing to overwrite a ` + `recorded recovery point.`);
-      });
-      const execution = liveExecutionMeta(handle.execution);
-      if (existing.storeId !== meta.storeId || existing.epoch !== meta.epoch || existing.revision !== meta.revision || existing.catalogRevision !== meta.catalogRevision || existing.authorityState !== meta.authorityState || existing.schemaVersion !== schemaVersionOf(handle.db) || !sameExecution(existing.execution, execution)) {
-        throw new StoreActivationError("store.activation-stale", `the existing backup at ${targetPath} does not describe this store (identity/epoch/revision/schema/execution mismatch). ` + `Refusing to overwrite a recorded recovery point.`);
-      }
-      return {
-        receiptVersion: BACKUP_RECEIPT_VERSION,
-        backupPath: targetPath,
-        ...existing,
-        walPending,
-        bytes: statSync3(targetPath).size,
-        takenAt: new Date().toISOString()
-      };
-    }
-    mkdirSync3(dirname7(targetPath), { recursive: true });
-    handle.db.prepare("vacuum into ?").run(targetPath);
-    const verified = await inspectBackupCopy(targetPath).catch((error) => {
-      rmSync(targetPath, { force: true });
-      throw new StoreActivationError("store.activation-stale", `the backup written to ${targetPath} could not be reopened for verification (${error.message}); ` + `the unverified copy was removed. Nothing was activated.`);
-    });
-    if (verified.storeId !== meta.storeId) {
-      rmSync(targetPath, { force: true });
-      throw new StoreActivationError("store.activation-stale", `the backup written to ${targetPath} describes store ${verified.storeId}, not the live store ${meta.storeId}; ` + `the unverified copy was removed. Nothing was activated.`);
-    }
-    return {
-      receiptVersion: BACKUP_RECEIPT_VERSION,
-      backupPath: targetPath,
-      ...verified,
-      walPending,
-      bytes: statSync3(targetPath).size,
-      takenAt: new Date().toISOString()
-    };
-  } finally {
-    handle.close();
-  }
-}
-async function backupStore(context, options = {}) {
-  return takeVerifiedBackup(context, { out: options.out, reuseMatchingIdentity: false });
-}
-async function assertBackupDescribesStore(context, receipt, reviewed) {
-  const stale = (detail) => {
-    throw new StoreActivationError("store.activation-stale", detail);
-  };
-  if (!receipt || receipt.receiptVersion !== ACTIVATION_PROTOCOL_VERSION && receipt.receiptVersion !== BACKUP_RECEIPT_VERSION || typeof receipt.backupPath !== "string" || receipt.backupPath.trim() === "") {
-    stale("the supplied recovery point is not a backup receipt of this protocol version; take one with `backupStore` and " + "apply the manifest that names it.");
-  }
-  const controlRoot = dirname7(storeDbPath(context));
-  if (!isPathWithin(controlRoot, receipt.backupPath)) {
-    stale(`the recovery point ${receipt.backupPath} is outside the authorized control root ${controlRoot}; a migration ` + `recovery point must live inside the root it protects.`);
-  }
-  const liveStore = canonicalPath(storeDbPath(context));
-  const candidate = canonicalPath(receipt.backupPath);
-  if (candidate === liveStore || candidate === `${liveStore}-wal` || candidate === `${liveStore}-shm`) {
-    stale(`the recovery point ${receipt.backupPath} names the live store database (${liveStore}), not an independent copy. ` + `A migration recovery point must be taken with \`backupStore\` (SQLite \`VACUUM INTO\`); the live database and its ` + `WAL/SHM sidecars cannot be their own recovery point.`);
-  }
-  if (receipt.storeId !== reviewed.storeId || receipt.epoch !== reviewed.epoch || receipt.schemaVersion !== reviewed.schemaVersion || receipt.catalogRevision !== reviewed.catalogRevision) {
-    stale(`the recovery point ${receipt.backupPath} belongs to store ${receipt.storeId} epoch ${receipt.epoch} schema ` + `${receipt.schemaVersion} catalog revision ${receipt.catalogRevision}, not to the reviewed authority ` + `${reviewed.storeId} epoch ${reviewed.epoch} schema ${reviewed.schemaVersion} catalog revision ` + `${reviewed.catalogRevision}; take a recovery point of the reviewed authority.`);
-  }
-  let copy;
-  try {
-    copy = await inspectBackupCopy(receipt.backupPath);
-  } catch (error) {
-    throw new StoreActivationError("store.activation-stale", `the recovery point ${receipt.backupPath} cannot be reopened for verification (${error.message}).`);
-  }
-  if (copy.storeId !== receipt.storeId || copy.epoch !== receipt.epoch || copy.revision !== receipt.revision || copy.catalogRevision !== receipt.catalogRevision || copy.authorityState !== receipt.authorityState || copy.schemaVersion !== receipt.schemaVersion || !sameExecution(copy.execution, receipt.execution ?? null) || !sameCounts(copy.counts, receipt.counts)) {
-    stale(`the copy at ${receipt.backupPath} does not match the receipt recorded for it; the receipt is not evidence for ` + `these bytes, so it is not a verified recovery point.`);
-  }
-  const handle = await openStore(context, "read");
-  try {
-    const meta = readMetaRow(handle.db);
-    const counts = countsOf(handle.db);
-    if (meta.authorityState !== receipt.authorityState || !sameCounts(counts, receipt.counts)) {
-      stale(`the recovery point ${receipt.backupPath} no longer describes the live issue/catalog authority ` + `(${meta.authorityState}, ${counts.issues} issue(s) / ${counts.catalogEntities} catalog entit(ies) live). ` + `Issue/catalog work committed after the point would be silently outside its coverage; take a fresh backup.`);
-    }
-  } finally {
-    handle.close();
-  }
-}
-function attestationRefusal(message) {
-  throw new StoreActivationError("store.attestation-invalid", message);
-}
-function activationBlocked(message) {
-  throw new StoreActivationError("store.activation-blocked", message);
-}
-function attestationObject(value, what) {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    attestationRefusal(`${what} must be an object`);
-  return value;
-}
-function attestationKeys(object, allowed, what) {
-  for (const key of Object.keys(object)) {
-    if (!allowed.includes(key)) {
-      attestationRefusal(`${what} declares an undeclared field "${key}"; the attestation records only installed entrypoints/versions, ` + `quiesced sessions and the approving operator — never session credentials or other data.`);
-    }
-  }
-}
-function attestationString(object, key, what) {
-  const value = object[key];
-  if (typeof value !== "string" || value.trim() === "")
-    attestationRefusal(`${what}.${key} must be a nonblank string`);
-  return value;
-}
-function attestationHeader(raw) {
-  if (raw.version !== ACTIVATION_PROTOCOL_VERSION) {
-    attestationRefusal(`the attestation version must be ${ACTIVATION_PROTOCOL_VERSION}`);
-  }
-  const attestedAt = attestationString(raw, "attestedAt", "the attestation");
-  if (!Number.isFinite(Date.parse(attestedAt)))
-    attestationRefusal("the attestation.attestedAt must be an ISO/RFC3339 instant");
-  const operator = attestationObject(raw.operator, "the attestation.operator");
-  attestationKeys(operator, ["actor", "authorizationRef"], "the attestation.operator");
-  return {
-    attestedAt,
-    operator: {
-      actor: attestationString(operator, "actor", "the attestation.operator"),
-      authorizationRef: attestationString(operator, "authorizationRef", "the attestation.operator")
-    }
-  };
-}
-function stoppedSessionsOf(raw) {
-  if (!Array.isArray(raw.stoppedSessions))
-    attestationRefusal("the attestation.stoppedSessions must be an array (possibly empty)");
-  return raw.stoppedSessions.map((entry, index2) => {
-    const what = `the attestation.stoppedSessions[${index2}]`;
-    const session = attestationObject(entry, what);
-    attestationKeys(session, ["sessionId", "host", "state"], what);
-    const state = session.state;
-    if (typeof state !== "string" || !Object.hasOwn(SESSION_STATES, state)) {
-      activationBlocked(`${what}.state must be "stopped" or "reloaded"; a running or queued session is not quiesced and stops the barrier`);
-    }
-    return {
-      sessionId: attestationString(session, "sessionId", what),
-      host: attestationString(session, "host", what),
-      state
-    };
-  });
-}
-function validateActivationAttestation(value) {
-  const raw = attestationObject(value, "the attestation");
-  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
-  const { attestedAt, operator } = attestationHeader(raw);
-  if (!Array.isArray(raw.consumers))
-    attestationRefusal("the attestation.consumers must be an array");
-  if (raw.consumers.length === 0) {
-    activationBlocked("the attestation must attest at least one installed consumer (entrypoint, version and disposition); a merely merged " + "source tree is not installed-consumer readiness");
-  }
-  const consumers = raw.consumers.map((entry, index2) => {
-    const what = `the attestation.consumers[${index2}]`;
-    const consumer = attestationObject(entry, what);
-    attestationKeys(consumer, ["entryId", "kind", "entrypoint", "runtime", "runtimeVersion", "version", "current", "disposition"], what);
-    const kind = consumer.kind;
-    if (typeof kind !== "string" || !Object.hasOwn(CONSUMER_KINDS, kind)) {
-      attestationRefusal(`${what}.kind must be one of ${Object.keys(CONSUMER_KINDS).join(", ")}`);
-    }
-    const runtime = consumer.runtime;
-    if (runtime !== "node") {
-      attestationRefusal(`${what}.runtime must be "node" (got ${JSON.stringify(runtime)}); a consumer is an installed entrypoint that opens the store, ` + "and Bun is this project's development toolchain, not a runtime a consumer runs on. Attest the Node entrypoint that opens the store");
-    }
-    const entryId = attestationString(consumer, "entryId", what);
-    const runtimeVersion = attestationString(consumer, "runtimeVersion", what);
-    const floor = readDeclaredNodeFloor();
-    if (floor === null) {
-      attestationRefusal(`${what} cannot be checked for runtime compatibility: no visible manifest declares engines.node (run this from an installed CLI or a full checkout, ` + "not from a copied bundle), so the consumer's Node version cannot be compared against the floor");
-    }
-    if (compareVersions(runtimeVersion, floor) < 0) {
-      activationBlocked(`${what} (${entryId}) reports ${runtime} ${runtimeVersion}, below the ${floor} floor; an old binary is not a ` + `compatible consumer. Upgrade/reload it or exclude it explicitly.`);
-    }
-    const disposition = consumer.disposition;
-    if (typeof disposition !== "string" || !Object.hasOwn(DISPOSITIONS, disposition)) {
-      activationBlocked(`${what}.disposition must be one of ${Object.keys(DISPOSITIONS).join(", ")}; a consumer left running/unattested ` + `stops the barrier — if a host cannot reload safely, stop at the exact user-restart step instead`);
-    }
-    if (typeof consumer.current !== "boolean")
-      attestationRefusal(`${what}.current must be a boolean`);
-    return {
-      entryId,
-      kind,
-      entrypoint: attestationString(consumer, "entrypoint", what),
-      runtime,
-      runtimeVersion,
-      version: attestationString(consumer, "version", what),
-      current: consumer.current,
-      disposition
-    };
-  });
-  const current = consumers.filter((consumer) => consumer.current);
-  if (current.length === 0) {
-    activationBlocked("the attestation does not mark a current coordinator; the coordinator driving this activation must attest its own " + "reloaded/upgraded entry, including its queued/reused sessions");
-  }
-  if (current.length > 1)
-    attestationRefusal(`${current.length} consumers are marked current; exactly one current coordinator is allowed`);
-  if (current[0].kind !== "coordinator") {
-    attestationRefusal(`the current consumer is attested as "${current[0].kind}"; the current-coordinator attestation must be a coordinator entry`);
-  }
-  if (!Array.isArray(raw.stoppedSessions))
-    attestationRefusal("the attestation.stoppedSessions must be an array (possibly empty)");
-  const stoppedSessions = stoppedSessionsOf(raw);
-  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator, consumers, stoppedSessions };
-}
-function validateRecoveryAttestation(value) {
-  const raw = attestationObject(value, "the attestation");
-  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
-  const { attestedAt, operator } = attestationHeader(raw);
-  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator, consumers: [], stoppedSessions: stoppedSessionsOf(raw) };
-}
-function currentRegisterSources(context) {
-  const projectsRoot = catalogRootDir(context, "projects");
-  let entries;
-  try {
-    entries = readdirSync3(projectsRoot, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const sources = [];
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (entry.isSymbolicLink() || !entry.isDirectory())
-      continue;
-    const absolutePath = join9(projectsRoot, entry.name, "residuals.json");
-    let info;
-    try {
-      info = lstatSync3(absolutePath);
-    } catch {
-      continue;
-    }
-    if (info.isSymbolicLink() || !info.isFile())
-      continue;
-    sources.push({ project: entry.name, absolutePath, relativePath: `${entry.name}/residuals.json` });
-  }
-  return sources;
-}
-function revalidateSources(context, manifest, mode) {
-  const reviewed = new Set(manifest.sources.map((source) => source.relativePath));
-  const retired = new Set(manifest.retirement.registers.map((register) => register.relativePath));
-  const changed = (detail) => {
-    throw new StoreActivationError(mode === "activation" ? "store.migration-source-changed" : "store.legacy-write-detected", `${detail} ` + (mode === "activation" ? "Nothing was activated; re-run the preview, review the final manifest, apply it and re-attest." : "Nothing was retired; re-preview and re-apply, then resume retirement."));
-  };
-  for (const source of currentRegisterSources(context)) {
-    if (!reviewed.has(source.relativePath) && !retired.has(source.relativePath)) {
-      changed(`an unreviewed legacy register appeared at ${source.relativePath}.`);
-    }
-  }
-  for (const reviewedSource of manifest.sources) {
-    const live = readIfExists(join9(catalogRootDir(context, "projects"), reviewedSource.relativePath));
-    if (live === undefined && !retired.has(reviewedSource.relativePath)) {
-      changed(`register ${reviewedSource.relativePath} is gone.`);
-    }
-  }
-}
-function readReceiptRows(db, where, param) {
-  const statement = db.prepare(`select ${RECEIPT_COLUMNS} from migration_receipts where ${where} order by id`);
-  return param === undefined ? statement.all() : statement.all(param);
-}
-async function appliedReceiptFor(context, manifest) {
-  const handle = await openStore(context, "read");
-  try {
-    if (resolve10(manifest.controlRoot) !== resolve10(context.harnessDir)) {
-      throw new StoreActivationError("store.activation-stale", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`);
-    }
-    const row = readReceiptRows(handle.db, "phase = 'applied'").at(-1);
-    if (!row) {
-      throw new StoreActivationError("store.activation-stale", "this store has no recorded apply receipt; apply the reviewed manifest first (store migrate --apply --manifest <path>).");
-    }
-    const storedMapping = JSON.parse(row.mapping_json);
-    const counts = JSON.parse(row.source_counts_json);
-    if (typeof counts.storeRevision !== "number") {
-      throw new StoreActivationError("store.activation-stale", "the recorded apply receipt carries no store revision; the staged store cannot be checked against the reviewed apply.");
-    }
-    return {
-      receiptId: row.id,
-      manifestHash: row.manifest_hash,
-      phase: "applied",
-      replayed: true,
-      issueIds: storedMapping.filter((entry) => entry.issueId !== "").map((entry) => ({ source: entry.source, issueId: entry.issueId })),
-      historyRows: storedMapping.filter((entry) => entry.issueId === "" && (entry.classification === "history" || entry.classification === "excluded")).map((entry) => ({
-        source: entry.source,
-        classification: entry.classification,
-        rationale: entry.rationale ?? "",
-        legacyJson: entry.legacyJson ?? ""
-      })),
-      counts: { ...counts, history: counts.history ?? 0, excluded: counts.excluded ?? 0, created: 0, updated: 0 },
-      storeRevision: counts.storeRevision,
-      appliedAt: row.applied_at
-    };
-  } finally {
-    handle.close();
-  }
-}
-function activationReceiptOfRow(row, replayed) {
-  const stored = JSON.parse(row.manifest_json);
-  return { ...stored, receiptId: row.id, phase: "activated", replayed, activatedAt: row.activated_at ?? row.applied_at };
-}
-async function activationReceiptFor(context, manifest) {
-  const apply = await appliedReceiptFor(context, manifest);
-  const handle = await openStore(context, "read");
-  try {
-    const row = findActivationRow(readReceiptRows(handle.db, "phase = 'activated'"), apply.receiptId);
-    if (!row) {
-      throw new StoreActivationError("store.activation-stale", `the applied receipt #${apply.receiptId} has no recorded activation; run "store activate" ` + `with the reviewed manifest and attestation first.`);
-    }
-    return activationReceiptOfRow(row, true);
-  } finally {
-    handle.close();
-  }
-}
-function findActivationRow(rows, applyReceiptId) {
-  for (const row of [...rows].reverse()) {
-    let stored;
-    try {
-      stored = JSON.parse(row.manifest_json);
-    } catch {
-      continue;
-    }
-    if (stored === null || typeof stored !== "object" || !("applyReceiptId" in stored))
-      continue;
-    if (typeof stored.applyReceiptId === "number" && stored.applyReceiptId === applyReceiptId)
-      return row;
-  }
-  return;
-}
-function activationHashOf(parts) {
-  return sha256Bytes2(Buffer.from(`activation\x00${JSON.stringify(parts)}`, "utf8"));
-}
-function findRetirementRow(rows, activationReceiptId, live) {
-  for (const row of [...rows].reverse()) {
-    let stored;
-    try {
-      stored = JSON.parse(row.manifest_json);
-    } catch {
-      continue;
-    }
-    if (stored === null || typeof stored !== "object")
-      continue;
-    const candidate = stored;
-    if (candidate.activationReceiptId !== activationReceiptId)
-      continue;
-    if (candidate.storeId !== live.storeId || candidate.epoch !== live.epoch)
-      continue;
-    return row;
-  }
-  return;
-}
-function requireGeneratedOperator(operator) {
-  if (operator === undefined || operator.trim() === "") {
-    throw Object.assign(new StoreActivationError("store.operator-required", "the activation generates its operator attestation when --attestation is omitted, and the generated document records the invoking operator; pass --operator <name> (or --attestation <absolute-json> to supply the document explicitly)"), { recovery: "run mstar store activate --manifest <path> --operator <name> (add --attestation <absolute-json> to override the generated document)" });
-  }
-  return operator;
-}
-async function activateStore(context, receipt, attestation, hooks = {}, options = {}) {
-  if (!receipt || receipt.phase !== "applied" || typeof receipt.receiptId !== "number" || typeof receipt.manifestHash !== "string" || typeof receipt.storeRevision !== "number") {
-    throw new StoreActivationError("store.activation-stale", "the activation requires the reviewed apply receipt (receiptId, storeRevision; manifestHash is provenance); re-apply the reviewed manifest.");
-  }
-  const validated = attestation === undefined ? undefined : validateActivationAttestation(attestation);
-  const inspection = await openStore(context, "write");
-  let meta;
-  let manifest;
-  try {
-    meta = readMetaRow(inspection.db);
-    if (meta.authorityState === "active") {
-      const row = findActivationRow(readReceiptRows(inspection.db, "phase = 'activated'"), receipt.receiptId);
-      if (!row) {
-        throw new StoreActivationError("store.activation-stale", "the store is already active under a different activation; the authority generation cannot be replaced by a new receipt.");
-      }
-      const recorded = activationReceiptOfRow(row, true);
-      if (recorded.storeId !== meta.storeId || recorded.epoch !== meta.epoch) {
-        throw new StoreActivationError("store.activation-stale", `the recorded activation #${recorded.receiptId} belongs to store ${recorded.storeId} epoch ${recorded.epoch}, ` + `not this live store ${meta.storeId} epoch ${meta.epoch}; it cannot be served as this store's activation.`);
-      }
-      return recorded;
-    }
-    const appliedRow = readReceiptRows(inspection.db, "id = ? and phase = 'applied'", receipt.receiptId)[0];
-    if (!appliedRow) {
-      throw new StoreActivationError("store.activation-stale", `the supplied receipt (#${receipt.receiptId}) is not a recorded apply receipt of this store; ` + `re-apply the reviewed manifest and use its receipt. Nothing was activated.`);
-    }
-    const applied = readReceiptRows(inspection.db, "phase = 'applied'");
-    if (applied.at(-1).id !== appliedRow.id) {
-      throw new StoreActivationError("store.activation-stale", `the supplied receipt is not the FINAL applied manifest (a later apply, receipt #${applied.at(-1).id}, is recorded); ` + `revalidate the final manifest, re-apply it and re-attest. Nothing was activated.`);
-    }
-    manifest = JSON.parse(appliedRow.manifest_json);
-    if (resolve10(manifest.controlRoot) !== resolve10(context.harnessDir)) {
-      throw new StoreActivationError("store.activation-stale", `the applied manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}. Nothing was activated.`);
-    }
-    if (meta.revision !== receipt.storeRevision) {
-      throw new StoreActivationError("store.activation-stale", `the staged store is at revision ${meta.revision}, but the reviewed apply committed revision ` + `${receipt.storeRevision}; the staged store changed after the reviewed apply. Re-apply the final manifest first.`);
-    }
-    revalidateSources(context, manifest, "activation");
-  } finally {
-    inspection.close();
-  }
-  const generatedOperator = validated === undefined ? requireGeneratedOperator(options.operator) : "";
-  const backup = await takeVerifiedBackup(context, {
-    label: `pre-activation-${meta.storeId.slice(0, 8)}-r${meta.revision}`,
-    reuseMatchingIdentity: true
-  });
-  hooks.afterStage?.("inspection", 0);
-  const flip = await openStore(context, "write");
-  try {
-    const at = (options.now ?? (() => new Date().toISOString()))();
-    flip.db.exec("begin immediate");
-    try {
-      const current = readMetaRow(flip.db);
-      if (current.authorityState !== "staged" || current.storeId !== meta.storeId || current.revision !== meta.revision) {
-        throw new StoreActivationError("store.activation-stale", "the staged store changed while the barrier was running; the activation was rolled back. Re-check and retry.");
-      }
-      revalidateSources(context, manifest, "activation");
-      let activationValidated = validated;
-      if (activationValidated === undefined) {
-        const stoppedRows = flip.db.prepare("select session_id from execution_sessions where state = 'active' and epoch = ?").all(current.epoch);
-        const provisioned = provisionActivationDocument({
-          actor: generatedOperator,
-          authorizationRef: `migration-receipt:${receipt.receiptId}`,
-          attestedAt: at,
-          stoppedSessions: stoppedRows.filter((row) => typeof row.session_id === "string" && row.session_id !== "").map((row) => ({ sessionId: row.session_id, host: "local", state: "stopped" }))
-        }, options.processFacts);
-        if (!provisioned.ok) {
-          throw Object.assign(new StoreActivationError("store.attestation-invalid", provisioned.message), { recovery: "run the same verb through the installed Node CLI: mstar store activate --manifest <path> --operator <name> (an explicit --attestation <absolute-json> also overrides)" });
-        }
-        activationValidated = validateActivationAttestation(provisioned.document);
-      }
-      const attestationHash = sha256Bytes2(Buffer.from(`attestation\x00${JSON.stringify(activationValidated)}`, "utf8"));
-      const epoch = current.epoch + 1;
-      const revision = current.revision + 1;
-      const activationHash = activationHashOf({
-        applyManifestHash: receipt.manifestHash,
-        applyReceiptId: receipt.receiptId,
-        storeId: current.storeId,
-        previousEpoch: current.epoch,
-        epoch,
-        attestationHash,
-        backupPath: backup.backupPath
-      });
-      flip.db.prepare("update store_meta set authority_state = 'active', authority_epoch = ?, revision = ?, activated_at = ? where id = 1").run(epoch, revision, at);
-      flip.db.prepare("update migration_receipts set activated_at = ? where id = ?").run(at, receipt.receiptId);
-      hooks.afterStage?.("flip", 0);
-      const stored = {
-        receiptVersion: ACTIVATION_PROTOCOL_VERSION,
-        activationHash,
-        applyReceiptId: receipt.receiptId,
-        applyManifestHash: receipt.manifestHash,
-        storeId: current.storeId,
-        previousEpoch: current.epoch,
-        epoch,
-        revision,
-        catalogRevision: current.catalogRevision,
-        attestationHash,
-        attestation: activationValidated,
-        backup
-      };
-      const result = flip.db.prepare("insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at, activated_at) " + "values (?, 'activated', ?, '[]', ?, ?, ?)").run(activationHash, JSON.stringify(stored), JSON.stringify({ consumers: activationValidated.consumers.length, stoppedSessions: activationValidated.stoppedSessions.length }), at, at);
-      const receiptId = Number(result.lastInsertRowid);
-      flip.db.exec("commit");
-      return { ...stored, receiptId, phase: "activated", replayed: false, activatedAt: at };
-    } catch (error) {
-      try {
-        flip.db.exec("rollback");
-      } catch {}
-      throw error;
-    }
-  } finally {
-    flip.close();
-  }
-}
-function relativePathSegments(relativePath) {
-  const segments = relativePath.split(/[\\/]+/);
-  if (segments.length === 0 || segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
-    throw new StoreActivationError("store.migration-source-changed", `the catalog source path "${relativePath}" is not a safe root-relative path; nothing was retired.`);
-  }
-  return segments;
-}
-function readLedger(path2) {
-  const bytes = readIfExists(path2);
-  if (bytes === undefined)
-    return;
-  try {
-    return JSON.parse(bytes.toString("utf8"));
-  } catch (error) {
-    throw new StoreActivationError("store.activation-stale", `the retirement ledger at ${path2} is unreadable (${error.message}); refusing to guess at partial retirement state.`);
-  }
-}
-function writeLedger(path2, ledger) {
-  ledger.updatedAt = new Date().toISOString();
-  writeJson(path2, ledger);
-}
-function markerText(ledger, receipt) {
-  return [
-    `# Legacy source archive — activation receipt #${ledger.activationReceiptId}`,
-    "",
-    "Retired from the live control root by `mstar store retire`, after the activation barrier passed.",
-    "",
-    `- successor authority: \`${ledger.successorDbPath}\` (store_id \`${ledger.storeId}\`, authority epoch ${ledger.epoch})`,
-    `- activation receipt: #${ledger.activationReceiptId} (\`${ledger.activationHash}\`)`,
-    `- retirement receipt: ${receipt === null ? "pending" : `#${receipt.receiptId} (\`${receipt.retirementHash}\`)`}`,
-    `- recovery point: \`${ledger.backupPath}\``,
-    `- archived: ${ledger.registers.length} residual register(s), ${ledger.sections.length} reviewed index section(s)`,
-    `- last updated: ${ledger.updatedAt}`,
-    "",
-    "These archived bytes are historical migration input, not a post-activation rollback path: they were the",
-    "pre-activation authority and are superseded history, and restoring them would recreate a second authority.",
-    "Recovery after activation uses the verified SQLite-consistent `VACUUM INTO` backup above plus reconciliation.",
-    "",
-    "The per-item retirement ledger (`ledger.json`, same directory) is the resumable record of exactly which",
-    "bytes and sections were moved and verified.",
-    ""
-  ].join(`
-`);
-}
-function retirementReceiptOfRow(row, replayed) {
-  const stored = JSON.parse(row.manifest_json);
-  return { ...stored, receiptId: row.id, phase: "retired", replayed, retiredAt: row.retired_at ?? row.applied_at };
-}
-function finalizeDisclosure(ledgerPath, ledger, receipt) {
-  writeLedger(ledgerPath, ledger);
-  writeTextAtomic(join9(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
-}
-function retireRegister(context, ledgerPath, ledger, item) {
-  const livePath = join9(catalogRootDir(context, "projects"), item.relativePath);
-  const liveBytes = readIfExists(livePath);
-  if (liveBytes !== undefined) {
-    mkdirSync3(dirname7(item.archivePath), { recursive: true });
-    rmSync(item.archivePath, { force: true });
-    copyFileSync(livePath, item.archivePath);
-    item.state = "archived";
-    writeLedger(ledgerPath, ledger);
-    unlinkSync2(livePath);
-  } else if (readIfExists(item.archivePath) === undefined) {
-    throw new StoreActivationError("store.migration-source-changed", `register ${item.relativePath} is gone and no archive copy exists; the reviewed source cannot be retired truthfully. ` + `Nothing was retired.`);
-  }
-  item.state = "verified";
-  writeLedger(ledgerPath, ledger);
-}
-function verifyArchivedRegister(item) {
-  if (readIfExists(item.archivePath) === undefined) {
-    throw new StoreActivationError("store.migration-source-changed", `the archived register ${item.relativePath} is missing; refusing to claim retirement.`);
-  }
-}
-function matchedRowsIn(table, owner, wanted) {
-  const family = detectIndexFamily(table.header);
-  if (family === null || family !== wanted.family)
-    return [];
-  const hits = [];
-  for (const row of table.rows) {
-    const identity = indexRowIdentity(family, row.cells, owner);
-    if (identity !== null && wanted.identities.has(identity))
-      hits.push({ identity, line: row.line });
-  }
-  return hits;
-}
-function selectReviewedSection(live, item) {
-  const wanted = { family: item.family, identities: new Set(item.retiredRows ?? item.reviewedRows) };
-  if (wanted.identities.size === 0)
-    return;
-  const slash = item.relativePath.indexOf("/");
-  const owner = slash === -1 ? null : item.relativePath.slice(0, slash);
-  let best;
-  for (const table of readTables(live)) {
-    const hits = matchedRowsIn(table, owner, wanted);
-    if (hits.length === 0)
-      continue;
-    if (best === undefined || hits.length > best.hits.length)
-      best = { table, hits };
-  }
-  return best;
-}
-function retireSection(context, ledgerPath, ledger, item, hooks) {
-  const livePath = join9(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
-  const live = readIfExists(livePath)?.toString("utf8");
-  if (live === undefined) {
-    throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; the reviewed section cannot be retired truthfully. ` + `Nothing was retired.`);
-  }
-  const selection = selectReviewedSection(live, item);
-  if (selection === undefined) {
-    item.removedLines ??= 0;
-    verifyRetiredSection(livePath, item);
-    item.state = "verified";
-    writeLedger(ledgerPath, ledger);
-    return;
-  }
-  const reviewedLines = new Set(selection.hits.map((hit) => hit.line));
-  const survivingRows = selection.table.rows.filter((row) => !reviewedLines.has(row.line));
-  const dropped = new Set;
-  if (survivingRows.length === 0) {
-    for (let line = selection.table.firstLine;line <= selection.table.lastLine; line += 1)
-      dropped.add(line);
-  } else {
-    for (const line of reviewedLines)
-      dropped.add(line);
-  }
-  const excised = live.split(`
-`).filter((_line, index2) => !dropped.has(index2 + 1)).join(`
-`);
-  mkdirSync3(dirname7(item.archivePath), { recursive: true });
-  rmSync(item.archivePath, { force: true });
-  copyFileSync(livePath, item.archivePath);
-  item.retiredRows = [...new Set(selection.hits.map((hit) => hit.identity))].sort();
-  item.removedLines = dropped.size;
-  item.expectedLiveSha256 = sha256Bytes2(Buffer.from(excised, "utf8"));
-  writeLedger(ledgerPath, ledger);
-  writeTextAtomic(livePath, excised);
-  item.state = "verified";
-  hooks.afterStage?.("section-write", 0);
-  verifyRetiredSection(livePath, item);
-  writeLedger(ledgerPath, ledger);
-}
-function verifyRetiredSection(livePath, item) {
-  const live = readIfExists(livePath)?.toString("utf8");
-  if (live === undefined) {
-    throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; refusing to claim retirement.`);
-  }
-  if (selectReviewedSection(live, item) !== undefined) {
-    throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} still holds a reviewed row of the retired section; refusing to claim retirement.`);
-  }
-  if (readIfExists(item.archivePath) === undefined) {
-    throw new StoreActivationError("store.migration-source-changed", `the archived original of ${item.relativePath} is missing; refusing to claim retirement.`);
-  }
-}
-async function retireStoreSources(context, activationReceipt, hooks = {}) {
-  if (!activationReceipt || activationReceipt.phase !== "activated" || typeof activationReceipt.receiptId !== "number" || typeof activationReceipt.activationHash !== "string" || typeof activationReceipt.storeId !== "string" || typeof activationReceipt.epoch !== "number") {
-    throw new StoreActivationError("store.activation-stale", 'retirement requires the recorded activation receipt (receiptId, activationHash, storeId, epoch); run "store activate" first.');
-  }
-  const handle = await openStore(context, "write");
-  try {
-    const meta = readMetaRow(handle.db);
-    if (meta.authorityState !== "active") {
-      throw new StoreActivationError("store.not-active", `the store is ${meta.authorityState}; legacy sources are retired only after the activation barrier made the store active. ` + `Nothing was retired.`);
-    }
-    refuseUnlessSameGeneration({ storeId: meta.storeId, epoch: meta.epoch }, { storeId: activationReceipt.storeId, epoch: activationReceipt.epoch }, "the activation receipt");
-    const activationRow = readReceiptRows(handle.db, "id = ? and phase = 'activated'", activationReceipt.receiptId)[0];
-    if (!activationRow) {
-      throw new StoreActivationError("store.activation-stale", `no activation receipt #${activationReceipt.receiptId} is recorded for this store; nothing was retired.`);
-    }
-    const activationRowReceipt = activationReceiptOfRow(activationRow, true);
-    if (activationRowReceipt.storeId !== meta.storeId || activationRowReceipt.epoch !== meta.epoch || activationRowReceipt.applyReceiptId !== activationReceipt.applyReceiptId) {
-      throw new StoreActivationError("store.activation-stale", `the recorded activation #${activationReceipt.receiptId} belongs to store ${activationRowReceipt.storeId} epoch ` + `${activationRowReceipt.epoch} over apply receipt #${activationRowReceipt.applyReceiptId}, not this store ` + `${meta.storeId} epoch ${meta.epoch} over apply receipt #${activationReceipt.applyReceiptId}; nothing was retired.`);
-    }
-    const appliedRow = readReceiptRows(handle.db, "id = ? and phase = 'applied'", activationReceipt.applyReceiptId)[0];
-    if (!appliedRow) {
-      throw new StoreActivationError("store.activation-stale", `the applied receipt #${activationReceipt.applyReceiptId} behind this activation is missing; nothing was retired.`);
-    }
-    const manifest = JSON.parse(appliedRow.manifest_json);
-    const registers = manifest.retirement.registers;
-    const sections = manifest.catalog.retirementSections;
-    const archiveDir = join9(dirname7(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
-    const ledgerPath = join9(archiveDir, "ledger.json");
-    const retirementHash = sha256Bytes2(Buffer.from(`retirement\x00${JSON.stringify({
-      activationReceiptId: activationReceipt.receiptId,
-      activationHash: activationReceipt.activationHash,
-      storeId: meta.storeId,
-      epoch: meta.epoch,
-      registers: registers.map((register) => ({ relativePath: register.relativePath, sha256: register.sha256 })),
-      sections: sections.map((section) => ({
-        rootKind: section.rootKind,
-        relativePath: section.relativePath,
-        startLine: section.startLine,
-        endLine: section.endLine,
-        sha256: section.sha256
-      }))
-    })}`, "utf8"));
-    const recorded = findRetirementRow(readReceiptRows(handle.db, "phase = 'retired'"), activationReceipt.receiptId, meta);
-    if (recorded) {
-      const receipt2 = retirementReceiptOfRow(recorded, true);
-      const existing = readLedger(ledgerPath);
-      if (existing)
-        finalizeDisclosure(ledgerPath, existing, receipt2);
-      return receipt2;
-    }
-    const existingLedger = readLedger(ledgerPath);
-    if (existingLedger && (existingLedger.storeId !== meta.storeId || existingLedger.epoch !== meta.epoch)) {
-      throw new StoreActivationError("store.activation-stale", `the retirement ledger at ${ledgerPath} belongs to a different activation generation; refusing to resume another ` + `generation's partial retirement. Nothing was retired.`);
-    }
-    revalidateSources(context, manifest, "retirement");
-    const resumed = existingLedger !== undefined;
-    const ledger = existingLedger ?? {
-      version: ACTIVATION_PROTOCOL_VERSION,
-      activationReceiptId: activationReceipt.receiptId,
-      activationHash: activationReceipt.activationHash,
-      storeId: meta.storeId,
-      epoch: meta.epoch,
-      archiveDir,
-      successorDbPath: storeDbPath(context),
-      backupPath: activationReceipt.backup.backupPath,
-      startedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      retirementReceiptId: null,
-      registers: registers.map((register) => ({
-        project: register.project,
-        relativePath: register.relativePath,
-        sha256: register.sha256,
-        archivePath: join9(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
-        state: "pending"
-      })).sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
-      sections: sections.map((section) => ({
-        rootKind: section.rootKind,
-        relativePath: section.relativePath,
-        header: section.header,
-        startLine: section.startLine,
-        endLine: section.endLine,
-        sha256: section.sha256,
-        preservedLines: section.preservedLines,
-        family: section.family,
-        reviewedRows: section.rows,
-        retiredRows: null,
-        removedLines: null,
-        archivePath: join9(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
-        expectedLiveSha256: null,
-        state: "pending"
-      })).sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine)
-    };
-    for (const item of ledger.sections) {
-      const section = sections.find((candidate) => candidate.rootKind === item.rootKind && candidate.relativePath === item.relativePath && candidate.startLine === item.startLine);
-      if (section === undefined)
-        continue;
-      item.family = section.family;
-      item.reviewedRows = section.rows;
-    }
-    mkdirSync3(archiveDir, { recursive: true });
-    writeLedger(ledgerPath, ledger);
-    let completed = 0;
-    for (const item of ledger.registers) {
-      if (item.state === "verified") {
-        verifyArchivedRegister(item);
-        continue;
-      }
-      retireRegister(context, ledgerPath, ledger, item);
-      completed += 1;
-      hooks.afterStage?.("retirement", completed);
-    }
-    for (const item of ledger.sections) {
-      retireSection(context, ledgerPath, ledger, item, hooks);
-      completed += 1;
-      hooks.afterStage?.("retirement", completed);
-    }
-    const at = new Date().toISOString();
-    const retiredRegisters = ledger.registers.map((item) => ({
-      project: item.project,
-      relativePath: item.relativePath,
-      sha256: item.sha256,
-      bytes: statSync3(item.archivePath).size,
-      archivedPath: item.archivePath
-    }));
-    const retiredSections = ledger.sections.map((item) => ({
-      rootKind: item.rootKind,
-      relativePath: item.relativePath,
-      header: item.header,
-      startLine: item.startLine,
-      endLine: item.endLine,
-      sha256: item.sha256,
-      archivedPath: item.archivePath,
-      liveSha256: item.expectedLiveSha256,
-      preservedLines: item.preservedLines,
-      removedLines: item.removedLines ?? item.endLine - item.startLine + 1
-    }));
-    handle.db.exec("begin immediate");
-    let receiptId;
-    try {
-      handle.db.prepare("update migration_receipts set retired_at = ? where id in (?, ?)").run(at, activationReceipt.receiptId, activationReceipt.applyReceiptId);
-      const stored = {
-        receiptVersion: ACTIVATION_PROTOCOL_VERSION,
-        retirementHash,
-        activationReceiptId: activationReceipt.receiptId,
-        activationHash: activationReceipt.activationHash,
-        storeId: meta.storeId,
-        epoch: meta.epoch,
-        archiveDir,
-        markerPath: join9(archiveDir, "MARKER.md"),
-        registers: retiredRegisters,
-        sections: retiredSections,
-        resumed
-      };
-      const result = handle.db.prepare("insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at, retired_at) " + "values (?, 'retired', ?, '[]', ?, ?, ?)").run(retirementHash, JSON.stringify(stored), JSON.stringify({
-        registers: retiredRegisters.length,
-        sections: retiredSections.length,
-        bytes: retiredRegisters.reduce((total, item) => total + item.bytes, 0),
-        resumed
-      }), at, at);
-      receiptId = Number(result.lastInsertRowid);
-      handle.db.exec("commit");
-    } catch (error) {
-      try {
-        handle.db.exec("rollback");
-      } catch {}
-      throw error;
-    }
-    ledger.retirementReceiptId = receiptId;
-    const receipt = {
-      receiptVersion: ACTIVATION_PROTOCOL_VERSION,
-      receiptId,
-      phase: "retired",
-      replayed: false,
-      retirementHash,
-      activationReceiptId: activationReceipt.receiptId,
-      activationHash: activationReceipt.activationHash,
-      storeId: meta.storeId,
-      epoch: meta.epoch,
-      archiveDir,
-      markerPath: join9(archiveDir, "MARKER.md"),
-      registers: retiredRegisters,
-      sections: retiredSections,
-      resumed,
-      retiredAt: at
-    };
-    finalizeDisclosure(ledgerPath, ledger, receipt);
-    return receipt;
-  } finally {
-    handle.close();
-  }
-}
-var BACKUP_RECEIPT_VERSION = 2;
 var StoreActivationError;
 var EXECUTION_MIGRATION_VERSION;
 var CONSUMER_KINDS;
 var DISPOSITIONS;
 var SESSION_STATES;
-var RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at";
 var init_store_activation = __esm(() => {
   init_catalog();
   init_catalog_import();
@@ -11779,61 +10530,6 @@ var init_store_activation = __esm(() => {
     "excluded:superseded-binary": true
   };
   SESSION_STATES = { stopped: true, reloaded: true };
-});
-var exports_execution_store = {};
-__export(exports_execution_store, {
-  ExecutionError: () => ExecutionError,
-  adoptTerminalWorkflow: () => adoptTerminalWorkflow,
-  advancePlanOperationRevisions: () => advancePlanOperationRevisions,
-  advanceWorkflowHeaderRevision: () => advanceWorkflowHeaderRevision,
-  assertAuthorityGeneration: () => assertAuthorityGeneration,
-  assertExecutionToken: () => assertExecutionToken,
-  assertOperationId: () => assertOperationId,
-  bindExecutionSession: () => bindExecutionSession,
-  bindRecoveredSession: () => bindRecoveredSession,
-  claimIntegrationMergeLease: () => claimIntegrationMergeLease,
-  createExecutionWorkflow: () => createExecutionWorkflow,
-  executionRootTokenOf: () => executionRootTokenOf,
-  executionToken: () => executionToken,
-  initializeExecutionAuthority: () => initializeExecutionAuthority,
-  parseExecutionToken: () => parseExecutionToken,
-  pruneWorkflowOperationReceipts: () => pruneWorkflowOperationReceipts,
-  readExecutionCleanupSnapshots: () => readExecutionCleanupSnapshots,
-  readExecutionPlan: () => readExecutionPlan,
-  readExecutionPlanAdmission: () => readExecutionPlanAdmission,
-  readExecutionPlanWitness: () => readExecutionPlanWitness,
-  readExecutionSealedInput: () => readExecutionSealedInput,
-  readExecutionSession: () => readExecutionSession,
-  readExecutionState: () => readExecutionState,
-  readExecutionStateGraph: () => readExecutionStateGraph,
-  readExecutionWorkflowWitness: () => readExecutionWorkflowWitness,
-  readLiveSessionIdentities: () => readLiveSessionIdentities,
-  readOperationReplay: () => readOperationReplay,
-  readOwnExecutionSession: () => readOwnExecutionSession,
-  readPlanOperationReplay: () => readPlanOperationReplay,
-  readPlanOperationReplayBeforeProof: () => readPlanOperationReplayBeforeProof,
-  readWorkflowOperationReplayBeforeProof: () => readWorkflowOperationReplayBeforeProof,
-  readWorkflowSessionRows: () => readWorkflowSessionRows,
-  recordRootMembershipLoss: () => recordRootMembershipLoss,
-  releaseIntegrationMergeLease: () => releaseIntegrationMergeLease,
-  requireWorkflowState: () => requireWorkflowState,
-  resolveCreateWorkflow: () => resolveCreateWorkflow,
-  resolvePlanRead: () => resolvePlanRead,
-  resolveTokenFreshness: () => resolveTokenFreshness,
-  resolveWorkflowSession: () => resolveWorkflowSession,
-  resolveWorkflowWrite: () => resolveWorkflowWrite,
-  revokeSessionRow: () => revokeSessionRow,
-  semanticRequestHash: () => semanticRequestHash,
-  serializeExecutionValue: () => serializeExecutionValue,
-  suppliedCatalogPin: () => suppliedCatalogPin,
-  withExecutionTransaction: () => withExecutionTransaction,
-  withRecoveryDetails: () => withRecoveryDetails,
-  writeExecutionCreation: () => writeExecutionCreation,
-  writeExecutionInputPin: () => writeExecutionInputPin,
-  writeOperationReceipt: () => writeOperationReceipt,
-  writePlanCoordinationRow: () => writePlanCoordinationRow,
-  writePlanOperationReceipt: () => writePlanOperationReceipt,
-  writeWorkflowState: () => writeWorkflowState
 });
 function canonicalRefusal(detail) {
   return new ExecutionError("execution.canonical-value", `${detail} is not a canonical execution value`);
@@ -11917,18 +10613,6 @@ function canonicalIntegerText(value, what) {
   }
   return String(value);
 }
-function positiveDecimal(text4, what) {
-  if (!DECIMAL_RE.test(text4)) {
-    throw tokenRefusal(`${what} must be a plain decimal without sign, whitespace or leading zeros — got ${JSON.stringify(text4)}`);
-  }
-  const value = Number(text4);
-  if (value === 0)
-    throw tokenRefusal(`${what} must be greater than 0 — got ${JSON.stringify(text4)}`);
-  if (value > Number.MAX_SAFE_INTEGER) {
-    throw tokenRefusal(`${what} exceeds Number.MAX_SAFE_INTEGER — got ${JSON.stringify(text4)}`);
-  }
-  return value;
-}
 function assertKeyShape(kind, key) {
   const expected = KIND_KEY_LENGTHS[kind];
   if (key.length !== expected) {
@@ -11945,22 +10629,6 @@ function assertKeyShape(kind, key) {
 function encodeTokenKey(key) {
   return Buffer.from(serializeExecutionValue(key), "utf8").toString("base64url");
 }
-function decodeTokenKey(key64, kind) {
-  if (!BASE64URL_RE.test(key64))
-    throw tokenRefusal("a token key must be unpadded base64url");
-  let decoded;
-  try {
-    decoded = JSON.parse(TOKEN_KEY_DECODER.decode(Buffer.from(key64, "base64url")));
-  } catch {
-    throw tokenRefusal("a token key must be base64url-wrapped UTF-8 JSON");
-  }
-  if (!Array.isArray(decoded) || decoded.some((part) => typeof part !== "string")) {
-    throw tokenRefusal("a token key must decode to a JSON array of strings");
-  }
-  const key = decoded;
-  assertKeyShape(kind, key);
-  return key;
-}
 function executionToken(kind, storeId, epoch, key, revision) {
   if (!isExecutionKind(kind))
     throw tokenRefusal(`unknown execution kind ${JSON.stringify(kind)}`);
@@ -11970,151 +10638,6 @@ function executionToken(kind, storeId, epoch, key, revision) {
   const epochText = canonicalIntegerText(epoch, "the epoch");
   const revisionText = canonicalIntegerText(revision, "the revision");
   return `${TOKEN_PREFIX}:${kind}:${storeId}:${epochText}:${encodeTokenKey(key)}:${revisionText}`;
-}
-function parseExecutionToken(value) {
-  if (typeof value !== "string")
-    throw tokenRefusal(`an execution token must be a string — got ${typeof value}`);
-  const parts = value.split(":");
-  if (parts.length !== 6)
-    throw tokenRefusal(`an execution token has 6 colon-separated parts — got ${parts.length}`);
-  const [prefix, kindText, storeId, epochText, key64, revisionText] = parts;
-  if (prefix !== TOKEN_PREFIX)
-    throw tokenRefusal(`an execution token starts with ${TOKEN_PREFIX} — got ${JSON.stringify(prefix)}`);
-  if (!isExecutionKind(kindText))
-    throw tokenRefusal(`unknown execution kind ${JSON.stringify(kindText)}`);
-  const kind = kindText;
-  if (!STORE_UUID_RE.test(storeId))
-    throw tokenRefusal(`a store identity must be a lowercase UUID — got ${JSON.stringify(storeId)}`);
-  const epoch = positiveDecimal(epochText, "the epoch");
-  const revision = positiveDecimal(revisionText, "the revision");
-  return { kind, storeId, epoch, key: decodeTokenKey(key64, kind), revision };
-}
-function assertExecutionToken(value, expected) {
-  const parsed = parseTokenForAddress(value, expected);
-  if (parsed.epoch !== expected.epoch) {
-    throw authorityEpochRefusal({
-      source: "the token",
-      presentedEpoch: parsed.epoch,
-      currentEpoch: expected.epoch,
-      detail: `the token carries epoch ${parsed.epoch}; the current epoch is ${expected.epoch}. Reopen the store and re-read before retrying.`
-    });
-  }
-  if (expected.revision !== undefined && parsed.revision !== expected.revision) {
-    throw new ExecutionError("execution.stale-token", `the token carries revision ${parsed.revision}; the current revision is ${expected.revision}. Re-read and retry with the current token.`, {
-      component: "revision",
-      path: "expected",
-      current_revision: expected.revision,
-      presented_revision: parsed.revision
-    });
-  }
-  return parsed;
-}
-function tokenKindReadPointer(expected) {
-  if (expected.kind === "root") {
-    return " Read the current root token with `mstar status validate` (output field data.token).";
-  }
-  if (expected.kind === "workflow") {
-    return ` Read the current workflow token with \`mstar status validate\` (the data.workflows[] entry for workflow ${JSON.stringify(expected.key[0] ?? "")} → token).`;
-  }
-  if (expected.kind === "plan") {
-    return ` Read the current plan token with \`mstar status validate\` (the data.authority.workflows[] entry for workflow ${JSON.stringify(expected.key[0] ?? "")} → planTokens[${JSON.stringify(expected.key[1] ?? "")}]).`;
-  }
-  return "";
-}
-function parseTokenForAddress(value, expected) {
-  const parsed = parseExecutionToken(value);
-  if (parsed.kind !== expected.kind) {
-    throw new ExecutionError("execution.token-kind", `expected a ${expected.kind} token — got a ${parsed.kind} token. The address kind is never inferred from a supplied token.${tokenKindReadPointer(expected)}`);
-  }
-  const sameKey = parsed.key.length === expected.key.length && parsed.key.every((part, index2) => part === expected.key[index2]);
-  if (parsed.storeId !== expected.storeId || !sameKey) {
-    throw new ExecutionError("execution.scope-mismatch", parsed.storeId !== expected.storeId ? `the token belongs to store ${parsed.storeId}, not to ${expected.storeId}` : `the token addresses ${JSON.stringify(parsed.key)}, not ${JSON.stringify(expected.key)}`, { expected: expected.key, actual: parsed.key });
-  }
-  return parsed;
-}
-function authorityEpochRefusal(input) {
-  const problem = {
-    component: "authority",
-    path: "epoch",
-    code: "store.stale-epoch",
-    sourcesTried: [input.source, "store_meta.authority_epoch, read in this transaction"],
-    currentFacts: [
-      `${input.source} carries epoch ${input.presentedEpoch}`,
-      `the store's current authority epoch is ${input.currentEpoch}`
-    ],
-    needed: `re-resolve the current authority generation and re-acquire your own identity at epoch ${input.currentEpoch} ` + `(resume or rebind the session row of that epoch), then retry against the current token`,
-    withheldEffect: `only the addressed effect: nothing was written, no revision advanced and no receipt was replayed from epoch ` + `${input.presentedEpoch}`,
-    availableWork: [
-      `read the current state at epoch ${input.currentEpoch}`,
-      `resume or rebind your own execution session at epoch ${input.currentEpoch}`,
-      "retry the operation with the token and reference of the current epoch"
-    ]
-  };
-  return new ExecutionError("store.stale-epoch", input.detail, {
-    component: problem.component,
-    path: problem.path,
-    current_epoch: input.currentEpoch,
-    presented_epoch: input.presentedEpoch,
-    sources_tried: problem.sourcesTried,
-    current_facts: problem.currentFacts,
-    needed: problem.needed,
-    available_work: problem.availableWork,
-    recoveryFacts: unresolvedRecovery({
-      target: input.target ?? {},
-      unresolved: [problem],
-      resolvedFrom: [{ path: "epoch", source: input.source }]
-    })
-  });
-}
-function assertAuthorityGeneration(tx, input) {
-  if (input.referenceStoreId !== tx.storeId) {
-    throw new ExecutionError("execution.scope-mismatch", `the session reference belongs to store ${input.referenceStoreId}, not to ${tx.storeId}`);
-  }
-  if (input.referenceEpoch !== tx.epoch) {
-    throw authorityEpochRefusal({
-      source: "the session reference",
-      presentedEpoch: input.referenceEpoch,
-      currentEpoch: tx.epoch,
-      target: input.target,
-      detail: `the session reference carries epoch ${input.referenceEpoch}; the current epoch is ${tx.epoch}. Rebind the session and retry.`
-    });
-  }
-}
-function resolveTokenFreshness(value, current, options = {}) {
-  const parsed = parseTokenForAddress(value, current);
-  if (parsed.epoch !== current.epoch) {
-    throw authorityEpochRefusal({
-      source: "the comparison token",
-      presentedEpoch: parsed.epoch,
-      currentEpoch: current.epoch,
-      target: options.target,
-      detail: `the token carries epoch ${parsed.epoch}; the current epoch is ${current.epoch}. Reopen the store and re-read before retrying.`
-    });
-  }
-  return {
-    readRevision: parsed.revision,
-    currentRevision: current.revision,
-    current: parsed.revision === current.revision
-  };
-}
-function semanticRequestHash(input) {
-  return createHash5("sha256").update(serializeExecutionValue({
-    operation: input.operation,
-    address: input.address,
-    caller: {
-      session_id: input.caller.sessionId,
-      role: input.caller.role,
-      workflow_id: input.caller.workflowId
-    },
-    intent: input.intent
-  }), "utf8").digest("hex");
-}
-function withRecoveryDetails(error, details) {
-  if (!(error instanceof Error))
-    return error;
-  const target = error;
-  target.details = { ...target.details ?? {}, ...details };
-  return error;
 }
 function corrupt(detail) {
   return new StoreError("store.corrupt", `${detail}; the execution authority cannot be verified`);
@@ -12378,44 +10901,6 @@ function readExecutionGraph(db, store, meta) {
     ...terminalAdoptions.length === 0 ? {} : { terminalAdoptions }
   };
 }
-function withExecutionTransaction(context, transition) {
-  const dbPath = storeDbPath(context);
-  const held = ownedTransactions.getStore();
-  if (held?.has(dbPath)) {
-    throw new ExecutionError("execution.reentrant", `this async context already owns a transaction on ${dbPath}. A domain operation opens exactly one ` + `transaction; a nested call would commit or roll back the outer one's work and is refused before anything runs.`);
-  }
-  return ownedTransactions.run(new Set([...held ?? [], dbPath]), async () => {
-    const handle = await openStore(context, "write");
-    try {
-      if (handle.execution === null) {
-        throw new ExecutionError("execution.not-active", `the store at ${dbPath} predates the execution schema (migration ${handle.schemaVersion} applied). ` + `There is no execution authority to transact against; nothing was written.`);
-      }
-      handle.db.exec("begin immediate");
-      const execution = readExecutionMetaRow(handle.db);
-      const identity = readStoreIdentity(handle.db);
-      try {
-        const result = transition({
-          db: handle.db,
-          storeId: identity.storeId,
-          epoch: identity.epoch,
-          execution
-        });
-        if (typeof result?.then === "function") {
-          throw new ExecutionError("execution.reentrant", "the transition body returned a promise. An execution transaction body is synchronous: nothing " + "awaits, launches or reads outside the transaction between BEGIN and COMMIT.");
-        }
-        handle.db.exec("commit");
-        return result;
-      } catch (error) {
-        try {
-          handle.db.exec("rollback");
-        } catch {}
-        throw error;
-      }
-    } finally {
-      handle.close();
-    }
-  });
-}
 async function withExecutionReadTransaction(context, body, requires = "ordinary execution reads require an active authority") {
   const handle = await openStore(context, "read");
   try {
@@ -12451,329 +10936,6 @@ async function readExecutionState(context) {
     epoch: tx.epoch
   }));
 }
-async function readExecutionPlanAdmission(context, planId) {
-  return withExecutionReadTransaction(context, (tx) => {
-    const graph = readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.execution);
-    const matches = [];
-    for (const workflow of graph.workflows) {
-      for (const view of workflow.plans) {
-        if (rowPlanIds(view.plan).includes(planId)) {
-          matches.push({ workflowId: workflow.state.id, row: view.plan, state: workflow.state });
-          break;
-        }
-      }
-    }
-    if (matches.length === 0)
-      return { kind: "absent", graph };
-    if (matches.length > 1) {
-      return { kind: "ambiguous", graph, workflowIds: matches.map((match) => match.workflowId) };
-    }
-    return { kind: "row", graph, ...matches[0] };
-  });
-}
-async function readExecutionCleanupSnapshots(context, workflowId) {
-  if (!isNonEmptyString(workflowId))
-    throw new CoordinationError("coordination.invalid-input", "Invalid workflowId: provide a non-empty value. Inspect registered workflows with mstar status validate.");
-  return withExecutionReadTransaction(context, (tx) => {
-    const store = { storeId: tx.storeId, epoch: tx.epoch };
-    const registered = readExecutionGraph(tx.db, store, tx.execution);
-    const byId = new Map;
-    for (const workflow of registered.workflows)
-      byId.set(workflow.state.id, cleanupSnapshot(workflow));
-    const retained = tx.db.prepare("select workflow_id from execution_workflows order by rowid").all();
-    for (const row of retained) {
-      const id = storedText(row.workflow_id, "execution_workflows.workflow_id");
-      if (!byId.has(id))
-        byId.set(id, cleanupSnapshot(readWorkflowView(tx.db, store, id)));
-    }
-    const selected = byId.get(workflowId);
-    if (selected === undefined) {
-      throw new CoordinationError("coordination.workflow-not-found", "The requested workflow is not registered in this execution authority. Inspect registered workflows with mstar status validate; if none remain, no workflow-scoped cleanup can be selected.", { workflow_id: workflowId });
-    }
-    return { selected, workflows: [...byId.values()] };
-  });
-}
-function cleanupSnapshot(workflow) {
-  return {
-    ...workflow.state,
-    ...workflow.integrationLease === null ? {} : { integration_merge_lease: workflow.integrationLease },
-    plans: workflow.plans.map(({ plan, coordination }) => ({
-      ...plan,
-      ...coordination === null ? {} : { coordination }
-    }))
-  };
-}
-function readExecutionStateGraph(tx) {
-  const meta = readExecutionMetaRow(tx.db);
-  return {
-    data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, meta),
-    token: executionToken("root", tx.storeId, tx.epoch, [], meta.revision),
-    storeId: tx.storeId,
-    epoch: tx.epoch
-  };
-}
-function assertNoLegacyExecutionSources(context) {
-  const harnessDir = dirname8(storeDbPath(context));
-  const workflowDir = resolveWorkflowDir(harnessDir, { harnessDir });
-  const sources = [];
-  const statusPath = join10(harnessDir, "status.json");
-  try {
-    lstatSync4(statusPath);
-    sources.push(statusPath);
-  } catch (error) {
-    if (error.code !== "ENOENT")
-      sources.push(`${statusPath} (unreadable)`);
-  }
-  let workflowRootIsDirectory = false;
-  try {
-    const info = lstatSync4(workflowDir);
-    workflowRootIsDirectory = info.isDirectory() && !info.isSymbolicLink();
-    if (!workflowRootIsDirectory)
-      sources.push(workflowDir);
-  } catch (error) {
-    if (error.code !== "ENOENT")
-      sources.push(`${workflowDir} (unreadable)`);
-  }
-  if (workflowRootIsDirectory) {
-    let entries;
-    try {
-      entries = readdirSync4(workflowDir, { withFileTypes: true });
-    } catch {
-      entries = [];
-      sources.push(`${workflowDir} (unreadable)`);
-    }
-    for (const entry of entries) {
-      const dir = join10(workflowDir, entry.name);
-      if (entry.isSymbolicLink()) {
-        sources.push(dir);
-        continue;
-      }
-      if (!entry.isDirectory())
-        continue;
-      const path2 = join10(dir, WORKFLOW_SNAPSHOT_FILE);
-      try {
-        lstatSync4(path2);
-        sources.push(path2);
-      } catch (error) {
-        if (error.code !== "ENOENT")
-          sources.push(`${path2} (unreadable)`);
-      }
-      const sessionsDir = join10(dir, "sessions");
-      try {
-        const info = lstatSync4(sessionsDir);
-        if (info.isSymbolicLink() || !info.isDirectory()) {
-          sources.push(sessionsDir);
-        } else {
-          let sessions;
-          try {
-            sessions = readdirSync4(sessionsDir, { withFileTypes: true });
-          } catch {
-            sessions = [];
-            sources.push(`${sessionsDir} (unreadable)`);
-          }
-          for (const session of sessions) {
-            if (session.name.endsWith(".json"))
-              sources.push(join10(sessionsDir, session.name));
-          }
-        }
-      } catch (error) {
-        if (error.code !== "ENOENT")
-          sources.push(`${sessionsDir} (unreadable)`);
-      }
-    }
-  }
-  if (sources.length > 0) {
-    throw new ExecutionError("execution.not-empty", `the control harness at ${harnessDir} still holds live execution sources: ${sources.join(", ")}. ` + `Import these sources with the supported \`mstar store upgrade --operator <name>\` operation; the retired ` + `staged migration writer is unavailable. Nothing was created or modified.`);
-  }
-}
-function assertActiveStoreAuthority(db) {
-  const row = db.prepare("select authority_state from store_meta where id = 1").get();
-  if (!row || typeof row.authority_state !== "string")
-    throw corrupt("store_meta is missing");
-  if (row.authority_state !== "active") {
-    throw new ExecutionError("store.not-active", `the issue/catalog store is ${row.authority_state}; run \`mstar store upgrade --operator <name>\` to import legacy ` + "workspace rows and activate both authorities; nothing was modified.");
-  }
-}
-function assertExecutionDomainEmpty(db, meta) {
-  if (meta.authorityState === "staged") {
-    throw new ExecutionError("execution.not-active", "the execution authority is staged. Run `mstar store upgrade --operator <name>` to import workspace records " + "and complete the minimal cutover; nothing was modified.");
-  }
-  if (meta.authorityState === "active") {
-    throw new ExecutionError("execution.not-empty", "the execution authority is already active. Initialization is create-only and never resets a live " + "execution domain; nothing was modified.");
-  }
-  const tables = [
-    "execution_workflows",
-    "execution_registry",
-    "execution_plans",
-    "execution_sessions",
-    "execution_integration_leases",
-    "execution_inputs",
-    "execution_operations",
-    "execution_migrations",
-    "catalog_execution_bindings"
-  ];
-  for (const table of tables) {
-    const row = db.prepare(`select count(*) as n from ${table}`).get();
-    const count = typeof row?.n === "number" ? row.n : 0;
-    if (count > 0) {
-      throw new ExecutionError("execution.not-empty", `${table} already holds ${count} row(s). Initialization creates an empty execution authority and never ` + `clears or adopts existing records; nothing was modified.`);
-    }
-  }
-}
-async function initializeExecutionAuthority(context) {
-  assertNoLegacyExecutionSources(context);
-  await withExecutionTransaction(context, (tx) => {
-    assertActiveStoreAuthority(tx.db);
-    assertExecutionDomainEmpty(tx.db, tx.execution);
-    const now = new Date().toISOString();
-    tx.db.prepare("update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, " + "activated_at = ? where id = 1").run(now, now);
-    tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
-    assertNoLegacyExecutionSources(context);
-    tx.db.prepare("delete from execution_operations where epoch < ?").run(tx.epoch + 1);
-  });
-  return readExecutionState(context);
-}
-function assertOperationId(value) {
-  if (typeof value !== "string" || !OPERATION_ID_RE.test(value)) {
-    throw new CoordinationError("coordination.invalid-input", "Invalid operation id: provide 1-128 ASCII characters from [A-Za-z0-9._:-]. Inspect workflow authority with mstar status validate.", { rejectedValue: value });
-  }
-  return value;
-}
-function invalidInput(detail) {
-  return new CoordinationError("coordination.invalid-input", detail);
-}
-function notNewLifecycle(detail) {
-  return new ExecutionError("execution.not-empty", detail);
-}
-function suppliedCatalogPin(row, workflowId, planId) {
-  const metadata = isPlainObject(row.metadata) ? row.metadata : null;
-  const raw = metadata === null ? undefined : metadata.catalog_pin;
-  if (raw === undefined || raw === null)
-    return null;
-  const what = `plan ${planId}'s metadata.catalog_pin`;
-  const details = { workflow_id: workflowId, plan_id: planId };
-  if (!isPlainObject(raw) || Object.keys(raw).length !== 4) {
-    throw new ExecutionPinConflictError(`${what} is not a complete catalog execution pin (store_id, entity_revision, document_hash, relation_hash); ` + "a malformed selection is never sealed as authority", details);
-  }
-  if (!isNonEmptyString(raw.store_id) || !STORE_UUID_RE.test(raw.store_id) || typeof raw.entity_revision !== "number" || !Number.isSafeInteger(raw.entity_revision) || raw.entity_revision <= 0 || !isNonEmptyString(raw.document_hash) || !isNonEmptyString(raw.relation_hash)) {
-    throw new ExecutionPinConflictError(`${what} is not a complete catalog execution pin (store_id, entity_revision, document_hash, relation_hash) ` + `— got ${JSON.stringify(raw)}`, details);
-  }
-  return {
-    store_id: raw.store_id,
-    entity_revision: raw.entity_revision,
-    document_hash: raw.document_hash,
-    relation_hash: raw.relation_hash
-  };
-}
-function resolveCreateWorkflow(caller, entry, snapshot, operationId) {
-  if (!isPlainObject(caller)) {
-    throw invalidInput("Invalid execution caller: provide a coordinator caller object. Inspect workflow authority with mstar status validate.");
-  }
-  assertOperationId(operationId);
-  const entryGate = validateWorkflowEntry(entry);
-  const snapshotGate = validateWorkflowSnapshot(snapshot);
-  const violations = [...entryGate.violations, ...snapshotGate.violations];
-  if (violations.length > 0) {
-    throw new CoordinationError("coordination.invalid-input", "Workflow entry/snapshot is invalid. Inspect registered workflow state with mstar status validate.", { violations: violations.map(({ code: code2, message }) => ({ code: code2, message })) });
-  }
-  const workflow = entry;
-  const doc = snapshot;
-  const workflowId = workflow.id;
-  if (caller.role !== "coordinator") {
-    throw new ExecutionError("execution.scope-mismatch", "creating a workflow is a coordinator operation");
-  }
-  if (caller.workflowId !== workflowId) {
-    throw new ExecutionError("execution.scope-mismatch", `the caller belongs to workflow ${caller.workflowId}, not to the workflow ${workflowId} this request creates`);
-  }
-  for (const field of ["id", "type", "started_at"]) {
-    if (workflow[field] !== doc[field]) {
-      throw invalidInput(`the workflow entry and its snapshot disagree on ${field}: entry ${JSON.stringify(workflow[field])}, ` + `snapshot ${JSON.stringify(doc[field])}. Registration fixes the identity anchors; creation never reconciles them.`);
-    }
-  }
-  if (doc.coordination !== undefined || doc.integration_merge_lease !== undefined || doc.delivery !== undefined) {
-    throw notNewLifecycle(`snapshot ${workflowId} already carries a coordinator binding, an integration merge lease or delivery evidence. ` + `Creation writes a NEW, unbound, unleased lifecycle that owns no accepted evidence; an existing lifecycle ` + `belongs on the staged migration route. Nothing was created.`);
-  }
-  if (isTerminalSnapshot(doc)) {
-    throw notNewLifecycle(`snapshot ${workflowId} is ${doc.status}. Registry membership selects an ACTIVE lifecycle, so a terminal snapshot ` + `is never created into the root register; nothing was created.`);
-  }
-  const plans = [];
-  const seen = new Set;
-  for (const row of doc.plans) {
-    const planId = rowPlanId(row);
-    if (seen.has(planId)) {
-      throw new CoordinationError("coordination.invalid-input", "Snapshot contains a duplicate plan identity. Inspect workflow rows with mstar status validate.", { workflow_id: workflowId, plan_id: planId });
-    }
-    seen.add(planId);
-    if (row.execution_lease !== undefined || row.coordination !== undefined) {
-      throw notNewLifecycle(`plan ${planId} of snapshot ${workflowId} already carries a coordination block or an execution lease. ` + `Creation writes unbound, unleased rows that own no accepted evidence; nothing was created.`);
-    }
-    plans.push({ planId, row, pin: suppliedCatalogPin(row, workflowId, planId) });
-  }
-  return { workflowId, entry: workflow, snapshot: doc, plans };
-}
-function createWorkflowRequestHash(caller, creation, expected) {
-  return createHash5("sha256").update(serializeExecutionValue({
-    operation: CREATE_WORKFLOW_OPERATION,
-    workflow_id: creation.workflowId,
-    expected,
-    caller: {
-      session_id: caller.sessionId,
-      role: caller.role,
-      workflow_id: caller.workflowId
-    },
-    entry: creation.entry,
-    snapshot: creation.snapshot
-  }), "utf8").digest("hex");
-}
-function readCommittedOperation(db, epoch, operationId) {
-  const row = db.prepare("select request_hash, store_id, workflow_id, result_json from execution_operations where epoch = ? and operation_id = ?").get(epoch, operationId);
-  if (!row)
-    return null;
-  const what = `execution_operations(${epoch},${operationId})`;
-  return {
-    requestHash: storedText(row.request_hash, `${what}.request_hash`),
-    storeId: storedText(row.store_id, `${what}.store_id`),
-    workflowId: storedText(row.workflow_id, `${what}.workflow_id`),
-    resultJson: storedText(row.result_json, `${what}.result_json`)
-  };
-}
-function readCommittedReceipt(recorded, tx, operationId, workflowId, token) {
-  const what = `execution_operations(${tx.epoch},${operationId})`;
-  if (recorded.storeId !== tx.storeId || recorded.workflowId !== workflowId) {
-    throw corrupt(`${what} records store ${JSON.stringify(recorded.storeId)} and workflow ${JSON.stringify(recorded.workflowId)}, ` + `which is not the workflow ${workflowId} this request addresses`);
-  }
-  const receipt = storedJsonObject(recorded.resultJson, `${what}.result_json`);
-  const recordedToken = receipt.token;
-  const parsed = parseExecutionToken(recordedToken);
-  const sameKey = parsed.key.length === token.key.length && parsed.key.every((part, index2) => part === token.key[index2]);
-  if (parsed.kind !== token.kind || parsed.storeId !== tx.storeId || parsed.epoch !== tx.epoch || !sameKey) {
-    throw corrupt(`${what}.result_json carries a token that does not address ${token.kind} ${JSON.stringify(token.key)} of this ` + `store in this epoch`);
-  }
-  if (!isNonEmptyString(receipt.storeId) || receipt.storeId !== tx.storeId || typeof receipt.epoch !== "number") {
-    throw corrupt(`${what}.result_json does not record the store identity it was committed under`);
-  }
-  if (receipt.slim !== true && !isPlainObject(receipt.data))
-    throw corrupt(`${what}.result_json carries no execution state`);
-  const recovery = receipt.operationRecovery;
-  if (recovery !== undefined) {
-    if (!isPlainObject(recovery) || !["applied", "already-satisfied", "partial", "unresolved"].includes(String(recovery.outcome)) || !["none", "committed", "partial", "unknown"].includes(String(recovery.commitState)) || !isPlainObject(recovery.target) || !Array.isArray(recovery.applied) || !Array.isArray(recovery.unresolved) || !Array.isArray(recovery.resolvedFrom) || !Array.isArray(recovery.warnings)) {
-      throw corrupt(`${what}.result_json carries an invalid recovery sidecar`);
-    }
-  }
-  const storedRecovery = recovery;
-  if (receipt.slim === true) {
-    const live = readExecutionStateGraph(tx);
-    return { ...live, ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery }, ...storedReceiptFacts(receipt) };
-  }
-  return {
-    data: receipt.data,
-    token: recordedToken,
-    storeId: receipt.storeId,
-    epoch: receipt.epoch,
-    ...storedRecovery === undefined ? {} : { operationRecovery: storedRecovery },
-    ...storedReceiptFacts(receipt)
-  };
-}
 function holderLiveWarningOf(value) {
   return isPlainObject(value) && value.code === "recovery.holder-live" && isNonEmptyString(value.holder) && typeof value.epoch === "number" && value.observed_state === "active" && isNonEmptyString(value.attested_at) ? value : undefined;
 }
@@ -12786,881 +10948,6 @@ function storedReceiptFacts(receipt) {
     ...warning === undefined ? {} : { holder_live_warning: warning }
   };
 }
-function assertWorkflowIdentityIsNew(db, workflowId) {
-  const row = db.prepare("select revision from execution_workflows where workflow_id = ?").get(workflowId);
-  if (!row)
-    return;
-  throw notNewLifecycle(`execution_workflows already holds workflow ${workflowId} (revision ${String(row.revision)}). A workflow identity is ` + `create-only: re-creating it never restores registry membership, resets revisions or rewrites its rows. ` + `Nothing was created.`);
-}
-function assertSelectedCatalogEntities(db, storeId, workflowId, plans) {
-  const entity = db.prepare("select revision from catalog_entities where kind = 'plan' and id = ?");
-  for (const plan of plans) {
-    const { pin } = plan;
-    if (pin === null)
-      continue;
-    const details = { workflow_id: workflowId, plan_id: plan.planId, pin };
-    if (pin.store_id !== storeId) {
-      throw new ExecutionPinConflictError(`plan ${plan.planId} selects catalog store ${pin.store_id}, which is not this store (${storeId}) — a foreign ` + `selection is never sealed as this store's frozen input`, details);
-    }
-    if (entity.get(plan.planId) === undefined) {
-      throw new ExecutionPinConflictError(`plan ${plan.planId} is pinned to catalog plan entity ${plan.planId} at revision ${pin.entity_revision}, but the ` + `catalog does not hold that entity. Creation binds existing catalog identities and never fabricates one; ` + `register the plan or drop the pin`, details);
-    }
-  }
-}
-function writeCreatedWorkflow(db, input) {
-  const { workflowId, entry, snapshot, plans, creatorSessionId, now } = input;
-  const header = { ...snapshot };
-  delete header.plans;
-  db.prepare("insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) " + "values (?, 1, ?, ?, ?, ?)").run(workflowId, creatorSessionId, JSON.stringify(header), now, now);
-  db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(workflowId, JSON.stringify(entry));
-  const insertPlan = db.prepare("insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) " + "values (?, ?, 1, ?, ?, '{}')");
-  const insertInput = db.prepare("insert into execution_inputs(workflow_id, plan_id, revision, input_json, input_hash, catalog_pin_json) " + "values (?, ?, 1, ?, ?, ?)");
-  plans.forEach((plan, ordinal) => {
-    const state = { ...plan.row, id: plan.planId };
-    delete state.coordination;
-    delete state.execution_lease;
-    insertPlan.run(workflowId, plan.planId, ordinal, JSON.stringify(state));
-    insertInput.run(workflowId, plan.planId, JSON.stringify(executionInputSelection(plan.row, plan.planId)), executionInputHash(plan.row, plan.planId), plan.pin === null ? null : JSON.stringify(plan.pin));
-  });
-}
-function writeExecutionCreation(tx, input) {
-  assertWorkflowIdentityIsNew(tx.db, input.creation.workflowId);
-  assertSelectedCatalogEntities(tx.db, tx.storeId, input.creation.workflowId, input.creation.plans);
-  writeCreatedWorkflow(tx.db, {
-    workflowId: input.creation.workflowId,
-    entry: input.creation.entry,
-    snapshot: input.creation.snapshot,
-    plans: input.creation.plans,
-    creatorSessionId: isNonEmptyString(input.caller.sessionId) ? input.caller.sessionId : null,
-    now: input.now
-  });
-  tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(input.now);
-  tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-}
-function executionRootTokenOf(tx) {
-  return executionToken("root", tx.storeId, tx.epoch, [], readExecutionMetaRow(tx.db).revision);
-}
-async function adoptTerminalWorkflow(context, input) {
-  const caller = context.caller;
-  if (caller.role !== "coordinator" || caller.workflowId !== input.workflowId || !isNonEmptyString(caller.sessionId)) {
-    throw new ExecutionError("execution.scope-mismatch", "terminal adoption requires an acquired coordinator identity addressing the selected workflow");
-  }
-  if (!isNonEmptyString(input.workflowId) || input.expectedRevision !== undefined && (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) || !isNonEmptyString(input.reason) || !isNonEmptyString(input.operationId)) {
-    throw new ExecutionError("execution.adoption-invalid", "workflowId, an optional positive expectedRevision, non-empty reason, and operationId are required");
-  }
-  const attestation = input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
-  const requestHash2 = semanticRequestHash({
-    operation: "workflow.adopt-terminal",
-    address: { workflowId: input.workflowId },
-    caller,
-    intent: {
-      expectedRevision: input.expectedRevision ?? "current",
-      reason: input.reason,
-      ...attestation === undefined ? {} : { attestation }
-    }
-  });
-  return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; terminal adoption requires an active authority`);
-    }
-    const replay = readOperationReplay(tx, {
-      operationId: input.operationId,
-      requestHash: requestHash2,
-      workflowId: input.workflowId,
-      planId: null,
-      token: { kind: "root", key: [] }
-    });
-    if (replay !== null) {
-      const { operationRecovery: operationRecovery2, ...recorded } = replay;
-      return { ...recorded, ...operationRecovery2 === undefined ? {} : { recovery: operationRecovery2 } };
-    }
-    const row = tx.db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(input.workflowId);
-    if (row === undefined) {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no header to adopt; register the workflow through the supported workflow registration route`);
-    }
-    const revision = storedRevision(row.revision, `execution_workflows(${input.workflowId}).revision`);
-    if (input.expectedRevision !== undefined && revision !== input.expectedRevision) {
-      throw new ExecutionError("execution.header-revision-conflict", `workflow ${input.workflowId} header revision is ${revision}, not expected revision ${input.expectedRevision}; re-read status validate and retry with its listed revision`);
-    }
-    const registered = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(input.workflowId);
-    if (registered !== undefined) {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is already registered; finish its lifecycle through mstar status workflow-close`);
-    }
-    const state = storedJsonObject(row.state_json, `execution_workflows(${input.workflowId}).state_json`);
-    const unclosed = state.status !== "completed" && state.status !== "stopped" && state.status !== "failed";
-    if (state.lifecycle_adopted_at !== undefined || state.adopt_reason !== undefined) {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} already has a terminal-adoption record; read status validate and use the recorded result`);
-    }
-    const now = new Date().toISOString();
-    const activeHolders = readWorkflowSessionRows(tx, input.workflowId, "coordinator").filter((row2) => row2.state === "active" && row2.ref.epoch === tx.epoch).map((row2) => row2.ref.sessionId).sort();
-    const proof = attestation ?? validateRecoveryAttestation(provisionRecoveryDocument({
-      actor: caller.sessionId,
-      authorizationRef: input.operationId,
-      attestedAt: now,
-      stoppedSessions: activeHolders.map((sessionId) => ({ sessionId, host: "local", state: "stopped" }))
-    }));
-    if (proof.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
-      throw new ExecutionError("execution.adoption-refused", `the adopting caller ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded by this adoption's proof; terminal ` + `adoption settles a workflow's ACTIVE holder rows and never the identity making the call, so the attested stop must come ` + `from a distinct operator identity. Rerun from a session id other than the one the proof names stopped, with a stop list ` + `covering only the addressed workflow's ACTIVE holder(s).`, { workflow_id: input.workflowId, caller_session_id: caller.sessionId, adoption_refusal: "self-settlement" });
-    }
-    if (activeHolders.length > 0) {
-      const attested = new Set(proof.stoppedSessions.map((session) => session.sessionId));
-      const unattested = activeHolders.filter((sessionId) => !attested.has(sessionId));
-      if (unattested.length > 0) {
-        throw new ExecutionError("execution.adoption-refused", `this attestation does not name ${unattested.map((sessionId) => JSON.stringify(sessionId)).join(", ")} — the ACTIVE ` + `coordinator session(s) of workflow ${input.workflowId} at epoch ${tx.epoch} — as stopped/reloaded, so the settlement ` + `cannot proceed: every addressed ACTIVE holder needs its own stop evidence, and the engine cannot observe a dead ` + `process itself. Omit --attestation and the engine generates that document from these rows itself; alternatively add ` + `each listed session to the supplied document's stoppedSessions and retry.`, {
-          workflow_id: input.workflowId,
-          epoch: tx.epoch,
-          active_holder_sessions: activeHolders,
-          unattested_sessions: unattested,
-          adoption_refusal: "active-session-proof-incomplete"
-        });
-      }
-      for (const sessionId of activeHolders) {
-        revokeSessionRow(tx, { workflowId: input.workflowId, role: "coordinator", sessionId });
-      }
-    }
-    const nextState = {
-      ...state,
-      ...unclosed ? { status: "stopped", ended_at: now, updated_at: now } : {},
-      lifecycle_adopted_at: now,
-      adopt_reason: input.reason,
-      adoption_actor_session_id: caller.sessionId,
-      adoption_operation_id: input.operationId
-    };
-    const expectedRevision = input.expectedRevision ?? revision;
-    tx.db.prepare("update execution_workflows set revision = revision + 1, state_json = ?, updated_at = ? where workflow_id = ? and revision = ?").run(JSON.stringify(nextState), now, input.workflowId, expectedRevision);
-    tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(now);
-    tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-    const settlement = {
-      outcome: activeHolders.length === 0 ? "already-satisfied" : "applied",
-      target: { workflowId: input.workflowId },
-      applied: activeHolders.map((sessionId) => `execution_sessions(${input.workflowId}, coordinator, ${sessionId}) revoked`),
-      unresolved: [],
-      resolvedFrom: [
-        { path: "attestation.operator", source: `${proof.operator.actor} (${proof.operator.authorizationRef})` },
-        { path: "attestation.attestedAt", source: proof.attestedAt },
-        {
-          path: "attestation.stoppedSessions",
-          source: proof.stoppedSessions.length === 0 ? "none" : proof.stoppedSessions.map((session) => session.sessionId).join(", ")
-        }
-      ],
-      warnings: activeHolders.length === 0 && attestation !== undefined ? [{
-        code: "execution.adoption.nothing-to-settle",
-        message: `the supplied attestation named no ACTIVE coordinator session of workflow ${input.workflowId}; the adoption was recorded without a settlement`
-      }] : [],
-      commitState: "committed"
-    };
-    const receipt = {
-      data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, readExecutionMetaRow(tx.db)),
-      token: executionRootTokenOf(tx),
-      storeId: tx.storeId,
-      epoch: tx.epoch,
-      ...settlement === undefined ? {} : { operationRecovery: settlement }
-    };
-    writeOperationReceipt(tx, { operationId: input.operationId, requestHash: requestHash2, workflowId: input.workflowId, planId: null, receipt, now, slim: true });
-    pruneWorkflowOperationReceipts(tx, input.workflowId, input.operationId);
-    const { operationRecovery, ...publicReceipt } = receipt;
-    return {
-      ...publicReceipt,
-      operationId: input.operationId,
-      replayed: false,
-      ...operationRecovery === undefined ? {} : { recovery: operationRecovery }
-    };
-  });
-}
-async function createExecutionWorkflow(context, input) {
-  const creation = resolveCreateWorkflow(context.caller, input?.entry, input?.snapshot, input?.operationId);
-  const operationId = input.operationId;
-  const requestHash2 = createWorkflowRequestHash(context.caller, creation, input.expected);
-  return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; domain creation requires an active authority. ` + `A staged store is inspectable only through migration diagnostics.`);
-    }
-    const recorded = readCommittedOperation(tx.db, tx.epoch, operationId);
-    if (recorded !== null) {
-      if (recorded.requestHash !== requestHash2) {
-        throw new ExecutionError("execution.operation-conflict", `operation id ${JSON.stringify(operationId)} is already committed on this store epoch for a different request ` + `(kind, scope, expected token, caller or payload). An operation id is an idempotency key, not a reusable ` + `slot — retry the committed request unchanged or use a new id. Nothing was created.`);
-      }
-      return {
-        ...readCommittedReceipt(recorded, tx, operationId, creation.workflowId, { kind: "root", key: [] }),
-        operationId,
-        replayed: true
-      };
-    }
-    assertExecutionToken(input.expected, {
-      kind: "root",
-      storeId: tx.storeId,
-      epoch: tx.epoch,
-      key: [],
-      revision: tx.execution.revision
-    });
-    const now = new Date().toISOString();
-    writeExecutionCreation(tx, { caller: context.caller, creation, now });
-    const meta = readExecutionMetaRow(tx.db);
-    const store = { storeId: tx.storeId, epoch: tx.epoch };
-    const receipt = {
-      data: readExecutionGraph(tx.db, store, meta),
-      token: executionToken("root", store.storeId, store.epoch, [], meta.revision),
-      storeId: store.storeId,
-      epoch: store.epoch
-    };
-    writeOperationReceipt(tx, { operationId, requestHash: requestHash2, workflowId: creation.workflowId, planId: null, receipt, now, slim: true });
-    return { ...receipt, operationId, replayed: false };
-  });
-}
-function resolveBindRequest(caller, input) {
-  if (!isPlainObject(input))
-    throw invalidInput("Invalid session bind: provide a request object. Inspect workflow authority with mstar status validate.");
-  if (!isNonEmptyString(caller?.sessionId))
-    throw invalidInput("Invalid execution caller: provide a non-empty session identity. Inspect workflow authority with mstar status validate.");
-  const { workflowId } = input;
-  const operationId = assertOperationId(input.operationId);
-  if (!isNonEmptyString(workflowId))
-    throw invalidInput("Invalid session bind: provide a non-empty workflowId. Inspect registered workflows with mstar status validate.");
-  if (caller.role !== "coordinator" || caller.workflowId !== workflowId) {
-    throw new ExecutionError("execution.scope-mismatch", "the session bind must address the trusted caller's coordinator workflow");
-  }
-  return { role: "coordinator", workflowId, sessionId: caller.sessionId, operationId };
-}
-function bindFreshnessIntent(expected) {
-  return expected === undefined ? { freshness: "omitted" } : { freshness: "supplied", token: expected };
-}
-function bindSessionRequestHash(caller, bind, expected) {
-  return createHash5("sha256").update(serializeExecutionValue({
-    operation: BIND_SESSION_OPERATION,
-    workflow_id: bind.workflowId,
-    role: bind.role,
-    expected: bindFreshnessIntent(expected),
-    caller: { session_id: caller.sessionId, role: caller.role, workflow_id: caller.workflowId }
-  }), "utf8").digest("hex");
-}
-function storedSessionState(value, what) {
-  if (!EXECUTION_SESSION_STATES.includes(value)) {
-    throw corrupt(`${what} is ${JSON.stringify(value)}, which is not a session state`);
-  }
-  return value;
-}
-function readSessionRows(db, store, workflowId) {
-  const rows = db.prepare("select role, session_id, epoch, revision, state from execution_sessions where workflow_id = ? and role = 'coordinator'").all(workflowId);
-  return rows.map((row) => {
-    const ref = sessionRef(store, workflowId, row);
-    return {
-      ref,
-      revision: storedRevision(row.revision, `execution_sessions(${workflowId},${ref.sessionId}).revision`),
-      state: storedSessionState(row.state, `execution_sessions(${workflowId},${ref.sessionId}).state`)
-    };
-  });
-}
-function readWorkflowHeaderRow(db, workflowId) {
-  const row = db.prepare("select revision, creator_session_id from execution_workflows where workflow_id = ?").get(workflowId);
-  if (row === undefined) {
-    throw new CoordinationError("coordination.workflow-not-found", `workflow ${workflowId} is not in the execution authority. A session binds only to a registered lifecycle; ` + `nothing was bound.`, { workflow_id: workflowId });
-  }
-  if (row.creator_session_id !== null && row.creator_session_id !== undefined && !isNonEmptyString(row.creator_session_id)) {
-    throw corrupt(`execution_workflows(${workflowId}).creator_session_id is not a session identity`);
-  }
-  return {
-    revision: storedRevision(row.revision, `execution_workflows(${workflowId}).revision`),
-    creatorSessionId: isNonEmptyString(row.creator_session_id) ? row.creator_session_id : null
-  };
-}
-function sessionRefusalDetails(input) {
-  return {
-    component: input.problem.component,
-    path: input.problem.path,
-    ...input.facts,
-    sources_tried: input.problem.sourcesTried,
-    current_facts: input.problem.currentFacts,
-    available_work: input.problem.availableWork,
-    recoveryFacts: unresolvedRecovery({ target: input.target ?? {}, unresolved: [input.problem] })
-  };
-}
-function coordinatorRecoveryWork(input) {
-  const live = input.rows.find((row) => row.state === "active" && row.ref.epoch === input.epoch);
-  if (live !== undefined) {
-    return [
-      `recovering over this row by naming it is refused while workflow ${JSON.stringify(input.workflowId)} holds the ` + `ACTIVE coordinator session ${JSON.stringify(live.ref.sessionId)} at epoch ${input.epoch}: ` + `recoverExecutionCoordinator replaces only the holder it names, and a normal bind never revives this ` + `${input.rowState} row (epoch ${input.rowEpoch}) — run the addressed effect through ` + `${JSON.stringify(live.ref.sessionId)}'s own live reference, or recover over that holder: the recovery names ` + `${JSON.stringify(live.ref.sessionId)} as the prior holder and carries a valid operator attestation with its ` + `stopped/reloaded entry — the attestation is the stop evidence, and no change to the holder's row is ` + `needed first`
-    ];
-  }
-  return [
-    `recovery is the coordinator recovery transition recoverExecutionCoordinator: it takes the workflow token ` + `of the current epoch, an operation id and a non-empty reason, names ${JSON.stringify(input.sessionId)} ` + `as the prior holder it replaces and carries a valid operator attestation — exactly one installed ` + `current-coordinator consumer plus an entry naming that holder stopped/reloaded — and it reactivates ` + `this ${input.rowState} row (epoch ${input.rowEpoch}) at the current epoch; a normal bind never revives it`
-  ];
-}
-function liveSession(tx, address) {
-  const store = { storeId: tx.storeId, epoch: tx.epoch };
-  const rows = readSessionRows(tx.db, store, address.workflowId);
-  const mine = rows.find((row) => row.ref.sessionId === address.sessionId);
-  if (mine === undefined || mine.state !== "active" || mine.ref.epoch !== tx.epoch) {
-    const problem = {
-      component: "session",
-      path: "session",
-      code: "execution.session-unavailable",
-      sourcesTried: [`the coordinator session rows of workflow ${JSON.stringify(address.workflowId)}, read in this transaction`],
-      currentFacts: [
-        `the reference names coordinator session ${JSON.stringify(address.sessionId)} of workflow ${JSON.stringify(address.workflowId)}`,
-        mine === undefined ? `the store holds no coordinator session row for ${JSON.stringify(address.sessionId)} at the current epoch ${tx.epoch}` : `session ${JSON.stringify(address.sessionId)}'s row is ${mine.state} in epoch ${mine.ref.epoch}, while the store's ` + `current authority epoch is ${tx.epoch}`
-      ],
-      needed: `a session reference the store holds ACTIVE for the coordinator of workflow ${JSON.stringify(address.workflowId)} ` + `at the current epoch ${tx.epoch}`,
-      withheldEffect: "only the addressed effect: authority was withheld, so nothing was written, no revision advanced and no receipt " + "was committed under this operation",
-      availableWork: [
-        `present the session reference of a binding the store holds ACTIVE for the coordinator of workflow ` + `${JSON.stringify(address.workflowId)} at epoch ${tx.epoch}`,
-        ...mine === undefined ? ["bind the coordinator session first — the bind verb takes the workflow, the full execution token and an operation id"] : coordinatorRecoveryWork({
-          rows,
-          workflowId: address.workflowId,
-          epoch: tx.epoch,
-          sessionId: address.sessionId,
-          rowState: mine.state,
-          rowEpoch: mine.ref.epoch
-        }),
-        "retry the operation with the reference and token of the current epoch"
-      ]
-    };
-    throw new ExecutionError("execution.session-unavailable", `workflow ${address.workflowId} holds no ACTIVE coordinator session ${address.sessionId} in epoch ${tx.epoch}` + `${mine === undefined ? "" : ` (its row is ${mine.state} in epoch ${mine.ref.epoch})`}. An execution session ` + `reference authorizes only the binding the store records at the current epoch; a legacy session envelope is ` + `never consulted.`, sessionRefusalDetails({
-      problem,
-      target: { workflowId: address.workflowId },
-      facts: {
-        session_id: address.sessionId,
-        workflow_id: address.workflowId,
-        role: address.role,
-        current_epoch: tx.epoch,
-        ...mine === undefined ? {} : { row_state: mine.state, row_epoch: mine.ref.epoch }
-      }
-    }));
-  }
-  return mine;
-}
-function assertReferenceAuthority(tx, referenceStoreId, referenceEpoch, target) {
-  assertAuthorityGeneration(tx, { referenceStoreId, referenceEpoch, ...target === undefined ? {} : { target } });
-}
-function writeExecutionSession(db, input) {
-  db.prepare("insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) " + "values (?, 'coordinator', ?, ?, 1, 'active', ?)").run(input.workflowId, input.address.sessionId, input.epoch, input.now);
-}
-function writePlanCoordinationRow(tx, input) {
-  tx.db.prepare("update execution_plans set state_json = ?, coordination_json = ?, revision = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(input.state), JSON.stringify(input.coordination), input.revision, input.workflowId, input.planId);
-}
-function readExecutionSealedInput(tx, workflowId, planId) {
-  const row = tx.db.prepare("select revision, input_hash, catalog_pin_json from execution_inputs where workflow_id = ? and plan_id = ?").get(workflowId, planId);
-  if (row === undefined) {
-    throw corrupt(`plan ${planId} has no sealed execution input in workflow ${workflowId}`);
-  }
-  return {
-    revision: storedRevision(row.revision, `execution_inputs(${workflowId},${planId}).revision`),
-    inputHash: storedText(row.input_hash, `execution_inputs(${workflowId},${planId}).input_hash`),
-    pin: readFrozenInput(row.catalog_pin_json, `execution_inputs(${workflowId},${planId}).catalog_pin_json`)
-  };
-}
-function writeExecutionInputPin(tx, input) {
-  const sealed = readExecutionSealedInput(tx, input.workflowId, input.planId);
-  const storedPinJson = sealed.pin === null ? null : serializeExecutionValue(sealed.pin);
-  const nextPinJson = input.pin === null ? null : serializeExecutionValue(input.pin);
-  if (storedPinJson === nextPinJson)
-    return;
-  tx.db.prepare("update execution_inputs set catalog_pin_json = ?, revision = ? where workflow_id = ? and plan_id = ?").run(nextPinJson, sealed.revision + 1, input.workflowId, input.planId);
-}
-function advancePlanOperationRevisions(tx, input) {
-  tx.db.prepare("update execution_workflows set revision = revision + 1, updated_at = ? where workflow_id = ?").run(input.now, input.workflowId);
-  tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-}
-function advanceWorkflowHeaderRevision(tx, input) {
-  tx.db.prepare("update execution_workflows set revision = revision + 1, updated_at = ? where workflow_id = ?").run(input.now, input.workflowId);
-  tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-}
-function recordRootMembershipLoss(tx, input) {
-  tx.db.prepare("delete from execution_registry where workflow_id = ?").run(input.workflowId);
-  tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(input.now);
-}
-function requireWorkflowState(tx, workflowId) {
-  const row = tx.db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(workflowId);
-  if (row === undefined) {
-    throw new CoordinationError("coordination.workflow-not-found", "Workflow is not in the execution authority. Inspect registered workflows with mstar status validate.", { workflow_id: workflowId });
-  }
-  return {
-    revision: storedRevision(row.revision, `execution_workflows(${workflowId}).revision`),
-    state: storedJsonObject(row.state_json, `execution_workflows(${workflowId}).state_json`)
-  };
-}
-function writeWorkflowState(tx, input) {
-  tx.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(input.state), input.workflowId);
-}
-function readLiveSessionIdentities(tx, workflowId) {
-  const rows = tx.db.prepare("select session_id from execution_sessions where workflow_id = ? and state = 'active' and epoch = ?").all(workflowId, tx.epoch);
-  return new Set(rows.map((row) => storedText(row.session_id, `execution_sessions(${workflowId}).session_id`)));
-}
-function readWorkflowSessionRows(tx, workflowId, role) {
-  if (role !== "coordinator") {
-    throw new CoordinationError("coordination.identity-mismatch", "Execution authority supports coordinator session rows only. Inspect registered workflow authority with mstar status validate.", {
-      role
-    });
-  }
-  return readSessionRows(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, workflowId);
-}
-function revokeSessionRow(tx, input) {
-  if (input.role !== "coordinator") {
-    throw new CoordinationError("coordination.identity-mismatch", "Execution authority can revoke coordinator session rows only. Inspect registered workflow authority with mstar status validate.", { role: input.role });
-  }
-  tx.db.prepare("update execution_sessions set state = 'revoked', revision = revision + 1 " + "where workflow_id = ? and role = 'coordinator' and session_id = ? and state <> 'revoked'").run(input.workflowId, input.sessionId);
-}
-function bindRecoveredSession(tx, input) {
-  const existing = tx.db.prepare("select revision from execution_sessions where workflow_id=? and role='coordinator' and session_id=?").get(input.workflowId, input.sessionId);
-  if (existing === undefined) {
-    writeExecutionSession(tx.db, {
-      workflowId: input.workflowId,
-      address: { workflowId: input.workflowId, role: "coordinator", sessionId: input.sessionId },
-      epoch: input.epoch,
-      now: input.now
-    });
-    return 1;
-  }
-  const revision = storedRevision(existing.revision, `execution_sessions(${input.workflowId},${input.sessionId}).revision`) + 1;
-  tx.db.prepare("update execution_sessions set state='active', epoch=?, revision=?, bound_at=? where workflow_id=? and role='coordinator' and session_id=?").run(input.epoch, revision, input.now, input.workflowId, input.sessionId);
-  return revision;
-}
-function claimIntegrationMergeLease(tx, input) {
-  const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
-  tx.db.prepare("insert or replace into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, ?, ?, ?)").run(input.workflowId, existing === null ? 1 : existing.revision + 1, tx.epoch, JSON.stringify({ ...input.lease, status: "held" }));
-}
-function releaseIntegrationMergeLease(tx, input) {
-  const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
-  if (existing === null || existing.status === "released")
-    return;
-  const tombstone = {
-    ...input.claim,
-    status: "released",
-    prior_holder: input.claim.holder,
-    released_by: input.releasedBy,
-    released_at: input.now,
-    release_reason: input.reason
-  };
-  tx.db.prepare("update execution_integration_leases set revision = ?, lease_json = ? where workflow_id = ?").run(existing.revision + 1, JSON.stringify(tombstone), input.workflowId);
-}
-function readPlanOperationReplay(tx, input) {
-  const replay = readOperationReplay(tx, {
-    ...input,
-    token: { kind: "plan", key: [input.workflowId, input.planId] }
-  });
-  if (replay === null)
-    return null;
-  const { operationRecovery, ...receipt } = replay;
-  return { ...receipt, ...operationRecovery === undefined ? {} : { recovery: operationRecovery } };
-}
-async function readPlanOperationReplayBeforeProof(context, read, input) {
-  const caller = context.caller;
-  if (caller.role !== "coordinator" || caller.sessionId !== read.sessionId || caller.workflowId !== read.workflowId) {
-    throw new CoordinationError("coordination.identity-mismatch", "Trusted caller does not match the coordinator session resolved for this plan address. Inspect workflow authority with mstar status validate.", { session_id: read.sessionId, workflow_id: read.workflowId });
-  }
-  return withExecutionReadTransaction(context, (tx) => {
-    assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
-    liveSession(tx, { workflowId: read.workflowId, role: "coordinator", sessionId: read.sessionId });
-    return readPlanOperationReplay(tx, {
-      ...input,
-      workflowId: read.workflowId,
-      planId: read.planId
-    });
-  });
-}
-async function readWorkflowOperationReplayBeforeProof(context, read, input) {
-  return withExecutionReadTransaction(context, (tx) => {
-    assertAuthorityGeneration(tx, {
-      referenceStoreId: read.referenceStoreId,
-      referenceEpoch: read.referenceEpoch,
-      target: { workflowId: read.workflowId }
-    });
-    resolveWorkflowSession(tx, read);
-    const replay = readOperationReplay(tx, {
-      ...input,
-      workflowId: read.workflowId,
-      planId: null,
-      token: { kind: "root", key: [] }
-    });
-    if (replay === null)
-      return null;
-    return { replay, storeId: tx.storeId, epoch: tx.epoch, revision: requireWorkflowState(tx, read.workflowId).revision };
-  }, "a workflow transition requires an active authority");
-}
-function readOperationReplay(tx, input) {
-  const recorded = readCommittedOperation(tx.db, tx.epoch, input.operationId);
-  if (recorded === null)
-    return null;
-  const legacyHashes = input.legacyRequestHash === undefined || input.legacyRequestHash === null ? [] : Array.isArray(input.legacyRequestHash) ? input.legacyRequestHash : [input.legacyRequestHash];
-  if (recorded.requestHash !== input.requestHash && !legacyHashes.includes(recorded.requestHash)) {
-    const problem = {
-      component: "operation",
-      path: "operationId",
-      code: "execution.operation-conflict",
-      sourcesTried: [
-        `execution_operations(epoch ${tx.epoch}, ${JSON.stringify(input.operationId)})`,
-        "the requested operation's semantic selection"
-      ],
-      currentFacts: [
-        `operation id ${JSON.stringify(input.operationId)} is committed for workflow ${recorded.workflowId} ` + `with request fingerprint ${recorded.requestHash}`,
-        `the requested operation's fingerprint is ${input.requestHash}`
-      ],
-      needed: "retry the committed request unchanged (an operation id is an idempotency key, not a reusable slot), or use a " + "new operation id for the new effect",
-      withheldEffect: "the requested effect, exactly as sent: no state was restored from the committed receipt either",
-      availableWork: [
-        `read the current state of workflow ${recorded.workflowId}`,
-        "retry the committed request unchanged under its own operation id",
-        "express the new effect under a new operation id"
-      ]
-    };
-    throw new ExecutionError("execution.operation-conflict", `operation id ${JSON.stringify(input.operationId)} is already committed on this store epoch for a different semantic ` + `request (its addressed record, caller or business payload). An operation id is an idempotency key, not a reusable ` + `slot — retry the committed request unchanged or use a new id. Nothing was written.`, {
-      component: problem.component,
-      path: problem.path,
-      operation_id: input.operationId,
-      recorded_fingerprint: recorded.requestHash,
-      requested_fingerprint: input.requestHash,
-      sources_tried: problem.sourcesTried,
-      current_facts: problem.currentFacts,
-      available_work: problem.availableWork,
-      recoveryFacts: unresolvedRecovery({
-        target: { workflowId: input.workflowId, ...input.planId === null ? {} : { planId: input.planId } },
-        unresolved: [problem]
-      })
-    });
-  }
-  const receipt = readCommittedReceipt(recorded, tx, input.operationId, input.workflowId, input.token);
-  return { ...receipt, operationId: input.operationId, replayed: true };
-}
-function writePlanOperationReceipt(tx, input) {
-  writeOperationReceipt(tx, input);
-}
-function receiptFacts(receipt) {
-  return {
-    ...receipt.operationRecovery === undefined ? {} : { operationRecovery: receipt.operationRecovery },
-    ...receipt.actor_session_id === undefined ? {} : { actor_session_id: receipt.actor_session_id },
-    ...receipt.reason === undefined ? {} : { reason: receipt.reason },
-    ...receipt.holder_live_warning === undefined ? {} : { holder_live_warning: receipt.holder_live_warning }
-  };
-}
-function writeOperationReceipt(tx, input) {
-  tx.db.prepare("insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " + "values (?, ?, ?, ?, ?, ?, ?, ?)").run(tx.epoch, input.operationId, input.requestHash, tx.storeId, input.workflowId, input.planId, JSON.stringify(input.slim === true ? { slim: true, token: input.receipt.token, storeId: tx.storeId, epoch: tx.epoch, ...receiptFacts(input.receipt) } : input.receipt), input.now);
-}
-function pruneWorkflowOperationReceipts(tx, workflowId, keepOperationId) {
-  tx.db.prepare("delete from execution_operations where workflow_id = ? and (epoch != ? or operation_id != ?)").run(workflowId, tx.epoch, keepOperationId);
-}
-function resolvePlanRead(caller, session, planId) {
-  if (!isPlainObject(session))
-    throw invalidInput("Invalid plan read: provide an execution session reference. Inspect workflow authority with mstar status validate.");
-  const { storeId, epoch, workflowId, role, sessionId } = session;
-  if (!isNonEmptyString(storeId) || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= 0 || !isNonEmptyString(workflowId) || !isNonEmptyString(sessionId) || role !== "coordinator") {
-    throw invalidInput("Invalid coordinator session reference: provide storeId, positive epoch, workflowId, role, and sessionId. Inspect workflow authority with mstar status validate.");
-  }
-  if (!isNonEmptyString(planId))
-    throw invalidInput("Invalid plan read: provide the explicit plan id. Inspect workflow rows with mstar status validate.");
-  if (caller.role !== "coordinator" || caller.sessionId !== sessionId || caller.workflowId !== workflowId) {
-    throw new CoordinationError("coordination.identity-mismatch", "Trusted caller does not match the coordinator session reference. Inspect workflow authority with mstar status validate.");
-  }
-  return { workflowId, role, sessionId, planId, referenceStoreId: storeId, referenceEpoch: epoch };
-}
-async function bindExecutionSession(context, input) {
-  const bind = resolveBindRequest(context.caller, input);
-  const requestHash2 = bindSessionRequestHash(context.caller, bind, input.expected);
-  return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; binding a session requires an active authority. ` + `A staged store is inspectable only through migration diagnostics.`);
-    }
-    const recorded = readCommittedOperation(tx.db, tx.epoch, bind.operationId);
-    if (recorded !== null) {
-      if (recorded.requestHash !== requestHash2) {
-        throw new ExecutionError("execution.operation-conflict", `operation id ${JSON.stringify(bind.operationId)} is already committed on this store epoch for a different request. ` + `An operation id is an idempotency key, not a reusable slot — retry the committed request unchanged, or express the ` + `new effect under a new operation id. Nothing was bound.`, { operation_id: bind.operationId, recorded_fingerprint: recorded.requestHash, requested_fingerprint: requestHash2 });
-      }
-      const receipt2 = readCommittedReceipt(recorded, tx, bind.operationId, bind.workflowId, {
-        kind: "session",
-        key: [bind.workflowId, "coordinator", bind.sessionId]
-      });
-      assertReferenceAuthority(tx, receipt2.data.storeId, receipt2.data.epoch);
-      liveSession(tx, { workflowId: bind.workflowId, role: "coordinator", sessionId: bind.sessionId });
-      return { ...receipt2, operationId: bind.operationId, replayed: true };
-    }
-    const header = readWorkflowHeaderRow(tx.db, bind.workflowId);
-    const expected = input.expected ?? executionToken("workflow", tx.storeId, tx.epoch, [bind.workflowId], header.revision);
-    assertExecutionToken(expected, {
-      kind: "workflow",
-      storeId: tx.storeId,
-      epoch: tx.epoch,
-      key: [bind.workflowId],
-      revision: header.revision
-    });
-    const view = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);
-    if (view.state.status !== "running") {
-      throw new CoordinationError("coordination.invalid-transition", "Coordinator session binding requires a running workflow lifecycle. Inspect current workflow state with mstar status validate.", { workflow_id: bind.workflowId, status: view.state.status });
-    }
-    const rows = readSessionRows(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);
-    const live = rows.find((row) => row.state === "active" && row.ref.epoch === tx.epoch);
-    if (live !== undefined) {
-      throw sessionBindRefusal({
-        code: "coordination.identity-mismatch",
-        detail: `workflow ${bind.workflowId} already holds the ACTIVE coordinator session ${JSON.stringify(live.ref.sessionId)} at ` + `epoch ${tx.epoch}. Ownership is not replaceable by a bind: resume that holder's own binding, or run ` + `recoverExecutionCoordinator naming ${JSON.stringify(live.ref.sessionId)} with its stop/reload attestation. Nothing was bound.`,
-        workflowId: bind.workflowId,
-        sessionId: bind.sessionId,
-        holder: live.ref.sessionId,
-        holderEpoch: live.ref.epoch,
-        facts: { holder: live.ref.sessionId, holder_epoch: live.ref.epoch, current_epoch: tx.epoch }
-      });
-    }
-    const mine = rows.find((row) => row.ref.sessionId === bind.sessionId);
-    if (mine !== undefined && (mine.state !== "active" || mine.ref.epoch !== tx.epoch)) {
-      throw sessionBindRefusal({
-        code: "execution.session-unavailable",
-        detail: `workflow ${bind.workflowId} records session ${JSON.stringify(bind.sessionId)} in state ${mine.state} at epoch ` + `${mine.ref.epoch}; the current epoch is ${tx.epoch}. A suspended, revoked or epoch-invalidated binding is never revived ` + `by a normal bind — run recoverExecutionCoordinator, which takes the workflow token, an operation id, a reason and the ` + `prior holder ${JSON.stringify(bind.sessionId)} with its stop/reload attestation. Nothing was bound.`,
-        workflowId: bind.workflowId,
-        sessionId: bind.sessionId,
-        holder: bind.sessionId,
-        holderEpoch: mine.ref.epoch,
-        facts: { row_state: mine.state, row_epoch: mine.ref.epoch, current_epoch: tx.epoch }
-      });
-    }
-    if (header.creatorSessionId !== null && header.creatorSessionId !== bind.sessionId) {
-      const recorded2 = rows[0];
-      throw sessionBindRefusal({
-        code: "coordination.identity-mismatch",
-        detail: `workflow ${bind.workflowId} was created by session ${JSON.stringify(header.creatorSessionId)}; the trusted caller is ` + `${JSON.stringify(bind.sessionId)}. A coordinator session binds only through the creating identity` + (recorded2 === undefined ? `, and this workflow records NO coordinator session row to recover — its supported route is recoverExecutionCoordinator ` + `with priorSessionId: null, a reason and a valid activation attestation` : `, or through recoverExecutionCoordinator naming the recorded coordinator ${JSON.stringify(recorded2.ref.sessionId)} ` + `(epoch ${recorded2.ref.epoch}) with stop attestation`) + `. Nothing was bound.`,
-        workflowId: bind.workflowId,
-        sessionId: bind.sessionId,
-        holder: recorded2 === undefined ? null : recorded2.ref.sessionId,
-        holderEpoch: recorded2 === undefined ? tx.epoch : recorded2.ref.epoch,
-        facts: {
-          creator_session_id: header.creatorSessionId,
-          caller_session_id: bind.sessionId,
-          recorded_coordinator_rows: rows.length
-        }
-      });
-    }
-    if (header.creatorSessionId === null) {
-      if (rows.length > 0) {
-        const recorded2 = rows[0];
-        throw sessionBindRefusal({
-          code: "coordination.identity-mismatch",
-          detail: `workflow ${bind.workflowId} records ${String(rows.length)} coordinator session row(s) while its creator identity is ` + `unset, so first-bind adoption is unavailable — use recoverExecutionCoordinator naming the recorded coordinator ` + `${JSON.stringify(recorded2.ref.sessionId)} (epoch ${recorded2.ref.epoch}) with its stop/reload attestation, the current ` + `workflow token, an operation id, a reason and a valid activation attestation. Nothing was bound.`,
-          workflowId: bind.workflowId,
-          sessionId: bind.sessionId,
-          holder: recorded2.ref.sessionId,
-          holderEpoch: recorded2.ref.epoch,
-          facts: { coordinator_rows: rows.length }
-        });
-      }
-      tx.db.prepare("update execution_workflows set creator_session_id = ? where workflow_id = ?").run(bind.sessionId, bind.workflowId);
-    }
-    const now = new Date().toISOString();
-    const address = { workflowId: bind.workflowId, role: "coordinator", sessionId: bind.sessionId };
-    writeExecutionSession(tx.db, { workflowId: bind.workflowId, address, epoch: tx.epoch, now });
-    advanceWorkflowHeaderRevision(tx, { workflowId: bind.workflowId, now });
-    const data = {
-      storeId: tx.storeId,
-      epoch: tx.epoch,
-      workflowId: bind.workflowId,
-      role: "coordinator",
-      sessionId: bind.sessionId
-    };
-    const receipt = {
-      data,
-      token: executionToken("session", tx.storeId, tx.epoch, [bind.workflowId, "coordinator", bind.sessionId], 1),
-      storeId: tx.storeId,
-      epoch: tx.epoch
-    };
-    writeOperationReceipt(tx, { operationId: bind.operationId, requestHash: requestHash2, workflowId: bind.workflowId, planId: null, receipt, now });
-    return { ...receipt, operationId: bind.operationId, replayed: false };
-  });
-}
-function sessionBindRefusal(input) {
-  const problem = {
-    component: "session",
-    path: "session",
-    code: input.code,
-    sourcesTried: [`the coordinator session rows of workflow ${JSON.stringify(input.workflowId)}, read in this transaction`],
-    currentFacts: [input.detail],
-    needed: input.holder === null ? `the supported route for a workflow with no recorded coordinator row: recoverExecutionCoordinator with priorSessionId: null, ` + `a non-empty reason and a valid activation attestation, or — while the workflow is still unbound — a bind by the creating identity` : `the supported coordinator recovery: run recoverExecutionCoordinator naming the RECORDED coordinator ` + `${JSON.stringify(input.holder)} (epoch ${input.holderEpoch}) with its stop/reload attestation, or resume that holder's own ` + `live reference while it is current`,
-    withheldEffect: "the session binding and its revision: authority was withheld, so no row, revision or receipt changed under this operation",
-    availableWork: input.holder === null ? [
-      `run recoverExecutionCoordinator with priorSessionId: null once the workflow needs a new coordinator`,
-      "independent operations on other workflows continue"
-    ] : [
-      `resume the recorded coordinator's own binding through resumeExecutionSession while its row is current`,
-      `run recoverExecutionCoordinator for that recorded holder once its stop/reload is attested`,
-      "independent operations on other workflows continue"
-    ]
-  };
-  return new ExecutionError("execution.session-unavailable", input.detail, {
-    component: problem.component,
-    path: problem.path,
-    workflow_id: input.workflowId,
-    session_id: input.sessionId,
-    ...input.holder === null ? {} : { holder: input.holder },
-    ...input.facts,
-    sources_tried: problem.sourcesTried,
-    current_facts: problem.currentFacts,
-    needed: problem.needed,
-    available_work: problem.availableWork,
-    recoveryFacts: unresolvedRecovery({ target: { workflowId: input.workflowId }, unresolved: [problem] })
-  });
-}
-function readExecutionPlanWitness(tx, read) {
-  assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
-  const live = liveSession(tx, {
-    workflowId: read.workflowId,
-    role: "coordinator",
-    sessionId: read.sessionId
-  });
-  const workflow = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, read.workflowId);
-  const view = workflow.plans.find((candidate) => candidate.plan.id === read.planId);
-  const token = workflow.planTokens[read.planId];
-  if (view === undefined || token === undefined) {
-    throw new CoordinationError("coordination.plan-not-found", "The addressed workflow holds no matching plan. Inspect plan rows with mstar status validate.", { workflow_id: read.workflowId, plan_id: read.planId });
-  }
-  return {
-    workflowId: read.workflowId,
-    planId: read.planId,
-    view,
-    siblings: workflow.plans.filter((candidate) => candidate.plan.id !== read.planId),
-    token,
-    revision: parseExecutionToken(token).revision,
-    workflowToken: workflow.workflowToken,
-    session: live.ref
-  };
-}
-function resolveWorkflowWrite(caller, session, workflowId) {
-  if (caller?.role !== "coordinator")
-    throw new ExecutionError("execution.scope-mismatch", "workflow writes require the coordinator identity");
-  if (!isNonEmptyString(caller.sessionId))
-    throw invalidInput("Invalid execution caller: provide a non-empty session identity. Inspect workflow authority with mstar status validate.");
-  if (!isNonEmptyString(workflowId))
-    throw invalidInput("Invalid workflow operation: provide the non-empty workflow id it addresses. Inspect registered workflows with mstar status validate.");
-  if (!isPlainObject(session))
-    throw invalidInput("Invalid workflow operation: provide an execution session reference. Inspect workflow authority with mstar status validate.");
-  const { storeId, epoch, workflowId: boundWorkflowId, role, sessionId } = session;
-  if (!isNonEmptyString(storeId) || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= 0 || !isNonEmptyString(boundWorkflowId) || !isNonEmptyString(sessionId) || role !== "coordinator") {
-    throw invalidInput("Invalid workflow operation: provide a valid coordinator session reference. Inspect workflow authority with mstar status validate.");
-  }
-  if (caller.sessionId !== sessionId || caller.workflowId !== boundWorkflowId) {
-    throw new ExecutionError("execution.scope-mismatch", "the trusted caller does not match the supplied coordinator reference");
-  }
-  if (caller.workflowId !== workflowId)
-    throw new ExecutionError("execution.scope-mismatch", "the caller does not own the addressed workflow");
-  return { workflowId, sessionId, referenceStoreId: storeId, referenceEpoch: epoch };
-}
-function resolveWorkflowSession(tx, read) {
-  assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
-  return liveSession(tx, { workflowId: read.workflowId, role: "coordinator", sessionId: read.sessionId }).ref;
-}
-function readExecutionWorkflowWitness(tx, read) {
-  const session = resolveWorkflowSession(tx, read);
-  const registered = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(read.workflowId);
-  if (registered === undefined) {
-    throw new CoordinationError("coordination.workflow-not-found", `workflow ${read.workflowId} is not registered as an ACTIVE lifecycle — a terminal or unregistered workflow stays ` + `as history and is never amended`, { workflow_id: read.workflowId });
-  }
-  const view = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, read.workflowId);
-  return {
-    workflowId: read.workflowId,
-    view,
-    token: view.workflowToken,
-    revision: parseExecutionToken(view.workflowToken).revision,
-    session
-  };
-}
-async function readExecutionPlan(context, sessionOrPlanId, addressedPlanId) {
-  const planId = typeof sessionOrPlanId === "string" ? sessionOrPlanId : addressedPlanId;
-  if (!isNonEmptyString(planId))
-    throw invalidInput("Invalid plan read: provide the plan id it selects. Inspect plan rows with mstar status validate.");
-  const session = typeof sessionOrPlanId === "string" ? (await readOwnExecutionSession(context)).data : sessionOrPlanId;
-  const read = resolvePlanRead(context.caller, session, planId);
-  return withExecutionReadTransaction(context, (tx) => {
-    const witness = readExecutionPlanWitness(tx, read);
-    return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
-  });
-}
-async function readExecutionSession(context, session) {
-  if (!isPlainObject(session) || !isNonEmptyString(session.storeId) || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) {
-    throw invalidInput("Invalid execution session reference: provide a store id and positive safe-integer epoch. Inspect workflow authority with mstar status validate.");
-  }
-  if (session.workflowId !== context.caller.workflowId || session.role !== context.caller.role || session.sessionId !== context.caller.sessionId) {
-    throw new CoordinationError("coordination.identity-mismatch", "Trusted caller does not independently match the supplied execution session reference. Inspect workflow authority with mstar status validate.");
-  }
-  return withExecutionReadTransaction(context, (tx) => {
-    assertReferenceAuthority(tx, session.storeId, session.epoch);
-    const live = liveSession(tx, {
-      workflowId: session.workflowId,
-      role: "coordinator",
-      sessionId: session.sessionId
-    });
-    return {
-      data: live.ref,
-      token: executionToken("session", tx.storeId, tx.epoch, [live.ref.workflowId, live.ref.role, live.ref.sessionId], live.revision),
-      storeId: tx.storeId,
-      epoch: tx.epoch
-    };
-  });
-}
-function ownSessionAddress(caller) {
-  if (!isPlainObject(caller) || !isNonEmptyString(caller.sessionId) || !isNonEmptyString(caller.workflowId)) {
-    throw invalidInput("Coordinator session reconstruction requires workflowId and sessionId from the trusted caller. Inspect workflow authority with mstar status validate.");
-  }
-  if (caller.role !== "coordinator") {
-    throw invalidInput("Invalid execution session role: expected coordinator. Inspect workflow authority with mstar status validate.");
-  }
-  return { workflowId: caller.workflowId, role: "coordinator", sessionId: caller.sessionId };
-}
-function unresolvedOwnSession(address, rows) {
-  const holder = rows.find((row) => row.state === "active");
-  const code2 = holder === undefined ? "coordination.session-not-found" : "coordination.identity-mismatch";
-  const currentFacts = [
-    `the trusted caller is coordinator session ${address.sessionId} of workflow ${address.workflowId}`,
-    holder === undefined ? `workflow ${address.workflowId} records no coordinator session ${address.sessionId} and holds no ACTIVE coordinator session` : `workflow ${address.workflowId} holds an ACTIVE coordinator session at epoch ${holder.ref.epoch}`
-  ];
-  const problem = {
-    component: "session",
-    path: "session",
-    code: code2,
-    sourcesTried: [
-      `execution_sessions rows of workflow ${address.workflowId} for role coordinator`,
-      "the trusted caller identity (workflow, role, session)"
-    ],
-    currentFacts,
-    needed: holder === undefined ? `a binding this identity can resume: bind coordinator session ${address.sessionId} to workflow ${address.workflowId}` : `the stop/recovery decision for the live coordinator: the named coordinator recovery with ` + `stop evidence for that holder`,
-    withheldEffect: `only this identity's own session binding and reference — no row was written, and the coordinator scope of ` + `workflow ${address.workflowId} is never taken over by another name here`,
-    availableWork: [
-      `read the state of workflow ${address.workflowId} and every plan row it holds`,
-      ...holder === undefined ? ["establish an authorized coordinator binding for the caller identity"] : [
-        "continue the active holder's own binding from that holder's identity",
-        "complete the registered coordinator-recovery flow after the holder stop is attested"
-      ]
-    ]
-  };
-  throw new CoordinationError(code2, "The caller has no usable coordinator session binding. Inspect workflow state with mstar status validate.", {
-    component: problem.component,
-    path: problem.path,
-    workflow_id: address.workflowId,
-    role: address.role,
-    session_id: address.sessionId,
-    ...holder === undefined ? {} : { holder_epoch: holder.ref.epoch },
-    sources_tried: problem.sourcesTried,
-    current_facts: problem.currentFacts,
-    available_work: problem.availableWork,
-    recoveryFacts: unresolvedRecovery({
-      target: { workflowId: address.workflowId },
-      unresolved: [problem],
-      resolvedFrom: [
-        { path: "workflowId", source: "caller.identity" },
-        { path: "role", source: "caller.identity" },
-        { path: "sessionId", source: "caller.identity" }
-      ]
-    })
-  });
-}
-async function readOwnExecutionSession(context) {
-  const address = ownSessionAddress(context?.caller);
-  return withExecutionReadTransaction(context, (tx) => {
-    const store = { storeId: tx.storeId, epoch: tx.epoch };
-    const rows = readSessionRows(tx.db, store, address.workflowId);
-    if (rows.every((row) => row.ref.sessionId !== address.sessionId))
-      unresolvedOwnSession(address, rows);
-    const live = liveSession(tx, address);
-    return {
-      data: live.ref,
-      token: executionToken("session", tx.storeId, tx.epoch, [live.ref.workflowId, live.ref.role, live.ref.sessionId], live.revision),
-      storeId: tx.storeId,
-      epoch: tx.epoch
-    };
-  });
-}
 var ExecutionError;
 var KIND_KEY_LENGTHS;
 var TOKEN_PREFIX = "exec-v1";
@@ -13670,8 +10957,6 @@ var BASE64URL_RE;
 var TOKEN_KEY_DECODER;
 var ownedTransactions;
 var OPERATION_ID_RE;
-var CREATE_WORKFLOW_OPERATION = "createExecutionWorkflow";
-var BIND_SESSION_OPERATION = "bindExecutionSession";
 var EXECUTION_SESSION_STATES;
 var init_execution_store = __esm(() => {
   init_coordination();
@@ -13710,171 +10995,10 @@ var init_execution_store = __esm(() => {
   OPERATION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
   EXECUTION_SESSION_STATES = ["active", "suspended", "revoked"];
 });
-function assertSafeSessionId(value, what = "session id") {
-  if (!isNonEmptyString(value)) {
-    throw new CoordinationError("coordination.invalid-session-id", "Invalid public session id: provide one safe path component using [A-Za-z0-9._-], at most 128 characters. Inspect coordinator identity with mstar status validate.", { form: typeof value, field: what });
-  }
-  if (value.length > SESSION_ID_MAX_LENGTH) {
-    throw new CoordinationError("coordination.invalid-session-id", "Invalid public session id: the value exceeds 128 characters and is not echoed. Inspect coordinator identity with mstar status validate.", { length: value.length, max_length: SESSION_ID_MAX_LENGTH, field: what });
-  }
-  try {
-    assertSafePathComponent(value, what);
-  } catch {
-    throw new CoordinationError("coordination.invalid-session-id", `${what} is not a safe path component — a single safe path component ([A-Za-z0-9._-]+) of at most ` + `${SESSION_ID_MAX_LENGTH} characters, not "", ".", ".." or a value containing "/" or "\\"; the rejected value is not echoed in this diagnostic`, { length: value.length });
-  }
-  return value;
-}
-function isRole(value) {
-  return value === "coordinator";
-}
-function isSource(value) {
-  return value === "host" || value === "local";
-}
-function validateExecutionIdentity(identity, scope, options = {}) {
-  if (!isPlainObject(identity)) {
-    throw new CoordinationError("coordination.identity-missing", "Invalid execution identity: provide the identity tuple. Inspect coordinator identity with mstar status validate.");
-  }
-  const value = identity;
-  assertExactKeys(value, ["source", "sessionId", "workflowId", "role", ...value.leafSeat === true ? ["leafSeat"] : []], "execution identity");
-  if (value.leafSeat === true) {
-    throw new CoordinationError("coordination.leaf-seat", 'the execution identity attests a leaf/delegated seat (session header origin "subagent" or a delegationDepth > 0); ' + "a leaf seat cannot mint or mutate a workflow coordinator registration, even under an ambient identity that would " + "otherwise satisfy the call. Recovery: the non-leaf coordinating session must acquire its own identity and perform " + "the registration; this seat continues with its permitted actions (issue.*, plan.prepare, plan.progress and the reads).", { leaf_seat: true });
-  }
-  if (!isSource(value.source)) {
-    const missing = value.source === undefined || value.source === null;
-    throw new CoordinationError(missing ? "coordination.identity-missing" : "coordination.identity-mismatch", missing ? "the execution identity carries no provenance source — an adapter states `host` or `local`, and it is never inferred" : `the execution identity source ${JSON.stringify(value.source)} is not \`host\` or \`local\``, { source: value.source });
-  }
-  if (!isNonEmptyString(value.workflowId)) {
-    throw new CoordinationError("coordination.identity-missing", "Invalid execution identity: provide a workflow id. Inspect registered workflows with mstar status validate.", { workflow_id: value.workflowId });
-  }
-  if (!isNonEmptyString(value.sessionId)) {
-    if (!(options.allowUnsetSessionId === true && typeof value.sessionId === "string")) {
-      throw new CoordinationError("coordination.identity-missing", "the execution identity carries no session id — an identity is acquired explicitly and is never generated; " + "supply a native or local id (CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: the host must pass sessionId per call)", { workflow_id: value.workflowId });
-    }
-  }
-  if (isNonEmptyString(value.sessionId))
-    assertSafeSessionId(value.sessionId);
-  if (!isRole(value.role)) {
-    throw new CoordinationError("coordination.identity-mismatch", "Invalid execution identity role; expected coordinator. Inspect the recorded identity with mstar status validate.", { expected: "coordinator", actual: value.role });
-  }
-  const role = value.role;
-  if (value.workflowId !== scope.workflowId) {
-    throw new CoordinationError("coordination.identity-mismatch", "Execution identity does not address the expected workflow. Inspect the recorded identity with mstar status validate.", { expected: scope.workflowId, actual: value.workflowId });
-  }
-  if (role !== scope.role) {
-    throw new CoordinationError("coordination.identity-mismatch", "Execution identity role does not match the expected seat. Inspect the recorded identity with mstar status validate.", { expected: scope.role, actual: role });
-  }
-}
-var SESSION_ID_MAX_LENGTH = 128;
 var init_session_identity = __esm(() => {
   init_coordination_write();
   init_path();
 });
-var exports_execution_session = {};
-__export(exports_execution_session, {
-  assertExecutionSessionCurrent: () => assertExecutionSessionCurrent,
-  createLocalExecutionIdentity: () => createLocalExecutionIdentity,
-  decodeExecutionSessionRef: () => decodeExecutionSessionRef,
-  encodeExecutionSessionRef: () => encodeExecutionSessionRef,
-  executionContextFor: () => executionContextFor,
-  resumeExecutionSession: () => resumeExecutionSession
-});
-function scopeOf(scope) {
-  return { workflowId: scope.workflowId, role: scope.role };
-}
-function assertRefShape(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new ExecutionError("execution.canonical-value", "an execution session reference must be an object");
-  }
-  const record = value;
-  const keys = Object.keys(record).sort();
-  if (keys.length !== SESSION_KEYS.length || keys.some((key, index2) => key !== [...SESSION_KEYS].sort()[index2])) {
-    throw new ExecutionError("execution.canonical-value", "an execution session reference has unknown or missing fields");
-  }
-  if (typeof record.storeId !== "string" || record.storeId.length === 0 || typeof record.workflowId !== "string" || record.workflowId.length === 0) {
-    throw new ExecutionError("execution.canonical-value", "an execution session reference has empty identity fields");
-  }
-  if (typeof record.epoch !== "number" || !Number.isSafeInteger(record.epoch) || record.epoch <= 0) {
-    throw new ExecutionError("execution.canonical-value", "an execution session reference has an invalid epoch");
-  }
-  if (record.role !== "coordinator") {
-    throw new ExecutionError("execution.canonical-value", "an execution session reference has an unknown role");
-  }
-  assertSafeSessionId(record.sessionId, "execution session reference session id");
-}
-function createLocalExecutionIdentity(scope) {
-  const identity = { source: "local", sessionId: randomUUID3(), ...scope };
-  validateExecutionIdentity(identity, scopeOf(scope));
-  assertSafeSessionId(identity.sessionId);
-  return identity;
-}
-function executionContextFor(context, identity, options = {}) {
-  const caller = {
-    sessionId: isNonEmptyString(identity.sessionId) ? identity.sessionId : "",
-    workflowId: identity.workflowId,
-    role: identity.role
-  };
-  validateExecutionIdentity({ ...identity, sessionId: caller.sessionId }, scopeOf(identity), options);
-  if (caller.sessionId !== "")
-    assertSafeSessionId(caller.sessionId);
-  return {
-    ...context,
-    caller
-  };
-}
-function encodeExecutionSessionRef(ref) {
-  assertRefShape(ref);
-  const bytes = serializeExecutionValue(ref);
-  return `${SESSION_WIRE_PREFIX}${Buffer.from(bytes, "utf8").toString("base64url")}`;
-}
-function decodeExecutionSessionRef(wire) {
-  if (typeof wire !== "string" || !wire.startsWith(SESSION_WIRE_PREFIX)) {
-    throw new ExecutionError("execution.canonical-value", "an execution session reference has an invalid wire prefix");
-  }
-  let text4;
-  try {
-    const encoded = wire.slice(SESSION_WIRE_PREFIX.length);
-    if (encoded.length === 0 || !/^[A-Za-z0-9_-]+$/.test(encoded) || encoded.length % 4 === 1)
-      throw new Error("invalid base64url");
-    const padded = encoded.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - encoded.length % 4) % 4);
-    const bytes = Buffer.from(padded, "base64");
-    text4 = SESSION_DECODER.decode(bytes);
-  } catch {
-    throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid UTF-8 base64url");
-  }
-  let value;
-  try {
-    value = JSON.parse(text4);
-  } catch {
-    throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid JSON");
-  }
-  assertRefShape(value);
-  return value;
-}
-async function resumeExecutionSession(context, ref) {
-  if (ref === undefined || ref === null)
-    return readOwnExecutionSession(context);
-  assertRefShape(ref);
-  if (context.caller.sessionId !== ref.sessionId || context.caller.workflowId !== ref.workflowId || context.caller.role !== ref.role) {
-    throw new ExecutionError("execution.scope-mismatch", "the independently acquired caller does not match the session reference");
-  }
-  return readExecutionSession(context, ref);
-}
-function assertExecutionSessionCurrent(context, session) {
-  assertRefShape(session);
-  if (context.caller.sessionId !== session.sessionId || context.caller.workflowId !== session.workflowId || context.caller.role !== session.role) {
-    throw new ExecutionError("execution.scope-mismatch", "the current caller does not match the execution session");
-  }
-  withExecutionReadGuard(context, (db, authority) => {
-    if (authority.storeId !== session.storeId || authority.epoch !== session.epoch) {
-      throw new ExecutionError("store.stale-epoch", "the execution session reference is not current");
-    }
-    const row = db.prepare("select epoch, state from execution_sessions where workflow_id = ? and role = ? and session_id = ?").get(session.workflowId, session.role, session.sessionId);
-    if (row?.state !== "active" || row.epoch !== session.epoch) {
-      throw new ExecutionError("execution.session-unavailable", "the execution session is not the active current binding");
-    }
-  });
-}
-var SESSION_WIRE_PREFIX = "exec-session-v1:";
 var SESSION_DECODER;
 var SESSION_KEYS;
 var init_execution_session = __esm(() => {
@@ -14919,11 +12043,6 @@ function resolvePlanDir(harnessDir) {
     return dir;
   return join14(dir, "plans");
 }
-function assertSafePathComponent(value, what) {
-  if (value === "" || value === "." || value === ".." || !/^[A-Za-z0-9._-]+$/.test(value)) {
-    throw new Error(`${what} must be a single safe path component ([A-Za-z0-9._-]+; not "", ".", "..", or containing "/" or "\\") — got ${JSON.stringify(value)}`);
-  }
-}
 function resolveIterationDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "iterationDir");
   if (declared !== null)
@@ -15111,15 +12230,6 @@ function rowValidationRoute(snapshot, row) {
   }
   return "integration";
 }
-function stableJson(value) {
-  if (Array.isArray(value))
-    return `[${value.map(stableJson).join(",")}]`;
-  if (isPlainObject(value)) {
-    const keys = Object.keys(value).sort();
-    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "undefined";
-}
 function violation8(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
@@ -15137,46 +12247,46 @@ function validateWorktreePathValue(violations, value, field) {
 }
 function deliveryEvidenceViolations(value, what) {
   const violations = [];
-  const invalid3 = (message) => {
+  const invalid2 = (message) => {
     violations.push(violation8("medium", "workflow.snapshot.invalid-delivery-evidence", `${what}: ${message}`));
   };
   if (!isPlainObject(value)) {
-    invalid3("must be an object");
+    invalid2("must be an object");
     return violations;
   }
   const members = ["compound", "merge"];
   const unknownMembers = Object.keys(value).filter((key) => !members.includes(key));
   if (unknownMembers.length > 0)
-    invalid3(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
+    invalid2(`unknown member(s) ${unknownMembers.join(", ")} — expected ${members.join(" | ")}`);
   const compound = value.compound;
   if (compound !== undefined) {
     if (!isPlainObject(compound))
-      invalid3("compound must be an object");
+      invalid2("compound must be an object");
     else {
       const unknown = Object.keys(compound).filter((key) => key !== "outcome" && key !== "reason");
       if (unknown.length > 0)
-        invalid3(`compound has unknown key(s) ${unknown.join(", ")}`);
+        invalid2(`compound has unknown key(s) ${unknown.join(", ")}`);
       if (typeof compound.outcome !== "string" || !WORKFLOW_COMPOUND_OUTCOMES.includes(compound.outcome)) {
-        invalid3(`compound.outcome must be one of ${WORKFLOW_COMPOUND_OUTCOMES.join(" | ")} — got ${JSON.stringify(compound.outcome)}`);
+        invalid2(`compound.outcome must be one of ${WORKFLOW_COMPOUND_OUTCOMES.join(" | ")} — got ${JSON.stringify(compound.outcome)}`);
       } else if (compound.outcome === "skipped" && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
-        invalid3("compound reason is required when the disposition outcome is 'skipped' (contract §4c)");
+        invalid2("compound reason is required when the disposition outcome is 'skipped' (contract §4c)");
       } else if (compound.reason !== undefined && (typeof compound.reason !== "string" || compound.reason.trim() === "")) {
-        invalid3("compound.reason must be a non-empty string when given");
+        invalid2("compound.reason must be a non-empty string when given");
       }
     }
   }
   const merge = value.merge;
   if (merge !== undefined) {
     if (!isPlainObject(merge))
-      invalid3("merge must be an object");
+      invalid2("merge must be an object");
     else {
       const unknown = Object.keys(merge).filter((key) => key !== "commit");
       if (unknown.length > 0)
-        invalid3(`merge has unknown key(s) ${unknown.join(", ")} — expected commit`);
+        invalid2(`merge has unknown key(s) ${unknown.join(", ")} — expected commit`);
       else if (merge.commit === undefined) {
-        invalid3("merge must record its commit — an empty merge carries no fact; record a full commit id, or omit the member when the delivery branch tip is contained in the registered target");
+        invalid2("merge must record its commit — an empty merge carries no fact; record a full commit id, or omit the member when the delivery branch tip is contained in the registered target");
       } else if (typeof merge.commit !== "string" || !DELIVERY_COMMIT_RE.test(merge.commit)) {
-        invalid3(`merge.commit must be a full lowercase 40- or 64-hex Git object id — got ${JSON.stringify(merge.commit)}`);
+        invalid2(`merge.commit must be a full lowercase 40- or 64-hex Git object id — got ${JSON.stringify(merge.commit)}`);
       }
     }
   }
@@ -15305,9 +12415,6 @@ function validateWorkflowSnapshot(doc) {
     }
   }
   return { ok: violations.length === 0, violations };
-}
-function isTerminalSnapshot(doc) {
-  return WORKFLOW_TERMINAL_STATUSES.includes(doc.status);
 }
 function nonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
@@ -15482,24 +12589,6 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   }
   return resolveHarnessDir(start);
 }
-function executionInputSelection(row, planId) {
-  const selection = { plan_id: planId };
-  if (isPlainObject(row)) {
-    const metadata = isPlainObject(row.metadata) ? row.metadata : {};
-    for (const key of FROZEN_ROW_FIELDS) {
-      if (row[key] !== undefined)
-        selection[key] = row[key];
-    }
-    for (const key of FROZEN_METADATA_FIELDS) {
-      if (metadata[key] !== undefined)
-        selection[key] = metadata[key];
-    }
-  }
-  return selection;
-}
-function executionInputHash(row, planId) {
-  return createHash9("sha256").update(stableJson(executionInputSelection(row, planId)), "utf8").digest("hex");
-}
 var PERSIST_PAYLOAD_CONTRACTS;
 var EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict";
 var ExecutionPinConflictError;
@@ -15595,17 +12684,6 @@ async function loadSqliteDriver() {
   } catch (error) {
     assertStoreRuntimeSupported({ ...detectStoreRuntime(), hasSqlite: false });
     throw new StoreError("store.runtime-unsupported", `Failed to load the native "node:sqlite" module: ${error.message}`);
-  }
-}
-function loadSqliteDriverSync() {
-  try {
-    const mod = createRequire2(import.meta.url)("node:sqlite");
-    if (typeof mod.DatabaseSync !== "function")
-      throw new Error("DatabaseSync is missing");
-    return mod;
-  } catch (error) {
-    assertStoreRuntimeSupported({ ...detectStoreRuntime(), hasSqlite: false });
-    throw new StoreError("store.runtime-unsupported", `Failed to load the native "node:sqlite" module synchronously: ${error.message}`);
   }
 }
 function storeDbPath(context) {
@@ -16045,12 +13123,6 @@ function readExecutionMeta(db, schemaVersion) {
     activatedAt: row.activated_at ?? null
   };
 }
-function isOpenLevelFailure(error) {
-  const err = error;
-  if (err?.errcode === 14 || err?.errcode === 10)
-    return true;
-  return /unable to open database file|disk I\/O error/i.test(String(err?.message ?? ""));
-}
 function isRawCantOpen(error) {
   return error !== null && typeof error === "object" && "errcode" in error && error.errcode === 14;
 }
@@ -16060,86 +13132,6 @@ function isTransientReadOpenFailure(error, dbPath) {
   if (!isRawCantOpen(error))
     return false;
   return existsSync14(dbPath);
-}
-function dropProbeConnection() {
-  const current = probeConnection;
-  probeConnection = null;
-  if (current === null)
-    return;
-  try {
-    current.db.close();
-  } catch {}
-}
-function probeConnectionFor(dbPath) {
-  let dev;
-  let ino;
-  try {
-    const stats = statSync8(dbPath);
-    dev = stats.dev;
-    ino = stats.ino;
-  } catch {
-    dropProbeConnection();
-    return null;
-  }
-  const cached = probeConnection;
-  if (cached !== null && cached.dbPath === dbPath && cached.dev === dev && cached.ino === ino)
-    return cached.db;
-  dropProbeConnection();
-  const db = openConnection(dbPath, "read", loadSqliteDriverSync().DatabaseSync);
-  probeConnection = { dbPath, dev, ino, db };
-  return db;
-}
-function probeExecutionAuthority(dbPath) {
-  assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync14(dbPath)) {
-    dropProbeConnection();
-    return { kind: "absent", dbPath };
-  }
-  assertStoreRuntimeSupported();
-  let db;
-  try {
-    db = probeConnectionFor(dbPath);
-  } catch (error) {
-    dropProbeConnection();
-    if (isOpenLevelFailure(error) || isBusyError(error))
-      return { kind: "unreadable", dbPath, error };
-    return refuseOpenFailure(error, dbPath);
-  }
-  if (db === null)
-    return { kind: "absent", dbPath };
-  try {
-    const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
-    readStoreMeta(db);
-    const state = readExecutionMeta(db, schemaVersion)?.authorityState ?? null;
-    return state === "active" ? { kind: "active", dbPath } : { kind: "not-active", dbPath, state };
-  } catch (error) {
-    dropProbeConnection();
-    if (isOpenLevelFailure(error) || isBusyError(error))
-      return { kind: "unreadable", dbPath, error };
-    return refuseOpenFailure(error, dbPath);
-  }
-}
-function withExecutionReadGuard(context, body) {
-  const probe = probeExecutionAuthority(storeDbPath(context));
-  if (probe.kind === "absent") {
-    throw new StoreError("store.not-initialized", 'No execution store exists. Run "mstar harness scaffold" then "mstar store init"; for legacy state run "mstar store upgrade".');
-  }
-  if (probe.kind === "unreadable")
-    refuseOpenFailure(probe.error, probe.dbPath);
-  if (probe.kind !== "active") {
-    const recovery = probe.state === "staged" ? 'Run "mstar store activate --manifest <migration.json> --operator <name>" to finish the reviewed activation.' : 'Run "mstar store upgrade" to import legacy state and activate the authority.';
-    throw new StoreError("store.not-active", `The execution authority is ${probe.state ?? "missing"}. ${recovery}`);
-  }
-  const db = probeConnectionFor(probe.dbPath);
-  if (db === null) {
-    throw new StoreError("store.not-initialized", "The execution store disappeared before the read-only assertion.");
-  }
-  const store = db.prepare("select store_id, authority_epoch from store_meta where id = 1").get();
-  const execution = db.prepare("select authority_state from execution_meta where id = 1").get();
-  if (store === undefined || typeof store.store_id !== "string" || typeof store.authority_epoch !== "number" || execution?.authority_state !== "active") {
-    throw new StoreError("store.corrupt", "The active execution authority metadata is missing or malformed.");
-  }
-  return body(db, { storeId: store.store_id, epoch: store.authority_epoch });
 }
 async function openStore(context, mode, options = {}) {
   assertStoreRuntimeSupported();
@@ -16929,7 +13921,6 @@ var EXECUTION_TABLE_NAMES;
 var EXECUTION_MIGRATION;
 var READ_OPEN_ATTEMPTS = 5;
 var READ_OPEN_BACKOFF_MS = 5;
-var probeConnection = null;
 var dshTransactions;
 var init_store_db = __esm(() => {
   init_coordination();
@@ -17037,8 +14028,9 @@ function readOn(db, projectId) {
   if (row.project_id !== projectId || typeof row.content_markdown !== "string" || typeof row.content_hash !== "string" || !Number.isInteger(row.revision) || row.revision < 1 || typeof row.updated_at !== "string") {
     throw new RoadmapError("roadmap.corrupt", `Stored roadmap for project ${projectId} is malformed.`);
   }
+  let content3;
   try {
-    const content3 = parseRoadmapContent(row.content_markdown);
+    content3 = parseRoadmapContent(row.content_markdown);
     if (content3.frontmatter.project_id !== projectId) {
       throw new RoadmapError("roadmap.corrupt", `Stored roadmap identity does not match project ${projectId}.`);
     }
@@ -17050,7 +14042,8 @@ function readOn(db, projectId) {
   return {
     projectId,
     projectRevision: project.revision,
-    roadmap: { projectId, revision: row.revision, contentHash: row.content_hash, updatedAt: row.updated_at, contentMarkdown: row.content_markdown }
+    roadmap: { projectId, revision: row.revision, contentHash: row.content_hash, updatedAt: row.updated_at, contentMarkdown: row.content_markdown },
+    content: content3
   };
 }
 function readRoadmapAuthorityOn(db, projectId) {
@@ -17181,8 +14174,8 @@ function harnessDocKindOfTarget(targetPath) {
     return null;
   return classify(fallbackDir);
 }
-function violationLine(violation9) {
-  return `[${violation9.severity}] ${violation9.code}: ${violation9.message}${violation9.fix ? ` (fix: ${violation9.fix})` : ""}`;
+function violationLine(violation) {
+  return `[${violation.severity}] ${violation.code}: ${violation.message}${violation.fix ? ` (fix: ${violation.fix})` : ""}`;
 }
 var MAX_STATUS_CONTENT_LENGTH = 2 * 1024 * 1024;
 function oversizedViolation(filePath) {
@@ -17667,9 +14660,9 @@ function deriveCompass(iterationId, content3, relativePath) {
   } catch {
     return { diagnostic: "invalid: compass frontmatter is not parseable" };
   }
-  const gate2 = validateCompassFrontmatter(frontmatter);
-  if (!gate2.ok)
-    return { diagnostic: `invalid: ${gate2.violations.map((violation16) => violation16.code).join(", ")}` };
+  const gate = validateCompassFrontmatter(frontmatter);
+  if (!gate.ok)
+    return { diagnostic: `invalid: ${gate.violations.map((violation) => violation.code).join(", ")}` };
   const body = bodyOf(content3);
   return {
     iterationId,
@@ -17725,13 +14718,13 @@ async function captureExecutionProjectionSources(context) {
     const diagnostics = [];
     const rows = { workflows: [], plans: [], leases: [], compasses: [] };
     const recordInvalid = (sourceSpec, content3, message, readState = "ok") => {
-      const sha2564 = readState === "invalid" ? null : createHash16("sha256").update(content3, "utf8").digest("hex");
-      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "invalid", diagnostic: message, declared: true });
+      const sha256 = readState === "invalid" ? null : createHash16("sha256").update(content3, "utf8").digest("hex");
+      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256, state: "invalid", diagnostic: message, declared: true });
       diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
     };
     const record = (sourceSpec, content3, shaText = content3) => {
-      const sha2564 = createHash16("sha256").update(shaText, "utf8").digest("hex");
-      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "ok", diagnostic: null, declared: sourceSpec.declared });
+      const sha256 = createHash16("sha256").update(shaText, "utf8").digest("hex");
+      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256, state: "ok", diagnostic: null, declared: sourceSpec.declared });
     };
     const spec = (kind, rel) => ({
       source: "database",
@@ -17771,6 +14764,7 @@ async function captureExecutionProjectionSources(context) {
     const servedWorkflowById = new Map(graphWorkflows.map((workflow) => [workflow.state.id, workflow]));
     const workflows = servedWorkflowIds.length === 0 ? [] : selectWhereIn(db, (placeholders) => `select workflow_id, state_json from execution_workflows where workflow_id in (${placeholders}) order by workflow_id`, servedWorkflowIds, (id) => [id]);
     const workflowIds = new Set(workflows.map((item) => item.workflow_id));
+    const headerViolations = (state) => validateWorkflowSnapshot({ ...state, plans: [] }).violations.filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE);
     for (const item of registry) {
       if (!workflowIds.has(item.workflow_id)) {
         const sourceKey = sourceKeyOf2("root", "harness", "execution/registry");
@@ -17796,10 +14790,9 @@ async function captureExecutionProjectionSources(context) {
         continue;
       }
       const projectionState = servedWorkflow.state;
-      const workflowValidation = validateWorkflowSnapshot({ ...projectionState, plans: [] });
-      const workflowErrors = workflowValidation.violations.filter((violation16) => violation16.code !== LEGACY_WORKTREE_PATH_CODE);
+      const workflowErrors = headerViolations(projectionState);
       if (workflowErrors.length > 0) {
-        recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation16) => violation16.code).join(", ")})`);
+        recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation) => violation.code).join(", ")})`);
         continue;
       }
       record(workflowSpec, item.state_json);
@@ -17838,6 +14831,11 @@ async function captureExecutionProjectionSources(context) {
         if (!isPlainObject(state) || state.type === "iteration") {
           recordInvalid(workflowSpec, item.state_json, "invalid: terminal workflow state has an invalid object, type, or status");
         }
+        continue;
+      }
+      const terminalErrors = headerViolations(state);
+      if (terminalErrors.length > 0) {
+        recordInvalid(workflowSpec, item.state_json, `invalid: terminal workflow state failed validation (${terminalErrors.map((violation) => violation.code).join(", ")})`);
         continue;
       }
       record(workflowSpec, item.state_json);
@@ -18295,7 +15293,6 @@ async function refreshProjections(context, hooks = {}) {
   }
   return attempt.report;
 }
-init_roadmap_content();
 init_store_db();
 init_execution_store();
 init_workflow();
@@ -18972,10 +15969,18 @@ function iterationDocumentIds(db) {
     list2.sort();
   return byIteration;
 }
-function iterationMembershipPlanIds(generated, linkIds, iterationIds) {
+function compassesByIteration(generated) {
+  const byIteration = new Map;
+  for (const row of generated.compasses) {
+    if (!byIteration.has(row.iteration_id))
+      byIteration.set(row.iteration_id, row);
+  }
+  return byIteration;
+}
+function iterationMembershipPlanIds(compassByIteration, linkIds, iterationIds) {
   const merged = new Map;
   for (const iterationId of iterationIds) {
-    const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
+    const compassRow = compassByIteration.get(iterationId);
     const mergedIds = new Set([...linkIds.get(iterationId) ?? [], ...parseJsonArray(compassRow?.plans_json)]);
     merged.set(iterationId, [...mergedIds].sort());
   }
@@ -18988,11 +15993,10 @@ function executionLifecycleOf(workflowRow) {
     return "active";
   return WORKFLOW_TERMINAL_STATUSES.find((status) => status === workflowRow.status) ?? "active";
 }
-function composeIteration(iterationId, catalog, generated, planIds, documentIds, identities, projects) {
+function composeIteration(iterationId, catalog, generated, compassRow, planIds, documentIds, identities, projects) {
   const badges = [];
   if (catalog === null)
     badges.push("catalog-missing");
-  const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
   if (generated.generation === null)
     badges.push("execution-unavailable");
   const workflowRow = generated.workflows.find((row) => row.id === iterationId && row.type === "iteration");
@@ -19069,7 +16073,8 @@ function readIterationList(db, filters) {
   const membership = projectMembership(db);
   const catalogRows = db.prepare(`select ${IDENTITY_COLUMNS} from catalog_entities where kind = 'iteration' order by title asc, id asc`).all().filter((row) => projectId === null || belongsTo(membership, "iteration", row.id, projectId));
   const linkPlanIds = iterationPlanIds(db);
-  const planIds = iterationMembershipPlanIds(generated, linkPlanIds, catalogRows.map((row) => row.id));
+  const compassByIteration = compassesByIteration(generated);
+  const planIds = iterationMembershipPlanIds(compassByIteration, linkPlanIds, catalogRows.map((row) => row.id));
   const documentIds = iterationDocumentIds(db);
   const page = catalogRows.slice(offset, offset + limit);
   const identities = catalogIdentities(db, [
@@ -19078,7 +16083,7 @@ function readIterationList(db, filters) {
     ...page.flatMap((row) => (documentIds.get(row.id) ?? []).map((documentId) => ({ kind: "document", id: documentId })))
   ]);
   return {
-    items: page.map((row) => composeIteration(row.id, identities.get(identityToken("iteration", row.id)) ?? null, generated, planIds.get(row.id) ?? [], documentIds.get(row.id) ?? [], identities, [...membership.get(identityToken("iteration", row.id)) ?? []].sort())),
+    items: page.map((row) => composeIteration(row.id, identities.get(identityToken("iteration", row.id)) ?? null, generated, compassByIteration.get(row.id), planIds.get(row.id) ?? [], documentIds.get(row.id) ?? [], identities, [...membership.get(identityToken("iteration", row.id)) ?? []].sort())),
     total: catalogRows.length,
     attribution: iterationAttribution(db)
   };
@@ -19086,9 +16091,10 @@ function readIterationList(db, filters) {
 function readIterationDetail(db, filters) {
   const iterationId = requireId(filters, "iteration-detail");
   const generated = readGeneratedRows(db);
-  const planIds = iterationMembershipPlanIds(generated, iterationPlanIds(db), [iterationId]).get(iterationId) ?? [];
+  const compassByIteration = compassesByIteration(generated);
+  const planIds = iterationMembershipPlanIds(compassByIteration, iterationPlanIds(db), [iterationId]).get(iterationId) ?? [];
   const documentIds = iterationDocumentIds(db).get(iterationId) ?? [];
-  const compassRow = generated.compasses.find((row) => row.iteration_id === iterationId);
+  const compassRow = compassByIteration.get(iterationId);
   const identities = catalogIdentities(db, [
     { kind: "iteration", id: iterationId },
     ...planIds.map((planId) => ({ kind: "plan", id: planId })),
@@ -19098,7 +16104,7 @@ function readIterationDetail(db, filters) {
   if (catalog === null && compassRow === undefined)
     return null;
   const projects = [...projectMembership(db).get(identityToken("iteration", iterationId)) ?? []].sort();
-  return composeIteration(iterationId, catalog, generated, planIds, documentIds, identities, projects);
+  return composeIteration(iterationId, catalog, generated, compassRow, planIds, documentIds, identities, projects);
 }
 function readOverview(db, filters) {
   const projectId = text5(filters.projectId);
@@ -19178,7 +16184,7 @@ function readRoadmap(db, filters) {
     projectId,
     catalog,
     authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
-    content: parseRoadmapContent(authority.roadmap.contentMarkdown),
+    content: authority.content,
     milestones
   };
 }
