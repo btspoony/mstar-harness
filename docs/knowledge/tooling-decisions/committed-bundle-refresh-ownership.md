@@ -28,11 +28,11 @@ During the audit-backlog iteration, three separate plans deleted engine exports 
 
 ## Decision
 
-A source change does **not** regenerate the committed bundles. The plan records the stale-bundle fact, and `release:prepare` rebuilds them before a release, so a published package never ships the previous engine. Verification of a deletion on the branch is a source-level zero-consumer grep over `packages`, `scripts` and docs; `scripts/build-zcode-hooks.test.ts` rebuilds the bundle in its `beforeAll`, so it proves the generator still produces a valid artifact, never that the committed bytes are fresh. The committed stale bytes are verified nowhere on the branch — `release:prepare` re-takes them. The CI bundle-freshness diff is advisory by design (`continue-on-error`), because it was reddening unrelated PRs for exactly this version-drift reason.
+A source change does **not** regenerate the committed bundles. The plan records the stale-bundle fact and `release:prepare` rebuilds them, so a published package never ships the previous engine. Branch evidence for a deletion is a source-level zero-consumer grep; the committed bytes are not part of branch evidence, and the CI freshness diff that compares them is advisory (`continue-on-error`) because it reddened unrelated PRs for exactly this version drift.
 
 ## Consequences
 
 - A branch can merge while the committed bundle still contains a deleted function. That is safe: the bundle's copy has no caller, and the release rebuild removes it.
 - Anyone regenerating locally must expect a large diff and must not commit it unless the pinned bun produced it.
-- `scripts/packaging-manifests/*` must still be re-taken after any source change: they digest source trees (`hooks/src`, `packages/*/src`) **and** the committed bundle file bytes (`generated.files` records `hooks/mstar-write-gate.mjs` with its sha256). A branch that regenerates a bundle must re-take the manifests in the same change, or the recorded digest names bytes that no longer exist; `pack-consumers` checks this on every PR.
+- The consumer manifests record both source trees and shipped artifacts. Re-take them with `bun scripts/execution-consumer-manifest.ts --repo . --write` after any change they cover, and never hand-merge a manifest conflict — re-take it.
 - If a future change makes the bundles' bytes reproducible across supported bun versions, this decision can be narrowed to "reproducible artifacts are committed"; until then the release boundary is the only place the artifact is re-taken.
