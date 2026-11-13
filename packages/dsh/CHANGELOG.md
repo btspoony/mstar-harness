@@ -6,6 +6,31 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.5.3] - 2026-11-13
+
+### Changed
+
+- Resolved Enforcement through one helper: the dsh boot diagnostic now honours an explicit
+  `enforcement: soft`, so it no longer announces "hard is active" while the gates run warn-only, and
+  the status gate and dispatch gate call the shared resolver instead of keeping their own copies.
+- Derived the compound `problem_type` aggregate from the two track tuples, so adding a value is one
+  edit and can no longer desynchronise aggregate validation from the track-specific required fields.
+- Removed dsh surface with no consumer: the private `currentSelection` method, the
+  `engine-status-endpoint` constant re-exports, and the duplicate endpoint-constant exports on the panel
+  client. The wire module remains the single import path.
+- **The engine-status catalog derives its panel projection once per cache build.** The pre-step gate called `panelDigestOf` on every step, re-serializing the whole catalog payload even when the payload came from an unchanged cache entry. The projection now lives on the cache entry (`CatalogCacheEntry.projection`), is computed where the entry is built, and is returned alongside the payload by `readCatalogPayload`, so the gate reads it instead of recomputing it. `panelDigestOf` stays exported and unchanged — it is still the definition of the projection. Change detection is untouched: the model row still compares rendered text, the panel still compares the full projection.
+- **The dispatch L1 gate reads branch ownership instead of the whole execution graph.** `worktreeL1Violations` called `readExecutionState` and then mapped every workflow's full state and plan payload down to the four facts `collectActiveLifecycleBranches` reads. `readActiveLifecycleBranchDocs` (engine) is that projection in one pass: the same registry membership, workflow headers and plan rows with the same refusals, but only `id`, `branch` and each row's `id`/`metadata`, so the cost follows the ownership question instead of the tokens, sessions, merge leases, frozen inputs and receipts nobody at that call reads. Every active lifecycle is still collected — dropping siblings would hide a cross-lifecycle `worktree.main.residency-switched` collision, which `tests/worktree-l2.spec.ts` now covers with a sibling-owned branch.
+- **The accepted nested React 18 from the `dsh-llm-fallbacks` dev dependency is stated, not worked around.** The package pins an external `react ^18` peer, so this React 19 workspace carries a nested React 18 tree for that dev-only plugin. It cannot reach shipped behavior — the package's `./client` surface is not mounted into the dashboard React tree and `src` never imports the package (only the test suite does) — so runtime is unaffected and no lockfile churn, alias or override is added. The decision and its reasoning live in `docs/adr/implemented/architecture/2026-11-12-fallbacks-dependency-boundaries.md`; the `packages/dsh` README pair cites it instead of restating the rationale.
+- **A failed harness-prompt registration no longer leaks what already landed.** When `registerHarnessPrompt`'s `mstar:engine-status` context registration threw after the `mstar:harness-rules` section had registered, the contained failure path only logged: the section (and its captured resolver closure) stayed on the prompt layer with no disposer, because the fiber effect that owns both disposers is installed only on the success path. Both collected disposers are now run from the failure path through the same individually guarded, never-throws helper the success disposer uses, so a half-registered prompt layer unwinds to nothing. `onRegistered` still fires only after both entries land.
+- **The engine-status plans segment comes from one assembler on both model-facing surfaces.** The compact `agent/pre-step` row and the always-on `mstar:engine-status` digest each built the `plans: …` text themselves, so an empty registry read `plans: none registered` in the row but `plans: none` in the digest. Both now call `plansSegment` in `catalog.ts`: an empty registry is `none registered`, an all-Done workflow is `all done`, and only the row cap stays per-surface. `tests/system-prompt.spec.ts` pins the digest's LENGTH ceiling with a 40-row registry, so an unbounded registry fails a test before it can grow the injected prompt.
+- **The `native-commands.ts` identity comment now states the shipped route.** The header claimed the shared MCP connection carries no identity; it carries a per-call `sessionId`, published because the bundle launches `mstar mcp --trust-caller-session-id`, and that value is a bearer identity the engine resolves to the caller's own coordinator binding. Without the flag the selector stays unpublished and a supplied one is refused. The native surface stays the host-proven route and the only one reaching plugin-local state; the registration list is unchanged.
+- **A milestone write refused in the gateway envelope keeps only the transport's own code.** `milestoneWrite` now passes through the `gateway/*` family the transport emits (`gateway/internal` for a thrown handler, `gateway/cancelled` for an aborted carrier) and maps every other envelope code to `transport-error`, so the retry channel keeps the operation id instead of settling on a code it does not own. Engine refusals (`milestone.invalid-input`, `store.revision-conflict`, `milestone.not-empty`) are unaffected: they arrive as the method's value and are decoded there, messages included.
+- **The branch-ownership projection refuses a plan row that carries a second authority.** `readActiveLifecycleBranchDocs` applies the same plan-level `state_json` guard `readWorkflowView` already applies: a row state carrying `coordination` or `execution_lease` is `store.corrupt` ("owned by `coordination_json`, not by the row state") instead of being read as the row.
+
+- Version alignment with harness **4.5.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.5.3**.
+
 ## [4.5.2] - 2026-11-11
 
 ### Changed

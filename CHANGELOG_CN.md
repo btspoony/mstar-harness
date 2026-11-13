@@ -6,6 +6,85 @@
 
 ## [Unreleased]
 
+## [4.5.3] - 2026-11-13
+
+### Documentation
+
+- **已采纳的边界记录转入 implemented 桶，且没有任何一条边界被改动。** `docs/adr/proposed/architecture/2026-11-12-low-sweep-accepted-limits.md` 迁至 `docs/adr/implemented/architecture/`，原 `Proposal` 改写为现在时 `Decision`，验收标准与风险并入 `Consequences`。其中四条（`I-000906`、`I-000907`、`I-000913`、`I-000939`）的理由与反转条件保持不变。`I-000196` 仍为豁免且验收未满足；该小节现在按 store 记录的宽度陈述豁免（只含 `model` 与 `assistance`，`seat`/`shard`/`sessionId` 义务仍在执行），并要求**两个字段都出现**才撤回豁免。代码行为无变更。`store-read.ts`、`projection.ts`、`execution-ledgers.ts` 中的模块注释改为引用 implemented 路径。
+- **`dsh-llm-fallbacks` 的依赖边界改为记录，而非设闸。** 该 pin 仍是两处手写字面量——`packages/dsh` 的开发依赖，以及 CLI 的 `mstar.dshLlmFallbacks`（由 `dshFallbacksVersion()` 在运行时读取）——必须在同一次改动中一起移动，因为没有测试、校验器或发布面会比较二者，而对比测试只能断言「两份同一个字符串相等」。决策记录为 `docs/adr/implemented/architecture/2026-11-12-fallbacks-dependency-boundaries.md`，其中也接受了该包 `react ^18` peer 带来的、仅存在于开发期的嵌套 React 18：`packages/dsh/src` 从不导入该包，其 `./client` 面也未挂进 dashboard 的 React 树。seeds 知识页只指向该记录，不再复述理由。
+- **ZCode 的 hook 声明被限定在 CLI hook 面。** `mstar-host` → `references/zcode.md` 与 `INSTALL.md` 现在明确：内置的 `hooks/hooks.json` 三道门禁由 CLI hook 面启动，不启动插件 process hook 的桌面界面上一道门禁都不会运行，那里的受支持路径是 CLI 会话。参考文件同时记录了平台侧的后续项——负责人：host adapter 维护者；当 ZCode 为桌面会话提供受支持的 hook 启动路径，或有用户报告某道门禁静默未运行时重新核查——并说明该后续项是一次 `hooks/` 改动，而非新建宿主包。
+
+### Harness
+
+- **删除三个无引用 UI 符号**：`Breadcrumb` 组件（四个屏幕各自渲染面包屑）、编译但不可达的
+  `styles/probe.ts`，以及公开的 `NOT_DECLARED` 字符串。
+- **项目看板的里程碑配色改用 canonical 表**：`active` 里程碑不再被本地表画成中性灰，与总览一致。
+- **迭代 prepare 步骤接上 `references/iteration-workspace-readme-template.md`**：该模板此前无入链，
+  而步骤仍在要求产出它所描述的文档。
+- **`calibrate` 现通过 artifact helper 读取 gold 与来源分片**：缺失 `gold/adjudicated.jsonl` 或 `sources/shard-N.jsonl` 时以 `jev.artifact-missing: <相对路径>` 拒绝，而不再泄漏带绝对 run root 的原始 `ENOENT`。退出码与 fail-closed 行为不变。
+- **closure 套件只声明它真正证明的东西。** 其 `reviewed re-freeze` 测试声称强制逐行 `beforeSha256` blob，实际从未比较任何摘要。摘要留在 `ablations.json` 作为冻结历史，套件改为只断言它真正检查的内容 —— BASE 祖先关系与 anchor 存在性/处置。
+- **套件内不再钉任何策略散文。** `closure.test.ts` 里的措辞与短语断言（Phase 1 评审链顺序、`status: locked`、lease 标识符、「preset 成员在角色 reference 中被点名」、交叉引用标题）一律删除而非重新钉死；保留的结构性事实仅为标题、文件存在性与可达性。
+- **原先靠句子断言的五条规则改为记录真实归属方。** Done 归属 = `mstar-harness-core` 状态机 + PM Acceptance；`none` 不豁免门禁 = 角色 reference 与共享 leaf 边界；执行诚实 = `code-reviewer` 席位；PM 必读 = PM 角色 reference；阶段跃迁 = `evaluatePhaseGate` 与 PHASE6 行为套件。
+- **compound 改为每个 development plan 执行一次**：每个 development plan `Done` 后都产出 `created` / `updated` / reasoned `skipped`——迭代行在 integration worktree 写入 tracked knowledge/CONCEPTS，仅当 capture 产生 tracked 变更时提交（reasoned `skipped` 不需空 commit）；独立 development plan 在 PR head 前记录 `delivery.compound`。report-only plan 仍豁免。`iteration-close` 改为只做 **specs/ADR 提升**（契约 → `mstar-doc-corpus`），compass 摘要字段改为 `## Corpus Promotion Summary`。删除 `mstar-knowledge` 的「Iteration package promotion」盘点，合并 phase-gates 重复规则，并修正 plan 模板中“引擎写入闸强制顺序”的过时声明（该闸不存在；terminal close 只对独立 `type: plan` workflow 咨询证据）。
+- **dsh 面板文档现在描述的是实际交付的 payload。** 面板章节写明会话摘要（`enforcement`、承载但不渲染的 `knowledge`、`selection`、`iteration` 回退成员、`leafSignal`）与一次性读取路径；已退役的五视图快照、其新鲜度页脚、`retained.selection`、5 秒轮询，以及那一代面板布局描述（分区导航、meta 小面板、kanban 与 roadmap 锚点、agents 画布、`projectGraph`、`IterationInfoSection`）均已删除。`README.i18n.yaml` 的 pin 已重新记录。
+- **`mainWorktreeBranch` 现记为 primary checkout 分支**，与 integration 分支区分，与「不相等即 `branch-mismatch`」的就绪比对一致。
+- **`reviewed-bot` 矩阵把内部 `skipped` 与已发布的 `success` / `failure` / `neutral` 分开**，两处仍断言「每个 commit 都 review」的站点改为跟随 bot 的触发模式。OpenCode 的现行声明改为点名 manifest pin（`2.2.5`），`packages/ui/src` 注释改引 `prototype.html`。
+- **hash-gate 契约可从 `scripts/lint-hash-gates.ts` 发现**：marker 语法、必需的理由与评审路径就在 `AUTHORIZED_MARKER_PREFIX` 旁。lifecycle 契约记录了已接受的 pre-proof audit 限制，低扫已接受限制另立提案 ADR。
+- **dsh 面板注释现在写明 payload 实际携带的字段。** `MstarHarnessState` 文档列出计划注册表、residual 汇总与明细、分支/策略锚点、row scope、项目汇总、知识摘要、方向与 agent-flow 视图，不再声称保留 "active leases" 段；`PANEL_SNAPSHOT_ENDPOINT` 注释描述一次性读取（座位挂载与显式 `reload()`），不再描述轮询。
+- **判定测试命名**：注入 supervisor 挂载路径的 evaluator-channel 用例现在写明这些挂载替代了生产的 `/proc`
+  读取，因此该测试不声称具备真实容器证明。
+- **在归属契约中写明证据边界**：`docs/judgment.md` 现声明 evaluator receipt 只证明已处理的内容与声明的
+  角色，不证明邮箱写入方身份；真实非 OMP 宿主的 W3/W5 度量与真实 coordinator handoff 证据仍是开发验收
+  之外的运营义务（handoff 绑定代码路径本身不是该证据）；`evaluation-rows.json` 是手工报告路径，不存在
+  自动生产者。
+- **feature worktree 依赖就绪**：`mstar-branch-worktree` 记录 feature worktree 可能从其他检出解析共享
+  依赖（假绿风险），要求在接受 plan 证据前运行该任务自身的模块解析检查，并写明对通用探测式启动拒绝的
+  显式豁免。
+- **Guard 10 现在要求 reason 指名规则 owner，并报告陈旧的 allowlist 条目。** 例外 reason 只有在指名真正的 owner `skills/` 路径（或本文件加 `owner` 一词）时才通过；仅重复被覆盖文件的 reason 属于停放的重复条目，判定失败。某条目的 `file` + `normalizedHash` 匹配不到任何已扫描站点时按文件报告，因此删除或改写规则不会留下静默失效的豁免。
+- **占位符分类区分生命周期词与占位 token，计划校验新增 surface 映射。** `Todo` 属于领域状态，而 `TBD`/`TODO`/`TBA` 仍然失败，frontmatter 与围栏块保持豁免。Files 条目一旦落在代码 surface 上，就必须指名该 surface 对应的检查（`packages/*/src` 与 `hooks/src` 字面量 → `bun run lint:ascii-literals`；`skills/**` → `bun run validation:drift`；仓库根 `scripts/*.ts` → 其自身测试或运行），否则触发 `lint.plan-quality.verification-set`。围栏示例不被读取，因此示例既不能引入 surface，也不能满足缺失的检查。`plan-quality-bar.md` 与 `plan.main.md` 记录了该映射。
+- **CLI 测试套件共用同一个 spawn runner。** `packages/cli/test/harness.ts` 暴露遵循 `MSTAR_CLI_ENTRY` 的 `runCli`（作业已构建时用构建产物入口，否则用源码入口），清除环境中的执行身份标记，并为挂起的子进程设置超时；已构建 CLI 的 CLI shard 作业在 env 中设置该入口。
+- **skills-mount HMR 用例有了显式超时。** same-context provider removal 用例等待 fiber 释放与重新挂载，因此使用 30 秒上限而非 Bun 默认的 5 秒（I-001045）。
+- **两个不可达的 coordination 拒绝族移除出词表。** Prepare-amendment 与 JSON identity-recovery 的错误码列表从 `COORDINATION_ERROR_CODES` 中删除；plan-path 读取器改为原样传播自身的 `plan-path.*` 码。
+- **移除已退役的 judgment 收集链路。** 删除 `runReviewAdvice` 与 WeakSet 认证模块（`evaluator-channel-trust.ts`），以及只有该入口使用的 CLI 结果类型与输入采集辅助函数；`connectEvaluatorChannel` 现在在 supervisor mount 校验后直接返回邮箱通道。`evaluateNative`、`connectEvaluatorChannel`、shadow supervisor 与 `review-advice.ts` 保持不变。
+- **judgment 泳道收敛为一套 container-probe。** 三个 probe launcher 共享 `dockerIsolationArgs` 与 `sha256File`，两个 gate sink 共享 `createOnlySinkWrite`（`container-probe.ts`）。各 gate 的 mount、路径校验与错误码未动，annotation 专属受保护根与「一个对两个允许 sink」的约束仍然成立。
+- **Judgment 工件在解析阶段按名拒绝**：`evaluate.ts` 与 `shadow.ts` 现在把受支持的解析失败（`ENOENT`、`EACCES`、`ENOTDIR`）包在 `realpathSync` 外层，因此无法解析的工件报 `jev.artifact-missing: <相对路径>`，而不再抛出携带绝对规范路径的原始错误。读取与 JSON 解析仍在该转换之外，无法解析的工件仍报解析错误而不是「缺失」。
+- **浏览器打开器在界限内等待**：`openBrowserBounded` 在平台打开器启动后即返回；打开器缺失或 5 秒内未启动时以 `capability.browser.unavailable` 拒绝，中止时以 `command.cancelled` 拒绝，不再永久挂起。
+- **UI 比较器在空比较上失败关闭**：`declaration-diff`、`selector-diff`、`tone-table` 在原型没有可比内容时以退出码 1 加诊断信息失败，而不是打印「0 个比较，全部一致」。`selector-diff` 在 allowlist 过滤后统计原型键集合，因此「全部被 allowlist 吸收」同样失败。mutation check 把原型基线缺失判为「检查无法运行」而非「检出变异」，并新增空比较用例。
+- **纯度守卫接受每一种合法的 type-only 引擎导入**（两种引号、多行、default、namespace、default 加具名），并通过不移动换行的掩码方式报告违规的源码行号。
+- **`@mstar-harness/judgment` 现仅通过 package 入口访问引擎**，并在公开表面上导出 `normalizeTypeSafeResponse` 及其 `NormalizedTypeSafeResponse` 类型；`../../engine/src/mstarc.js` 这种源码相对导入已移除。
+- 由既有 normalizer 测试套件加一次构建产物导入冒烟证明该导出；未新增转发型测试套件。
+- **所有授权点统一为一条 bot 绑定规则。** `reviewed-bot` 证据格、Phase 5 exit checklist 与 §5.3 谓词现与 §5.1b 一致：bot 实际发布的每个 artifact 都绑定当前 head；只有发布 `publication:v1` marker 的 bot 才需 comment `sha=`，才可继承空增量；无 marker 的 bot（Greptile）仅凭 check 的 `head_sha` 加该 check 自身绑定的 conclusion 绑定，没有继承路径；其分数须来自绑定该 head 的 artifact，未绑定的分数不算 settled。
+- **重复 `neutral` 的 waive 不构成 merge 授权。** `neutral` 的 head 没有可被 waive 的 finding 或分数，书面 waive 仅是升级记录；重复 `neutral` 之后唯一的授权路径是 Phase 1 `pr_merge_policy` 重录。
+- **Head 绑定按 provider 判定。** `reviewed-bot` 不再要求每个 bot 都发布 `publication:v1 … sha=` marker：bot check 的 `head_sha` 加该 check 自身绑定的 conclusion 始终构成绑定；只有确实发布 marker 的 bot 才需其 comment `sha=` 同样匹配；无 marker 的 bot（Greptile）仅凭 check 绑定，且没有继承路径。
+- **bot 的通过线在所有 policy 下适用。** Phase 5 exit checklist 现以 §5.3 的逐 bot 通过线覆盖 `reviewed-auto` 与 `owner-gated`：一张「不失败」的 check、本地 `ship it` 或 owner 批准都不能替代它。
+- **重复 `neutral` 必须点名出口。** 同一 head 上第二次 `neutral` 指向写明 surface 与确切 head 的书面 waive，或 Phase 1 `pr_merge_policy` 重新记录——不是无限重触发，也不是 PM 自签 waive。
+- **只点名 head 的 waive 永不构成 merge 授权。** §5.1b 空增量出口与 merge 前 head 对账现统一为 §5.3 的规则：没有继承路径的无 marker bot 只能在自己的新 head 上结算，或就某个 blocking finding / 未达门的分数取得点名该 finding 或分数的书面 waive；只点名 head 的 waive 仅是升级记录，不构成任何授权。
+- **重复 `neutral` 没有任何授权出口，§5.3 的 policy 重录是升级而非授权。** §5.1b 结论矩阵与 §5.3 的 `reviewed-bot` STOP 条目现在写明重录的实际作用：它改变的是门禁归属，而挂载 bot 自身的通过线在 `reviewed-auto` 与 `owner-gated` 下依旧适用、为达成 merge-ready 而脱离它仍被禁止——该 head 因此仍需要一个真实 bot verdict。可推进的路径只有含真实内容的新 head，或按 bot 文档化方式重触发；裸 `neutral` 没有 finding 或分数可 waive。
+- **QC 席位文档写明它本已拥有的残余批准形状。** 席位的正文结论 `Approve with residuals` 就是 `Approve`——校验器按最长词表前缀读取正文短语——因此 frontmatter 仍只写四个 token 之一，遗留项按 `Findings cleanup: allow-residual` 捕获为该计划关联 issue，而不是第五个 verdict 或残余清单字段。`report-template.md` 与 `qc-specialist-shared.md` 现已写明该形状，`qcreview.test.ts` 覆盖了带残余的批准报告校验通过。
+- **QC 席位权限改为校验而非默认一致。** `agents/qc-specialist*.md` 将 `git branch*` 收窄为 code-reviewer shell 已允许的四条只读形式（此前前缀通配会放行 `-d`/`-D`/`-m`/`-M`/`-c`/`-C`），并新增 `scripts/agent-shell-permission.test.ts`：任一 QC shell 的 `permission` 块偏离、或缺少 code-reviewer 超集拥有的键路径，测试即失败。
+- **store-cutover 套件不再弄脏工作区。** 它在 `beforeAll` 重建已提交的 ZCode bundle，并原样留在原地，导致一次绿色运行后工作区变脏，还可能悄悄替换掉它正在测试的产物。现在两条受版本控制的 bundle 在加载时快照、在 `afterAll` 还原；断言未变。
+- **测试 keep/delete 规则收敛为单一权威。** 规则现由 `mstar-coding-behavior` § Evidence 陈述；审计/角色/SDD 中的九处复述改为指针，仅在席位无法回读该 skill 处（三个 SDD prompt 与 QC checklist）保留一句自足断言。`mstar-audit` 与 `test-audit.md` 保留「报告非产品断言类别」的审计义务。
+
+### Changed
+
+- **`status workflow-close` 不再用一个拒绝给出两个恢复指引。** `coordination.git-unavailable` 同时覆盖 Git 状态不可读与 `TMPDIR` 下交付 diff 临时文件写失败；前者保留控制根指引，后者改为指出 `TMPDIR`，与引擎自身消息一致。
+- **已采纳边界记录按实际宽度陈述豁免。** `I-000196` 小节只豁免 `model` 与 `assistance`，并说明 `check-annotations` 仍在执行的 `seat`/`shard`/`sessionId` 义务不在豁免内。记录也改为点名五条边界中哪三条在代码内有引用，而非声称全部五条都有。
+
+### Fixed
+
+停止对 DSh 构建产物的字节固定——它本身不可复现——并修复上一轮迭代留在 `main` 上的两处 CI 失败。
+<!-- CN -->
+同时删除 `packages/cli/src` 里无人生成的陈旧产物及其 `.gitignore` 规则——它此前被计入 source 树摘要，导致本地与 CI 的文件数不一致。
+- **Release prep 打包的是构建产物，而不是空的 `dist`。** `Typecheck + pack (release sanity)` 步骤此前仅在 `bun run typecheck` 之后对 `@mstar-harness/cli` 与 `@mstar-harness/opencode` 运行 `npm pack`。这两个包都在 `files` 中声明了 `dist` 且没有 `prepack` 钩子，因此它检查的 tarball 不含任何构建输出。该步骤现在在两条 `npm pack` 之前运行 `bun run cli:build` 与 `bun run opencode:build`，使其声称的产物健全性覆盖真正发布的字节。该 workflow 由 CI 执行；本计划分支不运行它，因此第一次真实检查是下一次 "Release prep" 运行。
+- **consumer manifest 摘要门禁被删除，而不是刷新。** `scripts/execution-consumer-manifest.ts`、其测试套件与七份受版本控制的 `scripts/packaging-manifests/*.json` 快照一并移除，`.github/workflows/ci.yml` 中运行 `--check` 的步骤以及仅为它存在的 omp/dsh 额外构建也一并删除。这些记录的摘要描述的是写下它的那台机器：一个只改版本号的 release 分支因此在 `pack-consumers` 上以 `consumer.digest-mismatch` 失败，而包本身从未损坏。重新录制快照不会重新建立任何东西。
+- **advisory 的产物字节比较也一并删除。** `.github/workflows/ci.yml` 不再对 `hooks/` 或 `packages/commands/src/dashboard/assets.generated.ts` 运行 `git diff --exit-code`。这两步把新构建的字节与已提交副本比对，反映的是 bun/bundler 版本（1.4.0 与 1.4.4 对同一份源码产出不同文本），而不是被审的改动。阻塞式 `ZCode hooks bundle build`、根 typecheck、真实的 CLI/store/hook 套件、各包 build 与 pack，以及打包产物 smoke 全部保留；工作流头部也不再声称有 freshness 门禁。
+- **打包保护保留。** 各 consumer 的构建、CLI 与两代 OpenCode 的 `npm pack`、打包后 OpenCode V2 入口 smoke，以及 packed-manifest 元数据守卫全部保留；CLI 包回归（`packages/cli/test/execution-package.node.test.mjs`）保留其真实的执行/store/hook 场景，Node 下限改为读取 `packages/cli/package.json`，不再依赖已删除的清单。
+- **文档在源头得到纠正。** source-provenance 记录已归档（其对象不复存在），operational-traps 记录改述删除而非重录配方，受影响的知识文档不再推荐重录快照，也不再推荐把重建结果与已提交字节做 diff——它们指向的证据改为同 checkout 内的构建加执行该产物的套件。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.5.3**。
+
 ## [4.5.2] - 2026-11-11
 
 ### Harness
