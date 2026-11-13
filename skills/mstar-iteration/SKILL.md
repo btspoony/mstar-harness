@@ -124,7 +124,7 @@ Phase 6: post-merge close —— merge 授权完成、PR merged 后 §6.1–§6.
 - **不要在缺 §5.3 授权时 merge PR** — merge-ready / CI 绿 / QC Approve / review `ship it` 各自都不构成 merge 授权；三分支完整谓词、外部 bot 的 P1/未达标分数与 `pr_merge_policy` 缺失时的 STOP → **`references/phase-4-5-pr-delivery.md`** § 5.3
 - **不要在 integration worktree 或主 checkout（control root）上直接编辑产品代码** — Phase 5 修复走 fix feature worktree，review 后 merge 回 integration worktree（`phase-4-5-pr-delivery.md` §5.0）
 - **不要在缺 `iteration_base_branch` / `target_branch` 时默认 `main` / `master`**（门禁、例外写法与 base 解析 → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库））
-- **不要在 plan Done 后跳过 compound disposition** — 迭代行写 integration worktree 并提交，独立 plan 写 delivery branch；无可结晶时记录 reasoned `skipped`（→ **`mstar-knowledge`**）
+- **不要在 plan Done 后跳过 compound disposition** — 迭代行在 integration worktree 执行（有 tracked 变更才提交），独立 plan 写 delivery branch；无可结晶时记录 reasoned `skipped`（→ **`mstar-knowledge`**）
 
 ## Workflow
 

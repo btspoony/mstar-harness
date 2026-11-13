@@ -47,7 +47,7 @@ Compound 是**被生命周期流程调用**的知识结晶流程：本 SKILL 只
 
 每个 development plan `Done` 后执行一次（迭代行与独立 plan 相同），产出 `created` / `updated` / reasoned `skipped`：
 
-- **迭代行**：在 integration worktree 写 tracked `{KNOWLEDGE_DIR}` / `CONCEPTS.md`，立即 commit 到 integration 分支；disposition 记入该 plan 的 `## Review Gate Summary`（引擎 completion payload 不追改）。Child row 无 workflow delivery evidence。
+- **迭代行**：在 integration worktree 写 tracked `{KNOWLEDGE_DIR}` / `CONCEPTS.md`；有 tracked 变更时立即 commit 到 integration 分支，无变更的 reasoned `skipped` 只记录、不产生空 commit。disposition 记入该 plan 的 `## Review Gate Summary`（引擎 completion payload 不追改）。Child row 无 workflow delivery evidence。
 - **独立 development plan**：在 delivery branch 写，PR head 定稿前记录 `delivery.compound`。
 
 Phase 3 的 specs/ADR 提升不属本技能 → **`mstar-doc-corpus`**。
