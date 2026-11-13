@@ -201,35 +201,54 @@ function changedFilesSinceMergeBase(): string[] | null {
 }
 
 /**
+ * One side of a gate file: absent (the loader throws) reads as an empty
+ * collection, a legitimate state that lets adding or deleting a gate file be
+ * a pure diff; present but unparseable is a failure row naming the path and
+ * the side, because an empty collection there would silently narrow the gate
+ * and hide a widening.
+ */
+export function readGateSide(
+  file: string,
+  side: string,
+  load: () => string,
+): { value: unknown; failure: string | null } {
+  let text: string;
+  try {
+    text = load();
+  } catch {
+    return { value: null, failure: null };
+  }
+  try {
+    return { value: JSON.parse(text), failure: null };
+  } catch (error) {
+    return {
+      value: null,
+      failure: `Guard 14 gate-surface self-approval: ${file} (${side}) is present but unparseable as JSON (${
+        (error as Error).message
+      }) — a corrupt gate file must not read as an empty exemption list (AGENTS.md gate-surface rule)`,
+    };
+  }
+}
+
+/**
  * Gate-surface snapshots for Guard 14: the merge-base JSON of every allowlist
  * and of the skill-budget manifest versus the working-tree JSON, plus the
  * change set (merge-base..worktree, untracked included). `null` when git has
- * no range, the same skip Guard 2 takes. A side whose file is absent parses as
- * an empty collection, so adding or deleting a gate file is a pure diff.
+ * no range, the same skip Guard 2 takes.
  */
 function gateSurfaceSnapshots(): Omit<GateSurfaceInput, "ci"> | null {
   const base = mergeBaseOrNull();
   if (!base) return null;
-  const json = (text: string): unknown => {
-    try {
-      return JSON.parse(text);
-    } catch {
-      return null;
-    }
-  };
-  const atBase = (path: string): unknown => {
-    try {
-      return json(execFileSync("git", ["show", `${base}:${path}`], { encoding: "utf8" }));
-    } catch {
-      return null;
-    }
-  };
-  const atHead = (path: string): unknown => {
-    try {
-      return json(readFileSync(join(root, path), "utf8"));
-    } catch {
-      return null;
-    }
+  const failures: string[] = [];
+  const read = (path: string, at: "base" | "head"): unknown => {
+    const side = at === "base" ? `merge-base ${base.slice(0, 8)}` : "worktree";
+    const { value, failure } = readGateSide(path, side, () =>
+      at === "base"
+        ? execFileSync("git", ["show", `${base}:${path}`], { encoding: "utf8" })
+        : readFileSync(join(root, path), "utf8"),
+    );
+    if (failure) failures.push(failure);
+    return value;
   };
   const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
   const manifestEntries = (entries: unknown[]): ManifestEntry[] =>
@@ -265,19 +284,20 @@ function gateSurfaceSnapshots(): Omit<GateSurfaceInput, "ci"> | null {
       .map((l) => l.trim())
       .filter(Boolean);
 
-    return {
+    const snapshots = {
       manifest: {
-        base: manifestEntries(list(atBase("scripts/skill-budgets.manifest.json"))),
-        head: manifestEntries(list(atHead("scripts/skill-budgets.manifest.json"))),
+        base: manifestEntries(list(read(SKILL_BUDGETS_MANIFEST, "base"))),
+        head: manifestEntries(list(read(SKILL_BUDGETS_MANIFEST, "head"))),
       },
       allowlists: allowlistPaths.map((file) => ({
         file,
-        base: list(atBase(file)),
-        head: list(atHead(file)),
+        base: list(read(file, "base")),
+        head: list(read(file, "head")),
       })),
       changedFiles: [...new Set([...changedFiles, ...untracked])],
       hasRange: true,
     };
+    return { ...snapshots, failures };
   } catch {
     return null;
   }
@@ -358,6 +378,9 @@ export type GateSurfaceInput = {
   changedFiles: string[];
   hasRange: boolean;
   ci: boolean;
+  /** Gate files present but unreadable or unparseable. Carried as failures
+   * instead of an empty collection, which would hide a widening. */
+  failures?: string[];
 };
 
 /** The signature string of an allowlist entry, or null (non-string / absent). */
@@ -365,6 +388,13 @@ function allowlistSignature(entry: unknown): string | null {
   if (!entry || typeof entry !== "object" || !("signature" in entry)) return null;
   const { signature } = entry;
   return typeof signature === "string" ? signature : null;
+}
+
+/** A named string field of an allowlist entry, or null when absent/empty. */
+function allowlistStringField(entry: unknown, field: string): string | null {
+  if (!entry || typeof entry !== "object" || !(field in entry)) return null;
+  const value = (entry as Record<string, unknown>)[field];
+  return typeof value === "string" && value !== "" ? value : null;
 }
 
 /** `<kind>:<path>:<hash>` → `<path>`, or null when no path segment resolves. */
@@ -376,20 +406,42 @@ function signatureTargetPath(signature: string): string | null {
   return path.includes("/") ? path : null;
 }
 
-/** Entry identity for the multiset: its signature, else the whole JSON. */
-function allowlistKey(entry: unknown): string {
+/**
+ * Identity of one allowlist entry: the multiset key, the artifact the entry
+ * exempts, and how many findings it tolerates.
+ *
+ * Two entry shapes exist in this repo, so neither alone can be the contract:
+ * `lint-refusal-quality.allowlist.json` keys on `signature`
+ * (`<kind>:<path>:<hash>`, path between the first and last colon), while
+ * `rule-duplication.allowlist.json` keys on `file` + `normalizedHash` and has
+ * no signature at all. `signature` wins, `file` is the fallback, and an entry
+ * naming neither has no target and fails closed on a widening.
+ *
+ * Tolerance is the entry's `expectedCount` (lint-refusal-quality.ts treats it
+ * as the number of tolerated findings), so raising it widens the exemption.
+ */
+function allowlistEntryIdentity(entry: unknown): { key: string; target: string | null; tolerance: number } {
+  const expected = entry && typeof entry === "object" ? (entry as Record<string, unknown>).expectedCount : undefined;
+  const tolerance = typeof expected === "number" && Number.isSafeInteger(expected) && expected > 0 ? expected : 1;
   const signature = allowlistSignature(entry);
-  return signature ?? JSON.stringify(entry);
+  if (signature !== null) return { key: signature, target: signatureTargetPath(signature), tolerance };
+  const file = allowlistStringField(entry, "file");
+  if (file !== null) {
+    const hash = allowlistStringField(entry, "normalizedHash");
+    return { key: hash === null ? file : `${file}#${hash}`, target: file, tolerance };
+  }
+  return { key: JSON.stringify(entry), target: null, tolerance };
 }
 
 /**
  * Pure gate-surface check — a change to an allowlist or the skill-budget
  * manifest is part of the change it exempts (AGENTS.md gate-surface rule).
  * Compares JSON semantics, not line counts: formatting and compression cannot
- * move the verdict. Per entry, an added manifest key or a raised ceiling, and
- * an increased allowlist entry count for a signature, are widenings; each
- * widened entry must name the artifact it exempts and that artifact must be in
- * the same change set. Removal and lowered ceilings stand alone.
+ * move the verdict. Per entry, an added manifest key or a raised ceiling, an
+ * added allowlist entry, and a raised `expectedCount` on an existing entry
+ * (which widens the number of tolerated findings), are widenings; each widened
+ * entry must name the artifact it exempts and that artifact must be in the
+ * same change set. Removal, lowered ceilings and lowered counts stand alone.
  * `hasRange: false` skips locally and fails under CI, mirroring Guard 2.
  */
 export function checkGateSurfaceChange(input: GateSurfaceInput): string[] {
@@ -400,7 +452,7 @@ export function checkGateSurfaceChange(input: GateSurfaceInput): string[] {
         ]
       : [];
   }
-  const failures: string[] = [];
+  const failures: string[] = [...(input.failures ?? [])];
   const changed = new Set(input.changedFiles);
   const requirePayment = (gateFile: string, detail: string, target: string) => {
     if (changed.has(target)) return;
@@ -422,26 +474,35 @@ export function checkGateSurfaceChange(input: GateSurfaceInput): string[] {
   }
 
   for (const { file, base, head } of input.allowlists) {
+    type Totals = { entries: number; tolerance: number; target: string | null };
     const tally = (entries: unknown[]) => {
-      const counts = new Map<string, number>();
+      const counts = new Map<string, Totals>();
       for (const entry of entries) {
-        const key = allowlistKey(entry);
-        counts.set(key, (counts.get(key) ?? 0) + 1);
+        const { key, target, tolerance } = allowlistEntryIdentity(entry);
+        const before = counts.get(key);
+        counts.set(key, {
+          entries: (before?.entries ?? 0) + 1,
+          tolerance: (before?.tolerance ?? 0) + tolerance,
+          target: before?.target ?? target,
+        });
       }
       return counts;
     };
     const before = tally(base);
-    for (const [key, count] of tally(head)) {
-      if (count - (before.get(key) ?? 0) <= 0) continue;
-      const signature = allowlistSignature(head.find((entry) => allowlistKey(entry) === key));
-      const target = signature === null ? null : signatureTargetPath(signature);
+    for (const [key, current] of tally(head)) {
+      const prev = before.get(key);
+      const added = current.entries - (prev?.entries ?? 0);
+      const widened = added > 0 || current.tolerance > (prev?.tolerance ?? 0);
+      if (!widened) continue;
+      const target = prev?.target ?? current.target;
       if (target === null) {
         failures.push(
-          `Guard 14 gate-surface self-approval: ${file} widens a lint exemption with an entry that has no resolvable <kind>:<path>:<hash> signature (${key}) — a widened entry must name the artifact it exempts, so the check fails closed (AGENTS.md gate-surface rule)`,
+          `Guard 14 gate-surface self-approval: ${file} widens a lint exemption with an entry that names no exempted artifact — expected a \`signature\` of the form <kind>:<path>:<hash> or a \`file\` field (${key}) — a widened entry must name the artifact it exempts, so the check fails closed (AGENTS.md gate-surface rule)`,
         );
         continue;
       }
-      requirePayment(file, `added entry ${key}`, target);
+      const detail = added > 0 ? `added entry ${key}` : `raised expectedCount ${prev?.tolerance ?? 0}→${current.tolerance}`;
+      requirePayment(file, detail, target);
     }
   }
 
@@ -939,6 +1000,8 @@ export function checkEngineCallouts(
 
 export const SKILL_INDEX_CORE = "mstar-harness-core";
 export const SKILL_INDEX_HEADING = "## 专题 skill 索引";
+/** An HTML comment span in Markdown, including a multiline one. */
+const COMMENT_SPAN = /<!--[\s\S]*?-->/g;
 
 /** Guard 13 — every shipped `mstar-*` skill directory must have a row in
  * the core skill index table, and every table row must name a live
@@ -960,11 +1023,13 @@ export function checkSkillIndexCoverage(input: { shipped: string[]; indexed: str
 }
 
 /** First backticked cell of each row under the core `## 专题 skill 索引`
- * heading. A missing heading or a heading with no parseable row is a loud
+ * heading. HTML comments are stripped first (newlines preserved): a row
+ * wrapped in `<!-- ... -->` does not render, so it must not count as an
+ * index entry. A missing heading or a heading with no parseable row is a loud
  * failure row: an empty `indexed` set would otherwise report every skill as
  * unindexed and read as a corpus problem instead of a parser/contract break. */
 export function readSkillIndexTable(coreText: string): { indexed: string[]; failures: string[] } {
-  const lines = coreText.split(/\r?\n/);
+  const lines = coreText.replace(COMMENT_SPAN, (span) => span.replace(/[^\n]/g, "")).split(/\r?\n/);
   const start = lines.findIndex((line) => line.trim() === SKILL_INDEX_HEADING);
   if (start === -1) {
     return { indexed: [], failures: [`skills/${SKILL_INDEX_CORE}/SKILL.md: missing "${SKILL_INDEX_HEADING}" heading`] };
@@ -1796,7 +1861,9 @@ if (import.meta.main) {
   const gateSurfaceSnap = gateSurfaceSnapshots();
   const gateSurfaceCi = isGitHubActions();
   const gateSurfaceFailures = checkGateSurfaceChange(
-    gateSurfaceSnap ? { ...gateSurfaceSnap, ci: gateSurfaceCi } : { allowlists: [], changedFiles: [], hasRange: false, ci: gateSurfaceCi },
+    gateSurfaceSnap
+      ? { ...gateSurfaceSnap, ci: gateSurfaceCi }
+      : { allowlists: [], changedFiles: [], hasRange: false, ci: gateSurfaceCi },
   );
   for (const row of gateSurfaceFailures) fail(row);
   const gateSurfaceSummary = `Guard 14 gate-surface self-approval ${

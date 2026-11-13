@@ -71,6 +71,7 @@ import {
   extractCategoryRowTokens,
   isGitHubActions,
   readDeclaredBins,
+  readGateSide,
   readRolesCorpus,
   readTrackedFiles,
   readUseCliSkillMarkdown,
@@ -1479,6 +1480,20 @@ describe("readSkillIndexTable — core 专题 skill 索引 reader", () => {
     const result = readSkillIndexTable("## 专题 skill 索引\n\nno table here\n");
     expect(result.failures[0]).toContain("no `mstar-*` row");
   });
+
+  test("a row inside an HTML comment is not indexed, so the skill reports unindexed-skill", () => {
+    const text = core(["| `mstar-a` | x |", "<!--", "| `mstar-b` | y |", "-->"]);
+    const { indexed } = readSkillIndexTable(text);
+    expect(indexed).toEqual(["mstar-a"]);
+    expect(checkSkillIndexCoverage({ shipped: ["mstar-a", "mstar-b"], indexed })).toEqual({
+      failures: ["unindexed-skill: mstar-b"],
+    });
+  });
+
+  test("an inline-commented row and a row after the comment block still read correctly", () => {
+    const text = core(["| `mstar-a` | x |", "<!-- | `mstar-hidden` | y | -->", "| `mstar-b` | z |"]);
+    expect(readSkillIndexTable(text).indexed).toEqual(["mstar-a", "mstar-b"]);
+  });
 });
 
 describe("readSkillIndexCoverage — the shipped corpus agrees with the index", () => {
@@ -1490,6 +1505,39 @@ describe("readSkillIndexCoverage — the shipped corpus agrees with the index", 
     // pm / grill-me are not mstar-* and must stay outside the comparison.
     expect(result.shipped).not.toContain("pm");
     expect(result.shipped).not.toContain("grill-me");
+  });
+});
+
+describe("readGateSide — a corrupt gate file must not read as an empty collection", () => {
+  const file = "scripts/lint-refusal-quality.allowlist.json";
+
+  test("an absent file is a legitimate empty collection with no failure", () => {
+    const result = readGateSide(file, "merge-base abc12345", () => {
+      throw new Error("fatal: path does not exist");
+    });
+    expect(result.value).toBeNull();
+    expect(result.failure).toBeNull();
+  });
+
+  test("a base-version file that is present but unparseable yields a failure naming the path and side", () => {
+    const result = readGateSide(file, "merge-base abc12345", () => "[{ \"signature\": ");
+    expect(result.value).toBeNull();
+    expect(result.failure).toContain(file);
+    expect(result.failure).toContain("merge-base abc12345");
+    expect(result.failure).toContain("unparseable as JSON");
+  });
+
+  test("a worktree-version file that is present but unparseable yields a failure naming the path and side", () => {
+    const result = readGateSide(file, "worktree", () => "not json");
+    expect(result.value).toBeNull();
+    expect(result.failure).toContain(file);
+    expect(result.failure).toContain("(worktree)");
+  });
+
+  test("a parseable file returns its value with no failure", () => {
+    const result = readGateSide(file, "worktree", () => '[{"signature":"k:skills/a/SKILL.md:abc"}]');
+    expect(result.failure).toBeNull();
+    expect(result.value).toEqual([{ signature: "k:skills/a/SKILL.md:abc" }]);
   });
 });
 
@@ -1596,14 +1644,14 @@ describe("checkGateSurfaceChange — Guard 14 gate-surface self-approval", () =>
   test("an allowlist entry added with its signature path changed passes", () => {
     expect(
       checkGateSurfaceChange({
+        ...range(["skills/mstar-audit/SKILL.md"]),
         allowlists: [
           {
-            file: "scripts/rule-duplication.allowlist.json",
+            file: "scripts/lint-refusal-quality.allowlist.json",
             base: [],
             head: [{ signature: "duplicate-hard-rule:skills/mstar-audit/SKILL.md:abc123", justification: "x" }],
           },
         ],
-        ...range(["skills/mstar-audit/SKILL.md"]),
       }),
     ).toEqual([]);
   });
@@ -1613,15 +1661,119 @@ describe("checkGateSurfaceChange — Guard 14 gate-surface self-approval", () =>
       ...range(["skills/mstar-audit/references/other.md"]),
       allowlists: [
         {
-          file: "scripts/rule-duplication.allowlist.json",
+          file: "scripts/lint-refusal-quality.allowlist.json",
           base: [],
           head: [{ signature: "duplicate-hard-rule:skills/mstar-audit/SKILL.md:abc123" }],
         },
       ],
     });
     expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("scripts/lint-refusal-quality.allowlist.json");
+    expect(failures[0]).toContain("skills/mstar-audit/SKILL.md is not in the same change set");
+  });
+
+  test("a rule-duplication {file, normalizedHash} entry added with its file changed passes", () => {
+    expect(
+      checkGateSurfaceChange({
+        allowlists: [
+          {
+            file: "scripts/rule-duplication.allowlist.json",
+            base: [],
+            head: [
+              {
+                file: "skills/mstar-audit/SKILL.md",
+                normalizedHash: "abc123",
+                reason: "skills/mstar-sdd/SKILL.md owns this rule",
+              },
+            ],
+          },
+        ],
+        ...range(["skills/mstar-audit/SKILL.md"]),
+      }),
+    ).toEqual([]);
+  });
+
+  test("a rule-duplication {file, normalizedHash} entry added with its file unchanged fails naming the file", () => {
+    const failures = checkGateSurfaceChange({
+      ...range(["README.md"]),
+      allowlists: [
+        {
+          file: "scripts/rule-duplication.allowlist.json",
+          base: [],
+          head: [
+            {
+              file: "skills/mstar-audit/SKILL.md",
+              normalizedHash: "abc123",
+              reason: "skills/mstar-sdd/SKILL.md owns this rule",
+            },
+          ],
+        },
+      ],
+    });
+    expect(failures.length).toBe(1);
     expect(failures[0]).toContain("scripts/rule-duplication.allowlist.json");
     expect(failures[0]).toContain("skills/mstar-audit/SKILL.md is not in the same change set");
+  });
+
+  test("a raised expectedCount with its source file unchanged fails", () => {
+    const entry = (expectedCount?: number) => ({
+      signature: "missing-recovery:packages/commands/src/families/session.ts:1fb700d536ac",
+      justification: "x",
+      trackingIssue: "I-000872",
+      ...(expectedCount === undefined ? {} : { expectedCount }),
+    });
+    const failures = checkGateSurfaceChange({
+      ...range(["README.md"]),
+      allowlists: [
+        {
+          file: "scripts/lint-refusal-quality.allowlist.json",
+          base: [entry(1)],
+          head: [entry(2)],
+        },
+      ],
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("raised expectedCount 1→2");
+    expect(failures[0]).toContain("packages/commands/src/families/session.ts is not in the same change set");
+  });
+
+  test("a raised expectedCount with its source file changed passes, and a lowered one stands alone", () => {
+    const entry = (expectedCount?: number) => ({
+      signature: "missing-recovery:packages/commands/src/families/session.ts:1fb700d536ac",
+      justification: "x",
+      trackingIssue: "I-000872",
+      ...(expectedCount === undefined ? {} : { expectedCount }),
+    });
+    const allowlist = (base: number, head: number) => [
+      {
+        file: "scripts/lint-refusal-quality.allowlist.json",
+        base: [entry(base)],
+        head: [entry(head)],
+      },
+    ];
+    expect(
+      checkGateSurfaceChange({
+        ...range(["packages/commands/src/families/session.ts"]),
+        allowlists: allowlist(1, 2),
+      }),
+    ).toEqual([]);
+    expect(checkGateSurfaceChange({ allowlists: allowlist(2, 1), ...range([]) })).toEqual([]);
+  });
+
+  test("an implicit expectedCount of 1 does not register as a widening when made explicit", () => {
+    const signature = "missing-recovery:packages/commands/src/families/session.ts:1fb700d536ac";
+    expect(
+      checkGateSurfaceChange({
+        allowlists: [
+          {
+            file: "scripts/lint-refusal-quality.allowlist.json",
+            base: [{ signature, justification: "x" }],
+            head: [{ signature, justification: "x", expectedCount: 1 }],
+          },
+        ],
+        ...range([]),
+      }),
+    ).toEqual([]);
   });
 
   test("a removed allowlist entry stands alone", () => {
@@ -1639,7 +1791,23 @@ describe("checkGateSurfaceChange — Guard 14 gate-surface self-approval", () =>
     ).toEqual([]);
   });
 
-  test("a widened entry with an unparseable signature fails closed", () => {
+  test("a widened entry with no signature and no file fails closed", () => {
+    const failures = checkGateSurfaceChange({
+      ...range(["README.md"]),
+      allowlists: [
+        {
+          file: "scripts/rule-duplication.allowlist.json",
+          base: [],
+          head: [{ justification: "no key at all" }],
+        },
+      ],
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("fails closed");
+    expect(failures[0]).toContain("no key at all");
+  });
+
+  test("a widened entry whose signature has no path segment fails closed", () => {
     const failures = checkGateSurfaceChange({
       ...range(["README.md"]),
       allowlists: [
@@ -1653,6 +1821,21 @@ describe("checkGateSurfaceChange — Guard 14 gate-surface self-approval", () =>
     expect(failures.length).toBe(1);
     expect(failures[0]).toContain("fails closed");
     expect(failures[0]).toContain("no-colon-signature");
+  });
+
+  test("an unparseable gate file is a violation row, not an empty collection", () => {
+    const failures = checkGateSurfaceChange({
+      allowlists: [],
+      changedFiles: [],
+      hasRange: true,
+      ci: false,
+      failures: [
+        "Guard 14 gate-surface self-approval: scripts/lint-refusal-quality.allowlist.json (worktree) is present but unparseable as JSON (Unexpected token)",
+      ],
+    });
+    expect(failures).toEqual([
+      "Guard 14 gate-surface self-approval: scripts/lint-refusal-quality.allowlist.json (worktree) is present but unparseable as JSON (Unexpected token)",
+    ]);
   });
 
   test("no git range skips locally and fails in CI", () => {
@@ -1673,12 +1856,28 @@ describe("checkGateSurfaceChange — Guard 14 gate-surface self-approval", () =>
         allowlists: [
           {
             file: "scripts/rule-duplication.allowlist.json",
-            base: [{ signature: "duplicate-hard-rule:skills/mstar-audit/SKILL.md:abc123", justification: "x" }],
-            head: [{ justification: "x", signature: "duplicate-hard-rule:skills/mstar-audit/SKILL.md:abc123" }],
+            base: [{ file: "skills/mstar-audit/SKILL.md", normalizedHash: "abc123", reason: "x" }],
+            head: [{ reason: "x", normalizedHash: "abc123", file: "skills/mstar-audit/SKILL.md" }],
           },
         ],
         ...range(["scripts/rule-duplication.allowlist.json"]),
       }),
     ).toEqual([]);
+  });
+
+  test("a reordered allowlist entry with a raised expectedCount still fails (key order is not the contract)", () => {
+    const signature = "missing-recovery:packages/commands/src/families/session.ts:1fb700d536ac";
+    const failures = checkGateSurfaceChange({
+      ...range([]),
+      allowlists: [
+        {
+          file: "scripts/lint-refusal-quality.allowlist.json",
+          base: [{ signature, justification: "x", expectedCount: 1 }],
+          head: [{ expectedCount: 3, justification: "x", signature }],
+        },
+      ],
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("raised expectedCount 1→3");
   });
 });
