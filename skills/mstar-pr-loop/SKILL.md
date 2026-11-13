@@ -82,7 +82,7 @@ Reuse `mstar-iteration` → `references/command-shared-invariants.md` § Continu
 
 ## Evidence
 
-Return the PR identity and current head, latest report path and review URL, tally-derived verdict, fix commits and scoped checks actually exercised, plus residual findings (issue id and revalidated state when captured; `none` when empty). Success requires the `ship it` row's complete predicate. Blocked or budget-limited exits include unresolved state and a named recovery path; fixed findings do not authorize issue closure.
+Return the PR identity and current head, latest report path and review URL, tally-derived verdict, fix commits and scoped checks actually exercised, plus residual findings (issue id and revalidated state when captured; `none` when empty). Also report the PR body's `Door` and `Blast radius` when present, and report them missing when absent. Success requires the `ship it` row's complete predicate. Blocked or budget-limited exits include unresolved state and a named recovery path; fixed findings do not authorize issue closure.
 
 ## References
 
