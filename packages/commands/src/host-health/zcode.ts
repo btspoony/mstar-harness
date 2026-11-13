@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { resolveProjectRoot } from "./paths.js";
 
-const MARKETPLACE_ID = "mstar-local";
-const MARKETPLACE_NAME = "mstar-local";
-const GITHUB_REPO = "btspoony/mstar-harness";
+/** The marketplace identity the doctor validates and the adapter writes. */
+export const MARKETPLACE_ID = "mstar-local";
+export const MARKETPLACE_NAME = "mstar-local";
+export const GITHUB_REPO = "btspoony/mstar-harness";
 const PLUGIN_NAME = "morning-star-harness";
 const ZCODE_PLUGIN_MARKER = ".zcode-plugin/plugin.json";
 const ZCODE_PLUGIN_CHECKOUT_PROJECT = ".zcode/plugin-checkout";

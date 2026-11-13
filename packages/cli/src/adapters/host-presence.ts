@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { OPENCODE_VERSION_TIMEOUT_MS } from "@mstar-harness/commands";
+import { CODEX_INSTALL_HINT, DSH_INSTALL_HINT, OPENCODE_VERSION_TIMEOUT_MS } from "@mstar-harness/commands";
 import type { Target, ProbeCommandRunner } from "../types";
 import { withProbeAbort } from "./probe-timeout";
 
@@ -30,12 +30,16 @@ export const HOST_PRESENCE_BINARIES: Partial<Record<Target, string>> = {
 /** Share the version-probe deadline while bounding PATH lookup independently. */
 export const HOST_PRESENCE_TIMEOUT_MS = OPENCODE_VERSION_TIMEOUT_MS;
 
-/** Per-target recovery wording mirrors existing adapters; copied to avoid adapter/helper cycles. */
+/**
+ * Per-target recovery wording. codex and dsh read the hint their `host-health`
+ * writer exports — the same text the doctor quotes — while a target with no
+ * commands writer keeps its own literal here.
+ */
 const HOST_PRESENCE_INSTALL_HINTS: Partial<Record<Target, string>> = {
  opencode: "Install the OpenCode CLI (https://opencode.ai), then re-run: npx @mstar-harness/cli init --target opencode --scope <global|project>",
  omp: "Install Oh My Pi (`omp`), then re-run init or manually: omp plugin install @mstar-harness/omp",
- codex: "Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.",
- dsh: "Install the DeepSeek Harness CLI (@deepseek-ai/dsh), e.g. `pnpm add -g @deepseek-ai/dsh` or `npm install -g @deepseek-ai/dsh`, then re-run init.",
+ codex: CODEX_INSTALL_HINT,
+ dsh: DSH_INSTALL_HINT,
  cursor: "Install the Cursor CLI with `curl https://cursor.com/install -fsS | bash`, confirm `cursor-agent` is available on PATH, then re-run init.",
  kimi: "Install the Kimi Code CLI (https://www.kimi.com/code/docs/kimi-code-cli/), then re-run: npx @mstar-harness/cli init --target kimi --scope <global|project>",
 };
