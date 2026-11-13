@@ -2,21 +2,19 @@ import os from "node:os";
 import path from "node:path";
 import type { Scope, Target } from "./types";
 import {
-  detectCursorPluginVersion,
+  DSH_HOME_ENV,
+  DSH_HOME_SUBDIR,
   detectCursorPluginVersionForScope,
   detectDshPluginVersion,
   detectKimiPluginVersion,
   detectOpencodePluginVersion,
   detectZcodePluginVersion,
-  findInstalledPlugin,
-  formatPluginVersionDoctorNote,
   isMorningStarPluginEntry,
   ompEntryVersion,
   PLUGIN_VERSION_SHAPE_RE,
   globalInstallPath as cursorGlobalInstallPath,
   projectInstallPath as cursorProjectInstallPath,
 } from "@mstar-harness/commands";
-import { DSH_HOME_ENV, DSH_HOME_SUBDIR } from "./adapters/dsh";
 import { detectCodexPluginVersion } from "./adapters/codex";
 import { listInstalledPlugins } from "./adapters/omp";
 import { resolveProjectRoot } from "./utils";
@@ -104,15 +102,3 @@ export function detectInstalledPluginVersion(target: Target, scope: Scope = "pro
   const version = discovered.trim();
   return PLUGIN_VERSION_SHAPE_RE.test(version) ? version : null;
 }
-
-export {
-  detectCursorPluginVersion,
-  detectCursorPluginVersionForScope,
-  detectDshPluginVersion,
-  detectKimiPluginVersion,
-  detectOpencodePluginVersion,
-  detectZcodePluginVersion,
-  findInstalledPlugin,
-  formatPluginVersionDoctorNote,
-  ompEntryVersion,
-};

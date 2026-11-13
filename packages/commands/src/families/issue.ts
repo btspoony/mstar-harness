@@ -387,7 +387,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
     ...(payloadType[verb] !== undefined
-      ? { payloads: { payload: { schema: payloadSchema(payloadType[verb], terminalDisposition[verb]), registryName: payloadType[verb], help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
+      ? { payloads: { payload: { schema: payloadSchema(payloadType[verb], terminalDisposition[verb]), registryName: payloadType[verb] } } }
       : {}),
     execute: (input, context) => execute(id, input, context),
   };

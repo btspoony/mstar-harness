@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import {
+  CODEX_INSTALL_HINT,
   CODEX_MARKETPLACE_NAME as MARKETPLACE_NAME,
   diagnoseCodexHost,
   detectCodexPluginVersion as detectCodexPluginVersionFromHealth,
@@ -48,7 +49,6 @@ import {
  */
 
 const CODEX_BIN = "codex";
-const CODEX_INSTALL_HINT = "Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.";
 const CODEX_LOCAL_TIMEOUT_MS = 10_000;
 const CODEX_MARKETPLACE_TIMEOUT_MS = 300_000;
 

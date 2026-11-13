@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentAdapter, Scope } from "../types";
 import { ensureObject, readJson, writeJson, resolveProjectRoot, readHarnessVersion } from "../utils";
-import { diagnoseZcodeHost } from "@mstar-harness/commands";
+import { GITHUB_REPO, MARKETPLACE_ID, MARKETPLACE_NAME, diagnoseZcodeHost } from "@mstar-harness/commands";
 import {
   REPO_URL,
   PLUGIN_NAME,
@@ -43,8 +43,6 @@ export function writeMarketplaceFiles(
     throw new Error(`Failed writing ZCode marketplace files: ${String(error)}. ${restoreErrors.length ? `Rollback also failed: ${restoreErrors.join("; ")}` : "Previously existing file contents were restored."}`);
   }
 }
-const MARKETPLACE_ID = "mstar-local";
-const MARKETPLACE_NAME = "mstar-local";
 const MARKETPLACE_DESCRIPTION = "Morning Star harness marketplace (GitHub source).";
 const PLUGIN_DESCRIPTION =
   "Multi-agent code harness framework with unified skills for OpenCode, Cursor, Codex, Kimi Code, and ZCode.";
@@ -53,7 +51,6 @@ const PLUGIN_CATEGORY = "Productivity";
 // root `marketplace.json`) — ZCode replaces the bootstrap snapshot with the repo manifest on refresh.
 const PLUGIN_DISPLAY_NAME = "Morning Star Harness";
 const PLUGIN_ICON_URL = "https://raw.githubusercontent.com/btspoony/mstar-harness/main/assets/icon.png";
-const GITHUB_REPO = "btspoony/mstar-harness";
 const GITHUB_REF = "main";
 const ZCODE_PLUGIN_CHECKOUT_PROJECT = ".zcode/plugin-checkout";
 const ZCODE_PLUGINS_ROOT = path.join(os.homedir(), ".zcode", "cli", "plugins");

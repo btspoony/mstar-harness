@@ -7,13 +7,13 @@ import {
   AUDIT_EFFORTS,
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
+  REVIEW_RUN_LEVELS,
   SddScriptError,
   resolveReviewDir,
   scanSecrets,
   scaffoldAuditReport,
   supplyChainChecks,
   type AuditFinding,
-  type ReviewRunLevel,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
@@ -26,7 +26,6 @@ import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationConte
 
 const verbs = ["scaffold", "secret-scan", "supply-chain"] as const;
 type Verb = (typeof verbs)[number];
-const auditLevels = ["quick", "standard", "deep"] as const satisfies readonly ReviewRunLevel[];
 type Input = {
   findings?: string; dir?: string; level?: string; round?: string; reviewsDir?: string; sha?: string; date?: string; repo?: string;
   path?: string;
@@ -71,6 +70,9 @@ function parseFindings(text: string): { findings: AuditFinding[]; needsVerificat
   const doc = Array.isArray(data) ? { findings: data } : data;
   if (doc === null || typeof doc !== "object" || !Array.isArray((doc as Record<string, unknown>).findings)) throw new SddScriptError("findings file must be an array or an object with a findings array", 2);
   const raw = doc as Record<string, unknown>;
+  // The report's "considered and rejected" section is author-written: the
+  // scaffold has no input for it, so a key here would be silently dropped.
+  if (raw.rejected !== undefined) throw new SddScriptError('findings file key "rejected" is not a scaffold input; write "## Findings considered and rejected" in the report after scaffold', 2);
   const findings = (raw.findings as unknown[]).map((value, index): AuditFinding => {
     if (value === null || typeof value !== "object" || Array.isArray(value)) throw new SddScriptError(`findings[${index}] is not an object`, 2);
     const row = value as Record<string, unknown>;
@@ -161,8 +163,8 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       // resolved when the engine has to derive the run dir from it; otherwise
       // its parent stands in as a root the engine never reads.
       const derived = dirOverride === undefined;
-      const level = !derived || input.level === undefined ? undefined : auditLevels.find((candidate) => candidate === input.level);
-      if (derived && input.level !== undefined && level === undefined) throw new SddScriptError(`--level must be one of ${auditLevels.join(" | ")}`, 2);
+      const level = !derived || input.level === undefined ? undefined : REVIEW_RUN_LEVELS.find((candidate) => candidate === input.level);
+      if (derived && input.level !== undefined && level === undefined) throw new SddScriptError(`--level must be one of ${REVIEW_RUN_LEVELS.join(" | ")}`, 2);
       if (derived && input.round !== undefined && !/^[1-9]\d*$/.test(input.round)) throw new SddScriptError("--round must be an integer >= 1", 2);
       const reviewsDir = input.reviewsDir !== undefined
         ? resolvePath(context.cwd, input.reviewsDir)

@@ -96,6 +96,22 @@ function diagnosticSummary(diagnostics: readonly RefusalDiagnostic[]) {
   return { message: lines.join("\n"), counts: { total: diagnostics.length, shown, omitted } };
 }
 
+/** The one layout owner for the recovery lines a refused message ends with. */
+function refusalSuffix(helpRoute: string, recovery: string | undefined): string {
+  return `\nHelp: ${helpRoute}${recovery === undefined ? "" : `\nRecovery: ${recovery}`}`;
+}
+
+/**
+ * The message body a refusal publishes before this module appends its Help and
+ * Recovery lines. A caller that re-publishes a refusal (the MCP surface rebuilds
+ * one per response) reads the body here instead of restating the layout: an
+ * already-suffixed message loses exactly that suffix, so the call is idempotent.
+ */
+export function refusalMessageBody(message: string, helpRoute: string, recovery?: string): string {
+  const suffix = refusalSuffix(helpRoute, recovery);
+  return message.endsWith(suffix) ? message.slice(0, -suffix.length) : message;
+}
+
 /** Build the shared refusal shape without rewriting engine-authored messages. */
 export function refusalEnvelope(input: RefusalInput): CommandEnvelope<never> {
   const helpRoute = input.helpRoute ?? `mstar ${input.command.replaceAll(".", " ")} --help`;
@@ -121,7 +137,7 @@ export function refusalEnvelope(input: RefusalInput): CommandEnvelope<never> {
   if (input.status === "refused") {
     return {
       version: 1, command: input.command, status: "refused", code: input.code, exitCode: input.exitCode,
-      message: `${input.message}\nHelp: ${helpRoute}${recovery === undefined ? "" : `\nRecovery: ${recovery}`}`,
+      message: `${input.message}${refusalSuffix(helpRoute, recovery)}`,
       details: envelopeDetails,
     };
   }

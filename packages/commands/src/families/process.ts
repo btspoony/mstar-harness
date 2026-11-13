@@ -44,9 +44,9 @@ function definitions(): readonly CommandDefinition[] {
     cli: { path: id === "pr-review.worktree-setup" ? ["pr-review", "worktree-setup"] : id.split(".").map((part) => part.replace("-", " ")).flatMap((part) => part.split(" ")), aliases: [], arguments: args, options },
     input,
     ...(id === "sdd.exec"
-      ? { payloads: { argv: { schema: execArgvSchema, help: "Literal argv admitted by the SDD execution context." } } }
+      ? { payloads: { argv: { schema: execArgvSchema } } }
       : id === "worktree.cleanup"
-        ? { payloads: { worktree: { schema: cleanupWorktreeSchema, help: "Explicit worktree paths to consider within the named workflow scope." } } }
+        ? { payloads: { worktree: { schema: cleanupWorktreeSchema } } }
         : {}),
     output: commandEnvelopeSchema,
     effects,

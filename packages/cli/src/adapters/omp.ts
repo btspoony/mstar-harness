@@ -1,4 +1,4 @@
-import { diagnoseOmpHost, findInstalledPlugin, ompEntryVersion, parseOmpPluginList } from "@mstar-harness/commands";
+import { diagnoseOmpHost, ompEntryVersion, parseOmpPluginList } from "@mstar-harness/commands";
 import fs from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -7,7 +7,6 @@ import { runCliCommand } from "../exec";
 import type { AgentAdapter, InstallInitFlags, Scope } from "../types";
 import { readHarnessVersion, resolveProjectRoot } from "../utils";
 import {
- REPO_URL,
  HARNESS_REPO_PATH,
  ensureLocalHarnessRepo,
  validateLocalHarnessRepo,
@@ -329,7 +328,6 @@ const projectRoot = resolveProjectRoot();
 
  if (dryRun) {
  const ompPackagePath = path.join(HARNESS_REPO_PATH, OMP_PACKAGE_REL);
- const scopeFlag = scopeFlagText(scope);
  const linkArgs = ["plugin", "link", ompPackagePath];
  notes.push(
  "omp CLI presence is unchecked under --dry-run (would-run preview); install Oh My Pi (`omp`) before executing init.",
@@ -337,7 +335,6 @@ const projectRoot = resolveProjectRoot();
  );
  } else {
  const ompPackagePath = path.join(HARNESS_REPO_PATH, OMP_PACKAGE_REL);
- const scopeFlag = scopeFlagText(scope);
  // The CLI resolved this before mutating anything: the published latest when
  // it is newer than the running CLI, else the running version.
  const expectedVersion = initFlags?.pluginVersion ?? readHarnessVersion();

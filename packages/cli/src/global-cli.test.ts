@@ -449,6 +449,10 @@ exit 0`);
     const configPath = path.join(tmp, "opencode.json");
     const result = runInitCli(["--yes", "--target", "opencode", "--output", configPath], cliEnv());
     expect(result.status).not.toBe(0);
+    // One sentence for a failed global install, shared with install mode.
+    expect(result.stderr).toContain(
+      `The global install of @mstar-harness/cli@${SYNTH_PUBLISHED_LATER} failed, so the CLI on PATH stays at ${PACKAGE_VERSION}.`,
+    );
     expect(result.stderr).toContain("Recovery:");
     expect(result.stderr).toContain(`npm i -g @mstar-harness/cli@${SYNTH_PUBLISHED_LATER}`);
   });

@@ -21,7 +21,7 @@
  */
 import type { OverviewDTO, ReadEnvelope, ReadProjection } from "@mstar-harness/engine";
 
-import { UNREACHABLE, asEnvelope, refusalMessage } from "./read-envelope";
+import { asEnvelope, refusalMessage } from "./read-envelope";
 import {
   overviewModel,
   type Copy,
