@@ -7,7 +7,7 @@ severity: medium
 applies_when:
   - adding or changing a consumer of the PR review body (GitHub Review comment, local report archive, host hook)
   - a consumer needs a fact the rendered review Markdown states in prose
-  - deciding whether a new review presentation surface justifies a renderer variant
+  - deciding whether a new review publication channel justifies a renderer variant
 tags:
   - review-envelope
   - renderer-ownership
@@ -25,16 +25,16 @@ related_components:
 The PR review flow has two representations of one review: the structured `mstar.review/v1`
 envelope (`MstarReviewV1` in `packages/engine/src/prreview.ts`, payload schema
 `MSTAR_REVIEW_V1_PAYLOAD_SCHEMA` in `packages/engine/src/qcreview-schema.ts`) and the Markdown body
-published for a presentation surface. The envelope is the machine contract; the Markdown body is
-what a human reads. Confusing the second for the first is the recurring defect.
+published to a channel. The envelope is the machine contract; the Markdown body is what a human
+reads. Confusing the second for the first is the recurring defect.
 
 ## Context
 
-`renderReviewMarkdown(review, { surface })` in `packages/engine/src/prreview.ts` turns an envelope
-into the complete review body for one of two surfaces: `github-comment` and `local-report`
-(`ReviewRenderSurface`). Both surfaces answer the same question with different layouts — GitHub gets
-sections and per-class finding blocks, the local report gets a verdict heading with the score band, a
-count table and one `####` block per finding.
+`renderReviewMarkdown(review)` in `packages/engine/src/prreview.ts` turns an envelope into the one
+complete review body, published verbatim to a GitHub Review comment and archived verbatim in the local
+report. The body carries the verdict heading with the score band, a count table and one `####` block
+per finding; it takes no layout option, because a channel that wants a different body needs a contract
+change, not a rendering variant.
 
 Because both bodies are Markdown that demonstrably contains the verdict, the tally, the
 `cause:` / `unscanned:` pair and every finding, a consumer is tempted to regex them back out. That
@@ -56,8 +56,8 @@ rendering of it.
 
 ### The engine owns the body layout; consumers own only channel mechanics
 
-Both surfaces are rendered by the engine, from the same envelope, so the two surfaces can never drift
-apart in the facts they state. What remains outside the renderer is exactly what is *around* the body
+The posted comment and the archived report are both the engine's one rendered body, from the same
+envelope, so the two can never drift apart in the facts they state. What remains outside the renderer is exactly what is *around* the body
 and belongs to the channel:
 
 - **Upsert markers** — the consumer's identity convention for finding and replacing its own previous
@@ -78,7 +78,7 @@ same split from the consumer side.
 `summary_md` is present only when a seat actually produced that prose; `validateMstarReviewV1`
 accepts its absence and rejects an empty or whitespace-only string when the key is present, and
 `synthesizeReview` omits the key entirely for a blank narrative. The renderer prints it as the seat's
-own narrative (the `## 📋 Review` section on the local surface) and never reads it for facts.
+own narrative (`## 📋 Review` in the body) and never reads it for facts.
 
 A fabricated header summary — one built from the verdict and tally to fill the slot — republishes
 facts the body already states structured, so the artifact says everything twice and the two copies
@@ -89,13 +89,13 @@ gap to be filled.
 
 `MstarReviewV1` is a closed contract: `ENVELOPE_KEYS` in `packages/engine/src/prreview.ts` fixes its
 key set and `validateMstarReviewV1` refuses a document with a stray key rather than carrying it. A
-surface that needs a fact the envelope does not carry — a stored score, an unscanned scope for a
+consumer that needs a fact the envelope does not carry — a stored score, an unscanned scope for a
 settled run, a per-seat attribution — has a data gap, not a rendering gap. Adding a renderer variant,
-a surface-specific prop or a second pass over the body does not create data the envelope lacks; the
+a channel-specific prop or a second pass over the body does not create data the envelope lacks; the
 fact must enter through the envelope's own contract (a validated field) or the consumer must derive
 it from the durable report rather than from the rendered prose.
 
-Note where the boundary already sits correctly: the `local-report` surface displays a score band, but
+Note where the boundary already sits correctly: the body displays a score band, but
 `scorePct` and the band are envelope/tally facts; the renderer formats them, and the report
 frontmatter stores `score_pct` with the band explicitly *derived, never stored*.
 
@@ -112,15 +112,15 @@ the defect one level rather than removing it:
    so an `incomplete` review states its scope gap twice and the copies diverge on edit.
 
 Each step is a local patch over a structural error: the consumer was consuming an artifact it does
-not own. The repair is always the same — hand the envelope to `renderReviewMarkdown` for the
-consumer's surface, and keep the consumer's work outside the returned body.
+not own. The repair is always the same — hand the envelope to `renderReviewMarkdown` and keep the
+consumer's work outside the returned body.
 
 ## Why This Matters
 
 - **One layout owner means one place to change.** Fixing a wording or ordering defect in the review
   body is a renderer change with byte-exact unit tests behind it, not a search across consumers.
-- **The two surfaces cannot disagree.** `github-comment` and `local-report` are two renderings of the
-  same validated envelope; a consumer that composes its own body breaks that guarantee.
+- **The posted and archived bodies cannot disagree.** Both are the one renderer's output for the same
+  validated envelope; a consumer that composes its own body breaks that guarantee.
 - **Facts stay checkable.** A reviewer of an `incomplete` review compares the envelope's `incomplete`
   object against the stated scope gap; a consumer-side parse of the prose has no equivalent check and
   degrades quietly.
@@ -142,7 +142,7 @@ consumer's surface, and keep the consumer's work outside the returned body.
 ### Before — the consumer parses the body it just rendered
 
 ```ts
-const body = renderReviewMarkdown(review, { surface: "github-comment" });
+const body = renderReviewMarkdown(review);
 
 // Recovering facts by shape: depends on wording, ordering and emphasis the renderer owns.
 const verdict = body.match(/\*\*Verdict: (.+?)\*\*/)?.[1];
@@ -154,12 +154,12 @@ const cause = body.match(/^cause: (.+)$/m)?.[1]; // absent on a settled body
 
 ```ts
 const { verdict, tally, incomplete } = review; // validated by validateMstarReviewV1
-const body = renderReviewMarkdown(review, { surface: "github-comment" });
+const body = renderReviewMarkdown(review);
 
 // Channel mechanics stay outside the returned body: framing first, then the limit.
 const framed = [roundHeader, body, upsertMarker].join("\n\n");
 const payload = framed.length > channelLimit ? clamp(framed, channelLimit) : framed;
 ```
 
-A surface that needs a fact missing from `review` is a contract question, not a parsing question: add
-it to `MstarReviewV1` with validator coverage, or read it from the durable local report.
+A consumer that needs a fact missing from `review` is a contract question, not a parsing question:
+add it to `MstarReviewV1` with validator coverage, or read it from the durable local report.

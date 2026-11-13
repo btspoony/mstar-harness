@@ -133,6 +133,7 @@ import {
   StoreError,
   assertStoreRuntimeSupported,
   openStore,
+  readStoreAuthority,
   storeDbPath,
   type StoreContext,
   type StoreDb,
@@ -1277,26 +1278,24 @@ async function readLiveStore(context: StoreContext, what: string): Promise<LiveR
  * never from a second read taken beside it.
  */
 function readLiveSide(db: StoreDb, schemaVersion: number, execution: BackupExecutionMeta | null, what: string): LiveRead {
-  const meta = db
-    .prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1")
-    .get() as Record<string, unknown> | undefined;
+  const meta = readStoreAuthority(db);
   if (
-    !meta ||
-    typeof meta.store_id !== "string" ||
-    (meta.authority_state !== "staged" && meta.authority_state !== "active") ||
-    typeof meta.authority_epoch !== "number" ||
+    meta.missing ||
+    typeof meta.storeId !== "string" ||
+    (meta.authorityState !== "staged" && meta.authorityState !== "active") ||
+    typeof meta.epoch !== "number" ||
     typeof meta.revision !== "number" ||
-    typeof meta.catalog_revision !== "number"
+    typeof meta.catalogRevision !== "number"
   ) {
     throw corrupt(`${what} found store_meta missing or malformed; the live authority generation cannot be verified`);
   }
   const availability = availabilityOf(schemaVersion);
   return {
-    storeId: meta.store_id,
-    epoch: meta.authority_epoch,
+    storeId: meta.storeId,
+    epoch: meta.epoch,
     revision: meta.revision,
-    catalogRevision: meta.catalog_revision,
-    authorityState: meta.authority_state,
+    catalogRevision: meta.catalogRevision,
+    authorityState: meta.authorityState,
     schemaVersion,
     execution,
     rows: readAuthorityRows(db, availability),
@@ -2403,10 +2402,8 @@ export async function exportExecutionState(context: StoreContext): Promise<Execu
     const redacted: string[] = [];
     handle.db.exec("begin");
     try {
-      const meta = handle.db
-        .prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1")
-        .get() as Record<string, unknown> | undefined;
-      if (!meta || typeof meta.store_id !== "string") throw corrupt("store_meta is missing; there is no store identity to export");
+      const meta = readStoreAuthority(handle.db);
+      if (meta.missing || typeof meta.storeId !== "string") throw corrupt("store_meta is missing; there is no store identity to export");
 
       const migrations =
         handle.schemaVersion >= EXECUTION_MIGRATION_VERSION
@@ -2454,11 +2451,11 @@ export async function exportExecutionState(context: StoreContext): Promise<Execu
       const payload = {
         format: "execution-diagnostic-v1",
         store: {
-          storeId: meta.store_id,
-          epoch: meta.authority_epoch,
+          storeId: meta.storeId,
+          epoch: meta.epoch,
           revision: meta.revision,
-          catalogRevision: meta.catalog_revision,
-          authorityState: meta.authority_state,
+          catalogRevision: meta.catalogRevision,
+          authorityState: meta.authorityState,
           schemaVersion: handle.schemaVersion,
         },
         execution: handle.execution === null ? null : { ...handle.execution },

@@ -36,7 +36,7 @@ import {
   resolveTrackedResultDir,
 } from "./path.js";
 import { mainWorktreeRoot, realpathNearest } from "./git-probe.js";
-import { openStore, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, readStoreAuthority, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
 // Vocabulary (contract §2)
@@ -733,13 +733,11 @@ export type ComposedStoreRevision = {
  * — one reader for both transports.
  */
 export function readCatalogStoreVersionsOn(db: StoreDb): CatalogStoreVersions {
-  const row = db
-    .prepare("select authority_state, revision, catalog_revision from store_meta where id = 1")
-    .get() as { authority_state?: unknown; revision?: unknown; catalog_revision?: unknown } | undefined;
-  if (!row || typeof row.authority_state !== "string" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
+  const row = readStoreAuthority(db);
+  if (typeof row.authorityState !== "string" || typeof row.revision !== "number" || typeof row.catalogRevision !== "number") {
     throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept catalog mutations. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.");
   }
-  return { storeRevision: row.revision, catalogRevision: row.catalog_revision, authorityState: row.authority_state };
+  return { storeRevision: row.revision, catalogRevision: row.catalogRevision, authorityState: row.authorityState };
 }
 
 function assertCatalogActive(db: StoreDb): void {

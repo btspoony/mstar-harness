@@ -566,7 +566,8 @@ export function resolveReviewDir(
  * § 2). A category focus (security / perf / tests / branch / next /
  * simplify) never enters a run-directory name.
  */
-export type ReviewRunLevel = "quick" | "standard" | "deep";
+export const REVIEW_RUN_LEVELS = ["quick", "standard", "deep"] as const;
+export type ReviewRunLevel = (typeof REVIEW_RUN_LEVELS)[number];
 
 /**
  * Fully resolved run spec — the codebase round is required here (engine API
@@ -588,7 +589,6 @@ export type ReviewRunRequest =
   | { kind: "branch"; slug: string }
   | { kind: "diff"; headSha?: string };
 
-const REVIEW_RUN_LEVELS: readonly ReviewRunLevel[] = ["quick", "standard", "deep"];
 const REVIEW_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Short-SHA width for `diff` run names (git's default abbreviation length). */
 const REVIEW_SHORT_SHA_WIDTH = 7;

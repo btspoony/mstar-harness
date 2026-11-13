@@ -99,6 +99,7 @@ import {
 import {
   ExecutionError,
   advanceWorkflowHeaderRevision,
+  assertActiveExecutionAuthority,
   assertAuthorityGeneration,
   assertExecutionToken,
   assertOperationId,
@@ -1265,13 +1266,11 @@ export async function mutateExecutionWorkflow(
   }
   workflowWitnessGapForTest?.();
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError(
-        "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; a workflow transition requires an active authority. ` +
-          `A staged store is inspectable only through migration diagnostics.`,
-      );
-    }
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; a workflow transition requires an active authority. ` +
+        `A staged store is inspectable only through migration diagnostics.`,
+    );
     // §2.1/§4.1 (A26) the generation fences run FIRST: a reference or token from
     // a superseded epoch is re-resolved, never answered from a receipt recorded
     // under a generation that no longer exists.
@@ -1994,13 +1993,11 @@ export async function recoverExecutionCoordinator(
     attestation: supplied,
   });
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError(
-        "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; recovering a coordinator requires an active authority. ` +
-          `A staged store is inspectable only through migration diagnostics.`,
-      );
-    }
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; recovering a coordinator requires an active authority. ` +
+        `A staged store is inspectable only through migration diagnostics.`,
+    );
     const header = requireWorkflowState(tx, workflowId);
     // The omitted expectation is the current revision's token, resolved under
     // the same lock that checks it.
@@ -2315,13 +2312,11 @@ export async function reopenExecutionWorkflow(
     attestation: supplied,
   });
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError(
-        "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; reopening a workflow requires an active authority. ` +
-          `A staged store is inspectable only through migration diagnostics.`,
-      );
-    }
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; reopening a workflow requires an active authority. ` +
+        `A staged store is inspectable only through migration diagnostics.`,
+    );
     // `coordination.workflow-not-found` for a header this store does not hold.
     const header = requireWorkflowState(tx, workflowId);
     // §3.1 an identical retry replays its recorded receipt — and it is checked

@@ -75,6 +75,7 @@ import {
 import { provisionRecoveryDocument } from "./activation-provisioning.js";
 import {
   openStore,
+  readStoreAuthority,
   StoreError,
   storeDbPath,
   type ExecutionMeta,
@@ -1319,6 +1320,17 @@ async function withExecutionReadTransaction<T>(
 }
 
 /**
+ * The ACTIVE-authority precondition of every execution WRITE verb. The verb
+ * supplies its own sentence, so each refusal keeps the vocabulary of the action
+ * the caller attempted; the code and the authority state are the same for all.
+ */
+export function assertActiveExecutionAuthority(tx: ExecutionTransaction, message: string): void {
+  if (tx.execution.authorityState !== "active") {
+    throw new ExecutionError("execution.not-active", message);
+  }
+}
+
+/**
  * §3 consistent state read: one read-only transaction over the whole graph,
  * returning the root register with its active lifecycles and the root token the
  * caller passes back as CAS. Refuses `execution.not-active` unless the execution
@@ -1622,14 +1634,12 @@ function assertNoLegacyExecutionSources(context: StoreContext): void {
 
 /** §3: the store must already be the ACTIVE issue/catalog authority. */
 function assertActiveStoreAuthority(db: StoreDb): void {
-  const row = db.prepare("select authority_state from store_meta where id = 1").get() as
-    | { authority_state?: unknown }
-    | undefined;
-  if (!row || typeof row.authority_state !== "string") throw corrupt("store_meta is missing");
-  if (row.authority_state !== "active") {
+  const authority = readStoreAuthority(db).authorityState;
+  if (typeof authority !== "string") throw corrupt("store_meta is missing");
+  if (authority !== "active") {
     throw new ExecutionError(
       "store.not-active",
-      `the issue/catalog store is ${row.authority_state}; run \`mstar store upgrade --operator <name>\` to import legacy ` +
+      `the issue/catalog store is ${authority}; run \`mstar store upgrade --operator <name>\` to import legacy ` +
         "workspace rows and activate both authorities; nothing was modified.",
     );
   }
@@ -2286,9 +2296,10 @@ export async function adoptTerminalWorkflow(
     },
   });
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; terminal adoption requires an active authority`);
-    }
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; terminal adoption requires an active authority`,
+    );
     const replay = readOperationReplay<ExecutionState>(tx, {
       operationId: input.operationId,
       requestHash,
@@ -2496,13 +2507,11 @@ export async function createExecutionWorkflow(
   const operationId = input.operationId;
   const requestHash = createWorkflowRequestHash(context.caller, creation, input.expected);
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError(
-        "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; domain creation requires an active authority. ` +
-          `A staged store is inspectable only through migration diagnostics.`,
-      );
-    }
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; domain creation requires an active authority. ` +
+        `A staged store is inspectable only through migration diagnostics.`,
+    );
     // Idempotent replay: only the CURRENT epoch's committed receipt replays, and
     // only for the identical request. A different payload on the same id is a
     // conflict, never a silent overwrite of the recorded receipt.
@@ -3058,31 +3067,6 @@ export function bindRecoveredSession(
 }
 
 /**
- * §3/§E claim the workflow's integration merge lease for ONE attempt: the merge
- * is workflow-wide and exclusive, so this is the single row that says who is
- * merging what, and it names the plan and source branch it belongs to (a holder
- * match alone is never ownership). The row's own revision advances because its
- * record changed (§3.1); a re-claim by the same attempt is not this caller's
- * path — `integration-start` re-verifies a started attempt without writing.
- */
-export function claimIntegrationMergeLease(
-  tx: ExecutionTransaction,
-  input: { workflowId: string; lease: IntegrationMergeLease },
-): void {
-  const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
-  tx.db
-    .prepare(
-      "insert or replace into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, ?, ?, ?)",
-    )
-    .run(
-      input.workflowId,
-      existing === null ? 1 : existing.revision + 1,
-      tx.epoch,
-      JSON.stringify({ ...input.lease, status: "held" }),
-    );
-}
-
-/**
  * §3/§E release the workflow's integration merge lease, recording who held it,
  * who released it and why. The row is NOT deleted: it keeps its revision and
  * owner epoch as the §3.1 ABA guard, and reads as unclaimed (`null`) exactly as
@@ -3460,13 +3444,11 @@ export async function bindExecutionSession(
   const bind = resolveBindRequest(context.caller, input);
   const requestHash = bindSessionRequestHash(context.caller, bind, input.expected);
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError(
-        "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; binding a session requires an active authority. ` +
-          `A staged store is inspectable only through migration diagnostics.`,
-      );
-    }
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; binding a session requires an active authority. ` +
+        `A staged store is inspectable only through migration diagnostics.`,
+    );
     const recorded = readCommittedOperation(tx.db, tx.epoch, bind.operationId);
     if (recorded !== null) {
       if (recorded.requestHash !== requestHash) {

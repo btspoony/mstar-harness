@@ -16,7 +16,16 @@
  */
 import { SddScriptError } from "./sdd.js";
 import { queryDashboard, withStoreRead, type StoreReadQuery } from "./store-read.js";
-import { ISSUE_DISPOSITIONS, vocabularyMap, type Disposition, type IssueFilter } from "./issue.js";
+import {
+  ISSUE_DISPOSITIONS,
+  ISSUE_KINDS,
+  ISSUE_SEVERITIES,
+  vocabularyMap,
+  type Disposition,
+  type IssueFilter,
+  type IssueKind,
+  type Severity,
+} from "./issue.js";
 import type { StoreContext } from "./store-db.js";
 import type { DashboardFilters, DashboardView, DashboardViewData, ReadEnvelope } from "./store-read.js";
 
@@ -40,15 +49,8 @@ const VIEW_QUERY_FIELDS: Record<DashboardView, readonly string[]> = {
 };
 
 const DISPOSITIONS: Record<Disposition, true> = vocabularyMap(ISSUE_DISPOSITIONS);
-const KINDS: Record<string, true> = {
-  bug: true,
-  risk: true,
-  improvement: true,
-  request: true,
-  decision: true,
-  "review-obligation": true,
-};
-const SEVERITIES: Record<string, true> = { critical: true, high: true, medium: true, low: true, nit: true };
+const KINDS: Record<IssueKind, true> = vocabularyMap(ISSUE_KINDS);
+const SEVERITIES: Record<Severity, true> = vocabularyMap(ISSUE_SEVERITIES);
 
 function refuse(message: string): never {
   throw new SddScriptError(message, 2);
@@ -108,9 +110,9 @@ export function dashboardFilters(
       refuse(`disposition must be one of ${Object.keys(DISPOSITIONS).join(", ")}`);
     }
     const kind = queryValue(params, "kind");
-    if (kind !== undefined && KINDS[kind] !== true) refuse(`kind must be one of ${Object.keys(KINDS).join(", ")}`);
+    if (kind !== undefined && !Object.hasOwn(KINDS, kind)) refuse(`kind must be one of ${Object.keys(KINDS).join(", ")}`);
     const severity = queryValue(params, "severity");
-    if (severity !== undefined && SEVERITIES[severity] !== true) {
+    if (severity !== undefined && !Object.hasOwn(SEVERITIES, severity)) {
       refuse(`severity must be one of ${Object.keys(SEVERITIES).join(", ")}`);
     }
     const search = queryValue(params, "q");

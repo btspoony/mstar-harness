@@ -98,6 +98,7 @@ import { findRegisteredWorkflow, rowPlanIds, validatePlanRow, type PlanRow } fro
 import {
   StoreError,
   openStore,
+  readStoreAuthority,
   type StoreContext,
   type StoreDb,
   type StoreHandle,
@@ -807,10 +808,7 @@ export function catalogPinFactsOn(
   workflowId: string,
   planId: string,
 ): CatalogPinFacts {
-  const meta = db.prepare("select authority_state from store_meta where id = 1").get() as
-    | { authority_state?: unknown }
-    | undefined;
-  if (meta?.authority_state !== "active") {
+  if (readStoreAuthority(db).authorityState !== "active") {
     return { store: "inactive", storeId, revision: null, relation_hash: null, binding: null };
   }
   const entity = db

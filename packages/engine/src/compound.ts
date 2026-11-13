@@ -508,34 +508,6 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
 // ---------------------------------------------------------------------------
 
 /**
- * RETIRED (state-projection contract §4): the `{KNOWLEDGE_DIR}/README.md` row
- * listed here was a Markdown register, and catalog authority now lives in
- * `store.db`. It refuses actionably instead of quietly passing, and it has no
- * product caller left: `compound.validate` (the CLI command and the MCP
- * `mstar_compound` action `validate`) routes `knowledgeDir` to
- * `assertKnowledgeCatalogCompleteness`. The export stays published for an
- * external host hook that still calls it by name.
- *
- * No compound surface carries a reference-existence check: that Maintain-phase
- * duty is `referenceExists` in this module, and its only caller outside this
- * package is the dsh seam gate `validateCompoundDoc`
- * (`packages/dsh/src/gates/seams.ts`).
- */
-export function assertIndexRows(knowledgeDir: string): GateResult {
-  return {
-    ok: false,
-    violations: [
-      violation(
-        "medium",
-        "compound.index.retired",
-        `${join(knowledgeDir, "README.md")} is no longer a register \u2014 knowledge catalog completeness is a store.db query (state-projection contract \u00A74)`,
-        "call assertKnowledgeCatalogCompleteness(context), or run `mstar catalog discover` + `mstar catalog import`",
-      ),
-    ],
-  };
-}
-
-/**
  * The knowledge half of the catalog completeness query: every knowledge body
  * under `{KNOWLEDGE_DIR}` must be registered in the catalog. No README table is
  * involved, and a missing/staged store refuses instead of reading as an empty

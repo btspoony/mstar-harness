@@ -126,7 +126,7 @@
           "targetRoot": "packages/dsh/harness-skills",
           "mode": "copy",
           "files": 137,
-          "sha256": "a5ef3f41d5bfc4f7386a0deed9b176dd1a83b8413136c2ad74f7c2af022bbe11"
+          "sha256": "f26f9073e4340baac7c48ee32bb0d17f23146871e8418d2ce704d2df7c223277"
         }
       ]
     },
@@ -151,7 +151,7 @@
           {
             "root": "packages/engine/src",
             "files": 134,
-            "sha256": "28740409ccad82bffcb7b3fb5a0a800140775852174374419d8503cb0dbeb889"
+            "sha256": "d5cf77767f5ec48df90764c895824bfcdce8e123c8d67101f1a9b4aeb6e04df4"
           }
         ],
         "files": [
@@ -259,14 +259,14 @@
           "targetRoot": "packages/omp/harness-skills",
           "mode": "copy",
           "files": 137,
-          "sha256": "a5ef3f41d5bfc4f7386a0deed9b176dd1a83b8413136c2ad74f7c2af022bbe11"
+          "sha256": "f26f9073e4340baac7c48ee32bb0d17f23146871e8418d2ce704d2df7c223277"
         },
         {
           "sourceRoot": "skills",
           "targetRoot": "packages/omp/skills",
           "mode": "copy",
           "files": 137,
-          "sha256": "a5ef3f41d5bfc4f7386a0deed9b176dd1a83b8413136c2ad74f7c2af022bbe11"
+          "sha256": "f26f9073e4340baac7c48ee32bb0d17f23146871e8418d2ce704d2df7c223277"
         }
       ]
     },
@@ -336,7 +336,7 @@
           "targetRoot": "packages/opencode/harness-skills",
           "mode": "copy",
           "files": 137,
-          "sha256": "a5ef3f41d5bfc4f7386a0deed9b176dd1a83b8413136c2ad74f7c2af022bbe11"
+          "sha256": "f26f9073e4340baac7c48ee32bb0d17f23146871e8418d2ce704d2df7c223277"
         }
       ]
     },
@@ -361,7 +361,7 @@
           {
             "root": "packages/engine/src",
             "files": 134,
-            "sha256": "28740409ccad82bffcb7b3fb5a0a800140775852174374419d8503cb0dbeb889"
+            "sha256": "d5cf77767f5ec48df90764c895824bfcdce8e123c8d67101f1a9b4aeb6e04df4"
           }
         ],
         "files": [

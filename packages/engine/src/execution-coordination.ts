@@ -67,6 +67,7 @@ import {
 import {
   ExecutionError,
   advancePlanOperationRevisions,
+  assertActiveExecutionAuthority,
   assertExecutionToken,
   assertOperationId,
   readExecutionPlan,
@@ -124,7 +125,7 @@ import {
   type RecoveryProblem,
   type ResolutionSource,
 } from "./recovery-intent.js";
-import { storeDbPath } from "./store-db.js";
+import { readStoreAuthority, storeDbPath } from "./store-db.js";
 import {
   isStandaloneDevelopmentWorkflow,
   isStandaloneReportOnlyWorkflow,
@@ -272,13 +273,11 @@ export async function withExecutionPlanAuthority<T>(
   assertOperationRole(context.caller, operation.kind);
   const session = call.session ?? (await resolveSparseOwnSession(context, `a ${operation.kind} plan operation`));
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError(
-        "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; a plan operation requires an active authority. ` +
-          `A staged store is inspectable only through migration diagnostics.`,
-      );
-    }
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; a plan operation requires an active authority. ` +
+        `A staged store is inspectable only through migration diagnostics.`,
+    );
     const witness = readExecutionPlanWitness(tx, resolvePlanRead(context.caller, session, planId));
     assertExecutionToken(call.expected ?? witness.token, {
       kind: "plan",
@@ -557,13 +556,11 @@ function withExecutionPlanOperation<T>(
 ): Promise<ExecutionReceipt<T>> {
   const { call: request, read } = resolved;
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError(
-        "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; a plan operation requires an active authority. ` +
-          `A staged store is inspectable only through migration diagnostics.`,
-      );
-    }
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; a plan operation requires an active authority. ` +
+        `A staged store is inspectable only through migration diagnostics.`,
+    );
     const witness = readExecutionPlanWitness(tx, read);
     // §4.1/§4.2 (R6/A09) a committed receipt is served BEFORE any external proof
     // or evidence hash: an identical retry returns the RECORDED receipt verbatim
@@ -1562,15 +1559,13 @@ function requireCompletableStatus(row: PlanRow, planId: string): void {
  * staged or unreadable store.
  */
 function assertFindingsClosedOn(tx: ExecutionTransaction, planId: string, prepared: PreparedCoordination): void {
-  const meta = tx.db.prepare("select authority_state as authorityState from store_meta where id = 1").get() as
-    | { authorityState?: unknown }
-    | undefined;
-  if (meta?.authorityState !== "active") {
+  const meta = readStoreAuthority(tx.db);
+  if (meta.authorityState !== "active") {
     throw new CoordinationError(
       "coordination.store",
       "The plan cannot proceed: the issue store authority is unreadable; inspect the store with mstar status validate.",
       {
-        authority_state: typeof meta?.authorityState === "string" ? meta.authorityState : "unreadable",
+        authority_state: typeof meta.authorityState === "string" ? meta.authorityState : "unreadable",
         plan_id: planId,
         findings_cleanup: prepared.findings_cleanup,
       },
