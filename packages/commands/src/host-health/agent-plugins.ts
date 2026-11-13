@@ -1,6 +1,6 @@
 import fs, { realpathSync } from "node:fs";
 import path from "node:path";
-import { readJson } from "@mstar-harness/engine";
+import { extractFrontmatterAndBody, readJson } from "@mstar-harness/engine";
 
 /**
  * Agent Plugins v1.0.0 conformance validator (https://agent-plugins.org/specification).
@@ -118,10 +118,13 @@ function parseScalar(raw: string): string {
  */
 function parseFrontmatter(filePath: string): Record<string, string> | null {
   const content = fs.readFileSync(filePath, "utf8");
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-  if (!match) return null;
+  const { frontmatter, body } = extractFrontmatterAndBody(content);
+  // The shared reader answers an empty frontmatter both for "no fence" and for
+  // an empty fenced block; only the body tells them apart, and the absent fence
+  // is the null contract.
+  if (frontmatter === "" && body === content) return null;
   const result: Record<string, string> = {};
-  for (const line of match[1].split(/\r?\n/)) {
+  for (const line of frontmatter.split("\n")) {
     const field = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
     if (!field) continue;
     result[field[1]] = parseScalar(field[2]);
