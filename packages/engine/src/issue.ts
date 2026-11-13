@@ -121,8 +121,8 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
   },
   IssueTriage: {
     reason: { required: true, type: "string", description: "Reason for triage change" },
-    kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
-    severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "nit"] },
+    kind: { required: false, type: "string", description: "Replacement issue kind", values: ISSUE_KINDS },
+    severity: { required: false, type: "string", description: "Replacement severity", values: ISSUE_SEVERITIES },
     title: { required: false, type: "string", description: "Corrected finding title; nonblank when supplied", nonblankWhenPresent: true },
     impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
     acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
