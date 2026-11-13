@@ -8,15 +8,15 @@ import type { ToolHooks } from "@opencode/plugin/effect/tool";
 import { Tool } from "@opencode/schema/tool";
 import { Effect } from "effect";
 
-import type * as Engine from "@mstar-harness/engine";
+import * as Engine from "@mstar-harness/engine";
 
-import { engineSeamRefusal, loadWriteGateApi } from "../engine-seams";
-import type { EngineSeam } from "../engine-seams";
 import { defaultStatusLogger, type StatusLogger } from "../log";
 
 export type WriteBeforeEvent = ToolHooks["execute.before"];
 
 type EngineModule = typeof Engine;
+/** The engine exports this gate calls. The bundled build inlines the engine,
+ * so the set is fixed at build time and nothing here models a degraded load. */
 export type WriteGateEngineApi = Pick<
  EngineModule,
  | "applyEnforcement"
@@ -26,16 +26,15 @@ export type WriteGateEngineApi = Pick<
  | "landedPathOf"
  | "queryIssueFlow"
  | "resolveExecutionReadRoute"
- | "resolveHarnessDir"
- | "resolveProjectDir"
  | "resolveRepoEnforcement"
- | "resolveWorkflowDir"
  | "validateStatusWriteDoc"
  | "withStoreRead"
 >;
 
 type WriteGateServices = {
- loadEngine?: () => Promise<EngineSeam<WriteGateEngineApi>>;
+ /** Test substitution: the real engine is the default, and a suite replaces
+  * one member by spreading it (`{ ...Engine, withStoreRead }`). */
+ engine?: WriteGateEngineApi;
  logger?: StatusLogger;
 };
 
@@ -181,19 +180,7 @@ async function executeBefore(event: WriteBeforeEvent, services: WriteGateService
  : undefined;
  if (filePath === undefined) throw malformedPath(input.filePath === undefined ? "path" : "filePath");
 
- let seam: EngineSeam<WriteGateEngineApi>;
- try {
- seam = await (services.loadEngine ?? loadWriteGateApi)();
- } catch (error) {
- throw refusal(
- "write.engine-unavailable",
- `${engineSeamRefusal("import-failed", error)} No write was authorized.`,
- );
- }
- if (seam.api === null) {
- throw refusal("write.engine-unavailable", `${engineSeamRefusal(seam.failure)} No write was authorized.`);
- }
- const api = seam.api;
+ const api: WriteGateEngineApi = services.engine ?? Engine;
 
  const requested = resolve(filePath);
  let landed: string;

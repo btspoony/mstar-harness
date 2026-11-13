@@ -30,9 +30,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-type JsonPrimitive = string | number | boolean | null;
-type JsonObject = Record<string, unknown>;
+import { extractFrontmatterAndBody, parseSimpleFrontmatter } from "@mstar-harness/engine";
+import type { JsonObject } from "@mstar-harness/engine";
 
 /** V2 agent-mode literals — `packages/schema/src/config/agent.ts` @ v2.2.5
  * (installed: `@opencode/schema@2.2.5` `dist/config/agent.d.ts:26`):
@@ -72,80 +71,6 @@ export const packageRoot = path.resolve(__dirname, "..");
 export const bundledSkillsDir = path.join(packageRoot, "harness-skills");
 export const bundledAgentsDir = path.join(packageRoot, "harness-agents");
 export const bundledCommandsDir = path.join(packageRoot, "harness-commands");
-
-type FrontmatterAndBody = { frontmatter: string; body: string };
-
-export const extractFrontmatterAndBody = (content: string): FrontmatterAndBody => {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!match) return { frontmatter: "", body: content };
-  return { frontmatter: match[1], body: match[2] };
-};
-
-const parseScalar = (raw: string): JsonPrimitive => {
-  const value = raw.trim();
-  if (value === "true") return true;
-  if (value === "false") return false;
-  if (value === "null") return null;
-  if (value === "allow" || value === "ask" || value === "deny") return value;
-  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
-  return value.replace(/^["']|["']$/g, "");
-};
-
-/** Minimal nested-map frontmatter parser (ported from V1 mstar.ts — the
- * harness agent/role markdown uses only scalar and single-level map shapes). */
-export const parseSimpleFrontmatter = (frontmatter: string): JsonObject => {
-  const root: JsonObject = {};
-  const stack: Array<{ indent: number; target: JsonObject }> = [{ indent: -1, target: root }];
-  const lines = frontmatter.split("\n");
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (!line.trim() || line.trim().startsWith("#")) continue;
-
-    const indent = line.match(/^ */)?.[0]?.length ?? 0;
-    const trimmed = line.trim();
-    const separator = trimmed.indexOf(":");
-    if (separator <= 0) continue;
-
-    const key = trimmed.slice(0, separator).trim().replace(/^["']|["']$/g, "");
-    const rawValue = trimmed.slice(separator + 1).trim();
-
-    while (stack.length > 1 && indent <= stack[stack.length - 1].indent) {
-      stack.pop();
-    }
-
-    const current = stack[stack.length - 1].target;
-
-    if (rawValue === "" || rawValue === "{}") {
-      current[key] = {};
-      stack.push({ indent, target: current[key] as JsonObject });
-      continue;
-    }
-
-    if (rawValue === "|-" || rawValue === "|") {
-      const blockLines: string[] = [];
-      const baseIndent = indent;
-      for (let j = i + 1; j < lines.length; j += 1) {
-        const blockLine = lines[j];
-        const blockIndent = blockLine.match(/^ */)?.[0]?.length ?? 0;
-        if (blockLine.trim() && blockIndent <= baseIndent) break;
-        const normalized = blockLine.startsWith(" ".repeat(baseIndent + 2))
-          ? blockLine.slice(baseIndent + 2)
-          : blockLine.trim()
-            ? blockLine.trim()
-            : "";
-        blockLines.push(normalized);
-        i = j;
-      }
-      current[key] = blockLines.join("\n");
-      continue;
-    }
-
-    current[key] = parseScalar(rawValue);
-  }
-
-  return root;
-};
 
 /** Join a readdir-derived entry name under the bundled directory it was listed
  * from; refuses a result that resolves outside that directory (same guard as

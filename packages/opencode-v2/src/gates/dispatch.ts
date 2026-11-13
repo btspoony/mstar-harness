@@ -2,8 +2,8 @@ import { Tool } from "@opencode/schema/tool";
 import { Effect } from "effect";
 import type { ToolHooks } from "@opencode/plugin/effect/tool";
 
-import { engineSeamRefusal, loadDispatchGateApi } from "../engine-seams";
-import type { DispatchGateApi, EngineSeam } from "../engine-seams";
+import * as Engine from "@mstar-harness/engine";
+
 import { defaultStatusLogger, type StatusLogger } from "../log";
 
 /**
@@ -13,8 +13,20 @@ import { defaultStatusLogger, type StatusLogger } from "../log";
  * `event.agent` as the caller and leaves tool arguments in `input: unknown`.
  */
 export type DispatchBeforeEvent = ToolHooks["execute.before"];
+type EngineModule = typeof Engine;
+/** The engine exports this gate calls; the bundled build inlines them. */
+export type DispatchGateApi = Pick<
+ EngineModule,
+ | "applyEnforcement"
+ | "composeDispatchGate"
+ | "isReadOnlyAssignmentRole"
+ | "parseAssignmentFields"
+ | "resolveHarnessDir"
+ | "resolveRepoEnforcement"
+>;
 export type DispatchGateServices = {
- loadEngine?: () => Promise<EngineSeam<DispatchGateApi>>;
+ /** Test substitution: the real engine is the default. */
+ engine?: DispatchGateApi;
  logger?: StatusLogger;
 };
 
@@ -99,16 +111,5 @@ function dispatchEffect(event: DispatchBeforeEvent, api: DispatchGateApi, logger
 export function dispatchBefore(event: DispatchBeforeEvent, services: DispatchGateServices = {}): Effect.Effect<void, Tool.Error> {
  if (event.tool !== "subagent") return Effect.void;
 
- return Effect.flatMap(
- Effect.tryPromise({
- try: () => (services.loadEngine ?? loadDispatchGateApi)(),
- catch: (error) => toolError(
- "dispatch.engine-unavailable",
- `${engineSeamRefusal("import-failed", error)} No subagent was spawned.`,
- ),
- }),
- (seam) => seam.api === null
- ? Effect.fail(toolError("dispatch.engine-unavailable", `${engineSeamRefusal(seam.failure)} No subagent was spawned.`))
- : dispatchEffect(event, seam.api, services.logger ?? defaultStatusLogger),
- );
+ return dispatchEffect(event, services.engine ?? Engine, services.logger ?? defaultStatusLogger);
 }

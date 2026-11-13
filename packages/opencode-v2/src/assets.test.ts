@@ -3,13 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { extractFrontmatterAndBody, parseSimpleFrontmatter } from "@mstar-harness/engine";
 import {
-  extractFrontmatterAndBody,
   loadAgentsFromDir,
   loadCommandsFromDir,
   loadSkillsFromDir,
   packageRoot,
-  parseSimpleFrontmatter,
   projectAgentDefinition,
 } from "./assets";
 import type { CommandDefinition, PermissionRule, ProjectedAgent } from "./assets";
@@ -242,5 +241,51 @@ describe("bundled loaders resolve from the packed layout", () => {
       message = String((error as NodeJS.ErrnoException).message);
     }
     expect(message).toContain("broken.md");
+  });
+});
+
+describe("frontmatter parity with the V1 OpenCode loader", () => {
+  /** The real bundled trees: both hosts read the same repo-root markdown. */
+  const repoRoot = path.resolve(packageRoot, "..", "..");
+  const realAgents = path.join(repoRoot, "agents");
+  const realCommands = path.join(repoRoot, "commands");
+
+  /** V1's loader is not exported; its parse pair IS the shared pair now, so
+   * loading the same files through V2's loader is the parity proof. The
+   * quoted-key fixture pins the rule the two ports disagreed on. */
+  const QUOTED_KEY_SEAT = `---
+name: quoted-seat
+permission:
+  edit:
+    "*": deny
+---
+Body.
+`;
+
+  test("a quoted permission key parses to the same object on both hosts", () => {
+    // V1 (`mstar.ts:139`) kept the quotes; V2 (`assets.ts:110`) stripped them,
+    // so the object key differed per host. Both loaders now call this pair, so
+    // the loaded seat — not just the parser — answers the bare `*` key.
+    const loaded = loadAgentsFromDir(agentsDirWith(QUOTED_KEY_SEAT))["quoted-seat"];
+    expect(loaded.permission).toEqual({ edit: { "*": "deny" } });
+    expect(loaded).toMatchObject(parseSimpleFrontmatter(extractFrontmatterAndBody(QUOTED_KEY_SEAT).frontmatter));
+  });
+
+  test("the bundled agent and command trees parse through the shared reader", () => {
+    const agents = loadAgentsFromDir(realAgents);
+    const commands = loadCommandsFromDir(realCommands);
+    expect(Object.keys(agents).length).toBeGreaterThan(0);
+    expect(Object.keys(commands).length).toBeGreaterThan(0);
+    // Every seat keeps a string name, and every command a non-empty template:
+    // a parser drift that swallowed the fence would empty these.
+    for (const [id, agent] of Object.entries(agents)) {
+      expect(typeof agent.name === "string" ? agent.name : id).toBeTruthy();
+    }
+    for (const command of Object.values(commands)) {
+      expect(command.template.length).toBeGreaterThan(0);
+    }
+    // The bundled seats DO carry quoted map keys, which is what made the two
+    // ports disagree about the object key.
+    expect(JSON.stringify(agents["code-reviewer"]?.permission)).toContain('"*":"deny"');
   });
 });

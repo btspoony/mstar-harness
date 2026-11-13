@@ -336,6 +336,8 @@ export {
   validateStatusWriteDoc,
   violationLine,
 } from "./gates.js";
+export type { FrontmatterAndBody, JsonObject } from "./document-frontmatter.js";
+export { extractFrontmatterAndBody, parseSimpleFrontmatter } from "./document-frontmatter.js";
 export {
   MAX_SYMLINK_HOPS,
   STORE_AUTHORITY_FILES,

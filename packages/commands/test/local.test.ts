@@ -583,6 +583,33 @@ describe("shared host-health helpers", () => {
     expect(invalid.errors).toContain('plugin.json: "$schema" is required and must be the string https://agent-plugins.org/schemas/1.0.0/plugin.schema.json');
     expect(invalid.errors.some((error) => error.includes("violates Agent Plugins name rules"))).toBe(true);
   });
+
+  test("shared agent-plugin validation keeps its frontmatter fence rules", () => {
+    const root = fixture();
+    const validateSkillMd = (skillMd: string) => {
+      writeJson(root, "plugin.json", {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        name: "fixture-plugin",
+      });
+      writeText(root, "skills/demo/SKILL.md", skillMd);
+      return validateAgentPlugin(root);
+    };
+
+    // CRLF fences and their field lines both parse.
+    const crlf = validateSkillMd("---\r\nname: demo\r\ndescription: demo skill\r\n---\r\n\r\nbody\r\n");
+    expect(crlf.ok).toBe(true);
+    expect(crlf.warnings).toEqual([]);
+
+    // A closing fence at EOF without its newline, and an empty fenced block,
+    // are not frontmatter: the skill is skipped with the missing-fence warning.
+    for (const skillMd of ["---\nname: demo\ndescription: demo skill\n---", "---\n---\n"]) {
+      const result = validateSkillMd(skillMd);
+      expect(result.ok).toBe(true);
+      expect(result.warnings).toContain(
+        "skills: demo/SKILL.md is missing YAML frontmatter (name and description are required; skill skipped)",
+      );
+    }
+  });
 });
 
 describe("codex host health", () => {

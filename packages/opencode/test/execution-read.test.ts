@@ -13,8 +13,7 @@
  * - `tool.execute.before` returns void on this host, so every one of those
  *   verdicts is a DECISION record plus an error log. The log says so plainly
  *   ("the write is NOT stopped"); nothing here claims installed enforcement;
- * - a harness with no store, and an engine without the route export, keep the
- *   unchanged document lint.
+ * - a harness with no store keeps the unchanged document lint.
  *
  * Stores are REAL (`initializeStore` / `initializeExecutionAuthority` /
  * `createExecutionWorkflow`, real `node:sqlite` migrations); the refusals are
@@ -32,7 +31,7 @@ import {
   registerCatalogEntity,
 } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext } from "@mstar-harness/engine";
-import { storeApiLoader, validateStatusWrite, type StatusLogger } from "../src/mstar.js";
+import { validateStatusWrite, type StatusLogger } from "../src/mstar.js";
 
 /** Ambient MSTAR_HARNESS_DIR would redirect every `.mstar` fixture — pinned out. */
 const ENV_KEY = "MSTAR_HARNESS_DIR";
@@ -46,11 +45,9 @@ afterEach(() => {
   else process.env[ENV_KEY] = previousEnv;
 });
 
-const realStoreApiLoad = storeApiLoader.load;
 const projects: string[] = [];
 
 afterEach(() => {
-  storeApiLoader.load = realStoreApiLoad;
   for (const project of projects.splice(0)) rmSync(project, { recursive: true, force: true });
 });
 
@@ -251,17 +248,4 @@ describe("execution-opencode-read — the OpenCode plugin's execution-authority 
     expect(invalid?.hardBlocked).toBe(false);
   });
 
-  test("an installed engine without the route export keeps the document lint (no invented authority)", async () => {
-    const fixture = makeHarnessProject();
-    await seedActiveExecutionAuthority(fixture.harness, fixture.statusPath);
-
-    // A pre-execution engine: the route export is not there, so there is no
-    // authority to classify and the retired document keeps its document lint
-    // instead of a refusal class the engine cannot support.
-    storeApiLoader.load = async () => null;
-    const { log } = capture();
-    const result = await validateStatusWrite(fixture.statusPath, { log });
-    expect(result?.violations.some((violation) => violation.code === "execution.direct-write-refused")).toBe(false);
-    expect(result?.hardBlocked).not.toBe(true);
-  });
 });
