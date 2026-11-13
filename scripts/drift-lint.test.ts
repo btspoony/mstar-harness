@@ -1494,50 +1494,158 @@ describe("readSkillIndexCoverage — the shipped corpus agrees with the index", 
 });
 
 describe("checkGateSurfaceChange — Guard 14 gate-surface self-approval", () => {
-  test("no git range skips the guard", () => {
-    expect(checkGateSurfaceChange(null)).toEqual([]);
+  const range = (changedFiles: string[]) => ({ allowlists: [], changedFiles, hasRange: true, ci: false });
+
+  test("a manifest entry added with its own file changed passes", () => {
+    expect(
+      checkGateSurfaceChange({
+        manifest: {
+          base: [{ file: "skills/mstar-audit/SKILL.md", maxLines: 120 }],
+          head: [
+            { file: "skills/mstar-audit/SKILL.md", maxLines: 120 },
+            { file: "skills/mstar-audit/references/new.md", maxLines: 40 },
+          ],
+        },
+        ...range(["skills/mstar-audit/references/new.md"]),
+      }),
+    ).toEqual([]);
   });
 
-  test("a widened budget manifest alone fails naming the file and counts", () => {
-    const failures = checkGateSurfaceChange([
-      { file: "scripts/skill-budgets.manifest.json", added: 2, deleted: 0 },
-    ]);
+  test("a manifest entry added with its file unchanged fails naming the entry", () => {
+    const failures = checkGateSurfaceChange({
+      manifest: {
+        base: [],
+        head: [{ file: "skills/mstar-audit/references/new.md", maxLines: 40 }],
+      },
+      ...range(["skills/mstar-audit/SKILL.md"]),
+    });
     expect(failures.length).toBe(1);
     expect(failures[0]).toContain("Guard 14");
-    expect(failures[0]).toContain("scripts/skill-budgets.manifest.json (+2/-0)");
+    expect(failures[0]).toContain("skills/mstar-audit/references/new.md");
   });
 
-  test("a widened manifest with a paying artifact in the same change set passes", () => {
+  test("a raised manifest ceiling with its file changed passes", () => {
     expect(
-      checkGateSurfaceChange([
-        { file: "scripts/skill-budgets.manifest.json", added: 2, deleted: 0 },
-        { file: "skills/mstar-audit/references/skill-corpus-audit.md", added: 40, deleted: 1 },
-      ]),
+      checkGateSurfaceChange({
+        manifest: {
+          base: [{ file: "skills/mstar-artifacts/SKILL.md", maxLines: 70 }],
+          head: [{ file: "skills/mstar-artifacts/SKILL.md", maxLines: 90 }],
+        },
+        ...range(["skills/mstar-artifacts/SKILL.md"]),
+      }),
     ).toEqual([]);
   });
 
-  test("a net-narrowing allowlist may stand alone", () => {
-    expect(
-      checkGateSurfaceChange([{ file: "scripts/rule-duplication.allowlist.json", added: 0, deleted: 3 }]),
-    ).toEqual([]);
-  });
-
-  test("a skills-only change set passes", () => {
-    expect(
-      checkGateSurfaceChange([
-        { file: "skills/mstar-audit/SKILL.md", added: 4, deleted: 2 },
-        { file: "skills/mstar-audit/references/finding-format.md", added: 6, deleted: 0 },
-      ]),
-    ).toEqual([]);
-  });
-
-  test("the widened file fails even when a sibling gate file narrows", () => {
-    const failures = checkGateSurfaceChange([
-      { file: "scripts/rule-duplication.allowlist.json", added: 2, deleted: 0 },
-      { file: "scripts/lint-refusal-quality.allowlist.json", added: 0, deleted: 5 },
-    ]);
+  test("a raised manifest ceiling with its file unchanged fails", () => {
+    const failures = checkGateSurfaceChange({
+      manifest: {
+        base: [{ file: "skills/mstar-artifacts/SKILL.md", maxLines: 70 }],
+        head: [{ file: "skills/mstar-artifacts/SKILL.md", maxLines: 90 }],
+      },
+      ...range(["README.md"]),
+    });
     expect(failures.length).toBe(1);
-    expect(failures[0]).toContain("scripts/rule-duplication.allowlist.json (+2/-0)");
-    expect(failures[0]).not.toContain("lint-refusal-quality");
+    expect(failures[0]).toContain("raised ceiling 70→90");
+  });
+
+  test("a removed manifest entry stands alone", () => {
+    expect(
+      checkGateSurfaceChange({
+        manifest: {
+          base: [{ file: "skills/mstar-artifacts/SKILL.md", maxLines: 70 }],
+          head: [],
+        },
+        ...range([]),
+      }),
+    ).toEqual([]);
+  });
+
+  test("an allowlist entry added with its signature path changed passes", () => {
+    expect(
+      checkGateSurfaceChange({
+        allowlists: [
+          {
+            file: "scripts/rule-duplication.allowlist.json",
+            base: [],
+            head: [{ signature: "duplicate-hard-rule:skills/mstar-audit/SKILL.md:abc123", justification: "x" }],
+          },
+        ],
+        ...range(["skills/mstar-audit/SKILL.md"]),
+      }),
+    ).toEqual([]);
+  });
+
+  test("an allowlist entry added with its signature path unchanged fails", () => {
+    const failures = checkGateSurfaceChange({
+      ...range(["skills/mstar-audit/references/other.md"]),
+      allowlists: [
+        {
+          file: "scripts/rule-duplication.allowlist.json",
+          base: [],
+          head: [{ signature: "duplicate-hard-rule:skills/mstar-audit/SKILL.md:abc123" }],
+        },
+      ],
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("scripts/rule-duplication.allowlist.json");
+    expect(failures[0]).toContain("skills/mstar-audit/SKILL.md is not in the same change set");
+  });
+
+  test("a removed allowlist entry stands alone", () => {
+    expect(
+      checkGateSurfaceChange({
+        allowlists: [
+          {
+            file: "scripts/lint-refusal-quality.allowlist.json",
+            base: [{ signature: "missing-recovery:packages/commands/src/families/status.ts:1f78fdbe1af2" }],
+            head: [],
+          },
+        ],
+        ...range([]),
+      }),
+    ).toEqual([]);
+  });
+
+  test("a widened entry with an unparseable signature fails closed", () => {
+    const failures = checkGateSurfaceChange({
+      ...range(["README.md"]),
+      allowlists: [
+        {
+          file: "scripts/lint-refusal-quality.allowlist.json",
+          base: [],
+          head: [{ signature: "no-colon-signature" }],
+        },
+      ],
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("fails closed");
+    expect(failures[0]).toContain("no-colon-signature");
+  });
+
+  test("no git range skips locally and fails in CI", () => {
+    const input = { allowlists: [], changedFiles: [], hasRange: false };
+    expect(checkGateSurfaceChange({ ...input, ci: false })).toEqual([]);
+    const failures = checkGateSurfaceChange({ ...input, ci: true });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("no git range in CI");
+  });
+
+  test("a formatting-only change with identical JSON semantics passes", () => {
+    expect(
+      checkGateSurfaceChange({
+        manifest: {
+          base: [{ file: "skills/mstar-audit/SKILL.md", maxLines: 120 }],
+          head: [{ file: "skills/mstar-audit/SKILL.md", maxLines: 120 }],
+        },
+        allowlists: [
+          {
+            file: "scripts/rule-duplication.allowlist.json",
+            base: [{ signature: "duplicate-hard-rule:skills/mstar-audit/SKILL.md:abc123", justification: "x" }],
+            head: [{ justification: "x", signature: "duplicate-hard-rule:skills/mstar-audit/SKILL.md:abc123" }],
+          },
+        ],
+        ...range(["scripts/rule-duplication.allowlist.json"]),
+      }),
+    ).toEqual([]);
   });
 });

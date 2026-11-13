@@ -172,6 +172,16 @@ function exists(rel: string): boolean {
 /* Guard 2 helpers: README bilingual pairing (AGENTS.md) */
 /* ------------------------------------------------------------------ */
 
+/** merge-base(origin/main, HEAD), or null when git cannot produce one. */
+function mergeBaseOrNull(): string | null {
+  try {
+    const base = execFileSync("git", ["merge-base", "origin/main", "HEAD"], { encoding: "utf8" }).trim();
+    return base || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Changed files over the committed range merge-base(origin/main, HEAD)..HEAD
  * (the push range in CI), or null when git cannot produce a range (no repo,
@@ -180,16 +190,93 @@ function exists(rel: string): boolean {
  * editing.
  */
 function changedFilesSinceMergeBase(): string[] | null {
-  let base: string;
-  try {
-    base = execFileSync("git", ["merge-base", "origin/main", "HEAD"], { encoding: "utf8" }).trim();
-  } catch {
-    return null;
-  }
+  const base = mergeBaseOrNull();
   if (!base) return null;
   try {
     const out = execFileSync("git", ["diff", "--name-only", base, "HEAD"], { encoding: "utf8" });
     return out.split("\n").map((l) => l.trim()).filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Gate-surface snapshots for Guard 14: the merge-base JSON of every allowlist
+ * and of the skill-budget manifest versus the working-tree JSON, plus the
+ * change set (merge-base..worktree, untracked included). `null` when git has
+ * no range, the same skip Guard 2 takes. A side whose file is absent parses as
+ * an empty collection, so adding or deleting a gate file is a pure diff.
+ */
+function gateSurfaceSnapshots(): Omit<GateSurfaceInput, "ci"> | null {
+  const base = mergeBaseOrNull();
+  if (!base) return null;
+  const json = (text: string): unknown => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  };
+  const atBase = (path: string): unknown => {
+    try {
+      return json(execFileSync("git", ["show", `${base}:${path}`], { encoding: "utf8" }));
+    } catch {
+      return null;
+    }
+  };
+  const atHead = (path: string): unknown => {
+    try {
+      return json(readFileSync(join(root, path), "utf8"));
+    } catch {
+      return null;
+    }
+  };
+  const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+  const manifestEntries = (entries: unknown[]): ManifestEntry[] =>
+    entries.filter(
+      (entry): entry is ManifestEntry =>
+        !!entry &&
+        typeof entry === "object" &&
+        "file" in entry &&
+        typeof entry.file === "string" &&
+        "maxLines" in entry &&
+        typeof entry.maxLines === "number",
+    );
+  try {
+    let baseNames: string[] = [];
+    try {
+      baseNames = execFileSync("git", ["ls-tree", "-r", "--name-only", base, "scripts/"], { encoding: "utf8" })
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((name) => name.endsWith(".allowlist.json"));
+    } catch {
+      baseNames = [];
+    }
+    const headNames = readdirSync(join(root, "scripts")).filter((name) => name.endsWith(".allowlist.json"));
+    const allowlistPaths = [...new Set([...baseNames, ...headNames.map((name) => `scripts/${name}`)])].sort();
+
+    const changedFiles = execFileSync("git", ["diff", "--name-status", base], { encoding: "utf8" })
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .flatMap((line) => line.split("\t").slice(1));
+    const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { encoding: "utf8" })
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    return {
+      manifest: {
+        base: manifestEntries(list(atBase("scripts/skill-budgets.manifest.json"))),
+        head: manifestEntries(list(atHead("scripts/skill-budgets.manifest.json"))),
+      },
+      allowlists: allowlistPaths.map((file) => ({
+        file,
+        base: list(atBase(file)),
+        head: list(atHead(file)),
+      })),
+      changedFiles: [...new Set([...changedFiles, ...untracked])],
+    };
   } catch {
     return null;
   }
@@ -203,12 +290,7 @@ function changedFilesSinceMergeBase(): string[] | null {
  * the change set (`--numstat`; binary entries report "-" and count as 0).
  */
 function changedFileStatsSinceMergeBase(): Array<{ file: string; added: number; deleted: number }> | null {
-  let base: string;
-  try {
-    base = execFileSync("git", ["merge-base", "origin/main", "HEAD"], { encoding: "utf8" }).trim();
-  } catch {
-    return null;
-  }
+  const base = mergeBaseOrNull();
   if (!base) return null;
   try {
     const out = execFileSync("git", ["diff", "--numstat", base, "HEAD"], { encoding: "utf8" });
@@ -267,35 +349,102 @@ export function checkBilingualContentParity(
   ];
 }
 
-/**
- * Guard 14 gate-surface paths: the writable exemption surfaces every
- * mechanical gate in `scripts/` ships with. An implementer can turn a gate
- * green by widening one of these without touching the code the gate protects.
- */
-const GATE_SURFACE_PATTERN = /^scripts\/(?:[^/]+\.allowlist\.json|skill-budgets\.manifest\.json)$/;
+export type ManifestEntry = { file: string; maxLines: number };
+
+export type GateSurfaceInput = {
+  manifest?: { base: ManifestEntry[]; head: ManifestEntry[] };
+  allowlists: Array<{ file: string; base: unknown[]; head: unknown[] }>;
+  changedFiles: string[];
+  hasRange: boolean;
+  ci: boolean;
+};
+
+/** The signature string of an allowlist entry, or null (non-string / absent). */
+function allowlistSignature(entry: unknown): string | null {
+  if (!entry || typeof entry !== "object" || !("signature" in entry)) return null;
+  const { signature } = entry;
+  return typeof signature === "string" ? signature : null;
+}
+
+/** `<kind>:<path>:<hash>` → `<path>`, or null when no path segment resolves. */
+function signatureTargetPath(signature: string): string | null {
+  const first = signature.indexOf(":");
+  const last = signature.lastIndexOf(":");
+  if (first < 0 || last <= first) return null;
+  const path = signature.slice(first + 1, last);
+  return path.includes("/") ? path : null;
+}
+
+/** Entry identity for the multiset: its signature, else the whole JSON. */
+function allowlistKey(entry: unknown): string {
+  const signature = allowlistSignature(entry);
+  return signature ?? JSON.stringify(entry);
+}
 
 /**
  * Pure gate-surface check — a change to an allowlist or the skill-budget
- * manifest is part of the change it exempts. Decided per file, never
- * aggregated: a gate-surface file that widens (added >= deleted) needs at
- * least one non-gate-surface file in the same change set; a net-narrowing
- * change (deleted > added) may stand alone. `null` means git produced no
- * range, the same skip Guard 2 takes.
- * Known limit: the paying artifact is any non-gate file, not a matched
- * signature; upgrade only if a real bypass is observed.
+ * manifest is part of the change it exempts (AGENTS.md gate-surface rule).
+ * Compares JSON semantics, not line counts: formatting and compression cannot
+ * move the verdict. Per entry, an added manifest key or a raised ceiling, and
+ * an increased allowlist entry count for a signature, are widenings; each
+ * widened entry must name the artifact it exempts and that artifact must be in
+ * the same change set. Removal and lowered ceilings stand alone.
+ * `hasRange: false` skips locally and fails under CI, mirroring Guard 2.
  */
-export function checkGateSurfaceChange(
-  changes: Array<{ file: string; added: number; deleted: number }> | null,
-): string[] {
-  if (!changes) return [];
-  const hasPayingArtifact = changes.some((c) => !GATE_SURFACE_PATTERN.test(c.file));
-  if (hasPayingArtifact) return [];
-  return changes
-    .filter((c) => GATE_SURFACE_PATTERN.test(c.file) && c.added >= c.deleted)
-    .map(
-      ({ file, added, deleted }) =>
-        `Guard 14 gate-surface self-approval: ${file} (+${added}/-${deleted}) widens a lint exemption with no non-gate file in the same change set — widen a gate only in the same change as the artifact it exempts, or narrow it (deleted > added), because a widened gate is not a fix (AGENTS.md gate-surface rule)`,
+export function checkGateSurfaceChange(input: GateSurfaceInput): string[] {
+  if (!input.hasRange) {
+    return input.ci
+      ? [
+          "Guard 14 gate-surface self-approval: no git range in CI (merge-base failed or origin/main missing) — the drift-lint job must checkout with fetch-depth: 0 so the gate-surface check can run",
+        ]
+      : [];
+  }
+  const failures: string[] = [];
+  const changed = new Set(input.changedFiles);
+  const requirePayment = (gateFile: string, detail: string, target: string) => {
+    if (changed.has(target)) return;
+    failures.push(
+      `Guard 14 gate-surface self-approval: ${gateFile} (${detail}) widens a lint exemption but ${target} is not in the same change set — widen a gate only in the same change as the artifact it exempts, because a widened gate is not a fix (AGENTS.md gate-surface rule)`,
     );
+  };
+
+  if (input.manifest) {
+    const base = new Map(input.manifest.base.map((e) => [e.file, e.maxLines]));
+    for (const { file, maxLines } of input.manifest.head) {
+      const before = base.get(file);
+      if (before === undefined) {
+        requirePayment("scripts/skill-budgets.manifest.json", `added entry maxLines=${maxLines}`, file);
+      } else if (maxLines > before) {
+        requirePayment("scripts/skill-budgets.manifest.json", `raised ceiling ${before}→${maxLines}`, file);
+      }
+    }
+  }
+
+  for (const { file, base, head } of input.allowlists) {
+    const tally = (entries: unknown[]) => {
+      const counts = new Map<string, number>();
+      for (const entry of entries) {
+        const key = allowlistKey(entry);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      return counts;
+    };
+    const before = tally(base);
+    for (const [key, count] of tally(head)) {
+      if (count - (before.get(key) ?? 0) <= 0) continue;
+      const signature = allowlistSignature(head.find((entry) => allowlistKey(entry) === key));
+      const target = signature === null ? null : signatureTargetPath(signature);
+      if (target === null) {
+        failures.push(
+          `Guard 14 gate-surface self-approval: ${file} widens a lint exemption with an entry that has no resolvable <kind>:<path>:<hash> signature (${key}) — a widened entry must name the artifact it exempts, so the check fails closed (AGENTS.md gate-surface rule)`,
+        );
+        continue;
+      }
+      requirePayment(file, `added entry ${key}`, target);
+    }
+  }
+
+  return failures;
 }
 
 export function isGitHubActions(): boolean {
@@ -1643,12 +1792,17 @@ if (import.meta.main) {
 /* Guard 14: gate-surface self-approval (allowlists + budget manifest) */
 /* ------------------------------------------------------------------ */
 
-  const gateSurfaceStats = changedFileStatsSinceMergeBase();
-  const gateSurfaceFailures = checkGateSurfaceChange(gateSurfaceStats);
+  const gateSurfaceSnap = gateSurfaceSnapshots();
+  const gateSurfaceCi = isGitHubActions();
+  const gateSurfaceFailures = checkGateSurfaceChange(
+    gateSurfaceSnap ? { ...gateSurfaceSnap, ci: gateSurfaceCi } : { allowlists: [], changedFiles: [], hasRange: false, ci: gateSurfaceCi },
+  );
   for (const row of gateSurfaceFailures) fail(row);
   const gateSurfaceSummary = `Guard 14 gate-surface self-approval ${
-    gateSurfaceStats === null
-      ? "skipped (no git range)"
+    gateSurfaceSnap === null
+      ? gateSurfaceCi
+        ? "FAIL (no git range in CI)"
+        : "skipped (no git range)"
       : gateSurfaceFailures.length === 0
         ? "OK"
         : `FAIL (${gateSurfaceFailures.length} violation${gateSurfaceFailures.length === 1 ? "" : "s"})`
