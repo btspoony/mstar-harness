@@ -8,6 +8,23 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.6.0] - 2026-11-13
+
+### Harness
+
+- Added **Guard 13**: the `mstar-harness-core` skill index and the `skills/mstar-*` directories must agree in both directions.
+- Added **Guard 14**: a widened lint exemption (an allowlist entry or a raised skill-budget ceiling) must carry the artifact it exempts in the same change, compared by parsed JSON rather than line counts.
+- Added the `skill-corpus-audit` audit variant: concept overlap, stale references, promotion candidates and resident-description cost, with a reason-quality rule and an owner approval gate.
+- Added a `Depth Lens` with seven fixed terms and four decisions tests, and a `Spec-Fidelity Lens` for acceptance-criterion traceability; both attach to QC1 without adding a seat.
+- `clarify` now asks every frontier question without an unsettled prerequisite in one round, and asks a style or convention fork alone.
+- Skill authoring now states completion criteria (clarity and demand) and the no-op / negation judgements.
+- The PR body must carry Evidence and Merge danger (`Door` / `Blast radius`); `mstar-pr-loop` reports their presence.
+- Audit findings classify their fix as `mechanical` (routes to a deterministic check) or `judgement` (routes to a standard), and a plan task lists the direct consumers its change affects.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.6.0**.
+
 ## [4.5.3] - 2026-11-13
 
 ### Documentation
