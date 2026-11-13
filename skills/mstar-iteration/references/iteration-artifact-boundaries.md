@@ -55,11 +55,12 @@
 
 - 迭代内演进的规格草案 → **`<iteration-id>/specs/`**
 - 探索 scratch → **`<iteration-id>/guides/`**
-- 实施踩坑（未整理）→ 留 package 或 plan 素材，**close 时 compound 提升**
+- 实施踩坑（未整理）→ 该 plan `Done` 后 capture（**`mstar-knowledge`**）
 
-## Knowledge 与 compound 提升
+## Knowledge capture 与 Phase 3 语料提升
 
-- iteration-close 的 knowledge / specs package 盘点、准入、结构化提升与历史保留规则 → **`mstar-knowledge`**「Iteration package promotion」；目标层形状 → **`mstar-doc-corpus`**（`references/specs.md` / `references/knowledge-format.md`）。本轨写入 integration worktree，随 close commit 交付。
+- **per-plan**：每个迭代 plan `Done` 后 → **`mstar-knowledge`** capture；迭代行在 integration worktree 写 tracked `{KNOWLEDGE_DIR}` / `CONCEPTS.md`，有 tracked 变更时立即提交到 integration 分支（无变更的 reasoned `skipped` 不提交），独立 plan 在 delivery branch 写并随 PR 交付。
+- **Phase 3**：只提升 specs/ADR（**`mstar-doc-corpus`**：specs 准入/骨架、ADR 记录契约）；不重复 knowledge 盘点。本轨写入 integration worktree，随 close commit 交付。
 - **iteration-start §1.6**：product / architect **不得**向 `{KNOWLEDGE_DIR}/` **新增**；误写由 writing-specialist 迁回 **package**。
 
 ## §1.6 selected-role editing scope
@@ -89,7 +90,7 @@ Phase 2 执行期：各角色可继续向 **`<iteration-id>/`** 追加 guides/sp
 
 - 用 `{KNOWLEDGE_DIR}/` 存迭代探索（应进 `<iteration-id>/guides/`）
 - Putting a prototype in specs/knowledge, using it as runnable acceptance evidence, or losing its approved revision when revising the design
+- iteration-close **不**盘点 knowledge（per-plan 已完成）；只做 specs/ADR 提升
 - 把迭代 package 草案直接复制进 `{SPECS_DIR}/` 而不锁定评审
-- iteration-close **只做** plan 素材 compound、**不**盘点 `<iteration-id>/` package
-- 提升时整文件复制到 knowledge（应 compound 结构化重写）
+- 提升时整文件复制（应结构化重写）
 - 新写仍把 compass 放在 `{ITERATION_DIR}/` 根目录（应用 `<iteration-id>/delivery-compass.md`）

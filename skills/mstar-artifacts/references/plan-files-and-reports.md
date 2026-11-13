@@ -55,6 +55,7 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
   - `Task reviews`: compact per completed task — task number + review range + earned `Task quality` + report pointer (`task-N-review.md` → `{SDD_DIR}/task-N-review.md`); required for handoff once `{SDD_DIR}` is unavailable. The L2 report file lives at the SDD root (outside `{SDD_DIR}/review/`); bundle cleanup removes only the ephemeral `review/` artifacts. The pointer names the L2 report, never the implementer's `task-N-report.md`
   - `Blocking result`: fixed / none / deferred with reason
   - `Residual findings`: each open issue — id + short title + issue severity + store tracking location + owner/target + blocker-defer flag (`N/A — none open` when none)
+  - `Compound disposition`: `created` | `updated` | reasoned `skipped` (`N/A — report-only`) — appended after `Done` by the per-plan compound step; it does not amend the engine completion payload
 - Main plan `## PM Acceptance Summary`:
   - acceptance owner: primary project-manager; completion carrier `acceptance` (gate value `pm-acceptance`; the member name is the wire spelling, not a report filename)
   - compact per-AC evidence/result/applicability, coverage/gaps and exact report pointer (`pm-acceptance.md` → `{SDD_DIR}/review/pm-acceptance.md`)
@@ -62,7 +63,7 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
   - related issue dispositions and verification evidence
 - `{HARNESS_DIR}/store.db` linked issues: open-item machine SSOT (`mstar issue list` / `mstar issue show`); `{PROJECT_DIR}/<id>/residuals.json` is migration history only.
 
-The durable summary is not a paste of raw reports. It is a small gate record sufficient for handoff after `{SDD_DIR}` is unavailable.
+The durable summary is not a paste of raw reports. It is a small gate record sufficient for handoff after `{SDD_DIR}` is unavailable. The `Compound disposition` line is the one post-`Done` append: it records the authored outcome on a development plan without amending the engine completion payload.
 
 Decision rationale that must outlive the plan is not a durable-summary field: it is written as an ADR under `docs/adr/` (contract: `mstar-doc-corpus/references/adr.md`), and the summary keeps a pointer to the record.
 

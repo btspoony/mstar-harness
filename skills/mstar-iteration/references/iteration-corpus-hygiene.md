@@ -10,7 +10,7 @@
 | **Primary** | `{ITERATION_DIR}/<iteration-id>/**` | Only this round's affected prototypes/guides/specs, compass/plan links, draft-vs-locked status and current design baseline |
 | **Existing only** | Directly related `{KNOWLEDGE_DIR}/` references | Archive / misplaced correction as needed — no new knowledge or whole-corpus scan |
 | **Out of scope** | `{SPECS_DIR}/**` writes | 全局 specs 在 **Phase 3 iteration-close** 提升时写入 |
-| **Out of scope** | New `{KNOWLEDGE_DIR}/` writes | → **`mstar-knowledge`** @ iteration-close |
+| **Out of scope** | New `{KNOWLEDGE_DIR}/` writes | → **`mstar-knowledge`** @ each plan's `Done` |
 
 ## Placement corrections
 
@@ -37,8 +37,8 @@
 
 ## Close vs start
 
-| Tree | Start (§1.6) | Close (§3.2 compound + specs 提升） |
+| Tree | Start (§1.6) | Close (§3.2 specs/ADR 提升) |
 |------|--------------|------------------------|
 | `{SPECS_DIR}/` | Git-tracked shared specs；写入发生在 close 提升 | **specs 提升**写入 |
-| `{ITERATION_DIR}/<id>/` | Create/edit drafts（specs 在 `<id>/specs/`） | **Inventory → promote** to `{KNOWLEDGE_DIR}/` |
-| `{KNOWLEDGE_DIR}/` | Hygiene / archive only | **Primary write path** |
+| `{ITERATION_DIR}/<id>/` | Create/edit drafts（specs 在 `<id>/specs/`） | **specs/ADR 盘点**（knowledge 已随各 plan Done 处理） |
+| `{KNOWLEDGE_DIR}/` | Hygiene / archive only | **不在 close 写入**（per-plan capture 已提交） |

@@ -59,7 +59,7 @@ Q8: No  — 只涉及一个 model
 
 ## Phase 1: Gather context
 
-Read the conversation history **and**, when `iteration_id` is known, scan **`{ITERATION_DIR}/<iteration-id>/`** package per **Iteration package promotion** (SKILL.md `## Workflow — Capture`).
+Read the conversation history and the plan's own artifacts. Iteration package specs/ADR promotion belongs to Phase 3 (`mstar-doc-corpus`), not to capture.
 
 Understand:
 - What problem was solved (the concrete issue)

@@ -103,7 +103,7 @@ This table tracks **iteration delivery nodes**, not store `project_milestones` r
 
 ## Iteration package
 
-> Sibling paths under `{ITERATION_DIR}/<iteration-id>/`, not `{SPECS_DIR}/` or `{KNOWLEDGE_DIR}/`. Prototypes remain iteration design history; eligible formal material is considered at iteration-close under the existing promotion rules.
+> Sibling paths under `{ITERATION_DIR}/<iteration-id>/`, not `{SPECS_DIR}/` or `{KNOWLEDGE_DIR}/`. Prototypes remain iteration design history; eligible formal specs/ADR are considered at iteration-close under the existing promotion rules, while knowledge is captured per plan.
 
 | Path | Purpose |
 |------|---------|
@@ -125,13 +125,14 @@ Notes:
 - Raw review bundle: `{SDD_DIR}/review/` (ephemeral; do not rely on it after Done).
 - Open findings: store issue IDs + issue severity + tracking location; gate via `mstar status findings-cleanup <plan-id>`. Project `residuals.json` is migration history, never a live register.
 
-## Compound Round Summary
+## Corpus Promotion Summary
 
-> Filled at iteration-close.
+> Filled at iteration-close. Knowledge capture runs per plan; this summary covers specs/ADR promotion and points to each plan's compound disposition.
 
-- 结晶文档数：<N>
-- 新增 CONCEPTS.md 条目：<N>
-- 触发知识维护（`mstar-knowledge` `## Workflow — Maintain`）：<是/否>
+- Promoted specs：<N>（路径：<...>）
+- Promoted ADRs：<N> / N/A
+- Plan compound dispositions：<plan-id: created/updated/skipped (reason)>
+- Skipped / retained package material：<reason>
 
 ## Iteration Retrospective (minimal)
 
@@ -165,7 +166,7 @@ Notes:
 | `## Prototype baseline` | Yes | Phase 1 §1.3, from §1.2.5; retained path/revision and truthful confirmation/autonomous disposition |
 | Iteration package (`prototypes/`, optional `guides/` / `specs/`) | Yes (prototype) | Prototype before formal authoring; README is optional prose, not a required index |
 | `## Quality Gate Summary` | Yes | Phase 3 §3.4 |
-| `## Compound Round Summary` | Yes | Phase 3 §3.4 |
+| `## Corpus Promotion Summary` | Yes | Phase 3 §3.4 |
 | `## Iteration Retrospective` | Recommended | Phase 3 §3.4 |
 
 ## Legacy compass drift
