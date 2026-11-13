@@ -109,7 +109,7 @@ All rows use the same workflow coordinator, transaction/CAS/receipt discipline a
 |---|---|---|
 | Iteration/non-standalone | Reviewed source, independent QC, PM Acceptance and the real serial two-parent integration merge in recorded target checkout, with actual base/result SHAs | Row then runs its own compound; parent specs/ADR promotion/PR/verified merge/terminal close; no child PR |
 | Standalone development | Reviewed source, independent QC, PM Acceptance and clean registered source checkout/ref, without iteration integration inputs | Own compound/PR/verified merge/terminal close |
-| Standalone report-only | QC/PM Acceptance under the registered completion policy, without a fulfilment payload or invented Git/integration | Evidence-backed terminal close, no PR/merge |
+| Standalone report-only | QC/PM Acceptance under the registered completion policy, without a fulfilment payload or invented Git/integration | Evidence-backed terminal close; no compound/PR/merge |
 
 Completion never performs Git merge or an ownership transfer. The coordinator explicitly merges once in the recorded integration checkout and then complete verifies the actual result. Lost output means retry complete against actual facts, not a second merge. Resolve/abort a real conflict in Git. Exact replay preserves completion timestamps. Recovery replaces only the explicitly stopped workflow coordinator; row-specific sessions/launches are removed.
 

@@ -1,6 +1,6 @@
 ---
 name: mstar-knowledge
-description: "Load for `{KNOWLEDGE_DIR}` capture at each plan's `Done`, or maintain/refresh/bootstrap（每 plan 结晶/清理/bootstrap）；skip with reasoned skipped when nothing to crystallize. Not for ordinary feature coding."
+description: "Load for `{KNOWLEDGE_DIR}` capture at each development plan's `Done`, or maintain/refresh/bootstrap（每 development plan 结晶/清理/bootstrap）；skip with reasoned skipped when nothing to crystallize. Not for ordinary feature coding."
 ---
 
 # mstar-knowledge（知识结晶与维护）
@@ -13,7 +13,7 @@ Standalone, this skill needs nothing beyond itself and **`mstar-doc-corpus`** fo
 
 One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one document shape (**`mstar-doc-corpus`** → `references/knowledge-format.md`、`references/schema.yaml`、`assets/knowledge-skeleton.md`；本 skill 不维护第二份字段表或骨架), two workflows: **Capture** 把已解决的问题沉淀为结构化知识文档，供未来的 plan 研究、debug 与实现检索复用；**Maintain** 让既有文档对抗代码漂移重新可信。Knowledge that isn't captured evaporates when the session ends; knowledge that is captured but not discoverable is equally lost; documents that are captured also age — code changes, conventions evolve, patterns become obsolete — so capture and maintenance are one skill over one artifact.
 
-**In the mstar lifecycle**, Capture runs after every plan's `Done` — an iteration row or a standalone development plan — sharing one step sequence (see「Integration with mstar lifecycle」). It is not a mid-plan activity; ad-hoc captures stay invocable standalone. Maintain runs only from its own entries (`## When to use / Skip`), which include the Capture Phase 7 flag and the on-demand project-knowledge bootstrap.
+**In the mstar lifecycle**, Capture runs after every development plan's `Done` — an iteration row or a standalone development plan — sharing one step sequence (see「Integration with mstar lifecycle」). It is not a mid-plan activity, and report-only plans carry no compound duty; ad-hoc captures stay invocable standalone. Maintain runs only from its own entries (`## When to use / Skip`), which include the Capture Phase 7 flag and the on-demand project-knowledge bootstrap.
 
 **Storage**: `{KNOWLEDGE_DIR}` defaults to `.agents/knowledge/` — one default whether or not the harness runs; a `.mstarc` `knowledge_dir` is authoritative over it, resolved relative to the `.mstarc`, and a writing step must resolve the symbol (`.mstarc`, then `mstar path resolve`) instead of composing the default path (**`mstar-doc-corpus`** § Layout defaults)。知识文档 → `{KNOWLEDGE_DIR}/<category>/<slug>.md`（`<category>` 取值见 **`mstar-doc-corpus`** `references/category-mapping.md`）；CONCEPTS.md → `<repo-root>/CONCEPTS.md`；Maintain 另可操作 `{KNOWLEDGE_DIR}/README.md`（**散文**，见 Maintain Phase 4）。当 harness 运行时，完整的发现链与其余路径符号 → **`mstar-conventions`**。
 
@@ -21,9 +21,9 @@ One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one 
 
 ## When to use / Skip
 
-**Capture — use**: 每个 plan `Done` 后（迭代行与独立 development plan 相同，见「Integration with mstar lifecycle」）；任何非平凡问题解决后（独立触发，紧急情况同样适用）；重大 bug 修复后。
+**Capture — use**: 每个 development plan `Done` 后（迭代行与独立 plan 相同，见「Integration with mstar lifecycle」）；任何非平凡问题解决后（独立触发，紧急情况同样适用）；重大 bug 修复后。
 
-**Capture — skip**: 自检 ≤2 Yes；Q5 高重叠（更新已有而非新建）；纯机械工作（格式化、依赖升级、typo）；问题未经验证。每个 plan 的 disposition 义务不因跳过结晶而消失——结晶跳过时以 reasoned `skipped` 记录在该 plan 的完成记录（独立 plan 另记 `delivery.compound`，见「Integration with mstar lifecycle」）。
+**Capture — skip**: 自检 ≤2 Yes；Q5 高重叠（更新已有而非新建）；纯机械工作（格式化、依赖升级、typo）；问题未经验证。每个 development plan 的 disposition 义务不因跳过结晶而消失——结晶跳过时以 reasoned `skipped` 记录在该 plan 的 `## Review Gate Summary`（独立 plan 另记 `delivery.compound`，见「Integration with mstar lifecycle」）。
 
 **Maintain — use**:
 
@@ -45,9 +45,9 @@ One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one 
 
 Compound 是**被生命周期流程调用**的知识结晶流程：本 SKILL 只拥有**执行步骤**（下方 + `references/compound-workflow.md`）；**触发时机、cwd、写入面与结果记录面由调用方流程声明**。本 SKILL **不复述调用方细节，也不维护调用方清单** —— 调用方各自指向本技能的步骤文件。
 
-每个 plan `Done` 后执行一次（迭代行与独立 development plan 相同），产出 `created` / `updated` / reasoned `skipped`：
+每个 development plan `Done` 后执行一次（迭代行与独立 plan 相同），产出 `created` / `updated` / reasoned `skipped`：
 
-- **迭代行**：在 integration worktree 写 tracked `{KNOWLEDGE_DIR}` / `CONCEPTS.md`，立即 commit 到 integration 分支；disposition 记入该 plan 的完成记录。Child row 无 workflow delivery evidence。
+- **迭代行**：在 integration worktree 写 tracked `{KNOWLEDGE_DIR}` / `CONCEPTS.md`，立即 commit 到 integration 分支；disposition 记入该 plan 的 `## Review Gate Summary`（引擎 completion payload 不追改）。Child row 无 workflow delivery evidence。
 - **独立 development plan**：在 delivery branch 写，PR head 定稿前记录 `delivery.compound`。
 
 Phase 3 的 specs/ADR 提升不属本技能 → **`mstar-doc-corpus`**。

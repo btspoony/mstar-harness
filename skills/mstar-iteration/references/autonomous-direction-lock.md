@@ -55,7 +55,7 @@ Count only **business delivery plans** registered in compass / the workflow regi
 | Exclude from scale count | Examples |
 |--------------------------|----------|
 | Phase 1 process | Research, direction lock, retained prototype, Review & Edit, compass/catalog/execution registration |
-| Phase 2 process | Per-task SDD briefs/reviews, plan QC tri, PM Acceptance gate, branch merge-back |
+| Phase 2 process | Per-task SDD briefs/reviews, per-plan compound disposition, plan QC tri, PM Acceptance gate, branch merge-back |
 | Phase 3–5 process | specs/ADR promotion, iteration-close, Create PR, merge-ready / CI babysit |
 | Meta “plans” | “run QC”, “do compound”, “open PR”, “setup harness”, “write compass only” |
 

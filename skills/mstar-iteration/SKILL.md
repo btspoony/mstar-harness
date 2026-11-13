@@ -17,7 +17,7 @@ The primary coordinator owns all rows of the selected iteration and dispatches o
 
 ## 设计思路
 
-mstar 实践模式通常是：一次迭代锁定几个 spec 点（`specify + clarify`），产生多个 `plan`，每个 plan 含多个 tasks。**per-plan 生命周期有完整的闭环**（Prepare → Execute → QC → Done → **compound**）。Compound 是每个 plan `Done` 后的交付尾义务——迭代行与独立 development plan 相同；iteration-close 只做 specs/ADR 提升与迭代收口。
+mstar 实践模式通常是：一次迭代锁定几个 spec 点（`specify + clarify`），产生多个 `plan`，每个 plan 含多个 tasks。**per-plan 生命周期有完整的闭环**（Prepare → Execute → QC → Done → **compound**）。Compound 是每个迭代 plan `Done` 后的交付尾义务——迭代行与独立 development plan 相同；iteration-close 只做 specs/ADR 提升与迭代收口。
 
 本 skill 管理迭代 **Phase 1–6**（command 层可聚合编排，但 **不得**反向引用 command 名；第三方 helper 仅由 command 按需发现）：
 
@@ -107,7 +107,7 @@ Phase 6: post-merge close —— merge 授权完成、PR merged 后 §6.1–§6.
 
 完整 topic-skill 索引见 **`mstar-harness-core`**。本 skill 迭代级关键引用：
 
-- **`mstar-knowledge`** — 每个 plan `Done` 后触发知识结晶（**唯一**默认 knowledge 新增路径）
+- **`mstar-knowledge`** — 每个迭代 plan `Done` 后触发知识结晶（**唯一**默认 knowledge 新增路径）
 - **`references/phase-1-prepare.md`** — start route detail（§1.1–§1.6）
 - references/phase-2-worktree-lease.md — direct coordinator execution, isolated feature/integration checkouts, atomic writes and real serial merge proof
 - **`references/autonomous-direction-lock.md`** — §1.2 autonomous direction lock、scale budget、branch resolve

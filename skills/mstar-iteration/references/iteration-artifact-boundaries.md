@@ -59,7 +59,7 @@
 
 ## Knowledge capture 与 Phase 3 语料提升
 
-- **per-plan**：每个 plan `Done` 后 → **`mstar-knowledge`** capture；迭代行在 integration worktree 写 tracked `{KNOWLEDGE_DIR}` / `CONCEPTS.md` 并立即提交到 integration 分支，独立 plan 在 delivery branch 写并随 PR 交付。
+- **per-plan**：每个迭代 plan `Done` 后 → **`mstar-knowledge`** capture；迭代行在 integration worktree 写 tracked `{KNOWLEDGE_DIR}` / `CONCEPTS.md` 并立即提交到 integration 分支，独立 plan 在 delivery branch 写并随 PR 交付。
 - **Phase 3**：只提升 specs/ADR（**`mstar-doc-corpus`**：specs 准入/骨架、ADR 记录契约）；不重复 knowledge 盘点。本轨写入 integration worktree，随 close commit 交付。
 - **iteration-start §1.6**：product / architect **不得**向 `{KNOWLEDGE_DIR}/` **新增**；误写由 writing-specialist 迁回 **package**。
 
