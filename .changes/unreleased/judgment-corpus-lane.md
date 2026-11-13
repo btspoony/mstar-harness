@@ -1,6 +1,6 @@
 ---
-category: Changed
-packages: judgment
+category: Harness
+packages: root
 ---
 
 - **The retired judgment collection chain is gone.** `runReviewAdvice` and the WeakSet attestation module (`evaluator-channel-trust.ts`) are deleted, along with the CLI result types and input-collection helpers only that entrypoint used; `connectEvaluatorChannel` now returns the mailbox channel directly after its supervisor mount check. `evaluateNative`, `connectEvaluatorChannel`, the shadow supervisor and `review-advice.ts` are unchanged.
