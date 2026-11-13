@@ -5,10 +5,10 @@
  * Bundles the ZCode process hooks with `bun build --target node` (the hooks
  * run via `"command": "node"` in hooks/hooks.json) into committed artifacts.
  * The ZCode plugin root IS the repo checkout and the plugin pipeline has no
- * build step, so artifacts are committed under a `@generated` banner; CI
- * enforces freshness (`bun run engine:build && bun run hooks:build && git diff
- * --exit-code -- hooks/`). The `@mstar-harness/engine` glue is inlined — no
- * bare engine import may survive.
+ * build step, so artifacts are committed under a `@generated` banner.
+ * CI rebuilds the bundles and exercises the built hook behavior; it does
+ * not compare their bytes with the committed artifacts. The
+ * `@mstar-harness/engine` glue is inlined — no bare engine import may survive.
  *
  * Repo convention: same-name test (scripts/build-zcode-hooks.test.ts) wired
  * into the CI "Test scripts" step.
