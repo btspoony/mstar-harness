@@ -319,7 +319,7 @@ function callerIdentityFacts(
 ): Readonly<{ message: string; recovery: string; diagnostics: readonly RefusalDiagnostic[] }> {
   const cli = `mstar ${definition.cli.path.join(" ")}`;
   const native = definition.id === "plan.bind"
-    ? "the dsh native tool `mstar_plan_bind` (its identity is the carrying session's `exec.agent.id`)"
+    ? "A host that ships a native plan-bind tool accepts it without a session id; in dsh that is `mstar_plan_bind`, whose identity is the carrying session's `exec.agent.id`. The CLI route above works in every host."
     : undefined;
   const planGap = ["plan.prepare", "plan.progress", "plan.complete"].includes(definition.id);
   return {
@@ -327,7 +327,7 @@ function callerIdentityFacts(
       + "An MCP child process has no host-proven caller identity, so a sessionId on the wire cannot become a coordinator identity.",
     recovery: [
       "Drop `sessionId` on this connection; it is not a published field unless the launcher opts in.",
-      ...(native === undefined ? [] : [`The host-proven route for this operation is ${native}.`]),
+      ...(native === undefined ? [] : [native]),
       `Otherwise run \`${cli}\` from the session's shell, which takes --session-id or MSTAR_HOST_SESSION_ID.`,
       ...(planGap ? ["No dsh native tool covers plan prepare/progress/complete yet; the CLI is the only route for them."] : []),
     ].join(" "),
