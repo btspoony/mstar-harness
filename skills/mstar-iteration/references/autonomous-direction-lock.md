@@ -56,7 +56,7 @@ Count only **business delivery plans** registered in compass / the workflow regi
 |--------------------------|----------|
 | Phase 1 process | Research, direction lock, retained prototype, Review & Edit, compass/catalog/execution registration |
 | Phase 2 process | Per-task SDD briefs/reviews, plan QC tri, PM Acceptance gate, branch merge-back |
-| Phase 3–5 process | Compound / package promotion, iteration-close, Create PR, merge-ready / CI babysit |
+| Phase 3–5 process | specs/ADR promotion, iteration-close, Create PR, merge-ready / CI babysit |
 | Meta “plans” | “run QC”, “do compound”, “open PR”, “setup harness”, “write compass only” |
 
 Harness steps remain **mandatory gates** outside the budget — they do not consume S/M/L/XL slots and must not be padded into the plan list to “fill” the budget.

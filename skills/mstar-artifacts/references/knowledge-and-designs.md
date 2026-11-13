@@ -14,7 +14,7 @@
 
 | 过程产物 | 典型内容 | 权威 / 生命周期 |
 |----------|----------|-----------------|
-| `{ITERATION_DIR}/<iteration-id>/` | `delivery-compass.md`、`guides/`、`specs/`、`prototypes/` | Agent handoff 与迭代级草稿；close 时经 compound **提升** |
+| `{ITERATION_DIR}/<iteration-id>/` | `delivery-compass.md`、`guides/`、`specs/`、`prototypes/` | Agent handoff 与迭代级草稿；specs/ADR 在 close 提升；knowledge 在每 plan `Done` 后 capture |
 | `{PLAN_DIR}/` | 主 plan、durable gate summary、可选 `residuals/` | 计划执行与长期门禁决策留档 |
 | `{SDD_DIR}/review/` | review package、QC1/2/3、consolidated、PM Acceptance | **流程临时证据**，gitignored，Done 后可丢失 |
 | `{PROJECT_DIR}/<id>/references/` | surveys、epic roadmaps、第三方 notes | 与项目绑定；engine 只列文件名，**无 markdown schema** |

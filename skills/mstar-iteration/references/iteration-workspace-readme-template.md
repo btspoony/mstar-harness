@@ -7,7 +7,7 @@ It is a guide, not a register: which documents exist, where they live, what kind
 ```markdown
 # <iteration-id>
 
-Iteration package — retained `prototypes/` design context + formal `delivery-compass.md` and specs/guides. Not `{KNOWLEDGE_DIR}/`; eligible formal material follows the existing iteration-close promotion rules.
+Iteration package — retained `prototypes/` design context + formal `delivery-compass.md` and specs/guides. Not `{KNOWLEDGE_DIR}/`; knowledge is captured per plan, while eligible formal specs/ADR follow the iteration-close promotion rules.
 
 ## Orientation
 
@@ -16,11 +16,11 @@ Iteration package — retained `prototypes/` design context + formal `delivery-c
 - `guides/<name>.md` — <purpose>
 - `specs/<name>.md` — <purpose>
 
-## Promotion log (annotated at iteration-close)
+## Promotion log (specs/ADR at iteration-close; knowledge per plan)
 
 | Source | Promoted to | Date | Notes |
 |--------|-------------|------|-------|
 | | | | |
 ```
 
-**Content of the copied README**: a one-line package description, prose pointers to the files a reader should open first, and the `Promoted to:` annotations written at iteration-close. It carries no Kind/Status columns and no one-row-per-document table — document registration belongs to the catalog, not to this file.
+**Content of the copied README**: a one-line package description, prose pointers to the files a reader should open first, and the `Promoted to:` annotations written when the material is promoted (per-plan capture or Phase 3 specs/ADR promotion). It carries no Kind/Status columns and no one-row-per-document table — document registration belongs to the catalog, not to this file.

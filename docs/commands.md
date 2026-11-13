@@ -107,7 +107,7 @@ All rows use the same workflow coordinator, transaction/CAS/receipt discipline a
 
 | Route | Direct completion proof | Outer obligation |
 |---|---|---|
-| Iteration/non-standalone | Reviewed source, independent QC, PM Acceptance and the real serial two-parent integration merge in recorded target checkout, with actual base/result SHAs | Parent compound/PR/verified merge/terminal close; no child PR |
+| Iteration/non-standalone | Reviewed source, independent QC, PM Acceptance and the real serial two-parent integration merge in recorded target checkout, with actual base/result SHAs | Row then runs its own compound; parent specs/ADR promotion/PR/verified merge/terminal close; no child PR |
 | Standalone development | Reviewed source, independent QC, PM Acceptance and clean registered source checkout/ref, without iteration integration inputs | Own compound/PR/verified merge/terminal close |
 | Standalone report-only | QC/PM Acceptance under the registered completion policy, without a fulfilment payload or invented Git/integration | Evidence-backed terminal close, no PR/merge |
 

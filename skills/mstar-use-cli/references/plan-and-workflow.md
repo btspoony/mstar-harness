@@ -54,7 +54,7 @@ Use actual reports/source facts, not placeholders. Source and review head are de
 
 | Engine-selected route | Proof before direct complete | After row Done |
 |---|---|---|
-| Iteration/non-standalone | QC/PM Acceptance and source/review ancestry plus already-performed serial two-parent merge in the clean recorded integration checkout on its target branch. Supply real base/result. The engine re-witnesses Git at commit. | Parent still owes compound/PR/proved merge/terminal close; no child PR. |
+| Iteration/non-standalone | QC/PM Acceptance and source/review ancestry plus already-performed serial two-parent merge in the clean recorded integration checkout on its target branch. Supply real base/result. The engine re-witnesses Git at commit. | Row then runs its own compound; parent still owes specs/ADR promotion/PR/proved merge/terminal close; no child PR. |
 | Standalone development, exactly one row | QC/PM Acceptance and clean registered source checkout/ref/commit; integration input refuses. | Own compound/PR/proved merge/terminal close; workflow stays running. |
 | Standalone verification/report-only, exactly one row | QC/PM Acceptance under the registered completion_policy, a declaration and no payload. Git fields are provenance only, not an invented source/integration requirement. Integration input refuses. | Evidence-backed terminal close; no invented compound-before-PR, PR or merge. |
 
