@@ -21,7 +21,9 @@ secrets.env
 # Generated commands bundle; rebuild before CLI package tests
 packages/commands/dist/
 
-# Generated dashboard assets (regenerated before every CLI build)
+# Generated dashboard assets (regenerated before every CLI and commands build;
+# its bytes depend on the bundler version, so it is a build output, not a fact)
+packages/commands/src/dashboard/assets.generated.ts
 
 # JUnit report the dsh test step emits for the composition-report gate
 packages/dsh/.junit-dsh.xml
