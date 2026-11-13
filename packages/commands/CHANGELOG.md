@@ -6,6 +6,58 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.5.3] - 2026-11-13
+
+### Changed
+
+- **`status workflow-close` no longer answers one refusal with two recoveries.** `coordination.git-unavailable` covers both an unreadable Git state and the delivery-diff scratch write that failed under `TMPDIR`; the former keeps the control-root instruction, the latter now names `TMPDIR` so the appended recovery agrees with the engine's own message.
+- **The accepted-limits record states its waiver at its real width.** The `I-000196` subsection waives `model` and `assistance` only, and now says the `seat`/`shard`/`sessionId` duty `check-annotations` still enforces is outside it. The record also names which three of the five limits carry an in-code reference instead of claiming all five do.
+- **The skip rule answers before the workspace checks**: `pushItem` now computes the payload hash and
+  returns `skipped` for an applied row that already proves the remote content, before the state and
+  label preflights. An item whose kind label has since left the workspace used to report `failed` and
+  rewrite a correctly `applied` row with an error it never earned; it now reports `skipped` and leaves
+  the ledger untouched.
+- **Adoption adopts the last marker, not the first**: `markerIn` takes the final
+  `<!-- mstar-sync: … -->` occurrence in a description, so a marker quoted in operator text can no
+  longer be the one a reconcile scan matches. The marker grammar is unchanged.
+- **Reconcile scans are bounded, and a truncated one decides nothing**: `reconcilePendingCreate` stops
+  at the page bound its caller passes — `DEFAULT_MAX_PAGES`, the same number `import` stops at, which
+  the engine no longer has to duplicate — and rejects a bound below one. A scan still holding a cursor
+  is reported as truncated (`stoppedAtPageBound`, carried through to the `push` run report), and one
+  standard follows: neither absence nor uniqueness is proved over a listing read only in part. No
+  `--release` and, unlike before, **no adoption** — every residue stays `unresolved` with the bound in
+  its cause, so `--adopt` or a listing that fits the bound is the way out. Adopting the single match
+  read so far would bind the row to one of several remote issues carrying its marker, where no later
+  scan could surface the other.
+- **A malformed remote reference is invalid input, not a crash**: `externalIdOf("http://[")` throws the
+  existing `[sync.invalid-input]` refusal instead of leaking the `TypeError` `new URL` raises, so
+  `--adopt` reports a cause the operator can act on.
+- **`linear.label-unresolved` names both of its causes**: the recovery text now separates a discovery
+  walk that stopped at its page bound — a fixed bound the walk restarts from every run, so retrying
+  cannot change the outcome and the action is to bring the workspace's label set within what mstar
+  enumerates — from a completed walk that proved the label absent (create or redirect it). The code is
+  unchanged, and `sync.illegal-transition`'s recovery now also covers the truncated-scan branch instead
+  of describing only a wrong `--release` target.
+- **`workflow register` advises when the creation base is the delivery branch.** The `deliveryAnchorWarnings` advisory fired only when `--branch-work` equalled `--branch-target`, so a `development` registration whose `--branch-base` and `--branch-work` recorded the same branch passed silently — and that pair means the delivery branch is the source of its own change. The advisory now covers `base === work` too. Registration still succeeds, but such a registration no longer prints a warning-free `ok` envelope: it now carries a non-empty `data.warnings`, the same field the `work === target` advisory already uses. Both collision arms are symmetric in what they detect, so each now names both corrections — re-record the base, or re-record the work branch — because `mstar workflow delivery-anchors` accepts a re-recorded anchor that is already correct, and repairing only the one the text used to name would leave the collision in place with no further signal. `--branch-base`'s help text says recording it as `--branch-work` is advised against.
+- **Unreadable-store boundary stated on both refusal surfaces**: `store.corrupt` recovery text on
+  `project` and `status` no longer advertises `mstar store restore`, and no longer reports every
+  `store.corrupt` as a physically unreadable file. The code covers a store that cannot be inventoried —
+  a file no reader can open, or a store that opens but fails its own verification — so the text names
+  `store execution restore-preview` as the operation that settles which case applies: it either
+  inventories the live store against the backup point and names the loss a restore would cost, or it
+  refuses and leaves both files untouched. The text states the preserved-bytes boundary, the one
+  supported continuation (a fresh harness as a sibling of the repository's `.mstarc`, under the
+  repository root and gitignored — never nested inside `.mstar`, which hides the declaration from
+  `.mstarc` discovery and drops a custom `specs_dir`/`knowledge_dir` back to the defaults — bootstrapped
+  with `MSTAR_HARNESS_DIR=<fresh> mstar harness scaffold <repo-root>` → `mstar store init --harness`
+  → `mstar catalog discover --harness`), and that the rebuild recovers no authority, issues or
+  execution history. Decision record:
+  `docs/adr/implemented/process/2026-11-12-unreadable-store-boundary.md`.
+
+- Version alignment with harness **4.5.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.5.3**.
+
 ## [4.5.2] - 2026-11-11
 
 ### Changed

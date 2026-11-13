@@ -1,6 +1,19 @@
 # @mstar-harness/opencode-v2 Changelog
 
 
+## [4.5.3] - 2026-11-13
+
+### Fixed
+
+- **A failed engine load now keeps its cause, and both gates name the recovery that actually fits the failure.** Every `engine-seams.ts` gate seam used to log nothing before caching the failure, so a rejected `@mstar-harness/engine` import and a missing engine export both surfaced as one opaque refusal. Each seam now logs its cause, and the dispatch and write gates distinguish the two cases: a rejected import is cached for the host process lifetime, so the refusal names a host reload or restart; a loaded engine that lacks the expected exports is a version mismatch the same bundle would reproduce, so the refusal says the installed plugin and engine do not match, names the reinstall that ships a matching engine, and adds that the host must then reload or restart because the mismatched result is also cached for the process lifetime.
+- **A missing or empty `AGENTS.md` bootstrap warns at setup instead of silently vanishing.** `registerHooks` skips injection when the bundled content is absent, which left a packaged-but-broken install indistinguishable from a working one; setup now logs the missing asset and the reinstall that restores it. A packaging assertion pins `AGENTS.md` in the package file set.
+- **The V2 package's live version citations follow the manifest pin.** `assets.ts` and `hooks/bootstrap.ts` still named `2.1.3` while the manifest pinned `2.2.5`, so a reader checking a projection claim landed on the wrong tag. Every live claim now states the pin, and the three that assert a shape cite the installed declaration they were checked against (the bootstrap anchor moved with the pinned interface). Historical receipts keep the version they recorded.
+- **The OpenCode V2 host-presence note states the generation the installer ships.** The knowledge document named `@opencode/plugin` `2.0.26`; it now matches the manifest pin.
+
+- Version alignment with harness **4.5.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.5.3**.
+
 ## [4.5.2] - 2026-11-11
 
 ### Changed

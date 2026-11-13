@@ -10766,16 +10766,16 @@ function writeTextAtomic(path2, text4) {
   }
 }
 function readMetaRow(db) {
-  const row = db.prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1").get();
-  if (!row || typeof row.store_id !== "string" || row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.authority_epoch !== "number" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
+  const row = readStoreAuthority(db);
+  if (typeof row.storeId !== "string" || row.authorityState !== "staged" && row.authorityState !== "active" || typeof row.epoch !== "number" || typeof row.revision !== "number" || typeof row.catalogRevision !== "number") {
     throw new StoreError("store.corrupt", "store_meta is missing or malformed; the authority generation cannot be verified");
   }
   return {
-    storeId: row.store_id,
-    authorityState: row.authority_state,
-    epoch: row.authority_epoch,
+    storeId: row.storeId,
+    authorityState: row.authorityState,
+    epoch: row.epoch,
     revision: row.revision,
-    catalogRevision: row.catalog_revision
+    catalogRevision: row.catalogRevision
   };
 }
 function schemaVersionOf(db) {
@@ -11786,12 +11786,12 @@ __export(exports_execution_store, {
   adoptTerminalWorkflow: () => adoptTerminalWorkflow,
   advancePlanOperationRevisions: () => advancePlanOperationRevisions,
   advanceWorkflowHeaderRevision: () => advanceWorkflowHeaderRevision,
+  assertActiveExecutionAuthority: () => assertActiveExecutionAuthority,
   assertAuthorityGeneration: () => assertAuthorityGeneration,
   assertExecutionToken: () => assertExecutionToken,
   assertOperationId: () => assertOperationId,
   bindExecutionSession: () => bindExecutionSession,
   bindRecoveredSession: () => bindRecoveredSession,
-  claimIntegrationMergeLease: () => claimIntegrationMergeLease,
   createExecutionWorkflow: () => createExecutionWorkflow,
   executionRootTokenOf: () => executionRootTokenOf,
   executionToken: () => executionToken,
@@ -12444,6 +12444,11 @@ async function withExecutionReadTransaction(context, body, requires = "ordinary 
     handle.close();
   }
 }
+function assertActiveExecutionAuthority(tx, message) {
+  if (tx.execution.authorityState !== "active") {
+    throw new ExecutionError("execution.not-active", message);
+  }
+}
 async function readExecutionState(context) {
   return withExecutionReadTransaction(context, (tx) => ({
     data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.execution),
@@ -12639,11 +12644,11 @@ function assertNoLegacyExecutionSources(context) {
   }
 }
 function assertActiveStoreAuthority(db) {
-  const row = db.prepare("select authority_state from store_meta where id = 1").get();
-  if (!row || typeof row.authority_state !== "string")
+  const authority = readStoreAuthority(db).authorityState;
+  if (typeof authority !== "string")
     throw corrupt("store_meta is missing");
-  if (row.authority_state !== "active") {
-    throw new ExecutionError("store.not-active", `the issue/catalog store is ${row.authority_state}; run \`mstar store upgrade --operator <name>\` to import legacy ` + "workspace rows and activate both authorities; nothing was modified.");
+  if (authority !== "active") {
+    throw new ExecutionError("store.not-active", `the issue/catalog store is ${authority}; run \`mstar store upgrade --operator <name>\` to import legacy ` + "workspace rows and activate both authorities; nothing was modified.");
   }
 }
 function assertExecutionDomainEmpty(db, meta) {
@@ -12912,9 +12917,7 @@ async function adoptTerminalWorkflow(context, input) {
     }
   });
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; terminal adoption requires an active authority`);
-    }
+    assertActiveExecutionAuthority(tx, `the execution authority is ${tx.execution.authorityState}; terminal adoption requires an active authority`);
     const replay = readOperationReplay(tx, {
       operationId: input.operationId,
       requestHash: requestHash2,
@@ -13024,9 +13027,7 @@ async function createExecutionWorkflow(context, input) {
   const operationId = input.operationId;
   const requestHash2 = createWorkflowRequestHash(context.caller, creation, input.expected);
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; domain creation requires an active authority. ` + `A staged store is inspectable only through migration diagnostics.`);
-    }
+    assertActiveExecutionAuthority(tx, `the execution authority is ${tx.execution.authorityState}; domain creation requires an active authority. ` + `A staged store is inspectable only through migration diagnostics.`);
     const recorded = readCommittedOperation(tx.db, tx.epoch, operationId);
     if (recorded !== null) {
       if (recorded.requestHash !== requestHash2) {
@@ -13266,10 +13267,6 @@ function bindRecoveredSession(tx, input) {
   tx.db.prepare("update execution_sessions set state='active', epoch=?, revision=?, bound_at=? where workflow_id=? and role='coordinator' and session_id=?").run(input.epoch, revision, input.now, input.workflowId, input.sessionId);
   return revision;
 }
-function claimIntegrationMergeLease(tx, input) {
-  const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
-  tx.db.prepare("insert or replace into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, ?, ?, ?)").run(input.workflowId, existing === null ? 1 : existing.revision + 1, tx.epoch, JSON.stringify({ ...input.lease, status: "held" }));
-}
 function releaseIntegrationMergeLease(tx, input) {
   const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
   if (existing === null || existing.status === "released")
@@ -13407,9 +13404,7 @@ async function bindExecutionSession(context, input) {
   const bind = resolveBindRequest(context.caller, input);
   const requestHash2 = bindSessionRequestHash(context.caller, bind, input.expected);
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; binding a session requires an active authority. ` + `A staged store is inspectable only through migration diagnostics.`);
-    }
+    assertActiveExecutionAuthority(tx, `the execution authority is ${tx.execution.authorityState}; binding a session requires an active authority. ` + `A staged store is inspectable only through migration diagnostics.`);
     const recorded = readCommittedOperation(tx.db, tx.epoch, bind.operationId);
     if (recorded !== null) {
       if (recorded.requestHash !== requestHash2) {
@@ -13946,48 +13941,33 @@ function assertIssueProvenanceSchema(db) {
     throw new IssueError("issue.schema-outdated", `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store upgrade --operator <name>" first.`);
   }
 }
+var ISSUE_KINDS;
+var ISSUE_SEVERITIES;
 var TERMINAL_DISPOSITIONS;
 var ISSUE_DISPOSITIONS;
-var KINDS;
-var SEVERITIES;
-var ISSUE_KIND_VALUES;
-var SEVERITY_VALUES;
 var ISSUE_PAYLOAD_SCHEMAS;
 var ISSUE_ACTIONS;
 var ISSUE_ACTION_NAMES;
 var IssueError;
 var DISPOSITIONS2;
+var ISSUE_KIND_MAP;
+var ISSUE_SEVERITY_MAP;
 var RELATIONS3;
 var PROVENANCE_KINDS;
 var TERMINAL;
 var init_issue = __esm(() => {
   init_audit();
   init_store_db();
+  ISSUE_KINDS = ["bug", "risk", "improvement", "request", "decision", "review-obligation"];
+  ISSUE_SEVERITIES = ["critical", "high", "medium", "low", "nit"];
   TERMINAL_DISPOSITIONS = ["resolved", "waived", "duplicate", "superseded", "obsolete"];
   ISSUE_DISPOSITIONS = ["open", ...TERMINAL_DISPOSITIONS];
-  KINDS = {
-    bug: true,
-    risk: true,
-    improvement: true,
-    request: true,
-    decision: true,
-    "review-obligation": true
-  };
-  SEVERITIES = {
-    critical: true,
-    high: true,
-    medium: true,
-    low: true,
-    nit: true
-  };
-  ISSUE_KIND_VALUES = Object.keys(KINDS);
-  SEVERITY_VALUES = Object.keys(SEVERITIES);
   ISSUE_PAYLOAD_SCHEMAS = {
     CaptureInput: {
       projectId: { required: true, type: "string", description: "Project identifier" },
       title: { required: true, type: "string", description: "Finding title" },
-      kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KIND_VALUES },
-      severity: { required: true, type: "string", description: "Severity", values: SEVERITY_VALUES },
+      kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KINDS },
+      severity: { required: true, type: "string", description: "Severity", values: ISSUE_SEVERITIES },
       impact: { required: true, type: "string", description: "User or system impact" },
       acceptance: { required: true, type: "string", description: "Acceptance condition" },
       owner: { required: false, type: "string", description: "Optional owner" },
@@ -14014,8 +13994,8 @@ var init_issue = __esm(() => {
     },
     IssueTriage: {
       reason: { required: true, type: "string", description: "Reason for triage change" },
-      kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
-      severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "nit"] },
+      kind: { required: false, type: "string", description: "Replacement issue kind", values: ISSUE_KINDS },
+      severity: { required: false, type: "string", description: "Replacement severity", values: ISSUE_SEVERITIES },
       title: { required: false, type: "string", description: "Corrected finding title; nonblank when supplied", nonblankWhenPresent: true },
       impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
       acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
@@ -14107,6 +14087,8 @@ var init_issue = __esm(() => {
     }
   };
   DISPOSITIONS2 = vocabularyMap(ISSUE_DISPOSITIONS);
+  ISSUE_KIND_MAP = vocabularyMap(ISSUE_KINDS);
+  ISSUE_SEVERITY_MAP = vocabularyMap(ISSUE_SEVERITIES);
   RELATIONS3 = {
     related: true,
     blocks: true,
@@ -16057,6 +16039,17 @@ function validateAppliedMigrations(applied) {
   }
   return max;
 }
+function readStoreAuthority(db) {
+  const row = db.prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1").get();
+  return {
+    authorityState: row?.authority_state,
+    revision: row?.revision,
+    catalogRevision: row?.catalog_revision,
+    storeId: row?.store_id,
+    epoch: row?.authority_epoch,
+    missing: row === undefined
+  };
+}
 function readStoreMeta(db) {
   const row = db.prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1").get();
   if (!row || typeof row.store_id !== "string" || row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.authority_epoch !== "number" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
@@ -17067,8 +17060,7 @@ function requireRoadmapSchema(db) {
   }
 }
 function requireActive(db) {
-  const row = db.prepare("select authority_state from store_meta where id = 1").get();
-  if (row?.authority_state !== "active") {
+  if (readStoreAuthority(db).authorityState !== "active") {
     throw new RoadmapError("roadmap.store-not-active", "Roadmap access requires an active store; staged stores are not readable or writable.");
   }
 }
@@ -17414,6 +17406,34 @@ init_path();
 init_workflow();
 init_audit();
 init_iteration();
+var KNOWLEDGE_BUG_PROBLEM_TYPES = [
+  "build_error",
+  "test_failure",
+  "runtime_error",
+  "performance_issue",
+  "database_issue",
+  "security_issue",
+  "ui_bug",
+  "integration_issue",
+  "logic_error",
+  "config_error"
+];
+var KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES = [
+  "developer_experience",
+  "workflow_issue",
+  "best_practice",
+  "documentation_gap",
+  "architecture_pattern",
+  "design_pattern",
+  "tooling_decision",
+  "convention",
+  "api_design",
+  "testing_pattern"
+];
+var KNOWLEDGE_PROBLEM_TYPES = [
+  ...KNOWLEDGE_BUG_PROBLEM_TYPES,
+  ...KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES
+];
 var WALK_SKIP_DIRS = new Set(["node_modules", ".git", "dist"]);
 var DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)";
 var DATED_SLUG_TOKEN_RE = new RegExp(DATED_SLUG_TOKEN_SOURCE, "g");
@@ -17511,8 +17531,7 @@ function guard(db) {
   const schema = db.prepare("select max(version) as version from schema_version").get();
   if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7)
     fail("milestone.schema-outdated", 'Milestones require schema 7; run "mstar store upgrade --operator <name>" first.');
-  const active = db.prepare("select authority_state from store_meta where id=1").get();
-  if (active?.authority_state !== "active")
+  if (readStoreAuthority(db).authorityState !== "active")
     fail("store.not-active", "Milestone access requires an active store.");
 }
 var OTHER_RETIRED_DISPOSITION_SQL = TERMINAL_DISPOSITIONS.filter((value) => value !== "resolved").map((value) => `'${value}'`).join(",");
@@ -18414,14 +18433,14 @@ function parseJsonArray(value) {
   }
 }
 function readMeta2(db) {
-  const row = db.prepare("select authority_state, revision, catalog_revision from store_meta where id = 1").get();
-  if (!row || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
+  const row = readStoreAuthority(db);
+  if (typeof row.revision !== "number" || typeof row.catalogRevision !== "number") {
     throw new StoreReadError("store.not-active", "store_meta is missing; the store cannot serve reads");
   }
   return {
-    authorityState: typeof row.authority_state === "string" ? row.authority_state : "",
+    authorityState: typeof row.authorityState === "string" ? row.authorityState : "",
     storeRevision: row.revision,
-    catalogRevision: row.catalog_revision
+    catalogRevision: row.catalogRevision
   };
 }
 function readProjectionBlock(db) {
@@ -18539,15 +18558,8 @@ function dashboardView(view, handle, filters) {
       return readOverview(handle.db, filters);
   }
 }
-var ISSUE_KINDS = {
-  bug: true,
-  risk: true,
-  improvement: true,
-  request: true,
-  decision: true,
-  "review-obligation": true
-};
-var ISSUE_SEVERITIES = { critical: true, high: true, medium: true, low: true, nit: true };
+var ISSUE_KIND_MAP2 = vocabularyMap(ISSUE_KINDS);
+var ISSUE_SEVERITY_MAP2 = vocabularyMap(ISSUE_SEVERITIES);
 var ISSUE_DISPOSITION_MAP = vocabularyMap(ISSUE_DISPOSITIONS);
 var ISSUE_LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
@@ -18574,13 +18586,13 @@ function bindIssueFilter(filter) {
   clauses.push("issues.disposition = ?");
   params.push(disposition);
   if (filter.kind !== undefined) {
-    if (!Object.hasOwn(ISSUE_KINDS, filter.kind))
+    if (!Object.hasOwn(ISSUE_KIND_MAP2, filter.kind))
       usage("kind is not a contract vocabulary value");
     clauses.push("issues.kind = ?");
     params.push(filter.kind);
   }
   if (filter.severity !== undefined) {
-    if (!Object.hasOwn(ISSUE_SEVERITIES, filter.severity))
+    if (!Object.hasOwn(ISSUE_SEVERITY_MAP2, filter.severity))
       usage("severity is not a contract vocabulary value");
     clauses.push("issues.severity = ?");
     params.push(filter.severity);
@@ -19268,6 +19280,7 @@ init_worktree();
 init_status();
 init_issue();
 init_issue();
+init_issue();
 init_catalog();
 init_catalog_import();
 init_catalog_registration();
@@ -19280,6 +19293,8 @@ init_recovery_intent();
 init_workflow();
 init_issue();
 var DISPOSITIONS3 = vocabularyMap(ISSUE_DISPOSITIONS);
+var KINDS = vocabularyMap(ISSUE_KINDS);
+var SEVERITIES = vocabularyMap(ISSUE_SEVERITIES);
 init_catalog_import();
 init_catalog();
 init_store_db();

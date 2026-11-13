@@ -6,6 +6,77 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.5.3] - 2026-11-13
+
+### Changed
+
+- Resolved Enforcement through one helper: the dsh boot diagnostic now honours an explicit
+  `enforcement: soft`, so it no longer announces "hard is active" while the gates run warn-only, and
+  the status gate and dispatch gate call the shared resolver instead of keeping their own copies.
+- Derived the compound `problem_type` aggregate from the two track tuples, so adding a value is one
+  edit and can no longer desynchronise aggregate validation from the track-specific required fields.
+- Removed dsh surface with no consumer: the private `currentSelection` method, the
+  `engine-status-endpoint` constant re-exports, and the duplicate endpoint-constant exports on the panel
+  client. The wire module remains the single import path.
+- The iteration views build one compass row map per read instead of scanning the projection per
+  iteration: `readIterationList` builds `Map<iterationId, compass row>` once before the page loop, passes
+  the row into `composeIteration`, and the membership helper reuses the same map. The list path no longer
+  re-scans the compass rows for every row it composes, and `composeIteration` no longer calls `.find` on
+  `generated.compasses`. First-row-wins semantics for a duplicated compass row are unchanged.
+- Added a competing-write regression for the coordinator plan path: two writers presenting the same plan
+  token commit exactly once and the other is refused with the existing `execution.stale-token` CAS code,
+  leaving one revision advance and one receipt.
+- **The dispatch L1 gate reads branch ownership instead of the whole execution graph.** `worktreeL1Violations` called `readExecutionState` and then mapped every workflow's full state and plan payload down to the four facts `collectActiveLifecycleBranches` reads. `readActiveLifecycleBranchDocs` (engine) is that projection in one pass: the same registry membership, workflow headers and plan rows with the same refusals, but only `id`, `branch` and each row's `id`/`metadata`, so the cost follows the ownership question instead of the tokens, sessions, merge leases, frozen inputs and receipts nobody at that call reads. Every active lifecycle is still collected — dropping siblings would hide a cross-lifecycle `worktree.main.residency-switched` collision, which `tests/worktree-l2.spec.ts` now covers with a sibling-owned branch.
+- Added **`readStoreAuthority(db)`**: one `store_meta` select returning the raw authority columns plus `missing`, so the seventeen domain sites that re-derived that shape now share one reader — including the restore inventory and the diagnostic export, which keep their own stricter `staged|active` validation on top of it. The reader never throws — each caller keeps its own refusal type, code and message.
+- **Issue kind and severity are declared tuples** (`ISSUE_KINDS`, `ISSUE_SEVERITIES`) beside the disposition tuple; every validation map and browser filter derives from them through `vocabularyMap`, so adding a member is one edit and no consumer can silently skip it.
+- Exported **`REVIEW_RUN_LEVELS`** and derived `ReviewRunLevel` from it.
+- Pinned **Git probe subprocesses to the C locale**: a translated Git stderr no longer
+  changes the fatal-128 classification, so a real repository still resolves under a
+  non-English locale.
+- **The send right is the ledger's, not a connection's.** The claim test now opens two independent store connections before the first claim: exactly one claim succeeds, the loser is handed the row the winner opened, and a push over the losing connection sends no second create.
+- **Label discovery follows the listing cursor**: `discoverLabels` reads every page the
+  provider advertises (`hasNextPage` + `cursor`) instead of trusting a single 250-row page, so a
+  workspace with more labels than one page no longer reports a false `linear.label-unresolved`
+  for a label that exists. The walk stops at 20 pages and refuses by that same
+  `linear.label-unresolved` code when more pages remain, naming the bound rather than resolving
+  items against a set it knows is truncated. A page that advertises another page without a usable
+  cursor refuses as `linear.query-failed`, the same rule the issue listing applies to that defect.
+- **The skip rule answers before the workspace checks**: `pushItem` now computes the payload hash and
+  returns `skipped` for an applied row that already proves the remote content, before the state and
+  label preflights. An item whose kind label has since left the workspace used to report `failed` and
+  rewrite a correctly `applied` row with an error it never earned; it now reports `skipped` and leaves
+  the ledger untouched.
+- **Adoption adopts the last marker, not the first**: `markerIn` takes the final
+  `<!-- mstar-sync: … -->` occurrence in a description, so a marker quoted in operator text can no
+  longer be the one a reconcile scan matches. The marker grammar is unchanged.
+- **Reconcile scans are bounded, and a truncated one decides nothing**: `reconcilePendingCreate` stops
+  at the page bound its caller passes — `DEFAULT_MAX_PAGES`, the same number `import` stops at, which
+  the engine no longer has to duplicate — and rejects a bound below one. A scan still holding a cursor
+  is reported as truncated (`stoppedAtPageBound`, carried through to the `push` run report), and one
+  standard follows: neither absence nor uniqueness is proved over a listing read only in part. No
+  `--release` and, unlike before, **no adoption** — every residue stays `unresolved` with the bound in
+  its cause, so `--adopt` or a listing that fits the bound is the way out. Adopting the single match
+  read so far would bind the row to one of several remote issues carrying its marker, where no later
+  scan could surface the other.
+- **A malformed remote reference is invalid input, not a crash**: `externalIdOf("http://[")` throws the
+  existing `[sync.invalid-input]` refusal instead of leaking the `TypeError` `new URL` raises, so
+  `--adopt` reports a cause the operator can act on.
+- **`linear.label-unresolved` names both of its causes**: the recovery text now separates a discovery
+  walk that stopped at its page bound — a fixed bound the walk restarts from every run, so retrying
+  cannot change the outcome and the action is to bring the workspace's label set within what mstar
+  enumerates — from a completed walk that proved the label absent (create or redirect it). The code is
+  unchanged, and `sync.illegal-transition`'s recovery now also covers the truncated-scan branch instead
+  of describing only a wrong `--release` target.
+- **A milestone write refused in the gateway envelope keeps only the transport's own code.** `milestoneWrite` now passes through the `gateway/*` family the transport emits (`gateway/internal` for a thrown handler, `gateway/cancelled` for an aborted carrier) and maps every other envelope code to `transport-error`, so the retry channel keeps the operation id instead of settling on a code it does not own. Engine refusals (`milestone.invalid-input`, `store.revision-conflict`, `milestone.not-empty`) are unaffected: they arrive as the method's value and are decoded there, messages included.
+- **The branch-ownership projection refuses a plan row that carries a second authority.** `readActiveLifecycleBranchDocs` applies the same plan-level `state_json` guard `readWorkflowView` already applies: a row state carrying `coordination` or `execution_lease` is `store.corrupt` ("owned by `coordination_json`, not by the row state") instead of being read as the row.
+- Removed three retired engine surfaces with their barrel exports and the tests that only pinned them: **`assertIndexRows`** (always returned a `compound.index.retired` violation), **`claimIntegrationMergeLease`** (no importer) and `renderReviewMarkdown`'s unused options argument with `ReviewRenderOptions` / `ReviewRenderSurface`. The committed ZCode hook bundles intentionally stay at their base revision until `bun run release:prepare` rebuilds them.
+- **A close no longer blames the checkout for an unwritable `TMPDIR`.** When the delivery proof cannot create the scratch file its diff streams through, the refusal names that write and its path and tells the operator to point `TMPDIR` at a writable directory; the "Git availability requires a readable checkout" cause stays for a checkout Git genuinely cannot read. No fallback path and no retry were added.
+- **A supplied clock now stamps every row `store init` writes.** `initializeStore` accepted a `now` clock, but only the two `activated_at` columns read it: the immutable migration SQL seeds `store_meta.created_at`, `execution_meta.root_updated_at` and `projection_meta.checked_at` with SQLite's own `now`, and each `schema_version.applied_at` row took a fresh ambient reading. One store could therefore record `created_at` later than `activated_at`. The creation transaction now reads that clock once: the version ledger is inserted from it directly, and the rows the immutable SQL seeded are re-stamped from the same instant, so a supplied instant is the only instant a fresh store carries. The shared migration runner uses the caller's clock when one is supplied and keeps its own ambient reading otherwise; the upgrade path supplies none, so its stamps are unchanged. No new clock option, no configuration, no schema change: a caller that passes nothing still gets the wall clock.
+
+- Version alignment with harness **4.5.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.5.3**.
+
 ## [4.5.2] - 2026-11-11
 
 ### Changed
