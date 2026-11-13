@@ -41,7 +41,7 @@
     "lint:help-reachability": "bun scripts/lint-help-reachability.ts",
     "ui:build": "bun run --cwd packages/ui build"
   },
-  "packageManager": "bun@1.4.0",
+  "packageManager": "bun@1.4.4",
   "dependencies": {
     "@mstar-harness/engine": "^4.6.0"
   },
