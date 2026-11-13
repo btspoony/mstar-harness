@@ -112,13 +112,18 @@ function parserDiagnostic(error: CommanderError, argv: readonly string[]): Recor
   const quoted = /'([^']+)'/.exec(error.message)?.[1];
   const unknown = error.code === "commander.unknownOption";
   const excess = error.code === "commander.excessArguments";
-  const rejectedIndex = definition === undefined
+  // One scan answers both questions, so a variadic option or a `--` separator
+  // cannot yield two different offending indices.
+  const scan = definition === undefined ? undefined : scanArgv(argv, definition);
+  // The surplus positional, a mandatory option left without a value, or the
+  // rejected token commander quoted — all read off the one scan.
+  const rejectedIndex = scan === undefined || definition === undefined
     ? undefined
     : excess
-      ? excessArgumentIndex(argv, definition)
-      : (!unknown && !missingValue) || quoted === undefined
-        ? undefined
-        : rejectedOptionIndex(argv, definition, quoted, missingValue ? option : undefined);
+      ? scan.positionals[definition.cli.arguments.length]
+      : missingValue
+        ? scan.rejectedIndex
+        : quoted === undefined ? undefined : scan.positionals.find((index) => argv[index] === quoted);
   const path = field ?? (excess && rejectedIndex !== undefined ? `argv[${rejectedIndex}]` : undefined);
   return {
     ...(path === undefined ? {} : { path }),
@@ -149,59 +154,28 @@ function parserField(
   return undefined;
 }
 
-/**
- * The argv position a parser failure is attributed to, resolved against the
- * command's own syntax. A known option consumes the value that follows it
- * (including a token that looks like a flag), so a rejected token is one the
- * syntax does not account for: an unfilled mandatory option when its value is
- * missing, else the unconsumed token itself. Positions the syntax fully
- * explains — a consumed value, a declared positional — are never reported.
- */
-function rejectedOptionIndex(
-  argv: readonly string[],
-  definition: CommandDefinition,
-  quoted: string,
-  missingOption?: CommandDefinition["cli"]["options"][number],
-): number | undefined {
-  const options = definition.cli.options.map((option) => ({
-    option,
-    flags: cliOptionFlags(definition, option),
-    names: option.flags.split(/[ ,|]+/).filter((flag) => flag.startsWith("-")),
-  }));
-  for (let index = 2; index < argv.length; index++) {
-    const token = argv[index]!;
-    if (token === "--") break;
-    const name = token.split("=")[0]!;
-    const known = options.find((entry) => entry.names.includes(name));
-    if (known !== undefined) {
-      if (token.includes("=")) continue;
-      if (known.flags.includes("<")) {
-        if (index + 1 === argv.length && known.option === missingOption) return index;
-        index++; // Commander consumes a required value even when it looks like a flag.
-      } else if (known.flags.includes("[") && argv[index + 1] !== undefined && !argv[index + 1]!.startsWith("-")) {
-        index++;
-      }
-      continue;
-    }
-    if (missingOption === undefined && token === quoted) return index;
-  }
-  return undefined;
-}
+type ArgvScan = {
+  /** Token indices beyond the command path that no known option consumed, in argv order. */
+  positionals: readonly number[];
+  /** First index the syntax does not explain: the surplus positional, else a `<` option left without a value. */
+  rejectedIndex: number | undefined;
+};
 
 /**
- * The argv position of the first token beyond the command's declared
- * positionals — commander reports `excessArguments` by count, never by token,
- * so the position is recovered from the same argv the syntax was matched
- * against: skip the command path, consume every known option (and the value it
- * takes), then count the remaining tokens as the positionals commander counted.
+ * Match an argv against one command's own syntax, once. A known option consumes
+ * the value that follows it — including a token that looks like a flag, and
+ * every further non-flag value for a variadic `<` option. `--` ends option
+ * parsing, so every later token is a positional. Both parser diagnostics query
+ * this scan, so a variadic option or a separator cannot yield two indices.
  */
-function excessArgumentIndex(argv: readonly string[], definition: CommandDefinition): number | undefined {
+function scanArgv(argv: readonly string[], definition: CommandDefinition): ArgvScan {
   const options = definition.cli.options.map((option) => ({
     option,
     flags: cliOptionFlags(definition, option),
     names: option.flags.split(/[ ,|]+/).filter((flag) => flag.startsWith("-")),
   }));
   const positionals: number[] = [];
+  let danglingOptionIndex: number | undefined;
   let terminated = false;
   for (let index = 2 + definition.cli.path.length; index < argv.length; index++) {
     const token = argv[index]!;
@@ -215,8 +189,10 @@ function excessArgumentIndex(argv: readonly string[], definition: CommandDefinit
       if (known !== undefined) {
         if (token.includes("=")) continue;
         if (known.flags.includes("<")) {
-          if (known.option.variadic) {
-            if (argv[index + 1] !== undefined) index++; // Consume the required first value even if it looks like a flag.
+          if (argv[index + 1] === undefined) {
+            danglingOptionIndex ??= index;
+          } else if (known.option.variadic) {
+            index++; // Consume the required first value even if it looks like a flag.
             while (argv[index + 1] !== undefined && !argv[index + 1]!.startsWith("-")) index++;
           } else {
             index++;
@@ -227,7 +203,7 @@ function excessArgumentIndex(argv: readonly string[], definition: CommandDefinit
     }
     positionals.push(index);
   }
-  return positionals[definition.cli.arguments.length];
+  return { positionals, rejectedIndex: positionals[definition.cli.arguments.length] ?? danglingOptionIndex };
 }
 
 function renderCliUsage(definition: CommandDefinition): string {

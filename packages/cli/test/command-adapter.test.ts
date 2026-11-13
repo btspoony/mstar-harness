@@ -348,6 +348,29 @@ describe("generated CLI adapter", () => {
     ]);
   });
 
+  // Both parser diagnostics read one argv scan, so the same argv cannot yield
+  // two offending indices: a variadic option's values and a `--` separator are
+  // consumed identically on the excess path and on the rejected-token path.
+  test("both diagnostics name the same token after a variadic option", () => {
+    const argv = ["node", "mstar", "worktree", "cleanup", "--worktree", "/a", "/b", "--apply", "BADPOS"];
+    const excess = new CommanderError(2, "commander.excessArguments", "too many arguments");
+    const rejected = new CommanderError(2, "commander.unknownOption", "unknown option 'BADPOS'");
+    const excessIndex = (mapParserError(excess, argv)?.details?.diagnostics as Array<{ argvIndex?: number }>)[0]?.argvIndex;
+    const rejectedIndex = (mapParserError(rejected, argv)?.details?.diagnostics as Array<{ argvIndex?: number }>)[0]?.argvIndex;
+    expect(excessIndex).toBe(8);
+    expect(rejectedIndex).toBe(excessIndex);
+  });
+
+  test("both diagnostics name the same token after a -- separator", () => {
+    const argv = ["node", "mstar", "worktree", "cleanup", "--worktree", "/a", "--", "BADPOS", "EXTRA"];
+    const excess = new CommanderError(2, "commander.excessArguments", "too many arguments");
+    const rejected = new CommanderError(2, "commander.unknownOption", "unknown option 'BADPOS'");
+    const excessIndex = (mapParserError(excess, argv)?.details?.diagnostics as Array<{ argvIndex?: number }>)[0]?.argvIndex;
+    const rejectedIndex = (mapParserError(rejected, argv)?.details?.diagnostics as Array<{ argvIndex?: number }>)[0]?.argvIndex;
+    expect(excessIndex).toBe(7);
+    expect(rejectedIndex).toBe(excessIndex);
+  });
+
 
 
 
