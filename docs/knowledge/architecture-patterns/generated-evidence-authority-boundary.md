@@ -3,7 +3,7 @@ module: engine+commands+omp (attestation provisioning, store transactions)
 date: 2026-10-30
 problem_type: architecture_pattern
 category: architecture-patterns
-last_updated: 2026-11-09
+last_updated: 2026-11-13
 severity: medium
 applies_when:
   - replacing a hand-authored authorization or evidence document with tool-generated evidence
@@ -68,12 +68,14 @@ entrypoint can be absent, a node floor can be unresolvable. Each case refuses wi
 a route the caller can actually take (run through the installed Node CLI, supply the explicit
 override). A fabricated value is never the recovery.
 
-## Regenerate inventories last, and never hand-edit them
+## Generated artifacts are proved by behavior, not by a recorded digest
 
-Packaging manifests digest every inventoried source tree (`scripts/packaging-manifests/`, guarded by `scripts/ci-packed-manifest-guard.ts`). Any source change after a regeneration
-makes them stale, so the regeneration is the last step of the branch, rerun after every fix wave —
-and a regeneration is itself a source-adjacent change that must be re-verified with its own
-`--check`. Hand-editing a manifest digest is always wrong even when it makes the check pass today.
+This repository keeps no committed digest inventory of generated bundles: a recorded digest can only
+describe the environment that ran the build, and comparing it back re-reports environment drift as
+source drift. Generated artifacts are held honest by a rebuild in CI (the blocking bundle build plus
+its advisory byte diff) and by the suites that execute the built artifact, not by a checked-in hash.
+Never add a snapshot re-take step, a digest comparison, or a version pin as a test assertion — the
+repository's test rules forbid that class outright.
 
 ## A pass/fail gate that only runs in CI hides environment inheritance
 

@@ -24,15 +24,10 @@
  *    runs via `node`. It is spawned as a subprocess with real PreToolUse
  *    envelopes against a populated database fixture and against a
  *    pre-activation harness fixture.
- * 4. (removed) The generated consumer manifests are NOT re-derived here, and
- *    this file proves nothing about them beyond what is stated above: the CLI
- *    entrypoint's existence and the declared runtime floor, which is all the
- *    CLI consumer records (it pins no generated digest). The producer owns the
- *    rest — `bun scripts/execution-consumer-manifest.ts --check` re-verifies
- *    each PINNED digest and copied mirror against the bytes on disk, and fails
- *    naming the first stale entry. That check runs in CI's `pack-consumers`
- *    job, so the rule has one implementation instead of a second tree walk in a
- *    test that could disagree with it.
+ * 4. THE PACKAGE'S OWN DECLARATIONS — `packages/cli/package.json` names the
+ *    `bin` entry this file spawns and the Node floor it requires, and
+ *    `hooks/hooks.json` names the hook command. There is no separate recorded
+ *    inventory: these package-owner declarations are the authority.
  *
  * WHAT THIS TEST IS NOT (labels, so no reader over-claims)
  *
@@ -46,8 +41,7 @@
  *   generation are never read or written.
  * - Only the NODE-target artifacts (CLI bundle, engine generation, committed
  *   ZCode hook) are executed. The OMP / DSh / OpenCode entrypoints are Bun or
- *   other-runtime targets: here they are covered by the packaging-manifest
- *   check CI runs against the producer's own `--check`, and the populated
+ *   other-runtime targets with their own package suites; here the populated
  *   fixture recipe reused from H2's OMP
  *   `phase2-launches` seed is executed against the built engine to show that a
  *   real OMP-shaped database fixture runs under Node — never that an OMP host
@@ -57,13 +51,11 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -96,18 +88,12 @@ const CLI_ROOT = resolve(TEST_DIR, "..");
 const REPO = resolve(CLI_ROOT, "..", "..");
 const CLI_ENTRY = join(CLI_ROOT, "dist", "mstar-harness.js");
 const HOOK_ENTRY = join(REPO, "hooks", "mstar-write-gate.mjs");
-// The aggregate packaging manifest: read here only for the artifact-existence
-// checks and the consumer ids/runtime floor. Its digests are NOT re-derived in
-// this file — the producer's own `--check` owns that, and CI's `pack-consumers`
-// job runs it.
-const MANIFEST_PATH = join(REPO, "scripts", "packaging-manifests", "manifest.json");
 
-// The resolution above is load-bearing for EVERY manifest/artifact path in this
-// file: a wrong level would silently point outside the checkout. Fail loudly on
-// the repository's own landmarks rather than on a downstream missing file.
+// The resolution above is load-bearing for EVERY artifact path in this file: a
+// wrong level would silently point outside the checkout. Fail loudly on the
+// repository's own landmarks rather than on a downstream missing file.
 assert.ok(existsSync(join(REPO, "package.json")), `repository root did not resolve: ${REPO}`);
 assert.ok(existsSync(join(CLI_ROOT, "package.json")), `CLI package root did not resolve: ${CLI_ROOT}`);
-assert.ok(existsSync(MANIFEST_PATH), `generated manifest not found at ${MANIFEST_PATH}`);
 
 const WORKFLOW_ID = "wf-r3-parity";
 const PLAN_ID = "20260921-r3-parity-plan";
@@ -164,20 +150,6 @@ function satisfiesFloor(version, floor) {
     if (actual[index] < floorParts[index]) return false;
   }
   return true;
-}
-
-/* ------------------------------------------------------------------------ *
- * Built-artifact inventory
- * ------------------------------------------------------------------------ */
-
-function readManifest() {
-  return JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
-}
-
-function consumerById(manifest, id) {
-  const consumer = manifest.consumers.find((candidate) => candidate.id === id);
-  assert.ok(consumer, `manifest declares no ${id} consumer`);
-  return consumer;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -327,8 +299,9 @@ test("built CLI, built engine generation and committed ZCode hook are present no
   assert.equal(writeGate.hooks[0].command, "node");
   assert.deepEqual(writeGate.hooks[0].args, ["${ZCODE_PLUGIN_ROOT}/hooks/mstar-write-gate.mjs"]);
 
-  // This regression needs the CLI/engine/ZCode declared Node floor.
-  const nodeFloor = consumerById(readManifest(), "cli").runtime.floor;
+  // This regression needs the Node floor the CLI package itself declares.
+  const nodeFloor = cliPkg.engines?.node;
+  assert.ok(nodeFloor, "packages/cli/package.json declares no engines.node floor");
   assert.ok(
     satisfiesFloor(process.versions.node, nodeFloor),
     `this regression runs on Node ${process.versions.node}, below the declared floor ${nodeFloor}`,

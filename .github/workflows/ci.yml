@@ -45,8 +45,8 @@ permissions:
 # test-cli-ops-a, test-cli-ops-b, test-cli-suite-a, test-cli-suite-b,
 # test-cli-web) so wall clock is the slowest shard, not the sum; no shard
 # declares `needs:`. Its own share of the
-# duplicated setup is ~9s of bun builds (engine 4s, dsh 3s, opencode/omp
-# 1s each), while a shared `prepare` job would add ITS whole duration — ~40s of
+# duplicated setup is a few seconds of bun builds (engine, judgment, commands,
+# CLI), while a shared `prepare` job would add ITS whole duration — ~40s of
 # preamble+builds, plus artifact upload/download — in front of every test job.
 # Modelled at the original four-shard layout from the first run's measured job
 # durations: independent jobs = 250s
@@ -293,33 +293,14 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      # The CLI suite carries the generated-manifest guard
-      # (`packages/cli/test/execution-package.node.test.mjs`): it re-reads
-      # hooks/execution-consumer.json plus every
-      # <consumer>/execution-consumer/<id>.json evidence document and, for all
-      # six consumers, asserts the recorded entrypoint exists, the generated
-      # files exist, and every generated/source tree digest and copied-instruction
-      # mirror matches the bytes on disk. A fresh checkout has none of those
-      # artifacts, so every consumer the guard digests must be built here —
-      # engine first (each consumer build inlines the engine dist), then the
-      # consumers. A suite shard that runs the guard needs them built; every
+      # The CLI suite spawns the built CLI entry and imports the engine and
+      # judgment dists, so a fresh checkout needs those built first. Every
       # shard keeps this identical chain so the jobs stay interchangeable.
-      - name: Build engine (dist for the CLI suite's consumer-manifest guard)
+      - name: Build engine (dist for the CLI suite)
         run: bun run engine:build && bun run judgment:build
-      # The CLI suite's execution-consumer guard verifies built consumer artifacts.
+
       - name: Build commands package (for the CLI build)
         run: bun run --cwd packages/commands build
-
-      - name: Build OpenCode
-        run: bun run opencode:build
-      - name: Build OpenCode V2
-        run: bun run opencode-v2:build
-
-      - name: Build dsh
-        run: bun run dsh:build
-
-      - name: Build omp
-        run: bun run omp:build
 
       # The retired `test-cli` job ran the package script
       # (`bun run --cwd packages/cli test` = `bun run --cwd ../engine build &&
@@ -376,24 +357,14 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      # Same setup chain as every other CLI shard — see test-cli-coordination
-      # for why the consumer builds exist and why the CLI build is explicit.
-      - name: Build engine (dist for the CLI suite's consumer-manifest guard)
+      # Same setup chain as every other CLI shard — the suite spawns the built
+      # CLI entry and imports the engine/judgment dists; see
+      # test-cli-coordination for why the CLI build is explicit.
+      - name: Build engine (dist for the CLI suite)
         run: bun run engine:build && bun run judgment:build
 
       - name: Build commands package (for the CLI build)
         run: bun run --cwd packages/commands build
-
-      - name: Build OpenCode
-        run: bun run opencode:build
-      - name: Build OpenCode V2
-        run: bun run opencode-v2:build
-
-      - name: Build dsh
-        run: bun run dsh:build
-
-      - name: Build omp
-        run: bun run omp:build
 
       - name: Build CLI
         run: bun run cli:build
@@ -439,24 +410,14 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      # Same setup chain as every other CLI shard — see test-cli-coordination
-      # for why the consumer builds exist and why the CLI build is explicit.
-      - name: Build engine (dist for the CLI suite's consumer-manifest guard)
+      # Same setup chain as every other CLI shard — the suite spawns the built
+      # CLI entry and imports the engine/judgment dists; see
+      # test-cli-coordination for why the CLI build is explicit.
+      - name: Build engine (dist for the CLI suite)
         run: bun run engine:build && bun run judgment:build
 
       - name: Build commands package (for the CLI build)
         run: bun run --cwd packages/commands build
-
-      - name: Build OpenCode
-        run: bun run opencode:build
-      - name: Build OpenCode V2
-        run: bun run opencode-v2:build
-
-      - name: Build dsh
-        run: bun run dsh:build
-
-      - name: Build omp
-        run: bun run omp:build
 
       - name: Build CLI
         run: bun run cli:build
@@ -481,9 +442,9 @@ jobs:
   # sort deterministic, so the halves are complementary per runner: union =
   # full remainder, intersection = empty. Worst case: an unlisted file makes
   # one half slower, never silently skipped or double-run. The globs cover
-  # `test/` (the cross-module suites, including the `.node.test.mjs` consumer
-  # guard) and `src/` (colocated module suites) — `packages/cli/web/` has its
-  # own batch (test-cli-web) per owner decision.
+  # `test/` (the cross-module suites, including the `.node.test.mjs` package
+  # regression) and `src/` (colocated module suites) — `packages/cli/web/` has
+  # its own batch (test-cli-web) per owner decision.
   test-cli-suite-a:
     runs-on: ubuntu-latest
     env:
@@ -517,26 +478,14 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      # Same setup chain as every other CLI shard — see test-cli-coordination
-      # for why the consumer builds exist and why the CLI build is explicit.
-      # This shard may run `test/execution-package.node.test.mjs`, so the
-      # consumer artifacts it guards are genuinely required here.
-      - name: Build engine (dist for the CLI suite's consumer-manifest guard)
+      # Same setup chain as every other CLI shard — the suite spawns the built
+      # CLI entry and imports the engine/judgment dists; see
+      # test-cli-coordination for why the CLI build is explicit.
+      - name: Build engine (dist for the CLI suite)
         run: bun run engine:build && bun run judgment:build
 
       - name: Build commands package (for the CLI build)
         run: bun run --cwd packages/commands build
-
-      - name: Build OpenCode
-        run: bun run opencode:build
-      - name: Build OpenCode V2
-        run: bun run opencode-v2:build
-
-      - name: Build dsh
-        run: bun run dsh:build
-
-      - name: Build omp
-        run: bun run omp:build
 
       - name: Build CLI
         run: bun run cli:build
@@ -637,24 +586,14 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      # Same setup chain as every other CLI shard — see test-cli-coordination
-      # for why the consumer builds exist and why the CLI build is explicit.
-      - name: Build engine (dist for the CLI suite's consumer-manifest guard)
+      # Same setup chain as every other CLI shard — the suite spawns the built
+      # CLI entry and imports the engine/judgment dists; see
+      # test-cli-coordination for why the CLI build is explicit.
+      - name: Build engine (dist for the CLI suite)
         run: bun run engine:build && bun run judgment:build
 
       - name: Build commands package (for the CLI build)
         run: bun run --cwd packages/commands build
-
-      - name: Build OpenCode
-        run: bun run opencode:build
-      - name: Build OpenCode V2
-        run: bun run opencode-v2:build
-
-      - name: Build dsh
-        run: bun run dsh:build
-
-      - name: Build omp
-        run: bun run omp:build
 
       - name: Build CLI
         run: bun run cli:build
@@ -736,24 +675,14 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      # Same setup chain as every other CLI shard — see test-cli-coordination
-      # for why the consumer builds exist and why the CLI build is explicit.
-      - name: Build engine (dist for the CLI suite's consumer-manifest guard)
+      # Same setup chain as every other CLI shard — the suite spawns the built
+      # CLI entry and imports the engine/judgment dists; see
+      # test-cli-coordination for why the CLI build is explicit.
+      - name: Build engine (dist for the CLI suite)
         run: bun run engine:build && bun run judgment:build
 
       - name: Build commands package (for the CLI build)
         run: bun run --cwd packages/commands build
-
-      - name: Build OpenCode
-        run: bun run opencode:build
-      - name: Build OpenCode V2
-        run: bun run opencode-v2:build
-
-      - name: Build dsh
-        run: bun run dsh:build
-
-      - name: Build omp
-        run: bun run omp:build
 
       - name: Build CLI
         run: bun run cli:build
@@ -1135,7 +1064,7 @@ jobs:
         run: bun run cli:build
 
       - name: Test scripts
-        run: bun test scripts/adr-check.test.ts scripts/agent-shell-permission.test.ts scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/dsh-contract-lint.test.ts scripts/dsh-workflow-files-contract.test.ts scripts/dsh-workflow-script-bounds.test.ts scripts/escape-dist-literals.test.ts scripts/execution-consumer-manifest.test.ts scripts/extract-changelog-section.test.ts scripts/lint-ascii-literals.test.ts scripts/lint-hash-gates.test.ts scripts/lint-refusal-quality.test.ts scripts/lint-help-reachability.test.ts scripts/lint-overdesign-backtest.test.ts scripts/markdown-links.test.ts scripts/markdown-wrap.test.ts scripts/opencode-v2-smoke.test.ts scripts/prepare-release.test.ts scripts/release-preflight.test.ts scripts/rule-duplication.test.ts scripts/skill-budgets.test.ts scripts/skill-callout-contract.test.ts
+        run: bun test scripts/adr-check.test.ts scripts/agent-shell-permission.test.ts scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/dsh-contract-lint.test.ts scripts/dsh-workflow-files-contract.test.ts scripts/dsh-workflow-script-bounds.test.ts scripts/escape-dist-literals.test.ts scripts/extract-changelog-section.test.ts scripts/lint-ascii-literals.test.ts scripts/lint-hash-gates.test.ts scripts/lint-refusal-quality.test.ts scripts/lint-help-reachability.test.ts scripts/lint-overdesign-backtest.test.ts scripts/markdown-links.test.ts scripts/markdown-wrap.test.ts scripts/opencode-v2-smoke.test.ts scripts/prepare-release.test.ts scripts/release-preflight.test.ts scripts/rule-duplication.test.ts scripts/skill-budgets.test.ts scripts/skill-callout-contract.test.ts
 
       # Bundled artifacts and hand-written ZCode hook behavior/parse checks.
       - name: Test hooks
@@ -1199,23 +1128,6 @@ jobs:
         run: bun run opencode:build
       - name: Build OpenCode V2
         run: bun run opencode-v2:build
-
-      # The manifest check below digests every consumer's build output, so the
-      # two remaining consumers must be built here as well. omp first: the dsh
-      # host build fingerprints its reachable inputs, and `cli:build` above is a
-      # producer of `commands/dist`, so dsh must stay the last writer.
-      - name: Build omp
-        run: bun run omp:build
-
-      - name: Build dsh (last writer of its recorded inputs)
-        run: bun run dsh:build
-
-      # Byte parity, not existence: the producer re-derives every recorded
-      # source/generated digest and copied mirror from the bytes on disk and
-      # fails naming the first drifted entry, so a manifest that no longer
-      # describes this tree reddens the job instead of shipping.
-      - name: Verify consumer manifest (--check)
-        run: bun scripts/execution-consumer-manifest.ts --repo . --check
 
       - name: Pack CLI tarball
         run: bun run cli:pack

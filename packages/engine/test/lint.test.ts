@@ -832,7 +832,7 @@ describe("planQualityBar verification-set", () => {
   });
 
   test("a Files entry quoting a command names no surface", () => {
-    const plan = "**Files:**\n- Modify: only paths `bun scripts/execution-consumer-manifest.ts --repo . --write` changes under `scripts/packaging-manifests/`\n\n- [ ] From the integration checkout, run `--write` once, then `--check`.\n";
+    const plan = "**Files:**\n- Modify: only the paths `bun run release:prepare -- --minor` rewrites under `.changes/archive/`\n\n- [ ] Run: `bun run release:validate` once after the fragment moves.\n";
     expect(planQualityBar(plan).violations).toEqual([]);
   });
 

@@ -34,5 +34,4 @@ A source change does **not** regenerate the committed bundles. The plan records 
 
 - A branch can merge while the committed bundle still contains a deleted function. That is safe: the bundle's copy has no caller, and the release rebuild removes it.
 - Anyone regenerating locally must expect a large diff and must not commit it unless the pinned bun produced it.
-- The consumer manifests record both source trees and shipped artifacts. Re-take them with `bun scripts/execution-consumer-manifest.ts --repo . --write` after any change they cover, and never hand-merge a manifest conflict — re-take it.
 - If a future change makes the bundles' bytes reproducible across supported bun versions, this decision can be narrowed to "reproducible artifacts are committed"; until then the release boundary is the only place the artifact is re-taken.

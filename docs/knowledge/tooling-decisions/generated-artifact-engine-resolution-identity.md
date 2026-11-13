@@ -5,7 +5,7 @@ problem_type: tooling_decision
 category: tooling-decisions
 severity: high
 plan_id: "<plan-id>"
-last_updated: 2026-11-09
+last_updated: 2026-11-13
 applies_when:
   - "Regenerating a committed bundle that inlines another workspace package"
   - "Working in a git worktree whose node_modules resolves a sibling checkout"
@@ -27,13 +27,13 @@ The ZCode write-gate hook is a committed build product: `scripts/build-zcode-hoo
 
 While regenerating the hook inside a feature worktree, that worktree's root `node_modules/@mstar-harness/engine` still pointed at the **primary checkout**, so the generator inlined the primary checkout's engine. That engine understood execution schema generations 1–4 while the store the acceptance fixture builds is written by the current engine at generation 5. The hook therefore refused with the engine's `store.schema-unsupported`, which the gate surfaced as an unreadable authority (`store.authority-unavailable`), and the acceptance case failed with an authority error instead of reaching the behaviour it was testing. The stale bundle's diff against the previously committed bundle was one comment line — it read as a benign path-format change.
 
-The correction: point the worktree's engine dependency at **this** worktree's `packages/engine`, rebuild the generator, re-write and re-verify the consumer manifests, and confirm a second generation is byte-identical (`c3427b3f…` for the hook).
+The correction: point the worktree's engine dependency at **this** worktree's `packages/engine`, rebuild the generator, and confirm a second generation is byte-identical (`c3427b3f…` for the hook).
 
 ## Guidance
 
 - **Resolve the inlined dependency from the checkout that owns the artifact.** A worktree's `node_modules` must be materialised against that worktree's own packages before any generator runs. Freshness of the foreign checkout does not help — the build is current, it is simply the *wrong* build.
 - **Read the bundle's origin comment as a provenance signal.** A bundled origin like `// ../../packages/engine/dist/engine.js` points outside the checkout (a symlinked or hoisted resolution); `// packages/engine/dist/engine.js` points inside it. The comment is generated, so it is cheaper to check than to reason about.
-- **A digest pair cannot prove generation provenance.** The consumer manifest records the engine source tree and the generated file separately (`scripts/execution-consumer-manifest.ts` — the zcode consumer's `sourceTrees: [{root: "hooks/src"}, {root: "packages/engine/src"}]`); `--check` proves each side still matches its own record, and the producer's own header states that a recorded source/output digest is not proof the output was compiled from that source. Keep a **rebuild-and-byte-diff gate in the same checkout** (`engine:build` → `hooks:build` → `git diff --exit-code -- hooks/`) — it re-runs the generator against the current source and fails any committed artifact that a fresh build does not reproduce, which is strictly stronger than comparing two self-reported digests. This gate has landed: `.github/workflows/ci.yml` step `ZCode hooks bundle freshness` (:190).
+- **A recorded digest pair cannot prove generation provenance.** One digest for the source tree plus one for the generated file only proves each side still matches its own record; neither says the output was compiled from that source. Keep a **rebuild-and-byte-diff gate in the same checkout** (`engine:build` → `hooks:build` → `git diff --exit-code -- hooks/`) — it re-runs the generator against the current source and fails any committed artifact that a fresh build does not reproduce, which is strictly stronger than comparing two self-reported digests. This gate has landed: `.github/workflows/ci.yml` step `ZCode hooks bundle freshness` (:190), advisory because the byte form depends on the bundler version.
 - **Keep the generator deterministic.** Byte-identical regeneration is what makes the freshness gate usable; a generator that embeds timestamps or absolute paths turns every regeneration into a diff.
 - **Route the symptom correctly.** A generated hook refusing with an authority/unreadable-store error is not automatically a store defect: a cross-generation engine inlined into the hook fails closed with exactly that shape. Check the inlined generation before the store.
 - **Never commit an artifact whose provenance you cannot name.** "Only generated files changed" is a reason to check *which* generator and *which* resolution produced them, not a reason to skip the check.
@@ -46,7 +46,7 @@ The failure is silent at authoring time and misleading at detection time: the co
 
 - Regenerating any committed bundle that inlines a workspace package: the ZCode hook, host bundles, a CLI `dist` shipped as an artifact.
 - Any worktree whose `node_modules/@mstar-harness/*` resolves through a symlink out of the checkout.
-- Reviewing a "regenerated file only" commit: check the origin path, the recorded source tree, and whether a same-checkout rebuild reproduces it byte-for-byte.
+- Reviewing a "regenerated file only" commit: check the origin path in the bundle and whether a same-checkout rebuild reproduces it byte-for-byte.
 - Adding or changing the CI freshness step that guards such an artifact.
 
 ## Examples
@@ -57,7 +57,7 @@ Generate the hook in a worktree whose engine dependency points at the primary ch
 
 ### After
 
-Materialise the worktree's own engine dependency, regenerate, re-record the consumer manifests, confirm byte-identical regeneration, and let the CI rebuild-and-compare gate keep the committed bundle honest against a fresh build from the current source.
+Materialise the worktree's own engine dependency, regenerate, confirm byte-identical regeneration, and let the CI rebuild-and-compare gate keep the committed bundle honest against a fresh build from the current source.
 
 ## Source
 
