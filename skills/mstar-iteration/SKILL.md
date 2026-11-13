@@ -17,7 +17,7 @@ The primary coordinator owns all rows of the selected iteration and dispatches o
 
 ## 设计思路
 
-mstar 实践模式通常是：一次迭代锁定几个 spec 点（`specify + clarify`），产生多个 `plan`，每个 plan 含多个 tasks。**per-plan 生命周期有完整的闭环**（Prepare → Execute → QC → Done）。Compound 不是 per-plan 活动——它是**迭代级收口**，在迭代内所有 plan Done 后，沉淀一轮知识。
+mstar 实践模式通常是：一次迭代锁定几个 spec 点（`specify + clarify`），产生多个 `plan`，每个 plan 含多个 tasks。**per-plan 生命周期有完整的闭环**（Prepare → Execute → QC → Done）。迭代内 compound 不是 per-plan 活动——它是**迭代级收口**，在所有 plan Done 后统一沉淀（独立 development plan 例外：自身 Done 后、PR 前）。
 
 本 skill 管理迭代 **Phase 1–6**（command 层可聚合编排，但 **不得**反向引用 command 名；第三方 helper 仅由 command 按需发现）：
 
@@ -125,7 +125,7 @@ Phase 6: post-merge close —— merge 授权完成、PR merged 后 §6.1–§6.
 - **不要在 integration worktree 或主 checkout（control root）上直接编辑产品代码** — Phase 5 修复走 fix feature worktree，review 后 merge 回 integration worktree（`phase-4-5-pr-delivery.md` §5.0）
 - **不要在缺 `iteration_base_branch` / `target_branch` 时默认 `main` / `master`**（门禁、例外写法与 base 解析 → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库））
 - **不要在 Phase 1 §1.6 由 product/architect 向 `{KNOWLEDGE_DIR}/` 新增**（知识 → iteration-close **`mstar-knowledge`**）
-- **不要在 per-plan Done 后立即 compound** — 等 iteration-close 统一做
+- **迭代内 plan Done 后不要立即 compound** — 等 iteration-close（独立 development plan 例外：Done 后、PR 前）
 
 ## Workflow
 

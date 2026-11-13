@@ -29,7 +29,7 @@ Who advances this plan row's engine state, and what records each transition:
   - **iteration/non-standalone:** perform the real serial merge in the recorded integration checkout, then complete with source/review/QC/PM Acceptance evidence and actual `integration: {base_sha,result_sha}`. The engine verifies Git and atomically writes Done/completion, retains ownership metadata and releases applicable exclusion. Row Done creates no child PR.
   - **standalone development:** complete from clean registered source checkout/ref and reviewed commit without integration inputs. Workflow stays running for its own compound/PR/proved-merge/close.
   - **standalone report-only:** complete with QC/PM Acceptance under the registered completion_policy. No invented Git, integration, compound-before-PR, PR or merge; the policy is a registration-time declaration, not a payload to record. Evidence-backed terminal close remains.
-- **Evidence order** — `compound` disposition, and on the iteration/development routes the merge proof, are recorded **after** the row is `Done`; the engine refuses those writes while any plan row is not `Done`. The delivery tail runs on a completed row, never ahead of it.
+- **Evidence order** — `compound` disposition, and on the iteration/development routes the merge proof, are recorded **after** the row is `Done` and before the PR head is finalized; the terminal close consults them. The delivery tail runs on a completed row, never ahead of it.
 
 Semantics, routes, and failure behavior → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md` §3–§5; PM step sequence → `mstar-roles/references/project-manager/plan-management.md`.
 

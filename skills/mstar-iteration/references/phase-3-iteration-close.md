@@ -41,7 +41,7 @@ PM **必须**在对话中打印本 checklist；不得默认同过。
 
 ## 3.2 知识结晶（Compound）—— 迭代级核心收口
 
-**Compound 在此执行，不在 per-plan Done 后独立执行。** 执行步骤 SSOT → **`mstar-knowledge`**（`references/compound-workflow.md`：Q1–Q8 自检 + Phase 1–7 + 产出判据；package 盘点方法见其 SKILL.md `## Workflow — Capture`「Iteration package promotion」）。**调用面（时机 / cwd / 写入面 / 记录面）属本 Phase**，由本节声明，不在 compound 侧定义：
+**迭代内 compound 在此执行，不在 per-plan Done 后独立执行。** 执行步骤 SSOT → **`mstar-knowledge`**（`references/compound-workflow.md`：Q1–Q8 自检 + Phase 1–7 + 产出判据；package 盘点方法见其 SKILL.md `## Workflow — Capture`「Iteration package promotion」）。**调用面（时机 / cwd / 写入面 / 记录面）属本 Phase**，由本节声明，不在 compound 侧定义：
 
 - **cwd / 写入面**：在本 Phase 的 integration worktree（`integration_worktree_path`，检出 `spec_integration_branch`）直写 tracked 的 `{KNOWLEDGE_DIR}/<category>/<slug>.md`、准入后的 `{SPECS_DIR}/` 与 `CONCEPTS.md`；主 checkout（control root）只承载 gitignored 进程产物。这些写入随 §3.5 的 close commit 进入 integration 分支（**禁止**在主 checkout commit，见 §3.5）。
 - **package 盘点**：`{ITERATION_DIR}/<iteration-id>/**`（`guides/`、`specs/`、扁平 `.md`；默认排除 `delivery-compass.md`）强制盘点 → **`mstar-knowledge`「Iteration package promotion」**；提升同时完成 `Promoted to:` 标注、受影响 plan `primary_spec` / `spec_refs` 与 compass 引用改指提升后的权威路径，以及 catalog `derived-from` 关系。
