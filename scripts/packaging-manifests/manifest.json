@@ -150,8 +150,8 @@
           },
           {
             "root": "packages/engine/src",
-            "files": 134,
-            "sha256": "d5cf77767f5ec48df90764c895824bfcdce8e123c8d67101f1a9b4aeb6e04df4"
+            "files": 135,
+            "sha256": "2647a6d801b2aa3a30c0f66af072ecb239f14128072edf1ab3c22784e7887160"
           }
         ],
         "files": [
@@ -291,7 +291,7 @@
           {
             "root": "packages/opencode/src",
             "files": 1,
-            "sha256": "53d2e713d01ee4a53e7ae394797734132eb9ef3b85663a6183018e3cf6f3ca5c"
+            "sha256": "8d78813d1f05725caeba79216c19037ffffb0acd336633d0fb6b660bc9153da9"
           }
         ],
         "files": [
@@ -360,8 +360,8 @@
           },
           {
             "root": "packages/engine/src",
-            "files": 134,
-            "sha256": "d5cf77767f5ec48df90764c895824bfcdce8e123c8d67101f1a9b4aeb6e04df4"
+            "files": 135,
+            "sha256": "2647a6d801b2aa3a30c0f66af072ecb239f14128072edf1ab3c22784e7887160"
           }
         ],
         "files": [

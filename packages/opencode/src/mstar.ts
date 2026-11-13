@@ -33,12 +33,9 @@
  * The file write hook remains decision-only because `tool.execute.before`
  * returns `Promise<void>` and cannot stop a tool call; its validators report
  * through logs and structured results without claiming an OS/tool fence.
- * Engine-version compat : the snapshot/register
- * validators (`validateWorkflowSnapshot` / `validateProjectRegister`) are
- * P1-only exports absent from the published engine floor `^2.0.2` — they
- * are lazy-loaded (`newValidatorsLoader`); on a stale engine those write
- * lints are skipped with a one-time warning while the root status.json
- * lint keeps working, and the plugin module itself always links.
+ * The engine is bundled with this plugin (see the package's build), so every
+ * validator, resolver and authority read is a static import — a plugin build
+ * can never link against a different engine generation.
  * Hook coverage resolves the harness root from the target itself
  * ( the marker probe (`status.json` + `workflows/` +
  * `projects/` ancestor, correct for the default `.mstar` layout whose
@@ -64,29 +61,34 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import {
   applyEnforcement,
+  assertStoreRuntimeSupported,
   caseFoldedRegisterRoot,
   composeDispatchGate,
+  detectStoreRuntime,
+  extractFrontmatterAndBody,
+  harnessDocKindOfTarget,
   isReadOnlyAssignmentRole,
   isStoreAuthorityTarget,
   landedPathOf,
   parseAssignmentFields,
+  parseSimpleFrontmatter,
+  queryDashboard,
   readJson,
+  resolveExecutionReadRoute,
   resolveHarnessDir,
   resolveRepoEnforcement,
   SymlinkResolutionError,
+  validateProjectRegister,
   validateStatus,
+  validateWorkflowSnapshot,
+  withStoreRead,
 } from "@mstar-harness/engine";
-import type { EnforcementFlag, GateResult, StatusV2Doc, StoreRuntimeInfo } from "@mstar-harness/engine";
+import type { EnforcementFlag, GateResult, HarnessDocKind, StatusV2Doc } from "@mstar-harness/engine";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-type JsonPrimitive = string | number | boolean | null;
 type JsonObject = Record<string, unknown>;
-type FrontmatterAndBody = {
-  frontmatter: string;
-  body: string;
-};
 type MessagePart = { type: string; text?: string };
 
 type ChatMessage = { info: { role: string }; parts: MessagePart[] };
@@ -105,74 +107,6 @@ function resolveSkillPathCandidates(): string[] {
   if (fs.existsSync(bundledSkillsDir)) return [bundledSkillsDir];
   return [];
 }
-
-const extractFrontmatterAndBody = (content: string): FrontmatterAndBody => {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!match) return { frontmatter: "", body: content };
-  return { frontmatter: match[1], body: match[2] };
-};
-
-const parseScalar = (raw: string): JsonPrimitive => {
-  const value = raw.trim();
-  if (value === "true") return true;
-  if (value === "false") return false;
-  if (value === "null") return null;
-  if (value === "allow" || value === "ask" || value === "deny") return value;
-  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
-  return value.replace(/^["']|["']$/g, "");
-};
-
-const parseSimpleFrontmatter = (frontmatter: string): JsonObject => {
-  const root: JsonObject = {};
-  const stack: Array<{ indent: number; target: JsonObject }> = [{ indent: -1, target: root }];
-  const lines = frontmatter.split("\n");
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (!line.trim() || line.trim().startsWith("#")) continue;
-
-    const indent = line.match(/^ */)?.[0]?.length ?? 0;
-    const trimmed = line.trim();
-    const separator = trimmed.indexOf(":");
-    if (separator <= 0) continue;
-
-    const key = trimmed.slice(0, separator).trim();
-    const rawValue = trimmed.slice(separator + 1).trim();
-
-    while (stack.length > 1 && indent <= stack[stack.length - 1].indent) {
-      stack.pop();
-    }
-
-    const current = stack[stack.length - 1].target;
-
-    if (rawValue === "" || rawValue === "{}") {
-      current[key] = {};
-      stack.push({ indent, target: current[key] as JsonObject });
-      continue;
-    }
-
-    if (rawValue === "|-" || rawValue === "|") {
-      const blockLines = [];
-      const baseIndent = indent;
-      for (let j = i + 1; j < lines.length; j += 1) {
-        const blockLine = lines[j];
-        const blockIndent = blockLine.match(/^ */)?.[0]?.length ?? 0;
-        if (blockLine.trim() && blockIndent <= baseIndent) break;
-        const normalized = blockLine.startsWith(" ".repeat(baseIndent + 2))
-          ? blockLine.slice(baseIndent + 2)
-          : blockLine.trim() ? blockLine.trim() : "";
-        blockLines.push(normalized);
-        i = j;
-      }
-      current[key] = blockLines.join("\n");
-      continue;
-    }
-
-    current[key] = parseScalar(rawValue);
-  }
-
-  return root;
-};
 
 const loadBootstrapContent = (): string | null => {
   if (!fs.existsSync(bootstrapAgentsPath)) return null;
@@ -277,236 +211,6 @@ const defaultStatusLogger: StatusLogger = (level, message) => {
   else console.log(line);
 };
 
-const STATUS_FILE = "status.json";
-const SNAPSHOT_FILE = "snapshot.json";
-const REGISTER_FILE = "residuals.json";
-
-/**
- * Engine-version compat : `validateWorkflowSnapshot`
- * and `validateProjectRegister` postdate the published engine floor
- * (`^2.0.2` lacks them) — a static named import would fail at module link
- * on older engines and drop the whole plugin. They are loaded LAZILY
- * (module-level cached dynamic import, same pattern as the omp hook's
- * `newValidatorsLoader`). When either export is missing, snapshot/register
- * writes are skipped (warn once, `null` result) while the root
- * `status.json` lint (static `validateStatus`) keeps working.
- */
-type NewValidators = {
-  validateWorkflowSnapshot: (doc: unknown) => GateResult;
-  validateProjectRegister: (doc: unknown) => GateResult;
-};
-
-type NewValidatorsLoad =
-  | { status: "ok"; validators: NewValidators }
-  | { status: "missing" }
-  | { status: "error"; error: unknown };
-
-let cachedNewValidators: Promise<NewValidatorsLoad> | null = null;
-
-export function loadNewValidators(): Promise<NewValidatorsLoad> {
-  cachedNewValidators ??= import("@mstar-harness/engine")
-    .then((mod) =>
-      typeof mod.validateWorkflowSnapshot === "function" && typeof mod.validateProjectRegister === "function"
-        ? ({
-            status: "ok",
-            validators: {
-              validateWorkflowSnapshot: mod.validateWorkflowSnapshot,
-              validateProjectRegister: mod.validateProjectRegister,
-            },
-          } as const)
-        : ({ status: "missing" } as const),
-    )
-    .catch((error: unknown) => ({ status: "error", error } as const));
-  return cachedNewValidators;
-}
-
-/** Test seam (smoke scripts): replace `load` to simulate an engine build
- * without the P1 validators (missing) or a broken engine import (error). */
-export const newValidatorsLoader: { load: () => Promise<NewValidatorsLoad> } = {
-  load: loadNewValidators,
-};
-
-/**
- * The P1-only v3 layout-dir resolvers (custom `.mstarc` `workflow_dir` /
- * `project_dir` support, Phase-5 F1). Same stale-engine rationale as
- * `newValidatorsLoader`: the exports postdate the published engine floor
- * (`^2.0.2` lacks them) — a static named import would fail at module link
- * on older engines and drop the WHOLE plugin, so they are loaded lazily
- * and cached. `null` (missing exports / import failure) means the
- * classification falls back to the DEFAULT layout names (the pre-F1
- * behavior) — a stale engine keeps working, only custom layouts stay
- * unclassified.
- */
-type DirResolvers = {
-  resolveWorkflowDir: (startDir: string, opts?: { harnessDir?: string }) => string;
-  resolveProjectDir: (startDir: string, opts?: { harnessDir?: string }) => string;
-};
-
-let cachedDirResolvers: Promise<DirResolvers | null> | null = null;
-
-export function loadDirResolvers(): Promise<DirResolvers | null> {
-  cachedDirResolvers ??= import("@mstar-harness/engine")
-    .then((mod) =>
-      typeof mod.resolveWorkflowDir === "function" && typeof mod.resolveProjectDir === "function"
-        ? { resolveWorkflowDir: mod.resolveWorkflowDir, resolveProjectDir: mod.resolveProjectDir }
-        : null,
-    )
-    .catch(() => null);
-  return cachedDirResolvers;
-}
-
-/** Test seam: replace `load` to simulate an engine build without the P1
- * dir resolvers (null — default-layout classification). */
-export const dirResolversLoader: { load: () => Promise<DirResolvers | null> } = {
-  load: loadDirResolvers,
-};
-
-/** Sync slot for the loaded resolvers; `validateStatusWrite` awaits the
- * loader before classifying, so the slot is populated on that path. */
-let classifyDirResolvers: DirResolvers | null = null;
-
-/** One-time degradation warnings (module-level flags; degrade path must
- * never throw — optional chaining + local try/catch). */
-let newValidatorsWarned = false;
-let newValidatorsImportErrorWarned = false;
-
-function warnNewValidatorsDegraded(log: StatusLogger, reason: "missing" | "error", error?: unknown): void {
-  if (reason === "missing") {
-    if (newValidatorsWarned) return;
-    newValidatorsWarned = true;
-  } else {
-    if (newValidatorsImportErrorWarned) return;
-    newValidatorsImportErrorWarned = true;
-  }
-  const message =
-    reason === "missing"
-      ? "mstar: installed engine lacks validateWorkflowSnapshot/validateProjectRegister — snapshot/register write lint skipped; status.json lint unaffected; upgrade the engine (next release)"
-      : `mstar: snapshot/register write lint skipped: engine import failed — ${error instanceof Error ? error.message : String(error)}; status.json lint unaffected`;
-  try {
-    log("warn", message);
-  } catch {
- // degrade path must never throw
-  }
-}
-
-/** Gated harness coordination documents in v3 (compass ruling 7 — hard
- * cutover): the root `status.json` (v2), workflow snapshots and project
- * registers. Each kind maps to its engine validator. */
-type HarnessDocKind = "status" | "snapshot" | "register";
-
-/** Directory/entry check (never throws — a missing or unreadable path is
- * simply not a marker). */
-function hasEntry(dir: string, name: string): boolean {
-  try {
-    fs.statSync(path.join(dir, name));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * True when `dir` carries the v2 coordination-document markers that make
- * it a harness root: a `status.json` root file plus BOTH layout dirs.
- * Default-layout fast path: the `workflows/` + `projects/` names). With the lazily-loaded engine dir resolvers, with the lazily-loaded engine dir resolvers, a
- * `.mstarc` custom `workflow_dir` / `project_dir` layout is recognized via
- * the resolved absolute dirs (stale engine -> resolvers null -> default
- * names only). Never throws — a missing/unreadable path is not a marker.
- */
-function hasHarnessRootMarkers(dir: string): boolean {
-  if (!hasEntry(dir, STATUS_FILE)) return false;
-  if (hasEntry(dir, "workflows") && hasEntry(dir, "projects")) return true;
-  const resolvers = classifyDirResolvers;
-  if (resolvers === null) return false;
-  try {
-    return (
-      hasEntry(resolvers.resolveWorkflowDir(dir, { harnessDir: dir }), "") &&
-      hasEntry(resolvers.resolveProjectDir(dir, { harnessDir: dir }), "")
-    );
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Resolve the harness root containing `startDir` by marker probe (): the nearest ancestor holding the v2 coordination-document
- * markers — a `status.json` root file plus the layout directories — IS the
- * harness root. Unlike `resolveHarnessDir`'s rung-3 `plans/` probe, this
- * never mistakes the NESTED `{HARNESS_DIR}/plans` subdir of the default
- * `.mstar` layout for the root, so coordination docs inside a
- * default-layout root stay gated. Returns `null` when no ancestor carries
- * the markers — callers fall back to `resolveHarnessDir` for declared
- * roots (`.mstarc` `harness_dir` / `MSTAR_HARNESS_DIR`) that are not yet
- * populated with all three markers.
- */
-function resolveHarnessRootOf(target: string): string | null {
-  let dir = path.resolve(target);
-  for (;;) {
-    if (hasHarnessRootMarkers(dir)) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-
-/**
- * Classify `targetPath` as a canonical `{HARNESS_DIR}` coordination
- * document: basename is `status.json` at the harness root, `snapshot.json`
- * under `{WORKFLOW_DIR}/<id>/`, or `residuals.json` under
- * `{PROJECT_DIR}/<id>/` (harness-relative, one path component each), AND
- * the harness root resolves — marker probe first (
- * custom-layout-aware Phase-5 F1), `resolveHarnessDir` as the declared-root
- * fallback. The snapshot/register rel is computed against the RESOLVED
- * layout dirs (`.mstarc` `workflow_dir`/`project_dir` honored, defaults
- * `workflows`/`projects`), so a custom layout classifies at the same
- * location the runtime writes; on a stale engine (no dir resolvers) the
- * default names apply. Returns the harness dir + doc kind when gated,
- * `null` otherwise.
- */
-function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind: HarnessDocKind } | null {
-  const resolved = path.resolve(targetPath);
-  const name = path.basename(resolved);
-  if (name !== STATUS_FILE && name !== SNAPSHOT_FILE && name !== REGISTER_FILE) return null;
-  const classify = (harnessDir: string): { harnessDir: string; kind: HarnessDocKind } | null => {
-    const rel = path.relative(harnessDir, resolved);
-    if (name === STATUS_FILE && rel === STATUS_FILE) return { harnessDir, kind: "status" };
-    let workflowDir: string;
-    let projectDir: string;
-    const resolvers = classifyDirResolvers;
-    if (resolvers !== null) {
-      try {
-        workflowDir = resolvers.resolveWorkflowDir(harnessDir, { harnessDir });
-        projectDir = resolvers.resolveProjectDir(harnessDir, { harnessDir });
-      } catch {
-        workflowDir = path.join(harnessDir, "workflows");
-        projectDir = path.join(harnessDir, "projects");
-      }
-    } else {
-      workflowDir = path.join(harnessDir, "workflows");
-      projectDir = path.join(harnessDir, "projects");
-    }
-    if (name === SNAPSHOT_FILE && /^[^/]+\/snapshot\.json$/.test(path.relative(workflowDir, resolved))) {
-      return { harnessDir, kind: "snapshot" };
-    }
-    if (name === REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(path.relative(projectDir, resolved))) {
-      return { harnessDir, kind: "register" };
-    }
-    return null;
-  };
-  const probeRoot = resolveHarnessRootOf(path.dirname(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(path.dirname(resolved));
-  if (!harnessDir) return null;
-  const classified = classify(harnessDir);
-  if (classified !== null) return classified;
- // W-REV-3: probe root hit but rel non-canonical — pathological double
- // harness (a nested sparse harness below a full-marker ancestor). Rebuild
- // rel against the declared-root resolution before giving up.
-  if (probeRoot === null) return null;
-  const fallbackDir = resolveHarnessDir(path.dirname(resolved));
-  if (fallbackDir === null || fallbackDir === probeRoot) return null;
-  return classify(fallbackDir);
-}
-
 /**
  * Issue/catalog authority paths (G4b) — the store database plus the retired
  * register route. Mirrors the omp write gate
@@ -531,79 +235,6 @@ const EXECUTION_DIRECT_WRITE_CODE = "execution.direct-write-refused";
  * `catalogRegistrationRefusal` exclusion list, mirrored). */
 const PRE_ACTIVATION_CODES: readonly string[] = ["store.not-initialized", "store.not-active"];
 
-/**
- * Issue-store engine API (G4b). Like the P1 validators above, these exports
- * postdate the published engine floor — a static named import would fail at
- * module link against an older (or stubbed) installed engine and drop the
- * WHOLE plugin, so they load through the same lazy holder pattern. `null`
- * (missing exports / import failure) means the authority cannot be consulted:
- * the register path then refuses fail-closed with the upgrade guidance while
- * every unrelated document lint keeps working.
- */
-type StoreApi = {
-  detectStoreRuntime: () => StoreRuntimeInfo;
-  assertStoreRuntimeSupported: (info: StoreRuntimeInfo) => void;
-  /** One read envelope over the authority: resolves the active store revision. */
-  readAuthority: (harnessDir: string) => Promise<number>;
-  /**
-   * §5 (plan S4) the ONE execution-source route decision, when the installed
-   * engine carries it. OPTIONAL on purpose: an engine that predates the
-   * execution authority has no route to resolve AND no harness can carry an
-   * ACTIVE execution authority, so the retired documents keep their unchanged
-   * document lint instead of a refusal class that cannot be true. An engine
-   * that HAS the authority always exports it.
-   */
-  resolveExecutionRoute?: (harnessDir: string) => Promise<"execution" | "files">;
-};
-
-let cachedStoreApi: Promise<StoreApi | null> | null = null;
-
-export function loadStoreApi(): Promise<StoreApi | null> {
-  cachedStoreApi ??= import("@mstar-harness/engine")
-    .then((mod) =>
-      typeof mod.detectStoreRuntime === "function" &&
-      typeof mod.assertStoreRuntimeSupported === "function" &&
-      typeof mod.withStoreRead === "function" &&
-      typeof mod.queryDashboard === "function"
-        ? ({
-            detectStoreRuntime: mod.detectStoreRuntime,
-            assertStoreRuntimeSupported: mod.assertStoreRuntimeSupported,
-            readAuthority: async (harnessDir: string) => {
-              const envelope = await mod.withStoreRead(
-                { harnessDir },
-                mod.queryDashboard("issues", { limit: 1 }),
-              );
-              return envelope.storeRevision;
-            },
-            ...(typeof mod.resolveExecutionReadRoute === "function"
-              ? {
-                  resolveExecutionRoute: (harnessDir: string) =>
-                    mod.resolveExecutionReadRoute({ harnessDir }),
-                }
-              : {}),
-          } as const)
-        : null,
-    )
-    .catch(() => null);
-  return cachedStoreApi;
-}
-
-/** Test seam (same holder pattern as `newValidatorsLoader`): replace `load` to
- * simulate an engine build without the issue-store API, or to observe when the
- * store-backed route is entered. */
-export const storeApiLoader: { load: () => Promise<StoreApi | null> } = { load: loadStoreApi };
-
-/**
- * Actual-runtime probe override (test-injectable): when unset — the shipped
- * default — the route reads the ACTUAL runtime through the engine's
- * `detectStoreRuntime` (the Bun global first, so a Bun process is never judged
- * by Bun's EMULATED `process.versions.node`, which reports "26.3.0" on Bun
- * 1.4.0). Bun-run OpenCode gets the Bun floor; a native Node runner of this
- * plugin gets the Node floor — the invoked entrypoint's own runtime, never
- * both.
- */
-export const storeRuntimeOverride: { info: (() => StoreRuntimeInfo) | null } = { info: null };
-
 /** Stable code + message of a thrown refusal. */
 function refusalOf(error: unknown): { code: string; message: string } {
   const message = error instanceof Error ? error.message : String(error);
@@ -620,25 +251,19 @@ type AuthorityRoute =
   | { kind: "retired"; storeRevision: number }
   | { kind: "unavailable"; code: string; message: string };
 
+/** The authority answers from the ACTIVE store: the runtime floor is asserted on
+ * the ACTUAL runtime (`detectStoreRuntime` — the Bun global first, never Bun's
+ * emulated `process.versions.node`), and a store revision read is the retirement
+ * verdict. A missing/staged store is the pre-activation state, not a refusal. */
 async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
-  const api = await storeApiLoader.load();
-  if (api === null) {
-    return {
-      kind: "unavailable",
-      code: "engine-store-api-missing",
-      message:
-        "the installed @mstar-harness/engine exposes no issue-store API (detectStoreRuntime / " +
-        "assertStoreRuntimeSupported / withStoreRead / queryDashboard), so the register path cannot be " +
-        "answered; upgrade the engine (next release)",
-    };
-  }
   try {
-    api.assertStoreRuntimeSupported(storeRuntimeOverride.info?.() ?? api.detectStoreRuntime());
+    assertStoreRuntimeSupported(detectStoreRuntime());
   } catch (error) {
     return { kind: "unavailable", ...refusalOf(error) };
   }
   try {
-    return { kind: "retired", storeRevision: await api.readAuthority(harnessDir) };
+    const envelope = await withStoreRead({ harnessDir }, queryDashboard("issues", { limit: 1 }));
+    return { kind: "retired", storeRevision: envelope.storeRevision };
   } catch (error) {
     const refusal = refusalOf(error);
     return PRE_ACTIVATION_CODES.includes(refusal.code)
@@ -731,10 +356,9 @@ function authorityUnavailableRefusal(
 /**
  * Resolve the ACTIVE execution authority for a coordination-document write.
  * `active` refuses the retired persistence route; `absent` is NO verdict (no
- * store, a staged store, or an engine without the route export — the
- * pre-activation state, where the document lint decides); `unavailable` is a
- * fail-closed authority that exists but cannot be read. There is no file
- * route.
+ * store or a staged store — the pre-activation state, where the document lint
+ * decides); `unavailable` is a fail-closed authority that exists but cannot be
+ * read. There is no file route.
  */
 type ExecutionWriteRoute =
   | { kind: "active" }
@@ -742,19 +366,9 @@ type ExecutionWriteRoute =
   | { kind: "unavailable"; code: string; message: string };
 
 async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWriteRoute> {
-  const api = await storeApiLoader.load();
-  const resolve = api?.resolveExecutionRoute;
-  if (resolve === undefined) {
-    // No route export (or no store API at all): an engine that predates the
-    // execution authority has no authority to consult — absence, not a
-    // refusal (the document lint keeps deciding).
-    return { kind: "absent" };
-  }
   try {
-    const route = await resolve(harnessDir);
-    return route === "execution"
-      ? { kind: "active" }
-      : { kind: "absent" };
+    await resolveExecutionReadRoute({ harnessDir });
+    return { kind: "active" };
   } catch (error) {
     const refusal = refusalOf(error);
     // An ABSENT store (`store.not-initialized`) and a store that exists but
@@ -852,11 +466,6 @@ export async function validateStatusWrite(
       throw error;
     }
     const storeTarget = isStoreAuthorityTarget(resolved) ? resolved : isStoreAuthorityTarget(landed) ? landed : null;
- // Phase-5 F1: ensure the custom-layout dir resolvers are loaded before
- // classifying — the sync slot feeds `harnessDocKindOfTarget` AND the
- // authority-target marker probe (stale engine -> null -> default-layout
- // names, the pre-F1 behavior).
-    classifyDirResolvers = await dirResolversLoader.load();
 // G4b authority paths first: the store database is never writable by hand,
 // and a register target is decided by the DB-aware authority route rather
 // than by its document shape (both refuse unconditionally).
@@ -925,19 +534,7 @@ export async function validateStatusWrite(
     }
 
     if (opts.doc !== undefined) {
-      if (target.kind === "status") {
-        result = validateDocByKind(opts.doc, target.kind, null);
-      } else {
- // Snapshot/register validators are P1-only engine exports — lazy
- // load; a stale engine skips this write with a one-time warning
- // (never a module-link crash, never a throw).
-        const load = await newValidatorsLoader.load();
-        if (load.status !== "ok") {
-          warnNewValidatorsDegraded(log, load.status, load.status === "error" ? load.error : undefined);
-          return null;
-        }
-        result = validateDocByKind(opts.doc, target.kind, load.validators);
-      }
+      result = validateDocByKind(opts.doc, target.kind);
     } else if (!fs.existsSync(resolved)) {
       result = null;
     } else if (target.kind === "status") {
@@ -946,13 +543,8 @@ export async function validateStatusWrite(
     } else {
  // Snapshot/register validators take a doc — mirror the engine's
  // unparseable-file violation instead of degrading to an abort.
-      const load = await newValidatorsLoader.load();
-      if (load.status !== "ok") {
-        warnNewValidatorsDegraded(log, load.status, load.status === "error" ? load.error : undefined);
-        return null;
-      }
       try {
-        result = validateDocByKind(readJson(resolved), target.kind, load.validators);
+        result = validateDocByKind(readJson(resolved), target.kind);
       } catch (error) {
         result = {
           ok: false,
@@ -991,13 +583,10 @@ export async function validateStatusWrite(
   }
 }
 
-/** Run the validator matching the gated doc kind (v3 hard cutover). The
- * snapshot/register validators are P1-only engine exports — callers pass
- * the lazily-loaded set; `null` (stale engine) can never be reached for
- * those kinds because `validateStatusWrite` skips them first. */
-function validateDocByKind(doc: unknown, kind: HarnessDocKind, newValidators: NewValidators | null): GateResult {
-  if (kind === "snapshot") return newValidators!.validateWorkflowSnapshot(doc);
-  if (kind === "register") return newValidators!.validateProjectRegister(doc);
+/** Run the validator matching the gated doc kind (v3 hard cutover). */
+function validateDocByKind(doc: unknown, kind: HarnessDocKind): GateResult {
+  if (kind === "snapshot") return validateWorkflowSnapshot(doc);
+  if (kind === "register") return validateProjectRegister(doc);
   return validateStatus(doc as StatusV2Doc);
 }
 
@@ -1216,12 +805,11 @@ export const MorningStarHarnessPlugin: Plugin = async () => {
           );
         }
       } else if (input.tool === "edit") {
- // Classify the target FIRST : the dir-resolvers loader is
- // cached, so the kind check is cheap — the synchronous file read +
- // split/join + parse below only runs for canonical coordination
- // docs. Non-coordination targets (source files, configs, prose —
- // the overwhelming majority of edits) skip the read/parse entirely.
-        classifyDirResolvers = await dirResolversLoader.load();
+ // Classify the target FIRST: the kind check is cheap, so the
+ // synchronous file read + split/join + parse below only runs for
+ // canonical coordination docs. Non-coordination targets (source
+ // files, configs, prose — the overwhelming majority of edits) skip
+ // the read/parse entirely.
         if (harnessDocKindOfTarget(filePath) === null && !isStoreAuthorityTarget(filePath)) return;
  // Patched-doc linting: when the OpenCode `edit` args carry a
  // literal `oldString` -> `newString` pair (one pair per tool call —
