@@ -92,7 +92,7 @@
  * Exit 0 = no drift; exit 1 = drift found (one line per violation).
  */
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join, relative } from "node:path";
 import { getCommandDefinitions } from "../packages/commands/src/definitions.ts";
 import { checkAdrTree, summarizeAdrCheck, type AdrCheckResult } from "./adr-check.ts";
@@ -748,6 +748,84 @@ export function checkEngineCallouts(
   }
 
   return { calloutsChecked, cliCitationsChecked, failures };
+}
+
+/* ------------------------------------------------------------------ */
+/* Guard 13 helpers: skill index ↔ skill directory coverage. Guard 12 is the
+ * ADR-format guard (`scripts/adr-check.ts`); guard labels are unique across
+ * both files, so this one is 13. */
+/* ------------------------------------------------------------------ */
+
+export const SKILL_INDEX_CORE = "mstar-harness-core";
+export const SKILL_INDEX_HEADING = "## 专题 skill 索引";
+
+/** Guard 13 — every shipped `mstar-*` skill directory must have a row in
+ * the core skill index table, and every table row must name a live
+ * directory. Both directions, each mismatch reported once (input arrays are
+ * deduped through Sets, so a doubled name never yields a doubled row).
+ * `pm` and `grill-me` are not `mstar-*` and fall outside the comparison by
+ * construction — no allowlist here. */
+export function checkSkillIndexCoverage(input: { shipped: string[]; indexed: string[] }): { failures: string[] } {
+  const failures: string[] = [];
+  const shipped = new Set(input.shipped);
+  const indexed = new Set(input.indexed);
+  for (const name of [...shipped].sort()) {
+    if (!indexed.has(name)) failures.push(`unindexed-skill: ${name}`);
+  }
+  for (const name of [...indexed].sort()) {
+    if (!shipped.has(name)) failures.push(`stale-index-row: ${name}`);
+  }
+  return { failures };
+}
+
+/** First backticked cell of each row under the core `## 专题 skill 索引`
+ * heading. A missing heading or a heading with no parseable row is a loud
+ * failure row: an empty `indexed` set would otherwise report every skill as
+ * unindexed and read as a corpus problem instead of a parser/contract break. */
+export function readSkillIndexTable(coreText: string): { indexed: string[]; failures: string[] } {
+  const lines = coreText.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === SKILL_INDEX_HEADING);
+  if (start === -1) {
+    return { indexed: [], failures: [`skills/${SKILL_INDEX_CORE}/SKILL.md: missing "${SKILL_INDEX_HEADING}" heading`] };
+  }
+  const indexed: string[] = [];
+  for (let i = start + 1; i < lines.length && !/^##\s/.test(lines[i]); i++) {
+    const m = lines[i].match(/^\|\s*`([^`]+)`\s*\|/);
+    if (m) indexed.push(m[1]);
+  }
+  if (indexed.length === 0) {
+    return { indexed: [], failures: [`skills/${SKILL_INDEX_CORE}/SKILL.md: "${SKILL_INDEX_HEADING}" table has no \`mstar-*\` row`] };
+  }
+  return { indexed, failures: [] };
+}
+
+/** Guard 13 corpus read: shipped names from the `skills/mstar-*` skill
+ * directories, indexed names from the core table. */
+export function readSkillIndexCoverage(repoRoot: string): {
+  shipped: string[];
+  indexed: string[];
+  failures: string[];
+} {
+  let coreText: string;
+  try {
+    coreText = readFileSync(join(repoRoot, "skills", SKILL_INDEX_CORE, "SKILL.md"), "utf8");
+  } catch (error) {
+    return {
+      shipped: [],
+      indexed: [],
+      failures: [`skills/${SKILL_INDEX_CORE}/SKILL.md: ${(error as Error).message}`],
+    };
+  }
+  const shipped = readdirSync(join(repoRoot, "skills"), { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        entry.name.startsWith("mstar-") &&
+        existsSync(join(repoRoot, "skills", entry.name, "SKILL.md")),
+    )
+    .map((entry) => entry.name);
+  const { indexed, failures } = readSkillIndexTable(coreText);
+  return { shipped, indexed, failures };
 }
 
 /**
@@ -1500,6 +1578,37 @@ if (import.meta.main) {
   }
 
 /* ------------------------------------------------------------------ */
+/* Guard 13: skills corpus — skill index ↔ skill directory coverage */
+/* ------------------------------------------------------------------ */
+
+  let skillIndex: { shipped: string[]; indexed: string[]; failures: string[] } = {
+    shipped: [],
+    indexed: [],
+    failures: [],
+  };
+  try {
+    skillIndex = readSkillIndexCoverage(root);
+    const coverage = checkSkillIndexCoverage({ shipped: skillIndex.shipped, indexed: skillIndex.indexed });
+    skillIndex.failures = [...skillIndex.failures, ...coverage.failures];
+  } catch (error) {
+    skillIndex.failures = [`Guard 13 skill index coverage: ${(error as Error).message}`];
+  }
+  for (const row of skillIndex.failures) {
+    const name = row.split(":")[1]?.trim() ?? "";
+    if (row.startsWith("unindexed-skill:")) {
+      fail(
+        `Guard 13 unindexed-skill: ${name} - add a row to skills/${SKILL_INDEX_CORE}/SKILL.md § 专题 skill 索引`,
+      );
+    } else if (row.startsWith("stale-index-row:")) {
+      fail(
+        `Guard 13 stale-index-row: ${name} - skills/${name}/SKILL.md no longer exists; drop the index row`,
+      );
+    } else {
+      fail(row);
+    }
+  }
+
+/* ------------------------------------------------------------------ */
 
  // Guard 4 footer fragment: report each check's own verdict + count so a
  // load-order-only failure is never misstated as a combined/OK status.
@@ -1525,6 +1634,11 @@ if (import.meta.main) {
 
   const adrSummary = summarizeAdrCheck(adr);
 
+  const skillIndexFailures = skillIndex.failures.length;
+  const skillIndexSummary = `Guard 13 skill index coverage ${skillIndex.shipped.length} shipped mstar-* dirs, ${skillIndex.indexed.length} index rows, ${
+    skillIndexFailures === 0 ? "OK" : `FAIL (${skillIndexFailures} violation${skillIndexFailures === 1 ? "" : "s"})`
+  }`;
+
   reportOversizedTests();
   reportRuleDuplication(ruleDuplication);
   reportParagraphAnchoring(paragraphAnchoring);
@@ -1532,12 +1646,12 @@ if (import.meta.main) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}`,
   );
 }

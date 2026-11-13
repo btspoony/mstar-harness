@@ -59,6 +59,9 @@ import {
   checkEngineCallouts,
   checkFiveQuestionCorpus,
   checkProvenanceScan,
+  checkSkillIndexCoverage,
+  readSkillIndexCoverage,
+  readSkillIndexTable,
   checkRolesCorpus,
   checkUseCliSkillCliCitations,
   citesKnowledgeConventions,
@@ -1427,5 +1430,64 @@ describe("Guard 12 — ADR format footer summary", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("checkSkillIndexCoverage — skill index ↔ skill directory coverage", () => {
+  test("equal sets pass", () => {
+    expect(checkSkillIndexCoverage({ shipped: ["a", "b"], indexed: ["a", "b"] })).toEqual({ failures: [] });
+  });
+
+  test("a shipped skill with no index row reports unindexed-skill once", () => {
+    expect(checkSkillIndexCoverage({ shipped: ["a", "b"], indexed: ["a"] })).toEqual({
+      failures: ["unindexed-skill: b"],
+    });
+  });
+
+  test("an index row with no directory reports stale-index-row once", () => {
+    expect(checkSkillIndexCoverage({ shipped: ["a"], indexed: ["a", "b"] })).toEqual({
+      failures: ["stale-index-row: b"],
+    });
+  });
+
+  test("a duplicated shipped name reports the mismatch once, not per occurrence", () => {
+    expect(checkSkillIndexCoverage({ shipped: ["a", "a"], indexed: [] })).toEqual({
+      failures: ["unindexed-skill: a"],
+    });
+  });
+});
+
+describe("readSkillIndexTable — core 专题 skill 索引 reader", () => {
+  const core = (rows: string[]) =>
+    ["# core", "", "## 专题 skill 索引", "", "| Skill | 职责 |", "|-------|------|", ...rows, "", "## next", ""].join("\n");
+
+  test("reads the first backticked cell of each row and stops at the next heading", () => {
+    expect(
+      readSkillIndexTable(core(["| `mstar-a` | x |", "| `mstar-b` | y |", "plain prose line"])).indexed,
+    ).toEqual(["mstar-a", "mstar-b"]);
+  });
+
+  test("a missing heading is a loud failure row, not an empty success", () => {
+    const result = readSkillIndexTable("# core\n\n## other\n");
+    expect(result.indexed).toEqual([]);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toContain("专题 skill 索引");
+  });
+
+  test("a heading with no parseable row is a loud failure row", () => {
+    const result = readSkillIndexTable("## 专题 skill 索引\n\nno table here\n");
+    expect(result.failures[0]).toContain("no `mstar-*` row");
+  });
+});
+
+describe("readSkillIndexCoverage — the shipped corpus agrees with the index", () => {
+  test("the real tree is consistent in both directions", () => {
+    const repo = join(import.meta.dir, "..");
+    const result = readSkillIndexCoverage(repo);
+    expect(result.failures).toEqual([]);
+    expect(checkSkillIndexCoverage({ shipped: result.shipped, indexed: result.indexed })).toEqual({ failures: [] });
+    // pm / grill-me are not mstar-* and must stay outside the comparison.
+    expect(result.shipped).not.toContain("pm");
+    expect(result.shipped).not.toContain("grill-me");
   });
 });
