@@ -3068,31 +3068,6 @@ export function bindRecoveredSession(
 }
 
 /**
- * §3/§E claim the workflow's integration merge lease for ONE attempt: the merge
- * is workflow-wide and exclusive, so this is the single row that says who is
- * merging what, and it names the plan and source branch it belongs to (a holder
- * match alone is never ownership). The row's own revision advances because its
- * record changed (§3.1); a re-claim by the same attempt is not this caller's
- * path — `integration-start` re-verifies a started attempt without writing.
- */
-export function claimIntegrationMergeLease(
-  tx: ExecutionTransaction,
-  input: { workflowId: string; lease: IntegrationMergeLease },
-): void {
-  const existing = readIntegrationLeaseRow(tx.db, input.workflowId);
-  tx.db
-    .prepare(
-      "insert or replace into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, ?, ?, ?)",
-    )
-    .run(
-      input.workflowId,
-      existing === null ? 1 : existing.revision + 1,
-      tx.epoch,
-      JSON.stringify({ ...input.lease, status: "held" }),
-    );
-}
-
-/**
  * §3/§E release the workflow's integration merge lease, recording who held it,
  * who released it and why. The row is NOT deleted: it keeps its revision and
  * owner epoch as the §3.1 ABA guard, and reads as unclaimed (`null`) exactly as

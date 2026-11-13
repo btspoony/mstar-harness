@@ -413,7 +413,6 @@ export {
   KNOWLEDGE_REQUIRED_FIELDS,
   KNOWLEDGE_RESOLUTION_TYPES,
   KNOWLEDGE_SEVERITIES,
-  assertIndexRows,
   assertKnowledgeCatalogCompleteness,
   compoundRefreshScope,
   referenceExists,
@@ -502,8 +501,6 @@ export type {
   ReviewChangesetMode,
   ReviewInlineComment,
   ReviewPostPlan,
-  ReviewRenderOptions,
-  ReviewRenderSurface,
   ValidateFindingDocOptions,
 } from "./prreview.js";
 export {

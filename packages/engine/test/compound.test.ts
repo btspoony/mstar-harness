@@ -20,7 +20,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
-  assertIndexRows,
   assertKnowledgeCatalogCompleteness,
   compoundRefreshScope,
   referenceExists,
@@ -389,14 +388,6 @@ describe("knowledge catalog completeness — the DB query that replaced the READ
     await registerCatalogEntity(context, { kind: "document", id: "doc-cycle-a", title: "Cycle A", rootKind: "knowledge", relativePath: "logic-errors/cycle-a.md", documentKind: "knowledge" }, { operationId: "reg-cycle", actor: "compound" });
     const result = await assertKnowledgeCatalogCompleteness(context);
     expect(result.ok).toBe(true);
-  });
-
-  test("catalog discovery: the retired README export refuses instead of quietly passing", () => {
-    // The export survives only for the two consumers outside this task's
-    // scope; it asserts nothing about Markdown rows any more.
-    const result = assertIndexRows(join(tmp, "knowledge-ok-"));
-    expect(result.ok).toBe(false);
-    expect(hasCode(result, "compound.index.retired")).toBe(true);
   });
 });
 

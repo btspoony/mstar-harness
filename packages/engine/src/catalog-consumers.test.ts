@@ -28,7 +28,7 @@ import {
   type CatalogExecutionPin,
 } from "./coordination.js";
 import { getCatalog, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
-import { assertKnowledgeCatalogCompleteness, assertIndexRows } from "./compound.js";
+import { assertKnowledgeCatalogCompleteness } from "./compound.js";
 import { assertCatalogCompleteness, readCatalogCompleteness } from "./iteration.js";
 import { scaffoldHarness } from "./path.js";
 import { createFsStore, setArtifactStore } from "./store.js";
@@ -307,13 +307,6 @@ describe("catalog discovery \u2014 the completeness query over store.db", () => 
     const knowledge = await assertKnowledgeCatalogCompleteness(context);
     expect(knowledge.ok).toBe(false);
     expect(knowledge.violations.map((violation) => violation.code)).toEqual(["catalog.discovery.missing-document"]);
-  });
-
-  test("catalog discovery: the retired README index refuses instead of quietly passing", async () => {
-    const { root } = await withStore("discovery-retired-");
-    const gate = assertIndexRows(join(root, ".mstar", "knowledge"));
-    expect(gate.ok).toBe(false);
-    expect(gate.violations.map((violation) => violation.code)).toEqual(["compound.index.retired"]);
   });
 });
 

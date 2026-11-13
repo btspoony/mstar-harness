@@ -1016,17 +1016,8 @@ export function synthesizeReview(input: {
 }
 
 // ---------------------------------------------------------------------------
-// renderReviewMarkdown — the envelope's two presentation surfaces
+// renderReviewMarkdown — one layout owner for the review body
 // ---------------------------------------------------------------------------
-
-/** Where a review body is published: a GitHub Review comment, or the local
- * report archive's Markdown body. Layout-neutral: both surfaces carry the same
- * template body, because the archive keeps the posted body verbatim. */
-export type ReviewRenderSurface = "github-comment" | "local-report";
-
-/** All fields optional: the layout does not vary by surface, so a caller that
- * already renders the one body may omit the options entirely. */
-export type ReviewRenderOptions = { surface?: ReviewRenderSurface };
 
 /** Verdict emoji for the verdict head on both surfaces (module-private). */
 const VERDICT_EMOJI: Record<PrVerdict, string> = {
@@ -1209,7 +1200,7 @@ function renderFindings(findings: readonly MstarReviewFinding[]): string | null 
  * and evidence keep their internal Markdown; renderer-owned single-line slots
  * lose every line break. Sections join with one blank line; no trailing newline.
  */
-export function renderReviewMarkdown(review: MstarReviewV1, _opts: ReviewRenderOptions = {}): string {
+export function renderReviewMarkdown(review: MstarReviewV1): string {
   const sections: string[] = [];
   const narrative =
     typeof review.summary_md === "string" && review.summary_md.trim() !== ""

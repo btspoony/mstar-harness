@@ -1388,31 +1388,27 @@ describe("synthesizeReview — mstar.review/v1 envelope ", () => {
     const synthesized = synthesizeReview({ findings });
     expect("summary_md" in synthesized).toBe(false);
 
-    for (const surface of ["github-comment", "local-report"] as const) {
-      const body = renderReviewMarkdown(synthesized, { surface });
-      // The Thread-lifecycle candidate set keeps only bodies starting with the head.
-      expect(body.startsWith("## ")).toBe(true);
-      expect(body.split("Verdict").length).toBe(2);
-      expect(body.split("Unhandled null deref")).toHaveLength(2);
-      expect(body.split("Typo in comment")).toHaveLength(2);
-      expect(body).toContain("Score 86% (good)");
-      // The Review section is mandated and has no narrative beneath it here.
-      expect(body.split("\n").filter((line) => line === "## \u{1F4CB} Review")).toHaveLength(1);
-      expect(body).not.toMatch(/\n{3,}/);
-    }
+    const body = renderReviewMarkdown(synthesized);
+    // The Thread-lifecycle candidate set keeps only bodies starting with the head.
+    expect(body.startsWith("## ")).toBe(true);
+    expect(body.split("Verdict").length).toBe(2);
+    expect(body.split("Unhandled null deref")).toHaveLength(2);
+    expect(body.split("Typo in comment")).toHaveLength(2);
+    expect(body).toContain("Score 86% (good)");
+    // The Review section is mandated and has no narrative beneath it here.
+    expect(body.split("\n").filter((line) => line === "## \u{1F4CB} Review")).toHaveLength(1);
+    expect(body).not.toMatch(/\n{3,}/);
   });
 
-  test("empty findings render no findings section on either surface", () => {
+  test("empty findings render no findings section", () => {
     const synthesized = synthesizeReview({ findings: [] });
     expect("summary_md" in synthesized).toBe(false);
 
-    for (const surface of ["github-comment", "local-report"] as const) {
-      const body = renderReviewMarkdown(synthesized, { surface });
-      expect(body).toContain("Score 100% (mergeable)");
-      expect(body).toContain("| \u{1F534} must-fix | 0 |");
-      expect(body).not.toContain("### Findings");
-      expect(body.endsWith("\n")).toBe(false);
-    }
+    const body = renderReviewMarkdown(synthesized);
+    expect(body).toContain("Score 100% (mergeable)");
+    expect(body).toContain("| \u{1F534} must-fix | 0 |");
+    expect(body).not.toContain("### Findings");
+    expect(body.endsWith("\n")).toBe(false);
   });
 
   test("an incomplete run states the partial mark, cause and unscanned scope once", () => {
@@ -1427,17 +1423,15 @@ describe("synthesizeReview — mstar.review/v1 envelope ", () => {
     });
     expect("summary_md" in partial).toBe(false);
 
-    for (const surface of ["github-comment", "local-report"] as const) {
-      const body = renderReviewMarkdown(partial, { surface });
-      expect(body.split("cause: budget spent before the security domain")).toHaveLength(2);
-      expect(body.split("unscanned: src/auth.ts, packages/engine")).toHaveLength(2);
-      expect(body).toContain("Score 53% (fail, partial)");
-    }
+    const body = renderReviewMarkdown(partial);
+    expect(body.split("cause: budget spent before the security domain")).toHaveLength(2);
+    expect(body.split("unscanned: src/auth.ts, packages/engine")).toHaveLength(2);
+    expect(body).toContain("Score 53% (fail, partial)");
 
     // An empty scope renders the explicit none marker, exactly as the chat header does.
     const none = synthesizeReview({ findings: [], incomplete: { reason: "operator cancelled the run", unscanned: [] } });
-    expect(renderReviewMarkdown(none, { surface: "github-comment" })).toContain("unscanned: none");
-    expect(renderReviewMarkdown(none, { surface: "local-report" })).toContain("Score 100% (mergeable, partial)");
+    expect(renderReviewMarkdown(none)).toContain("unscanned: none");
+    expect(renderReviewMarkdown(none)).toContain("Score 100% (mergeable, partial)");
   });
 
   test("explicit summary_md is preserved verbatim", () => {
