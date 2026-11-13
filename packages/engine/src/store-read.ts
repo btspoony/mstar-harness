@@ -34,6 +34,8 @@ import {
   assertIssueProvenanceSchema,
   IssueError,
   ISSUE_DISPOSITIONS,
+  ISSUE_KINDS,
+  ISSUE_SEVERITIES,
   TERMINAL_DISPOSITIONS,
   vocabularyMap,
   type Disposition,
@@ -695,15 +697,8 @@ function dashboardView(view: DashboardView, handle: StoreHandle, filters: Dashbo
 // Issue views (mirror of issue.ts listIssues/getIssue, same transaction)
 // ---------------------------------------------------------------------------
 
-const ISSUE_KINDS: Record<string, true> = {
-  bug: true,
-  risk: true,
-  improvement: true,
-  request: true,
-  decision: true,
-  "review-obligation": true,
-};
-const ISSUE_SEVERITIES: Record<string, true> = { critical: true, high: true, medium: true, low: true, nit: true };
+const ISSUE_KIND_MAP: Record<IssueKind, true> = vocabularyMap(ISSUE_KINDS);
+const ISSUE_SEVERITY_MAP: Record<Severity, true> = vocabularyMap(ISSUE_SEVERITIES);
 const ISSUE_DISPOSITION_MAP: Record<Disposition, true> = vocabularyMap(ISSUE_DISPOSITIONS);
 
 /** issue.ts `LAST_ACTIVITY_SQL`: max nonnull registration / discovery / transition date. */
@@ -732,12 +727,12 @@ function bindIssueFilter(filter: IssueFilter): { where: string; params: unknown[
   clauses.push("issues.disposition = ?");
   params.push(disposition);
   if (filter.kind !== undefined) {
-    if (!Object.hasOwn(ISSUE_KINDS, filter.kind)) usage("kind is not a contract vocabulary value");
+    if (!Object.hasOwn(ISSUE_KIND_MAP, filter.kind)) usage("kind is not a contract vocabulary value");
     clauses.push("issues.kind = ?");
     params.push(filter.kind);
   }
   if (filter.severity !== undefined) {
-    if (!Object.hasOwn(ISSUE_SEVERITIES, filter.severity)) usage("severity is not a contract vocabulary value");
+    if (!Object.hasOwn(ISSUE_SEVERITY_MAP, filter.severity)) usage("severity is not a contract vocabulary value");
     clauses.push("issues.severity = ?");
     params.push(filter.severity);
   }

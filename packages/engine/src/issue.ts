@@ -12,8 +12,15 @@ import type { ExecutionContext, ExecutionSessionRef } from "./execution-store.js
 import { MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 
 
-export type IssueKind = "bug" | "risk" | "improvement" | "request" | "decision" | "review-obligation";
-export type Severity = "critical" | "high" | "medium" | "low" | "nit";
+/**
+ * The one authored kind and severity vocabularies. Every validation map, SQL
+ * predicate and browser filter derives from these tuples; adding a member is one
+ * edit here, never a second copy in a consumer.
+ */
+export const ISSUE_KINDS = ["bug", "risk", "improvement", "request", "decision", "review-obligation"] as const;
+export type IssueKind = (typeof ISSUE_KINDS)[number];
+export const ISSUE_SEVERITIES = ["critical", "high", "medium", "low", "nit"] as const;
+export type Severity = (typeof ISSUE_SEVERITIES)[number];
 
 /**
  * The one authored disposition vocabulary. Every union, validation map, SQL
@@ -29,23 +36,6 @@ export type TerminalDisposition = (typeof TERMINAL_DISPOSITIONS)[number];
 export const ISSUE_DISPOSITIONS = ["open", ...TERMINAL_DISPOSITIONS] as const;
 export type Disposition = (typeof ISSUE_DISPOSITIONS)[number];
 
-const KINDS: Record<IssueKind, true> = {
-  bug: true,
-  risk: true,
-  improvement: true,
-  request: true,
-  decision: true,
-  "review-obligation": true,
-};
-const SEVERITIES: Record<Severity, true> = {
-  critical: true,
-  high: true,
-  medium: true,
-  low: true,
-  nit: true,
-};
-const ISSUE_KIND_VALUES = Object.keys(KINDS);
-const SEVERITY_VALUES = Object.keys(SEVERITIES);
 
 export type MutationContext = {
   operationId: string;
@@ -103,8 +93,8 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
   CaptureInput: {
     projectId: { required: true, type: "string", description: "Project identifier" },
     title: { required: true, type: "string", description: "Finding title" },
-    kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KIND_VALUES },
-    severity: { required: true, type: "string", description: "Severity", values: SEVERITY_VALUES },
+    kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KINDS },
+    severity: { required: true, type: "string", description: "Severity", values: ISSUE_SEVERITIES },
     impact: { required: true, type: "string", description: "User or system impact" },
     acceptance: { required: true, type: "string", description: "Acceptance condition" },
     owner: { required: false, type: "string", description: "Optional owner" },
@@ -451,12 +441,12 @@ export class IssueError extends Error {
   }
 }
 export function assertIssueTriageVocabulary(patch: IssueTriage): void {
-  if (patch.kind !== undefined && (typeof patch.kind !== "string" || !Object.hasOwn(KINDS, patch.kind))) {
+  if (patch.kind !== undefined && (typeof patch.kind !== "string" || !Object.hasOwn(ISSUE_KIND_MAP, patch.kind))) {
     throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
   }
   if (
     patch.severity !== undefined &&
-    (typeof patch.severity !== "string" || !Object.hasOwn(SEVERITIES, patch.severity))
+    (typeof patch.severity !== "string" || !Object.hasOwn(ISSUE_SEVERITY_MAP, patch.severity))
   ) {
     throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
   }
@@ -481,6 +471,8 @@ export function vocabularyMap<const T extends string>(values: readonly T[]): Rec
 }
 
 const DISPOSITIONS: Record<Disposition, true> = vocabularyMap(ISSUE_DISPOSITIONS);
+const ISSUE_KIND_MAP: Record<IssueKind, true> = vocabularyMap(ISSUE_KINDS);
+const ISSUE_SEVERITY_MAP: Record<Severity, true> = vocabularyMap(ISSUE_SEVERITIES);
 const RELATIONS: Record<"related" | "blocks" | "duplicate-of" | "superseded-by", true> = {
   related: true,
   blocks: true,
@@ -854,7 +846,7 @@ async function withWrite<T>(context: StoreContext, fn: (handle: StoreHandle) => 
 }
 
 function issueVocabularyError(field: "kind" | "severity", value: unknown): IssueError {
-  const supported = field === "kind" ? ISSUE_KIND_VALUES : SEVERITY_VALUES;
+  const supported = field === "kind" ? ISSUE_KINDS : ISSUE_SEVERITIES;
   const received =
     typeof value === "string"
       ? redactSecrets(value).text
@@ -883,10 +875,10 @@ export function assertCaptureRequest(input: CaptureInput): void {
     () => requireNonblank("acceptance", input.acceptance),
     () => requireNonblank("projectId", input.projectId),
     () => {
-      if (typeof input.kind !== "string" || !Object.hasOwn(KINDS, input.kind)) throw issueVocabularyError("kind", input.kind);
+      if (typeof input.kind !== "string" || !Object.hasOwn(ISSUE_KIND_MAP, input.kind)) throw issueVocabularyError("kind", input.kind);
     },
     () => {
-      if (typeof input.severity !== "string" || !Object.hasOwn(SEVERITIES, input.severity)) throw issueVocabularyError("severity", input.severity);
+      if (typeof input.severity !== "string" || !Object.hasOwn(ISSUE_SEVERITY_MAP, input.severity)) throw issueVocabularyError("severity", input.severity);
     },
     () => occurrenceColumns(input),
   ];
@@ -1142,12 +1134,12 @@ function bindFilter(filter: IssueFilter): { where: string; params: unknown[] } {
   clauses.push("issues.disposition = ?");
   params.push(disposition);
   if (filter.kind) {
-    if (!Object.hasOwn(KINDS, filter.kind)) throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
+    if (!Object.hasOwn(ISSUE_KIND_MAP, filter.kind)) throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
     clauses.push("issues.kind = ?");
     params.push(filter.kind);
   }
   if (filter.severity) {
-    if (!Object.hasOwn(SEVERITIES, filter.severity)) {
+    if (!Object.hasOwn(ISSUE_SEVERITY_MAP, filter.severity)) {
       throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
     }
     clauses.push("issues.severity = ?");
