@@ -20,7 +20,7 @@ Phase 2–5 全程有效（drive + loop 共有的行）：
 | 最后一个 plan `Done` 后直接开 PR / 汇报结束；§5.2 merge-ready exit 或 PR merged 即宣称交付完成 | **Phase 3 → 4 → 5 → 6** 顺序执行（Phase 6 = PR merged 后 post-merge close，`references/phase-6-post-merge-close.md`） |
 | Phase 5 自己改产品代码 | 需改产品代码时 **dispatch** `fullstack-dev` / `ops-engineer` |
 
-派发细则 → **`mstar-dispatch-gates`** + **`mstar-host`**。Phase 3 细则 → **`mstar-iteration/references/phase-3-iteration-close.md`** + **`mstar-knowledge`**。
+派发细则 → **`mstar-dispatch-gates`** + **`mstar-host`**。Phase 3 细则 → **`mstar-iteration/references/phase-3-iteration-close.md`** + **`mstar-doc-corpus`**。
 
 ## Assignment preflight（bash 块 — byte-identical 共享副本）
 

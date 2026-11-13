@@ -64,9 +64,9 @@ per-plan 门禁通过后，PM 在**迭代层面**管理以下活动（不计入 
 
 - **迭代启动**（`mstar-iteration` § Phase 1）：锁定迭代范围、**显式 branch policy**（`iteration_base_branch` / `target_branch`）、产出 compass。
 - **迭代驱动**（`mstar-iteration` § Phase 2 Autonomous Execute）：per-plan 派发循环（分支→实现→QC→**PM Acceptance**→Done→合并），跨 plan 进度追踪，更新 compass 中各 plan 状态。
-- **迭代收口**（`mstar-iteration` § Phase 3 iteration-close）：迭代内所有 plan Done 后，执行一轮知识结晶（`mstar-knowledge`）沉淀迭代经验，更新 roadmap，标记迭代完成。
+- **迭代收口**（`mstar-iteration` § Phase 3 iteration-close）：迭代内所有 plan Done 后，执行 specs/ADR 语料提升（**`mstar-doc-corpus`** 契约），更新 roadmap，标记迭代完成。
 
-per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动，不影响 per-plan 状态判定。此句不否定独立交付 plan 的 disposition 义务——它在交付 PR head 定稿前运行（迭代内 plan 行不各自触发）；语义权威 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
+per-plan Done 是 per-plan 的闭环终点；compound 是每个 **development plan** `Done` 后的交付尾义务（迭代行与独立 plan 相同），不影响该判定。迭代收口只做 specs/ADR 提升；语义权威 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
 
 > **Engine check:** run `mstar iteration gate --workflow <id> --compass <delivery-compass.md>` (engine `evaluatePhaseGate`) to evaluate the iteration phase-transition gate (Phase 2 → 3 → 4) against the ACTIVE execution authority when iteration-level activities above are reached — per-plan Prepare/Execute gate judgment stays prompt. On `fail` (gate-blocking violations), do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
 
@@ -91,7 +91,7 @@ per-plan Done 是 per-plan 的闭环终点；compound 是迭代级收口活动�
 
 **任一项为「否」时，`Gate decision` 必须是 `blocked`**。
 
-> 迭代级活动（compound / iteration-close）见 `mstar-iteration`；不属于 per-plan gate 判定项。独立交付 plan 的 compound disposition 属交付尾段义务（PR head 定稿前），见 `mstar-harness-core`「最小交付循环」。
+> 迭代级活动（specs/ADR promotion / iteration-close）见 `mstar-iteration`；per-plan compound 见 `mstar-knowledge`。
 
 ## Hotfix 例外
 

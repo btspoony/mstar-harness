@@ -168,7 +168,7 @@ PM 在需要持久化追踪时：
 - **Iteration base branch**：创建 Spec/iteration 集成分支的祖先分支或 ref；必须显式记录，不能默认 `main` / `master`。**`branch.base` 是创建/merge 锚点，不是主 worktree 驻留事实**——主 worktree（control root）的驻留分支在生命周期写入前由 PM 记录为 **`Main worktree branch`**（主 plan 头），全程不切换。
 - **Spec 集成分支**：从 `iteration_base_branch` 创建；各 Plan 实现 merge 回此线后再视为 Spec 在代码侧集成。
 - **Plan 实现分支**：每 `plan_id` 一条（PM 书面）。
-- **PR target**：全部 Plans 与 iteration-close 完成后，向显式 `target_branch` 提 PR（窄例外见 Assignment `Branch policy`）。
+- **PR target**：全部 Plans、各 plan 的 compound、与 iteration-close（specs/ADR 提升）完成后，向显式 `target_branch` 提 PR（窄例外见 Assignment `Branch policy`）。
 - **Standalone development plan**：单 plan 交付不经迭代集成序列——交付分支上完成 compound disposition（步骤 → **`mstar-knowledge/references/compound-workflow.md`**）后向显式 target 提交 PR，PR 身份（repo/head/target）在提交时记录；序列与语义 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`（迭代序列不变，见上）。
 - Git 操作与 QC 单一 `HEAD` → **`mstar-branch-worktree`**。
 - ACTIVE workflow 行（DB）登记顶层 `branch.base`（`iteration_base_branch`）/ `branch.target`（`target_branch`）/ `branch.integration`（`spec_integration_branch`），以及 plan 行 `metadata.spec_integration_branch` / `merge_target` → **`mstar-artifacts`**。

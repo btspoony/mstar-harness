@@ -6,6 +6,36 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.5.3] - 2026-11-13
+
+### Changed
+
+- Made the five `--*-model` overrides independent: each flag now validates only itself, and roles whose
+  group was not supplied keep OpenCode's default model. The previous shape refused a documented
+  single-flag install four times and then wrote the roles from `--other-models`.
+- A supplied `--*-model` value that names no model (`--dev-models ",,"`) now refuses instead of writing
+  nothing; only an absent flag leaves the group alone.
+- Replaced `linearAuthorize`'s hand-rolled browser launcher with the bounded opener the same effect
+  object already used, so a platform opener that never starts now refuses with
+  `capability.browser.unavailable` instead of hanging the authorization flow.
+- Constrained `init --target` to the supported hosts and `--scope` to `global|project`, so a typo is a
+  usage refusal rather than a project-scope write. `--yes` is still accepted; its only effect is to
+  suppress the `Scope not provided; defaulting to project` notice — `init` never prompts.
+- **The `plan` family purpose describes the surface, not one host's native tool.** The published line named `mstar_plan_bind`, which only one host mounts and which a model reading any other host's `tools/list` cannot call. It now says that `bind` writes the engine row only and that a host keeping its own ledger uses that host's own binding entry point — the same fact, without an id that is absent on the other surfaces publishing the family.
+- **The published-surface budget test says what to do when it trips.** Its comment named the ceiling as a product decision but gave no procedure: measure the new surface in the checkout that holds the change, decide whether the growth is intended, and re-take the ceiling with that reason recorded — never silently raise the number to go green.
+- **Leaf-seat test isolation**: the shared CLI test harness now owns one identity-channel list
+  (`DSH_MSTAR_LEAF_SEAT`, `MSTAR_LEAF_SEAT`, `DSH_SESSION_ID`, `MSTAR_HOST_SESSION_ID`,
+  `MSTAR_EXECUTION_IDENTITY`) with clear/restore helpers, and the registration and MCP-identity suites
+  clear those channels before each negative control. A shell that exports a leaf marker no longer turns
+  those cases red; the marker is the case's own decision again.
+- **`mstar init --target opencode` verifies the generation it actually wrote.** A dual-key config (both `plugin` and `plugins` present) made the post-write check re-derive the generation from config markers, get `null`, and silently validate nothing. The adapter now records the generation it resolved on the same options object the caller validates with, so a dual-key write is checked against the surface it selected.
+- **The seeded `mcp.servers["morning-star"]` command is a copy, not an alias.** The V2 MCP seed spread the module-level server entry, which copied the object but shared its `command` array; a consumer mutating one written entry mutated the constant every later write reads from.
+- **The persist suite states its engine-build ordering requirement.** `packages/cli/AGENTS.md` now documents the package test flow (`bun run test`: engine build, package build, `bun test`) and that no suite may run beside a concurrent `bun run --cwd packages/engine build`, because the suites resolve `@mstar-harness/engine` through `packages/engine/dist` while that build starts with `rm -rf dist`. `packages/cli/test/persist.test.ts` repeats the requirement in its header, so the file explains its own precondition instead of depending on a rebuild that nothing near it mentioned. No assertion and no build step changed.
+
+- Version alignment with harness **4.5.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.5.3**.
+
 ## [4.5.2] - 2026-11-11
 
 ### Changed

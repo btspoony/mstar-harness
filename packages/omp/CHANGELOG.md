@@ -6,6 +6,16 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.5.3] - 2026-11-13
+
+### Changed
+
+- **The model-handoff start surfaces a stale plugin bundle as its own cause.** Direction-lock's ACTIVE authority read collapsed every thrown store error into the generic `register-invalid` refusal, so a store migrated by a newer build of the plugin's bundled engine told the operator to upgrade the harness while the CLI, the plugin package and the engine source all reported one version. A `store.schema-unsupported`/`store.schema-drift` cause now keeps the engine's own code, carries `loadedEntry` (the module the host actually loaded) and appends the shared incompatible-loaded-build recovery: refresh the installed `@mstar-harness/omp` package, then start a NEW host process so the registration is loaded from it. Every other cause keeps the existing `register-invalid` refusal, and no binding or model action is recorded either way.
+
+- Version alignment with harness **4.5.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.5.3**.
+
 ## [4.5.2] - 2026-11-11
 
 ### Changed
