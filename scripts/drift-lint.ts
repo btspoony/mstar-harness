@@ -276,6 +276,7 @@ function gateSurfaceSnapshots(): Omit<GateSurfaceInput, "ci"> | null {
         head: list(atHead(file)),
       })),
       changedFiles: [...new Set([...changedFiles, ...untracked])],
+      hasRange: true,
     };
   } catch {
     return null;

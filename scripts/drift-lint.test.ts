@@ -1560,6 +1560,39 @@ describe("checkGateSurfaceChange — Guard 14 gate-surface self-approval", () =>
     ).toEqual([]);
   });
 
+  test("an added entry is unpaid even when a sibling entry is removed", () => {
+    const failures = checkGateSurfaceChange({
+      manifest: {
+        base: [
+          { file: "skills/a/SKILL.md", maxLines: 20 },
+          { file: "skills/b/SKILL.md", maxLines: 20 },
+        ],
+        head: [
+          { file: "skills/a/SKILL.md", maxLines: 20 },
+          { file: "skills/c/SKILL.md", maxLines: 20 },
+        ],
+      },
+      ...range(["skills/b/SKILL.md"]),
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/c/SKILL.md");
+  });
+
+  test("a renamed target pays because both names are in the change set", () => {
+    expect(
+      checkGateSurfaceChange({
+        manifest: {
+          base: [{ file: "skills/old/SKILL.md", maxLines: 20 }],
+          head: [
+            { file: "skills/old/SKILL.md", maxLines: 20 },
+            { file: "skills/new/SKILL.md", maxLines: 20 },
+          ],
+        },
+        ...range(["skills/{old => new}/SKILL.md", "skills/old/SKILL.md", "skills/new/SKILL.md"]),
+      }),
+    ).toEqual([]);
+  });
+
   test("an allowlist entry added with its signature path changed passes", () => {
     expect(
       checkGateSurfaceChange({
