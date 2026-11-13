@@ -1,6 +1,7 @@
 # ADR: The CLI consumer is proved by source provenance, not by a recorded bundle digest
 
 Status: implemented — the manifest records what the CLI build can honestly reproduce; the missing bundle digest is the decision, not a gap to close.
+Archived: 2026-11-13 — the whole consumer-manifest digest gate was deleted, so the record's subject no longer exists; retained for the reasoning that a digest pin describes the building machine.
 
 Date: 2026-11-12
 

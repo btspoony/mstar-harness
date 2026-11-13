@@ -46,7 +46,7 @@ A delivery loop spent many CI rounds on gates that could never be green, or that
 
 9. **A prerequisite that several callers must satisfy by hand has no home — put it inside the command they call.** Three workflows each carried their own copy of the declaration-build chain a typecheck needs (`engine` → `judgment` → `commands` dists, all gitignored). One caller was updated when a package began importing another; the other two kept the old chain. No release was attempted for the next eighteen days, so nothing reported the drift — and when `Release prep` was finally run on 2026-10-14 it failed immediately on the missing `@mstar-harness/commands` declarations. The fix was not to repair the stale copies but to delete them: the prerequisite now lives inside `bun run typecheck` itself, so a caller cannot forget it. Duplicated prerequisites are the same defect as duplicated rules — the copies disagree silently, and only the copy that runs says anything at all.
 
-10. **A package's inlined-bundle consumers are part of the changed surface.** Several packages are compiled INTO committed artifacts: the engine is inlined into `hooks/session-context.mjs` and `hooks/mstar-write-gate.mjs` by `bun run hooks:build`, and host bundles inline their own entry points. A source change in such a package therefore also changes a committed bundle, and the freshness gate compares the regenerated bundle against the committed one. Treat "who inlines this package?" as part of the change scope when writing a fix brief: name the regeneration step and the artifact in the verification list, or CI discovers it for you one round later. The dependency runs one way (artifact ← package), so a targeted unit run cannot catch it — only the bundle rebuild can.
+10. **A package's inlined-bundle consumers are part of the changed surface.** Several packages are compiled INTO committed artifacts: the engine is inlined into `hooks/session-context.mjs` and `hooks/mstar-write-gate.mjs` by `bun run hooks:build`, and host bundles inline their own entry points. A source change in such a package therefore also changes a committed bundle, and the committed copy goes stale until the build re-runs; the build itself is the CI step that runs there. Treat "who inlines this package?" as part of the change scope when writing a fix brief: name the rebuild step and the artifact in the verification list, or CI discovers it for you one round later. The dependency runs one way (artifact ← package), so a targeted unit run cannot catch it — only the bundle rebuild can.
 
 11. **A literal-scan gate and the changelog that reports the removal cannot both be satisfied, and a fail-closed rewrite changes what an old probe means.**
 
@@ -75,7 +75,7 @@ A delivery loop spent many CI rounds on gates that could never be green, or that
 - **Platform fixture**: an "uninventoriable store" fixture corrupted raw pages (a no-op under WAL) and passed locally while failing in CI; removing a required authority table made it deterministic everywhere.
 - **Prerequisite drift**: a release workflow typechecked with only the engine built while CI built engine, judgment and commands; the absent `@mstar-harness/commands` declaration dist surfaced as `TS2307` plus an implicit-`any` cascade. Moving the chain into the shared command deleted three copies of it and the failure class with them.
 
-- **Inlined bundle**: an engine source change (a binding read gaining one field) left `hooks/session-context.mjs` stale; every scoped test was green, and the freshness job failed after a full CI cycle. Adding "rebuild the inlined hooks bundle and commit it" to the wave brief's verification list makes it a pre-push step instead.
+- **Inlined bundle**: an engine source change (a binding read gaining one field) left `hooks/session-context.mjs` stale; every scoped test was green, because the behaviour suites rebuild the bundle in `beforeAll` and nothing in the branch read the committed copy. Treat the inlined artifact as part of the changed surface: record the rebuild step and the artifact in the wave brief's verification list.
 
 11. **A wall-clock sleep is not a synchronization primitive — and a fixture that owns the async seam can
    gate it deterministically.** A new suite synchronized six sites with `settleSeam = () => new
@@ -96,7 +96,7 @@ Phase-5 (PR merge-ready) loop of the execution-authority cutover iteration, 2026
 
 Added 2026-10-15 from the `Release prep` repair: guidance item 9 and its example come from a release pipeline that had been unable to typecheck since the CLI began importing the commands package, because only CI's copy of the prerequisite chain was updated.
 
-Added 2026-10-20 from the dsh-channel adoption PR #541 waves: guidance item 10 and its example come from an engine change whose inlined hooks bundle was only discovered by the CI freshness gate.
+Added 2026-10-20 from the dsh-channel adoption PR #541 waves: guidance item 10 and its example come from an engine change whose inlined hooks bundle stayed stale through a full CI cycle, because nothing in the branch read the committed copy.
 
 Added 2026-11-08 from the skill ritual-trim wave: guidance items 12 and 13 come from the callout-marker collapse (one scanner left behind, passing on zero hits) and from the QC round that reviewed a checkout the coordinator was still advancing.
 

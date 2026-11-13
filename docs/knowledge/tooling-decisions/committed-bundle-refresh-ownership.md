@@ -28,11 +28,10 @@ During the audit-backlog iteration, three separate plans deleted engine exports 
 
 ## Decision
 
-A source change does **not** regenerate the committed bundles. The plan records the stale-bundle fact and `release:prepare` rebuilds them, so a published package never ships the previous engine. Branch evidence for a deletion is a source-level zero-consumer grep; the committed bytes are not part of branch evidence, and the CI freshness diff that compares them is advisory (`continue-on-error`) because it reddened unrelated PRs for exactly this version drift.
+A source change does **not** regenerate the committed bundles. The plan records the stale-bundle fact and `release:prepare` rebuilds them, so a published package never ships the previous engine. Branch evidence for a deletion is a source-level zero-consumer grep; the committed bytes are not part of branch evidence. CI builds the bundles (a broken build fails the job) but does not compare their bytes to the committed copies — that diff tracks the bundler version, so it reported drift on unrelated PRs for exactly this reason.
 
 ## Consequences
 
 - A branch can merge while the committed bundle still contains a deleted function. That is safe: the bundle's copy has no caller, and the release rebuild removes it.
 - Anyone regenerating locally must expect a large diff and must not commit it unless the pinned bun produced it.
-- The consumer manifests record both source trees and shipped artifacts. Re-take them with `bun scripts/execution-consumer-manifest.ts --repo . --write` after any change they cover, and never hand-merge a manifest conflict — re-take it.
 - If a future change makes the bundles' bytes reproducible across supported bun versions, this decision can be narrowed to "reproducible artifacts are committed"; until then the release boundary is the only place the artifact is re-taken.
