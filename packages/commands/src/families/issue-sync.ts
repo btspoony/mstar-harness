@@ -64,6 +64,7 @@ import {
   commitLinearCredential,
   supersededBy,
   readRepoLinearBinding,
+  redactTransportMessage,
   releaseRun,
   resolveRepoRoot,
   resetCursor,
@@ -233,7 +234,7 @@ const RECOVERY: Record<string, string> = {
   "linear.binding-absent":
     "This store project mirrors no Linear project yet. Bind one first: `mstar project bind --project <project-id> --provider linear --remote-project <name-or-id> --operation <id>`, then re-run the import.",
   "linear.query-failed":
-    "A page failed and nothing from it was ingested; the cursor did not advance. Re-run `mstar issue-sync import --project <project-id>` to resume from the recorded cursor once the provider answers again.",
+    "A page failed and nothing from it was ingested; the cursor did not advance. Re-run `mstar issue-sync import --project <project-id>` to resume from the recorded cursor once the provider answers again. When the failure is a label-discovery page that advertised a next page without a usable cursor, it is a provider envelope defect: re-running reads the same page and refuses identically, so report it to the provider's maintainers instead of retrying.",
   "linear.list-unimplemented":
     "This host exposes no Linear listing adapter, so no page can be requested. Run the import from a host that ships the adapter (dsh this iteration), or install a release whose plugin provides it.",
   "linear.identity-collision":
@@ -540,7 +541,7 @@ function adoptPairs(values: readonly string[] | undefined): Array<{ localId: str
   return (values ?? []).map((value) => {
     const split = value.indexOf("=");
     if (split <= 0 || split === value.length - 1) {
-      throw new UsageError(`--adopt expects <localId>=<issueUrl|externalId>; received ${JSON.stringify(value)}`);
+      throw new UsageError(`--adopt expects <localId>=<issueUrl|externalId>; received ${JSON.stringify(redactTransportMessage(value))}`);
     }
     return { localId: value.slice(0, split).trim(), reference: value.slice(split + 1).trim() };
   });
@@ -566,7 +567,7 @@ function assertOperatorVerbsAgree(
     if (first !== undefined) {
       throw new SyncError(
         "sync.operator-conflict",
-        `--adopt names ${localId} twice (${first}, ${reference}), but one local item has one remote identity; ` +
+        `--adopt names ${localId} twice (${redactTransportMessage(first)}, ${redactTransportMessage(reference)}), but one local item has one remote identity; ` +
           "keep the pair that is the right issue and re-run; nothing was written",
       );
     }

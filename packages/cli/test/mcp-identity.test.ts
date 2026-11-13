@@ -353,6 +353,7 @@ describe("MCP session identity", () => {
       const bindRecovery = String(bindRefused.details?.recovery ?? (bindRefused as { recovery?: string }).recovery ?? "");
       expect(bindRecovery).toContain("mstar_plan_bind");
       expect(bindRecovery).toContain("exec.agent.id");
+      expect(bindRecovery).toContain("mstar plan bind");
       expect(JSON.stringify(bindRefused)).not.toContain(claimed);
     } finally {
       if (previous === undefined) delete process.env.MSTAR_HOST_SESSION_ID;

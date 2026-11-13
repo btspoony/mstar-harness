@@ -19,6 +19,7 @@ import {
   openStore,
   readLedgerSummary,
   readRun,
+  SyncError,
   writeLinearCredential,
   type IssueProvider,
   type ProbeResult,
@@ -505,6 +506,36 @@ describe("push — the credential scope preflight", () => {
     if (previousCredential === undefined) delete process.env.MSTAR_LINEAR_CREDENTIAL;
     else process.env.MSTAR_LINEAR_CREDENTIAL = previousCredential;
     rmSync(credentialPath(), { force: true });
+  });
+
+  test("a malformed --adopt echoes its value with credentials redacted", async () => {
+    const provider = writeProvider();
+    const f = await fixture("push-adopt-redaction", null);
+    storeCredential("issues:create");
+    const result = (await executeCommand("issue-sync.push", { project: PROJECT, adopt: ["https://user:hunter2@linear.app/acme"] }, withProvider(f, provider))) as {
+      status: string;
+      message?: string;
+    };
+    expect(result.status).toBe("usage");
+    expect(result.message).toContain("[redacted]");
+    expect(result.message).not.toContain("hunter2");
+    expect(provider.calls).toEqual([]);
+  });
+
+  test("a label-discovery envelope failure recovers toward the provider defect, not the import cursor", async () => {
+    const provider = writeProvider();
+    provider.discoverLabels = async () => {
+      throw new SyncError("linear.query-failed", "the label page said hasNextPage but carried no usable `cursor`");
+    };
+    const f = await fixture("push-label-envelope", null);
+    storeCredential("issues:create");
+    const result = (await executeCommand("issue-sync.push", { project: PROJECT }, withProvider(f, provider))) as {
+      status: string;
+      code: string;
+      details?: { recovery?: string };
+    };
+    expect(result.code).toBe("linear.query-failed");
+    expect(result.details?.recovery).toContain("label-discovery");
   });
 
   test("a scope of `read` refuses the run before any provider call or ledger write", async () => {

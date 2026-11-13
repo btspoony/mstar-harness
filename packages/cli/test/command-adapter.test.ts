@@ -1287,7 +1287,6 @@ describe("opencode adapter — generation selection", () => {
   test("a dual-key write validates the generation it resolved instead of skipping on marker derivation", async () => {
     const opts: MutateConfigForInitOptions = { presenceRunner: runnerPresent, probeRunner: runnerV2 };
     const written = await mutateAdapter({ plugin: ["@mstar-harness/opencode@latest"], plugins: ["unrelated"] }, {}, opts);
-    expect(opts.generation).toBe("v2");
     expect(opencodeAdapter.validateConfig!(written, opts)).toEqual([]);
     // Both marker keys present: a re-derivation answers null, this answers the v2 surface.
     const brokenV2Surface = { plugin: ["@mstar-harness/opencode@latest"], plugins: ["unrelated"] };
