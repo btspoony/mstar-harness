@@ -55,7 +55,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.0
+          bun-version: 1.4.4
 
       # Node 24.18 is the issue-store runtime floor and ships npm with working
       # Trusted Publishing / provenance (sigstore). Do not `npm install -g npm@latest`

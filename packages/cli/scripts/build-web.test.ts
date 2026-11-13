@@ -132,8 +132,10 @@ describe("the bundle", () => {
   });
 
   test("boots a React root and imports no htm or preact value", () => {
-    // A root that never calls createRoot is not an entry.
-    expect(js).toContain("createRoot");
+    // The minifier renames the `createRoot` binding under a newer bundler, so the
+    // entry's proof is the mount point it queries plus React's own element symbol.
+    expect(js).toContain("getElementById");
+    expect(js).toContain("react.element");
     // The old runtime must be gone from the graph, not merely unused.
     expect(js).not.toContain("htm/preact");
     expect(/preact/i.test(js)).toBe(false);

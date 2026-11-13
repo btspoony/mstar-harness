@@ -19,8 +19,8 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "rm -rf dist && bun run scripts/build.ts && bunx tsc",
-    "test": "bun test"
+    "build": "bun run ../cli/scripts/build-web.ts && rm -rf dist && bun run scripts/build.ts && bunx tsc",
+    "test": "bun run ../cli/scripts/build-web.ts && bun test"
   },
   "dependencies": {
     "@mstar-harness/engine": "workspace:*",

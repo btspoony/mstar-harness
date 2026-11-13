@@ -22,9 +22,9 @@ tags:
 
 ## Context
 
-Two tracked artifacts are build outputs that inline `packages/engine` sources: `hooks/mstar-write-gate.mjs` and `hooks/session-context.mjs`, plus the dashboard module `packages/commands/src/dashboard/assets.generated.ts`. Their contents depend on the bundler version as well as on the source.
+Two tracked artifacts are build outputs that inline `packages/engine` sources: `hooks/mstar-write-gate.mjs` and `hooks/session-context.mjs`. Their contents depend on the bundler version as well as on the source. The dashboard module `packages/commands/src/dashboard/assets.generated.ts` is not tracked for this reason: no host config names it by path (it is inlined into the CLI bundle), so it is a gitignored build output that `packages/commands` regenerates before building.
 
-During the audit-backlog iteration, three separate plans deleted engine exports that those bundles inline. Each plan ran the documented rebuild, and each produced a diff that rewrote tens of thousands of lines for a one-function deletion: this checkout's bun (1.4.4) and the CI-pinned bun (1.4.0) emit different bundle shapes, and neither matched the committed bytes. Reviewing or merging that diff would have buried the real change and moved the artifact to a byte form CI cannot reproduce.
+During the audit-backlog iteration, three separate plans deleted engine exports that those bundles inline. Each plan ran the documented rebuild, and each produced a diff that rewrote tens of thousands of lines for a one-function deletion: at the time this checkout ran bun 1.4.4 while CI pinned 1.4.0, and the two emit different bundle shapes, so neither matched the committed bytes. CI and `packageManager` now pin one version (1.4.4); the rule below does not depend on that being true, because the committed bytes are re-taken by release preparation and never compared. Reviewing or merging that diff would have buried the real change and moved the artifact to a byte form CI cannot reproduce.
 
 ## Decision
 
