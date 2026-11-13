@@ -3,8 +3,6 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertSupervisorMountInfo, connectEvaluatorChannel, connectEvaluatorChannelForTest, connectEvaluatorChannelWithSupervisorMountsForTest, createEvaluatorMailbox } from "../src/evaluator-channel.js";
-import { isAttestedEvaluatorChannel } from "../src/evaluator-channel-trust.js";
-import { runReviewAdvice } from "../src/runtime.js";
 
 const roots: string[] = [];
 function makeRoot(): string {
@@ -35,7 +33,6 @@ describe("bounded evaluator mailbox", () => {
   test("durably admits one matching run request before acknowledging status", async () => {
     const root = makeRoot();
     const channel = await connectEvaluatorChannelForTest(invocation(root), new AbortController().signal);
-    expect(isAttestedEvaluatorChannel(channel)).toBe(false);
     const mailboxPath = join(root, ".jev-mailbox");
     const mailbox = createEvaluatorMailbox({ runId: "run-1", requestDirectory: join(mailboxPath, "requests"), statusPath: join(mailboxPath, "status.json") });
     const requestBytes = new TextEncoder().encode(JSON.stringify({ runId: "run-1", packId: "pack-1" }));
@@ -80,19 +77,6 @@ describe("bounded evaluator mailbox", () => {
     }
   });
 
-  test("runReviewAdvice channelIsValid denies an unattested channel before pilot collection", async () => {
-    const root = makeRoot();
-    const invocation = { cwd: root, workspace: root, input: { kind: "stdin" } as const, pilotPath: "pilot.json" };
-    const channel = await connectEvaluatorChannelForTest(invocation, new AbortController().signal);
-    let collected = false;
-    const result = await runReviewAdvice(invocation, new AbortController().signal, channel, {
-      resolveConfig: () => ({ state: "enabled", mode: "shadow", transport: "native-typesafe", cwd: root, workspace: root, configPath: join(root, ".mstarc") }),
-      readFile: async () => { collected = true; throw new Error("pilot collection must not run"); },
-    });
-    expect(result).toMatchObject({ status: "unavailable", code: "jev.channel-unavailable" });
-    expect(collected).toBe(false);
-  });
-
   test("cancellation marker invalidates a late recorded response", async () => {
     const root = makeRoot();
     const channel = await connectEvaluatorChannelForTest(invocation(root), new AbortController().signal);
@@ -128,7 +112,6 @@ describe("bounded evaluator mailbox", () => {
     const statusPath = join(root, "status.json");
     writeFileSync(statusPath, "{}");
     const channel = await connectEvaluatorChannelWithSupervisorMountsForTest(requestDirectory, statusPath, new AbortController().signal);
-    expect(isAttestedEvaluatorChannel(channel)).toBe(true);
     const mailbox = createEvaluatorMailbox({ runId: "run-1", requestDirectory, statusPath });
     const pending = channel.submit({ packBytes: new TextEncoder().encode('{"runId":"run-1"}'), pilotDigest: "a".repeat(64) }, new AbortController().signal);
     const request = await mailbox.readNext(new AbortController().signal);

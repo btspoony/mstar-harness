@@ -26,16 +26,12 @@ export {
   JudgmentRuntimeError,
   evaluateNative,
   resolveJudgmentConfig,
-  runReviewAdvice,
-  type JudgmentCliResult,
-  type JudgmentCliStatus,
   type JudgmentInvocation,
   type ResolvedJudgmentConfig,
   type EvaluatorChannel,
   type EvaluatorChannelResponse,
   type EvaluatorContext,
   type JudgmentResult,
-  type RuntimeEffects,
 } from "./runtime.js";
 export { buildA05Request, canonicalJsonBytes, type CanonicalQuestion, type PreparedRequest } from "./review-advice.js";
 export {

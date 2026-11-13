@@ -57,7 +57,7 @@ Full codebase audit: nine-category fan-out across **`references/audit-playbook.m
 
 Investigate correctness, security, and data-loss paths before reliability at expected load, risky untested behavior, performance, and leanness. This is an investigation order, not a replacement for the existing leverage rubric, severity, merge classes, or verdict derivation.
 
-**Test assertions (all variants, including `pr`):** keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. On finding a non-product assertion, the auditor must report its non-product-assertion class and conclude **"delete, or replace with a product-behaviour assertion"**. Calibrate against the PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression; judge the assertion and production-owner contract, not the example name alone. Detailed candidate evidence and retention safeguards → **`references/test-audit.md`** §§ 2–7.
+**Test assertions (all variants, including `pr`):** apply `mstar-coding-behavior` § Evidence keep/delete rule. On finding a non-product assertion, the auditor must report its non-product-assertion class and conclude **"delete, or replace with a product-behaviour assertion"**. Detailed candidate evidence and retention safeguards → **`references/test-audit.md`** §§ 2–7.
 
 ### Phase 3 — Vet, prioritize, confirm
 
