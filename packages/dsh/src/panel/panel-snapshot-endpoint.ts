@@ -36,10 +36,10 @@
  * @module @mstar-harness/dsh/panel/panel-snapshot-endpoint
  */
 
-import { isAbsolute } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { installServiceOnce } from '../gates/_shared.ts'
 import type { HarnessResolver } from '../gates/_shared.ts'
 import {
   MSTAR_DASHBOARD_VIEW_METHOD,
@@ -62,6 +62,12 @@ import {
   type MilestoneReceipt,
   type ReadEnvelope,
 } from '@mstar-harness/engine'
+import {
+  isRefusedPath,
+  nonEmptyString,
+  resolveSessionCwdOf,
+  type SessionCwdResolution,
+} from '../session-cwd.ts'
 import { leafSignalStateOf, type LeafSignalState, type PanelSnapshotRead } from './panel-snapshot.ts'
 import { readPanelSnapshot, resolveWorkflowId, type PanelRetainedReader } from './read-panel-snapshot.ts'
 
@@ -170,44 +176,6 @@ function unavailable(reason: string): PanelSnapshotRead {
   return { kind: 'unavailable', reason }
 }
 
-/** A non-empty string, or undefined. */
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() !== '' ? value : undefined
-}
-
-/**
- * The `SessionHeader` of either session surface, or undefined.
- *
- * The two surfaces carry it under DIFFERENT keys, read from the host's own types:
- * a live `Session` exposes `header: SessionHeader`
- * (`@deepseek-ai/dsh-session` `Session.header`), while a persisted inspection
- * exposes `meta: SessionHeader` (`@deepseek-ai/dsh-session-persistence`
- * `SessionInspection extends SessionStorageMetadata { meta: SessionHeader }`).
- * Reading only `header` made every cold session answer `session-cwd-absent`
- * while its workspace was right there.
- */
-function sessionHeaderOf(value: unknown): { cwd?: unknown } | undefined {
-  const row = value as { header?: unknown; meta?: unknown } | null | undefined
-  const header = row?.header ?? row?.meta
-  return header !== null && typeof header === 'object' ? (header as { cwd?: unknown }) : undefined
-}
-
-/** The session's workspace directory from either surface (`header.cwd` / `meta.cwd`). */
-function headerCwdOf(value: unknown): string | undefined {
-  return nonEmptyString(sessionHeaderOf(value)?.cwd)
-}
-
-/**
- * Refuse a client-asserted path that is not a plain absolute path: a relative
- * path would be resolved against the host process cwd (never the caller's), and
- * a `..` segment or NUL byte is a traversal probe, not a workspace.
- */
-function isRefusedPath(cwd: string): boolean {
-  if (cwd.includes('\0')) return true
-  if (!isAbsolute(cwd)) return true
-  return cwd.split(/[\\/]+/).includes('..')
-}
-
 /**
  * The ONE cwd acceptance rule, taken by both invocations (`panelSnapshot` and
  * `dashboardView`): the client's claim must be the resolved session's own — never
@@ -239,17 +207,6 @@ function refusedId(value: unknown, name: string): string | undefined {
   if (id === undefined) return `invalid-${name}-id`
   return isUnsafeId(id) ? `${name}-id-refused` : undefined
 }
-
-/**
- * The resolved session cwd, or the explicit reason the session is unusable.
- * `source` records WHICH surface answered: `live` (`Session.header.cwd`),
- * `persisted` (`SessionInspection.meta.cwd`) or `boot` (neither declared a
- * workspace, so the plugin reads the workspace the host was launched in and the
- * client's claim is not used as an address).
- */
-type SessionCwdResolution =
-  | { readonly kind: 'ok'; readonly cwd: string; readonly source: 'live' | 'persisted' | 'boot' }
-  | { readonly kind: 'unavailable'; readonly reason: string }
 
 /**
  * Host-side `mstar/panelSnapshot` service: `/api/mstar/panelSnapshot` serves the
@@ -636,34 +593,21 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
   }
 
   /**
-   * Resolve the authoritative cwd of one session: the LIVE session first
-   * (`ctx.sessions.get(id)`), then the session controller's persisted
-   * `inspect(id)` fallback for a session that is not currently attached.
+   * Resolve the authoritative cwd of one session through the shared resolver:
+   * the LIVE session first (`ctx.sessions.get(id)`), then the session
+   * controller's persisted `inspect(id)` fallback for a session that is not
+   * currently attached, then the host's launch workspace.
    */
   private async resolveSessionCwd(sessionId: string): Promise<SessionCwdResolution> {
     const sessions = this.ctx.get('sessions') as SessionsView | undefined
-    const live = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined
-    const liveCwd = headerCwdOf(live)
-    if (liveCwd !== undefined) return { kind: 'ok', cwd: liveCwd, source: 'live' }
-
     const controller = this.ctx.get('sessionController') as SessionControllerView | undefined
-    if (typeof controller?.inspect !== 'function') {
-      return { kind: 'unavailable', reason: live === undefined ? 'session-absent' : 'session-cwd-absent' }
-    }
-    let inspection: unknown
-    try {
-      inspection = await controller.inspect(sessionId)
-    } catch {
-      return { kind: 'unavailable', reason: 'session-inspect-failed' }
-    }
-    const persistedCwd = headerCwdOf(inspection)
-    if (persistedCwd !== undefined) return { kind: 'ok', cwd: persistedCwd, source: 'persisted' }
-    // Both surfaces are genuinely silent: the session declares no workspace. Read
-    // the one the host was launched in rather than claiming the workspace has
-    // nothing — the client's claim is still not an address (see `serve`).
-    const boot = nonEmptyString(process.cwd())
-    if (boot !== undefined) return { kind: 'ok', cwd: boot, source: 'boot' }
-    return { kind: 'unavailable', reason: 'session-cwd-absent' }
+    return await resolveSessionCwdOf({
+      liveSession: (id) => (typeof sessions?.get === 'function' ? sessions.get(id) : undefined),
+      // `inspect` is optional on the host service: an absent one stays
+      // undefined so the shared resolver answers its own explicit reason.
+      inspect: typeof controller?.inspect === 'function' ? (id) => controller.inspect(id) : undefined,
+      bootCwd: () => process.cwd(),
+    }, sessionId)
   }
 }
 
@@ -818,30 +762,17 @@ export function mstarMilestoneRemoveInvocation(): TypertContribution['invocation
  * @param options - the apply-scoped resolver + boot root.
  */
 export function installPanelSnapshotEndpoint(ctx: Context, options: PanelSnapshotEndpointOptions): void {
-  let present = false
-  try {
-    present = ctx.get(PANEL_SNAPSHOT_SERVICE) !== undefined
-  } catch {
-    present = false
-  }
-  if (present) {
+  installServiceOnce(ctx, {
+    key: PANEL_SNAPSHOT_SERVICE,
+    loggerName: ENDPOINT_LOGGER,
+    label: 'mstar panel-snapshot gateway',
+    construct: () => void new MstarPanelSnapshotGateway(ctx, options),
     // The kept instance is from an EARLIER apply generation: re-arm its
     // once-gate (and rebind the generation's sink) before returning, or a
     // reload could never disclose the same absence again.
-    const existing = ctx.get(PANEL_SNAPSHOT_SERVICE) as MstarPanelSnapshotGateway | undefined
-    existing?.rearmLeafSignalWarning(options)
-    ctx.logger(ENDPOINT_LOGGER).debug('mstar panel-snapshot gateway already registered — kept as-is (multi-fiber dedupe)')
-    return
-  }
-  try {
-    void new MstarPanelSnapshotGateway(ctx, options)
-  } catch (error) {
-    // The admission test lost a race: the earlier registrant stays.
-    if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
-    // Same generation boundary as the present-check above: the winner is kept,
-    // this apply still re-arms its warning.
-    const winner = ctx.get(PANEL_SNAPSHOT_SERVICE) as MstarPanelSnapshotGateway | undefined
-    winner?.rearmLeafSignalWarning(options)
-    ctx.logger(ENDPOINT_LOGGER).debug('mstar panel-snapshot gateway registered concurrently — kept the first (multi-fiber dedupe)')
-  }
+    onKept: () => {
+      const kept = ctx.get(PANEL_SNAPSHOT_SERVICE) as MstarPanelSnapshotGateway | undefined
+      kept?.rearmLeafSignalWarning(options)
+    },
+  })
 }
