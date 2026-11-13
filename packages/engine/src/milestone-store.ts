@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
 import { TERMINAL_DISPOSITIONS, type Disposition } from "./issue.js";
 import type { StoreReadQuery } from "./store-read.js";
 
@@ -19,8 +19,7 @@ const fail = (code: MilestoneErrorCode, message: string): never => { throw new M
 function guard(db: StoreDb): void {
   const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
   if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7) fail("milestone.schema-outdated", 'Milestones require schema 7; run "mstar store upgrade --operator <name>" first.');
-  const active = db.prepare("select authority_state from store_meta where id=1").get() as { authority_state?: string } | undefined;
-  if (active?.authority_state !== "active") fail("store.not-active", "Milestone access requires an active store.");
+  if (readStoreAuthority(db).authorityState !== "active") fail("store.not-active", "Milestone access requires an active store.");
 }
 /**
  * Every terminal disposition that is retired WITHOUT being resolved — the

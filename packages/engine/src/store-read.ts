@@ -50,7 +50,7 @@ import { ProjectionError, refreshProjections, type ProjectionFreshness, type Sou
 import type { RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
-import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { openStore, readStoreAuthority, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
 import type { AuthorityVerdict } from "./recovery-intent.js";
 import { WORKFLOW_TERMINAL_STATUSES } from "./workflow.js";
@@ -451,16 +451,14 @@ function parseJsonArray<T>(value: unknown): T[] {
 type ReadMeta = { authorityState: string; storeRevision: number; catalogRevision: number };
 
 function readMeta(db: StoreDb): ReadMeta {
-  const row = db
-    .prepare("select authority_state, revision, catalog_revision from store_meta where id = 1")
-    .get() as { authority_state?: unknown; revision?: unknown; catalog_revision?: unknown } | undefined;
-  if (!row || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
+  const row = readStoreAuthority(db);
+  if (typeof row.revision !== "number" || typeof row.catalogRevision !== "number") {
     throw new StoreReadError("store.not-active", "store_meta is missing; the store cannot serve reads");
   }
   return {
-    authorityState: typeof row.authority_state === "string" ? row.authority_state : "",
+    authorityState: typeof row.authorityState === "string" ? row.authorityState : "",
     storeRevision: row.revision,
-    catalogRevision: row.catalog_revision,
+    catalogRevision: row.catalogRevision,
   };
 }
 

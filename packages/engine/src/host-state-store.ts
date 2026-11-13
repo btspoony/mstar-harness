@@ -1,4 +1,4 @@
-import { StoreError, withDshWriteTransaction, withExecutionReadGuard, type DshSelectedGeneration, type DshWriteTransaction, type StoreContext, type StoreDb } from "./store-db.js";
+import { StoreError, readStoreAuthority, withDshWriteTransaction, withExecutionReadGuard, type DshSelectedGeneration, type DshWriteTransaction, type StoreContext, type StoreDb } from "./store-db.js";
 export type { DshSelectedGeneration } from "./store-db.js";
 
 export type DshSessionBinding = {
@@ -382,13 +382,12 @@ export function importDshHostStateRows(
   reusedOrPresent: string[];
   revisionAdvanced: boolean;
 } {
-  const authority = tx.db.prepare("select store_id, authority_epoch, authority_state from store_meta where id = 1").get() as
-    { store_id?: string; authority_epoch?: number; authority_state?: string } | undefined;
-  if (authority?.store_id !== tx.storeId || authority.authority_epoch !== tx.epoch) {
+  const authority = readStoreAuthority(tx.db);
+  if (authority.storeId !== tx.storeId || authority.epoch !== tx.epoch) {
     throw new StoreError("store.stale-epoch", "The store identity or epoch changed during legacy host-state import.");
   }
-  if (authority.authority_state !== "active") {
-    throw new StoreError("store.not-active", `The store authority is ${authority?.authority_state ?? "missing"}; rerun store upgrade.`);
+  if (authority.authorityState !== "active") {
+    throw new StoreError("store.not-active", `The store authority is ${authority.authorityState ?? "missing"}; rerun store upgrade.`);
   }
   const written = { workflows: 0, identities: 0, ledgerRows: 0, scanBounds: 0, bindings: 0, emissions: 0 };
   const merged = { scanBoundsAdvanced: 0, bindingFloorsRaised: 0 };

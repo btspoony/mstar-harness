@@ -46,7 +46,7 @@ export type { RoadmapValidation } from "./roadmap-content.js";
 export { ROADMAP_STATUSES };
 import { isPlainObject } from "./coordination-write.js";
 import { createHash } from "node:crypto";
-import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
 import { assertIssueProvenanceSchema, IssueError } from "./issue.js";
 import {
   normalizeSeverity,
@@ -251,13 +251,11 @@ export async function findingsCleanupGate(
   const handle = await openStore(context, "read");
   try {
     const db = handle.db;
-    const meta = db.prepare("select authority_state as authorityState from store_meta where id = 1").get() as
-      | { authorityState?: unknown }
-      | undefined;
-    if (!meta || meta.authorityState !== "active") {
+    const meta = readStoreAuthority(db);
+    if (meta.authorityState !== "active") {
       throw new IssueError(
         "store.not-active",
-        `The issue store is ${meta && typeof meta.authorityState === "string" ? meta.authorityState : "unreadable"}; findings authority requires an active store.`,
+        `The issue store is ${typeof meta.authorityState === "string" ? meta.authorityState : "unreadable"}; findings authority requires an active store.`,
       );
     }
     assertIssueProvenanceSchema(db);
@@ -517,8 +515,7 @@ export function bindProject(
       return JSON.parse(prior.result_json) as ProjectBindingReceipt;
     }
 
-    const active = db.prepare("select authority_state from store_meta where id = 1").get() as { authority_state?: string } | undefined;
-    if (active?.authority_state !== "active") {
+    if (readStoreAuthority(db).authorityState !== "active") {
       throw new BindingError("store.not-active", "Project binding requires an active store.");
     }
     if (db.prepare("select 1 from catalog_entities where kind = 'project' and id = ?").get(id) === undefined) {

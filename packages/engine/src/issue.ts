@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
 import type { ExecutionContext, ExecutionSessionRef } from "./execution-store.js";
-import { MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { MIGRATIONS, openStore, readStoreAuthority, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 
 
 /**
@@ -571,10 +571,8 @@ function requestHash(kind: string, payload: unknown): string {
   return sha256(`${kind}\n${JSON.stringify(payload)}`);
 }
 function readMeta(db: StoreDb): { authorityState: string; revision: number } {
-  const row = db.prepare("select authority_state as authorityState, revision from store_meta where id = 1").get() as
-    | { authorityState?: string; revision?: number }
-    | undefined;
-  if (!row || typeof row.authorityState !== "string" || typeof row.revision !== "number") {
+  const row = readStoreAuthority(db);
+  if (typeof row.authorityState !== "string" || typeof row.revision !== "number") {
     throw new IssueError("store.not-active", "store_meta is missing; the store cannot accept issue mutations");
   }
   return { authorityState: row.authorityState, revision: row.revision };

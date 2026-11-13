@@ -125,7 +125,7 @@ import {
   type RecoveryProblem,
   type ResolutionSource,
 } from "./recovery-intent.js";
-import { storeDbPath } from "./store-db.js";
+import { readStoreAuthority, storeDbPath } from "./store-db.js";
 import {
   isStandaloneDevelopmentWorkflow,
   isStandaloneReportOnlyWorkflow,
@@ -1559,15 +1559,13 @@ function requireCompletableStatus(row: PlanRow, planId: string): void {
  * staged or unreadable store.
  */
 function assertFindingsClosedOn(tx: ExecutionTransaction, planId: string, prepared: PreparedCoordination): void {
-  const meta = tx.db.prepare("select authority_state as authorityState from store_meta where id = 1").get() as
-    | { authorityState?: unknown }
-    | undefined;
-  if (meta?.authorityState !== "active") {
+  const meta = readStoreAuthority(tx.db);
+  if (meta.authorityState !== "active") {
     throw new CoordinationError(
       "coordination.store",
       "The plan cannot proceed: the issue store authority is unreadable; inspect the store with mstar status validate.",
       {
-        authority_state: typeof meta?.authorityState === "string" ? meta.authorityState : "unreadable",
+        authority_state: typeof meta.authorityState === "string" ? meta.authorityState : "unreadable",
         plan_id: planId,
         findings_cleanup: prepared.findings_cleanup,
       },

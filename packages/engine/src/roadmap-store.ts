@@ -1,7 +1,7 @@
 export type { RoadmapContent } from "./roadmap-content.js";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { StoreError, openStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { StoreError, openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
 import { parseRoadmapContent, type RoadmapContent, validateRoadmapContent } from "./roadmap-content.js";
 
 export type RoadmapExpected = number | "absent";
@@ -76,8 +76,7 @@ function requireRoadmapSchema(db: StoreDb): void {
 }
 
 function requireActive(db: StoreDb): void {
-  const row = db.prepare("select authority_state from store_meta where id = 1").get() as { authority_state?: unknown } | undefined;
-  if (row?.authority_state !== "active") {
+  if (readStoreAuthority(db).authorityState !== "active") {
     throw new RoadmapError("roadmap.store-not-active", "Roadmap access requires an active store; staged stores are not readable or writable.");
   }
 }

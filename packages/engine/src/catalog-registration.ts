@@ -21,7 +21,7 @@ import { isPlainObject } from "./coordination-write.js";
 import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js";
 import { parseCompassFrontmatter, validateCompassFrontmatter } from "./iteration.js";
 import { canonicalRegisteredPlanPath, resolveRegisteredPlanFile } from "./plan-path.js";
-import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
 import { validateWorkflowEntry, type WorkflowEntry } from "./status.js";
 import {
   assertDeliveryRegistrationCoherence,
@@ -752,16 +752,14 @@ function refuseActiveCatalogRecovery(db: StoreDb, workflowId: string, recoveryCo
  * rather than half-registering against a store that cannot record it.
  */
 function assertStoreActive(db: StoreDb): void {
-  const row = db
-    .prepare("select authority_state from store_meta where id = 1")
-    .get() as { authority_state?: unknown } | undefined;
-  if (!row || typeof row.authority_state !== "string") {
+  const row = readStoreAuthority(db);
+  if (typeof row.authorityState !== "string") {
     throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept an execution registration. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.");
   }
-  if (row.authority_state !== "active") {
+  if (row.authorityState !== "active") {
     throw new CatalogError(
       "store.not-active",
-      `The catalog store is ${row.authority_state}; registering an execution publishes catalog rows and therefore requires an active store. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.`,
+      `The catalog store is ${row.authorityState}; registering an execution publishes catalog rows and therefore requires an active store. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.`,
     );
   }
 }
@@ -985,10 +983,7 @@ export function refusePendingRegistration(
  */
 export function assertCatalogExecutionCommittedOn(db: StoreDb, workflowId: string): void {
   const id = requireText(workflowId, "workflowId");
-  const meta = db.prepare("select authority_state from store_meta where id = 1").get() as
-    | { authority_state?: unknown }
-    | undefined;
-  if (meta?.authority_state !== "active") return;
+  if (readStoreAuthority(db).authorityState !== "active") return;
   if (db.prepare("select workflow_id from execution_registry where workflow_id = ?").get(id) === undefined) return;
   const pending = pendingRegistrationOf(db, id);
   if (pending === null) return;
