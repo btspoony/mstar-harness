@@ -332,7 +332,7 @@ async function gateSeamIntent(ctx: Context, harnessDir: string | null, config: C
     await runContentBlindIntentGate({
       logger,
       subject: `${basename(path)} write to ${target.displayPath}`,
-      target: { path, displayPath: target.displayPath },
+      target: { path },
       harnessDir,
       config,
       read: () => readFileSync(path, 'utf8'),

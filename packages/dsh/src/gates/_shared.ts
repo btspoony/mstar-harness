@@ -427,7 +427,7 @@ interface ContentBlindIntentGateBase {
   /** Line appended after the violation list in both decision logs (skill-lint's asset fix hint). */
   readonly logDetailOf?: () => string
   /** The gated on-disk target, or `null` when this intent is not this gate's (pure pass-through). */
-  readonly target: { readonly path: string; readonly displayPath: string } | null
+  readonly target: { readonly path: string } | null
   readonly harnessDir: string | null
   readonly config: Config
   readonly emit: ContentBlindEmit

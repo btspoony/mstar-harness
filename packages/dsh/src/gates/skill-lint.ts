@@ -254,7 +254,7 @@ async function gateSkillIntent(ctx: Context, harnessDir: string | null, config: 
       // fix instruction for the violating file in the decision log lines.
       logDetailOf: () => resolveAssetPath(skillNameOf(target), 'SKILL.md', 'dsh'),
       subject: `SKILL.md write to ${target.displayPath}`,
-      target: { path: skillPath, displayPath: target.displayPath },
+      target: { path: skillPath },
       harnessDir,
       config,
       read: () => readFileSync(skillPath, 'utf8'),
