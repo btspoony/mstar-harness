@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { constants, closeSync, existsSync, fsyncSync, mkdirSync, openSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
+import { createOnlySinkWrite, MAX_SINK_BYTES } from "./container-probe.js";
 
 const encoder = new TextEncoder();
-const MAX_SINK_BYTES = 16_777_216;
 
 export type AnnotationSeat = "A" | "B";
 
@@ -32,19 +31,7 @@ export function createOnlyAnnotationSinkWrite(sinkRoot: string, seat: Annotation
   if (existsSync(target)) throw new Error("jev.annotation-sink-create-only");
   const bytes = typeof body === "string" ? encoder.encode(body) : body;
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_SINK_BYTES) throw new Error("jev.annotation-sink-size-invalid");
-  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  const temp = `${target}.${randomUUID()}.tmp`;
-  const fd = openSync(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
-  try {
-    writeFileSync(fd, bytes);
-    fsyncSync(fd);
-  } catch (error) {
-    unlinkSync(temp);
-    throw error;
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(temp, target);
+  createOnlySinkWrite(target, bytes);
   if (!statSync(target).isFile()) throw new Error("jev.annotation-sink-write-failed");
   return target;
 }

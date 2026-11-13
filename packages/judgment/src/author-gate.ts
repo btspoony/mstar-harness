@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
-import { appendFileSync, chmodSync, closeSync, constants, copyFileSync, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, constants, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { allowedAuthorOutputs, authorSlotKeys } from "./author-sink.js";
+import { dockerIsolationArgs, sha256File } from "./container-probe.js";
 import type { ApprovedChild, ApprovedChildResult } from "./shadow-supervisor.js";
 import type { EvidenceClass } from "./shadow-receipts.js";
 
@@ -64,20 +64,6 @@ const within = (root: string, path: string): boolean => {
 const validId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
 const pinnedImageDigest = (value: string): boolean => /^.+@sha256:[a-f0-9]{64}$/.test(value) || /^sha256:[a-f0-9]{64}$/.test(value);
 
-function sha256File(path: string): string {
-  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  const hash = createHash("sha256");
-  const buffer = Buffer.allocUnsafe(65_536);
-  try {
-    if (!fstatSync(fd).isFile()) throw new Error("jev.manifest-file-invalid");
-    let offset = 0;
-    while ((offset = readSync(fd, buffer, 0, buffer.byteLength, null)) > 0) hash.update(buffer.subarray(0, offset));
-    return hash.digest("hex");
-  } finally {
-    closeSync(fd);
-  }
-}
-
 export function buildAuthorDockerLaunchArgs(child: ApprovedChild, sessionId: string, shard: number, plan: AuthorMountPlan): readonly string[] {
   const runtimePath = realpathSync(child.runtimePath);
   if (!validId(sessionId) || !Number.isInteger(shard) || shard < 1 || shard > 4 ||
@@ -89,8 +75,7 @@ export function buildAuthorDockerLaunchArgs(child: ApprovedChild, sessionId: str
   if ([plan.authorInputs, plan.authorSink, plan.probeOutput].some((path) => path.includes(","))) throw new Error("jev.author-mount-path-unsupported");
   const [sourcesName, provenanceName] = allowedAuthorOutputs(shard);
   return Object.freeze([
-    "run", "--rm", "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
-    `--user=${child.uid}:${child.gid}`, "--pids-limit=64", "--memory=256m", "--cpus=1",
+    ...dockerIsolationArgs(child),
     `--tmpfs=/mnt/scratch:rw,nosuid,nodev,noexec,size=16m,uid=${child.uid},gid=${child.gid},mode=0700`,
     `--mount=type=bind,src=${plan.authorInputs},dst=/mnt/inputs,readonly`,
     `--mount=type=bind,src=${plan.authorSink},dst=/mnt/sink`,
