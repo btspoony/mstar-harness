@@ -26,6 +26,9 @@ Findings flow into a prioritization table and into this run's report. Without st
 
 ## Structural remedies
 
+Classify the fix before sketching it. **Fix class: mechanical** — a fixed syntactic pattern, banned API, import shape, or file-location rule — routes to a deterministic check (custom lint rule, hook, or CI job), and the sketch names the check and why existing checks did not catch it.
+**Fix class: judgement** — cross-file consistency, matching surrounding style, anything no guardrail could substitute — routes to a written standard or lens. Default to the check when the pattern is mechanically detectable.
+
 Choose the smallest fix that preserves required behavior and safeguards. Name the deletion, canonical helper to reuse, duplicate branches/near-copies to merge, or responsibility to move/split; preserve meaningful differences. Split by independent responsibility, never line count or helpers that only shorten a function. Prefer removing moving pieces over relocating complexity; do not add a layer, dispatcher, type, dependency, or config merely because a smell suggests one.
 
 ## Category codes

@@ -30,7 +30,7 @@ Before a plan is locked, verify every item:
 - Every task names **exact file paths** (create / modify / test), not "the relevant module".
 - **Current-state excerpts** — when a task modifies existing code, include the code as it exists today (short, with `file:line` markers), enough that the executor can confirm it is looking at the right thing.
 - **Conventions to follow** — name the repo pattern (error handling, naming, layering) and point to one exemplar file: "Error handling follows the Result pattern — see `src/lib/result.ts` and its use in `src/users/api.ts:40-60`. Match it."
-- **Interfaces** — consumed and produced signatures are listed verbatim, not paraphrased.
+- **Interfaces** — consumed and produced signatures are listed verbatim, not paraphrased. When a task changes externally observable behaviour, its Interfaces also list the direct consumers found at prepare time, or state that none exist, so the executor inherits the blast radius; the implementer-side caller and consumer mapping stays with `mstar-coding-behavior` § 2.
 
 ### 2. Verification gates
 
