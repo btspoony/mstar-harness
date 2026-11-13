@@ -75,6 +75,7 @@ import {
 import { provisionRecoveryDocument } from "./activation-provisioning.js";
 import {
   openStore,
+  readStoreAuthority,
   StoreError,
   storeDbPath,
   type ExecutionMeta,
@@ -1633,14 +1634,12 @@ function assertNoLegacyExecutionSources(context: StoreContext): void {
 
 /** §3: the store must already be the ACTIVE issue/catalog authority. */
 function assertActiveStoreAuthority(db: StoreDb): void {
-  const row = db.prepare("select authority_state from store_meta where id = 1").get() as
-    | { authority_state?: unknown }
-    | undefined;
-  if (!row || typeof row.authority_state !== "string") throw corrupt("store_meta is missing");
-  if (row.authority_state !== "active") {
+  const authority = readStoreAuthority(db).authorityState;
+  if (typeof authority !== "string") throw corrupt("store_meta is missing");
+  if (authority !== "active") {
     throw new ExecutionError(
       "store.not-active",
-      `the issue/catalog store is ${row.authority_state}; run \`mstar store upgrade --operator <name>\` to import legacy ` +
+      `the issue/catalog store is ${authority}; run \`mstar store upgrade --operator <name>\` to import legacy ` +
         "workspace rows and activate both authorities; nothing was modified.",
     );
   }
