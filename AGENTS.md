@@ -36,6 +36,8 @@ Merge authorization is not restated here — it is owned by the policy in force:
 
 "CI green and mergeable" alone is not authorization, and a bot stuck in `pending` is not a pass.
 
+A change to an allowlist (`scripts/*.allowlist.json`), `scripts/skill-budgets.manifest.json`, or any other lint exemption is part of the change it exempts: a standalone widening is a defect and is reviewed as one (drift-lint Guard 14; widen a gate only alongside the artifact it exempts, or narrow it).
+
 A merge that landed without authorization is fixed forward in a follow-up PR — the direction may be right even when the process was not — and the PR says so. Revert only when the merged change itself is wrong.
 
 ## Where to edit

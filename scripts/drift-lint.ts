@@ -267,6 +267,37 @@ export function checkBilingualContentParity(
   ];
 }
 
+/**
+ * Guard 14 gate-surface paths: the writable exemption surfaces every
+ * mechanical gate in `scripts/` ships with. An implementer can turn a gate
+ * green by widening one of these without touching the code the gate protects.
+ */
+const GATE_SURFACE_PATTERN = /^scripts\/(?:[^/]+\.allowlist\.json|skill-budgets\.manifest\.json)$/;
+
+/**
+ * Pure gate-surface check — a change to an allowlist or the skill-budget
+ * manifest is part of the change it exempts. Decided per file, never
+ * aggregated: a gate-surface file that widens (added >= deleted) needs at
+ * least one non-gate-surface file in the same change set; a net-narrowing
+ * change (deleted > added) may stand alone. `null` means git produced no
+ * range, the same skip Guard 2 takes.
+ * Known limit: the paying artifact is any non-gate file, not a matched
+ * signature; upgrade only if a real bypass is observed.
+ */
+export function checkGateSurfaceChange(
+  changes: Array<{ file: string; added: number; deleted: number }> | null,
+): string[] {
+  if (!changes) return [];
+  const hasPayingArtifact = changes.some((c) => !GATE_SURFACE_PATTERN.test(c.file));
+  if (hasPayingArtifact) return [];
+  return changes
+    .filter((c) => GATE_SURFACE_PATTERN.test(c.file) && c.added >= c.deleted)
+    .map(
+      ({ file, added, deleted }) =>
+        `Guard 14 gate-surface self-approval: ${file} (+${added}/-${deleted}) widens a lint exemption with no non-gate file in the same change set — widen a gate only in the same change as the artifact it exempts, or narrow it (deleted > added), because a widened gate is not a fix (AGENTS.md gate-surface rule)`,
+    );
+}
+
 export function isGitHubActions(): boolean {
   return process.env.GITHUB_ACTIONS === "true";
 }
@@ -1609,6 +1640,21 @@ if (import.meta.main) {
   }
 
 /* ------------------------------------------------------------------ */
+/* Guard 14: gate-surface self-approval (allowlists + budget manifest) */
+/* ------------------------------------------------------------------ */
+
+  const gateSurfaceStats = changedFileStatsSinceMergeBase();
+  const gateSurfaceFailures = checkGateSurfaceChange(gateSurfaceStats);
+  for (const row of gateSurfaceFailures) fail(row);
+  const gateSurfaceSummary = `Guard 14 gate-surface self-approval ${
+    gateSurfaceStats === null
+      ? "skipped (no git range)"
+      : gateSurfaceFailures.length === 0
+        ? "OK"
+        : `FAIL (${gateSurfaceFailures.length} violation${gateSurfaceFailures.length === 1 ? "" : "s"})`
+  }`;
+
+/* ------------------------------------------------------------------ */
 
  // Guard 4 footer fragment: report each check's own verdict + count so a
  // load-order-only failure is never misstated as a combined/OK status.
@@ -1646,12 +1692,12 @@ if (import.meta.main) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${gateSurfaceSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${gateSurfaceSummary}`,
   );
 }

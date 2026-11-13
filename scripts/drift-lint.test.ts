@@ -58,6 +58,7 @@ import {
   checkCliCitationsInText,
   checkEngineCallouts,
   checkFiveQuestionCorpus,
+  checkGateSurfaceChange,
   checkProvenanceScan,
   checkSkillIndexCoverage,
   readSkillIndexCoverage,
@@ -1489,5 +1490,54 @@ describe("readSkillIndexCoverage — the shipped corpus agrees with the index", 
     // pm / grill-me are not mstar-* and must stay outside the comparison.
     expect(result.shipped).not.toContain("pm");
     expect(result.shipped).not.toContain("grill-me");
+  });
+});
+
+describe("checkGateSurfaceChange — Guard 14 gate-surface self-approval", () => {
+  test("no git range skips the guard", () => {
+    expect(checkGateSurfaceChange(null)).toEqual([]);
+  });
+
+  test("a widened budget manifest alone fails naming the file and counts", () => {
+    const failures = checkGateSurfaceChange([
+      { file: "scripts/skill-budgets.manifest.json", added: 2, deleted: 0 },
+    ]);
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("Guard 14");
+    expect(failures[0]).toContain("scripts/skill-budgets.manifest.json (+2/-0)");
+  });
+
+  test("a widened manifest with a paying artifact in the same change set passes", () => {
+    expect(
+      checkGateSurfaceChange([
+        { file: "scripts/skill-budgets.manifest.json", added: 2, deleted: 0 },
+        { file: "skills/mstar-audit/references/skill-corpus-audit.md", added: 40, deleted: 1 },
+      ]),
+    ).toEqual([]);
+  });
+
+  test("a net-narrowing allowlist may stand alone", () => {
+    expect(
+      checkGateSurfaceChange([{ file: "scripts/rule-duplication.allowlist.json", added: 0, deleted: 3 }]),
+    ).toEqual([]);
+  });
+
+  test("a skills-only change set passes", () => {
+    expect(
+      checkGateSurfaceChange([
+        { file: "skills/mstar-audit/SKILL.md", added: 4, deleted: 2 },
+        { file: "skills/mstar-audit/references/finding-format.md", added: 6, deleted: 0 },
+      ]),
+    ).toEqual([]);
+  });
+
+  test("the widened file fails even when a sibling gate file narrows", () => {
+    const failures = checkGateSurfaceChange([
+      { file: "scripts/rule-duplication.allowlist.json", added: 2, deleted: 0 },
+      { file: "scripts/lint-refusal-quality.allowlist.json", added: 0, deleted: 5 },
+    ]);
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("scripts/rule-duplication.allowlist.json (+2/-0)");
+    expect(failures[0]).not.toContain("lint-refusal-quality");
   });
 });
