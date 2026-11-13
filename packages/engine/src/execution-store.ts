@@ -1319,6 +1319,17 @@ async function withExecutionReadTransaction<T>(
 }
 
 /**
+ * The ACTIVE-authority precondition of every execution WRITE verb. The verb
+ * supplies its own sentence, so each refusal keeps the vocabulary of the action
+ * the caller attempted; the code and the authority state are the same for all.
+ */
+export function assertActiveExecutionAuthority(tx: ExecutionTransaction, message: string): void {
+  if (tx.execution.authorityState !== "active") {
+    throw new ExecutionError("execution.not-active", message);
+  }
+}
+
+/**
  * §3 consistent state read: one read-only transaction over the whole graph,
  * returning the root register with its active lifecycles and the root token the
  * caller passes back as CAS. Refuses `execution.not-active` unless the execution
@@ -2286,9 +2297,10 @@ export async function adoptTerminalWorkflow(
     },
   });
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; terminal adoption requires an active authority`);
-    }
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; terminal adoption requires an active authority`,
+    );
     const replay = readOperationReplay<ExecutionState>(tx, {
       operationId: input.operationId,
       requestHash,
@@ -2496,13 +2508,11 @@ export async function createExecutionWorkflow(
   const operationId = input.operationId;
   const requestHash = createWorkflowRequestHash(context.caller, creation, input.expected);
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError(
-        "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; domain creation requires an active authority. ` +
-          `A staged store is inspectable only through migration diagnostics.`,
-      );
-    }
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; domain creation requires an active authority. ` +
+        `A staged store is inspectable only through migration diagnostics.`,
+    );
     // Idempotent replay: only the CURRENT epoch's committed receipt replays, and
     // only for the identical request. A different payload on the same id is a
     // conflict, never a silent overwrite of the recorded receipt.
@@ -3460,13 +3470,11 @@ export async function bindExecutionSession(
   const bind = resolveBindRequest(context.caller, input);
   const requestHash = bindSessionRequestHash(context.caller, bind, input.expected);
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError(
-        "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; binding a session requires an active authority. ` +
-          `A staged store is inspectable only through migration diagnostics.`,
-      );
-    }
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; binding a session requires an active authority. ` +
+        `A staged store is inspectable only through migration diagnostics.`,
+    );
     const recorded = readCommittedOperation(tx.db, tx.epoch, bind.operationId);
     if (recorded !== null) {
       if (recorded.requestHash !== requestHash) {

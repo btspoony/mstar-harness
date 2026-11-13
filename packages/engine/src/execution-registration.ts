@@ -62,6 +62,7 @@ import { canonicalRegisteredPlanPath } from "./plan-path.js";
 import { relative, sep } from "node:path";
 import {
   ExecutionError,
+  assertActiveExecutionAuthority,
   assertExecutionToken,
   executionRootTokenOf,
   readOperationReplay,
@@ -288,13 +289,11 @@ export async function commitExecutionRegistration(
   const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
 
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError(
-        "execution.not-active",
-        `state: ${tx.execution.authorityState}; registration requires the active execution authority. ` +
-          `Upgrade required: mstar store upgrade --operator <name>.`,
-      );
-    }
+    assertActiveExecutionAuthority(
+      tx,
+      `state: ${tx.execution.authorityState}; registration requires the active execution authority. ` +
+        `Upgrade required: mstar store upgrade --operator <name>.`,
+    );
     // §4.1 semantic replay first: the retry of the same reviewed intent must not
     // be judged by a CAS — or a catalog expectation — its own first attempt
     // already advanced, whatever tokens the caller re-read after the lost
