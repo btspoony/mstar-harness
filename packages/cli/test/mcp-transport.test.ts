@@ -302,7 +302,12 @@ generated_at: 2026-01-02
       // it, the engine's first-line message, and the recovery metadata — not
       // collapse it to a generic exit 1 with a re-derived message.
       expect(refusal).toMatchObject({ command: "sdd.task-brief", status: "refused", exitCode: 3 });
-      expect(String(refusal.message).split("\n")[0]).toContain("task 9 not found");
+      const lines = String(refusal.message).split("\n");
+      expect(lines[0]).toContain("task 9 not found");
+      // The suffix layout belongs to commands/envelope.ts: the MCP round trip
+      // must publish exactly one line of each, never a doubled or sliced copy.
+      expect(lines.filter((line) => line.startsWith("Help: "))).toHaveLength(1);
+      expect(lines.filter((line) => line.startsWith("Recovery: "))).toHaveLength(1);
       expect(refusal.details?.helpRoute).toBe("mstar sdd task-brief --help");
       expect(refusal.details?.recovery).toEqual(expect.stringContaining("mstar sdd task-brief"));
     });

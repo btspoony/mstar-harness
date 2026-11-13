@@ -3,7 +3,6 @@ import path from "node:path";
 import {
  detectOpencodeGeneration,
  getOpencodeDoctorWarnings,
- getOpencodeDoctorWarningsV2,
  isAnyMstarHarnessOpencodeSlot,
  isMstarHarnessOpencodePlugin,
  isMstarHarnessOpencodeV2Slot,

@@ -68,6 +68,7 @@ import {
   assertStoreRuntimeSupported,
   compareVersions,
   openStore,
+  readStoreAuthority,
   storeDbPath,
   StoreError,
   type ExecutionAuthorityState,
@@ -330,25 +331,22 @@ type LiveMeta = {
 };
 
 function readMetaRow(db: StoreDb): LiveMeta {
-  const row = db
-    .prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1")
-    .get() as Record<string, unknown> | undefined;
+  const row = readStoreAuthority(db);
   if (
-    !row ||
-    typeof row.store_id !== "string" ||
-    (row.authority_state !== "staged" && row.authority_state !== "active") ||
-    typeof row.authority_epoch !== "number" ||
+    typeof row.storeId !== "string" ||
+    (row.authorityState !== "staged" && row.authorityState !== "active") ||
+    typeof row.epoch !== "number" ||
     typeof row.revision !== "number" ||
-    typeof row.catalog_revision !== "number"
+    typeof row.catalogRevision !== "number"
   ) {
     throw new StoreError("store.corrupt", "store_meta is missing or malformed; the authority generation cannot be verified");
   }
   return {
-    storeId: row.store_id,
-    authorityState: row.authority_state,
-    epoch: row.authority_epoch,
+    storeId: row.storeId,
+    authorityState: row.authorityState,
+    epoch: row.epoch,
     revision: row.revision,
-    catalogRevision: row.catalog_revision,
+    catalogRevision: row.catalogRevision,
   };
 }
 

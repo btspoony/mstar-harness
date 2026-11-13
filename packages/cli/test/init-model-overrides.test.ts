@@ -59,13 +59,21 @@ describe("buildModelAssignments partial overrides", () => {
 });
 
 describe("init model override groups", () => {
-  test("a supplied value that names no model refuses", () => {
+  test("a supplied value that names no model refuses, whatever its shape", () => {
     withTempRoot((root) => {
-      for (const value of [",,", " "]) {
+      for (const value of ["", " ", ",,"]) {
         const result = runInit(root, ["--dev-models", value]);
         expect(result.exitCode).toBe(1);
         expect(result.output).toContain("dev-models: the supplied value names no model.");
       }
+    });
+  });
+
+  test("an empty single-value --pm-model refuses instead of reading as an absent flag", () => {
+    withTempRoot((root) => {
+      const result = runInit(root, ["--pm-model", " "]);
+      expect(result.exitCode).toBe(1);
+      expect(result.output).toContain("pm-model: the supplied value names no model.");
     });
   });
 

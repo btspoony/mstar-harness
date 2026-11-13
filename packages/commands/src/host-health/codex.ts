@@ -75,7 +75,7 @@ export function legacyCodexMarketplaceNote(raw: string, legacyPath: string): str
 }
 
 const CODEX_BIN = "codex";
-const CODEX_INSTALL_HINT =
+export const CODEX_INSTALL_HINT =
   "Install the Codex CLI (https://github.com/openai/codex), e.g. `npm install -g @openai/codex`, then re-run init.";
 
 export type CodexDoctorResult = { location: string; errors: string[]; notes: string[] };

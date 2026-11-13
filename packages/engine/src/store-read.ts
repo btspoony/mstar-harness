@@ -34,6 +34,8 @@ import {
   assertIssueProvenanceSchema,
   IssueError,
   ISSUE_DISPOSITIONS,
+  ISSUE_KINDS,
+  ISSUE_SEVERITIES,
   TERMINAL_DISPOSITIONS,
   vocabularyMap,
   type Disposition,
@@ -48,7 +50,7 @@ import { ProjectionError, refreshProjections, type ProjectionFreshness, type Sou
 import type { RoadmapContent } from "./roadmap-content.js";
 import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
-import { openStore, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { openStore, readStoreAuthority, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
 import type { AuthorityVerdict } from "./recovery-intent.js";
 import { WORKFLOW_TERMINAL_STATUSES } from "./workflow.js";
@@ -449,16 +451,14 @@ function parseJsonArray<T>(value: unknown): T[] {
 type ReadMeta = { authorityState: string; storeRevision: number; catalogRevision: number };
 
 function readMeta(db: StoreDb): ReadMeta {
-  const row = db
-    .prepare("select authority_state, revision, catalog_revision from store_meta where id = 1")
-    .get() as { authority_state?: unknown; revision?: unknown; catalog_revision?: unknown } | undefined;
-  if (!row || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
+  const row = readStoreAuthority(db);
+  if (typeof row.revision !== "number" || typeof row.catalogRevision !== "number") {
     throw new StoreReadError("store.not-active", "store_meta is missing; the store cannot serve reads");
   }
   return {
-    authorityState: typeof row.authority_state === "string" ? row.authority_state : "",
+    authorityState: typeof row.authorityState === "string" ? row.authorityState : "",
     storeRevision: row.revision,
-    catalogRevision: row.catalog_revision,
+    catalogRevision: row.catalogRevision,
   };
 }
 
@@ -695,15 +695,8 @@ function dashboardView(view: DashboardView, handle: StoreHandle, filters: Dashbo
 // Issue views (mirror of issue.ts listIssues/getIssue, same transaction)
 // ---------------------------------------------------------------------------
 
-const ISSUE_KINDS: Record<string, true> = {
-  bug: true,
-  risk: true,
-  improvement: true,
-  request: true,
-  decision: true,
-  "review-obligation": true,
-};
-const ISSUE_SEVERITIES: Record<string, true> = { critical: true, high: true, medium: true, low: true, nit: true };
+const ISSUE_KIND_MAP: Record<IssueKind, true> = vocabularyMap(ISSUE_KINDS);
+const ISSUE_SEVERITY_MAP: Record<Severity, true> = vocabularyMap(ISSUE_SEVERITIES);
 const ISSUE_DISPOSITION_MAP: Record<Disposition, true> = vocabularyMap(ISSUE_DISPOSITIONS);
 
 /** issue.ts `LAST_ACTIVITY_SQL`: max nonnull registration / discovery / transition date. */
@@ -732,12 +725,12 @@ function bindIssueFilter(filter: IssueFilter): { where: string; params: unknown[
   clauses.push("issues.disposition = ?");
   params.push(disposition);
   if (filter.kind !== undefined) {
-    if (!Object.hasOwn(ISSUE_KINDS, filter.kind)) usage("kind is not a contract vocabulary value");
+    if (!Object.hasOwn(ISSUE_KIND_MAP, filter.kind)) usage("kind is not a contract vocabulary value");
     clauses.push("issues.kind = ?");
     params.push(filter.kind);
   }
   if (filter.severity !== undefined) {
-    if (!Object.hasOwn(ISSUE_SEVERITIES, filter.severity)) usage("severity is not a contract vocabulary value");
+    if (!Object.hasOwn(ISSUE_SEVERITY_MAP, filter.severity)) usage("severity is not a contract vocabulary value");
     clauses.push("issues.severity = ?");
     params.push(filter.severity);
   }

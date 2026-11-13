@@ -1,4 +1,4 @@
-import { commandEnvelopeSchema, refusalEnvelope, type CommandDefinition, type CommandEnvelope, type RefusalDiagnostic } from "@mstar-harness/commands";
+import { commandEnvelopeSchema, refusalEnvelope, refusalMessageBody, type CommandDefinition, type CommandEnvelope, type RefusalDiagnostic } from "@mstar-harness/commands";
 
 export function validateCommandOutcome(
   definition: CommandDefinition,
@@ -27,11 +27,11 @@ export function validateCommandOutcome(
     ? details.helpRoute
     : `mstar ${definition.id.replaceAll(".", " ")} --help`;
   const recovery = typeof details.recovery === "string" ? details.recovery : undefined;
-  let message = outcome.message;
-  if (outcome.status === "refused") {
-    const suffix = `\nHelp: ${helpRoute}${recovery === undefined ? "" : `\nRecovery: ${recovery}`}`;
-    if (message.endsWith(suffix)) message = message.slice(0, -suffix.length);
-  }
+  // The suffix layout belongs to `envelope.ts` alone: this surface only drops
+  // the body a previous refusal already carried, then re-publishes its own.
+  const message = outcome.status === "refused"
+    ? refusalMessageBody(outcome.message, helpRoute, recovery)
+    : outcome.message;
   const { diagnostics, helpRoute: _helpRoute, recovery: _recovery, ...extraDetails } = details;
   const refusal = {
     command: outcome.command,

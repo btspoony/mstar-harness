@@ -2098,6 +2098,43 @@ type StoreMeta = {
   catalogRevision: number;
 };
 
+/** The `store_meta` singleton as stored: raw columns plus whether the row exists. */
+export type StoreAuthorityRead = {
+  authorityState: unknown;
+  revision: unknown;
+  catalogRevision: unknown;
+  storeId: unknown;
+  epoch: unknown;
+  missing: boolean;
+};
+
+/**
+ * One read of the `store_meta` singleton's authority columns. It never throws
+ * and never checks a domain rule: every caller keeps its own refusal type, code
+ * and message, and its own decision whether to throw or return.
+ */
+export function readStoreAuthority(db: StoreDb): StoreAuthorityRead {
+  const row = db
+    .prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1")
+    .get() as
+    | {
+        store_id?: unknown;
+        authority_state?: unknown;
+        authority_epoch?: unknown;
+        revision?: unknown;
+        catalog_revision?: unknown;
+      }
+    | undefined;
+  return {
+    authorityState: row?.authority_state,
+    revision: row?.revision,
+    catalogRevision: row?.catalog_revision,
+    storeId: row?.store_id,
+    epoch: row?.authority_epoch,
+    missing: row === undefined,
+  };
+}
+
 /** Read the shared metadata singleton. DB identity is checked on every open. */
 function readStoreMeta(db: StoreDb): StoreMeta {
   const row = db

@@ -18,13 +18,13 @@
  * fields); whether that label exists is resolved at push time against the
  * discovered workspace label set — this module never creates one.
  */
-import type { Disposition, IssueKind, Severity } from "../issue.js";
+import { ISSUE_KINDS, ISSUE_SEVERITIES, type Disposition, type IssueKind, type Severity } from "../issue.js";
 import type { LinearFacetMapping } from "../mstarc.js";
 import { SyncError } from "../issue-sync.js";
 import type { ProviderItem } from "./provider.js";
 
-const KIND_VALUES: readonly IssueKind[] = ["bug", "risk", "improvement", "request", "decision", "review-obligation"];
-const SEVERITY_VALUES: readonly Severity[] = ["critical", "high", "medium", "low", "nit"];
+const KIND_VALUES: readonly IssueKind[] = ISSUE_KINDS;
+const SEVERITY_VALUES: readonly Severity[] = ISSUE_SEVERITIES;
 
 /** Linear priority bands per D7 (0 "No priority" is never written). */
 const PRIORITY_BANDS = [1, 2, 3, 4] as const;

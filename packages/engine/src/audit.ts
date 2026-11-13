@@ -782,7 +782,6 @@ export type ScaffoldAuditReportOptions = {
   date?: string;
   repoName?: string;
   repoShortSha?: string;
-  rejected?: readonly { title: string; reason: string }[];
   needsVerification?: readonly { lead: string; how: string; evidence?: string }[];
   hardeningChecked?: readonly { kind: "Hardening" | "Checked and clean"; text: string }[];
 };
@@ -1028,8 +1027,7 @@ export function validateAuditFindingGates(findings: readonly AuditFinding[]): Ga
 /**
  * One redaction wrapper for every free-text scaffold channel: finding
  * fields (via {@link redactFinding}) AND the non-finding report channels
- * (rejected findings, `needsVerification`, `hardeningChecked` —
- *).
+ * (`needsVerification`, `hardeningChecked`).
  * All user-supplied strings pass through this before any rendering, so no
  * channel can reach an artifact with raw credential material.
  */
@@ -1156,11 +1154,10 @@ function renderIndex(params: {
     severity?: string;
   }[];
   details: readonly string[];
-  rejected: readonly { title: string; reason: string }[];
   needsVerification: readonly string[];
   hardeningChecked: readonly string[];
 }): string {
-  const { date, repoName, repoShortSha, rows, details, rejected, needsVerification, hardeningChecked } = params;
+  const { date, repoName, repoShortSha, rows, details, needsVerification, hardeningChecked } = params;
  // §8: the Fingerprint column appears if any displayed row carries one; the
  // severity columns are appended after (retained prose) Impact when any row
  // has severity. Unrated rows show `—`; legacy-only batches keep the old
@@ -1181,8 +1178,6 @@ function renderIndex(params: {
     .filter((r) => r.category === "direction")
     .map((r) => `- ${escapeCell(r.title)} \u2014 ${escapeCell(truncate(r.impact, 120))}`)
     .join("\n");
-  const rejectedRows = rejected.map((r) => `- ${escapeCell(r.title)}: ${escapeCell(r.reason)}`).join("\n");
-
   const sections = [
     `# Audit Report \u2014 ${repoName} @ ${repoShortSha} (${date})`,
     "",
@@ -1212,9 +1207,6 @@ function renderIndex(params: {
   if (hardeningChecked.length > 0) {
     sections.push("", "## Hardening & checked notes", "", ...hardeningChecked);
   }
-  if (rejectedRows !== "") {
-    sections.push("", "## Findings considered and rejected", "", rejectedRows);
-  }
   sections.push(
     "",
     "## Red-team dispositions",
@@ -1239,8 +1231,10 @@ function localToday(): string {
  * ONE report index rendered from the supplied findings — no per-finding
  * plan files, no Status blocks. The run dir is the SSOT (§ 2); an omitted
  * `round` allocates the next free round for `date` + `level` unless
- * `options.dir` names the directory outright. Rejected findings render in
- * the "considered and rejected" section. Security dispositions
+ * `options.dir` names the directory outright. The "Findings considered and
+ * rejected" section is author-written, not a scaffold input: this function
+ * neither renders nor preserves it, so a rebuild drops it (the carry-over
+ * covers only the two security dispositions). Security dispositions
  * (`needsVerification` / `hardeningChecked`) render in their documented
  * sections. Policy: a SUPPLIED option is the authoritative current set and
  * replaces the section (resolved leads can be removed, revised entries
@@ -1343,7 +1337,6 @@ export function scaffoldAuditReport(
       repoShortSha: options.repoShortSha ?? "unknown",
       rows,
       details,
-      rejected: (options.rejected ?? []).map((r) => ({ title: redactText(r.title), reason: redactText(r.reason) })),
       needsVerification: needsVerificationLines,
       hardeningChecked: hardeningCheckedLines,
     }),

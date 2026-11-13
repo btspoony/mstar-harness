@@ -104,6 +104,7 @@ export {
   resolveScaffoldDirs,
   resolveSddDir,
   resolveSpecsDir,
+  REVIEW_RUN_LEVELS,
   resolveTrackedResultDir,
   resolveWorkflowDir,
   reviewRunDirName,
@@ -335,6 +336,8 @@ export {
   validateStatusWriteDoc,
   violationLine,
 } from "./gates.js";
+export type { FrontmatterAndBody, JsonObject } from "./document-frontmatter.js";
+export { extractFrontmatterAndBody, parseSimpleFrontmatter } from "./document-frontmatter.js";
 export {
   MAX_SYMLINK_HOPS,
   STORE_AUTHORITY_FILES,
@@ -412,7 +415,6 @@ export {
   KNOWLEDGE_REQUIRED_FIELDS,
   KNOWLEDGE_RESOLUTION_TYPES,
   KNOWLEDGE_SEVERITIES,
-  assertIndexRows,
   assertKnowledgeCatalogCompleteness,
   compoundRefreshScope,
   referenceExists,
@@ -501,8 +503,6 @@ export type {
   ReviewChangesetMode,
   ReviewInlineComment,
   ReviewPostPlan,
-  ReviewRenderOptions,
-  ReviewRenderSurface,
   ValidateFindingDocOptions,
 } from "./prreview.js";
 export {
@@ -724,6 +724,8 @@ export {
   ISSUE_ACTIONS,
   ISSUE_ACTION_NAMES,
   ISSUE_DISPOSITIONS,
+  ISSUE_KINDS,
+  ISSUE_SEVERITIES,
   ISSUE_PAYLOAD_SCHEMAS,
   TERMINAL_DISPOSITIONS,
   vocabularyMap,

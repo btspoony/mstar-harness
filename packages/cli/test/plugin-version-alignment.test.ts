@@ -13,20 +13,21 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { detectInstalledPluginVersion, detectOmpPluginVersion } from "../src/plugin-version-alignment";
+import type { Target } from "../src/types";
 import {
   detectCursorPluginVersion,
   detectCursorPluginVersionForScope,
   detectDshPluginVersion,
-  detectInstalledPluginVersion,
   detectKimiPluginVersion,
-  detectOmpPluginVersion,
   detectOpencodePluginVersion,
   detectZcodePluginVersion,
+  findInstalledPlugin,
   formatPluginVersionDoctorNote,
   ompEntryVersion,
-} from "../src/plugin-version-alignment";
-import type { Target } from "../src/types";
-import { findInstalledPlugin, parseCodexInstalledEntries, parseOmpPluginList } from "@mstar-harness/commands";
+  parseCodexInstalledEntries,
+  parseOmpPluginList,
+} from "@mstar-harness/commands";
 import { OMP_LIST_TIMEOUT_MS } from "../src/adapters/omp";
 
 const PLUGIN_DIR_NAME = "morning-star-harness";

@@ -10,8 +10,13 @@ import pc from "picocolors";
 import { getAdapter } from "./adapters";
 import { buildModelAssignments } from "./assignment";
 import { mapParserError, registerCliCommands } from "./command-adapter";
-import { compareSemver } from "@mstar-harness/commands";
-import { chooseCliVersion, detectPublishedLatest, ensureGlobalCli, formatVersionSkewWarning } from "./global-cli";
+import {
+  chooseCliVersion,
+  detectPublishedLatest,
+  ensureGlobalCli,
+  formatVersionSkewWarning,
+  type EnsureGlobalCliResult,
+} from "./global-cli";
 import { SUPPORTED_TARGETS, type InitOptions } from "./types";
 import { parseCsv, readHarnessVersion, readJson, writeJson } from "./utils";
 import { registerMcpCommand } from "./mcp/command";
@@ -31,29 +36,104 @@ function logStep(message: string) {
 }
 
 function hasExplicitModelFlags(options: InitOptions): boolean {
-  return Boolean(options.pmModel || options.strategicModels || options.devModels || options.qcModels || options.otherModels);
+  // Presence is the option being supplied, not its truthiness: `--dev-models ""`
+  // asked for an override and must not read as "no flag given".
+  return options.pmModel !== undefined || options.strategicModels !== undefined || options.devModels !== undefined
+    || options.qcModels !== undefined || options.otherModels !== undefined;
+}
+
+/** Model ids from one override flag; `undefined` means the flag was absent. */
+function modelFlagValues(raw: string | undefined, csv: boolean): string[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!csv) return [raw.trim()].filter(Boolean);
+  return parseCsv(raw) ?? [];
 }
 
 /** Advanced override only — never calls `opencode models` (avoids silent hangs). */
-function resolveExplicitModelAssignments(options: InitOptions) {
-  // Each flag stands on its own: an absent group writes nothing.
-  const allow = (label: string, values: string[] | undefined, max: number, provided: boolean) => {
-    if (!values?.length) {
-      // Presence of the flag, not the parse result: `--dev-models ",,"` asked for
-      // an override and must not read as "no flag given".
-      if (provided) throw new Error(`${label}: the supplied value names no model.`);
-      return [] as string[];
-    }
+function resolveExplicitModelAssignments(options: InitOptions): Record<string, string> {
+  // Each flag stands on its own: an absent group writes nothing, a present flag
+  // that names no model is refused with the same sentence whatever its shape.
+  const allow = (label: string, values: string[] | undefined, max: number) => {
+    if (values === undefined) return [] as string[];
+    if (values.length === 0) throw new Error(`${label}: the supplied value names no model.`);
     if (values.length > max) throw new Error(`${label}: pick at most ${max} model(s).`);
     return values;
   };
   return buildModelAssignments({
-    pm: allow("pm-model", options.pmModel ? [options.pmModel] : undefined, 1, Boolean(options.pmModel)),
-    strategic: allow("strategic-models", parseCsv(options.strategicModels), 3, Boolean(options.strategicModels)),
-    dev: allow("dev-models", parseCsv(options.devModels), 3, Boolean(options.devModels)),
-    qc: allow("qc-models", parseCsv(options.qcModels), 3, Boolean(options.qcModels)),
-    others: allow("other-models", parseCsv(options.otherModels), 3, Boolean(options.otherModels)),
+    pm: allow("pm-model", modelFlagValues(options.pmModel, false), 1),
+    strategic: allow("strategic-models", modelFlagValues(options.strategicModels, true), 3),
+    dev: allow("dev-models", modelFlagValues(options.devModels, true), 3),
+    qc: allow("qc-models", modelFlagValues(options.qcModels, true), 3),
+    others: allow("other-models", modelFlagValues(options.otherModels, true), 3),
   });
+}
+
+type AlignCliAndPluginInput = {
+  packageVersion: string;
+  dryRun: boolean;
+  noGlobalCli: boolean;
+  /** Only an adapter that installed a plugin can be at a version. */
+  installedPluginVersion?: string;
+  /** Already-probed published latest: an install-mode run probes it before it
+   *  mutates the host and must not probe twice. Omitted here means "probe now". */
+  latest?: string | null;
+};
+
+type AlignCliAndPluginResult = {
+  latest: string | null;
+  chosen: string;
+  globalResult: EnsureGlobalCliResult;
+  /** The shared refusal sentence, when the run left the two apart. */
+  failure: { message: string } | null;
+};
+
+/**
+ * The one version-alignment tail both init modes run: resolve the published
+ * latest, install the matching global CLI, and name every way the plugin and
+ * the CLI on PATH end apart. Each mode prints its own status lines and decides
+ * when to throw; the refusal sentence has one owner here.
+ */
+function alignCliAndPlugin(input: AlignCliAndPluginInput): AlignCliAndPluginResult {
+  const { packageVersion, installedPluginVersion } = input;
+  // --no-global-cli is a no-network opt-out: the probe exists only to inform the
+  // global install, so it is skipped with it.
+  const latest = input.latest !== undefined
+    ? input.latest
+    : input.dryRun || input.noGlobalCli ? null : detectPublishedLatest();
+  const chosen = chooseCliVersion(packageVersion, latest);
+  const globalResult = ensureGlobalCli({
+    version: packageVersion,
+    latest,
+    dryRun: input.dryRun,
+    noGlobalCli: input.noGlobalCli,
+  });
+  // Skew is refused whether or not the global update succeeded: a linked
+  // checkout can lag the version this run selected even when the CLI install
+  // worked, and a checkout ahead of it is as far apart as one behind it.
+  const pluginMismatched = installedPluginVersion !== undefined && installedPluginVersion !== chosen;
+  // A failed update matters only when it was meant to move the CLI forward:
+  // PATH then stays on the running version instead of the one this run promised.
+  const globalFailed = globalResult.action === "failed" && chosen !== packageVersion;
+  if (!pluginMismatched && !globalFailed) return { latest, chosen, globalResult, failure: null };
+  // Each refusal states the cause that actually happened and the route that
+  // repairs it; either can be sidestepped on the running version.
+  const causes = [
+    ...(pluginMismatched ? [`The host plugin is at ${installedPluginVersion}, while this run targets ${chosen}.`] : []),
+    ...(globalFailed ? [`The global install of ${globalResult.spec} failed, so the CLI on PATH stays at ${packageVersion}.`] : []),
+  ];
+  const recoveries = [
+    ...(pluginMismatched ? [`realign the plugin (\`git -C ~/.mstar/harness pull --ff-only\` then re-run init, or install the published plugin at ${chosen})`] : []),
+    ...(globalFailed ? [`fix the global install (\`npm i -g @mstar-harness/cli@${chosen}\`)`] : []),
+  ];
+  return {
+    latest,
+    chosen,
+    globalResult,
+    failure: {
+      message: `${causes.join(" ")}\n`
+        + `Recovery: ${recoveries.join(", or ")}, or re-run with --no-global-cli to stay on the running version ${packageVersion}.`,
+    },
+  };
 }
 
 async function runInit(options: InitOptions) {
@@ -83,14 +163,22 @@ async function runInit(options: InitOptions) {
     console.log(`Target: ${target}`);
     console.log(`Install location: ${installResult.location}`);
     for (const note of installResult.notes) console.log(`  - ${note}`);
-    const skew = formatVersionSkewWarning(packageVersion, latest);
-    if (skew !== null) console.log(skew);
-    const globalResult = ensureGlobalCli({
-      version: packageVersion,
-      latest,
+    const alignment = alignCliAndPlugin({
+      packageVersion,
       dryRun: !!options.dryRun,
       noGlobalCli: !!options.noGlobalCli,
+      latest,
+      // Only an adapter that installs a plugin can be reported at a version, and
+      // that version is the one it actually installed (a linked tree carries the
+      // checkout's version, not the one this run chose); the others register a
+      // marketplace or write config and leave the plugin install to the operator.
+      // An adapter that could not establish the installed version says so: the
+      // version this run *chose* is not evidence of what is on disk.
+      ...(installResult.pluginVersion === undefined ? {} : { installedPluginVersion: installResult.pluginVersion }),
     });
+    const skew = formatVersionSkewWarning(packageVersion, alignment.latest);
+    if (skew !== null) console.log(skew);
+    const globalResult = alignment.globalResult;
     const globalState = globalResult.action === "installed"
       ? `installed ${globalResult.spec}`
       : globalResult.action === "failed"
@@ -98,47 +186,12 @@ async function runInit(options: InitOptions) {
         : globalResult.reason === "already-matching"
           ? "already matching"
           : globalResult.reason;
-    // Only an adapter that installs a plugin can be reported at a version, and
-    // that version is the one it actually installed (a linked tree carries the
-    // checkout's version, not the one this run chose); the others register a
-    // marketplace or write config and leave the plugin install to the operator.
-    // An adapter that could not establish the installed version says so: the
-    // version this run *chose* is not evidence of what is on disk.
-    const installedPluginVersion = installResult.pluginVersion;
     console.log(
       adapter.installsPlugin === true
-        ? `Plugin version: ${installedPluginVersion ?? "unconfirmed (the existing row was skipped and its manifest is unreadable)"}; global CLI: ${globalState}.`
+        ? `Plugin version: ${installResult.pluginVersion ?? "unconfirmed (the existing row was skipped and its manifest is unreadable)"}; global CLI: ${globalState}.`
         : `Global CLI: ${globalState}.`,
     );
-    // Skew is refused whether or not the global update succeeded: a linked
-    // checkout can lag the version this run selected even when the CLI install
-    // worked, and the two must not be left apart.
-    // Any verified difference is skew: a checkout ahead of the selected CLI is as
-    // far apart as one behind it, so neither is reported as success.
-    const pluginMismatched = installedPluginVersion !== undefined && installedPluginVersion !== chosenCli;
-    // A failed update matters when it was meant to move the CLI forward: PATH
-    // then stays on the running version instead of the one this run promised.
-    // No plugin version enters this: an adapter that installs no plugin and
-    // ignores initFlags never reports one, and that is no reason to report a
-    // failed update as configured.
-    const globalFailed = globalResult.action === "failed" && chosenCli !== packageVersion;
-    if (pluginMismatched || globalFailed) {
-      // Each refusal states the cause that actually happened and the route that
-      // repairs it: a plugin at a known version is realigned, a failed global
-      // install is retried, and either can be sidestepped on the running version.
-      const causes = [
-        ...(pluginMismatched ? [`The host plugin is at ${installedPluginVersion}, while this run targets ${chosenCli}.`] : []),
-        ...(globalFailed ? [`The global install of ${globalResult.spec} failed, so the CLI on PATH stays at ${packageVersion}.`] : []),
-      ];
-      const recoveries = [
-        ...(pluginMismatched ? [`realign the plugin (\`git -C ~/.mstar/harness pull --ff-only\` then re-run init, or install the published plugin at ${chosenCli})`] : []),
-        ...(globalFailed ? [`fix the global install (\`npm i -g @mstar-harness/cli@${chosenCli}\`)`] : []),
-      ];
-      throw new Error(
-        `${causes.join(" ")}\n` +
-          `Recovery: ${recoveries.join(", or ")}, or re-run with --no-global-cli to stay on the running version ${packageVersion}.`,
-      );
-    }
+    if (alignment.failure !== null) throw new Error(alignment.failure.message);
     console.log(`Next: npx @mstar-harness/cli doctor --target ${target}${scope === "project" ? "" : " --scope global"}`);
     return;
   }
@@ -173,24 +226,16 @@ async function runInit(options: InitOptions) {
   console.log(`Config file: ${configPath}`);
   if (adapter.printPostSetupSummary) adapter.printPostSetupSummary(updated);
   for (const [roleId, modelId] of Object.entries(assignments)) console.log(`  - ${roleId}: ${modelId}`);
-  const latest = options.dryRun || options.noGlobalCli ? null : detectPublishedLatest();
-  const skew = formatVersionSkewWarning(packageVersion, latest);
-  if (skew !== null) console.log(skew);
-  const globalResult = ensureGlobalCli({
-    version: packageVersion,
-    latest,
+  // The config-only path mutates no host plugin, but a failed global update still
+  // leaves the newer CLI un-installed: the shared tail reports it as a failure.
+  const alignment = alignCliAndPlugin({
+    packageVersion,
     dryRun: !!options.dryRun,
     noGlobalCli: !!options.noGlobalCli,
   });
-  // The config-only path mutates no host plugin, but a failed global update still
-  // leaves the newer CLI un-installed: report it as a failure, not as configured.
-  const chosenCli = chooseCliVersion(packageVersion, latest);
-  if (globalResult.action === "failed" && chosenCli !== packageVersion) {
-    throw new Error(
-      `The published CLI ${chosenCli} could not be installed globally (${globalResult.spec}); the CLI on PATH stays at ${packageVersion}.\n` +
-        `Recovery: fix the global install (\`npm i -g @mstar-harness/cli@${chosenCli}\`), or re-run with --no-global-cli to stay on the running version ${packageVersion}.`,
-    );
-  }
+  const skew = formatVersionSkewWarning(packageVersion, alignment.latest);
+  if (skew !== null) console.log(skew);
+  if (alignment.failure !== null) throw new Error(alignment.failure.message);
 }
 
 program.name("mstar-harness").description("Morning Star harness CLI for target-based agent bootstrap").version(packageVersion);
@@ -234,13 +279,6 @@ registerCliCommands(program, getCommandDefinitions(), {
   cwd: invocationCwd,
   controlRoot: resolveProcessHarnessDir(invocationCwd),
   versions: reportSurfaceVersions,
-  signal: new AbortController().signal,
-  effects: {
-    async readInput() { return ""; },
-    async spawn() { throw new Error("process effect is supplied per invocation"); },
-    async startDashboard() { throw new Error("service effect is supplied per invocation"); },
-    async openBrowser() { throw new Error("browser effect is supplied per invocation"); },
-  },
 });
 registerMcpCommand(program);
 

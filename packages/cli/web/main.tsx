@@ -62,7 +62,6 @@ import {
   readIterationDetail,
   readIterations,
   type IterationDetailOutcome,
-  type IterationsOutcome,
 } from "./iterations-data";
 import {
   ISSUE_FILTER_OPTIONS,
@@ -99,7 +98,6 @@ import {
   workflowsCopy,
   workflowsOutcome,
   type WorkflowDetailOutcome,
-  type WorkflowsOutcome,
 } from "./workflows-data";
 import {
   detailReturnTarget,
@@ -683,7 +681,6 @@ function ProjectsDestination(props: { outcome: ProjectsOutcome }) {
 function ProjectDetailDestination(props: { address: Address; feature: ProjectFeature; projectIds: readonly string[] }) {
   const projectId = props.address.route.name === "project" ? props.address.route.id : "";
   const [outcome, setOutcome] = useState<RoadmapOutcome>({ kind: "loading" });
-  const [identity, setIdentity] = useState<{ title: string; description: string | null } | null>(null);
   /**
    * The list's read follows the address bar: a filter change navigates, the route
    * re-derives this query, and the rows read from it. A read frozen to the defaults
@@ -729,7 +726,6 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       if (!current) return;
       const next = roadmapOutcome(result, projectId);
       setOutcome(next);
-      if (next.kind === "ready") setIdentity({ title: next.identity.title, description: next.identity.description });
     });
     return () => {
       current = false;

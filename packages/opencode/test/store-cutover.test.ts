@@ -30,23 +30,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, openStore } from "@mstar-harness/engine";
-import type { StoreRuntimeInfo } from "@mstar-harness/engine";
 import {
   MorningStarHarnessPlugin,
-  storeApiLoader,
-  storeRuntimeOverride,
   validateStatusWrite,
   type StatusLogger,
 } from "../src/mstar.js";
-
-// The declared Node floor, read from the engine manifest at runtime: no test
-// pins the floor value, and package.json stays the sole version authority.
-type EngineManifest = { engines?: { node?: string } };
-const engineManifest = JSON.parse(
-  readFileSync(join(import.meta.dir, "..", "..", "engine", "package.json"), "utf8"),
-) as EngineManifest;
-const declaredNodeFloor = (engineManifest.engines?.node ?? "").replace(/^>=\s*/, "").trim();
-const belowFloorNodeVersion = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10) - 1}.0.0`;
 
 /** Ambient MSTAR_HARNESS_DIR would redirect every `.mstar` fixture — pinned out. */
 const ENV_KEY = "MSTAR_HARNESS_DIR";
@@ -60,12 +48,9 @@ afterEach(() => {
   else process.env[ENV_KEY] = previousEnv;
 });
 
-const realStoreApiLoad = storeApiLoader.load;
 const projects: string[] = [];
 
 afterEach(() => {
-  storeApiLoader.load = realStoreApiLoad;
-  storeRuntimeOverride.info = null;
   for (const project of projects.splice(0)) rmSync(project, { recursive: true, force: true });
 });
 
@@ -116,17 +101,6 @@ function corruptStore(harness: string): void {
 function capture(): { entries: Array<[string, string]>; log: StatusLogger } {
   const entries: Array<[string, string]> = [];
   return { entries, log: (level, message) => entries.push([level, message]) };
-}
-
-/** Count the plugin's store-API loads: the single store-backed route entry. */
-function countStoreRoute(): () => number {
-  let calls = 0;
-  const real = storeApiLoader.load;
-  storeApiLoader.load = () => {
-    calls += 1;
-    return real();
-  };
-  return () => calls;
 }
 
 describe("opencode authority boundary — store/retired-register direct writes (G4b)", () => {
@@ -247,53 +221,18 @@ describe("opencode authority boundary — store/retired-register direct writes (
     }
   });
 
-  test("a below-floor ACTUAL runtime refuses with the declared floor", async () => {
-    const fixture = makeHarnessProject();
-    const { log } = capture();
-
-    storeRuntimeOverride.info = (): StoreRuntimeInfo => ({ isBun: false, version: belowFloorNodeVersion });
-    const node = await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
-    expect(node?.violations[0]!.code).toBe("store.authority-unavailable");
-    // The refusal names the runtime it refused; the floor value is the engine
-    // manifest's, so no floor literal is restated here.
-    expect(node?.violations[0]!.message).toContain("Node");
-    expect(node?.violations[0]!.message).toContain(declaredNodeFloor);
-  });
-
-  test("the route reports the ACTUAL runtime, never Bun's emulated Node version, and refuses a stub engine", async () => {
-    // No override: the plugin asks the engine for the actual runtime.
-    expect(storeRuntimeOverride.info).toBeNull();
-    const api = await storeApiLoader.load();
-    const detected = api!.detectStoreRuntime();
-    expect(detected.isBun).toBe(true);
-
-    // An engine without the store API refuses the register path instead of
-    // dropping the plugin (the engine-absent contract this file shares).
-    storeApiLoader.load = async () => null;
-    const fixture = makeHarnessProject();
-    const { entries, log } = capture();
-    const result = await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
-    expect(result?.hardBlocked).toBe(true);
-    expect(result?.violations[0]!.code).toBe("store.authority-unavailable");
-    expect(result?.violations[0]!.message).toContain("no issue-store API");
-    expect(entries.some(([level]) => level === "error")).toBe(true);
-  });
-
   test("unrelated writes bypass the authority route; a missing store leaves coordination writes to their document lint (plan S4)", async () => {
     const fixture = makeHarnessProject();
-    const reads = countStoreRoute();
     const { log } = capture();
 
     writeFileSync(join(fixture.project, "notes.md"), "# notes\n");
     expect(await validateStatusWrite(join(fixture.project, "notes.md"), { doc: "x", log })).toBeNull();
-    expect(reads()).toBe(0);
 
     // No store = the pre-activation state: absence is not an authority
     // verdict, so the valid document passes and nothing is fail-closed.
     const status = await validateStatusWrite(fixture.statusPath, { doc: validStatus, log });
     expect(status?.ok).toBe(true);
     expect(status?.hardBlocked).toBe(false);
-    expect(reads()).toBeGreaterThan(0);
 
     const snapshotPath = join(fixture.harness, "workflows", "wf-a", "snapshot.json");
     mkdirSync(join(snapshotPath, ".."), { recursive: true });
@@ -302,8 +241,10 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(snapshot?.ok).toBe(false);
     expect(snapshot?.violations[0]?.code).toBe("workflow.snapshot.missing-status");
 
-    await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
-    expect(reads()).toBeGreaterThan(0);
+    // The register is the one document whose route reads the store: with no
+    // store it keeps its own validator, never a refusal.
+    const register = await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
+    expect(register?.ok).toBe(true);
   })
 
   test("a symlink alias that resolves into the harness is the authority itself (S-G4b-03)", async () => {

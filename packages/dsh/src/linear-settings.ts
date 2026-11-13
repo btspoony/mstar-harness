@@ -56,6 +56,7 @@ import {
   type PendingAuthorization,
   type TokenSet,
 } from '@mstar-harness/engine'
+import { installServiceOnce } from './gates/_shared.ts'
 import type { LoaderEntryView } from './gates/fallbacks-probe.ts'
 import {
   MSTAR_CONTRIBUTING_PACKAGE,
@@ -759,20 +760,10 @@ export function mstarLinearAuthorizeCancelInvocation(): TypertContribution['invo
  * provides the service they name.
  */
 export function installLinearSettingsEndpoint(ctx: Context, options: MstarLinearSettingsOptions): void {
-  let present = false
-  try {
-    present = ctx.get(LINEAR_SETTINGS_SERVICE) !== undefined
-  } catch {
-    present = false
-  }
-  if (present) {
-    ctx.logger('mstar/linear-settings').debug('linear-settings gateway already registered — kept as-is (multi-fiber dedupe)')
-    return
-  }
-  try {
-    void new MstarLinearSettingsGateway(ctx, options)
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
-    ctx.logger('mstar/linear-settings').debug('linear-settings gateway registered concurrently — kept the first (multi-fiber dedupe)')
-  }
+  installServiceOnce(ctx, {
+    key: LINEAR_SETTINGS_SERVICE,
+    loggerName: 'mstar/linear-settings',
+    label: 'linear-settings gateway',
+    construct: () => void new MstarLinearSettingsGateway(ctx, options),
+  })
 }

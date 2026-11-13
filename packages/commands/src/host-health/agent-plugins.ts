@@ -112,13 +112,18 @@ function parseScalar(raw: string): string {
   return trimmed;
 }
 
+/** The doctor's own fence rule: CRLF is accepted, but a closing fence at EOF
+ * without its newline, or an empty block, is not a fence. The shared engine
+ * reader accepts both, so it cannot decide whether a skill has frontmatter. */
+const FRONTMATTER_FENCE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/;
+
 /**
  * Minimal YAML frontmatter extractor for SKILL.md files. Returns the parsed
  * key/value map (string scalars only) or null when no `---` block is present.
  */
 function parseFrontmatter(filePath: string): Record<string, string> | null {
   const content = fs.readFileSync(filePath, "utf8");
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  const match = content.match(FRONTMATTER_FENCE);
   if (!match) return null;
   const result: Record<string, string> = {};
   for (const line of match[1].split(/\r?\n/)) {

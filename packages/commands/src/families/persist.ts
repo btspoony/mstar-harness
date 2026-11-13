@@ -41,8 +41,8 @@ function payloadSchema(fields: Readonly<Record<string, { readonly required: bool
  */
 const jsonKindContract = `${payloadContracts.json.reason} ${payloadContracts.json.alternative}`;
 const payloadSchemas = {
-  review: { schema: payloadSchema(payloadContracts.review.schema), help: "mstar.review/v1 envelope; finding, tally and verdict invariants are validated by the engine." },
-  json: { schema: z.unknown().describe(jsonKindContract), help: jsonKindContract },
+  review: { schema: payloadSchema(payloadContracts.review.schema) },
+  json: { schema: z.unknown().describe(jsonKindContract) },
 } as const;
 /** One document option's help: which kind is typed, and why `json` is not. */
 const documentHelp = `Document for the addressed kind: review is the typed mstar.review/v1 envelope the engine validates; json is an opaque escape — ${jsonKindContract}`;
@@ -161,10 +161,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         ],
       },
       input: z.object({ kind: z.string(), key: z.string().min(1), input: z.string().optional(), file: z.string().optional(), store: z.string().optional(), schema: z.string().optional() }),
-      payloads: Object.fromEntries(Object.entries(payloadSchemas).map(([kind, descriptor]) => [
-        kind,
-        { schema: descriptor.schema, help: descriptor.help },
-      ])),
+      payloads: payloadSchemas,
       output, effects: ["write"], description: "Replace one persisted review or JSON document.",
       async execute(input, context) {
         const id = "persist.write";

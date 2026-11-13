@@ -24,12 +24,6 @@ export type InitOptions = {
   otherModels?: string;
 };
 
-export type DoctorOptions = {
-  target?: Target;
-  scope?: Scope;
-  output?: string;
-};
-
 export type PluginValidateOptions = {
   root?: string;
 };
@@ -91,7 +85,6 @@ export type AgentAdapter = {
   defaultScope?: Scope;
   target: Target;
   mode: "config" | "install";
-  getAvailableModels?: () => string[];
   resolveConfigPath?: (scope: Scope, outputPath?: string) => string;
   mutateConfigForInit?: (
     config: Record<string, unknown>,

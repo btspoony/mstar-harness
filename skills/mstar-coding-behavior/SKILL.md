@@ -54,6 +54,7 @@ Completion means the requested behavior meets its acceptance criteria, supported
 
 - For executable changes, retain the smallest relevant runnable check protecting consumer-visible behavior or a meaningful invariant. For bugs, demonstrate the regression and its correction when the available evidence and authorized checks permit.
 - Test behavior, not source shape, prompt wording, forwarding echoes, or duplicated producer checks. Do not manufacture tests to satisfy a template.
+- **Keep/delete rule:** keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned, and report the class before replacing one. Calibrate against the PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression; judge the assertion against its production-owner contract, not its name.
 - For non-executable policy changes, use scoped static or before/after evidence with observable criteria. Static lint does not establish model compliance or runtime behavior.
 - Report the changed outcome and actual check commands/results concisely, including failures; never imply an unrun check passed. In the required report, use one or two closing lines for intentionally skipped work, material unverified behavior, and its user-facing risk. Separate observation from inference; a missing prerequisite is not a successful result.
 

@@ -23,7 +23,11 @@ permission:
     "git blame*": allow
     "git shortlog*": allow
     "git stash list*": allow
-    "git branch*": allow
+    # Narrowed to read-only forms: a "git branch*" allow admits -d/-D/-m/-M/-c/-C
+    "git branch --show-current*": allow
+    "git branch -a": allow
+    "git branch --list*": allow
+    "git branch -r": allow
     "git status*": allow
     "git rev-parse*": allow
     # Lightweight read-only analysis

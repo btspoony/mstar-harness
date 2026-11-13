@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { Effect } from "effect";
+import * as Engine from "@mstar-harness/engine";
 import { Tool } from "@opencode/schema/tool";
 
 import { writeBefore } from "./write";
-import { loadWriteGateApi } from "../engine-seams";
 import type { WriteBeforeEvent, WriteGateEngineApi } from "./write";
 const roots: string[] = [];
 
@@ -33,7 +33,7 @@ async function run(
   logger?: (level: "info" | "warn" | "error", message: string) => void,
 ) {
   return Effect.runPromise(writeBefore(eventValue, {
-    ...(api === undefined ? {} : { loadEngine: async () => ({ api }) }),
+    ...(api === undefined ? {} : { engine: api }),
     ...(logger === undefined ? {} : { logger }),
   }));
 }
@@ -146,10 +146,8 @@ describe("OpenCode V2 structured-write gate", () => {
 
 
   test("classifies case-variant store sidecars and retired registers in both modes", async () => {
-    const api = (await loadWriteGateApi()).api;
-    expect(api).not.toBeNull();
     const activeApi = {
-      ...api!,
+      ...Engine,
       withStoreRead: async () => ({}),
     } as WriteGateEngineApi;
 
@@ -182,10 +180,8 @@ describe("OpenCode V2 structured-write gate", () => {
   });
 
   test("refuses ACTIVE status and snapshot targets with unchanged bytes in both enforcement modes", async () => {
-    const api = (await loadWriteGateApi()).api;
-    expect(api).not.toBeNull();
     const activeApi = {
-      ...api!,
+      ...Engine,
       resolveExecutionReadRoute: async () => "execution",
     } as WriteGateEngineApi;
 
@@ -211,8 +207,6 @@ describe("OpenCode V2 structured-write gate", () => {
 
 
   test("a pre-activation harness is no verdict for status/snapshot targets: the document lint decides", async () => {
-    const api = (await loadWriteGateApi()).api;
-    expect(api).not.toBeNull();
     const invalid = "not-json";
     // Issue #428 / PR #432 retired the file execution route: the engine's
     // route decision now only resolves ACTIVE or throws. A pre-activation
@@ -221,7 +215,7 @@ describe("OpenCode V2 structured-write gate", () => {
     // warned) instead of the authority failing closed.
     for (const preActivationCode of ["store.not-initialized", "store.not-active"] as const) {
       const preActivationApi = {
-        ...api!,
+        ...Engine,
         resolveExecutionReadRoute: async () => {
           throw Object.assign(new Error(preActivationCode), { code: preActivationCode });
         },
@@ -274,10 +268,9 @@ describe("OpenCode V2 structured-write gate", () => {
     const messages: string[] = [];
     const levels: string[] = [];
     const softBody = makeBody(() => writeFileSync(softPath, invalid));
-    const api = (await loadWriteGateApi()).api;
     await softBody.run(
       event("write", { filePath: softPath, content: invalid }),
-      api!,
+      Engine,
       (level, message) => {
         levels.push(level);
         messages.push(message);
@@ -296,13 +289,12 @@ describe("OpenCode V2 structured-write gate", () => {
     writeFileSync(path, current);
     const body = makeBody();
 
-    const api = (await loadWriteGateApi()).api;
     const inputs: unknown[] = [];
     const testApi = {
-      ...api!,
+      ...Engine,
       validateStatusWriteDoc: (content: unknown, filePath: string, kind: "status" | "snapshot" | "register") => {
         inputs.push(content);
-        return api!.validateStatusWriteDoc(content, filePath, kind);
+        return Engine.validateStatusWriteDoc(content, filePath, kind);
       },
     } as WriteGateEngineApi;
     await expect(body.run(event("edit", { path, oldString: "\"version\":2", newString: "not-json", replaceAll: true }), testApi)).rejects.toBeInstanceOf(Tool.Error);
@@ -316,13 +308,12 @@ describe("OpenCode V2 structured-write gate", () => {
     const path = join(harnessDir, "status.json");
     const current = JSON.stringify({ version: 2, updated_at: "2026-10-10", workflows: [] });
     writeFileSync(path, current);
-    const api = (await loadWriteGateApi()).api;
     const inputs: unknown[] = [];
     const testApi = {
-      ...api!,
+      ...Engine,
       validateStatusWriteDoc: (content: unknown, filePath: string, kind: "status" | "snapshot" | "register") => {
         inputs.push(content);
-        return api!.validateStatusWriteDoc(content, filePath, kind);
+        return Engine.validateStatusWriteDoc(content, filePath, kind);
       },
     } as WriteGateEngineApi;
 
@@ -342,13 +333,12 @@ describe("OpenCode V2 structured-write gate", () => {
     const path = join(harnessDir, "status.json");
     const current = JSON.stringify({ version: 2, updated_at: "2026-10-10", workflows: [] });
     writeFileSync(path, current);
-    const api = (await loadWriteGateApi()).api;
     const inputs: unknown[] = [];
     const testApi = {
-      ...api!,
+      ...Engine,
       validateStatusWriteDoc: (content: unknown, filePath: string, kind: "status" | "snapshot" | "register") => {
         inputs.push(content);
-        return api!.validateStatusWriteDoc(content, filePath, kind);
+        return Engine.validateStatusWriteDoc(content, filePath, kind);
       },
     } as WriteGateEngineApi;
     const body = makeBody();
@@ -369,13 +359,12 @@ describe("OpenCode V2 structured-write gate", () => {
     const valid = JSON.stringify({ version: 2, updated_at: "2026-10-10", workflows: [] });
     const statusPath = join(harnessDir, "status.json");
     writeFileSync(statusPath, valid);
-    const api = (await loadWriteGateApi()).api;
     const validated: unknown[] = [];
     const testApi = {
-      ...api!,
+      ...Engine,
       validateStatusWriteDoc: (content: unknown, filePath: string, kind: "status" | "snapshot" | "register") => {
         validated.push(content);
-        return api!.validateStatusWriteDoc(content, filePath, kind);
+        return Engine.validateStatusWriteDoc(content, filePath, kind);
       },
     } as WriteGateEngineApi;
     await expect(run(event("edit", { filePath: statusPath, oldString: "missing", newString: "replacement", replaceAll: false }), testApi)).resolves.toBeUndefined();
@@ -392,7 +381,7 @@ describe("OpenCode V2 structured-write gate", () => {
     const { harnessDir } = harness("hard");
     const filePath = join(harnessDir, "status.json");
     const activeApi = {
-      ...(await loadWriteGateApi()).api!,
+      ...Engine,
       resolveExecutionReadRoute: async () => "execution",
     } as WriteGateEngineApi;
 
@@ -410,7 +399,7 @@ describe("OpenCode V2 structured-write gate", () => {
     });
   });
 
-  test("normal write/edit and missing-path behavior follow the claimed seam contract", async () => {
+  test("normal write/edit and missing-path behavior follow the gate contract", async () => {
     const { harnessDir, root } = harness("hard");
     const path = join(harnessDir, "status.json");
     const valid = JSON.stringify({ version: 2, updated_at: "2026-10-10", workflows: [] });
@@ -422,61 +411,4 @@ describe("OpenCode V2 structured-write gate", () => {
     await expect(run(event("edit", { filePath: 42 }))).rejects.toMatchObject({ _tag: "Tool.Error", message: expect.stringContaining("input.filePath") });
   });
 
-  test("null engine seam refuses writes with the recovery that fits the failure", async () => {
-    const missing = "The bundled engine loaded but does not export the gate exports this plugin build requires";
-    await expect(Effect.runPromise(writeBefore(
-      event("write", { filePath: "/tmp/unavailable-engine-target", content: "unauthorized" }),
-      { loadEngine: async () => ({ api: null, failure: "exports-missing" }) },
-    ))).rejects.toMatchObject({
-      _tag: "Tool.Error",
-      message: expect.stringMatching(/\[write\.engine-unavailable\][\s\S]*Reinstall @mstar-harness\/opencode-v2[\s\S]*then reload or restart the OpenCode host to discard this cached result[\s\S]*No write was authorized/),
-    });
-    const caught = await Effect.runPromise(writeBefore(
-      event("write", { filePath: "/tmp/unavailable-engine-target", content: "unauthorized" }),
-      { loadEngine: async () => ({ api: null, failure: "exports-missing" }) },
-    )).catch((error: Tool.Error) => error);
-    expect((caught as Tool.Error).message).toContain(missing);
-    // The reload is only the cache flush after the reinstall, never the fix itself.
-    const message = (caught as Tool.Error).message;
-    expect(message.indexOf("Reinstall")).toBeLessThan(message.indexOf("reload or restart the OpenCode host"));
-    expect(message).toContain("reloading before the reinstall reproduces the same mismatch");
-  });
-  test("retains engine import failure cause and directs a reload", async () => {
-    const cause = "Cannot find package '@mstar-harness/engine'";
-    await expect(Effect.runPromise(writeBefore(
-      event("write", { filePath: "/tmp/unavailable-engine-target", content: "unauthorized" }),
-      { loadEngine: async () => { throw new Error(cause); } },
-    ))).rejects.toMatchObject({
-      _tag: "Tool.Error",
-      message: expect.stringMatching(/\[write\.engine-unavailable\][\s\S]*Cannot find package[\s\S]*Reload or restart the OpenCode host[\s\S]*No write was authorized/),
-    });
-  });
-  test("a cached rejected engine import refuses with the reload recovery on every write", () => {
-    // An isolated process: mocking the engine module in-process leaks into the
-    // sibling suites, and the rejection has to hit the real cached seam.
-    const script = `
-import { mock } from "bun:test";
-mock.module("@mstar-harness/engine", () => { throw new Error("probe engine unavailable"); });
-const logged = [];
-console.error = (...args) => { logged.push(args.map(String).join(" ")); };
-const { Effect } = await import("effect");
-const { writeBefore } = await import(${JSON.stringify(new URL("./write.ts", import.meta.url).pathname)});
-const event = { tool: "write", input: { filePath: "/tmp/cached-rejection-target", content: "x" }, sessionID: "s", agent: "a", messageID: "m", id: "c" };
-const messages = [];
-for (let attempt = 0; attempt < 2; attempt += 1) {
-  messages.push(await Effect.runPromise(writeBefore(event, {})).catch((error) => error.message));
-}
-process.stdout.write(JSON.stringify({ messages, logged }));
-`;
-    const result = Bun.spawnSync([process.execPath, "-e", script], { cwd: new URL("..", import.meta.url).pathname, stdout: "pipe", stderr: "pipe" });
-    expect(result.stderr.toString()).toBe("");
-    const payload = JSON.parse(result.stdout.toString()) as { messages: string[]; logged: string[] };
-    expect(payload.messages).toHaveLength(2);
-    for (const message of payload.messages) {
-      expect(message).toMatch(/\[write\.engine-unavailable\][\s\S]*Reload or restart the OpenCode host[\s\S]*cached for the process lifetime/);
-    }
-    // The cause is logged once, when the rejected load is cached.
-    expect(payload.logged).toHaveLength(1);
-    expect(payload.logged[0]).toContain("write gate exports unavailable: probe engine unavailable");
-  });
 });

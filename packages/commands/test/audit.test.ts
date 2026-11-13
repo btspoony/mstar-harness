@@ -66,6 +66,21 @@ describe("audit command family", () => {
     expect(result).toMatchObject({ status: "ok", data: { outDir, level: "standard", round: 1 } });
   });
 
+  test("a findings file carrying the retired rejected key refuses by name", async () => {
+    const root = tempRoot();
+    const findings = path.join(root, "findings.json");
+    const outDir = path.join(root, "rejected-key-run");
+    writeFileSync(findings, JSON.stringify({
+      findings: [{ title: "Bounded finding", description: "A fixture finding", priority: "P2", effort: "S", risk: "LOW", category: "bug" }],
+      rejected: [{ title: "Add dark mode", reason: "not worth doing" }],
+    }));
+    const result = await command("audit.scaffold").execute({ findings, dir: outDir, date: "2026-09-27" }, context(root));
+    expect(result).toMatchObject({ status: "usage", exitCode: 2 });
+    if (!("message" in result)) throw new Error("expected a refusal envelope with a message");
+    expect(result.message).toContain('"rejected" is not a scaffold input');
+    expect(existsSync(outDir)).toBe(false);
+  });
+
   test("scaffold defaults the run dir to {REVIEW_DIR}/<date>-codebase-<level>-<round>", async () => {
     const root = tempRoot();
     mkdirSync(path.join(root, ".mstar"), { recursive: true });

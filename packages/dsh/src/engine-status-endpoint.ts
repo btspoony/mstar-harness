@@ -40,13 +40,20 @@
  * @module @mstar-harness/dsh/engine-status-endpoint
  */
 
-import { isAbsolute } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { installServiceOnce } from './gates/_shared.ts'
 import type { HarnessResolver } from './gates/_shared.ts'
 import { readExecutionWorkflowSource, type SessionHint } from './gates/workflow-selection.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from './engine-status-store.ts'
+import {
+  headerCwdOf,
+  isRefusedPath,
+  nonEmptyString,
+  resolveSessionCwdOf,
+  type SessionCwdResolution,
+} from './session-cwd.ts'
 import {
   MSTAR_CONTRIBUTING_PACKAGE,
   MSTAR_ENGINE_STATUS_NAMESPACE,
@@ -128,33 +135,6 @@ function unavailable(reason: string): MstarEngineStatusUnavailableResult {
   return { status: 'unavailable', reason }
 }
 
-/** A non-empty string, or undefined. */
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() !== '' ? value : undefined
-}
-
-/**
- * The `SessionHeader` of either session surface, or undefined.
- *
- * The two surfaces carry it under DIFFERENT keys, read from the host's own types:
- * a live `Session` exposes `header: SessionHeader`
- * (`@deepseek-ai/dsh-session` `Session.header`), while a persisted inspection
- * exposes `meta: SessionHeader` (`@deepseek-ai/dsh-session-persistence`
- * `SessionInspection extends SessionStorageMetadata { meta: SessionHeader }`).
- * Reading only `header` made every cold session answer `session-cwd-absent`
- * while its workspace was right there.
- */
-function sessionHeaderOf(value: unknown): { cwd?: unknown } | undefined {
-  const row = value as { header?: unknown; meta?: unknown } | null | undefined
-  const header = row?.header ?? row?.meta
-  return header !== null && typeof header === 'object' ? (header as { cwd?: unknown }) : undefined
-}
-
-/** The session's workspace directory from either surface (`header.cwd` / `meta.cwd`). */
-function headerCwdOf(value: unknown): string | undefined {
-  return nonEmptyString(sessionHeaderOf(value)?.cwd)
-}
-
 /**
  * The live Session's bounded integer sequence (`Session.seq` — the log
  * length), or undefined when the structural fake/older runtime carries none.
@@ -165,22 +145,6 @@ function liveSeqOf(value: unknown): number | undefined {
   const seq = (value as { seq?: unknown } | null | undefined)?.seq
   return typeof seq === 'number' && Number.isInteger(seq) && seq >= 0 ? seq : undefined
 }
-
-/**
- * Refuse a client-asserted path that is not a plain absolute path: a relative
- * path would be resolved against the host process cwd (never the caller's), and
- * a `..` segment or NUL byte is a traversal probe, not a workspace.
- */
-function isRefusedPath(cwd: string): boolean {
-  if (cwd.includes('\0')) return true
-  if (!isAbsolute(cwd)) return true
-  return cwd.split(/[\\/]+/).includes('..')
-}
-
-/** The resolved session cwd, or the explicit reason the session is unusable. */
-type SessionCwdResolution =
-  | { readonly kind: 'ok'; readonly cwd: string; readonly source: 'live' | 'persisted' | 'boot' }
-  | { readonly kind: 'unavailable'; readonly reason: string }
 
 /**
  * Host-side `mstar` gateway: `/api/mstar/selectWorkflow` commits the session's
@@ -320,26 +284,15 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
    */
   private async resolveSessionCwd(sessionId: string): Promise<SessionCwdResolution> {
     const sessions = this.ctx.get('sessions') as SessionsView | undefined
-    const live = typeof sessions?.get === 'function' ? sessions.get(sessionId) : undefined
-    const liveCwd = headerCwdOf(live)
-    if (liveCwd !== undefined) return { kind: 'ok', cwd: liveCwd, source: 'live' }
-
     const controller = this.ctx.get('sessionController') as SessionControllerView | undefined
-    if (typeof controller?.inspect !== 'function') {
-      return { kind: 'unavailable', reason: live === undefined ? 'session-absent' : 'session-cwd-absent' }
-    }
-    let inspection: unknown
-    try {
-      inspection = await controller.inspect(sessionId)
-    } catch {
-      return { kind: 'unavailable', reason: 'session-inspect-failed' }
-    }
-    const persistedCwd = headerCwdOf(inspection)
-    if (persistedCwd !== undefined) return { kind: 'ok', cwd: persistedCwd, source: 'persisted' }
-    // Both surfaces silent: read the workspace the host was launched in.
-    const boot = nonEmptyString(process.cwd())
-    if (boot !== undefined) return { kind: 'ok', cwd: boot, source: 'boot' }
-    return { kind: 'unavailable', reason: 'session-cwd-absent' }
+    return await resolveSessionCwdOf({
+      liveSession: (id) => (typeof sessions?.get === 'function' ? sessions.get(id) : undefined),
+      // `inspect` is optional on the host service: keep this reader undefined
+      // when the service is absent so the shared resolver answers its own
+      // `session-absent` / `session-cwd-absent` reason.
+      inspect: typeof controller?.inspect === 'function' ? (id) => controller.inspect(id) : undefined,
+      bootCwd: () => process.cwd(),
+    }, sessionId)
   }
 }
 
@@ -401,39 +354,13 @@ export function mstarEngineStatusContribution(): TypertContribution {
 }
 
 /**
- * Is a `mstar` gateway already registered on this context?
- *
- * The dedupe ADMISSION TEST, taken by
- * {@link installEngineStatusEndpoint} before the constructor so the duplicate
- * path is explicit: constructing a second `MstarEngineStatusGateway` whose
- * `provide` finds the name taken throws out of the service's `fiber.effect`,
- * and the dedupe would then rest on matching cordis' error text. This reads the
- * live registration instead — the FIRST instance keeps serving with its own
- * resolver/boot root, which is what the sibling-apply spec pins.
- *
- * An unreadable registry is not a reason to skip the service: fall through to
- * the constructor, whose own guard still contains the duplicate.
- */
-function engineStatusServicePresent(ctx: Context): boolean {
-  try {
-    return ctx.get(MSTAR_ENGINE_STATUS_NAMESPACE) !== undefined
-  } catch {
-    return false
-  }
-}
-
-/**
  * Install the host half of the channel on one apply scope.
  *
  * Two optional units, never a static inject on the plugin row:
- *  - the `mstar` service — `engineStatusServicePresent` above is the admission
- *    test, so a second apply on the same context (a sibling fiber, an HMR
- *    re-apply) does not construct a second gateway and keeps the FIRST instance
- *    with its own resolver/boot root. Constructing a second one would make the
- *    service's `provide` find the name taken and throw out of the child effect,
- *    so the present-check is the primary dedupe and the `has been registered`
- *    catch arm below covers what it cannot see: the concurrent-apply window, and
- *    an unreadable registry (the helper falls through in both cases);
+ *  - the `mstar` service, through {@link installServiceOnce}: a second apply on
+ *    the same context (a sibling fiber, an HMR re-apply) does not construct a
+ *    second gateway and keeps the FIRST instance with its own resolver/boot
+ *    root;
  *  - the endpoint contribution, registered inside `ctx.inject(['typert'], …)`
  *    and returning that registration's own disposer — so the endpoints withdraw
  *    with the child fiber (or when the typert service goes away).
@@ -463,18 +390,12 @@ export function installEngineStatusEndpoint(
   ctx: Context,
   options: MstarEngineStatusEndpointOptions,
 ): void {
-  if (engineStatusServicePresent(ctx)) {
-    ctx.logger(ENDPOINT_LOGGER).debug('mstar engine-status gateway already registered — kept as-is (multi-fiber dedupe)')
-  } else {
-    try {
-      void new MstarEngineStatusGateway(ctx, options)
-    } catch (error) {
-      // The admission test lost a race (or the registry was unreadable): a
-      // name that is taken now belongs to the earlier registrant, which stays.
-      if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
-      ctx.logger(ENDPOINT_LOGGER).debug('mstar engine-status gateway registered concurrently — kept the first (multi-fiber dedupe)')
-    }
-  }
+  installServiceOnce(ctx, {
+    key: MSTAR_ENGINE_STATUS_NAMESPACE,
+    loggerName: ENDPOINT_LOGGER,
+    label: 'mstar engine-status gateway',
+    construct: () => void new MstarEngineStatusGateway(ctx, options),
+  })
   ctx.inject(['typert'], (tctx) => {
     try {
       return tctx.typert.register(mstarEngineStatusContribution())

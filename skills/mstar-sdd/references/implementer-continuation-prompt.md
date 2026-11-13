@@ -48,7 +48,7 @@ Dispatch:
     ## Your job
 
     1. Implement exactly what this brief specifies (prior tasks are done)
-    2. Before creating or keeping tests, apply `mstar-coding-behavior` § Evidence: keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. Report the non-product-assertion class and conclude "delete, or replace with a product-behaviour assertion". PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression; judge assertions against production-owner contracts, not names.
+    2. Before creating or keeping tests, apply the `mstar-coding-behavior` § Evidence keep/delete rule: keep product-behaviour assertions and fails-first regression defences, delete incidental / source-shape / wiring / environment-constant assertions, and report the non-product-assertion class and conclude "delete, or replace with a product-behaviour assertion".
     3. Run only assigned affected unit tests or applicable scoped-check evidence; use file-handoffs.md § Optional retained output, retain unaffected prior evidence, and cite any retained log path in the report
     4. Commit on Working branch
        Use the configured identity for this task's commit; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).

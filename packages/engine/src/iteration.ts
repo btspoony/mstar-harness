@@ -50,7 +50,7 @@ import type { GateResult, Severity, ValidationResult } from "./core.js";
 // consumer runs, and this module only calls it from its own completeness
 // query, so neither side dereferences the other during module evaluation.
 import { catalogRootDir } from "./catalog.js";
-import { StoreError, openStore, type StoreContext } from "./store-db.js";
+import { StoreError, openStore, readStoreAuthority, type StoreContext } from "./store-db.js";
 import { validateStatusV2, type StatusV2Doc } from "./status.js";
 import { LEGACY_WORKTREE_PATH_CODE, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
@@ -977,18 +977,16 @@ export async function readCatalogCompleteness(
   try {
     const handle = await openStore(context, "read");
     try {
-      const meta = handle.db
-        .prepare("select authority_state, revision, catalog_revision from store_meta where id = 1")
-        .get() as { authority_state?: unknown; revision?: unknown; catalog_revision?: unknown } | undefined;
-      if (!meta || typeof meta.authority_state !== "string" || typeof meta.revision !== "number" || typeof meta.catalog_revision !== "number") {
+      const meta = readStoreAuthority(handle.db);
+      if (typeof meta.authorityState !== "string" || typeof meta.revision !== "number" || typeof meta.catalogRevision !== "number") {
         throw new StoreError("store.corrupt", "store_meta is missing or malformed; the catalog authority cannot be verified");
       }
       storeRevision = meta.revision;
-      catalogRevision = meta.catalog_revision;
-      if (meta.authority_state !== "active") {
+      catalogRevision = meta.catalogRevision;
+      if (meta.authorityState !== "active") {
         return completenessRefusal(
           "store.not-active",
-          `The catalog store is ${meta.authority_state}; catalog completeness is asserted only against an ACTIVE authority \u2014 ` +
+          `The catalog store is ${meta.authorityState}; catalog completeness is asserted only against an ACTIVE authority \u2014 ` +
             "the legacy index/register sources remain authoritative until activation completes.",
           discovered.length,
           storeRevision,

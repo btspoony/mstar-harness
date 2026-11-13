@@ -8,13 +8,6 @@ export { joinWithinRoot, resolveCliPath, resolveProjectRoot } from "@mstar-harne
 //   now writes atomically (temp + rename).
 export { readHarnessVersion, readJson, writeJson } from "@mstar-harness/engine";
 
-export function normalizeModelList(raw: string) {
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
 export function parseCsv(raw?: string) {
   if (!raw) return undefined;
   return raw
