@@ -1,5 +1,5 @@
 import { diagnoseCursorHost, globalInstallPath, projectInstallPath } from "@mstar-harness/commands";
-import type { AgentAdapter, Scope } from "../types";
+import type { AgentAdapter } from "../types";
 import {
   REPO_URL,
   ensureLocalHarnessRepo,

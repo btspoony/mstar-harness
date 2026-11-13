@@ -1,15 +1,10 @@
 import {
   DSH_BIN,
   DSH_DUMP_FLAG,
-  dshFallbacksLoaderName,
   dshFallbacksSpec,
-  DSH_HOME_ENV,
-  DSH_HOME_SUBDIR,
   DSH_INSTALL_HINT,
-  dshPluginSpecs,
   DSH_PROFILE,
   DSH_PROFILE_FLAG,
-  DSH_PROFILES_DIR,
   diagnoseDshHost,
   dshLoaderName,
   readInstalledPluginVersion,
@@ -22,7 +17,6 @@ import { runCliCommand } from "../exec";
 import { readHarnessVersion } from "../utils";
 import type { AgentAdapter, InstallInitFlags, Scope } from "../types";
 
-export { dshFallbacksLoaderName, DSH_HOME_ENV, DSH_HOME_SUBDIR, DSH_PROFILE, DSH_PROFILES_DIR };
 
 // --- dsh CLI surface (probe-pinned 2026-08-17 on dsh 0.1.0-rc.6) ---
 // - `--profile <name>` is required and must precede the subcommand:

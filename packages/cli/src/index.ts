@@ -10,7 +10,6 @@ import pc from "picocolors";
 import { getAdapter } from "./adapters";
 import { buildModelAssignments } from "./assignment";
 import { mapParserError, registerCliCommands } from "./command-adapter";
-import { compareSemver } from "@mstar-harness/commands";
 import {
   chooseCliVersion,
   detectPublishedLatest,
@@ -280,13 +279,6 @@ registerCliCommands(program, getCommandDefinitions(), {
   cwd: invocationCwd,
   controlRoot: resolveProcessHarnessDir(invocationCwd),
   versions: reportSurfaceVersions,
-  signal: new AbortController().signal,
-  effects: {
-    async readInput() { return ""; },
-    async spawn() { throw new Error("process effect is supplied per invocation"); },
-    async startDashboard() { throw new Error("service effect is supplied per invocation"); },
-    async openBrowser() { throw new Error("browser effect is supplied per invocation"); },
-  },
 });
 registerMcpCommand(program);
 

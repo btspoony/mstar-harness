@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { compareSemver as scriptsCompareSemver } from "../../../scripts/release-surfaces";
-import { compareSemver } from "../src/version-compare";
+import { compareSemver } from "@mstar-harness/commands";
 
 // Comparator spec vectors. None of these is a repository version: the core is
 // either zero or the `synthetic` marker, and these strings exist only to fix an

@@ -880,7 +880,9 @@ async function waitForStop(): Promise<NodeJS.Signals> {
 export function registerCliCommands(
   program: Command,
   definitions: readonly CommandDefinition[],
-  baseContext: InvocationContext,
+  // `signal` and `effects` are per-invocation (see the action below): a caller
+  // that supplied them would only be overwritten.
+  baseContext: Omit<InvocationContext, "signal" | "effects">,
 ): void {
   program.exitOverride();
   program.configureOutput({ writeErr: () => {} });

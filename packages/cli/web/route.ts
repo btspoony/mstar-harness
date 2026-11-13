@@ -23,7 +23,6 @@
 import {
   DEFAULT_PROJECT_FEATURE,
   PROJECT_FEATURES,
-  issueQuery,
   parseIssueQuery,
   type IssueQuery,
   type ProjectFeature,
