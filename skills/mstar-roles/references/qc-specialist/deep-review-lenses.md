@@ -36,7 +36,7 @@ QC reviewer 在开工时根据以下信号自判是否启用 deep review。满�
 
 | Reviewer | 默认透镜 |
 |----------|---------|
-| QC1 (architecture/maintainability) | **Modularity Lens** + **Contract Lens** |
+| QC1 (architecture/maintainability) | **Modularity Lens** + **Contract Lens** + **Spec-Fidelity Lens** |
 | QC2 (security/correctness) | **Security Lens** + **Correctness Lens** + **Bounds Lens** + **Real-Entry-Path Lens** |
 | QC3 (performance/reliability) | **Performance Lens** + **Reliability Lens** + **Enforcement-Path Lens** + **Ownership / Derived-State Lens** |
 
@@ -56,6 +56,7 @@ QC reviewer 在开工时根据以下信号自判是否启用 deep review。满�
 每个透镜是一组审查焦点。QC reviewer 在报告中按透镜分节列出发现，每个发现标注来自哪个透镜（`Source Type: deep-lens: <Lens>`）。
 
 - **Modularity Lens** — 新依赖方向合理；无逻辑错放层级（controller 业务逻辑、model 视图逻辑）；公共接口职责单一边界清晰；无循环依赖/隐含耦合。
+- **Spec-Fidelity Lens** — checks the diff against the plan's acceptance criteria rather than the plan's prose: ① does every plan AC have a named evidence site in the diff or its test surface? ② is behaviour present in the diff that no AC authorizes listed as scope creep? ③ does an AC that looks implemented have an implementation contradicting its wording? ④ does an AC declare a check that the diff or tests cannot actually support? **Evidence rule:** a missing evidence site is a finding, never an assumption that it was covered elsewhere. Augments **Contract Lens** on QC1's default set; it adds no seat and does not change tri identity.
 - **Contract Lens** — 公共 API/接口签名无未声明 breaking change（有则 plan 声明 + 迁移说明）；新端点遵循命名/参数约定；返回类型稳定（新字段不破坏已有解析）；docs-match-code：config/defaults/errors/wire fields/events 变更同 diff 更新 README/JSDoc；双语仓对照同步。
 - **Security Lens** — 认证/授权/session/token/permission 逻辑正确；未验证输入未直入 DB/命令/文件；敏感数据（密钥/token/PII）未在日志/错误/返回值泄露；新访问控制点覆盖所有调用路径。（与 **Enforcement-Path Lens** 互指：访问控制点自身的正确性归本透镜；拒绝/校验路径的执行与旁路追迹归 Enforcement-Path）
 - **Correctness Lens** — 错误处理显式可恢复（无吞关键异常的 catch-all）；边界条件覆盖（空/零/溢出/并发）；状态转换一致（无外部可观察中间态）；返回值/副作用与声明一致。
