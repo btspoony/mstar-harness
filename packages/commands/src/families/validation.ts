@@ -661,7 +661,7 @@ function definition(verb: (typeof verbs)[number]): CommandDefinition<Input, unkn
   const id = verb;
   const item = contract[verb];
   const payloads: Record<string, PayloadDescriptor> | undefined = verb === "worktree.check"
-    ? { tracks: { schema: tracksSchema, help: "JSON array of {worktreePath, workingBranch}; the CLI passes the JSON string, MCP passes the object array" } }
+    ? { tracks: { schema: tracksSchema } }
     : undefined;
   const assignmentHeaderRequirement = {
     name: "assignmentFile",

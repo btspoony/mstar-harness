@@ -333,7 +333,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     cli: { path: ["store", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
     ...(verb === "upgrade"
-      ? { payloads: { existingActivationAttestation: { schema: activationAttestationDocumentSchema }, delivery: { schema: z.array(deliveryDeclarationSchema), help: optionHelp.delivery } } }
+      ? { payloads: { existingActivationAttestation: { schema: activationAttestationDocumentSchema }, delivery: { schema: z.array(deliveryDeclarationSchema) } } }
       : {}),
     output: commandEnvelopeSchema,
     effects: ({

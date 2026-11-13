@@ -400,11 +400,7 @@ function makeDefinition(
       // adapter reads the document), never an inline JSON field.
       ...Object.entries(payloadOverride)
         .filter(([key]) => !keys.includes(key))
-        .map(([key, schema]): [string, { schema: z.ZodType; help?: string }] => [key, {
-          schema,
-          ...(key === "delivery" ? { help: "UTF-8 JSON object loaded from --file (pathname, never inline JSON); supply at least one complete member. development allows any subset of compound {outcome: created|updated|skipped, reason?: non-empty; required for skipped} and merge {commit: full lowercase 40/64-hex provider merge/squash commit}. The merge member is optional: omit it when the delivery's content is already present upstream (`git cherry` proves a rebase or single-commit squash), and a supplied merge must record its commit — an empty block carries no fact. A verification/report-only workflow records no delivery evidence: its registered completion_policy is a registration-time declaration, so any member is refused. Omit untouched members; supplied member blocks are complete, not sub-field patches. Members outside registered delivery_kind are refused. The PR identity is the registered branch.work/branch.target pair and is never recorded here. ACTIVE workflows use the DB-backed coordinator evidence operation; this --file route is pre-activation." } : {}),
-          ...(key === "policy" ? { help: "Execution-policy object loaded from --file (pathname, never inline JSON): plan_parallelism, worktree_mode and push_policy, every member optional. The object REPLACES the recorded policy block — an omitted key is removed, never retained. plan_parallelism is the closed serial | parallel set; an unknown key is refused. Read the declared shape with mstar schema --command workflow.execution-policy." } : {}),
-        }]),
+        .map(([key, schema]): [string, { schema: z.ZodType }] => [key, { schema }]),
     ]),
     output: commandEnvelopeSchema,
     effects: [effect],
