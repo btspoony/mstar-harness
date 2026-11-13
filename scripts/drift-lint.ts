@@ -92,7 +92,7 @@
  * Exit 0 = no drift; exit 1 = drift found (one line per violation).
  */
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join, relative } from "node:path";
 import { getCommandDefinitions } from "../packages/commands/src/definitions.ts";
 import { checkAdrTree, summarizeAdrCheck, type AdrCheckResult } from "./adr-check.ts";
@@ -172,6 +172,16 @@ function exists(rel: string): boolean {
 /* Guard 2 helpers: README bilingual pairing (AGENTS.md) */
 /* ------------------------------------------------------------------ */
 
+/** merge-base(origin/main, HEAD), or null when git cannot produce one. */
+function mergeBaseOrNull(): string | null {
+  try {
+    const base = execFileSync("git", ["merge-base", "origin/main", "HEAD"], { encoding: "utf8" }).trim();
+    return base || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Changed files over the committed range merge-base(origin/main, HEAD)..HEAD
  * (the push range in CI), or null when git cannot produce a range (no repo,
@@ -180,16 +190,114 @@ function exists(rel: string): boolean {
  * editing.
  */
 function changedFilesSinceMergeBase(): string[] | null {
-  let base: string;
-  try {
-    base = execFileSync("git", ["merge-base", "origin/main", "HEAD"], { encoding: "utf8" }).trim();
-  } catch {
-    return null;
-  }
+  const base = mergeBaseOrNull();
   if (!base) return null;
   try {
     const out = execFileSync("git", ["diff", "--name-only", base, "HEAD"], { encoding: "utf8" });
     return out.split("\n").map((l) => l.trim()).filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One side of a gate file: absent (the loader throws) reads as an empty
+ * collection, a legitimate state that lets adding or deleting a gate file be
+ * a pure diff; present but unparseable is a failure row naming the path and
+ * the side, because an empty collection there would silently narrow the gate
+ * and hide a widening.
+ */
+export function readGateSide(
+  file: string,
+  side: string,
+  load: () => string,
+): { value: unknown; failure: string | null } {
+  let text: string;
+  try {
+    text = load();
+  } catch {
+    return { value: null, failure: null };
+  }
+  try {
+    return { value: JSON.parse(text), failure: null };
+  } catch (error) {
+    return {
+      value: null,
+      failure: `Guard 14 gate-surface self-approval: ${file} (${side}) is present but unparseable as JSON (${
+        (error as Error).message
+      }) — a corrupt gate file must not read as an empty exemption list (AGENTS.md gate-surface rule)`,
+    };
+  }
+}
+
+/**
+ * Gate-surface snapshots for Guard 14: the merge-base JSON of every allowlist
+ * and of the skill-budget manifest versus the working-tree JSON, plus the
+ * change set (merge-base..worktree, untracked included). `null` when git has
+ * no range, the same skip Guard 2 takes.
+ */
+function gateSurfaceSnapshots(): Omit<GateSurfaceInput, "ci"> | null {
+  const base = mergeBaseOrNull();
+  if (!base) return null;
+  const failures: string[] = [];
+  const read = (path: string, at: "base" | "head"): unknown => {
+    const side = at === "base" ? `merge-base ${base.slice(0, 8)}` : "worktree";
+    const { value, failure } = readGateSide(path, side, () =>
+      at === "base"
+        ? execFileSync("git", ["show", `${base}:${path}`], { encoding: "utf8" })
+        : readFileSync(join(root, path), "utf8"),
+    );
+    if (failure) failures.push(failure);
+    return value;
+  };
+  const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+  const manifestEntries = (entries: unknown[]): ManifestEntry[] =>
+    entries.filter(
+      (entry): entry is ManifestEntry =>
+        !!entry &&
+        typeof entry === "object" &&
+        "file" in entry &&
+        typeof entry.file === "string" &&
+        "maxLines" in entry &&
+        typeof entry.maxLines === "number",
+    );
+  try {
+    let baseNames: string[] = [];
+    try {
+      baseNames = execFileSync("git", ["ls-tree", "-r", "--name-only", base, "scripts/"], { encoding: "utf8" })
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((name) => name.endsWith(".allowlist.json"));
+    } catch {
+      baseNames = [];
+    }
+    const headNames = readdirSync(join(root, "scripts")).filter((name) => name.endsWith(".allowlist.json"));
+    const allowlistPaths = [...new Set([...baseNames, ...headNames.map((name) => `scripts/${name}`)])].sort();
+
+    const changedFiles = execFileSync("git", ["diff", "--name-status", base], { encoding: "utf8" })
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .flatMap((line) => line.split("\t").slice(1));
+    const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], { encoding: "utf8" })
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    const snapshots = {
+      manifest: {
+        base: manifestEntries(list(read(SKILL_BUDGETS_MANIFEST, "base"))),
+        head: manifestEntries(list(read(SKILL_BUDGETS_MANIFEST, "head"))),
+      },
+      allowlists: allowlistPaths.map((file) => ({
+        file,
+        base: list(read(file, "base")),
+        head: list(read(file, "head")),
+      })),
+      changedFiles: [...new Set([...changedFiles, ...untracked])],
+      hasRange: true,
+    };
+    return { ...snapshots, failures };
   } catch {
     return null;
   }
@@ -203,12 +311,7 @@ function changedFilesSinceMergeBase(): string[] | null {
  * the change set (`--numstat`; binary entries report "-" and count as 0).
  */
 function changedFileStatsSinceMergeBase(): Array<{ file: string; added: number; deleted: number }> | null {
-  let base: string;
-  try {
-    base = execFileSync("git", ["merge-base", "origin/main", "HEAD"], { encoding: "utf8" }).trim();
-  } catch {
-    return null;
-  }
+  const base = mergeBaseOrNull();
   if (!base) return null;
   try {
     const out = execFileSync("git", ["diff", "--numstat", base, "HEAD"], { encoding: "utf8" });
@@ -265,6 +368,145 @@ export function checkBilingualContentParity(
   return [
     `README.md/README_CN.md changed-set size mismatch — README.md +${en.added}/-${en.deleted} vs README_CN.md +${cn.added}/-${cn.deleted}; mirror the same change set in both files (AGENTS.md bilingual rule)`,
   ];
+}
+
+export type ManifestEntry = { file: string; maxLines: number };
+
+export type GateSurfaceInput = {
+  manifest?: { base: ManifestEntry[]; head: ManifestEntry[] };
+  allowlists: Array<{ file: string; base: unknown[]; head: unknown[] }>;
+  changedFiles: string[];
+  hasRange: boolean;
+  ci: boolean;
+  /** Gate files present but unreadable or unparseable. Carried as failures
+   * instead of an empty collection, which would hide a widening. */
+  failures?: string[];
+};
+
+/** The signature string of an allowlist entry, or null (non-string / absent). */
+function allowlistSignature(entry: unknown): string | null {
+  if (!entry || typeof entry !== "object" || !("signature" in entry)) return null;
+  const { signature } = entry;
+  return typeof signature === "string" ? signature : null;
+}
+
+/** A named string field of an allowlist entry, or null when absent/empty. */
+function allowlistStringField(entry: unknown, field: string): string | null {
+  if (!entry || typeof entry !== "object" || !(field in entry)) return null;
+  const value = (entry as Record<string, unknown>)[field];
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** `<kind>:<path>:<hash>` → `<path>`, or null when no path segment resolves. */
+function signatureTargetPath(signature: string): string | null {
+  const first = signature.indexOf(":");
+  const last = signature.lastIndexOf(":");
+  if (first < 0 || last <= first) return null;
+  const path = signature.slice(first + 1, last);
+  return path.includes("/") ? path : null;
+}
+
+/**
+ * Identity of one allowlist entry: the multiset key, the artifact the entry
+ * exempts, and how many findings it tolerates.
+ *
+ * Two entry shapes exist in this repo, so neither alone can be the contract:
+ * `lint-refusal-quality.allowlist.json` keys on `signature`
+ * (`<kind>:<path>:<hash>`, path between the first and last colon), while
+ * `rule-duplication.allowlist.json` keys on `file` + `normalizedHash` and has
+ * no signature at all. `signature` wins, `file` is the fallback, and an entry
+ * naming neither has no target and fails closed on a widening.
+ *
+ * Tolerance is the entry's `expectedCount` (lint-refusal-quality.ts treats it
+ * as the number of tolerated findings), so raising it widens the exemption.
+ */
+function allowlistEntryIdentity(entry: unknown): { key: string; target: string | null; tolerance: number } {
+  const expected = entry && typeof entry === "object" ? (entry as Record<string, unknown>).expectedCount : undefined;
+  const tolerance = typeof expected === "number" && Number.isSafeInteger(expected) && expected > 0 ? expected : 1;
+  const signature = allowlistSignature(entry);
+  if (signature !== null) return { key: signature, target: signatureTargetPath(signature), tolerance };
+  const file = allowlistStringField(entry, "file");
+  if (file !== null) {
+    const hash = allowlistStringField(entry, "normalizedHash");
+    return { key: hash === null ? file : `${file}#${hash}`, target: file, tolerance };
+  }
+  return { key: JSON.stringify(entry), target: null, tolerance };
+}
+
+/**
+ * Pure gate-surface check — a change to an allowlist or the skill-budget
+ * manifest is part of the change it exempts (AGENTS.md gate-surface rule).
+ * Compares JSON semantics, not line counts: formatting and compression cannot
+ * move the verdict. Per entry, an added manifest key or a raised ceiling, an
+ * added allowlist entry, and a raised `expectedCount` on an existing entry
+ * (which widens the number of tolerated findings), are widenings; each widened
+ * entry must name the artifact it exempts and that artifact must be in the
+ * same change set. Removal, lowered ceilings and lowered counts stand alone.
+ * `hasRange: false` skips locally and fails under CI, mirroring Guard 2.
+ */
+export function checkGateSurfaceChange(input: GateSurfaceInput): string[] {
+  if (!input.hasRange) {
+    return input.ci
+      ? [
+          "Guard 14 gate-surface self-approval: no git range in CI (merge-base failed or origin/main missing) — the drift-lint job must checkout with fetch-depth: 0 so the gate-surface check can run",
+        ]
+      : [];
+  }
+  const failures: string[] = [...(input.failures ?? [])];
+  const changed = new Set(input.changedFiles);
+  const requirePayment = (gateFile: string, detail: string, target: string) => {
+    if (changed.has(target)) return;
+    failures.push(
+      `Guard 14 gate-surface self-approval: ${gateFile} (${detail}) widens a lint exemption but ${target} is not in the same change set — widen a gate only in the same change as the artifact it exempts, because a widened gate is not a fix (AGENTS.md gate-surface rule)`,
+    );
+  };
+
+  if (input.manifest) {
+    const base = new Map(input.manifest.base.map((e) => [e.file, e.maxLines]));
+    for (const { file, maxLines } of input.manifest.head) {
+      const before = base.get(file);
+      if (before === undefined) {
+        requirePayment("scripts/skill-budgets.manifest.json", `added entry maxLines=${maxLines}`, file);
+      } else if (maxLines > before) {
+        requirePayment("scripts/skill-budgets.manifest.json", `raised ceiling ${before}→${maxLines}`, file);
+      }
+    }
+  }
+
+  for (const { file, base, head } of input.allowlists) {
+    type Totals = { entries: number; tolerance: number; target: string | null };
+    const tally = (entries: unknown[]) => {
+      const counts = new Map<string, Totals>();
+      for (const entry of entries) {
+        const { key, target, tolerance } = allowlistEntryIdentity(entry);
+        const before = counts.get(key);
+        counts.set(key, {
+          entries: (before?.entries ?? 0) + 1,
+          tolerance: (before?.tolerance ?? 0) + tolerance,
+          target: before?.target ?? target,
+        });
+      }
+      return counts;
+    };
+    const before = tally(base);
+    for (const [key, current] of tally(head)) {
+      const prev = before.get(key);
+      const added = current.entries - (prev?.entries ?? 0);
+      const widened = added > 0 || current.tolerance > (prev?.tolerance ?? 0);
+      if (!widened) continue;
+      const target = prev?.target ?? current.target;
+      if (target === null) {
+        failures.push(
+          `Guard 14 gate-surface self-approval: ${file} widens a lint exemption with an entry that names no exempted artifact — expected a \`signature\` of the form <kind>:<path>:<hash> or a \`file\` field (${key}) — a widened entry must name the artifact it exempts, so the check fails closed (AGENTS.md gate-surface rule)`,
+        );
+        continue;
+      }
+      const detail = added > 0 ? `added entry ${key}` : `raised expectedCount ${prev?.tolerance ?? 0}→${current.tolerance}`;
+      requirePayment(file, detail, target);
+    }
+  }
+
+  return failures;
 }
 
 export function isGitHubActions(): boolean {
@@ -748,6 +990,88 @@ export function checkEngineCallouts(
   }
 
   return { calloutsChecked, cliCitationsChecked, failures };
+}
+
+/* ------------------------------------------------------------------ */
+/* Guard 13 helpers: skill index ↔ skill directory coverage. Guard 12 is the
+ * ADR-format guard (`scripts/adr-check.ts`); guard labels are unique across
+ * both files, so this one is 13. */
+/* ------------------------------------------------------------------ */
+
+export const SKILL_INDEX_CORE = "mstar-harness-core";
+export const SKILL_INDEX_HEADING = "## 专题 skill 索引";
+/** An HTML comment span in Markdown, including a multiline one. */
+const COMMENT_SPAN = /<!--[\s\S]*?-->/g;
+
+/** Guard 13 — every shipped `mstar-*` skill directory must have a row in
+ * the core skill index table, and every table row must name a live
+ * directory. Both directions, each mismatch reported once (input arrays are
+ * deduped through Sets, so a doubled name never yields a doubled row).
+ * `pm` and `grill-me` are not `mstar-*` and fall outside the comparison by
+ * construction — no allowlist here. */
+export function checkSkillIndexCoverage(input: { shipped: string[]; indexed: string[] }): { failures: string[] } {
+  const failures: string[] = [];
+  const shipped = new Set(input.shipped);
+  const indexed = new Set(input.indexed);
+  for (const name of [...shipped].sort()) {
+    if (!indexed.has(name)) failures.push(`unindexed-skill: ${name}`);
+  }
+  for (const name of [...indexed].sort()) {
+    if (!shipped.has(name)) failures.push(`stale-index-row: ${name}`);
+  }
+  return { failures };
+}
+
+/** First backticked cell of each row under the core `## 专题 skill 索引`
+ * heading. HTML comments are stripped first (newlines preserved): a row
+ * wrapped in `<!-- ... -->` does not render, so it must not count as an
+ * index entry. A missing heading or a heading with no parseable row is a loud
+ * failure row: an empty `indexed` set would otherwise report every skill as
+ * unindexed and read as a corpus problem instead of a parser/contract break. */
+export function readSkillIndexTable(coreText: string): { indexed: string[]; failures: string[] } {
+  const lines = coreText.replace(COMMENT_SPAN, (span) => span.replace(/[^\n]/g, "")).split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === SKILL_INDEX_HEADING);
+  if (start === -1) {
+    return { indexed: [], failures: [`skills/${SKILL_INDEX_CORE}/SKILL.md: missing "${SKILL_INDEX_HEADING}" heading`] };
+  }
+  const indexed: string[] = [];
+  for (let i = start + 1; i < lines.length && !/^##\s/.test(lines[i]); i++) {
+    const m = lines[i].match(/^\|\s*`([^`]+)`\s*\|/);
+    if (m) indexed.push(m[1]);
+  }
+  if (indexed.length === 0) {
+    return { indexed: [], failures: [`skills/${SKILL_INDEX_CORE}/SKILL.md: "${SKILL_INDEX_HEADING}" table has no \`mstar-*\` row`] };
+  }
+  return { indexed, failures: [] };
+}
+
+/** Guard 13 corpus read: shipped names from the `skills/mstar-*` skill
+ * directories, indexed names from the core table. */
+export function readSkillIndexCoverage(repoRoot: string): {
+  shipped: string[];
+  indexed: string[];
+  failures: string[];
+} {
+  let coreText: string;
+  try {
+    coreText = readFileSync(join(repoRoot, "skills", SKILL_INDEX_CORE, "SKILL.md"), "utf8");
+  } catch (error) {
+    return {
+      shipped: [],
+      indexed: [],
+      failures: [`skills/${SKILL_INDEX_CORE}/SKILL.md: ${(error as Error).message}`],
+    };
+  }
+  const shipped = readdirSync(join(repoRoot, "skills"), { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        entry.name.startsWith("mstar-") &&
+        existsSync(join(repoRoot, "skills", entry.name, "SKILL.md")),
+    )
+    .map((entry) => entry.name);
+  const { indexed, failures } = readSkillIndexTable(coreText);
+  return { shipped, indexed, failures };
 }
 
 /**
@@ -1500,6 +1824,59 @@ if (import.meta.main) {
   }
 
 /* ------------------------------------------------------------------ */
+/* Guard 13: skills corpus — skill index ↔ skill directory coverage */
+/* ------------------------------------------------------------------ */
+
+  let skillIndex: { shipped: string[]; indexed: string[]; failures: string[] } = {
+    shipped: [],
+    indexed: [],
+    failures: [],
+  };
+  try {
+    skillIndex = readSkillIndexCoverage(root);
+    const coverage = checkSkillIndexCoverage({ shipped: skillIndex.shipped, indexed: skillIndex.indexed });
+    skillIndex.failures = [...skillIndex.failures, ...coverage.failures];
+  } catch (error) {
+    skillIndex.failures = [`Guard 13 skill index coverage: ${(error as Error).message}`];
+  }
+  for (const row of skillIndex.failures) {
+    const name = row.split(":")[1]?.trim() ?? "";
+    if (row.startsWith("unindexed-skill:")) {
+      fail(
+        `Guard 13 unindexed-skill: ${name} - add a row to skills/${SKILL_INDEX_CORE}/SKILL.md § 专题 skill 索引`,
+      );
+    } else if (row.startsWith("stale-index-row:")) {
+      fail(
+        `Guard 13 stale-index-row: ${name} - skills/${name}/SKILL.md no longer exists; drop the index row`,
+      );
+    } else {
+      fail(row);
+    }
+  }
+
+/* ------------------------------------------------------------------ */
+/* Guard 14: gate-surface self-approval (allowlists + budget manifest) */
+/* ------------------------------------------------------------------ */
+
+  const gateSurfaceSnap = gateSurfaceSnapshots();
+  const gateSurfaceCi = isGitHubActions();
+  const gateSurfaceFailures = checkGateSurfaceChange(
+    gateSurfaceSnap
+      ? { ...gateSurfaceSnap, ci: gateSurfaceCi }
+      : { allowlists: [], changedFiles: [], hasRange: false, ci: gateSurfaceCi },
+  );
+  for (const row of gateSurfaceFailures) fail(row);
+  const gateSurfaceSummary = `Guard 14 gate-surface self-approval ${
+    gateSurfaceSnap === null
+      ? gateSurfaceCi
+        ? "FAIL (no git range in CI)"
+        : "skipped (no git range)"
+      : gateSurfaceFailures.length === 0
+        ? "OK"
+        : `FAIL (${gateSurfaceFailures.length} violation${gateSurfaceFailures.length === 1 ? "" : "s"})`
+  }`;
+
+/* ------------------------------------------------------------------ */
 
  // Guard 4 footer fragment: report each check's own verdict + count so a
  // load-order-only failure is never misstated as a combined/OK status.
@@ -1525,6 +1902,11 @@ if (import.meta.main) {
 
   const adrSummary = summarizeAdrCheck(adr);
 
+  const skillIndexFailures = skillIndex.failures.length;
+  const skillIndexSummary = `Guard 13 skill index coverage ${skillIndex.shipped.length} shipped mstar-* dirs, ${skillIndex.indexed.length} index rows, ${
+    skillIndexFailures === 0 ? "OK" : `FAIL (${skillIndexFailures} violation${skillIndexFailures === 1 ? "" : "s"})`
+  }`;
+
   reportOversizedTests();
   reportRuleDuplication(ruleDuplication);
   reportParagraphAnchoring(paragraphAnchoring);
@@ -1532,12 +1914,12 @@ if (import.meta.main) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${gateSurfaceSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${gateSurfaceSummary}`,
   );
 }

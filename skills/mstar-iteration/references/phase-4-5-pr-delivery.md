@@ -11,8 +11,9 @@
 3. 创建 PR：`spec_integration_branch` → `target_branch`
 4. PR 正文须含 residual 披露节：本迭代各 plan 的 open R# 清单（id + severity + 跟踪位置 + blocker-defer 标记；无 open 时写 `N/A — none open`）—— 职责 → **`mstar-artifacts`**「Findings cleanup modes」
 5. PR 正文须写明 compass 记录的 `pr_merge_policy`（`reviewed-auto` / `reviewed-bot` / `owner-gated`）—— reviewer 据此知道本 PR 的 review 由本地 loop 还是挂载的 bot 提供，以及是否被期待给出 merge 批准
-6. 记录 PR URL / number（Phase 5 会话 SSOT）
-7. **Immediately** 进入 **Phase 5** — **Phase 4 exit ≠ 迭代交付完成**
+6. PR 正文须写明 **Evidence**（证明改动确实生效的前后可比观测：scoped 命令及其实测 before/after 结果，或视觉改动的截图——不得复述 diff）与 **Merge danger**（`Door: one-way | two-way` 加一行 `Blast radius`）—— door 是回滚成本而非严重度：无法在不牵动外部协调的前提下回退的改动为 `one-way`
+7. 记录 PR URL / number（Phase 5 会话 SSOT）
+8. **Immediately** 进入 **Phase 5** — **Phase 4 exit ≠ 迭代交付完成**
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: mstar-audit
-description: "Audit or survey a codebase into an evidence-backed, prioritized review report (read-only): bugs, security, perf, test gaps, tech debt, DX, a PR/branch/diff (`pr` variant), test-suite audit."
+description: "Audit or survey a codebase into an evidence-backed, prioritized review report (read-only): bugs, security, perf, test gaps, tech debt, DX, a PR/branch/diff (`pr` variant), test-suite audit, a `skills/` corpus stocktake — is the skill corpus redundant, which skills overlap, what does it cost always-loaded (`skills` variant; read-only, proposes verdicts, never edits a skill)."
 ---
 
 # Morning Star Codebase Audit
@@ -21,8 +21,6 @@ A read-only advisory skill that discovers what is worth doing in a codebase and 
 
 ## When to Use
 
-Two entry families, one skill:
-
 - **Full codebase audit** — user asks: "audit my codebase", "what should I improve", "find bugs/security/perf issues", "what tech debt do we have", "what should I build next"; PM routes a request with `Task category: audit`; before a major refactoring initiative. Process detail → **`references/codebase-audit.md`**.
 - **Deep PR review** — user asks to deeply review a pull request / branch / diff before merge (verdict `ship it` / `needs fixes` / `blocked` / `incomplete`). Process detail → **`references/pr-review.md`**.
 
@@ -32,6 +30,7 @@ Two entry families, one skill:
 |-------|------|
 | Full codebase audit — bare / `quick` / `deep` / category focus (`security`, `perf`, `tests`, ...) / `branch` / `next` / `roadmap` / `simplify` | **`references/codebase-audit.md`** (Phase 2 categories + effort table, scope variants, Phase 4 excerpt & reconcile rules, audit index output templates) — shared review report → **`## Output format`** |
 | PR / branch / diff deep review (`pr`) | **`references/pr-review.md`**（三阶段流水线：领域收集 → 领域审查 → 主代理合成；存在 pinned diff pack 时 collect 波默认折入领域席位（`collectFolded`），kept 例外与 `- notes:` 声明见 § Review pipeline；同一目标在 head 前进后再次 review → § Re-review（复核既有 findings；上一轮 settled 且祖先成立时只审增量，其它情况完整审 `base...<new-head>`）；多 PR 单会话语义见 § Review pipeline / § Batch sibling PRs） |
+| Skill-corpus audit — `skills` / stocktake the `skills/` tree (concept overlap, stale references, promotion candidates, resident-description cost) / quick scan or full | **`references/skill-corpus-audit.md`**（four judgements + evidence each requires, verdict vocabulary `Keep` / `Improve` / `Retire` / `Merge into <skill>` / `Promote to <owner>`, reason-quality rule, report shape, approval gate; judging vocabulary → `mstar-skill-authoring`） |
 | Test-suite audit — category focus `tests` depth / prune, repair, consolidate the test surface / `campaign` (one subsystem's whole test surface) / `/amazing-test-audit` | **`references/test-audit.md`**（value bar, authoring gate, junk-pattern sweep, retention bar, per-candidate evidence, discovery lanes, campaign R/F/C/D ledger; the report carries the edit shape + verification gates） |
 
 ## Workflow
@@ -115,6 +114,5 @@ Workflow, audit playbook, finding format, and the security deep-dive method are 
 - `references/finding-format.md` — structured finding shape and evidence requirements
 - `references/codebase-audit.md` — full codebase audit variant: Phase 2 categories + subagent-prompt requirements, effort table, scope variants, Phase 4 excerpt & reconcile rules, audit index output templates, `mstar audit scaffold` callout (report writing → § Phase 4)
 - `references/pr-review.md` — deep PR-review process: worktree isolation, concern lenses, evidence rules, verdict synthesis, linked-issue hygiene, three-stage pipeline, same-target re-review (§ Re-review: revalidate prior findings, review only the increment), batch session policy
-- `references/security-review.md` — security deep-dive: exploitability bar, input-source triage, FP discipline, hunting angles, LLM/supply-chain/CI-CD surfaces
-- `references/agent-artifact-review.md` — untrusted skill/MCP/repo/URL artifacts: install-time red flags, social-engineering leads, supply-chain gaps not already in security-review.md
+- `references/security-review.md` — security deep-dive: exploitability bar, input-source triage, FP discipline, hunting angles, LLM/supply-chain/CI-CD surfaces; its sibling `references/agent-artifact-review.md` covers untrusted skill/MCP/repo/URL artifacts (install-time red flags, social-engineering leads, supply-chain gaps)
 - `references/test-audit.md` — test-suite audit deep method: value bar, authoring gate (grades existing tests and gates proposed ones), junk-pattern sweep, retention bar, per-candidate evidence, discovery lanes, campaign scope (per-test R/F/C/D ledger), edit shape + verification gates the report carries

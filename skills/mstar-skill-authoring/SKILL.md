@@ -53,6 +53,14 @@ description: "Use when creating/rewriting a skill (`SKILL.md`), narrowing a desc
 
 已发布的 `mstar-*` 专题 skill 的运行时别名表由引擎的 `lintFiveQuestion(body, "runtime")` 拥有（`packages/engine/src/skill-authoring.ts`），本文件不复制别名；改表须同步引擎回归测试与 corpus。新写 / greenfield skill 走 `authoring` 模式，仍要求 canonical 标题；别名只豁免已发布专题 skill 的机械 lint，**不豁免语义**——别名标题必须真实回答对应问题，正文不得因别名而缩水。
 
+### Completion criterion
+
+每一个 step 都以 completion criterion 收口，它有两个属性：**clarity**——执行者能否分辨 done 与 not-done，因为模糊的界正是 **premature completion** 在 post-completion pull 下的入口；以及 **demand**——界要求多少工作量，“每一个被改动的 model 都已交代”迫使 legwork，“产出一份 change list”则不。防御顺序：先 sharpen the bound；只有界不可再锐化 **且** 已观察到 rush 时才拆分序列，而拆分只在真实 context boundary（handoff 或 subagent）上有效，绝不 inline——inline 拆分把同一份 context 留在同一份压力之下。
+
+### No-op and negation
+
+**no-op**：模型默认就已遵守的指令付出 load 却什么也没说，判据是这句话相对默认行为是否改变行为，失败时删掉整句而不是修剪措辞。**Negation**：以禁止方式转向会把被禁行为拽进 context 并使其更可得，应陈述 positive target，仅在无法正面表述时保留 prohibition，并始终与 positive target 成对出现。两者判断的是句子是否赚回它的 load；句子是否在 HEAD 可解析归 **`mstar-prose`**，本 skill 不复述该测试。
+
 ## Skill Purpose Test
 
 仅当全部成立才新建 / 扩写 skill：
@@ -129,7 +137,7 @@ skill body 自身的经济性归本 skill 判断；其散文是否在 HEAD 可�
 
 ## Review Template
 
-逐项一行：trigger contract（原则 3）、5 问覆盖（原则 2）、模型缺口（原则 5）、SSOT 对齐、progressive disclosure、paired 证据（原则 6）、stale references。
+逐项一行：trigger contract（原则 3）、5 问覆盖（原则 2）、模型缺口（原则 5）、SSOT 对齐、progressive disclosure、paired 证据（原则 6）、stale references、completion criterion（clarity + demand）与 no-op / negation（任一失败 → `Request Changes`）。
 
 Verdict：`Approve` | `Request Changes` | `Needs Discussion` | `Unconfirmed`——`Unconfirmed` 表示 paired 证据（原则 6）无法建立或核验。
 
