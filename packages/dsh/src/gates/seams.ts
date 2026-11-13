@@ -17,7 +17,6 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
-  applyEnforcement,
   assertLightDarkParity,
   canonicalizeNearestExisting,
   collectLegacyArchiveReferenceTexts,
@@ -41,7 +40,7 @@ import {
 import { redactSecrets } from '@mstar-harness/engine/src/audit'
 import type { GateResult, SecretFinding, ValidationResult } from '@mstar-harness/engine'
 import type { FsTarget, FsWriteIntent } from '@deepseek-ai/dsh-fs'
-import { formatViolation, resolveSeamHard, HarnessResolver, actorAgentOf } from './_shared.ts'
+import { formatViolation, runContentBlindIntentGate, HarnessResolver, actorAgentOf } from './_shared.ts'
 import type { Config } from './_shared.ts'
 // ---------------------------------------------------------------------------
 // Artifact seam gates — design-md / audit / compound / roles
@@ -325,35 +324,27 @@ function emitSeamAdvisory(
  * envelope — an untyped throw from the gate would spuriously block
  * legitimate writes).
  */
-function gateSeamIntent(ctx: Context, harnessDir: string | null, config: Config, seam: SeamId, target: FsTarget): void {
+async function gateSeamIntent(ctx: Context, harnessDir: string | null, config: Config, seam: SeamId, target: FsTarget): Promise<void> {
   const logger = ctx.logger(SEAM_LOGGERS[seam])
   try {
     if (!isSeamTarget(seam, harnessDir, target)) return
     const path = resolve(target.displayPath)
-    if (!existsSync(path)) return // first create — nothing to lint yet
-    let doc: string
-    try {
-      doc = readFileSync(path, 'utf8')
-    } catch (error) {
-      logger.error(`seam lint degraded to allow (cannot read ${path}): ${(error as Error).message}`)
-      emitSeamAdvisory(ctx, seam, target.displayPath, { ok: true, violations: [] }, false, { degraded: true })
-      return
-    }
-    const result = validateSeamDoc(seam, doc, path, harnessDir)
-    if (result.ok) return
-    const hard = resolveSeamHard(harnessDir, config)
-    const verdict = applyEnforcement(result, { hard })
-    if (verdict.hardBlocked) {
-      // Repair escape: the current document is already invalid; this write
-      // may BE the repair — allow, but make the degraded control loud.
-      logger.error(
-        `${basename(path)} write to ${target.displayPath} ALLOWED as repair (Enforcement: hard; the current on-disk document is already invalid — the intent carries no incoming content, so the vetoable signal is only the pre-write state):\n${verdict.violations.map(formatViolation).join('\n')}`,
-      )
-      emitSeamAdvisory(ctx, seam, target.displayPath, verdict, hard, { repair: true })
-    } else {
-      logger.warn(`${basename(path)} write to ${target.displayPath} (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`)
-      emitSeamAdvisory(ctx, seam, target.displayPath, verdict, hard)
-    }
+    await runContentBlindIntentGate({
+      logger,
+      subject: `${basename(path)} write to ${target.displayPath}`,
+      target: { path, displayPath: target.displayPath },
+      harnessDir,
+      config,
+      read: () => readFileSync(path, 'utf8'),
+      validate: (doc: string) => validateSeamDoc(seam, doc, path, harnessDir),
+      onReadError: (error) => {
+        logger.error(`seam lint degraded to allow (cannot read ${path}): ${error.message}`)
+        emitSeamAdvisory(ctx, seam, target.displayPath, { ok: true, violations: [] }, false, { degraded: true })
+      },
+      emit: (result, hard, repair) => {
+        emitSeamAdvisory(ctx, seam, target.displayPath, result, hard, repair ? { repair: true } : {})
+      },
+    })
   } catch (error) {
     logger.error(`seam lint gate degraded to allow: ${(error as Error).message}`)
     emitSeamAdvisory(ctx, seam, target.displayPath, { ok: true, violations: [] }, false, { degraded: true })
@@ -379,7 +370,7 @@ export async function seamWriteIntentListener(
   actor: object | undefined,
   next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
 ): Promise<FsWriteIntent | undefined> {
-  gateSeamIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, seam, target)
+  await gateSeamIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, seam, target)
   return await next()
 }
 

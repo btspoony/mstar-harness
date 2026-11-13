@@ -23,7 +23,8 @@ import { fileURLToPath } from 'node:url'
 // `createVolatile` never runs, so the Loader would drop a live settings save
 // without a remount AND without applying it.
 import z from '@deepseek-ai/schemastery'
-import { resolveHarnessDir, resolveRepoEnforcement } from '@mstar-harness/engine'
+import type { Context, Logger } from '@deepseek-ai/cordis'
+import { applyEnforcement, resolveHarnessDir, resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { GateResult, ValidationResult } from '@mstar-harness/engine'
 import type { Config as SkillLocalConfig } from '@deepseek-ai/dsh-skill-filesystem'
 import type { IterationGateListView, IterationGateViolationView } from '../types.ts'
@@ -409,6 +410,101 @@ export function resolveSeamHard(harnessDir: string | null, config: Config): bool
   if (config.enforcement === 'soft') return false
   return harnessDir !== null && resolveRepoEnforcement(harnessDir).hard
 }
+
+/**
+ * One gate's advisory emit. The event name, the payload shape (`canonical`,
+ * `seam`, `operation`, …) and whether the emit is contained stay at the gate —
+ * this module only knows WHEN the gate emits.
+ */
+export type ContentBlindEmit = (result: GateResult, hard: boolean, repair: boolean) => void
+
+/** The pieces every content-blind intent gate shares. */
+interface ContentBlindIntentGateBase {
+  /** The gate's own named logger (`<scope>/<subject>`). */
+  readonly logger: Logger
+  /** Log-line subject: `<file> <verb>` — the exact per-gate prefix of both decision lines. */
+  readonly subject: string
+  /** Line appended after the violation list in both decision logs (skill-lint's asset fix hint). */
+  readonly logDetailOf?: () => string
+  /** The gated on-disk target, or `null` when this intent is not this gate's (pure pass-through). */
+  readonly target: { readonly path: string; readonly displayPath: string } | null
+  readonly harnessDir: string | null
+  readonly config: Config
+  readonly emit: ContentBlindEmit
+  /**
+   * Gate-local refusal taken BEFORE the repair escape would admit the write
+   * (the status gate's store-authority classes); a throw here propagates.
+   */
+  readonly veto?: (verdict: GateResult, hard: boolean) => void
+}
+
+/** A gate whose validator lints the pre-write document text. */
+export interface ContentBlindDocGate extends ContentBlindIntentGateBase {
+  /** The single read of the on-disk document; a throw takes the gate's read-degrade path. */
+  readonly read: () => string
+  readonly validate: (doc: string, path: string) => GateResult | Promise<GateResult>
+  /** Read-failure containment (degrade to allow); the gate's own shape and log line. */
+  readonly onReadError: (error: Error) => void
+}
+
+/** A gate whose validator reads the document itself (an unparseable document is its violation, not a degrade). */
+export interface ContentBlindPathGate extends ContentBlindIntentGateBase {
+  readonly validate: (path: string) => GateResult | Promise<GateResult>
+}
+
+export type ContentBlindIntentGate = ContentBlindDocGate | ContentBlindPathGate
+
+/**
+ * The content-blind intent-gate sequence the seams, skill-lint and status
+ * gates share: the intent waterfall carries only `(target, actor)` — never the
+ * incoming content — so the only lint signal is the pre-write on-disk document.
+ *
+ * Policy (one place): missing file → pass (first create has nothing to lint);
+ * clean document → silent pass (blocking valid writes would deadlock
+ * authoring); violations + warn mode → warn log + advisory; violations + hard
+ * mode → REPAIR ESCAPE (the on-disk document is ALREADY invalid, so this write
+ * may BE the repair: allow with an error-level log + `repair` advisory).
+ *
+ * Deliberately NOT owned here: each gate's read-error / outer-catch degrade
+ * shape, its advisory payload and containment, and any refusal (`veto`) — a
+ * throw from `veto` is the gate's decision, not this helper's.
+ */
+export async function runContentBlindIntentGate(gate: ContentBlindIntentGate): Promise<void> {
+  const { target } = gate
+  if (target === null) return
+  const { path } = target
+  if (!existsSync(path)) return // first create — nothing to lint yet
+  let result: GateResult
+  if ('read' in gate) {
+    let doc: string
+    try {
+      doc = gate.read()
+    } catch (error) {
+      gate.onReadError(error as Error)
+      return
+    }
+    result = await gate.validate(doc, path)
+  } else {
+    result = await gate.validate(path)
+  }
+  if (result.ok) return
+  const hard = resolveSeamHard(gate.harnessDir, gate.config)
+  const verdict = applyEnforcement(result, { hard })
+  const lines = verdict.violations.map(formatViolation).join('\n')
+  const detail = gate.logDetailOf === undefined ? '' : `\n${gate.logDetailOf()}`
+  if (verdict.hardBlocked) {
+    gate.veto?.(verdict, hard)
+    // Repair escape: the current document is already invalid; this write may
+    // BE the repair — allow, but make the degraded control loud.
+    gate.logger.error(
+      `${gate.subject} ALLOWED as repair (Enforcement: hard; the current on-disk document is already invalid — the intent carries no incoming content, so the vetoable signal is only the pre-write state):\n${lines}${detail}`,
+    )
+    gate.emit(verdict, hard, true)
+  } else {
+    gate.logger.warn(`${gate.subject} (advisory):\n${lines}${detail}`)
+    gate.emit(verdict, hard, false)
+  }
+}
 /**
  * Resolve the plugin package's own `harness-skills/` mirror (synced from the
  * repo root by `bundle-assets` at build time; gitignored), anchored at
@@ -504,6 +600,54 @@ export function packagedAgentsDir(): string | undefined {
   const dir = resolvePackagedAgentsDir(import.meta.url)
   if (dir !== undefined) packagedAgentsDirMemo = dir
   return dir
+}
+
+/**
+ * Register one cordis gateway service at most once per context.
+ *
+ * The ADMISSION TEST is the present-check: a sibling apply (a second plugin
+ * instance, an HMR re-apply) keeps the FIRST instance with its own options
+ * instead of constructing a second one, whose `provide` would find the name
+ * taken and throw out of the service's `fiber.effect`. The constructor's
+ * throw is still caught for what the pre-check cannot see — the concurrent
+ * apply window, and an unreadable registry — but ONLY when it is cordis' own
+ * name collision; anything else propagates.
+ *
+ * Withdrawal follows ownership: a deduped apply registered nothing, so
+ * disposing it withdraws nothing, and its own service withdraws with its own
+ * fiber.
+ * @param ctx - the plugin's apply context.
+ * @param input.key - the cordis service key the present-check reads.
+ * @param input.loggerName - the gate's named logger for the dedupe lines.
+ * @param input.label - the service's own name in both dedupe sentences.
+ * @param input.construct - constructs the service (its own registration happens there).
+ * @param input.onKept - runs when an EARLIER registrant is kept (a panel's warning re-arm).
+ */
+export function installServiceOnce(
+  ctx: Context,
+  input: { key: string; loggerName: string; label: string; construct: () => void; onKept?: () => void },
+): void {
+  const logger = ctx.logger(input.loggerName)
+  let present = false
+  try {
+    present = ctx.get(input.key) !== undefined
+  } catch {
+    present = false
+  }
+  if (present) {
+    input.onKept?.()
+    logger.debug(`${input.label} already registered — kept as-is (multi-fiber dedupe)`)
+    return
+  }
+  try {
+    input.construct()
+  } catch (error) {
+    // The admission test lost a race (or the registry was unreadable): a name
+    // that is taken now belongs to the earlier registrant, which stays.
+    if (!(error instanceof Error) || !error.message.includes('has been registered')) throw error
+    input.onKept?.()
+    logger.debug(`${input.label} registered concurrently — kept the first (multi-fiber dedupe)`)
+  }
 }
 
 /**

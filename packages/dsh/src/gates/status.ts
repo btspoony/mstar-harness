@@ -19,7 +19,6 @@ import { existsSync } from 'node:fs'
 import { basename, join, relative, resolve } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
-  applyEnforcement,
   findingsCleanupGate,
   readJson,
   resolveProjectDir,
@@ -36,7 +35,7 @@ import type {
   ValidationResult,
 } from '@mstar-harness/engine'
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
-import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, actorAgentOf, resolveSeamHard } from './_shared.ts'
+import { STATUS_FILE, asRecord, formatViolation, runContentBlindIntentGate, HarnessResolver, actorAgentOf, resolveSeamHard } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { storeAuthorityRefusals } from './store-authority.ts'
 // Type-only (erased at runtime — no cycle): the adapter owns the shared
@@ -383,46 +382,43 @@ async function gateStatusIntent(
     }
     if (kind === null) return
     // The adapter owns the shared status-gate core (missing file = first
-    // create = pass); this listener adds enforcement + observability.
-    const result = await adapter.statusGate(target.displayPath, kind, harnessDir)
-    const hard = resolveSeamHard(harnessDir, config)
-    const verdict = applyEnforcement(result, { hard })
-    if (!verdict.ok) {
-      if (verdict.hardBlocked) {
+    // create = pass); this listener adds enforcement + observability. The
+    // store-authority veto above runs BEFORE it, and the hard-mode cleanup
+    // veto below is the one refusal this seam can still make.
+    await runContentBlindIntentGate({
+      logger: ctx.logger(LOGGER_NAME),
+      subject: `status.json ${operation}`,
+      target: { path: target.displayPath, displayPath: target.displayPath },
+      harnessDir,
+      config,
+      validate: (path: string) => adapter.statusGate(path, kind, harnessDir),
+      veto: (verdict, hard) => {
+        if (!verdict.violations.some((violation) => violation.code === CLEANUP_AUTHORITY_UNAVAILABLE_CODE)) return
         // The one refusal this seam CAN make: the store-authority class (see
         // CLEANUP_AUTHORITY_UNAVAILABLE_CODE). Thrown past the error-containment
         // envelope below, which contains UNEXPECTED errors only — the veto is a
         // decision, and the fs-policy channel turns it into an isError write.
-        if (verdict.violations.some((violation) => violation.code === CLEANUP_AUTHORITY_UNAVAILABLE_CODE)) {
-          ctx.logger(LOGGER_NAME).error(
-            `status.json ${operation} VETOED (Enforcement: hard; the issue authority is unavailable, so the findings cleanup gate has no verdict — no filesystem write can repair that):\n${verdict.violations.map(formatViolation).join('\n')}`,
-          )
-          // The advisory is contained: a throwing consumer must not hand the
-          // catch below an error it would contain as a degrade-to-allow (the
-          // throw at the end of this branch IS the decision).
-          try {
-            ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard })
-          } catch (emitError) {
-            ctx.logger(LOGGER_NAME).error(`status gate veto advisory emit failed: ${(emitError as Error).message}`)
-          }
-          throw new StatusVetoError(
-            target.displayPath,
-            verdict.violations,
-            'Enforcement: hard — the issue authority cannot be consulted, so the findings cleanup gate has no verdict and no filesystem write can repair it',
-          )
-        }
-        // Repair escape: the current document is already invalid; this write
-        // may BE the repair, so allow it — but make the degraded control
-        // loud (error-level log + repair advisory, `hard: true`).
         ctx.logger(LOGGER_NAME).error(
-          `status.json ${operation} ALLOWED as repair (Enforcement: hard; the current on-disk document is already invalid — the intent carries no incoming content, so the vetoable signal is only the pre-write state):\n${verdict.violations.map(formatViolation).join('\n')}`,
+          `status.json ${operation} VETOED (Enforcement: hard; the issue authority is unavailable, so the findings cleanup gate has no verdict — no filesystem write can repair that):\n${verdict.violations.map(formatViolation).join('\n')}`,
         )
-        ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard, repair: true })
-      } else {
-        ctx.logger(LOGGER_NAME).warn(`status.json ${operation} (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`)
-        ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard })
-      }
-    }
+        // The advisory is contained: a throwing consumer must not hand the
+        // catch below an error it would contain as a degrade-to-allow (the
+        // throw at the end of this branch IS the decision).
+        try {
+          ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard })
+        } catch (emitError) {
+          ctx.logger(LOGGER_NAME).error(`status gate veto advisory emit failed: ${(emitError as Error).message}`)
+        }
+        throw new StatusVetoError(
+          target.displayPath,
+          verdict.violations,
+          'Enforcement: hard — the issue authority cannot be consulted, so the findings cleanup gate has no verdict and no filesystem write can repair it',
+        )
+      },
+      emit: (result, hard, repair) => {
+        ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result, hard, ...(repair ? { repair: true } : {}) })
+      },
+    })
   } catch (error) {
     // The typed veto is rethrown untouched (the only throw this gate makes).
     if (error instanceof StatusVetoError) throw error
