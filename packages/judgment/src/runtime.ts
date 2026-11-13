@@ -10,7 +10,7 @@ import {
   validatePack,
   validatePilot,
 } from "./contracts.js";
-import { buildA05Request, canonicalJsonBytes, type PreparedRequest } from "./review-advice.js";
+import { buildA05Request, type PreparedRequest } from "./review-advice.js";
 import { normalizeTypeSafeResponse, type NormalizedTypeSafeResponse } from "./normalize.js";
 import { sendNativeRequest, type NativeTransportInput, type NativeTransportResult } from "./typesafe.js";
 import { createRunBudgetPolicy, reserveRunBudget, RunBudgetError, type ReusedRunResult, type RunReservation } from "./run-budget.js";
