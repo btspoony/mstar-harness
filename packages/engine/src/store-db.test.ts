@@ -35,6 +35,7 @@ import {
   compareVersions,
   initializeStore,
   openStore,
+  readStoreAuthority,
   SettlementAttestationNeeded,
   upgradeStore,
   type StoreContext,
@@ -235,6 +236,34 @@ describe("store-db read-open repair", () => {
     // Nothing was created for the refused link, and the leftover bytes stayed.
     expect(existsSync(`${join(dir, "store.db")}-wal`)).toBe(false);
     expect(existsSync(join(dir, "status.json"))).toBe(true);
+  });
+});
+
+describe("store-db authority reader", () => {
+  test("reads the raw authority columns and reports a missing row instead of throwing", async () => {
+    const dir = mkdtempSync(join(ROOT, "authority-read-"));
+    const handle = await initializeStore({ harnessDir: dir });
+    const active = readStoreAuthority(handle.db);
+    expect(active.missing).toBe(false);
+    expect(active.authorityState).toBe("active");
+    expect(typeof active.storeId).toBe("string");
+    expect(typeof active.epoch).toBe("number");
+    expect(typeof active.revision).toBe("number");
+    expect(typeof active.catalogRevision).toBe("number");
+
+    handle.db.exec("update store_meta set authority_state = 'staged' where id = 1");
+    expect(readStoreAuthority(handle.db).authorityState).toBe("staged");
+
+    handle.db.exec("delete from store_meta where id = 1");
+    expect(readStoreAuthority(handle.db)).toEqual({
+      authorityState: undefined,
+      revision: undefined,
+      catalogRevision: undefined,
+      storeId: undefined,
+      epoch: undefined,
+      missing: true,
+    });
+    handle.close();
   });
 });
 

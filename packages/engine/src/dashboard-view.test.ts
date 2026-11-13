@@ -14,7 +14,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { MAX_DASHBOARD_SEARCH_LENGTH, dashboardFailure, dashboardFilters, readDashboardView } from "./dashboard-view.js";
 import { catalogRootDir, linkCatalogEntities, registerCatalogEntity } from "./catalog.js";
 import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
-import { captureIssue, getIssue, ISSUE_DISPOSITIONS } from "./issue.js";
+import { captureIssue, getIssue, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_SEVERITIES } from "./issue.js";
 import { addMilestone } from "./milestone-store.js";
 import { initializeStore, openStore } from "./store-db.js";
 import { queryDashboard, withStoreRead } from "./store-read.js";
@@ -107,6 +107,19 @@ describe("dashboardFilters refusals", () => {
     expect(() => dashboardFilters("issues", { disposition: "gone" })).toThrow(
       /disposition must be one of .*obsolete/,
     );
+  });
+
+  test("accepts every declared kind and severity and refuses an invented one", () => {
+    // The filter vocabulary IS the issue vocabulary, so the tuple a capture
+    // accepts is exactly the set the dashboard can filter on.
+    for (const kind of ISSUE_KINDS) {
+      expect(dashboardFilters("issues", { kind })).toEqual({ issue: { kind } });
+    }
+    expect(() => dashboardFilters("issues", { kind: "invented" })).toThrow(/kind must be one of .*review-obligation/);
+    for (const severity of ISSUE_SEVERITIES) {
+      expect(dashboardFilters("issues", { severity })).toEqual({ issue: { severity } });
+    }
+    expect(() => dashboardFilters("issues", { severity: "invented" })).toThrow(/severity must be one of .*nit/);
   });
 
   test("maps raw query parameters onto the engine's filter shape", () => {
