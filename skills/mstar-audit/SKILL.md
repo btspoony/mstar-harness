@@ -1,6 +1,6 @@
 ---
 name: mstar-audit
-description: "Audit or survey a codebase into an evidence-backed, prioritized review report (read-only): bugs, security, perf, test gaps, tech debt, DX, a PR/branch/diff (`pr` variant), test-suite audit."
+description: "Audit or survey a codebase into an evidence-backed, prioritized review report (read-only): bugs, security, perf, test gaps, tech debt, DX, a PR/branch/diff (`pr` variant), test-suite audit, a `skills/` corpus stocktake — is the skill corpus redundant, which skills overlap, what does it cost always-loaded (`skills` variant; read-only, proposes verdicts, never edits a skill)."
 ---
 
 # Morning Star Codebase Audit

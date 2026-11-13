@@ -16,7 +16,7 @@ Stocktake and principle distillation for a `skills/` tree. Load when the request
 Every number comes from the tree being audited, cited with the command that produced it. A literal copied from an earlier run is a stale reference under § 3.2.
 
 - **Inventory.** Shipped skills are the directories holding `skills/mstar-*/SKILL.md`; `pm` and `grill-me` are not `mstar-*` and are listed separately when the request covers the whole `skills/` tree. Per skill record: name, description text, `SKILL.md` line count, its `references/` files with line counts, and its declared load-order neighbours.
-- **Resident cost.** Character count of every `description:` line, per skill and summed. This is an **estimate of always-loaded text** — the description is the only skill text a host loads before selection. It is never provider-reported context: no token accounting, no claim about cache behaviour, no measured effect on answer quality.
+- **Resident cost.** Character count of each skill's frontmatter `description:` line in `skills/mstar-*/SKILL.md`, per skill and summed; fenced examples and inline code mentions of `description:` in Markdown are not counted — only the frontmatter line of each `SKILL.md`. This is an **estimate of always-loaded text** — the description is the only skill text a host loads before selection. It is never provider-reported context: no token accounting, no claim about cache behaviour, no measured effect on answer quality.
 
 ```
 ls -d skills/mstar-*/SKILL.md
