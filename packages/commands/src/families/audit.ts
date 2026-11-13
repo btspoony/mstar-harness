@@ -71,6 +71,9 @@ function parseFindings(text: string): { findings: AuditFinding[]; needsVerificat
   const doc = Array.isArray(data) ? { findings: data } : data;
   if (doc === null || typeof doc !== "object" || !Array.isArray((doc as Record<string, unknown>).findings)) throw new SddScriptError("findings file must be an array or an object with a findings array", 2);
   const raw = doc as Record<string, unknown>;
+  // The report's "considered and rejected" section is author-written: the
+  // scaffold has no input for it, so a key here would be silently dropped.
+  if (raw.rejected !== undefined) throw new SddScriptError('findings file key "rejected" is not a scaffold input; write "## Findings considered and rejected" in the report after scaffold', 2);
   const findings = (raw.findings as unknown[]).map((value, index): AuditFinding => {
     if (value === null || typeof value !== "object" || Array.isArray(value)) throw new SddScriptError(`findings[${index}] is not an object`, 2);
     const row = value as Record<string, unknown>;

@@ -483,17 +483,14 @@ describe("scaffoldAuditReport", () => {
     expect(readme).toContain("- Ship a status dashboard \u2014 Product value for operators.");
   });
 
-  test("renders the rejected-findings section when provided", () => {
+  test("the rejected-findings section is author-written, so a rebuild does not invent or preserve it", () => {
     const reviews = join(tmp, "reviews-rejected");
     mkdirSync(reviews, { recursive: true });
-    scaffoldAuditReport(findings, {
-      reviewsDir: reviews,
-      date: "2026-08-13",
-      rejected: [{ title: "Add dark mode", reason: "not worth doing for a CLI" }],
-    });
+    scaffoldAuditReport(findings, { reviewsDir: reviews, date: "2026-08-13" });
     const readme = readReport(reviews, "2026-08-13");
-    expect(readme).toContain("## Findings considered and rejected");
-    expect(readme).toContain("- Add dark mode: not worth doing for a CLI");
+    // Only the two security-disposition sections carry over (codebase-audit.md
+    // § Scaffold boundary); this one is the author's, so a scaffold drops it.
+    expect(readme).not.toContain("## Findings considered and rejected");
   });
 
   test("duplicate titles keep their own numbered row (no slug loss on the report surface)", () => {
@@ -673,7 +670,6 @@ describe("scaffoldAuditReport", () => {
       {
         reviewsDir: reviews,
         date: "2026-08-22",
-        rejected: [{ title: `Rejected token: ${otherLeak}`, reason: "value was already rotated" }],
         needsVerification: [{ lead: "AWS key in logs", how: `search ${otherLeak} in CloudWatch` }],
         hardeningChecked: [{ kind: "Hardening", text: `legacy key ${otherLeak} revoked` }],
       },
