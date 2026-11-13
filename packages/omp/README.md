@@ -59,7 +59,7 @@ At phase-2-entry call `mstar_phase2` with `{operation:"bind",workflowId}`; nativ
 
 There is no per-plan primary launch, terminal transport, capacity setting or launch journal. Model-handoff preferences remain unchanged. `/iteration-drive` accepts no arguments and resumes the coordinator's workflow; unsupported input refuses before boot.
 
-Rows advance directly through revisable prepare, progress and complete, preserving isolated worktrees, SDD/QC/QA, CAS/receipts and actual serial integration. Standalone development retains its compound/PR/verified-merge/close tail; report-only retains explicit policy fulfilment before Done and evidence-backed close without invented Git/PR.
+Rows advance directly through revisable prepare, progress and complete, preserving isolated worktrees, SDD/QC/QA, CAS/receipts and actual serial integration. Standalone development retains its compound/PR/verified-merge/close tail; report-only follows its registered completion policy and closes from evidence without compound, Git or PR.
 
 ## Quick start
 

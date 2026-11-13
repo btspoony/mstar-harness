@@ -34,7 +34,7 @@ PM 在迭代内全部 plan Done 后执行。**本 Phase 在 integration worktree
 - [ ] compass 登记的全部 plan 在 ACTIVE `execution_plans` 均为 `Done`（经 `mstar status validate` / `mstar plan show`）
 - [ ] 各 plan 经 `mstar status findings-cleanup <plan-id>` 对 store linked open issues 按 Assignment mode 收口；`allow-residual` 下已捕获且披露的非阻断 issue 可保持 open，`zero-residual` 仅允许 blocker-defer + roadmap；关闭经 `mstar issue close|waive|duplicate|supersede`，不改退役 project register；unresolved `critical` 阻断（规则 → `mstar-artifacts` Findings cleanup modes）
 - [ ] compass `## Plans` 表状态与当前权威执行行同步
-- [ ] 每个 plan 的 compound disposition（`created` / `updated` / reasoned `skipped`）已记录在该 plan 的 `## Review Gate Summary`
+- [ ] 每个 plan 的 compound disposition（`created` / `updated` / reasoned `skipped`）已记录在该 plan 的 `## Review Gate Summary`（`Compound disposition`）
 - [ ] 迭代 `## Acceptance Criteria` 已达成或显式豁免（compass 或对话记录原因）
 - [ ] compass shape 已满足（frontmatter + `## Roadmap Position` + close 占位节）
 
