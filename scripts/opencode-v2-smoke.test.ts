@@ -51,6 +51,7 @@ describe("OpenCode V2 installed package smoke", () => {
         command: true,
         skill: true,
         nestedReference: true,
+        bootstrap: true,
       },
       engines: { node: ">=24.18.0", bun: ">=1.4.0" },
     });

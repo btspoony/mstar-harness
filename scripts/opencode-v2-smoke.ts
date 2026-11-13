@@ -48,7 +48,7 @@ process.stdout.write(JSON.stringify({
   nodeVersion: process.version,
   id: plugin.id,
   lifecycle: "effect",
-  assets: { agent: true, command: true, skill: true, nestedReference: true },
+  assets: { agent: true, command: true, skill: true, nestedReference: true, bootstrap: true },
   engines: { node: engines.node, bun: engines.bun },
 }));
 `;
