@@ -13,7 +13,7 @@ type SmokeResult = {
   nodeVersion: string;
   id: string;
   lifecycle: "effect";
-  assets: { agent: true; command: true; skill: true; nestedReference: true };
+  assets: { agent: true; command: true; skill: true; nestedReference: true; bootstrap: true };
   engines: { node: string; bun: string };
 };
 
