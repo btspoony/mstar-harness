@@ -1019,7 +1019,7 @@ export function synthesizeReview(input: {
 // renderReviewMarkdown — one layout owner for the review body
 // ---------------------------------------------------------------------------
 
-/** Verdict emoji for the verdict head on both surfaces (module-private). */
+/** Verdict emoji for the rendered verdict head (module-private). */
 const VERDICT_EMOJI: Record<PrVerdict, string> = {
   "ship it": "\u2705", // ✅
   "needs fixes": "\u26A0\uFE0F", // ⚠️
