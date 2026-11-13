@@ -36,4 +36,4 @@ Label every Depth Lens recommendation `Strong`, `Worth exploring`, or `Speculati
 
 ## When both lenses apply
 
-When Depth and Modularity both apply to one diff, **Depth subsumes the Modularity question**: "should this be split, merged, or deleted" is settled by the deletion test and the leverage count, so report the finding once under `Source Type: deep-lens: Depth Lens`.
+When Depth and Modularity both apply to one diff, they stay complementary: Depth judges abstraction value (the deletion test and the leverage count) while dependency direction, layering, responsibility boundaries and cycles remain Modularity checks. Report a shared root cause once, under the lens whose question it actually answers.
