@@ -327,9 +327,9 @@ verdicts above, and the two rules at the end were learned while applying them.
 14. **Removing behavior from engine source is not done until the shipped bundles are
     regenerated.** `hooks/session-context.mjs` and `hooks/mstar-write-gate.mjs` inline engine
     code, so a seam deleted in `packages/engine/src` still ships in the hook process until
-    `bun run engine:build && bun run hooks:build` runs and the result is committed. The CI
-    freshness gate (`git diff --exit-code -- hooks/`) catches it only after a build, so a stale
-    committed bundle reads as clean until then.
+    `bun run engine:build && bun run hooks:build` runs and the result is committed. CI builds the
+    bundles, so a broken build fails the job; nothing compares the committed bytes, so a stale
+    committed copy reads as clean until `release:prepare` re-takes it.
 
 **Host fact worth reusing.** On this host a subagent's shell and file tools default to the
 session's primary checkout, so a RELATIVE path in an edit lands in the primary worktree while an

@@ -72,8 +72,9 @@ override). A fabricated value is never the recovery.
 
 This repository keeps no committed digest inventory of generated bundles: a recorded digest can only
 describe the environment that ran the build, and comparing it back re-reports environment drift as
-source drift. Generated artifacts are held honest by a rebuild in CI (the blocking bundle build plus
-its advisory byte diff) and by the suites that execute the built artifact, not by a checked-in hash.
+source drift. Generated artifacts are held honest by a rebuild in CI (the blocking bundle build) and by
+the suites that execute the built artifact, not by a checked-in hash — and not by diffing the rebuild
+against the committed copy, which reports the bundler version rather than the source.
 Never add a snapshot re-take step, a digest comparison, or a version pin as a test assertion — the
 repository's test rules forbid that class outright.
 

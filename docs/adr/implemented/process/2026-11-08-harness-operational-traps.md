@@ -17,14 +17,14 @@ Before acting on any of these refusals, establish **which component's version is
 Concretely:
 
 - **Store refusals.** First `sqlite3 {HARNESS_DIR}/store.db "select json_type(coordination_json,'$.completion.review_base'), json_valid(coordination_json) from execution_plans where plan_id='<id>';"`. A `null | 1` result means the row is fine and the reader is old. Then run `status validate` through the checkout whose engine last touched the schema; `status.ok` there settles it. Never hand-edit `coordination_json`, and never restore a backup to fix a reader.
-- **Generated artefacts.** Prove the artifact by rebuilding it in the same checkout and diffing, and by the suite that executes it. Do not answer a staleness report by re-recording a digest: refreshing the record proves only that the machine can produce those bytes today, which is exactly what the recorded value was supposed to establish. A large diff from a correct rebuild is generated output, and the change description must say so.
+- **Generated artefacts.** Prove the artifact by rebuilding it in the same checkout and by the suite that executes it. Do not answer a staleness report by re-recording a digest: refreshing the record proves only that the machine can produce those bytes today, which is exactly what the recorded value was supposed to establish. A byte diff of build output is no better — it reports the bundler version rather than the source. A large diff from a correct rebuild is generated output, and the change description must say so.
 - **Merges.** Resolve by semantics: ask of each hunk whether the losing side's *meaning* survives in the merged tree, not whether the merged file looks coherent. Then review the merge commit itself against both parents. Green `validation:drift` proves the corpus is self-consistent, not that both sides survived.
 
 ## Alternatives considered
 
 **Repair the data because the message says the data is corrupt.** Rejected: the message names a symptom class ("store.corrupt"), not a cause. Acting on it costs a backup restore and the concurrent work inside it. The check that distinguishes the two cases is one `json_type` query, so there is no cost to checking first.
 
-**Keep the digest fresh continuously by regenerating after every skills commit.** Rejected, and later abandoned entirely: it multiplies the work, and each regeneration is invalidated by the next peer commit. Re-taking a snapshot at the end of a branch only moved the cost, so the mechanism was deleted and the rebuild-and-diff gate kept instead.
+**Keep the digest fresh continuously by regenerating after every skills commit.** Rejected, and later abandoned entirely: it multiplies the work, and each regeneration is invalidated by the next peer commit. Re-taking a snapshot at the end of a branch only moved the cost, so the mechanism was deleted; a build plus the suites that execute its output replace it, and neither a digest nor a byte diff stands in for them.
 
 **Accept "drift is green" as merge acceptance.** Rejected: drift validates self-consistency of the resulting corpus. A hand resolution that drops a sentence produces a perfectly self-consistent tree with one fact missing, which is precisely the failure mode being guarded against.
 

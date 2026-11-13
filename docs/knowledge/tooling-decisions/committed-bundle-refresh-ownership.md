@@ -28,7 +28,7 @@ During the audit-backlog iteration, three separate plans deleted engine exports 
 
 ## Decision
 
-A source change does **not** regenerate the committed bundles. The plan records the stale-bundle fact and `release:prepare` rebuilds them, so a published package never ships the previous engine. Branch evidence for a deletion is a source-level zero-consumer grep; the committed bytes are not part of branch evidence, and the CI freshness diff that compares them is advisory (`continue-on-error`) because it reddened unrelated PRs for exactly this version drift.
+A source change does **not** regenerate the committed bundles. The plan records the stale-bundle fact and `release:prepare` rebuilds them, so a published package never ships the previous engine. Branch evidence for a deletion is a source-level zero-consumer grep; the committed bytes are not part of branch evidence. CI builds the bundles (a broken build fails the job) but does not compare their bytes to the committed copies — that diff tracks the bundler version, so it reported drift on unrelated PRs for exactly this reason.
 
 ## Consequences
 
