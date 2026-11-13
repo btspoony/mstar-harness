@@ -44,7 +44,6 @@ import { isAbsolute } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
-import type { WorkflowSelectionView } from './types.ts'
 import type { HarnessResolver } from './gates/_shared.ts'
 import { readExecutionWorkflowSource, type SessionHint } from './gates/workflow-selection.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from './engine-status-store.ts'
@@ -71,11 +70,6 @@ import {
   mstarLinearAuthorizeStatusInvocation,
   mstarLinearStatusInvocation,
 } from './linear-settings.ts'
-
-// The wire address is declared ONCE for both halves (`./engine-status-wire.ts`)
-// and re-exported here for the host-side consumers that already import this
-// module; a rename can therefore never land on one side only.
-export { MSTAR_ENGINE_STATUS_NAMESPACE, MSTAR_SELECT_WORKFLOW_METHOD }
 
 /** Logger label for the endpoint's own degradation lines. */
 const ENDPOINT_LOGGER = 'mstar-engine-status-endpoint'
@@ -309,33 +303,6 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
       )
     }
     return { status: 'selected', sessionId: sid, workflowId: wid }
-  }
-
-  /**
-   * The session's CURRENT selection: the durable picker record folded with the
-   * session's structural identity. An unreadable binding record keeps
-   * the structural hint only (the pick is unknown, never invented), and the
-   * request's `sessionId` is NEVER substituted for the session identity.
-   */
-  private async currentSelection(
-    harnessDir: string,
-    sessionId: string,
-    cwd: string,
-    live: boolean,
-  ): Promise<WorkflowSelectionView> {
-    const stored = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
-    const selected = stored.kind === 'ok' ? stored.binding?.selectedWorkflowId : undefined
-    const hint: SessionHint = {
-      cwd,
-      sessionId,
-      ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
-    }
-    const source = await readExecutionWorkflowSource({ harnessDir }, hint)
-    if (source.kind === 'active') return { kind: 'active', workflowId: source.workflowId, dir: source.dir }
-    if (source.kind === 'unavailable') {
-      return { kind: 'error', code: source.code, message: source.message }
-    }
-    return source.selection
   }
 
   /**

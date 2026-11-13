@@ -23,7 +23,6 @@ import {
   findingsCleanupGate,
   readJson,
   resolveProjectDir,
-  resolveRepoEnforcement,
   resolveWorkflowDir,
   validateProjectRegister,
   validateStatus,
@@ -37,7 +36,7 @@ import type {
   ValidationResult,
 } from '@mstar-harness/engine'
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
-import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, actorAgentOf } from './_shared.ts'
+import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, actorAgentOf, resolveSeamHard } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { storeAuthorityRefusals } from './store-authority.ts'
 // Type-only (erased at runtime — no cycle): the adapter owns the shared
@@ -141,17 +140,6 @@ export function harnessDocKindOfTarget(harnessDir: string, targetPath: string): 
   if (name === WORKFLOW_SNAPSHOT_FILE && /^[^/]+\/snapshot\.json$/.test(relative(workflowDir, resolved))) return 'snapshot'
   if (isRegisterName && /^[^/]+\/residuals\.json$/i.test(relative(projectDir, resolved))) return 'register'
   return null
-}
-
-/**
- * Resolve the hard-enforcement flag: explicit Config override wins, else
- * the repo `.mstarc` `[config] enforcement`, else the iteration compass
- * frontmatter (`resolveRepoEnforcement`), else warn-only.
- */
-function resolveHard(harnessDir: string, config: Config): boolean {
-  if (config.enforcement === 'hard') return true
-  if (config.enforcement === 'soft') return false
-  return resolveRepoEnforcement(harnessDir).hard
 }
 
 /**
@@ -375,7 +363,7 @@ async function gateStatusIntent(
       rawPath: target.displayPath,
     })
     if (authorityRefusals.length > 0) {
-      const hard = resolveHard(harnessDir, config)
+      const hard = resolveSeamHard(harnessDir, config)
       ctx.logger(LOGGER_NAME).error(
         `${target.displayPath} ${operation} VETOED (store-authority refusal class; unconditional — an authority invariant, not the enforcement flag):\n${authorityRefusals.map(formatViolation).join('\n')}`,
       )
@@ -397,7 +385,7 @@ async function gateStatusIntent(
     // The adapter owns the shared status-gate core (missing file = first
     // create = pass); this listener adds enforcement + observability.
     const result = await adapter.statusGate(target.displayPath, kind, harnessDir)
-    const hard = resolveHard(harnessDir, config)
+    const hard = resolveSeamHard(harnessDir, config)
     const verdict = applyEnforcement(result, { hard })
     if (!verdict.ok) {
       if (verdict.hardBlocked) {
@@ -448,9 +436,9 @@ async function gateStatusIntent(
       // vetoed).
       let hard = false
       try {
-        hard = harnessDir !== null && resolveHard(harnessDir, config)
+        hard = resolveSeamHard(harnessDir, config)
       } catch {
-        // `resolveHard` reads `.mstarc`/compass frontmatter from disk — a
+        // `resolveSeamHard` reads `.mstarc`/compass frontmatter from disk — a
         // throwing resolve must not re-enter the envelope (second-catch
         // death loop); fall back to a fail-safe warn-mode advisory.
       }

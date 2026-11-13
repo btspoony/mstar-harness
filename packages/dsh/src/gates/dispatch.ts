@@ -32,7 +32,6 @@ import {
   parseEnforcementFlag,
   probeCheckoutRoot,
   readMainWorktree,
-  resolveRepoEnforcement,
 } from '@mstar-harness/engine'
 import type {
   AssignmentFields,
@@ -42,7 +41,7 @@ import type {
   WorktreeTrack,
 } from '@mstar-harness/engine'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
-import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, ROOT_SESSION_DISPATCH_BINDING, liveConfigValue } from './_shared.ts'
+import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, ROOT_SESSION_DISPATCH_BINDING, liveConfigValue, resolveSeamHard } from './_shared.ts'
 import type { Config, SessionHintRead } from './_shared.ts'
 // The root discriminator (`session.header.parentSession === undefined`) the
 // planMode bridge already reads: the dispatch gate reuses ONE lineage grammar
@@ -196,7 +195,7 @@ export function resolveDispatchHard(harnessDir: string | null, config: Config, a
   if (config.enforcement === 'hard') return true
   if (config.enforcement === 'soft') return false
   if (parseEnforcementFlag(assignmentHeaderRegion(assignmentText)).hard) return true
-  return harnessDir !== null && resolveRepoEnforcement(harnessDir).hard
+  return resolveSeamHard(harnessDir, config)
 }
 
 /** The hard-mode veto reason: one line per violation + the refusal channel. */

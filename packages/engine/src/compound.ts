@@ -34,30 +34,6 @@ function violation(severity: ValidationResult["severity"], code: string, message
 /** Required frontmatter fields (schema.yaml required_fields). */
 export const KNOWLEDGE_REQUIRED_FIELDS = ["module", "date", "problem_type", "category", "severity"] as const;
 
-/** All problem_type enum values (bug track + knowledge track). */
-export const KNOWLEDGE_PROBLEM_TYPES = [
-  "build_error",
-  "test_failure",
-  "runtime_error",
-  "performance_issue",
-  "database_issue",
-  "security_issue",
-  "ui_bug",
-  "integration_issue",
-  "logic_error",
-  "config_error",
-  "developer_experience",
-  "workflow_issue",
-  "best_practice",
-  "documentation_gap",
-  "architecture_pattern",
-  "design_pattern",
-  "tooling_decision",
-  "convention",
-  "api_design",
-  "testing_pattern",
-] as const;
-
 /** Bug-track problem_types (schema.yaml tracks.bug). */
 export const KNOWLEDGE_BUG_PROBLEM_TYPES = [
   "build_error",
@@ -84,6 +60,12 @@ export const KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES = [
   "convention",
   "api_design",
   "testing_pattern",
+] as const;
+
+/** All problem_type enum values (bug track + knowledge track). */
+export const KNOWLEDGE_PROBLEM_TYPES = [
+  ...KNOWLEDGE_BUG_PROBLEM_TYPES,
+  ...KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES,
 ] as const;
 
 /** Severity enum (schema.yaml required_fields.severity). */

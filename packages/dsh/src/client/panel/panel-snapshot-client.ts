@@ -35,8 +35,6 @@ import {
   PANEL_SNAPSHOT_ENDPOINT,
 } from '../../engine-status-wire.ts'
 
-export { MILESTONE_ADD_ENDPOINT, MILESTONE_ASSIGN_ENDPOINT, MILESTONE_REMOVE_ENDPOINT, MILESTONE_UPDATE_ENDPOINT }
-
 /**
  * ONE answer shape for every milestone write: the engine's own refusal passes
  * through verbatim; a success carries the engine's own receipt (contract C1).
@@ -56,8 +54,6 @@ export function parseMilestoneWriteResult(value: unknown): MilestoneWriteResult 
     message: str(row.message) ?? str(row.code) ?? 'the write was refused',
   }
 }
-
-export { DASHBOARD_VIEW_ENDPOINT, PANEL_SNAPSHOT_ENDPOINT }
 
 /**
  * Structural face of the client `connection` service the panel needs — the

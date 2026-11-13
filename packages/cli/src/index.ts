@@ -12,7 +12,7 @@ import { buildModelAssignments } from "./assignment";
 import { mapParserError, registerCliCommands } from "./command-adapter";
 import { compareSemver } from "@mstar-harness/commands";
 import { chooseCliVersion, detectPublishedLatest, ensureGlobalCli, formatVersionSkewWarning } from "./global-cli";
-import type { InitOptions } from "./types";
+import { SUPPORTED_TARGETS, type InitOptions } from "./types";
 import { parseCsv, readHarnessVersion, readJson, writeJson } from "./utils";
 import { registerMcpCommand } from "./mcp/command";
 
@@ -36,20 +36,23 @@ function hasExplicitModelFlags(options: InitOptions): boolean {
 
 /** Advanced override only — never calls `opencode models` (avoids silent hangs). */
 function resolveExplicitModelAssignments(options: InitOptions) {
-  const allow = (label: string, values: string[] | undefined, max: number, required: boolean) => {
+  // Each flag stands on its own: an absent group writes nothing.
+  const allow = (label: string, values: string[] | undefined, max: number, provided: boolean) => {
     if (!values?.length) {
-      if (required) throw new Error(`${label} is required when any --*-model flag is set.`);
+      // Presence of the flag, not the parse result: `--dev-models ",,"` asked for
+      // an override and must not read as "no flag given".
+      if (provided) throw new Error(`${label}: the supplied value names no model.`);
       return [] as string[];
     }
     if (values.length > max) throw new Error(`${label}: pick at most ${max} model(s).`);
     return values;
   };
   return buildModelAssignments({
-    pm: allow("pm-model", options.pmModel ? [options.pmModel] : undefined, 1, true),
-    strategic: allow("strategic-models", parseCsv(options.strategicModels), 3, true),
-    dev: allow("dev-models", parseCsv(options.devModels), 3, true),
-    qc: allow("qc-models", parseCsv(options.qcModels), 3, true),
-    others: allow("other-models", parseCsv(options.otherModels), 3, true),
+    pm: allow("pm-model", options.pmModel ? [options.pmModel] : undefined, 1, Boolean(options.pmModel)),
+    strategic: allow("strategic-models", parseCsv(options.strategicModels), 3, Boolean(options.strategicModels)),
+    dev: allow("dev-models", parseCsv(options.devModels), 3, Boolean(options.devModels)),
+    qc: allow("qc-models", parseCsv(options.qcModels), 3, Boolean(options.qcModels)),
+    others: allow("other-models", parseCsv(options.otherModels), 3, Boolean(options.otherModels)),
   });
 }
 
@@ -197,10 +200,10 @@ program.addHelpText(
 );
 program
   .command("init")
-  .description("Interactive/non-interactive setup for target agent bootstrap")
-  .option("-y, --yes", "Non-interactive mode")
-  .option("--target <target>", "Install target", "opencode")
-  .option("--scope <scope>", "Config scope: global|project (default: project, or the target's single supported scope)")
+  .description("Target-aware setup for agent bootstrap")
+  .option("-y, --yes", "Accepted for compatibility; only suppresses the scope-default notice")
+  .addOption(new Option("--target <target>", "Install target").choices([...SUPPORTED_TARGETS]).default("opencode"))
+  .addOption(new Option("--scope <scope>", "Config scope (default: project, or the target's single supported scope)").choices(["global", "project"]))
   .option("--output <path>", "Config file path override, relative to project root")
   .option("--dry-run", "Preview result without writing config")
   .option("--no-fallbacks", "Skip installing the dsh-llm-fallbacks plugin (dsh target only)")

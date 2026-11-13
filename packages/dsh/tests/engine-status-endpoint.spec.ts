@@ -32,11 +32,9 @@ import * as endpointStore from '../src/engine-status-store.ts'
 import * as workflowSelection from '../src/gates/workflow-selection.ts'
 import {
   installEngineStatusEndpoint,
-  MSTAR_ENGINE_STATUS_NAMESPACE,
-  MSTAR_SELECT_WORKFLOW_METHOD,
   type MstarSelectWorkflowResult,
 } from '../src/engine-status-endpoint.ts'
-import { SELECT_WORKFLOW_ENDPOINT } from '../src/engine-status-wire.ts'
+import { MSTAR_ENGINE_STATUS_NAMESPACE, SELECT_WORKFLOW_ENDPOINT } from '../src/engine-status-wire.ts'
 import { bootApp, seedActiveWorkflow, seedHarness, seedStore, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined

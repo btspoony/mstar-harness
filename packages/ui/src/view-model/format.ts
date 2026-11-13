@@ -17,9 +17,6 @@ export const UNKNOWN_DATE = "Date unknown";
 /** The copy for a value the read did not determine (never `0`, never blank). */
 export const NOT_KNOWN = "Not known";
 
-/** The copy for a concept this subject does not declare (IA §5 `absent`). */
-export const NOT_DECLARED = "Not declared";
-
 /**
  * A stored timestamp in the prototype's own display form (`prototype.html`):
  * `2026-10-23 09:14`.
