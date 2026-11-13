@@ -31,28 +31,35 @@ function logStep(message: string) {
 }
 
 function hasExplicitModelFlags(options: InitOptions): boolean {
-  return Boolean(options.pmModel || options.strategicModels || options.devModels || options.qcModels || options.otherModels);
+  // Presence is the option being supplied, not its truthiness: `--dev-models ""`
+  // asked for an override and must not read as "no flag given".
+  return options.pmModel !== undefined || options.strategicModels !== undefined || options.devModels !== undefined
+    || options.qcModels !== undefined || options.otherModels !== undefined;
+}
+
+/** Model ids from one override flag; `undefined` means the flag was absent. */
+function modelFlagValues(raw: string | undefined, csv: boolean): string[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!csv) return [raw.trim()].filter(Boolean);
+  return parseCsv(raw) ?? [];
 }
 
 /** Advanced override only — never calls `opencode models` (avoids silent hangs). */
-function resolveExplicitModelAssignments(options: InitOptions) {
-  // Each flag stands on its own: an absent group writes nothing.
-  const allow = (label: string, values: string[] | undefined, max: number, provided: boolean) => {
-    if (!values?.length) {
-      // Presence of the flag, not the parse result: `--dev-models ",,"` asked for
-      // an override and must not read as "no flag given".
-      if (provided) throw new Error(`${label}: the supplied value names no model.`);
-      return [] as string[];
-    }
+function resolveExplicitModelAssignments(options: InitOptions): Record<string, string> {
+  // Each flag stands on its own: an absent group writes nothing, a present flag
+  // that names no model is refused with the same sentence whatever its shape.
+  const allow = (label: string, values: string[] | undefined, max: number) => {
+    if (values === undefined) return [] as string[];
+    if (values.length === 0) throw new Error(`${label}: the supplied value names no model.`);
     if (values.length > max) throw new Error(`${label}: pick at most ${max} model(s).`);
     return values;
   };
   return buildModelAssignments({
-    pm: allow("pm-model", options.pmModel ? [options.pmModel] : undefined, 1, Boolean(options.pmModel)),
-    strategic: allow("strategic-models", parseCsv(options.strategicModels), 3, Boolean(options.strategicModels)),
-    dev: allow("dev-models", parseCsv(options.devModels), 3, Boolean(options.devModels)),
-    qc: allow("qc-models", parseCsv(options.qcModels), 3, Boolean(options.qcModels)),
-    others: allow("other-models", parseCsv(options.otherModels), 3, Boolean(options.otherModels)),
+    pm: allow("pm-model", modelFlagValues(options.pmModel, false), 1),
+    strategic: allow("strategic-models", modelFlagValues(options.strategicModels, true), 3),
+    dev: allow("dev-models", modelFlagValues(options.devModels, true), 3),
+    qc: allow("qc-models", modelFlagValues(options.qcModels, true), 3),
+    others: allow("other-models", modelFlagValues(options.otherModels, true), 3),
   });
 }
 
