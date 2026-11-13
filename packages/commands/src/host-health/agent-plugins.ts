@@ -1,6 +1,6 @@
 import fs, { realpathSync } from "node:fs";
 import path from "node:path";
-import { extractFrontmatterAndBody, readJson } from "@mstar-harness/engine";
+import { readJson } from "@mstar-harness/engine";
 
 /**
  * Agent Plugins v1.0.0 conformance validator (https://agent-plugins.org/specification).
@@ -112,19 +112,21 @@ function parseScalar(raw: string): string {
   return trimmed;
 }
 
+/** The doctor's own fence rule: CRLF is accepted, but a closing fence at EOF
+ * without its newline, or an empty block, is not a fence. The shared engine
+ * reader accepts both, so it cannot decide whether a skill has frontmatter. */
+const FRONTMATTER_FENCE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/;
+
 /**
  * Minimal YAML frontmatter extractor for SKILL.md files. Returns the parsed
  * key/value map (string scalars only) or null when no `---` block is present.
  */
 function parseFrontmatter(filePath: string): Record<string, string> | null {
   const content = fs.readFileSync(filePath, "utf8");
-  const { frontmatter, body } = extractFrontmatterAndBody(content);
-  // The shared reader answers an empty frontmatter both for "no fence" and for
-  // an empty fenced block; only the body tells them apart, and the absent fence
-  // is the null contract.
-  if (frontmatter === "" && body === content) return null;
+  const match = content.match(FRONTMATTER_FENCE);
+  if (!match) return null;
   const result: Record<string, string> = {};
-  for (const line of frontmatter.split("\n")) {
+  for (const line of match[1].split(/\r?\n/)) {
     const field = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
     if (!field) continue;
     result[field[1]] = parseScalar(field[2]);
