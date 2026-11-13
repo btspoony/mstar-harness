@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { accessSync, constants, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, closeSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { attestEvaluatorChannel } from "./evaluator-channel-trust.js";
 import type { EvaluatorChannel, EvaluatorChannelResponse, JudgmentInvocation } from "./runtime.js";
 
 const MAX_REQUEST_BYTES = 1_048_576;
@@ -94,7 +93,7 @@ export async function connectEvaluatorChannelForTest(invocation: JudgmentInvocat
 }
 
 async function connectAtSupervisorMounts(mounts: Readonly<{ requestDirectory: string; statusPath: string }>, signal: AbortSignal): Promise<EvaluatorChannel> {
-  return attestEvaluatorChannel(await createChannel(mounts.requestDirectory, mounts.statusPath, signal));
+  return createChannel(mounts.requestDirectory, mounts.statusPath, signal);
 }
 
 /** Test-only injection for exercising the production connection with approved sibling mounts. */

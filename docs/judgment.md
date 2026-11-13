@@ -1,6 +1,6 @@
 # Judgment runtime and shadow workflows
 
-> The `mstar-harness judgment review-advice` command has been retired. The judgment runtime, evaluator-channel API, and shadow-supervisor APIs remain available; the optional Stage 3 shadow exercise below does not use that command.
+> The `mstar-harness judgment review-advice` command and its collection entry `runReviewAdvice` are retired. `evaluateNative`, `connectEvaluatorChannel`, and the shadow-supervisor APIs remain. Channel confinement is the supervisor mount and uid checks inside `connectEvaluatorChannel` (`jev.channel-supervisor-unattested`). The shadow path calls `evaluateNative` directly after binding the mailbox request by digest; it does not apply a separate channel-attestation gate.
 
 ## Optional Stage 3 shadow exercise
 

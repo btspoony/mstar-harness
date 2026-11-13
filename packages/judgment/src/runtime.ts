@@ -1,4 +1,4 @@
-import { closeSync, constants, createReadStream, fstatSync, openSync, readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import { findMstarc, parseMstarc, type MstarcConfig } from "@mstar-harness/engine";
@@ -14,11 +14,8 @@ import { buildA05Request, canonicalJsonBytes, type PreparedRequest } from "./rev
 import { normalizeTypeSafeResponse, type NormalizedTypeSafeResponse } from "./normalize.js";
 import { sendNativeRequest, type NativeTransportInput, type NativeTransportResult } from "./typesafe.js";
 import { createRunBudgetPolicy, reserveRunBudget, RunBudgetError, type ReusedRunResult, type RunReservation } from "./run-budget.js";
-import { isAttestedEvaluatorChannel } from "./evaluator-channel-trust.js";
 
-const CLI_SCHEMA = "mstar.judgment-cli/v1" as const;
 const RESULT_SCHEMA = "mstar.judgment-result/v1" as const;
-const MAX_PILOT_BYTES = 1_048_576;
 const MODE_OBSERVATION_MS = 100;
 
 type InvalidConfig = Readonly<{ state: "invalid"; code: string }>;
@@ -76,15 +73,6 @@ export type JudgmentInvocation = Readonly<{
   pilotPath: string | null;
 }>;
 
-export type JudgmentCliStatus = "disabled" | "recorded" | "unavailable" | "invalid" | "cancelled";
-export type JudgmentCliResult = Readonly<{
-  schema: typeof CLI_SCHEMA;
-  contractRevision: typeof CONTRACT_REVISION;
-  status: JudgmentCliStatus;
-  advice: null;
-  code?: string;
-}>;
-
 export type EvaluatorChannelResponse = Readonly<{
   status: "recorded" | "unavailable" | "invalid";
   code?: string;
@@ -95,301 +83,10 @@ export type EvaluatorChannel = Readonly<{
   cancel(): Promise<void>;
 }>;
 
-export type RuntimeEffects = Readonly<{
-  resolveConfig?: typeof resolveJudgmentConfig;
-  readFile?: (path: string, maxBytes: number, signal: AbortSignal) => Promise<Uint8Array>;
-  readStdin?: (maxBytes: number, signal: AbortSignal) => Promise<Uint8Array>;
-  isStdinTTY?: () => boolean;
-}>;
-
 export class JudgmentRuntimeError extends Error {
   constructor(readonly code: string, message: string) {
     super(message);
     this.name = "JudgmentRuntimeError";
-  }
-}
-
-function cliResult(status: JudgmentCliStatus, code?: string): JudgmentCliResult {
-  return code === undefined
-    ? Object.freeze({ schema: CLI_SCHEMA, contractRevision: CONTRACT_REVISION, status, advice: null })
-    : Object.freeze({ schema: CLI_SCHEMA, contractRevision: CONTRACT_REVISION, status, advice: null, code });
-}
-
-async function fileBytes(path: string, maxBytes: number, workspace: string, signal: AbortSignal): Promise<Uint8Array> {
-  if (signal.aborted) throw activeError(signal);
-  const canonicalPath = realpathSync(path);
-  const canonicalRelative = relative(workspace, canonicalPath);
-  if (canonicalRelative === ".." || canonicalRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(canonicalRelative)) {
-    throw new JudgmentRuntimeError("jev.input-outside-workspace", "Input must remain inside its workspace");
-  }
-  const noFollow = constants.O_NOFOLLOW ?? 0;
-  const fd = openSync(canonicalPath, constants.O_RDONLY | noFollow);
-  try {
-    if (!fstatSync(fd).isFile()) throw new JudgmentRuntimeError("jev.input-invalid", "Input must be a regular file");
-    const stream = createReadStream(canonicalPath, {
-      fd,
-      autoClose: false,
-      highWaterMark: 8_192,
-      start: 0,
-      end: maxBytes,
-      signal,
-    });
-    try {
-      const chunks: Buffer[] = [];
-      let total = 0;
-      for await (const value of stream) {
-        if (signal.aborted) throw activeError(signal);
-        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-        total += chunk.byteLength;
-        if (total > maxBytes) throw new JudgmentRuntimeError("jev.input-too-large", "Input exceeds its byte limit");
-        chunks.push(chunk);
-      }
-      if (signal.aborted) throw activeError(signal);
-      return Buffer.concat(chunks, total);
-    } finally {
-      stream.destroy();
-    }
-  } finally {
-    closeSync(fd);
-  }
-}
-function workspaceInputPath(cwd: string, workspace: string, path: string): string {
-  const resolved = resolve(cwd, path);
-  const inputRelative = relative(workspace, resolved);
-  if (inputRelative === ".." || inputRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(inputRelative)) {
-    throw new JudgmentRuntimeError("jev.input-outside-workspace", "Input must remain inside its workspace");
-  }
-  return resolved;
-}
-
-function stdinBytes(maxBytes: number, signal: AbortSignal): Promise<Uint8Array> {
-  const { promise, resolve, reject } = Promise.withResolvers<Uint8Array>();
-  if (signal.aborted) {
-    reject(activeError(signal));
-    return promise;
-  }
-  const chunks: Buffer[] = [];
-  let total = 0;
-  const cleanup = () => {
-    process.stdin.removeListener("data", onData);
-    process.stdin.removeListener("end", onEnd);
-    process.stdin.removeListener("error", onError);
-    signal.removeEventListener("abort", onAbort);
-    process.stdin.pause();
-  };
-  const onData = (value: Buffer | string) => {
-    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-    total += chunk.byteLength;
-    if (total > maxBytes) {
-      cleanup();
-      reject(new JudgmentRuntimeError("jev.input-too-large", "Input exceeds its byte limit"));
-      return;
-    }
-    chunks.push(chunk);
-  };
-  const onEnd = () => {
-    cleanup();
-    resolve(Buffer.concat(chunks, total));
-  };
-  const onError = (error: Error) => {
-    cleanup();
-    reject(error);
-  };
-  const onAbort = () => {
-    cleanup();
-    reject(activeError(signal));
-  };
-  process.stdin.pause();
-  process.stdin.on("data", onData);
-  process.stdin.once("end", onEnd);
-  process.stdin.once("error", onError);
-  signal.addEventListener("abort", onAbort, { once: true });
-  process.stdin.resume();
-  return promise;
-}
-
-function parseObject(bytes: Uint8Array, code: string): unknown {
-  let text: string;
-  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
-  catch { throw new JudgmentRuntimeError(code, "Input is not valid UTF-8"); }
-  try { return JSON.parse(text) as unknown; }
-  catch { throw new JudgmentRuntimeError(code, "Input is not valid JSON"); }
-}
-
-function pilotDigest(pilot: JudgmentPilot): string {
-  return createHash("sha256").update(canonicalJsonBytes(pilot)).digest("hex");
-}
-
-function sameEnabledConfig(left: ResolvedJudgmentConfig, right: ResolvedJudgmentConfig): boolean {
-  return left.state === "enabled" && right.state === "enabled" && left.mode === right.mode &&
-    left.transport === right.transport && left.cwd === right.cwd && left.workspace === right.workspace &&
-    left.configPath === right.configPath;
-}
-
-function invocationIsValid(invocation: JudgmentInvocation): boolean {
-  return invocation !== null && typeof invocation === "object" &&
-    typeof invocation.cwd === "string" && typeof invocation.workspace === "string" &&
-    (invocation.pilotPath === null || typeof invocation.pilotPath === "string") &&
-    invocation.input !== null && typeof invocation.input === "object" &&
-    (invocation.input.kind === "stdin" || (invocation.input.kind === "file" && typeof invocation.input.path === "string"));
-}
-
-function channelIsValid(channel: EvaluatorChannel | null): channel is EvaluatorChannel {
-  return channel !== null && typeof channel === "object" &&
-    isAttestedEvaluatorChannel(channel) &&
-    typeof channel.submit === "function" && typeof channel.cancel === "function";
-}
-
-function publicChannelResponse(value: EvaluatorChannelResponse): JudgmentCliResult {
-  if (value === null || typeof value !== "object" ||
-      !["recorded", "unavailable", "invalid"].includes(value.status) ||
-      (value.code !== undefined && !/^[a-z0-9][a-z0-9.-]{0,95}$/.test(value.code))) {
-    return cliResult("unavailable", "jev.channel-response-invalid");
-  }
-  return cliResult(value.status, value.code);
-}
-
-export async function runReviewAdvice(
-  invocation: JudgmentInvocation,
-  signal: AbortSignal,
-  channel: EvaluatorChannel | null,
-  effects: RuntimeEffects = {},
-): Promise<JudgmentCliResult> {
-  if (!invocationIsValid(invocation)) return cliResult("invalid", "jev.invocation-invalid");
-  const resolveConfig = effects.resolveConfig ?? resolveJudgmentConfig;
-  const config = resolveConfig(invocation.cwd, invocation.workspace);
-  if (config.state === "disabled") return cliResult("disabled");
-  if (config.state === "invalid") return cliResult("invalid", config.code);
-  if (channel === null || !channelIsValid(channel)) return cliResult("unavailable", "jev.channel-unavailable");
-  if (invocation.pilotPath === null) return cliResult("invalid", "jev.pilot-required");
-  if (signal.aborted) return cliResult("cancelled", "jev.review-cancelled");
-
-  const readFile = effects.readFile ?? ((path, maxBytes, readSignal) => fileBytes(path, maxBytes, config.workspace, readSignal));
-  let collectionDeadline: NodeJS.Timeout | undefined;
-  const collectionController = new AbortController();
-  const abortCollectionFromCaller = () => collectionController.abort("review-cancelled");
-  signal.addEventListener("abort", abortCollectionFromCaller, { once: true });
-  const collectionPoll = setInterval(() => {
-    try {
-      if (!sameEnabledConfig(config, resolveConfig(invocation.cwd, invocation.workspace))) collectionController.abort("revoked");
-    } catch {
-      collectionController.abort("revoked");
-    }
-  }, MODE_OBSERVATION_MS);
-  const stopWatchingConfig = () => {
-    clearInterval(collectionPoll);
-    signal.removeEventListener("abort", abortCollectionFromCaller);
-  };
-  const assertConfigCurrent = () => {
-    if (signal.aborted) collectionController.abort("review-cancelled");
-    if (!collectionController.signal.aborted) {
-      try {
-        if (!sameEnabledConfig(config, resolveConfig(invocation.cwd, invocation.workspace))) collectionController.abort("revoked");
-      } catch {
-        collectionController.abort("revoked");
-      }
-    }
-    if (collectionController.signal.aborted) throw activeError(collectionController.signal);
-  };
-
-  try {
-    let pilot: JudgmentPilot;
-    try {
-      assertConfigCurrent();
-      const pilotPath = workspaceInputPath(config.cwd, config.workspace, invocation.pilotPath);
-      const pilotBytes = await raceWithSignal(Promise.resolve(readFile(pilotPath, MAX_PILOT_BYTES, collectionController.signal)), collectionController.signal);
-      assertConfigCurrent();
-      pilot = validatePilot(parseObject(pilotBytes, "jev.pilot-invalid"));
-    } catch (error) {
-      if (signal.aborted) return cliResult("cancelled", "jev.review-cancelled");
-      if (collectionController.signal.reason === "revoked") return cliResult("unavailable", "jev.revoked");
-      if (error instanceof JudgmentRuntimeError) return cliResult("invalid", error.code);
-      return cliResult("invalid", "jev.pilot-invalid");
-    }
-    if (pilot.mode !== config.mode || pilot.transport !== config.transport || pilot.permission.dataClass !== "synthetic-only") {
-      return cliResult("invalid", "jev.pilot-config-mismatch");
-    }
-    const maxPackBytes = pilot.limits.maxPackBytes;
-    collectionDeadline = setTimeout(() => collectionController.abort("deadline"), pilot.limits.timeoutMs);
-    let packBytes: Uint8Array;
-    try {
-      assertConfigCurrent();
-      if (invocation.input.kind === "file") {
-        const packPath = workspaceInputPath(config.cwd, config.workspace, invocation.input.path);
-        packBytes = await raceWithSignal(Promise.resolve(readFile(packPath, maxPackBytes, collectionController.signal)), collectionController.signal);
-      } else {
-        if (effects.isStdinTTY?.() ?? process.stdin.isTTY === true) throw new JudgmentRuntimeError("jev.stdin-tty", "TTY stdin cannot be used as a review pack source");
-        packBytes = await raceWithSignal(Promise.resolve((effects.readStdin ?? stdinBytes)(maxPackBytes, collectionController.signal)), collectionController.signal);
-      }
-      assertConfigCurrent();
-      if (packBytes.byteLength > maxPackBytes) throw new JudgmentRuntimeError("jev.input-too-large", "Input exceeds its byte limit");
-    } catch (error) {
-      if (signal.aborted) return cliResult("cancelled", "jev.review-cancelled");
-      if (collectionController.signal.reason === "deadline") return cliResult("unavailable", "jev.deadline");
-      if (collectionController.signal.reason === "revoked") return cliResult("unavailable", "jev.revoked");
-      if (error instanceof JudgmentRuntimeError) return cliResult("invalid", error.code);
-      return cliResult("invalid", "jev.pack-unavailable");
-    }
-
-    let pack: ReviewDecisionPack;
-    let canonicalPack: Uint8Array;
-    try {
-      assertConfigCurrent();
-      pack = validatePack(parseObject(packBytes, "jev.pack-invalid"));
-      canonicalPack = canonicalJsonBytes(pack);
-      if (canonicalPack.byteLength > maxPackBytes) return cliResult("invalid", "jev.input-too-large");
-      buildA05Request(pack, pilot);
-    } catch {
-      if (signal.aborted) return cliResult("cancelled", "jev.review-cancelled");
-      if (collectionController.signal.reason === "revoked") return cliResult("unavailable", "jev.revoked");
-      return cliResult("invalid", "jev.pack-invalid");
-    }
-
-    stopWatchingConfig();
-    const latest = resolveConfig(invocation.cwd, invocation.workspace);
-    if (!sameEnabledConfig(config, latest)) return cliResult("unavailable", "jev.revoked");
-    if (signal.aborted) return cliResult("cancelled", "jev.review-cancelled");
-
-    const controller = new AbortController();
-    const abortFromCaller = () => controller.abort("review-cancelled");
-    signal.addEventListener("abort", abortFromCaller, { once: true });
-    const timer = setTimeout(() => controller.abort("deadline"), pilot.limits.timeoutMs);
-    const poll = setInterval(() => {
-      try {
-        if (!sameEnabledConfig(config, resolveConfig(invocation.cwd, invocation.workspace))) controller.abort("revoked");
-      } catch {
-        controller.abort("revoked");
-      }
-    }, MODE_OBSERVATION_MS);
-    let cancelRequested = false;
-    const cancelChannel = () => {
-      if (cancelRequested) return;
-      cancelRequested = true;
-      try { void channel.cancel().catch(() => {}); } catch { /* revoked channel is no longer consumable */ }
-    };
-    controller.signal.addEventListener("abort", cancelChannel, { once: true });
-    try {
-      const response = await raceWithSignal(
-        channel.submit(Object.freeze({ packBytes: canonicalPack, pilotDigest: pilotDigest(pilot) }), controller.signal),
-        controller.signal,
-      );
-      if (controller.signal.aborted) return cliResult(signal.aborted ? "cancelled" : "unavailable", signal.aborted ? "jev.review-cancelled" : "jev.revoked");
-      if (!sameEnabledConfig(config, resolveConfig(invocation.cwd, invocation.workspace))) return cliResult("unavailable", "jev.revoked");
-      return publicChannelResponse(response);
-    } catch {
-      if (signal.aborted) return cliResult("cancelled", "jev.review-cancelled");
-      if (controller.signal.reason === "revoked") return cliResult("unavailable", "jev.revoked");
-      if (controller.signal.reason === "deadline") return cliResult("unavailable", "jev.deadline");
-      return cliResult("unavailable", "jev.channel-failed");
-    } finally {
-      clearTimeout(timer);
-      clearInterval(poll);
-      signal.removeEventListener("abort", abortFromCaller);
-      controller.signal.removeEventListener("abort", cancelChannel);
-    }
-  } finally {
-    if (collectionDeadline !== undefined) clearTimeout(collectionDeadline);
-    stopWatchingConfig();
   }
 }
 
@@ -431,14 +128,6 @@ function raceWithSignal<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) return Promise.reject(activeError(signal));
   const { promise, reject } = Promise.withResolvers<never>();
   const abort = () => reject(activeError(signal));
-  signal.addEventListener("abort", abort, { once: true });
-  return Promise.race([work, promise]).finally(() => signal.removeEventListener("abort", abort));
-}
-
-function raceWithCallerSignal<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(new JudgmentRuntimeError("jev.review-cancelled", "Whole-review evaluation was cancelled"));
-  const { promise, reject } = Promise.withResolvers<never>();
-  const abort = () => reject(new JudgmentRuntimeError("jev.review-cancelled", "Whole-review evaluation was cancelled"));
   signal.addEventListener("abort", abort, { once: true });
   return Promise.race([work, promise]).finally(() => signal.removeEventListener("abort", abort));
 }
