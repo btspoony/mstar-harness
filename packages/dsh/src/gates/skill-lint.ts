@@ -10,11 +10,10 @@
  * Module boundary: no barrel — the entry imports by explicit relative path;
  * public exports are re-exported verbatim by the entry.
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { basename, dirname, resolve, sep } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
-  applyEnforcement,
   classifySkillLint,
   findEphemeralCitations,
   lintFiveQuestion,
@@ -25,7 +24,7 @@ import {
 } from '@mstar-harness/engine'
 import type { EphemeralCitation, GateResult, ValidationResult } from '@mstar-harness/engine'
 import type { FsTarget, FsWriteIntent } from '@deepseek-ai/dsh-fs'
-import { formatViolation, packagedSkillsDir, resolveSeamHard, HarnessResolver, actorAgentOf } from './_shared.ts'
+import { formatViolation, packagedSkillsDir, runContentBlindIntentGate, HarnessResolver, actorAgentOf } from './_shared.ts'
 import type { Config } from './_shared.ts'
 /** Logger label for the skill lint gate (dsh logger naming: `<scope>/<subject>`). */
 const SKILL_LINT_LOGGER = 'mstar/skill-lint'
@@ -232,57 +231,51 @@ function skillCanonicalForm(target: FsTarget): string {
  * (error-containment envelope — an untyped throw from the gate would
  * spuriously block legitimate writes).
  */
-function gateSkillIntent(ctx: Context, harnessDir: string | null, config: Config, target: FsTarget): void {
+async function gateSkillIntent(ctx: Context, harnessDir: string | null, config: Config, target: FsTarget): Promise<void> {
   try {
     const roots = skillRootsOf(config)
     if (roots.length === 0) return
     if (!isSkillTarget(roots, target)) return
     const skillPath = resolve(target.displayPath)
-    if (!existsSync(skillPath)) return // first create — nothing to lint yet
-    let doc: string
-    try {
-      doc = readFileSync(skillPath, 'utf8')
-    } catch (error) {
-      // Single-read contract: an unreadable on-disk doc is an unexpected
-      // error — degrade to allow with a degraded advisory (never a throw).
-      ctx.logger(SKILL_LINT_LOGGER).error(`skill lint degraded to allow (cannot read ${skillPath}): ${(error as Error).message}`)
+    const emit = (result: GateResult, hard: boolean, repair: boolean): void => {
       ctx.emit('mstar/skill-lint', {
         operation: 'write',
         target: target.displayPath,
         canonical: skillCanonicalForm(target),
-        result: { ok: true, violations: [] },
-        hard: false,
-        degraded: true,
+        result,
+        hard,
+        ...(repair ? { repair: true } : {}),
       })
-      return
     }
-    // Profile identity (spec A4): the trusted resolved skill-target
-    // basename — the configured skill-root boundary, never the YAML name.
-    const result = lintSkillDoc(doc, { skillId: basename(dirname(skillPath)) })
-    if (result.ok) return
-    const hard = resolveSeamHard(harnessDir, config)
-    // The advisory carries the ENFORCED verdict (status-gate shape:
-    // `hardBlocked` true on the hard repair escape — the write would have
-    // been blocked, and is allowed as a repair).
-    const verdict = applyEnforcement(result, { hard })
-    // resolveAssetPath renders the canonical skill-relative asset form
-    // (mstar-skill-authoring § Skill-relative script and asset paths) — the
-    // fix instruction for the violating file in the log line below.
-    const fixHint = resolveAssetPath(skillNameOf(target), 'SKILL.md', 'dsh')
-    if (hard) {
-      // Repair escape: the current document is already invalid; this write
-      // may BE the repair — allow, but make the degraded control loud
-      // (error-level log + repair advisory, `hard: true`).
-      ctx.logger(SKILL_LINT_LOGGER).error(
-        `SKILL.md write to ${target.displayPath} ALLOWED as repair (Enforcement: hard; the current on-disk document is already invalid — the intent carries no incoming content, so the vetoable signal is only the pre-write state):\n${verdict.violations.map(formatViolation).join('\n')}\n${fixHint}`,
-      )
-      ctx.emit('mstar/skill-lint', { operation: 'write', target: target.displayPath, canonical: skillCanonicalForm(target), result: verdict, hard, repair: true })
-    } else {
-      ctx.logger(SKILL_LINT_LOGGER).warn(
-        `SKILL.md write to ${target.displayPath} (advisory):\n${verdict.violations.map(formatViolation).join('\n')}\n${fixHint}`,
-      )
-      ctx.emit('mstar/skill-lint', { operation: 'write', target: target.displayPath, canonical: skillCanonicalForm(target), result: verdict, hard })
-    }
+    await runContentBlindIntentGate({
+      logger: ctx.logger(SKILL_LINT_LOGGER),
+      // resolveAssetPath renders the canonical skill-relative asset form
+      // (mstar-skill-authoring § Skill-relative script and asset paths) — the
+      // fix instruction for the violating file in the decision log lines.
+      logDetailOf: () => resolveAssetPath(skillNameOf(target), 'SKILL.md', 'dsh'),
+      subject: `SKILL.md write to ${target.displayPath}`,
+      target: { path: skillPath },
+      harnessDir,
+      config,
+      read: () => readFileSync(skillPath, 'utf8'),
+      // Profile identity (spec A4): the trusted resolved skill-target
+      // basename — the configured skill-root boundary, never the YAML name.
+      validate: (doc: string) => lintSkillDoc(doc, { skillId: basename(dirname(skillPath)) }),
+      onReadError: (error) => {
+        // Single-read contract: an unreadable on-disk doc is an unexpected
+        // error — degrade to allow with a degraded advisory (never a throw).
+        ctx.logger(SKILL_LINT_LOGGER).error(`skill lint degraded to allow (cannot read ${skillPath}): ${error.message}`)
+        ctx.emit('mstar/skill-lint', {
+          operation: 'write',
+          target: target.displayPath,
+          canonical: skillCanonicalForm(target),
+          result: { ok: true, violations: [] },
+          hard: false,
+          degraded: true,
+        })
+      },
+      emit,
+    })
   } catch (error) {
     ctx.logger(SKILL_LINT_LOGGER).error(`skill lint gate degraded to allow: ${(error as Error).message}`)
     try {
@@ -314,6 +307,6 @@ export async function skillWriteIntentListener(
   actor: object | undefined,
   next: () => FsWriteIntent | undefined | Promise<FsWriteIntent | undefined>,
 ): Promise<FsWriteIntent | undefined> {
-  gateSkillIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, target)
+  await gateSkillIntent(ctx, resolver.forAgent(actorAgentOf(actor)), config, target)
   return await next()
 }

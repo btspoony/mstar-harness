@@ -8,8 +8,9 @@
  * Enforcement is the status-gate repair-escape contract: the intent waterfall
  * carries no incoming content, so hard mode with an ALREADY-invalid document
  * allows the write as a repair (loud error log + `repair: true` advisory) —
- * EXCEPT the store-authority refusal class, which no write can repair and
- * which is therefore vetoed (throw; {@link StatusVetoError}).
+ * EXCEPT the authority refusal classes (store-authority and cleanup-authority),
+ * which no write can repair and which are therefore vetoed (throw;
+ * {@link StatusVetoError}).
  *
  * Module boundary: no barrel — the entry and the adapter import by explicit
  * relative path; public exports (`StatusGateAdvisory`) are re-exported
@@ -19,7 +20,6 @@ import { existsSync } from 'node:fs'
 import { basename, join, relative, resolve } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
 import {
-  applyEnforcement,
   findingsCleanupGate,
   readJson,
   resolveProjectDir,
@@ -36,7 +36,7 @@ import type {
   ValidationResult,
 } from '@mstar-harness/engine'
 import type { FsTarget, FsVersion, FsWriteIntent } from '@deepseek-ai/dsh-fs'
-import { STATUS_FILE, asRecord, formatViolation, HarnessResolver, actorAgentOf, resolveSeamHard } from './_shared.ts'
+import { STATUS_FILE, asRecord, formatViolation, runContentBlindIntentGate, HarnessResolver, actorAgentOf, resolveSeamHard } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { storeAuthorityRefusals } from './store-authority.ts'
 // Type-only (erased at runtime — no cycle): the adapter owns the shared
@@ -53,12 +53,12 @@ const LOGGER_NAME = 'mstar/status-gate'
  * would violate the seam contract. Consumers (later tasks, catalogs) observe
  * this event for model-visible/session-log surfacing.
  *
- * The status gate throws only the typed store-authority veto
- * ({@link StatusVetoError}) — the one refusal this content-blind seam CAN
- * make, because no write to the document can repair an unreadable issue
- * authority. Every other decision surfaces through this advisory: the intent
- * waterfall carries no incoming content, so the only hard-mode decision about
- * an ALREADY-invalid document is to allow the write as a repair escape.
+ * The status gate throws only the typed veto ({@link StatusVetoError}) — the
+ * two authority refusal classes this content-blind seam CAN decide, because no
+ * write to the document can repair an unreadable issue authority. Every other
+ * decision surfaces through this advisory: the intent waterfall carries no
+ * incoming content, so the only hard-mode decision about an ALREADY-invalid
+ * document is to allow the write as a repair escape.
  * Unexpected internal errors degrade to an allow with `degraded: true`.
  */
 export interface StatusGateAdvisory {
@@ -147,8 +147,8 @@ export function harnessDocKindOfTarget(harnessDir: string, targetPath: string): 
  * authority cannot be consulted at all — missing (`store.not-initialized`),
  * staged (`store.not-active`), corrupt (`store.corrupt`), below-floor /
  * capability-less (`store.runtime-unsupported`), drifted (`store.schema-*`) or
- * busy store. The store-authority refusal class: the cleanup gate's VERDICT is
- * unknown, as opposed to a cleanup violation the authority actually reported.
+ * busy store. The cleanup-authority refusal class: the cleanup gate's VERDICT
+ * is unknown, as opposed to a cleanup violation the authority actually reported.
  *
  * The fs-intent repair escape is unsound for this class: the violation says the
  * authority could not be READ, so the write that would "repair" it is a store
@@ -161,8 +161,8 @@ export function harnessDocKindOfTarget(harnessDir: string, targetPath: string): 
 const CLEANUP_AUTHORITY_UNAVAILABLE_CODE = 'findings.cleanup-authority-unavailable'
 
 /**
- * Typed hard-mode veto for the status gate's store-authority refusal class
- * (the dsh fs-policy veto channel: "veto = throw"; the fs tool turns the throw
+ * Typed veto for the status gate's two authority refusal classes (the dsh
+ * fs-policy veto channel: "veto = throw"; the fs tool turns the throw
  * into an isError tool result carrying `{ name, code }`). Two decision
  * classes throw it:
  *
@@ -321,14 +321,15 @@ export async function validateStatusDoc(path: string, kind: HarnessDocKind, harn
  * Gate one fs intent on a canonical `{HARNESS_DIR}` coordination document
  * (root `status.json` / `workflows/<id>/snapshot.json` /
  * `projects/<id>/residuals.json` — the v3 write-intent target set). The gate
- * throws only {@link StatusVetoError} (the store-authority refusal veto); it
+ * throws only {@link StatusVetoError} (the authority refusal veto); it
  * never throws anything else. Warn mode logs + advisory emit + delegates; hard
  * mode with an ALREADY-invalid document logs an error-level REPAIR advisory
  * and delegates — the intent waterfall carries no incoming content, so a
  * hard veto here would deadlock the very write that repairs the document.
  * The coherent content-blind policy: invalid on-disk → allow-as-repair; valid
  * on-disk → normal validation path (pass). EXCEPTION (narrowed repair
- * escape): a store-authority refusal is vetoed instead — no write to the
+ * escape): an authority refusal (store-authority, or the cleanup-authority class
+ * when the findings authority is unreadable) is vetoed instead — no write to the
  * document can repair an unreadable issue authority, so admitting the write
  * could only serve to remove the plan row the closure gate asks about while no
  * authority can re-derive the violation. Non-coordination targets and absent
@@ -383,46 +384,45 @@ async function gateStatusIntent(
     }
     if (kind === null) return
     // The adapter owns the shared status-gate core (missing file = first
-    // create = pass); this listener adds enforcement + observability.
-    const result = await adapter.statusGate(target.displayPath, kind, harnessDir)
-    const hard = resolveSeamHard(harnessDir, config)
-    const verdict = applyEnforcement(result, { hard })
-    if (!verdict.ok) {
-      if (verdict.hardBlocked) {
-        // The one refusal this seam CAN make: the store-authority class (see
-        // CLEANUP_AUTHORITY_UNAVAILABLE_CODE). Thrown past the error-containment
-        // envelope below, which contains UNEXPECTED errors only — the veto is a
-        // decision, and the fs-policy channel turns it into an isError write.
-        if (verdict.violations.some((violation) => violation.code === CLEANUP_AUTHORITY_UNAVAILABLE_CODE)) {
-          ctx.logger(LOGGER_NAME).error(
-            `status.json ${operation} VETOED (Enforcement: hard; the issue authority is unavailable, so the findings cleanup gate has no verdict — no filesystem write can repair that):\n${verdict.violations.map(formatViolation).join('\n')}`,
-          )
-          // The advisory is contained: a throwing consumer must not hand the
-          // catch below an error it would contain as a degrade-to-allow (the
-          // throw at the end of this branch IS the decision).
-          try {
-            ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard })
-          } catch (emitError) {
-            ctx.logger(LOGGER_NAME).error(`status gate veto advisory emit failed: ${(emitError as Error).message}`)
-          }
-          throw new StatusVetoError(
-            target.displayPath,
-            verdict.violations,
-            'Enforcement: hard — the issue authority cannot be consulted, so the findings cleanup gate has no verdict and no filesystem write can repair it',
-          )
-        }
-        // Repair escape: the current document is already invalid; this write
-        // may BE the repair, so allow it — but make the degraded control
-        // loud (error-level log + repair advisory, `hard: true`).
+    // create = pass); this listener adds enforcement + observability. The
+    // store-authority veto above runs BEFORE it, and the hard-mode cleanup
+    // veto below is the one refusal this seam can still make.
+    await runContentBlindIntentGate({
+      logger: ctx.logger(LOGGER_NAME),
+      subject: `status.json ${operation}`,
+      target: { path: target.displayPath },
+      harnessDir,
+      config,
+      validate: (path: string) => adapter.statusGate(path, kind, harnessDir),
+      veto: (verdict, hard) => {
+        if (!verdict.violations.some((violation) => violation.code === CLEANUP_AUTHORITY_UNAVAILABLE_CODE)) return
+        // The one refusal this seam CAN make: the cleanup-authority class — the
+        // findings cleanup authority is unreadable, so its verdict is unknown
+        // (see {@link CLEANUP_AUTHORITY_UNAVAILABLE_CODE}), NOT the store-authority
+        // refusal class decided above. Thrown past the error-containment envelope
+        // below, which contains UNEXPECTED errors only — the veto is a decision,
+        // and the fs-policy channel turns it into an isError write.
         ctx.logger(LOGGER_NAME).error(
-          `status.json ${operation} ALLOWED as repair (Enforcement: hard; the current on-disk document is already invalid — the intent carries no incoming content, so the vetoable signal is only the pre-write state):\n${verdict.violations.map(formatViolation).join('\n')}`,
+          `status.json ${operation} VETOED (Enforcement: hard; the issue authority is unavailable, so the findings cleanup gate has no verdict — no filesystem write can repair that):\n${verdict.violations.map(formatViolation).join('\n')}`,
         )
-        ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard, repair: true })
-      } else {
-        ctx.logger(LOGGER_NAME).warn(`status.json ${operation} (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`)
-        ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard })
-      }
-    }
+        // The advisory is contained: a throwing consumer must not hand the
+        // catch below an error it would contain as a degrade-to-allow (the
+        // throw at the end of this branch IS the decision).
+        try {
+          ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result: verdict, hard })
+        } catch (emitError) {
+          ctx.logger(LOGGER_NAME).error(`status gate veto advisory emit failed: ${(emitError as Error).message}`)
+        }
+        throw new StatusVetoError(
+          target.displayPath,
+          verdict.violations,
+          'Enforcement: hard — the issue authority cannot be consulted, so the findings cleanup gate has no verdict and no filesystem write can repair it',
+        )
+      },
+      emit: (result, hard, repair) => {
+        ctx.emit('mstar/status-gate', { operation, target: target.displayPath, result, hard, ...(repair ? { repair: true } : {}) })
+      },
+    })
   } catch (error) {
     // The typed veto is rethrown untouched (the only throw this gate makes).
     if (error instanceof StatusVetoError) throw error
@@ -460,8 +460,8 @@ async function gateStatusIntent(
  * delegating the observed-state intent decision to the remaining chain
  * (fs-policy when mounted; the bare `undefined` default otherwise) rather
  * than terminating the slot with `undefined` (which would silently disable
- * fs-policy's CAS for status.json in composed deployments). The store-authority
- * veto ({@link StatusVetoError}) is the single decision that does NOT delegate:
+ * fs-policy's CAS for status.json in composed deployments). The authority veto
+ * ({@link StatusVetoError}) is the single decision that does NOT delegate:
  * it rejects the waterfall so the write cannot land (dsh fs-policy "veto =
  * throw").
  */
