@@ -82,8 +82,8 @@
           },
           {
             "root": "packages/dsh/src",
-            "files": 64,
-            "sha256": "d2c62a94a80bfd9677d3808b0eb2a5326e986a5c5197a9b9f3abedfc03aaa8c8"
+            "files": 65,
+            "sha256": "ddcdba49bf3f844c63028db5ada5940c58877b0448d86f37a865a3efe3344fc3"
           },
           {
             "root": "packages/dsh/workflows",
