@@ -56,7 +56,7 @@ related_components:
 ## Why This Matters
 
 - 该 bug 类**只在 bun 执行大 bundle 时显形**：源码测试、node 执行、小文件提取全绿——常规测试金字塔全部漏过，只有「跑构建产物」的 smoke 能拦。
-- 事故钉的是 bun 1.2.17；当前 CI 钉 bun 1.4.0（`.github/workflows/ci.yml` `bun-version`），而 `lint:ascii-literals`（:1105）、CLI build 链里的 `escape-dist-literals.ts`、`bundle-smoke.test.ts` 三道守门**全部仍在**——它们是版本无关的保险（任何 runtime 解码 raw 多字节都可能再犯），不是针对已修 bug 的死代码。
+- 事故钉的是 bun 1.2.17；当前 CI 钉 bun 1.4.4（`.github/workflows/ci.yml` `bun-version`），而 `lint:ascii-literals`（:1105）、CLI build 链里的 `escape-dist-literals.ts`、`bundle-smoke.test.ts` 三道守门**全部仍在**——它们是版本无关的保险（任何 runtime 解码 raw 多字节都可能再犯），不是针对已修 bug 的死代码。
 - 守门若无渲染断言，摘除 escaper 后 CI 仍绿（守门被静默解除）——本仓 fix wave 3 的起因正是 QC tri 发现「零测试 + smoke 不钉 escaper」。
 - commentMask 类启发式有假阳性边界（`i++ / 2 // 注释`：相邻 `++` 应视作操作数而非正则开启）——必须配行为测试而非只测 happy path。
 

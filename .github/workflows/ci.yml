@@ -182,8 +182,8 @@ jobs:
 
       # Committed-bundle build — the blocking half of hooks contract D2. A broken
       # bundle must fail CI. The committed bytes are not compared: the byte form
-      # depends on the exact bun/bundler version (1.4.0 and 1.4.4 emit different
-      # text for identical sources), so a diff reports the build environment
+      # depends on the exact bun/bundler version (a pin bump from 1.4.0 to 1.4.4
+      # rewrites the same sources), so a diff reports the build environment
       # rather than the change. The hooks behaviour tests execute the built
       # bundle, and `bun run release:prepare` re-takes the committed copies, so a
       # release cannot ship the previous engine.

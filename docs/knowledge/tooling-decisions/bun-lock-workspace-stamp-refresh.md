@@ -44,7 +44,7 @@ related_components:
 
 ### 2026-11-09 复核：结论随 bun 版本反转
 
-CI 与 release workflow 现钉 **bun 1.4.0**（`.github/workflows/ci.yml`、`release-prep.yml`、`release.yml` 的 `bun-version: 1.4.0`；本机 1.4.4），该版本**会**为真实仓库布局重写 stamps：`scripts/prepare-release.ts` `syncLockfile()`（:427-476）把刷新委托给 `bun install --lockfile-only --ignore-scripts`，然后**证明它确实动了**（`lockfileWorkspaceDrift` + `lockfileRootRangeDrift`，`scripts/release-surfaces.ts:320,342`）。三个 release commit（`11c3a8f7` v4.3.0、`570d0adf` v4.2.1、`dac1c781` v4.2.0）都是 `bun.lock | 18 +++++-----`：8 个 stamp + 1 条 root range，**零 graph churn**。当前锁状态：8 个 released workspace 全部等于 manifest `4.3.0`，`lockfileVersion 2` / `configVersion 1`。
+CI 与 release workflow 现钉 **bun 1.4.x**（`.github/workflows/ci.yml`、`release-prep.yml`、`release.yml` 的 `bun-version`；2026-11-09 复核时为 1.4.0，2026-11-14 起与 `packageManager` 一并统一为 1.4.4，本机同版本），该版本**会**为真实仓库布局重写 stamps：`scripts/prepare-release.ts` `syncLockfile()`（:427-476）把刷新委托给 `bun install --lockfile-only --ignore-scripts`，然后**证明它确实动了**（`lockfileWorkspaceDrift` + `lockfileRootRangeDrift`，`scripts/release-surfaces.ts:320,342`）。三个 release commit（`11c3a8f7` v4.3.0、`570d0adf` v4.2.1、`dac1c781` v4.2.0）都是 `bun.lock | 18 +++++-----`：8 个 stamp + 1 条 root range，**零 graph churn**。当前锁状态：8 个 released workspace 全部等于 manifest `4.3.0`，`lockfileVersion 2` / `configVersion 1`。
 
 所以「只有手编辑才能无 churn 对齐」只在 bun 1.2.x 成立；在 1.4.x 上 **`release:prepare` 是 stamps 的唯一 owner**，不该手编辑。
 
