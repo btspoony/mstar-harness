@@ -8,6 +8,28 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.6.1] - 2026-11-14
+
+### Fixed
+
+- **The dashboard asset module is a gitignored build output again.** `packages/commands/src/dashboard/assets.generated.ts` was tracked even though its bytes depend on the bundler version, so any local `cli:build` or `typecheck:src` on a bun other than the pinned 1.4.0 left a 430 KB generated diff in `git status`. Nothing names that path from a host config — it is inlined into the CLI bundle — so tracking it bought nothing and cost every local build a dirty tree. `packages/commands` now regenerates it in its own `build` and `test` scripts before compiling, so a fresh checkout and every CI job that builds that package still get the module; the repository `.gitignore` names it.
+- **The committed-bundle record now states the boundary it was missing.** Only `hooks/*.mjs` are tracked bundles, because a host config references those paths inside the checkout; a generated module with no such reference stays a build output.
+- **A refusal no longer echoes credentials an operator pasted.** `--adopt` reports a malformed value through the same URL-userinfo redaction the transport layer uses, so `https://user:pass@host` arrives as `https://[redacted]@host` in both the usage refusal and the duplicate-entry refusal. The operator still sees which value was rejected.
+- **A label-discovery query failure recovers toward the real repair.** The shared `linear.query-failed` recovery described resuming an import, which does not apply when push's label walk hits a provider page that advertises a next page without a cursor; it now states that re-running reads the same page and refuses identically, and names the provider envelope as the defect.
+- **The MCP caller-identity refusal for `plan.bind` names a host-neutral route.** It printed the dsh native tool as the recovery to every host; the CLI entry is now the stated route, with the native tool described as an optional host surface (dsh's remains named as the example).
+- **The packaged-install smoke receipt lists the bootstrap asset it requires.** The probe already rejected a tarball without `AGENTS.md`; the recorded `assets` object now says `bootstrap: true` so the receipt and the requirement agree.
+- **The dual-key adapter test asserts the observable validation result** instead of pinning the mutation of its options object, so moving the resolved generation does not redden a behaviour-preserving refactor.
+
+### Changed
+
+- **Every workflow and the root manifest pin bun 1.4.4, the interpreter developers run.** CI pinned 1.4.0 while `package.json` still declared `bun@1.4.0` and local checkouts ran 1.4.4, so generated bundles and a few engine suites behaved differently in CI than on the machine reviewing them. One version now: `setup-bun` in `ci.yml`, `plugin-scanner.yml`, `release-prep.yml` and `release.yml`, plus `packageManager`. The committed hook bundles are unchanged — `release:prepare` re-takes them, and CI never compares their bytes.
+- **The dashboard bundle test asserts the mount point, not the minified binding name.** The newer bundler renames `createRoot`, so the entry is proved by the `getElementById` mount query and React's `react.element` symbol, both stable across the two minifiers.
+- **The CLI build runs the dashboard generator once.** `packages/commands` now owns that step for its own build, so `packages/cli`'s build chain no longer calls it a second time; `typecheck:src` keeps its call because it does not build the commands package.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.6.1**.
+
 ## [4.6.0] - 2026-11-13
 
 ### Harness
