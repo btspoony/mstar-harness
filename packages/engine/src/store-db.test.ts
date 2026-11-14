@@ -73,6 +73,49 @@ function runScenarioOn(bin: string, scenario: string, dir: string): { status: nu
   return { status: run.status ?? -1, output: `${run.stdout}${run.stderr}`.trim() };
 }
 
+/**
+ * The store file's own bytes: WAL in the header, and no `-wal`/`-shm` beside it.
+ * The shape SQLite's own clean close leaves behind.
+ */
+function isQuiescedWalStoreFile(dbPath: string): boolean {
+  try {
+    const header = readFileSync(dbPath).subarray(0, 100);
+    return header[18] === 2 && header[19] === 2 && !existsSync(`${dbPath}-wal`) && !existsSync(`${dbPath}-shm`);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read a store file without changing it, through the real driver.
+ *
+ * SQLite reads a WAL database THROUGH its `-wal` file, so a store whose last
+ * clean close folded the journal into the database file cannot be read by a
+ * plain read-only open at all: node:sqlite creates that empty journal inside its
+ * own open, while Bun refuses with SQLITE_CANTOPEN "unable to open database
+ * file". The `immutable` form reads the same bytes without the WAL machinery,
+ * which is exact for the quiesced shape - the database file holds the whole
+ * committed state - so it is tried only for that shape: every other store keeps
+ * the ordinary read-only open, and a broken file still reports its own error.
+ * Same body as `execution-recovery.test.ts`'s `withRawRead`.
+ */
+function withRawRead<T>(dbPath: string, run: (db: DatabaseSync) => T): T {
+  const read = (spec: string): T => {
+    const db = new DatabaseSync(spec, { readOnly: true });
+    try {
+      return run(db);
+    } finally {
+      db.close();
+    }
+  };
+  try {
+    return read(dbPath);
+  } catch (error) {
+    if (!isQuiescedWalStoreFile(dbPath)) throw error;
+    return read(`file:${dbPath}?immutable=1`);
+  }
+}
+
 const SCENARIOS: string[] = [
   "import-lazy",
   "below-floor-refusal",
@@ -168,7 +211,21 @@ describe.each([
     try {
       const result = runScenarioOn(bin, scenario, dir);
       if (result.status !== 0) {
-        throw new Error(`${runtime} ${scenario} failed (exit ${result.status}):\n${result.output}`);
+        // A failure names the interpreter that ran and the supported one, so a
+        // local red never reads as a store defect. The binary that actually ran is
+        // named, not `process.version`: inside a Bun run that is Bun's Node-compat
+        // version, not the spawned interpreter's.
+        const version = runtime === "bun" ? Bun.version : spawnSync(bin, ["--version"], { encoding: "utf8" }).stdout.trim();
+        const interpreter = `${runtime} ${version} (${bin}) on ${process.platform}`;
+        const rawReadNote = result.output.includes("unable to open database file")
+          ? `\nThis leg's raw read-only open of a cleanly closed WAL store needs the empty -wal journal that a clean` +
+            ` close removes; node:sqlite creates it, Bun refuses on this platform. The supported interpreter is the` +
+            ` CI pin (bun on linux, .github/workflows/ci.yml bun-version); the product read path is` +
+            ` openStore(..., "read"), which prepares that journal explicitly.`
+          : "";
+        throw new Error(
+          `${runtime} ${scenario} failed (exit ${result.status}) under ${interpreter}:\n${result.output}${rawReadNote}`,
+        );
       }
       expect(result.output).toContain(`OK ${scenario}`);
     } finally {
@@ -697,9 +754,9 @@ describe("migration 7 - project_milestones", () => {
       const versionsBefore = handle.db.prepare("select * from schema_version order by version").all();
       handle.close();
       await expect(upgradeStore({ harnessDir: dir })).rejects.toMatchObject({ code });
-      const unchanged = new DatabaseSync(join(dir, "store.db"), { readOnly: true });
-      expect(versionsBefore).toEqual(unchanged.prepare("select * from schema_version order by version").all());
-      unchanged.close();
+      expect(versionsBefore).toEqual(
+        withRawRead(join(dir, "store.db"), (db) => db.prepare("select * from schema_version order by version").all()),
+      );
     }
   });
 
@@ -960,9 +1017,9 @@ describe("store-db schema-unsupported reports store / build / first-unknown dist
     // The baseline and the post-refusal read both go through the real driver,
     // so the rows keep the driver's own shape and the comparison needs no
     // annotation or suppression.
-    const baseline = new DatabaseSync(join(dir, "store.db"), { readOnly: true });
-    const versionsBefore = baseline.prepare("select version from schema_version order by version").all();
-    baseline.close();
+    const versionsBefore = withRawRead(join(dir, "store.db"), (db) =>
+      db.prepare("select version from schema_version order by version").all(),
+    );
 
     // The validation guard is unchanged: the read still refuses this store.
     const refusal: unknown = await openStore({ harnessDir: dir }, "read").then(() => null, (error: unknown) => error);
@@ -985,9 +1042,9 @@ describe("store-db schema-unsupported reports store / build / first-unknown dist
       details: { storeSchemaVersion: highestApplied, supportedSchemaMax: supportedMax, firstUnsupportedMigration: firstUnsupported },
     });
     // No state write: the guard refuses before any mutation and every row stands.
-    const after = new DatabaseSync(join(dir, "store.db"), { readOnly: true });
-    expect(after.prepare("select version from schema_version order by version").all()).toEqual(versionsBefore);
-    after.close();
+    expect(
+      withRawRead(join(dir, "store.db"), (db) => db.prepare("select version from schema_version order by version").all()),
+    ).toEqual(versionsBefore);
   });
 });
 
