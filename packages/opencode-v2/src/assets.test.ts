@@ -271,6 +271,28 @@ Body.
     expect(loaded).toMatchObject(parseSimpleFrontmatter(extractFrontmatterAndBody(QUOTED_KEY_SEAT).frontmatter));
   });
 
+  /** The first sorted asset file whose independent parse carries a string
+   * `description`, paired with the entry the loader files it under. The
+   * expectation is a parse of that same file — never a string copied here. */
+  const firstDescribed = <Entry>(
+    dir: string,
+    extensions: RegExp,
+    lookup: (id: string) => Entry,
+  ): { description: string; loaded: Entry } => {
+    const files = fs
+      .readdirSync(dir)
+      .filter((name: string) => extensions.test(name))
+      .sort((a, b) => a.localeCompare(b));
+    for (const file of files) {
+      const { frontmatter } = extractFrontmatterAndBody(fs.readFileSync(path.join(dir, file), "utf8"));
+      const parsed = parseSimpleFrontmatter(frontmatter);
+      if (typeof parsed.description !== "string") continue;
+      const id = typeof parsed.name === "string" ? parsed.name : file.replace(extensions, "");
+      return { description: parsed.description, loaded: lookup(id) };
+    }
+    throw new Error(`no asset under ${dir} parses a string description`);
+  };
+
   test("the bundled agent and command trees parse through the shared reader", () => {
     const agents = loadAgentsFromDir(realAgents);
     const commands = loadCommandsFromDir(realCommands);
@@ -287,5 +309,11 @@ Body.
     // The bundled seats DO carry quoted map keys, which is what made the two
     // ports disagree about the object key.
     expect(JSON.stringify(agents["code-reviewer"]?.permission)).toContain('"*":"deny"');
+    // A description survives the load verbatim (`I-001138`): each loader hands
+    // over exactly what an independent parse of the same file reads.
+    const agent = firstDescribed(realAgents, /\.md$/, (id) => agents[id]);
+    expect(agent.loaded.description).toBe(agent.description);
+    const command = firstDescribed(realCommands, /\.(?:md|mdc|markdown|txt)$/, (id) => commands[id]);
+    expect(command.loaded.description).toBe(command.description);
   });
 });
