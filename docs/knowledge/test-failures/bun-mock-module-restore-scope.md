@@ -5,7 +5,7 @@ last_updated: 2026-11-14
 problem_type: test_failure
 category: test-failures
 severity: medium
-plan_id: 20261114-host-adapters
+plan_id: <plan-id>
 symptoms:
   - "A test file mocks a package specifier and passes alone, while other files in the same `bun test` run fail on the real module"
   - "The failures appear only when the mocking file runs first in the same process"
