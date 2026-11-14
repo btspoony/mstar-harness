@@ -539,6 +539,8 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
       expect(text).toContain('workflow other-workflow (plan) running | plans: other-plan(Todo)')
     } finally {
       await ctx.fiber.dispose().catch(() => {})
+      // otherRoot never reached bootApp, so the shared teardown does not own it.
+      await rm(otherRoot, { recursive: true, force: true })
     }
   })
 

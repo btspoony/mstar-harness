@@ -5,7 +5,7 @@ last_updated: 2026-11-14
 problem_type: test_failure
 category: test-failures
 severity: low
-plan_id: 20261114-engine-coordination
+plan_id: <plan-id>
 symptoms:
   - "`bun test packages/engine/src/store-db.test.ts` reports `unable to open database file` on a read-only open that passes under the CI-pinned interpreter"
   - "The failures cluster on cases that open an existing store file read-only after a clean close"
