@@ -935,6 +935,55 @@ function readIntegrationLeaseRow(db: StoreDb, workflowId: string): StoredIntegra
   };
 }
 
+/**
+ * §2.2 the workflow header's `state_json` guards, in refusal order: the row must
+ * describe its own key, the blocks another table owns stay refused rather than
+ * silently dropped, and the remainder must validate as a snapshot. Both readers
+ * of the graph — `readWorkflowView` and the branch-ownership projection — run
+ * exactly this chain.
+ */
+function refuseWorkflowStateJson(state: Record<string, unknown>, workflowId: string): void {
+  if (state.id !== workflowId) {
+    throw corrupt(
+      `execution_workflows(${workflowId}).state_json carries id ${JSON.stringify(state.id)} and does not describe its own key`,
+    );
+  }
+  if (state.plans !== undefined || state.integration_merge_lease !== undefined || state.coordinator_session !== undefined) {
+    throw corrupt(
+      `execution_workflows(${workflowId}).state_json carries plans/integration_merge_lease/coordinator_session, which are owned by ` +
+        `execution_plans/execution_integration_leases/execution_sessions`,
+    );
+  }
+  const validation = validateWorkflowSnapshot({ ...state, plans: [] });
+  if (!validation.ok) {
+    throw validationRefusal(`execution_workflows(${workflowId}).state_json`, validation.violations);
+  }
+}
+
+/**
+ * §2.2 the plan row's `state_json` guards, in refusal order: `coordination` and
+ * `execution_lease` are owned by `coordination_json`, then the row must describe
+ * its own key, then the remainder must validate. `readWorkflowView` reads the
+ * coordination column on top of this; the branch-ownership projection does not.
+ */
+function refusePlanStateJson(planState: Record<string, unknown>, workflowId: string, planId: string): void {
+  if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
+    throw corrupt(
+      `execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned ` +
+        `by coordination_json, not by the row state`,
+    );
+  }
+  if (planState.id !== planId) {
+    throw corrupt(
+      `execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`,
+    );
+  }
+  const validation = validatePlanRow(planState);
+  if (!validation.ok) {
+    throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, validation.violations);
+  }
+}
+
 /** Assemble one workflow's view (workflow row, plans, sessions, leases, inputs). */
 function readWorkflowView(
   db: StoreDb,
@@ -949,24 +998,7 @@ function readWorkflowView(
   }
   const revision = storedRevision(workflowRow.revision, `execution_workflows(${workflowId}).revision`);
   const state = storedJsonObject(workflowRow.state_json, `execution_workflows(${workflowId}).state_json`);
-  if (state.id !== workflowId) {
-    throw corrupt(
-      `execution_workflows(${workflowId}).state_json carries id ${JSON.stringify(state.id)} and does not describe its own key`,
-    );
-  }
-  // §2.2: `plans` and `integration_merge_lease` are OWNED by execution_plans and
-  // execution_integration_leases. A second copy inside the header would be a
-  // second authority, so it is refused rather than merged or dropped.
-  if (state.plans !== undefined || state.integration_merge_lease !== undefined || state.coordinator_session !== undefined) {
-    throw corrupt(
-      `execution_workflows(${workflowId}).state_json carries plans/integration_merge_lease/coordinator_session, which are owned by ` +
-        `execution_plans/execution_integration_leases/execution_sessions`,
-    );
-  }
-  const workflowValidation = validateWorkflowSnapshot({ ...state, plans: [] });
-  if (!workflowValidation.ok) {
-    throw validationRefusal(`execution_workflows(${workflowId}).state_json`, workflowValidation.violations);
-  }
+  refuseWorkflowStateJson(state, workflowId);
 
   const sessions = db
     .prepare("select role, session_id, epoch, state from execution_sessions where workflow_id = ? and role = 'coordinator'")
@@ -1015,21 +1047,7 @@ function readWorkflowView(
     // the stored coordination block is the block minus `revision`/`session`.
     // Anything else is a second authority or a session credential in the DB and
     // refuses instead of being merged.
-    if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
-      throw corrupt(
-        `execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned ` +
-          `by coordination_json, not by the row state`,
-      );
-    }
-    if (planState.id !== planId) {
-      throw corrupt(
-        `execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`,
-      );
-    }
-    const planValidation = validatePlanRow(planState);
-    if (!planValidation.ok) {
-      throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, planValidation.violations);
-    }
+    refusePlanStateJson(planState, workflowId, planId);
     if (storedCoordination.revision !== undefined || storedCoordination.session !== undefined) {
       throw corrupt(
         `execution_plans(${workflowId},${planId}).coordination_json carries revision/session, which live in the ` +
@@ -1391,22 +1409,7 @@ export async function readActiveLifecycleBranchDocs(context: StoreContext): Prom
         throw corrupt(`execution_registry lists workflow ${workflowId} without an execution_workflows row`);
       }
       const state = storedJsonObject(header.state_json, `execution_workflows(${workflowId}).state_json`);
-      if (state.id !== workflowId) {
-        throw corrupt(
-          `execution_workflows(${workflowId}).state_json carries id ${JSON.stringify(state.id)} and does not describe its own key`,
-        );
-      }
-      // §2.2 owned members stay refused rather than silently dropped.
-      if (state.plans !== undefined || state.integration_merge_lease !== undefined || state.coordinator_session !== undefined) {
-        throw corrupt(
-          `execution_workflows(${workflowId}).state_json carries plans/integration_merge_lease/coordinator_session, which are owned by ` +
-            `execution_plans/execution_integration_leases/execution_sessions`,
-        );
-      }
-      const workflowValidation = validateWorkflowSnapshot({ ...state, plans: [] });
-      if (!workflowValidation.ok) {
-        throw validationRefusal(`execution_workflows(${workflowId}).state_json`, workflowValidation.violations);
-      }
+      refuseWorkflowStateJson(state, workflowId);
       const planRows = tx.db
         .prepare("select plan_id, state_json from execution_plans where workflow_id = ? order by ordinal")
         .all(workflowId) as Array<{ plan_id?: unknown; state_json?: unknown }>;
@@ -1414,23 +1417,9 @@ export async function readActiveLifecycleBranchDocs(context: StoreContext): Prom
       for (const planRow of planRows) {
         const planId = storedText(planRow.plan_id, `execution_plans(${workflowId}).plan_id`);
         const planState = storedJsonObject(planRow.state_json, `execution_plans(${workflowId},${planId}).state_json`);
-        // §2.2 owned members stay refused rather than silently dropped (same
-        // rule `readWorkflowView` applies to the same row).
-        if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
-          throw corrupt(
-            `execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned ` +
-              `by coordination_json, not by the row state`,
-          );
-        }
-        if (planState.id !== planId) {
-          throw corrupt(
-            `execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`,
-          );
-        }
-        const planValidation = validatePlanRow(planState);
-        if (!planValidation.ok) {
-          throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, planValidation.violations);
-        }
+        // The same row-state chain `readWorkflowView` applies; this projection
+        // reads no coordination column, so nothing else guards the row here.
+        refusePlanStateJson(planState, workflowId, planId);
         plans.push({ id: planId, metadata: planState.metadata });
       }
       docs.push({ id: workflowId, branch: state.branch, plans });
