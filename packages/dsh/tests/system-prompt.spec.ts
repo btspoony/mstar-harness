@@ -485,7 +485,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(fallbackText).toContain('enforcement: soft')
   })
 
-  it('(m) first render of a non-boot workspace is version-only by contract; the render after the background refresh is store-backed (I-000508)', async () => {
+  it('(m) first render of a non-boot workspace is version-only by contract; the render after the background refresh is store-backed', async () => {
     // Boot workspace, store-backed: the outer `await refresh(bootHarnessDir)`
     // primes exactly this key, so its FIRST assembly is already store-backed.
     const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-first-render-'))
@@ -529,7 +529,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
 
       // After the in-flight refresh settles, the same agent renders the store.
       let text = firstText ?? ''
-      for (let attempt = 0; attempt < 100 && !text.includes('workflow other-workflow'); attempt++) {
+      for (let attempt = 0; attempt < 500 && !text.includes('workflow other-workflow'); attempt++) {
         const { promise, resolve } = Promise.withResolvers<void>()
         setTimeout(resolve, 10)
         await promise

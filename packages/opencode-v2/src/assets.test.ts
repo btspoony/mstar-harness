@@ -287,7 +287,7 @@ Body.
       const { frontmatter } = extractFrontmatterAndBody(fs.readFileSync(path.join(dir, file), "utf8"));
       const parsed = parseSimpleFrontmatter(frontmatter);
       if (typeof parsed.description !== "string") continue;
-      const id = typeof parsed.name === "string" ? parsed.name : file.replace(extensions, "");
+      const id = (typeof parsed.name === "string" ? parsed.name : "") || file.replace(extensions, "");
       return { description: parsed.description, loaded: lookup(id) };
     }
     throw new Error(`no asset under ${dir} parses a string description`);
@@ -309,8 +309,8 @@ Body.
     // The bundled seats DO carry quoted map keys, which is what made the two
     // ports disagree about the object key.
     expect(JSON.stringify(agents["code-reviewer"]?.permission)).toContain('"*":"deny"');
-    // A description survives the load verbatim (`I-001138`): each loader hands
-    // over exactly what an independent parse of the same file reads.
+    // A description survives the load verbatim: each loader hands over exactly
+    // what an independent parse of the same file reads.
     const agent = firstDescribed(realAgents, /\.md$/, (id) => agents[id]);
     expect(agent.loaded.description).toBe(agent.description);
     const command = firstDescribed(realCommands, /\.(?:md|mdc|markdown|txt)$/, (id) => commands[id]);

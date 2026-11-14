@@ -385,7 +385,7 @@ function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFla
  * per-agent workspace starts its bounded read on first use.
  *
  * The version-only first render of a per-agent workspace is the CONTRACT, not
- * a memo accident (I-000508): a key absent from `memo` answers with the
+ * a memo accident: a key absent from `memo` answers with the
  * synchronous `buildCatalogPayload` summary (the version line only — that
  * path reads no store) and starts `refresh` in the background; the next
  * assembly after that refresh settles is store-backed. Do not `await` on the

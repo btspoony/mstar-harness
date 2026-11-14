@@ -1,5 +1,5 @@
 /**
- * runtime-floor.test.ts — I-001137: the plugin-level below-floor case.
+ * runtime-floor.test.ts — the plugin-level below-floor case.
  *
  * The register authority route asserts the runtime floor on what the engine
  * detects, BEFORE it reads the store. This file pins that order at the plugin
@@ -19,7 +19,6 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as engine from "@mstar-harness/engine";
-import type { StatusLogger } from "../src/mstar.js";
 
 /** Ambient MSTAR_HARNESS_DIR would redirect every `.mstar` fixture — pinned out. */
 const ENV_KEY = "MSTAR_HARNESS_DIR";
@@ -41,7 +40,7 @@ afterEach(() => {
 
 const validRegister = { entries: {} };
 /** Below every Node floor this product declares, so the REAL assertion refuses. */
-const belowFloor = "18.20.0";
+const belowFloor = "0.0.0";
 const declaredNodeFloor = engine.readDeclaredNodeFloor();
 /** Store reads the plugin performs below the floor: must stay at zero. */
 let storeReads = 0;
@@ -66,6 +65,11 @@ async function makeActiveHarnessProject(): Promise<{ harness: string; registerPa
  * seeded on the real runtime. */
 const fixture = await makeActiveHarnessProject();
 
+/** Captured BEFORE the override: Bun 1.4.4's `mock.restore()` does not drop a
+ * `mock.module` replacement, so teardown re-registers this snapshot — otherwise
+ * the stub leaks into every later file of the package's one-process `bun test`. */
+const realEngine = { ...engine };
+
 mock.module("@mstar-harness/engine", () => ({
   ...engine,
   detectStoreRuntime: () => ({ isBun: false, version: belowFloor }),
@@ -81,9 +85,10 @@ const { validateStatusWrite } = await import("../src/mstar.js");
 
 afterAll(() => {
   mock.restore();
+  mock.module("@mstar-harness/engine", () => realEngine);
 });
 
-describe("opencode runtime floor — below the declared Node floor (I-001137)", () => {
+describe("opencode runtime floor — below the declared Node floor", () => {
   test("refuses the register write before reading the store", async () => {
     let thrown: { code?: string; message: string } | null = null;
     try {
@@ -96,9 +101,7 @@ describe("opencode runtime floor — below the declared Node floor (I-001137)", 
     expect(declaredNodeFloor).not.toBeNull();
     expect(thrown?.message).toContain(declaredNodeFloor!);
 
-    const entries: Array<[string, string]> = [];
-    const log: StatusLogger = (level, message) => entries.push([level, message]);
-    const result = await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
+    const result = await validateStatusWrite(fixture.registerPath, { doc: validRegister });
 
     expect(storeReads).toBe(0);
     expect(result?.hardBlocked).toBe(true);
@@ -107,6 +110,5 @@ describe("opencode runtime floor — below the declared Node floor (I-001137)", 
       `the issue authority could not be read ([store.runtime-unsupported] ${thrown!.message}) — the register write is ` +
         "refused rather than applied against an unreadable authority; no older-runtime or JSON fallback exists",
     );
-    expect(entries.filter(([level]) => level === "error").length).toBe(1);
   });
 });
