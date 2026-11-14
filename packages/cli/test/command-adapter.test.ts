@@ -347,6 +347,19 @@ describe("generated CLI adapter", () => {
       { path: "argv[7]", argvIndex: 7, token: "BADPOS" },
     ]);
   });
+  // A value-less option is the defect even when a surplus positional precedes
+  // it: the option token, not the positional, is what the caller must repair.
+  test("a missing option value names the option token, not a surplus positional", () => {
+    const error = new CommanderError(
+      2,
+      "commander.optionMissingArgument",
+      "option '--id <id>' argument missing",
+    );
+    const envelope = mapParserError(error, ["node", "mstar", "issue", "show", "BADPOS", "--id"]);
+    expect(envelope?.details?.diagnostics).toMatchObject([
+      { argvIndex: 5, token: "--id", flag: "--id <id>", expected: "option value", received: "missing value" },
+    ]);
+  });
 
   // Both parser diagnostics read one argv scan, so the same argv cannot yield
   // two offending indices: a variadic option's values and a `--` separator are

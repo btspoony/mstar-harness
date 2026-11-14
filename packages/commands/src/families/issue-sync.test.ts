@@ -1111,15 +1111,17 @@ describe("push — the credential scope preflight", () => {
     expect(first.data?.items).toEqual([expect.objectContaining({ localId: "I-000806", outcome: "unresolved" })]);
     expect(writes).toHaveLength(1);
 
-    // 2. A second push reports the SAME unresolved residue and names both
-    //    recoveries instead of sending a second create.
+    // 2. A second push reports the SAME unresolved residue with the SCAN's own
+    //    verdict: a complete scan that matched no marker, so `--release` is the
+    //    exit it proves. The cause is the engine's string, not the candidate
+    //    loop's generic one.
     const again = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as {
       status: string;
       data?: { items: Array<{ localId: string; outcome: string; cause?: string }> };
     };
     expect(again.status).toBe("ok");
     expect(again.data?.items).toEqual([expect.objectContaining({ localId: "I-000806", outcome: "unresolved" })]);
-    expect(again.data?.items[0]?.cause).toContain("--adopt");
+    expect(again.data?.items[0]?.cause).toContain("no remote issue carries this item's correlation marker");
     expect(again.data?.items[0]?.cause).toContain("--release <localId>");
     expect(writes).toHaveLength(1);
 
@@ -1201,7 +1203,7 @@ describe("push — the credential scope preflight", () => {
     expect(listings).toBe(before);
     const run = (await executeCommand("issue-sync.push", { project: PROJECT }, context)) as {
       status: string;
-      data?: { stoppedAtPageBound?: number; reconciled: unknown[]; items: Array<{ outcome: string }> };
+      data?: { stoppedAtPageBound?: number; reconciled: unknown[]; unresolved: number; items: Array<{ localId: string; outcome: string; cause?: string }> };
     };
     expect(run.status).toBe("ok");
     // The report a caller reads carries the truncation: without it a partial
@@ -1209,7 +1211,14 @@ describe("push — the credential scope preflight", () => {
     // The number it names is the number of pages actually read — never one more.
     expect(run.data?.stoppedAtPageBound).toBe(listings - before);
     expect(run.data?.reconciled).toEqual([]);
-    expect(run.data?.items).toEqual([expect.objectContaining({ outcome: "unresolved" })]);
+    expect(run.data?.items).toEqual([expect.objectContaining({ localId: "I-000814", outcome: "unresolved" })]);
+    expect(run.data?.unresolved).toBe(1);
+    // The item keeps the engine's own cause, which names the bound the scan
+    // stopped at. The generic residue guard offers `--release`, and that is the
+    // one flag a truncated scan refuses: offering it here sends the operator
+    // into a refusal instead of the `--adopt` recovery that works.
+    expect(run.data?.items[0]?.cause).toContain(`${run.data?.stoppedAtPageBound}-page bound`);
+    expect(run.data?.items[0]?.cause).not.toContain("--release");
   });
 
   test("a second push on the same binding is refused by name while the first holds the run, and --take-run takes a dead holder's run over", async () => {
