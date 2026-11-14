@@ -6,6 +6,20 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.6.1] - 2026-11-14
+
+### Fixed
+
+- **A refusal no longer echoes credentials an operator pasted.** `--adopt` reports a malformed value through the same URL-userinfo redaction the transport layer uses, so `https://user:pass@host` arrives as `https://[redacted]@host` in both the usage refusal and the duplicate-entry refusal. The operator still sees which value was rejected.
+- **A label-discovery query failure recovers toward the real repair.** The shared `linear.query-failed` recovery described resuming an import, which does not apply when push's label walk hits a provider page that advertises a next page without a cursor; it now states that re-running reads the same page and refuses identically, and names the provider envelope as the defect.
+- **The MCP caller-identity refusal for `plan.bind` names a host-neutral route.** It printed the dsh native tool as the recovery to every host; the CLI entry is now the stated route, with the native tool described as an optional host surface (dsh's remains named as the example).
+- **The packaged-install smoke receipt lists the bootstrap asset it requires.** The probe already rejected a tarball without `AGENTS.md`; the recorded `assets` object now says `bootstrap: true` so the receipt and the requirement agree.
+- **The dual-key adapter test asserts the observable validation result** instead of pinning the mutation of its options object, so moving the resolved generation does not redden a behaviour-preserving refactor.
+
+- Version alignment with harness **4.6.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.6.1**.
+
 ## [4.6.0] - 2026-11-13
 
 ### Changed

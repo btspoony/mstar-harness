@@ -6,6 +6,28 @@
 
 ## [Unreleased]
 
+## [4.6.1] - 2026-11-14
+
+### Fixed
+
+- **dashboard 资源模块重新成为被 gitignore 的构建产物。** `packages/commands/src/dashboard/assets.generated.ts` 曾被跟踪，但其字节随 bundler 版本变化，因此任何在非 pinned 1.4.0 的 bun 上执行的本地 `cli:build` 或 `typecheck:src` 都会在 `git status` 里留下 430 KB 的生成差异。没有任何宿主配置按路径引用它（它被内联进 CLI 产物），跟踪它没有收益，只让每次本地构建都脏。现在 `packages/commands` 在自己的 `build` 与 `test` 脚本里先生成该模块再编译，因此全新检出与每一个构建该包的 CI 任务仍能拿到它；仓库 `.gitignore` 已列出该路径。
+- **committed bundle 记录补上了缺失的边界。** 只有 `hooks/*.mjs` 是被跟踪的 bundle，因为宿主配置在 checkout 内按路径引用它们；没有这类引用的生成模块属于构建产物。
+- **拒绝文本不再回显操作者粘贴的凭据。** `--adopt` 报错走与传输层相同的 URL userinfo 脱敏，`https://user:pass@host` 在用法拒绝与重复条目拒绝中都变成 `https://[redacted]@host`，操作者仍能看到被拒的是哪个值。
+- **label discovery 的查询失败改为指向真正的修复。** 共享的 `linear.query-failed` recovery 原先只讲恢复 import cursor，而 push 的 label 遍历命中“宣称还有下一页却没有 cursor”的 provider 页时并不适用；现在说明重跑会读到同一页并同样被拒，并点名这是 provider 信封缺陷。
+- **`plan.bind` 的 MCP caller-identity 拒绝文本给出中立的入口。** 原先向所有 host 打印 dsh 原生工具作为恢复路径；现在以 CLI 入口为正式路径，把原生工具描述为可选的宿主能力（dsh 的实现仍作为示例点名）。
+- **打包安装 smoke 的 receipt 列出它实际要求的 bootstrap 资产。** 探针本就会拒绝缺少 `AGENTS.md` 的 tarball，现在记录里的 `assets` 对象补上 `bootstrap: true`，使 receipt 与要求一致。
+- **dual-key adapter 测试只断言可观察的校验结果**，不再钉死 options 对象的字段改写，因此把解析出的 generation 换个位置不会让保持行为的重构变红。
+
+### Changed
+
+- **所有 workflow 与根清单统一 pin bun 1.4.4，即开发者实际运行的解释器。** 此前 CI pin 1.4.0、`package.json` 声明 `bun@1.4.0`，而本地检出运行 1.4.4，导致生成产物与部分引擎套件在 CI 与评审机器上表现不一致。现在只有一个版本：`ci.yml`、`plugin-scanner.yml`、`release-prep.yml`、`release.yml` 中的 `setup-bun` 与 `packageManager`。已提交的 hook bundle 不变 —— 由 `release:prepare` 重取，CI 从不比较其字节。
+- **dashboard bundle 测试断言挂载点，而不是被压缩改名的绑定。** 新版 bundler 会把 `createRoot` 改名，因此入口改由 `getElementById` 挂载查询与 React 的 `react.element` 符号证明，两者在两个 minifier 下都稳定。
+- **CLI 构建只生成一次 dashboard。** 该步骤现由 `packages/commands` 在自身构建中负责，`packages/cli` 的构建链不再重复调用；`typecheck:src` 仍保留调用，因为它不构建 commands 包。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.6.1**。
+
 ## [4.6.0] - 2026-11-13
 
 ### Harness
