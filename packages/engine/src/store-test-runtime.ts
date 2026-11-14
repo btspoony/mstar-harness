@@ -13,10 +13,11 @@
  *
  * Usage: node|bun <bundle> <scenario> <root-dir>
  */
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { readDeclaredNodeFloor } from "./core.js";
+import type { DatabaseSync } from "node:sqlite";
 import type { StoreError as StoreErrorClass } from "./store-db.js";
 
 const {
@@ -65,6 +66,50 @@ async function expectStoreErrorAsync(code: string, run: () => Promise<unknown>):
     throw new Error(`expected StoreError ${code}, got ${String(error)}`);
   }
   throw new Error(`expected StoreError ${code}, but the call succeeded`);
+}
+
+/**
+ * The store file's own bytes: WAL in the header, and no `-wal`/`-shm` beside it.
+ * The shape SQLite's own clean close leaves behind.
+ */
+function isQuiescedWalStoreFile(dbPath: string): boolean {
+  try {
+    const header = readFileSync(dbPath).subarray(0, 100);
+    return header[18] === 2 && header[19] === 2 && !existsSync(`${dbPath}-wal`) && !existsSync(`${dbPath}-shm`);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read a store file without changing it, through the real driver.
+ *
+ * SQLite reads a WAL database THROUGH its `-wal` file, so a store whose last
+ * clean close folded the journal into the database file cannot be read by a
+ * plain read-only open at all: node:sqlite creates that empty journal inside its
+ * own open, while Bun refuses with SQLITE_CANTOPEN "unable to open database
+ * file". The `immutable` form reads the same bytes without the WAL machinery,
+ * which is exact for the quiesced shape - the database file holds the whole
+ * committed state - so it is tried only for that shape: every other store keeps
+ * the ordinary read-only open, and a broken file still reports its own error.
+ * Same body as `store-db.test.ts`'s `withRawRead`; the constructor is passed in
+ * because this module acquires the driver lazily (see `import-lazy`).
+ */
+function withRawRead<T>(Open: typeof DatabaseSync, dbPath: string, run: (db: DatabaseSync) => T): T {
+  const read = (spec: string): T => {
+    const db = new Open(spec, { readOnly: true });
+    try {
+      return run(db);
+    } finally {
+      db.close();
+    }
+  };
+  try {
+    return read(dbPath);
+  } catch (error) {
+    if (!isQuiescedWalStoreFile(dbPath)) throw error;
+    return read(`file:${dbPath}?immutable=1`);
+  }
 }
 
 const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
@@ -214,9 +259,9 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     await expectStoreErrorAsync("store.schema-unsupported", () => openStore({ harnessDir: rootDir }, "write"));
     await expectStoreErrorAsync("store.schema-unsupported", () => upgradeStore({ harnessDir: rootDir }));
     const { DatabaseSync } = await import("node:sqlite");
-    const raw = new DatabaseSync(join(rootDir, "store.db"), { readOnly: true });
-    const rows = raw.prepare("select version from schema_version order by version").all() as Array<{ version: number }>;
-    raw.close();
+    const rows = withRawRead(DatabaseSync, join(rootDir, "store.db"), (raw) =>
+      raw.prepare("select version from schema_version order by version").all(),
+    ) as Array<{ version: number }>;
     if (rows.length !== MIGRATIONS.length + 1 || rows[MIGRATIONS.length].version !== MIGRATIONS.length + 1) {
       throw new Error("the newer-schema refusal rewrote schema rows");
     }

@@ -211,13 +211,12 @@ describe.each([
     try {
       const result = runScenarioOn(bin, scenario, dir);
       if (result.status !== 0) {
-        // The `newer-schema` leg reads a cleanly closed store back through a RAW
-        // read-only open. SQLite reads a WAL database through its `-wal` file and a
-        // clean close removes it: node:sqlite creates that empty journal itself,
-        // Bun refuses on this platform, so the leg fails on the interpreter's open
-        // and not on the store. A failure names the interpreter that ran and the
-        // supported one, so a local red never reads as a store defect.
-        const interpreter = `${runtime} ${runtime === "bun" ? Bun.version : process.version} on ${process.platform}`;
+        // A failure names the interpreter that ran and the supported one, so a
+        // local red never reads as a store defect. The binary that actually ran is
+        // named, not `process.version`: inside a Bun run that is Bun's Node-compat
+        // version, not the spawned interpreter's.
+        const version = runtime === "bun" ? Bun.version : spawnSync(bin, ["--version"], { encoding: "utf8" }).stdout.trim();
+        const interpreter = `${runtime} ${version} (${bin}) on ${process.platform}`;
         const rawReadNote = result.output.includes("unable to open database file")
           ? `\nThis leg's raw read-only open of a cleanly closed WAL store needs the empty -wal journal that a clean` +
             ` close removes; node:sqlite creates it, Bun refuses on this platform. The supported interpreter is the` +
