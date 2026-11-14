@@ -147,10 +147,12 @@ describe("mstar workflow register", () => {
         exitCode: 0,
       });
       const warnings = commandWarnings(result) ?? [];
-      expect(warnings).toHaveLength(1);
+      expect(warnings).toHaveLength(2);
       expect(warnings[0]).toContain("--branch-work/--branch-target");
       expect(warnings[0]).toContain('"main"');
       expect(warnings[0]).toContain("mstar workflow delivery-anchors");
+      expect(warnings[1]).toContain("--branch-base/--branch-work");
+      expect(warnings[1]).toContain("mstar workflow delivery-anchors");
       // The advisory never blocks: the suspicious pair is what got registered.
       const workflows = await readWorkflows(harness);
       expect(workflows).toHaveLength(1);

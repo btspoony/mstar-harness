@@ -383,6 +383,16 @@ function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFla
  * service is injected and refresh in the background when a workspace's TTL
  * expires. The configured workspace is ready for its first assembly; a new
  * per-agent workspace starts its bounded read on first use.
+ *
+ * The version-only first render of a per-agent workspace is the CONTRACT, not
+ * a memo accident: a key absent from `memo` answers with the
+ * synchronous `buildCatalogPayload` summary (the version line only — that
+ * path reads no store) and starts `refresh` in the background; the next
+ * assembly after that refresh settles is store-backed. Do not `await` on the
+ * miss: the callback must stay `(context: object) => string`, and the
+ * per-agent key is not known until the callback runs, so the boot
+ * `await refresh(bootHarnessDir)` can never prime it. Both halves are pinned
+ * by `tests/system-prompt.spec.ts` (m).
  */
 function engineStatusProvider(
   ctx: Context,

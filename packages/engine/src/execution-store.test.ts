@@ -33,6 +33,7 @@ import {
   executionToken,
   initializeExecutionAuthority,
   parseExecutionToken,
+  readActiveLifecycleBranchDocs,
   readExecutionPlan,
   readExecutionState,
   readOperationReplay,
@@ -1185,6 +1186,199 @@ try {
       writer.close();
     }
     await expect(readExecutionState(context)).rejects.toMatchObject({ code: "store.corrupt" });
+  });
+});
+
+/* ------------------------------------------------------------------------ *
+ * The shared `state_json` guard chain and the branch-doc projection boundary
+ * ------------------------------------------------------------------------ */
+
+/** The authority graph of `seedAuthorityGraph`, plus one stored-row defect. */
+async function storeWithDefect(label: string, defect?: (db: StoreDb) => void): Promise<StoreContext> {
+  const { context, epoch } = await freshStore(label);
+  const writer = await openStore(context, "write");
+  try {
+    seedAuthorityGraph(writer.db, epoch);
+    defect?.(writer.db);
+  } finally {
+    writer.close();
+  }
+  return context;
+}
+
+function writeWorkflowState(db: StoreDb, state: Record<string, unknown>): void {
+  db.prepare("update execution_workflows set state_json = ? where workflow_id = 'wf-1'").run(JSON.stringify(state));
+}
+
+function writePlanState(db: StoreDb, state: Record<string, unknown>): void {
+  db.prepare("update execution_plans set state_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'")
+    .run(JSON.stringify(state));
+}
+
+/** Both readers of the graph: the full read and the branch-ownership projection. */
+const GRAPH_READERS: Array<(context: StoreContext) => Promise<unknown>> = [
+  readExecutionState,
+  readActiveLifecycleBranchDocs,
+];
+
+/**
+ * A stored row defect both readers share must refuse out of BOTH with the same
+ * code and the winning message, and never with the message of the check it
+ * outranks. That is the refusal order the two inline copies used to duplicate.
+ */
+async function expectSameRefusal(context: StoreContext, winning: string, outranked: string): Promise<void> {
+  for (const read of GRAPH_READERS) {
+    const error = await read(context).then(
+      () => undefined,
+      (caught: unknown) => caught as { code?: unknown; message?: unknown },
+    );
+    expect(error?.code).toBe("store.corrupt");
+    const message = typeof error?.message === "string" ? error.message : "";
+    expect(message).toContain(winning);
+    expect(message).not.toContain(outranked);
+  }
+}
+
+describe("execution-read: the shared state_json guards keep their refusal order", () => {
+  test("refuses a foreign workflow id before the owned member in the same state_json", async () => {
+    const context = await storeWithDefect("guard-workflow-id", (db) =>
+      writeWorkflowState(db, { id: "wf-other", plans: [] }),
+    );
+    await expectSameRefusal(
+      context,
+      "carries id \"wf-other\" and does not describe its own key",
+      "plans/integration_merge_lease/coordinator_session",
+    );
+  });
+
+  test("refuses an owned workflow member before a snapshot that would also fail validation", async () => {
+    const context = await storeWithDefect("guard-workflow-owned", (db) =>
+      writeWorkflowState(db, { id: "wf-1", plans: [] }),
+    );
+    await expectSameRefusal(context, "plans/integration_merge_lease/coordinator_session", "does not validate");
+  });
+
+  test("refuses a plan owned member before a plan id mismatch", async () => {
+    const context = await storeWithDefect("guard-plan-owned", (db) =>
+      writePlanState(db, { id: "p-other", coordination: { revision: 6 } }),
+    );
+    await expectSameRefusal(
+      context,
+      "carries coordination/execution_lease, which are owned by coordination_json",
+      "does not describe its own key",
+    );
+  });
+
+  test("refuses a plan id mismatch before plan-row validation", async () => {
+    const context = await storeWithDefect("guard-plan-id", (db) => writePlanState(db, { id: "p-other" }));
+    await expectSameRefusal(context, "carries id \"p-other\" and does not describe its own key", "does not validate");
+  });
+
+  test("refuses a workflow state_json whose only defect is snapshot validation", async () => {
+    const context = await storeWithDefect("guard-workflow-validation", (db) =>
+      writeWorkflowState(db, { id: "wf-1", type: "plan", status: "running", started_at: TS, updated_at: TS }),
+    );
+    await expectSameRefusal(
+      context,
+      "execution_workflows(wf-1).state_json does not validate",
+      "carries id",
+    );
+  });
+
+  test("refuses a plan state_json whose only defect is row validation", async () => {
+    const context = await storeWithDefect("guard-plan-validation", (db) => writePlanState(db, { id: "p-1" }));
+    await expectSameRefusal(
+      context,
+      "execution_plans(wf-1,p-1).state_json does not validate",
+      "carries coordination",
+    );
+  });
+
+  test("refuses a coordination_json that is not an object, which the projection never reads", async () => {
+    const context = await storeWithDefect("guard-coordination-boundary", (db) =>
+      db.prepare("update execution_plans set coordination_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'").run("[]"),
+    );
+    // The full read parses the coordination column and refuses; the projection
+    // reads only the row state, so the same row is still served (the boundary).
+    await expect(readExecutionState(context)).rejects.toMatchObject({
+      code: "store.corrupt",
+      message: expect.stringContaining("execution_plans(wf-1,p-1).coordination_json is not a JSON object"),
+    });
+    const docs = await readActiveLifecycleBranchDocs(context);
+    expect(docs.map((doc) => doc.id)).toEqual(["wf-1"]);
+    expect(docs[0]?.plans.map((plan) => plan.id)).toEqual(["p-1"]);
+  });
+});
+
+describe("execution-read: the branch-doc projection refuses the rows it does read", () => {
+  const refuses = (message: string) => ({
+    code: "store.corrupt",
+    message: expect.stringContaining(message),
+  });
+
+  test("refuses a registry entry that does not validate", async () => {
+    const context = await storeWithDefect("branch-doc-entry-invalid", (db) =>
+      db.prepare("update execution_registry set entry_json = ? where workflow_id = 'wf-1'").run(JSON.stringify({ id: "wf-1" })),
+    );
+    await expect(readActiveLifecycleBranchDocs(context)).rejects.toMatchObject(
+      refuses("execution_registry(wf-1).entry_json does not validate"),
+    );
+  });
+
+  test("refuses a registry entry that does not describe its own key", async () => {
+    const context = await storeWithDefect("branch-doc-entry-id", (db) =>
+      db.prepare("update execution_registry set entry_json = ? where workflow_id = 'wf-1'").run(
+        JSON.stringify({ id: "wf-other", type: "plan", started_at: TS, dir: "workflows/wf-1" }),
+      ),
+    );
+    await expect(readActiveLifecycleBranchDocs(context)).rejects.toMatchObject(
+      refuses("execution_registry(wf-1).entry_json carries id \"wf-other\""),
+    );
+  });
+
+  test("refuses a registry entry with no execution_workflows row", async () => {
+    const context = await storeWithDefect("branch-doc-header-absent");
+    // The orphan row needs FK enforcement off, which is the damage an external
+    // writer that never set the pragma leaves behind.
+    const raw = rawDb(storePath(context));
+    try {
+      raw.exec("pragma foreign_keys=OFF");
+      raw.prepare("insert into execution_registry(workflow_id, entry_json) values ('wf-orphan', ?)").run(
+        JSON.stringify({ id: "wf-orphan", type: "plan", started_at: TS, dir: "workflows/wf-orphan" }),
+      );
+    } finally {
+      raw.close();
+    }
+    await expect(readActiveLifecycleBranchDocs(context)).rejects.toMatchObject(
+      refuses("execution_registry lists workflow wf-orphan without an execution_workflows row"),
+    );
+  });
+
+  test("refuses an entry_json that is not a JSON object", async () => {
+    const context = await storeWithDefect("branch-doc-entry-shape", (db) =>
+      db.prepare("update execution_registry set entry_json = ? where workflow_id = 'wf-1'").run("\"wf-1\""),
+    );
+    await expect(readActiveLifecycleBranchDocs(context)).rejects.toMatchObject(
+      refuses("execution_registry(wf-1).entry_json is not a JSON object"),
+    );
+  });
+
+  test("refuses a state_json that is not a JSON object", async () => {
+    const context = await storeWithDefect("branch-doc-state-shape", (db) =>
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = 'wf-1'").run("[]"),
+    );
+    await expect(readActiveLifecycleBranchDocs(context)).rejects.toMatchObject(
+      refuses("execution_workflows(wf-1).state_json is not a JSON object"),
+    );
+  });
+
+  test("refuses a plan state_json that is not a JSON object", async () => {
+    const context = await storeWithDefect("branch-doc-plan-state-shape", (db) =>
+      db.prepare("update execution_plans set state_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'").run("[]"),
+    );
+    await expect(readActiveLifecycleBranchDocs(context)).rejects.toMatchObject(
+      refuses("execution_plans(wf-1,p-1).state_json is not a JSON object"),
+    );
   });
 });
 

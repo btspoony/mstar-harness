@@ -116,13 +116,14 @@ function parserDiagnostic(error: CommanderError, argv: readonly string[]): Recor
   // cannot yield two different offending indices.
   const scan = definition === undefined ? undefined : scanArgv(argv, definition);
   // The surplus positional, a mandatory option left without a value, or the
-  // rejected token commander quoted — all read off the one scan.
+  // rejected token commander quoted — all read off the one scan. A missing
+  // value names its option even when a surplus positional precedes it.
   const rejectedIndex = scan === undefined || definition === undefined
     ? undefined
     : excess
       ? scan.positionals[definition.cli.arguments.length]
       : missingValue
-        ? scan.rejectedIndex
+        ? scan.danglingOptionIndex ?? scan.rejectedIndex
         : quoted === undefined ? undefined : scan.positionals.find((index) => argv[index] === quoted);
   const path = field ?? (excess && rejectedIndex !== undefined ? `argv[${rejectedIndex}]` : undefined);
   return {
@@ -157,6 +158,8 @@ function parserField(
 type ArgvScan = {
   /** Token indices beyond the command path that no known option consumed, in argv order. */
   positionals: readonly number[];
+  /** First `<` option whose value the argv ends without, even when a surplus positional also exists. */
+  danglingOptionIndex: number | undefined;
   /** First index the syntax does not explain: the surplus positional, else a `<` option left without a value. */
   rejectedIndex: number | undefined;
 };
@@ -203,7 +206,11 @@ function scanArgv(argv: readonly string[], definition: CommandDefinition): ArgvS
     }
     positionals.push(index);
   }
-  return { positionals, rejectedIndex: positionals[definition.cli.arguments.length] ?? danglingOptionIndex };
+  return {
+    positionals,
+    danglingOptionIndex,
+    rejectedIndex: positionals[definition.cli.arguments.length] ?? danglingOptionIndex,
+  };
 }
 
 function renderCliUsage(definition: CommandDefinition): string {

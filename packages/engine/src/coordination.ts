@@ -1117,7 +1117,7 @@ function gitUnavailable(cwd: string, args: readonly string[], error: unknown): C
 function gitScratchUnavailable(scratch: string, error: unknown): CoordinationError {
   const code = propertyOf(error, "code");
   return new CoordinationError(
-    "coordination.git-unavailable",
+    "coordination.git-scratch-unavailable",
     `Git state cannot be read: the delivery diff could not be written to its scratch file ${scratch}` +
       `${typeof code === "string" ? ` (${code})` : ""}. Point TMPDIR at a writable directory, then retry the close.`,
     { path: scratch, cause: typeof code === "string" ? code : String(error) },

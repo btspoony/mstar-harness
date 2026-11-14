@@ -187,6 +187,21 @@ describe("workflow family advisories", () => {
     expect(await storedBranch(harnessDir)).toEqual({ base: "main", work: "feature/plan-anchor", target: "main" });
   });
 
+  test("all three anchors recorded as one branch warns twice and still registers", async () => {
+    // Such a triple names no delivery at all: the delivery branch is its own
+    // target and its own creation base. Each collision keeps its own sentence,
+    // and the work === target one comes first.
+    const harnessDir = await harness();
+    const envelope = await register(harnessDir, { base: "main", work: "main", target: "main" });
+    expect(envelope).toMatchObject({ status: "ok", code: "workflow.register.ok", exitCode: 0 });
+    const warnings = warningsOf(envelope);
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain("--branch-work/--branch-target");
+    expect(warnings[1]).toContain("--branch-base/--branch-work");
+    // Registration still stores the triple it warned about.
+    expect(await storedBranch(harnessDir)).toEqual({ base: "main", work: "main", target: "main" });
+  });
+
   test("a coherent anchor triple carries no advisory", async () => {
     // base and target name the protected merge anchor; only work is a feature.
     const envelope = await register(await harness(), { base: "main", work: "feature/plan-anchor", target: "main" });

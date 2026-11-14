@@ -796,6 +796,17 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
     for (const adopted of reconciled.adopted) {
       report.items.push({ localId: adopted.localId, outcome: "reconciled", externalId: adopted.externalId });
     }
+    // The scan's verdict on each residue IS the item's cause: it names the page
+    // bound the scan stopped at, where `pushItem`'s generic residue guard offers
+    // `--release` — the one flag a truncated scan refuses. Those ids are skipped
+    // in the candidate loop below, which would otherwise replace this cause and
+    // count the item twice.
+    const unattributed = new Set<string>();
+    for (const entry of reconciled.unresolved) {
+      unattributed.add(entry.localId);
+      report.unresolved += 1;
+      report.items.push({ localId: entry.localId, outcome: "unresolved", externalId: null, cause: entry.cause });
+    }
     // The scan's own fact, carried to the envelope. Without it a truncated scan
     // whose residue happened to be fully adopted reads as a complete one, and
     // every consumer downstream believes the listing was read to its end.
@@ -803,6 +814,7 @@ async function runPush(id: string, input: Input, invocation: InvocationContext):
 
     // 6. One write per candidate, classified by its receipt.
     for (const candidate of selectPushCandidates(db, bindingId)) {
+      if (unattributed.has(candidate.localId)) continue;
       const outcome: PushOutcome = await pushItem(db, provider, pushContext, candidate);
       report[outcome.outcome]++;
       report.items.push({
