@@ -445,26 +445,33 @@ const deliveryEvidenceSchema: z.ZodType<WorkflowDeliveryEvidence> = z.union([
  * the mis-recorded one, and `delivery-anchors` accepts a re-recorded anchor
  * that is already correct. Each arm therefore names both corrections, so no
  * accepted repair leaves the collision in place.
+ *
+ * One triple can trip both arms (`base === work === target`), and each match is
+ * its own sentence: reporting only the first would leave the second collision
+ * unmentioned on the registration that recorded both.
  */
 function deliveryAnchorWarnings(deliveryKind: string, base: string | undefined, work: string | undefined, target: string | undefined): string[] {
   if (deliveryKind !== "development" || work === undefined) return [];
+  const warnings: string[] = [];
   if (work === target) {
-    return [
+    warnings.push(
       `--branch-work/--branch-target: both were recorded as ${JSON.stringify(work)}, so branch.work === branch.target and the anchors name no delivery PR. ` +
       "--branch-work is the branch the delivery PR comes from, normally the plan's own feature branch; " +
       "`mstar plan complete` compares it with the plan row's recorded working branch. " +
       "Either anchor may be the wrong one: if branch.work is the real delivery branch, record the branch it merges into with `mstar workflow delivery-anchors --workflow <id> --branch-target <branch> --reason <text>`; " +
       "if branch.target is right, record the delivery branch instead with `mstar workflow delivery-anchors --workflow <id> --branch-work <branch> --reason <text>`.",
-    ];
+    );
   }
-  if (base !== work) return [];
-  return [
-    `--branch-base/--branch-work: both were recorded as ${JSON.stringify(work)}, so branch.base === branch.work and the delivery branch is the source of the change. ` +
-    "--branch-base is the protected branch the work was created from, not the delivery branch; " +
-    "`mstar plan complete` compares branch.work with the plan row's recorded working branch. " +
-    "Either anchor may be the wrong one: if branch.work is the real delivery branch, record its creation base with `mstar workflow delivery-anchors --workflow <id> --branch-base <branch> --reason <text>`; " +
-    "if branch.base is the real creation base, record the delivery branch instead with `mstar workflow delivery-anchors --workflow <id> --branch-work <branch> --reason <text>`.",
-  ];
+  if (base === work) {
+    warnings.push(
+      `--branch-base/--branch-work: both were recorded as ${JSON.stringify(work)}, so branch.base === branch.work and the delivery branch is the source of the change. ` +
+      "--branch-base is the protected branch the work was created from, not the delivery branch; " +
+      "`mstar plan complete` compares branch.work with the plan row's recorded working branch. " +
+      "Either anchor may be the wrong one: if branch.work is the real delivery branch, record its creation base with `mstar workflow delivery-anchors --workflow <id> --branch-base <branch> --reason <text>`; " +
+      "if branch.base is the real creation base, record the delivery branch instead with `mstar workflow delivery-anchors --workflow <id> --branch-work <branch> --reason <text>`.",
+    );
+  }
+  return warnings;
 }
 
 export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
