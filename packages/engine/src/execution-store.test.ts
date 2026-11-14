@@ -1274,6 +1274,26 @@ describe("execution-read: the shared state_json guards keep their refusal order"
     await expectSameRefusal(context, "carries id \"p-other\" and does not describe its own key", "does not validate");
   });
 
+  test("refuses a workflow state_json whose only defect is snapshot validation", async () => {
+    const context = await storeWithDefect("guard-workflow-validation", (db) =>
+      writeWorkflowState(db, { id: "wf-1", type: "plan", status: "running", started_at: TS, updated_at: TS }),
+    );
+    await expectSameRefusal(
+      context,
+      "execution_workflows(wf-1).state_json does not validate",
+      "carries id",
+    );
+  });
+
+  test("refuses a plan state_json whose only defect is row validation", async () => {
+    const context = await storeWithDefect("guard-plan-validation", (db) => writePlanState(db, { id: "p-1" }));
+    await expectSameRefusal(
+      context,
+      "execution_plans(wf-1,p-1).state_json does not validate",
+      "carries coordination",
+    );
+  });
+
   test("refuses a coordination_json that is not an object, which the projection never reads", async () => {
     const context = await storeWithDefect("guard-coordination-boundary", (db) =>
       db.prepare("update execution_plans set coordination_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'").run("[]"),
@@ -1349,6 +1369,15 @@ describe("execution-read: the branch-doc projection refuses the rows it does rea
     );
     await expect(readActiveLifecycleBranchDocs(context)).rejects.toMatchObject(
       refuses("execution_workflows(wf-1).state_json is not a JSON object"),
+    );
+  });
+
+  test("refuses a plan state_json that is not a JSON object", async () => {
+    const context = await storeWithDefect("branch-doc-plan-state-shape", (db) =>
+      db.prepare("update execution_plans set state_json = ? where workflow_id = 'wf-1' and plan_id = 'p-1'").run("[]"),
+    );
+    await expect(readActiveLifecycleBranchDocs(context)).rejects.toMatchObject(
+      refuses("execution_plans(wf-1,p-1).state_json is not a JSON object"),
     );
   });
 });
