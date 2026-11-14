@@ -70,18 +70,18 @@ function isDetailsRecord(value: unknown): value is Record<string, unknown> {
 /**
  * The one recovery `status.workflow-close` appends to the engine's own message.
  *
- * `coordination.git-unavailable` needs the branch: it covers both a Git read
- * the checkout could not answer (details name the `command`) and the
- * delivery-diff scratch write that failed under `TMPDIR` (details name only the
- * file). The engine's second refusal already states its repair, so repeating a
- * control-root instruction there would answer one refusal with two
- * incompatible recoveries.
+ * Each Git refusal carries its own code, so the code alone selects the repair:
+ * `coordination.git-scratch-unavailable` is the delivery-diff scratch write that
+ * failed under `TMPDIR` and needs that setting moved, while
+ * `coordination.git-unavailable` is a Git read the checkout could not answer and
+ * keeps the control-root instruction. Answering either with the other's
+ * recovery would tell an operator to repair something that is fine.
  */
 export function workflowCloseRecovery(code: string, details: Record<string, unknown> | undefined): string {
   if (code === "execution.not-active" || code === "store.not-initialized" || code === "store.not-active") {
     return "Select the control root that holds the workflow's ACTIVE execution authority, or create one with mstar harness scaffold then mstar store init (or mstar store upgrade to import historical file state); the file close route is retired and never falls back.";
   }
-  if (code === "coordination.git-unavailable" && details !== undefined && !("command" in details)) {
+  if (code === "coordination.git-scratch-unavailable") {
     return "Point TMPDIR at a writable directory so the delivery-diff scratch file can be written, then rerun mstar status workflow-close.";
   }
   if (code === "coordination.scope-mismatch" || code === "coordination.harness-not-found" || code === "coordination.git-unavailable") {

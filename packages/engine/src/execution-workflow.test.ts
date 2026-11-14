@@ -1205,7 +1205,7 @@ describe("execution-workflow: \u00A74f the delivery merge proof", () => {
     // The obstacle is the scratch write, not the repository: the cause names the
     // file it could not create and the setting an operator can move, instead of
     // sending them to repair a checkout that is fine.
-    expect(refused.code).toBe("coordination.git-unavailable");
+    expect(refused.code).toBe("coordination.git-scratch-unavailable");
     expect(refused.message).toContain("could not be written to its scratch file");
     expect(refused.message).toContain("Point TMPDIR at a writable directory");
     // The cause names the file it could not create, under the locked root.
