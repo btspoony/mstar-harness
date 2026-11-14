@@ -167,13 +167,13 @@ describe("status command family", () => {
   });
 
   /**
-   * One code, one recovery: `coordination.git-unavailable` covers both a Git
-   * read the checkout could not answer and the delivery-diff scratch write that
-   * failed under `TMPDIR`. The status layer must not answer the scratch case
-   * with a control-root instruction that contradicts the engine's own.
+   * One code, one recovery: the delivery-diff scratch write that failed under
+   * `TMPDIR` is `coordination.git-scratch-unavailable`, and the status layer
+   * must answer it with the setting to move — never with the control-root
+   * instruction the Git-read code earns.
    */
   test("the close recovery for a scratch write names TMPDIR instead of the control root", () => {
-    const scratch = workflowCloseRecovery("coordination.git-unavailable", { path: "/tmp/mstar-patchid-1", cause: "EACCES" });
+    const scratch = workflowCloseRecovery("coordination.git-scratch-unavailable", { path: "/tmp/mstar-patchid-1", cause: "EACCES" });
     expect(scratch).toContain("TMPDIR");
     expect(scratch).not.toContain("control root");
     const read = workflowCloseRecovery("coordination.git-unavailable", { command: "git status", cause: "ENOENT" });

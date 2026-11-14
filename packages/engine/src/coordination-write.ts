@@ -67,6 +67,10 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.forbidden-field",
   "coordination.not-in-git",
   "coordination.git-unavailable",
+  // The delivery-diff scratch write, not the checkout: the obstacle is the
+  // process `TMPDIR`, so it earns a code whose recovery names that setting
+  // instead of sharing `git-unavailable`'s checkout instruction.
+  "coordination.git-scratch-unavailable",
   "coordination.git-proof",
   "coordination.integration-unresolved",
   "coordination.integration-diverged",
