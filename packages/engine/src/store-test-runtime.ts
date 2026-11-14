@@ -239,9 +239,9 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     await expectStoreErrorAsync("store.schema-drift", () => openStore({ harnessDir: rootDir }, "write"));
     await expectStoreErrorAsync("store.schema-drift", () => openStore({ harnessDir: rootDir }, "read"));
     const { DatabaseSync } = await import("node:sqlite");
-    const raw = new DatabaseSync(join(rootDir, "store.db"), { readOnly: true });
-    const rows = raw.prepare("select version from schema_version order by version").all() as Array<{ version: number }>;
-    raw.close();
+    const rows = withRawRead(DatabaseSync, join(rootDir, "store.db"), (raw) =>
+      raw.prepare("select version from schema_version order by version").all(),
+    ) as Array<{ version: number }>;
     const expected = MIGRATIONS.map((migration) => migration.version).filter((version) => version !== 2);
     if (rows.length !== expected.length || rows.some((row, index) => row.version !== expected[index])) {
       throw new Error("the drift refusal rewrote schema rows");
