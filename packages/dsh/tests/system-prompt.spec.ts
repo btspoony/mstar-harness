@@ -34,7 +34,7 @@ import { Context } from '@deepseek-ai/cordis'
 import SystemPromptPlugin from '@deepseek-ai/dsh-system-prompt'
 import { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import { assembleContextFor, type Agent } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import { bootApp, fakeChild, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { PERSONA_INTERPOLATION_HAZARD, stripInterpolationHazard } from '../src/gates/_shared.ts'
@@ -483,6 +483,63 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(fallbackText.startsWith('<mstar_engine_status>\nmstar version: ')).toBe(true)
     expect(fallbackText).toContain(`harness dir: ${app.harnessDir}`)
     expect(fallbackText).toContain('enforcement: soft')
+  })
+
+  it('(m) first render of a non-boot workspace is version-only by contract; the render after the background refresh is store-backed', async () => {
+    // Boot workspace, store-backed: the outer `await refresh(bootHarnessDir)`
+    // primes exactly this key, so its FIRST assembly is already store-backed.
+    const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-first-render-'))
+    const harnessDir = join(root, 'harness')
+    await seedActiveWorkflow(harnessDir, 'boot-workflow', [
+      { id: 'boot-plan', title: 'Boot plan', status: 'Todo' },
+    ], {}, 'seed-boot-workflow', root)
+    booted = await bootApp({ root })
+    const bootText = (await assembleWithEngineStatus(booted.ctx))
+      .contexts.find((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)!.text
+    expect(bootText).toContain('workflow boot-workflow (plan) running')
+
+    // A second workspace whose per-agent answer differs from the boot value.
+    // The explicit boot above would answer its own dir for EVERY agent, so this
+    // composition mounts the service directly with a PROBING resolver (the (f)
+    // pattern): its boot value is `null`, so the per-agent key is a memo miss.
+    const otherRoot = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-first-render-ws-'))
+    const otherHarnessDir = join(otherRoot, 'harness')
+    await seedActiveWorkflow(otherHarnessDir, 'other-workflow', [
+      { id: 'other-plan', title: 'Other plan', status: 'Todo' },
+    ], {}, 'seed-other-workflow', otherRoot)
+
+    const ctx = new Context()
+    await ctx.plugin(SystemPromptPlugin, {})
+    try {
+      expect(registerHarnessPrompt(ctx, { resolver: new HarnessResolver(undefined) })).toBe(true)
+      // The agent the assembly is for: its session cwd is the second workspace,
+      // so `resolver.forAgent` answers a harness dir the boot await never primed.
+      const agent = {
+        id: 'ses-first-render',
+        session: { header: { id: 'ses-first-render', cwd: otherRoot } },
+      } as unknown as Agent
+      const assemblyContext = assembleContextFor(agent)
+      // Let the inject child land the registration (the (f) pattern).
+      await settleInjectChild()
+      // The miss does not await: the provider is synchronous, so the first
+      // render is the version-only summary and the store read runs behind it.
+      const firstText = (await ctx.systemPrompt.assemble(assemblyContext))
+        .contexts.find((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)?.text
+      expect(firstText).toBe(`mstar engine status: v${PLUGIN_VERSION}`)
+
+      // After the in-flight refresh settles, the same agent renders the store.
+      let text = firstText ?? ''
+      for (let attempt = 0; attempt < 500 && !text.includes('workflow other-workflow'); attempt++) {
+        const { promise, resolve } = Promise.withResolvers<void>()
+        setTimeout(resolve, 10)
+        await promise
+        text = (await ctx.systemPrompt.assemble(assemblyContext))
+          .contexts.find((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)?.text ?? text
+      }
+      expect(text).toContain('workflow other-workflow (plan) running | plans: other-plan(Todo)')
+    } finally {
+      await ctx.fiber.dispose().catch(() => {})
+    }
   })
 
 
