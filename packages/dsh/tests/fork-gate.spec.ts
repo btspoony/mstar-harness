@@ -363,7 +363,7 @@ describe('fork preset — the native channel composes on fork dispatches', () =>
 
     await startActivationViaNativeChannel(app, {
       provider: 'fake-spawn',
-      request: { prompt: [{ type: 'text', text: FORK_ASSIGNMENT_PROMPT }] },
+      prompt: [{ type: 'text', text: FORK_ASSIGNMENT_PROMPT }],
     })
 
     expect(provider.starts).toHaveLength(1)

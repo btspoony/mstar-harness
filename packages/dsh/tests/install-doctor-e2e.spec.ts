@@ -167,6 +167,20 @@ function hasShippedSurface(mstarPkgDir: string): boolean {
   return dist.includes('mstar seeds declared') && dist.includes('internal/get') && dist.includes('startActivation')
 }
 
+/**
+ * Whether the installed artifact was built for the SAME dsh corridor as this
+ * source tree (compared on the subagent seam's peer pin). A published
+ * artifact one corridor behind carries the previous activation-spec shape
+ * (`request` nested vs extended), so a source-shaped spec cannot drive its
+ * channel: the vintage arm below must stay disarmed until the release
+ * carrying this corridor is published.
+ */
+function sameSubagentCorridor(mstarPkgDir: string): boolean {
+  const peers = (dir: string): Record<string, string> | undefined =>
+    (JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { peerDependencies?: Record<string, string> }).peerDependencies
+  return peers(mstarPkgDir)?.['@deepseek-ai/dsh-subagent'] === peers(packageRoot)?.['@deepseek-ai/dsh-subagent']
+}
+
 /** Read the `version` field of a package.json (Task 1 pattern). */
 async function readVersion(pkgJsonPath: string): Promise<string> {
   const parsed: unknown = JSON.parse(await readFile(pkgJsonPath, 'utf8'))
@@ -204,9 +218,9 @@ const ASSIGNMENT_PROMPT = [
 /** The deployed agent preset id `fullstack-dev` maps to (Config `rolePresets`). */
 const ROLE_PRESET = 'mstar-execute'
 
-/** A native activation spec whose request prompt carries `text` (role-persona.spec pattern). */
+/** A native activation spec whose prompt carries `text` (role-persona.spec pattern). */
 function activationSpec(text: string): SubagentActivationSpecView {
-  return { provider: 'fake-spawn', request: { prompt: [{ type: 'text', text }] } }
+  return { provider: 'fake-spawn', prompt: [{ type: 'text', text }] }
 }
 
 /** A DISABLED fallbacks loader entry (the real profile's loader view for a
@@ -262,9 +276,9 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
     // preset. Instead of a green-by-omission the run prints the explicit
     // deviation; `tests/role-persona.spec.ts` owns the channel behavior at
     // src level, and the release carrying the port arms this assertion.
-    const presetChannelArmed = hasShippedSurface(installedMstarDir(dshHome))
+    const presetChannelArmed = hasShippedSurface(installedMstarDir(dshHome)) && sameSubagentCorridor(installedMstarDir(dshHome))
     if (!presetChannelArmed) {
-      console.log('install-doctor-e2e: installed artifact lacks the ported role-preset channel — cell1 dsh-side preset selection DISARMED (degradation facts still asserted)')
+      console.log('install-doctor-e2e: installed artifact lacks the ported role-preset channel or predates this source tree\'s dsh corridor — cell1 dsh-side preset selection DISARMED (degradation facts still asserted)')
     }
 
     // --- CELL 1: fallbacks uninstalled ---

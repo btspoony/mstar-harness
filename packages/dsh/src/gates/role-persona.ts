@@ -197,15 +197,15 @@ export interface SubagentStartRequestView {
 /**
  * Structural view of the activation spec the channel merges into
  * (`@deepseek-ai/dsh-subagent` `SubagentActivationSpec` — consumed fields
- * only). The wrapper forwards the spec object SPREAD, so every
- * non-consumed field (`label`, `childId`, `signal`, `delivery`) reaches the
- * service unchanged at runtime; the view types only what this module reads.
+ * only). Since 0.2.2-rc.3 the spec EXTENDS the start request instead of
+ * nesting it (`request` is gone), so the spec itself is the merge target.
+ * The wrapper forwards the spec object SPREAD, so every non-consumed field
+ * (`label`, `childId`, `signal`, `delivery`, `name`) reaches the service
+ * unchanged at runtime; the view types only what this module reads.
  */
-export interface SubagentActivationSpecView {
+export interface SubagentActivationSpecView extends SubagentStartRequestView {
   /** Registered backend the child is started on (the capability-gate key). */
   readonly provider: string
-  /** The delegation request (the merge target). */
-  readonly request: SubagentStartRequestView
 }
 
 /**
@@ -1138,9 +1138,9 @@ function wrapSubagentsService(
       // projection, not the immutable header), so it must be resolved BEFORE
       // the harness predicate (an omitted cwd is never a non-harness
       // exemption).
-      const startDirectory = effectiveStartDirectory(spec.request, currentDirectoryOf(spec.request.parent, ctx))
+      const startDirectory = effectiveStartDirectory(spec, currentDirectoryOf(spec.parent, ctx))
       decision = evaluateRoleGate({
-        request: spec.request,
+        request: spec,
         mode: readRoleGate(),
         cwd: startDirectory,
         harnessProject: isHarnessProject(startDirectory),
@@ -1162,7 +1162,7 @@ function wrapSubagentsService(
       }
     }
     if (decision.kind === 'repair') {
-      gated = { ...spec, request: decision.request }
+      gated = { ...spec, ...decision.request }
       log(
         'debug',
         `role gate repaired the dispatch role '${decision.roleId}' from a ${decision.evidence === 'field' ? 'role field line' : 'declared role-id token'}; the canonical 'Execute as' header is what the child receives`,
@@ -1170,8 +1170,8 @@ function wrapSubagentsService(
     }
     let merged = gated
     try {
-      const mergedRequest = withRolePreset(agentPresetsService(ctx), state, service, spec.provider, gated.request, rolePresets)
-      if (mergedRequest !== gated.request) merged = { ...gated, request: mergedRequest }
+      const mergedRequest = withRolePreset(agentPresetsService(ctx), state, service, spec.provider, gated, rolePresets)
+      if (mergedRequest !== gated) merged = mergedRequest
     } catch (error) {
       // Contained like the gate's degrade path: the merge aborts, the
       // ORIGINAL spec reaches the service — the start is never affected.
@@ -1210,34 +1210,34 @@ function withRolePreset(
   state: ChannelState,
   service: SubagentsServiceView,
   providerName: string,
-  request: SubagentStartRequestView,
+  spec: SubagentActivationSpecView,
   rolePresets: Config['rolePresets'],
-): SubagentStartRequestView {
+): SubagentActivationSpecView {
   // (1) An explicit selection (tool default or the model's own choice) wins
   // — mstar never overrides caller intent.
-  if (request.agentPreset !== undefined) return request
+  if (spec.agentPreset !== undefined) return spec
   // (2) Perf guard: with no mapping there is nothing to resolve — skip the
   // Assignment parse entirely.
-  if (rolePresets == null || Object.keys(rolePresets).length === 0) return request
+  if (rolePresets == null || Object.keys(rolePresets).length === 0) return spec
   // (3) The prompt text: text blocks joined with newlines (the same
   // projection the child's seeded user message carries).
-  const taskPrompt = (request.prompt ?? [])
+  const taskPrompt = (spec.prompt ?? [])
     .filter((block) => block.type === 'text')
     .map((block) => block.text ?? '')
     .join('\n')
-  if (taskPrompt.trim().length === 0) return request
+  if (taskPrompt.trim().length === 0) return spec
   // (4) The SAME engine Assignment grammar the dispatch gate uses: the
   // header region only, so a body-quoted field line cannot shape a merge.
   const executeAs = parseAssignmentFields(assignmentHeaderRegion(taskPrompt)).executeAs
-  if (executeAs === undefined) return request
+  if (executeAs === undefined) return spec
   // (5) Only a mapped role selects a preset (an empty mapping value is
   // treated as unmapped).
   const presetId = rolePresets[executeAs]
-  if (presetId === undefined || presetId.trim().length === 0) return request
+  if (presetId === undefined || presetId.trim().length === 0) return spec
   // (6) Provider unknown → silent: `startActivation` fails loud its own way
   // (`NO_PROVIDER`), and the channel must not shadow that contract.
   const provider = service.getProvider(providerName)
-  if (provider === undefined) return request
+  if (provider === undefined) return spec
   // (7) Capability gate: an independent selection needs provider support and
   // a provider that does not inherit its parent's conversation (upstream
   // rejects the pair).
@@ -1246,7 +1246,7 @@ function withRolePreset(
       'debug',
       `subagent provider '${providerName}' does not support independent preset selection — role preset for '${executeAs}' skipped (start proceeds unchanged)`,
     )
-    return request
+    return spec
   }
   // (8) The selection is only usable where the registry is mounted.
   if (presets === undefined) {
@@ -1254,13 +1254,13 @@ function withRolePreset(
       state.registryAbsentLogged = true
       log('debug', `role preset selection skipped: the '${AGENT_PRESETS_SERVICE}' service is not mounted in this composition (the web and headless bundles mount @deepseek-ai/dsh-agent-preset-registry)`)
     }
-    return request
+    return spec
   }
   // (9) Hit — merge into the native selection slot. dsh mounts the named
   // preset as the child's composition (persona, tools and skills), records
   // the selection in the child's log, and replays it on cold resume.
   log('debug', `role preset delivered through the native subagent preset channel for role '${executeAs}' → preset '${presetId}' (provider: ${providerName})`)
-  return { ...request, agentPreset: presetId }
+  return { ...spec, agentPreset: presetId }
 }
 
 /** Best-effort human-readable message from an arbitrary thrown value (agent-flow `errorMessage` pattern). */

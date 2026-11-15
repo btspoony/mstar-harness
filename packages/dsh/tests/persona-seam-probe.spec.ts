@@ -96,9 +96,9 @@ function brandedWrapper(proto: object = {}): object {
   return wrapper
 }
 
-/** One native `startActivation` spec whose request prompt text carries `text` (Assignment or plain). */
+/** One native `startActivation` spec whose prompt text carries `text` (Assignment or plain). */
 function startSpec(text: string): Parameters<SubagentsServiceView['startActivation']>[0] {
-  return { provider: PROVIDER, request: { prompt: [{ type: 'text', text }] } }
+  return { provider: PROVIDER, prompt: [{ type: 'text', text }] }
 }
 
 /**

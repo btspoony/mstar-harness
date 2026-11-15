@@ -203,7 +203,7 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
       const { promise, resolve, reject } = Promise.withResolvers<void>()
       void ctx.inject(['subagents'], (sctx) => {
         ;(sctx.subagents as unknown as FakeSubagentService)
-          .startActivation({ provider: 'fake-spawn', request: { prompt: [{ type: 'text', text: ASSIGNMENT_PROMPT }] } })
+          .startActivation({ provider: 'fake-spawn', prompt: [{ type: 'text', text: ASSIGNMENT_PROMPT }] })
           .then(() => resolve(), reject)
       })
       return promise

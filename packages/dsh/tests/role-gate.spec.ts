@@ -111,8 +111,9 @@ function writeLiveRoleGate(app: BootResult, mode: 'off' | 'warn' | 'hard'): void
 /** One activation spec for the fake provider (the non-consumed fields are additive). */
 function specFor(request: RecordedRequest, provider: string = PROVIDER): SubagentActivationSpecView {
   // Boundary cast: the view types only the consumed fields; the signal is the
-  // runtime's own (the wrapper forwards the spec spread).
-  return { provider, request, signal: new AbortController().signal } as unknown as SubagentActivationSpecView
+  // runtime's own (the wrapper forwards the spec spread). The spec extends the
+  // request since dsh 0.2.2-rc.3, so the request fields sit on the spec.
+  return { provider, ...request, signal: new AbortController().signal } as unknown as SubagentActivationSpecView
 }
 
 /** The text projection of one recorded request prompt. */
