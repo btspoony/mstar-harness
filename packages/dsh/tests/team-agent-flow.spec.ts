@@ -29,6 +29,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readDshLedgerWindow } from '@mstar-harness/engine'
 import {
+  AGENT_FLOW_ACTIVATION_END_CAPACITY,
   AGENT_FLOW_TEAM_CHILD_CAPACITY,
   readAgentFlow,
   recordDispatch,
@@ -148,6 +149,25 @@ async function recordDispatchOnFixture(exec: unknown) {
   recordDispatch({ harnessDir, workflowId: 'wf-1', resolvedWorkflowDir: workflowDir, selectedGeneration, exec, pairing, prompt: ASSIGNMENT, violations: [], hard: false })
   return { harnessDir, workflowDir, selectedGeneration, pairing }
 }
+
+/** Record one dispatch against an already-created fixture (the pre-execute half). */
+function recordOn(fixture: Awaited<ReturnType<typeof activeFixture>>, exec: unknown, pairing: AgentFlowPairing): void {
+  recordDispatch({
+    harnessDir: fixture.harnessDir,
+    workflowId: 'wf-1',
+    resolvedWorkflowDir: fixture.workflowDir,
+    selectedGeneration: fixture.selectedGeneration,
+    exec,
+    pairing,
+    prompt: ASSIGNMENT,
+    violations: [],
+    hard: false,
+  })
+}
+
+/** The settle rows of one fixture's ledger (the observable completion evidence). */
+const settlesOf = (harnessDir: string): LedgerRow[] =>
+  ledgerRows(harnessDir).filter((row) => row.kind === 'settle')
 
 /* ------------------------------ activation pairing ------------------------------ */
 
@@ -489,6 +509,124 @@ describe('team agent flow — bounded pairing state and cross-call safety', () =
     expect(pairing.teamDispatchByChildId?.has('child-new')).toBe(true)
     expect(pairing.teamDispatchByChildId?.has('old-0')).toBe(false)
     expect(ledgerRows(harnessDir).find((row) => row.kind === 'continuation')?.state).toBe('unresolved')
+  })
+})
+
+/* ------------------------------ early-end admission (R-1) ------------------------------ */
+
+describe('team agent flow — early-end admission keeps genuine ends and is honest at the capacity', () => {
+  it('settles a genuine early end beside an unclaimable record of the same parent (R-1)', async () => {
+    const fixture = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamServices(ctx, [{ name: 'a', childId: 'child-a' }, { name: 'b', childId: 'child-b' }])
+    registerSettleListener(ctx, {}, pairing)
+    const first = subagentExec('call-a')
+    const second = subagentExec('call-b')
+    recordOn(fixture, first, pairing)
+    recordOn(fixture, second, pairing)
+
+    // Two overlapping in-flight dispatches of ONE parent. A child no ref can
+    // ever claim arrives first and is admitted (a legitimate leftover), then the
+    // first dispatch's call window closes and its name resolves.
+    emitLifecycleEnd(ctx, { id: 'child-stray', stopReason: 'completed', parentSessionId: 'session-1' })
+    emit(ctx, SETTLE_SEAM, first, activationResult('a'))
+    await activationTick()
+    // The second dispatch's child end beats its own async name resolution.
+    emit(ctx, SETTLE_SEAM, second, activationResult('b'))
+    emitLifecycleEnd(ctx, { id: 'child-b', stopReason: 'completed', parentSessionId: 'session-1' })
+    await activationTick()
+    // The first child's end arrives after its pairing (the live settle path).
+    emitLifecycleEnd(ctx, { id: 'child-a', stopReason: 'completed' })
+
+    // Both dispatches settle exactly once, attributed to their own child and
+    // call id; the stray leftover never costs the genuine early end.
+    // (The native window is latest-first, so order the rows by child id.)
+    expect(settlesOf(fixture.harnessDir).sort((a, b) => String(a.childId).localeCompare(String(b.childId)))).toEqual([
+      expect.objectContaining({ outcome: 'ok', childId: 'child-a', role: 'fullstack-dev', callId: 'call-a' }),
+      expect.objectContaining({ outcome: 'ok', childId: 'child-b', role: 'fullstack-dev', callId: 'call-b' }),
+    ])
+    expect(ledgerRows(fixture.harnessDir).some((row) => row.kind === 'continuation')).toBe(false)
+    expect(state(pairing)).toEqual({ call: 0, child: 0 })
+  })
+
+  it('evicts the oldest early end at the capacity and records the explicit unresolved continuation', async () => {
+    const fixture = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamServices(ctx, [{ name: 'evicted', childId: 'evict-0' }])
+    registerSettleListener(ctx, {}, pairing)
+    const warnings: string[] = []
+    const previous = setAgentFlowLogger((level, message) => {
+      if (level === 'warn') warnings.push(message)
+    })
+    try {
+      // One in-flight dispatch keeps the parent's window open while its scope
+      // fills past the capacity with ends no ref can claim.
+      recordOn(fixture, subagentExec('call-window'), pairing)
+      for (let index = 0; index <= AGENT_FLOW_ACTIVATION_END_CAPACITY; index += 1) {
+        emitLifecycleEnd(ctx, { id: `evict-${index}`, stopReason: 'completed', parentSessionId: 'session-1' })
+      }
+      // The dispatch that created the EVICTED child resolves its name late.
+      const exec = subagentExec('call-evicted')
+      recordOn(fixture, exec, pairing)
+      emit(ctx, SETTLE_SEAM, exec, activationResult('evicted'))
+      await activationTick()
+
+      // The oldest record was evicted with a warn naming it.
+      expect(warnings.some((message) => message.includes('evict-0') && message.includes('evicted at the early-end capacity'))).toBe(true)
+      // The eventual dispatch is honest: ONE explicit unresolved continuation
+      // naming the capacity, and no fabricated settle.
+      const rows = ledgerRows(fixture.harnessDir)
+      expect(rows.some((row) => row.kind === 'settle')).toBe(false)
+      expect(rows.filter((row) => row.kind === 'continuation')).toEqual([
+        expect.objectContaining({
+          state: 'unresolved',
+          role: 'fullstack-dev',
+          callId: 'call-evicted',
+          reason: expect.stringContaining('evicted at the early-end capacity'),
+        }),
+      ])
+    } finally {
+      setAgentFlowLogger(previous)
+    }
+  })
+
+  it('settles the same child end exactly once whether it beats or follows the name resolution', async () => {
+    // Order A — the end beats the async name resolution (reconciled).
+    const early = await activeFixture()
+    const earlyCtx = new Context()
+    const earlyPairing = newPairing()
+    provideTeamServices(earlyCtx, [{ name: 'reviewer', childId: 'child-early' }])
+    registerSettleListener(earlyCtx, {}, earlyPairing)
+    const earlyExec = subagentExec('call-early')
+    recordOn(early, earlyExec, earlyPairing)
+    emit(earlyCtx, SETTLE_SEAM, earlyExec, activationResult())
+    emitLifecycleEnd(earlyCtx, { id: 'child-early', stopReason: 'completed' })
+    await activationTick()
+    // A re-woken child's later end is the same child: never a second settle.
+    emitLifecycleEnd(earlyCtx, { id: 'child-early', stopReason: 'completed' })
+    expect(settlesOf(early.harnessDir)).toEqual([
+      expect.objectContaining({ outcome: 'ok', childId: 'child-early', role: 'fullstack-dev' }),
+    ])
+    expect(state(earlyPairing)).toEqual({ call: 0, child: 0 })
+
+    // Order B — the end follows the pairing write (the keyed-by-child path).
+    const late = await activeFixture()
+    const lateCtx = new Context()
+    const latePairing = newPairing()
+    provideTeamServices(lateCtx, [{ name: 'reviewer', childId: 'child-late' }])
+    registerSettleListener(lateCtx, {}, latePairing)
+    const lateExec = subagentExec('call-late')
+    recordOn(late, lateExec, latePairing)
+    emit(lateCtx, SETTLE_SEAM, lateExec, activationResult())
+    await activationTick()
+    emitLifecycleEnd(lateCtx, { id: 'child-late', stopReason: 'completed' })
+    emitLifecycleEnd(lateCtx, { id: 'child-late', stopReason: 'completed' })
+    expect(settlesOf(late.harnessDir)).toEqual([
+      expect.objectContaining({ outcome: 'ok', childId: 'child-late', role: 'fullstack-dev' }),
+    ])
+    expect(state(latePairing)).toEqual({ call: 0, child: 0 })
   })
 })
 
