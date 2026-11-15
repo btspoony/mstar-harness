@@ -37,7 +37,7 @@ import {
   type ExecutionState,
   type StoreContext,
 } from "@mstar-harness/engine";
-import { CLI_ROOT, runCli as spawnCli, type RunResult } from "./harness";
+import { CLI_ROOT, receiptStable, runCli as spawnCli, type RunResult } from "./harness";
 
 type EngineManifest = { engines?: { node?: string } };
 // Repo manifest read at runtime: no test pins the runtime floor, and
@@ -409,6 +409,8 @@ describe("mstar workflow \u2014 documented invocation", () => {
       identity,
     );
     expect(dataOf(replayed).replayed).toBe(true);
+    // The replay reproduces the recorded receipt field for field, not only its marker.
+    expect(receiptStable(dataOf(replayed))).toEqual(receiptStable(dataOf(paused)));
   });
 
   test("the terminal lifecycle is atomic and the retired file close has no active route", async () => {

@@ -41,7 +41,7 @@ import {
 import { semanticRequestHash } from "../../engine/src/execution-store.js";
 import { PLAN_OPERATION_SEMANTICS, selectSemanticFields } from "../../engine/src/recovery-intent.js";
 
-import { runCli, type RunResult } from "./harness";
+import { receiptStable, runCli, type RunResult } from "./harness";
 
 const WORKFLOW_ID = "wf-close";
 const PLAN_ID = "plan-close";
@@ -507,6 +507,8 @@ test("historical mandatory completion replays only its exact receipt", async () 
     caller: { sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID },
     intent: selectSemanticFields({ planId: PLAN_ID, operation }, PLAN_OPERATION_SEMANTICS.complete),
   });
+  // The exact pre-cutover receipt this store is made to hold: the replay must reproduce it.
+  let historicalReceipt: any;
   const store = await openStore(fixture.context, "write");
   try {
     const row = store.db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?").get(WORKFLOW_ID, PLAN_ID) as { coordination_json: string };
@@ -516,7 +518,7 @@ test("historical mandatory completion replays only its exact receipt", async () 
     delete coordination.completion.acceptance;
     store.db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(coordination), WORKFLOW_ID, PLAN_ID);
     const receipt = store.db.prepare("select result_json from execution_operations where operation_id = ?").get("legacy-complete") as { result_json: string };
-    const historicalReceipt = JSON.parse(receipt.result_json);
+    historicalReceipt = JSON.parse(receipt.result_json);
     historicalReceipt.data.coordination.completion.qa = { ...historicalReceipt.data.coordination.completion.acceptance, gate: "mandatory" };
     delete historicalReceipt.data.coordination.completion.acceptance;
     store.db.prepare("update execution_operations set request_hash = ?, result_json = ? where operation_id = ?").run(requestHash, JSON.stringify(historicalReceipt), "legacy-complete");
@@ -527,6 +529,13 @@ test("historical mandatory completion replays only its exact receipt", async () 
   const replay = submit(evidence);
   expect(replay.exitCode, replay.stdout).toBe(0);
   expect(dataOf(replay)).toMatchObject({ replayed: true, data: { coordination: { completion: { qa: { gate: "mandatory" } } } } });
+  // The replay IS that recorded receipt: every field, not only the marker. Two
+  // projections differ by contract — the row stores the read envelope (no served
+  // `operationId`) and the plan replay moves the recorded sidecar from
+  // `operationRecovery` to this call's `recovery` — so those two are excluded.
+  const { operationId: _servedOperationId, ...servedReceipt } = receiptStable(dataOf(replay));
+  const { operationRecovery: _recordedSidecar, ...recordedReceipt } = receiptStable(historicalReceipt);
+  expect(servedReceipt).toEqual(recordedReceipt);
   const changed = submit({ ...evidence, acceptance: { ...evidence.acceptance, report: `${fixture.acceptanceReport}.other` } });
   expect(envelope(changed).code).toBe("execution.operation-conflict");
   const fresh = submit(evidence, [...args.slice(0, -1), "new-complete"]);

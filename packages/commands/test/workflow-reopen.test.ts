@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { initializeStore, openStore, readExecutionState } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { InvocationContext } from "../src/types.js";
+import { receiptStable } from "./receipt.js";
 
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
@@ -109,6 +110,8 @@ describe("workflow.reopen — the public verb on a terminal lifecycle", () => {
     const retry = await definition("workflow.reopen").execute(request, invocation(root));
     expect(retry).toMatchObject({ status: "ok", code: "workflow.reopen.ok", exitCode: 0 });
     expect(retry.data).toMatchObject({ replayed: true });
+    // The served replay reproduces the committed receipt, not merely exit 0.
+    expect(receiptStable(retry.data)).toEqual(receiptStable(first.data));
     expect(await readExecutionState({ harnessDir: harness })).toEqual(committed);
   });
 

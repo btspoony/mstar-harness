@@ -8,7 +8,7 @@ import { initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCli, type RunResult } from "./harness";
+import { receiptStable, runCli, type RunResult } from "./harness";
 
 const WORKFLOW_ID = "20260916-plan-register-cli";
 const SESSION_ID = "registration-cli-session";
@@ -174,10 +174,13 @@ describe("mstar workflow register", () => {
 
   test("an identical retry without an explicit operation replays the shipped registration", async () => {
     await setupHarness(async (harness) => {
-      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
+      const first = runCli(registerArgs(harness));
+      expect(first.exitCode).toBe(0);
       const retry = runCli(registerArgs(harness));
       expect(retry.exitCode).toBe(0);
       expect(commandOutput(retry)).toMatchObject({ status: "ok", code: "workflow.register.ok" });
+      // The served replay reproduces the recorded receipt, not merely exit 0.
+      expect(receiptStable(commandOutput(retry).data)).toEqual(receiptStable(commandOutput(first).data));
       await expectDevelopmentRegistration(harness);
     });
   });

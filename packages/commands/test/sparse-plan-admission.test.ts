@@ -27,6 +27,7 @@ import {
 import { DatabaseSync } from "node:sqlite";
 import { executeCommand } from "../src/definitions.js";
 import type { CommandEnvelope, InvocationContext } from "../src/types.js";
+import { receiptStable } from "./receipt.js";
 
 const TS = "2026-01-02T03:04:05.000Z";
 const WORKFLOW_ID = "wf-1";
@@ -273,6 +274,8 @@ describe("sparse plan intent admission", () => {
     expect(second.status).toBe("ok");
     if (second.status !== "ok") throw new Error(second.message);
     expect((second.data as PlanReceiptData).replayed).toBe(true);
+    // The replay reproduces the recorded receipt field for field, not only its marker.
+    expect(receiptStable(second.data)).toEqual(receiptStable(first.data));
   });
 
   test("the coordinator reads a row with no session reference at all", async () => {

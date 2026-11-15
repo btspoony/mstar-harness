@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { initializeStore, readExecutionAuthority, serializeExecutionValue, type ExecutionIdentity, type StoreContext } from "@mstar-harness/engine";
-import { runCli } from "./harness";
+import { receiptStable, runCli } from "./harness";
 const WF = "wf-plan-coordination", PLAN = "plan-coordination", SESSION = "coord-plan-coordination";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -146,6 +146,8 @@ describe("mstar plan — ACTIVE coordinator operations", () => {
     const replay = await addIssue(f, WF, PLAN, "capture-replay"); expect(replay.code, replay.stdout).toBe(0);
     const after = await issues(f); expect(after).toHaveLength(1); expect(after[0]!.id).toBe(original.id);
     expect(replay.json.data.replayed).toBe(true);
+    // The replay reproduces the recorded receipt field for field, not only its marker.
+    expect(receiptStable(replay.json.data)).toEqual(receiptStable(first.json.data));
   });
   test("stale issue CAS leaves it open and foreign plan close is refused", async () => {
     const f = await fixture(); await register(f); expect((await bind(f)).code).toBe(0);
