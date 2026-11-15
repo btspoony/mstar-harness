@@ -354,14 +354,15 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
       signal: new AbortController().signal,
     } as never)
 
-    // Boot without an ACTIVE workflow → the one engine-status row.
+    // Boot without an ACTIVE workflow → no engine-status row is injected (the
+    // row is an ACTIVE-workflow-only surface).
     const before = await app.ctx.waterfall('agent/pre-step', stepPayloadFor(1), defaultEnter(inbox))
-    expect(before.kind === 'enter' && before.messages.length).toBe(inbox.length + 1)
-    expect(lastMessage(before)?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
+    expect(before.kind === 'enter' && before.messages.length).toBe(inbox.length)
+    expect(before.kind === 'enter' && before.messages.some((message) => message.source.kind === 'mstar-engine')).toBe(false)
 
-    // Adding the ACTIVE workflow + compass mid-session does NOT change the row
-    // within the catalog TTL: the cache is built on first use, and the
-    // unchanged row is not re-appended by the start of a new turn.
+    // Adding the ACTIVE workflow + compass mid-session does NOT surface within
+    // the catalog TTL: the cache is built on first use, and the new turn does
+    // not re-read it.
     await seedActiveWorkflow(app.harnessDir, 'iter-00000808-wt', [PLAN_TODO], {
       type: 'iteration',
       compass_ref: 'iterations/iter-00000808-wt/delivery-compass.md',

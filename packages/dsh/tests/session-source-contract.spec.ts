@@ -49,7 +49,8 @@ const stepPayload = (messages: UserMessage[]) => ({
 
 /** Run one real-composition pre-step and return the appended catalog row. */
 async function emittedCatalogRow(): Promise<UserMessage> {
-  const app = booted = await bootApp()
+  // An ACTIVE workflow context: the catalog row is injected only for one.
+  const app = booted = await bootApp({ seedV2: true })
   const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
   if (decision.kind !== 'enter') throw new Error('expected an enter decision')
   const row = decision.messages.at(-1)

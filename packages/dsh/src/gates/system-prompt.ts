@@ -7,6 +7,20 @@
  * per name per layer, verified `scope/src/store.ts`).
  *
  * Content discipline:
+ * - Model-visible mstar content is gated on the session's workspace resolving
+ *   an ACTIVE workflow (the pre-step catalog row's predicate). Without one the
+ *   pointer block and the engine-status digest contribute NOTHING; only the
+ *   Agent Teams delegation contract can remain — it governs dispatch with or
+ *   without a workflow and carries no workflow state. dsh's `renderPrompt` /
+ *   `renderContextSections` drop empty text, so an empty provider string means
+ *   "no contribution" rather than a blank line.
+ * - A cache MISS is NOT "no workflow": a real session's key carries its id +
+ *   cwd, so its first assembly always misses the boot prime, and the
+ *   synchronous provider cannot await the read. That one assembly keeps the
+ *   PRE-GATE content (full pointer block + version line); the next assembly
+ *   follows the read selection. Without it an ACTIVE session loses the
+ *   harness rules on its first prompt while a workflow-less one keeps them
+ *   forever — the exact inversion this gate exists to avoid.
  * - The section is a POINTER block (presence / enforcement word / resolved
  *   `{HARNESS_DIR}` / one read-mstar-harness-core directive) — deliberately
  *   minimal, never a rules dump (plan pointer-block constraint). The
@@ -36,7 +50,8 @@
  *   re-registration, in zero-config and explicit-config deployments alike.
  * - The context provider reuses the catalog's unified machine-summary
  *   payload (`buildCatalogPayloadWithStore` — the same ACTIVE graph-backed
- *   builder used by the pre-step catalog row) and projects the SLIM digest.
+ *   builder used by the pre-step catalog row), projects the SLIM digest, and
+ *   answers `''` for every non-active selection (version line included).
  *   The prompt API's provider is synchronous, so the configured workspace is
  *   resolved once when the service is injected; additional per-assembly
  *   workspaces are loaded asynchronously and cached for their next assembly.
@@ -73,8 +88,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import { resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { EnforcementFlag } from '@mstar-harness/engine'
 import type { MstarEngineStatusPayload } from '../types.ts'
-import { DEFAULT_CATALOG_TTL_MS, buildCatalogPayload, buildCatalogPayloadWithStore, gateSegment, plansSegment } from './catalog.ts'
-import { stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
+import { catalogCacheKey, DEFAULT_CATALOG_TTL_MS, buildCatalogPayload, buildCatalogPayloadWithStore, gateSegment, plansSegment, selectionHintFor } from './catalog.ts'
+import { sessionHintOf, stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
+import type { SessionHint } from './workflow-selection.ts'
 
 /** Logger label for the harness-prompt injection (dsh logger naming: `<scope>/<subject>`). */
 export const HARNESS_PROMPT_LOGGER = 'mstar/harness-prompt'
@@ -234,6 +250,10 @@ export function registerHarnessPrompt(
     let disposeContext: (() => void) | undefined
     try {
       const view = systemPromptCtx.systemPrompt as unknown as SystemPromptView
+      // ONE shared cache for both surfaces: the injection predicate is the
+      // pre-step catalog row's (ACTIVE workflow only), read from the same
+      // per-workspace payload.
+      const statusCache = await engineStatusCache(ctx, options.resolver, bootHarnessDir)
       disposeSection = view.section({
         name: HARNESS_RULES_SECTION_NAME,
         order: HARNESS_RULES_SECTION_ORDER,
@@ -245,13 +265,39 @@ export function registerHarnessPrompt(
         // assembly — in zero-config and explicit-config deployments alike.
         text: (context) => {
           const harnessDir = resolveAssemblyHarnessDir(context, options.resolver, bootHarnessDir)
-          return harnessRulesText(harnessDir, sectionEnforcement(harnessDir), teamLayerMounted(ctx))
+          const teamMounted = teamLayerMounted(ctx)
+          const payload = statusCache.payloadFor(context)
+          // A cache MISS is "not read yet", NOT "no workflow": a real
+          // session's key carries its id + cwd, so its FIRST assembly always
+          // misses and the synchronous provider cannot await the read. Keep
+          // the pre-gate pointer block for that one assembly (the background
+          // read decides the next one), or an ACTIVE session would lose the
+          // harness path, enforcement word and read-core directive exactly
+          // once, with no fallback left to carry them.
+          if (payload === undefined || hasActiveWorkflow(payload)) {
+            return harnessRulesText(harnessDir, sectionEnforcement(harnessDir), teamMounted)
+          }
+          // Read, and no ACTIVE workflow: the pointer block constrains nothing
+          // and would steer the model into a rule set it does not need. The
+          // delegation contract is the one exception — it governs dispatch,
+          // not the workflow.
+          return teamMounted ? TEAM_DELEGATION_CONTRACT : ''
         },
       })
       disposeContext = view.context({
         name: ENGINE_STATUS_CONTEXT_NAME,
         order: ENGINE_STATUS_CONTEXT_ORDER,
-        text: await engineStatusProvider(ctx, options.resolver, bootHarnessDir),
+        text: (context) => {
+          const payload = statusCache.payloadFor(context)
+          if (payload !== undefined) return engineStatusSummary(payload)
+          // Miss: keep the pre-gate version line for this one assembly. The
+          // synchronous builder reads no store, so it cannot resolve the
+          // selection — but it carries the manifest version, and dropping the
+          // line would leave the catalog row's watermark fallback (disabled
+          // while this registration is live) as the only channel.
+          const harnessDir = resolveAssemblyHarnessDir(context, options.resolver, bootHarnessDir)
+          return `mstar engine status: v${buildCatalogPayload(ctx, harnessDir).version}`
+        },
       })
       systemPromptCtx.effect(function* () {
         yield () => {
@@ -329,9 +375,17 @@ function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
 
 /**
  * The delegation contract: which channel is the default and what shape every
- * dispatch prompt must take. Appended only when the Agent Teams service is
- * mounted — without it `spawn_teammate` does not exist, so the first line
- * would name a tool the session cannot call.
+ * dispatch prompt must take. The `teamLayerMounted` gate guards the
+ * team/roster sentences — without that layer the roster-reuse wording would
+ * name a surface the session does not have.
+ *
+ * Recorded cost of that gate: on a NON-Team composition, where `subagent` is
+ * the delegation channel, the third line's dispatch-header rule is withheld.
+ * Under `hard` enforcement the dispatch/role gates still deny a header-less
+ * `subagent` prompt (`dispatch.ts` `DEFAULT_DISPATCH_TOOLS`), but the default
+ * deployment is soft/warn-only, so there the rule is simply uncovered.
+ * Shipping the header rule unconditionally would close it; that is a separate
+ * behaviour change.
  *
  * Both facts are otherwise reachable only through `mstar-host` →
  * `references/dsh.md`, which a coordinator that is mid-task on something else
@@ -341,7 +395,8 @@ function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
  * gate (reads only `Execute as`) can correct that after the fact.
  */
 const TEAM_DELEGATION_CONTRACT = [
-  'delegation: Agent Teams is mounted — `spawn_teammate` is the default channel for writable work (one durable teammate per writable track); `subagent` is a one-off read-only seat.',
+  'delegation: Agent Teams is mounted — writable work defaults to one durable teammate per writable track: `subagent` / `subagent_fork` (legacy `spawn_teammate`) creates that teammate on a Team-mode root, and a roster name never returns, so reuse it via `send_message` instead of one call per task.',
+  'read-only: 1–2 read-only seats go to `subagent` only (a `subagent_fork` inherits the completed conversation, so review and audit seats would lose their fresh context); on a Team-mode root that same call also joins the roster, and a roster name never returns, so a read-only seat is not a free one. Fan-out of 3+ goes to `workflow`, whose children are fresh one-shot subagents and never join the roster; a profile that disables the direct `subagent` rows carries read-only work of any size through `workflow`, whose script is chosen by the work.',
   'dispatch prompt: every delegation prompt — `workflow agent()` included — opens with "## Assignment" and "Execute as: <role>"; the role gate cannot repair a header-less `workflow` child.',
 ].join('\n')
 
@@ -360,11 +415,12 @@ function teamLayerMounted(ctx: Context): boolean {
 }
 
 /**
- * The pointer block: presence / enforcement word / resolved
- * `{HARNESS_DIR}` / one read-mstar-harness-core directive — plus the
- * delegation contract when the Team layer is mounted. Zero complete
- * `{{...}}` groups by construction (STRICT interpolation safety — plan QC
- * fix wave W-1): the operator-controlled harness dir is screened before
+ * The pointer block, rendered ONLY for an ACTIVE workflow context (without one
+ * the section carries the delegation contract alone, or nothing): presence /
+ * enforcement word / resolved `{HARNESS_DIR}` / one read-mstar-harness-core
+ * directive — plus the delegation contract when the Team layer is mounted. Zero
+ * complete `{{...}}` groups by construction (STRICT interpolation safety —
+ * plan QC fix wave W-1): the operator-controlled harness dir is screened before
  * embedding, so a path containing `{{…}}` can never break prompt assembly.
  */
 function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFlag, teamMounted: boolean): string {
@@ -378,60 +434,98 @@ function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFla
 }
 
 /**
- * The apply-scoped engine-status provider. The system-prompt API requires a
- * synchronous text provider, so hydrate its cache asynchronously when the
- * service is injected and refresh in the background when a workspace's TTL
- * expires. The configured workspace is ready for its first assembly; a new
- * per-agent workspace starts its bounded read on first use.
- *
- * The version-only first render of a per-agent workspace is the CONTRACT, not
- * a memo accident: a key absent from `memo` answers with the
- * synchronous `buildCatalogPayload` summary (the version line only — that
- * path reads no store) and starts `refresh` in the background; the next
- * assembly after that refresh settles is store-backed. Do not `await` on the
- * miss: the callback must stay `(context: object) => string`, and the
- * per-agent key is not known until the callback runs, so the boot
- * `await refresh(bootHarnessDir)` can never prime it. Both halves are pinned
- * by `tests/system-prompt.spec.ts` (m).
+ * Whether the payload resolves an ACTIVE workflow — the ONE injection predicate
+ * both prompt surfaces share with the pre-step catalog row
+ * (`catalog.ts` `preStepCatalogListener`): `state === null` and every
+ * non-active verdict (no active lifecycle, unbound multi-active,
+ * `status.missing`, `store.not-initialized`, terminal) means "no mstar
+ * business context", so nothing mstar-owned is injected.
  */
-function engineStatusProvider(
+function hasActiveWorkflow(payload: MstarEngineStatusPayload | undefined): payload is MstarEngineStatusPayload {
+  return payload !== undefined && payload.state !== null && payload.state.selection.kind === 'active'
+}
+
+/** The apply-scoped engine-status cache both prompt surfaces read. */
+interface EngineStatusCache {
+  /**
+   * The per-workspace payload, or `undefined` when this workspace has not been
+   * read yet. A MISS starts the bounded background read and answers
+   * `undefined`; the CALLER keeps its pre-gate fallback for that one assembly
+   * (dropping it would cost a real session's first prompt, whose key carries
+   * the session id + cwd and therefore never matches the boot prime). An entry
+   * expired past the TTL is returned as-is and refreshed behind the reader.
+   * Never blocks and never reads the store inline.
+   */
+  payloadFor(context: object): MstarEngineStatusPayload | undefined
+}
+
+/**
+ * The apply-scoped engine-status cache. The system-prompt API requires a
+ * synchronous text provider, so hydrate it asynchronously when the service is
+ * injected and refresh in the background when a workspace's TTL expires. The
+ * configured workspace is ready for its first assembly; a new per-agent
+ * workspace starts its bounded read on first use.
+ *
+ * A cache MISS is "no workflow context yet", not a version-only row: the miss
+ * starts `refresh` and answers `undefined`, so this assembly injects nothing
+ * and the next one after the refresh settles follows the real selection. Do
+ * not `await` on the miss: the callback must stay
+ * `(context: object) => string`, and the per-agent key is not known until the
+ * callback runs, so the boot `await refresh(bootHarnessDir)` can never prime
+ * it. Both halves are pinned by `tests/system-prompt.spec.ts` (m).
+ */
+function engineStatusCache(
   ctx: Context,
   resolver: HarnessResolver,
   bootHarnessDir: string | null,
-): Promise<(context: object) => string> {
-  const memo = new Map<string | null, { payload: MstarEngineStatusPayload; builtAt: number }>()
-  const pending = new Map<string | null, Promise<void>>()
-  const refresh = (harnessDir: string | null): Promise<void> => {
-    const active = pending.get(harnessDir)
+): Promise<EngineStatusCache> {
+  // Keyed by the catalog's OWN session key (harness dir + session + cwd + the
+  // durable pick): the prompt must resolve the SAME selection the pre-step
+  // catalog does, or a session with several ACTIVE lifecycles that already
+  // picked one would read an unbound selection here and lose its harness
+  // instructions while the pre-step row selected correctly.
+  const memo = new Map<string, { payload: MstarEngineStatusPayload; builtAt: number }>()
+  const pending = new Map<string, Promise<void>>()
+  const refresh = (key: string, harnessDir: string | null, hint: SessionHint | undefined): Promise<void> => {
+    const active = pending.get(key)
     if (active !== undefined) return active
     const request = (harnessDir === null
-      ? Promise.resolve(buildCatalogPayload(ctx, null))
-      : buildCatalogPayloadWithStore(ctx, harnessDir)
+      ? Promise.resolve(buildCatalogPayload(ctx, null, hint))
+      : buildCatalogPayloadWithStore(ctx, harnessDir, hint)
     ).then((payload) => {
-      memo.set(harnessDir, { payload, builtAt: Date.now() })
+      memo.set(key, { payload, builtAt: Date.now() })
     }).catch((error: unknown) => {
       log('warn', `mstar:engine-status ACTIVE catalog read failed: ${errorMessage(error)}`)
-      if (!memo.has(harnessDir)) {
-        memo.set(harnessDir, { payload: buildCatalogPayload(ctx, harnessDir), builtAt: Date.now() })
+      if (!memo.has(key)) {
+        memo.set(key, { payload: buildCatalogPayload(ctx, harnessDir, hint), builtAt: Date.now() })
       }
     }).finally(() => {
-      pending.delete(harnessDir)
+      pending.delete(key)
     })
-    pending.set(harnessDir, request)
+    pending.set(key, request)
     return request
   }
 
   return (async () => {
-    await refresh(bootHarnessDir)
-    return (context: object): string => {
-      const harnessDir = resolveAssemblyHarnessDir(context, resolver, bootHarnessDir)
-      const entry = memo.get(harnessDir)
-      if (entry === undefined) {
-        void refresh(harnessDir)
-        return engineStatusSummary(buildCatalogPayload(ctx, harnessDir))
-      }
-      if (Date.now() - entry.builtAt >= DEFAULT_CATALOG_TTL_MS) void refresh(harnessDir)
-      return engineStatusSummary(entry.payload)
+    // Prime the boot workspace with no session hint — the key an agent-less
+    // assembly reads.
+    await refresh(catalogCacheKey(bootHarnessDir, '', '', undefined), bootHarnessDir, undefined)
+    return {
+      payloadFor(context: object): MstarEngineStatusPayload | undefined {
+        const harnessDir = resolveAssemblyHarnessDir(context, resolver, bootHarnessDir)
+        // The assembly's own session identity, folded with its DURABLE pick —
+        // the pre-step catalog's hint rule (`selectionHintFor`).
+        const identity = sessionHintOf((context as { agent?: unknown } | null | undefined)?.agent)
+        const hint = identity === undefined ? undefined : selectionHintFor(harnessDir, identity)
+        const key = catalogCacheKey(harnessDir, identity?.sessionId ?? '', identity?.cwd ?? '', hint)
+        const entry = memo.get(key)
+        if (entry === undefined) {
+          void refresh(key, harnessDir, hint)
+          return undefined
+        }
+        if (Date.now() - entry.builtAt >= DEFAULT_CATALOG_TTL_MS) void refresh(key, harnessDir, hint)
+        return entry.payload
+      },
     }
   })()
 }
@@ -453,11 +547,15 @@ const DIGEST_PLAN_CAP = 8
  * session's workspace has an active workflow
  * (`payload.state.selection.kind === 'active'`) — ONE compact
  * `workflow <id> (<type>) <status> | plans: <id>(<status>) … [| branch: <base>
- * → <target>] [| gate: …]` line. Idle sessions (empty/absent active set —
- * `state === null`, or a `'terminal'` / `'error'` selection) render the version
- * line alone; the catalog's terminal-mtime history fallback is therefore
- * structurally unreachable from this surface without touching
- * `resolveReadWorkflow`.
+ * → <target>] [| gate: …]` line. Every non-active session (an unresolved
+ * workspace, an empty/absent active set — `state === null`, a `'terminal'` /
+ * `'error'` selection) renders the EMPTY string: dsh's `renderPrompt` drops
+ * empty sections, so the model context carries no mstar digest at all. A
+ * cache MISS never reaches this renderer — the caller falls back to the
+ * pre-gate version line for that one assembly. The version line is not a
+ * standalone fact worth a section — it changes no decision without a workflow. The
+ * catalog's terminal-mtime history fallback is therefore structurally
+ * unreachable from this surface without touching `resolveReadWorkflow`.
  *
  * The plans segment comes from `plansSegment` in `catalog.ts` — the SAME
  * assembler the pre-step row renders — so the selected snapshot's non-Done
@@ -488,7 +586,8 @@ const DIGEST_PLAN_CAP = 8
  * `none registered`, `all done`, `unknown`, the `+N more` overflow marker) are
  * constants, not operator text, and stay unscreened.
  */
-function engineStatusSummary(payload: MstarEngineStatusPayload): string {
+function engineStatusSummary(payload: MstarEngineStatusPayload | undefined): string {
+  if (!hasActiveWorkflow(payload)) return ''
   const lines = [`mstar engine status: v${payload.version}`]
   const state = payload.state
   if (state !== null) {

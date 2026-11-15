@@ -38,6 +38,7 @@ import { assembleContextFor, type Agent } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import { bootApp, fakeChild, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { PERSONA_INTERPOLATION_HAZARD, stripInterpolationHazard } from '../src/gates/_shared.ts'
+import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { HarnessResolver } from '../src/index.ts'
 import {
   ENGINE_STATUS_CONTEXT_NAME,
@@ -148,7 +149,8 @@ function promptServiceRowFiber(ctx: BootResult['ctx']): { dispose(): Promise<voi
 
 describe('mstar:harness-rules global section + mstar:engine-status context ', () => {
   it('(a) global registration — the root assembly carries the mstar:harness-rules section (name/order/minimal pointer content)', async () => {
-    booted = await bootApp()
+    // An ACTIVE workflow context: only then is the pointer block injected.
+    booted = await bootApp({ seedV2: true })
     const assembly = await assembleWithEngineStatus(booted.ctx)
     const section = assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)
     expect(section).toBeDefined()
@@ -173,7 +175,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
   })
 
   it('(a2) appends the delegation contract only when the Agent Teams layer is mounted', async () => {
-    booted = await bootApp()
+    booted = await bootApp({ seedV2: true })
     const without = await assembleWithEngineStatus(booted.ctx)
     const withoutText = without.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text
     // No Team service → `spawn_teammate` is not callable, so the contract must
@@ -186,19 +188,124 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     // The two facts a coordinator otherwise finds only in
     // `mstar-host` → `references/dsh.md`: the default channel, and the header
     // shape every delegation prompt needs (workflow children included).
-    expect(withText).toContain('`spawn_teammate` is the default channel for writable work')
+    expect(withText).toContain('one durable teammate per writable track')
     expect(withText).toContain('"## Assignment" and "Execute as: <role>"')
     expect(withText).toContain('`workflow agent()` included')
+    // The read-only clause names its carriers explicitly: 1-2 seats go to
+    // `subagent` only (a fork inherits the conversation), while fan-out and a
+    // `subagent`-disabled profile route through `workflow`.
+    const readOnlyLine = withText.split('\n').find((line) => line.startsWith('read-only: '))
+    expect(readOnlyLine).toBeDefined()
+    expect(readOnlyLine).toContain('`subagent` only')
+    expect(readOnlyLine).toContain('Fan-out of 3+ goes to `workflow`')
+    // The fork is named only as the DISQUALIFIED carrier (it inherits the
+    // conversation), and the 1-2-seat branch discloses the roster cost.
+    expect(readOnlyLine).not.toContain('`subagent` / `subagent_fork`')
+    expect(readOnlyLine).toContain('also joins the roster')
   })
 
-  it('(b) engine-status context — idle default boot (no status.json seeded) injects exactly the version watermark line (D1)', async () => {
+  it('(b) no ACTIVE workflow ⇒ the engine-status context is EMPTY — not even the version line (D1)', async () => {
     booted = await bootApp()
     const assembly = await assembleWithEngineStatus(booted.ctx)
     const context = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)
     expect(context).toBeDefined()
-    expect(context!.text).toBe(`mstar engine status: v${PLUGIN_VERSION}`)
-    expect(context!.text).not.toContain('harness')
-    expect(context!.text).not.toContain('enforcement')
+    // A version line with no workflow changes no decision: dsh drops empty
+    // context text, so the model log carries no mstar digest at all.
+    expect(context!.text).toBe('')
+    expect(context!.text).not.toContain('mstar engine status:')
+  })
+
+  it('(b2) no ACTIVE workflow ⇒ the harness-rules section is EMPTY without Agent Teams, and only the delegation contract with it', async () => {
+    booted = await bootApp()
+    const bare = await assembleWithEngineStatus(booted.ctx)
+    const section = bare.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)
+    expect(section).toBeDefined()
+    // No workflow and no Team layer: nothing constrains any behaviour, so the
+    // presence line / enforcement / harness dir / read-core pointer are gone.
+    expect(section!.text).toBe('')
+    const prompt = renderPrompt(bare)
+    expect(prompt).not.toContain('Morning Star (mstar)')
+    expect(prompt).not.toContain('skill://mstar-harness-core')
+    expect(prompt).not.toContain('mstar engine status:')
+
+    booted.ctx.provide('agentTeams' as never, { listMembers: () => [] } as never)
+    const withTeam = await assembleWithEngineStatus(booted.ctx)
+    const withText = withTeam.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text
+    // The dispatch contract governs dispatch with or without a workflow.
+    expect(withText).toContain('one durable teammate per writable track')
+    expect(withText).toContain('"## Assignment" and "Execute as: <role>"')
+    expect(withText).not.toContain('Morning Star (mstar)')
+    expect(withText).not.toContain('harness dir:')
+  })
+
+  it('(b5) a real session with no ACTIVE workflow keeps the pre-gate rule for its FIRST assembly, then drops it', async () => {
+    booted = await bootApp()
+    await assembleWithEngineStatus(booted.ctx)
+    // A session-keyed assembly: its cache key carries the id + cwd, so the boot
+    // prime never matches it and the first assembly is a miss.
+    const assemblyContext = assembleContextFor({
+      session: { header: { id: 'ses-idle', cwd: booted.root } },
+    } as never)
+    const first = await booted.ctx.systemPrompt.assemble(assemblyContext)
+    // The miss keeps the PRE-GATE content for that one assembly — this is what
+    // guarantees an ACTIVE session never loses its harness rules on prompt 1.
+    expect(first.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text).toContain('Morning Star (mstar)')
+    expect(first.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text).toBe(`mstar engine status: v${PLUGIN_VERSION}`)
+    // After the background read settles, the selection decides: no ACTIVE
+    // workflow ⇒ both surfaces contribute nothing.
+    let sectionText = 'cold'
+    for (let attempt = 0; attempt < 500 && sectionText !== ''; attempt++) {
+      const { promise, resolve } = Promise.withResolvers<void>()
+      setTimeout(resolve, 10)
+      await promise
+      const assembly = await booted.ctx.systemPrompt.assemble(assemblyContext)
+      sectionText = assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text
+    }
+    expect(sectionText).toBe('')
+    const settled = await booted.ctx.systemPrompt.assemble(assemblyContext)
+    expect(settled.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text).toBe('')
+  })
+
+  it('(b3) an ACTIVE workspace restores BOTH surfaces — the full pointer block and the engine-status digest', async () => {
+    booted = await bootApp({ seedV2: true })
+    const assembly = await assembleWithEngineStatus(booted.ctx)
+    const section = assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text
+    const context = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text
+    expect(section).toContain('Morning Star (mstar)')
+    expect(section).toContain('harness dir: ')
+    expect(section).toContain('skill://mstar-harness-core')
+    expect(context.split('\n')).toEqual([
+      `mstar engine status: v${PLUGIN_VERSION}`,
+      'workflow wf-1 (plan) running | plans: none registered',
+    ])
+  })
+
+  it('(b4) several ACTIVE lifecycles + a durable session pick ⇒ BOTH surfaces follow the pick (the catalog hint rule)', async () => {
+    booted = await bootApp({ seedV2: true })
+    // Two ACTIVE lifecycles: without the session's durable pick this resolves
+    // as an unbound multi-active selection, so only the hint can select one.
+    await seedActiveWorkflow(booted.harnessDir, 'wf-2', [], {}, 'seed-wf-2', booted.root, null)
+    expect(updateWorkflowSessionBinding(booted.harnessDir, 'ses-pick', booted.root, {
+      selectedWorkflowId: 'wf-2',
+      excludedBeforeSeq: 0,
+    }).kind).toBe('written')
+    const assemblyContext = assembleContextFor({
+      session: { header: { id: 'ses-pick', cwd: booted.root } },
+    } as never)
+    // The per-session cache entry starts as a miss (the background read fills
+    // it); the next assembly follows the pick — the SAME selection the
+    // pre-step catalog row makes with the same hint.
+    let assembly = await booted.ctx.systemPrompt.assemble(assemblyContext)
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const context = assembly.contexts.find((entry) => entry.name === ENGINE_STATUS_CONTEXT_NAME)
+      if (context !== undefined && context.text.includes('workflow wf-2')) break
+      await settleInjectChild()
+      assembly = await booted.ctx.systemPrompt.assemble(assemblyContext)
+    }
+    const section = assembly.sections.find((entry) => entry.name === HARNESS_RULES_SECTION_NAME)!.text
+    const context = assembly.contexts.find((entry) => entry.name === ENGINE_STATUS_CONTEXT_NAME)!.text
+    expect(section).toContain('Morning Star (mstar)')
+    expect(context).toContain('workflow wf-2 (plan) running')
   })
 
   // Disposition: only legacy status.json/snapshot.json transport assertions were removed; the ACTIVE graph's consumer rendering rules remain tested below.
@@ -299,7 +406,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
   })
 
   it('(d) interpolation safety — neither injected text carries a complete {{...}} group and both render without throwing', async () => {
-    booted = await bootApp()
+    booted = await bootApp({ seedV2: true })
     const assembly = await assembleWithEngineStatus(booted.ctx)
     const section = assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)
     const context = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)
@@ -340,8 +447,10 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
       const assembly = await ctx.systemPrompt.assemble()
       expect(assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)).toBeDefined()
       expect(assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)).toBeDefined()
-      // No harness dir resolved on the bare context → the pointer renders `none`.
-      expect(assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text).toContain('harness dir: none')
+      // No workflow context resolves on the bare context, so both surfaces stay
+      // registered but inject NOTHING (the pointer block included).
+      expect(assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text).toBe('')
+      expect(assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text).toBe('')
     } finally {
       await ctx.fiber.dispose().catch(() => {})
     }
@@ -378,7 +487,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     await seedHarness(harnessDir, {
       'iterations/v2.2.0/delivery-compass.md': RICH_COMPASS,
     })
-    booted = await bootApp({ root })
+    booted = await bootApp({ root, seedV2: true })
     const assembly = await assembleWithEngineStatus(booted.ctx)
     const section = assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)
     expect(section).toBeDefined()
@@ -386,7 +495,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
   })
 
   it('(i) mid-session enforcement flip switches the section word on the next assembly without re-registration', async () => {
-    booted = await bootApp()
+    booted = await bootApp({ seedV2: true })
     const before = await assembleWithEngineStatus(booted.ctx)
     expect(before.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text).toContain('enforcement: soft')
     // Flip the compass to hard mid-session — same boot, same registration
@@ -407,7 +516,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     // registration, so the row must still carry the version / harness-dir /
     // enforcement trio in both cases.
     for (const failure of ['section', 'context'] as const) {
-      booted = await bootApp({ systemPromptFailure: failure })
+      booted = await bootApp({ systemPromptFailure: failure, seedV2: true })
       // The service IS composed, so `registerHarnessPrompt` reported `true`
       // and scheduled the inject child — the schedule is not the finding's
       // failure mode.
@@ -466,7 +575,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
   })
 
   it('(k) disposing a live registration returns the row watermark (onDisposed)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
     // Wait until BOTH registrations are live — the confirmed state the lazy
     // predicate reads — then the row is watermark-free (unchanged live case).
     await assembleWithEngineStatus(app.ctx)
@@ -485,7 +594,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(fallbackText).toContain('enforcement: soft')
   })
 
-  it('(m) first render of a non-boot workspace is version-only by contract; the render after the background refresh is store-backed', async () => {
+  it('(m) first render of a non-boot workspace injects NOTHING (a cache miss is no workflow context); the render after the background refresh is store-backed', async () => {
     // Boot workspace, store-backed: the outer `await refresh(bootHarnessDir)`
     // primes exactly this key, so its FIRST assembly is already store-backed.
     const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-first-render-'))
@@ -521,11 +630,17 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
       const assemblyContext = assembleContextFor(agent)
       // Let the inject child land the registration (the (f) pattern).
       await settleInjectChild()
-      // The miss does not await: the provider is synchronous, so the first
-      // render is the version-only summary and the store read runs behind it.
-      const firstText = (await ctx.systemPrompt.assemble(assemblyContext))
-        .contexts.find((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)?.text
+      // The miss does not await: the synchronous provider keeps the PRE-GATE
+      // content for this one assembly (the version line, plus the full pointer
+      // block in the section), because a real session's key carries its id +
+      // cwd and always misses first. The store read runs behind it and decides
+      // the next assembly — so an ACTIVE session never loses the harness rules
+      // on its first prompt.
+      const firstAssembly = await ctx.systemPrompt.assemble(assemblyContext)
+      const firstText = firstAssembly.contexts.find((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)?.text
       expect(firstText).toBe(`mstar engine status: v${PLUGIN_VERSION}`)
+      const firstSection = firstAssembly.sections.find((section) => section.name === HARNESS_RULES_SECTION_NAME)!.text
+      expect(firstSection).toContain('Morning Star (mstar)')
 
       // After the in-flight refresh settles, the same agent renders the store.
       let text = firstText ?? ''
