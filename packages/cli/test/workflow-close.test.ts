@@ -529,13 +529,16 @@ test("historical mandatory completion replays only its exact receipt", async () 
   const replay = submit(evidence);
   expect(replay.exitCode, replay.stdout).toBe(0);
   expect(dataOf(replay)).toMatchObject({ replayed: true, data: { coordination: { completion: { qa: { gate: "mandatory" } } } } });
-  // The replay IS that recorded receipt: every field, not only the marker. Two
-  // projections differ by contract — the row stores the read envelope (no served
-  // `operationId`) and the plan replay moves the recorded sidecar from
-  // `operationRecovery` to this call's `recovery` — so those two are excluded.
+  // The replay IS that recorded receipt: every field, not only the marker. The
+  // row stores the read envelope (so it has no served top-level `operationId`)
+  // and names the recorded sidecar `operationRecovery`; the engine re-exposes
+  // that same sidecar as `recovery`. Rename it here, at the call site, so the
+  // comparison still covers the recorded decision field for field.
   const { operationId: _servedOperationId, ...servedReceipt } = receiptStable(dataOf(replay));
-  const { operationRecovery: _recordedSidecar, ...recordedReceipt } = receiptStable(historicalReceipt);
-  expect(servedReceipt).toEqual(recordedReceipt);
+  const { operationRecovery, ...recordedReceipt } = receiptStable(historicalReceipt);
+  expect(servedReceipt).toEqual(
+    operationRecovery === undefined ? recordedReceipt : { ...recordedReceipt, recovery: operationRecovery },
+  );
   const changed = submit({ ...evidence, acceptance: { ...evidence.acceptance, report: `${fixture.acceptanceReport}.other` } });
   expect(envelope(changed).code).toBe("execution.operation-conflict");
   const fresh = submit(evidence, [...args.slice(0, -1), "new-complete"]);

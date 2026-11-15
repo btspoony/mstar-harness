@@ -409,8 +409,14 @@ describe("mstar workflow \u2014 documented invocation", () => {
       identity,
     );
     expect(dataOf(replayed).replayed).toBe(true);
-    // The replay reproduces the recorded receipt field for field, not only its marker.
-    expect(receiptStable(dataOf(replayed))).toEqual(receiptStable(dataOf(paused)));
+    // The replay reproduces the recorded receipt field for field, not only its
+    // marker. The one exception is `recovery`: a workflow replay serves a fresh
+    // `already-satisfied` sidecar (`replayedWorkflowReceipt`) rather than the
+    // commit's recorded decision, so this surface has no recorded sidecar to
+    // compare — the plan routes and `workflow-close` do compare it.
+    const { recovery: _replayedSidecar, ...replayedFields } = receiptStable(dataOf(replayed));
+    const { recovery: _committedSidecar, ...committedFields } = receiptStable(dataOf(paused));
+    expect(replayedFields).toEqual(committedFields);
   });
 
   test("the terminal lifecycle is atomic and the retired file close has no active route", async () => {
