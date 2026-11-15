@@ -238,6 +238,34 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(withText).not.toContain('harness dir:')
   })
 
+  it('(b5) a real session with no ACTIVE workflow keeps the pre-gate rule for its FIRST assembly, then drops it', async () => {
+    booted = await bootApp()
+    await assembleWithEngineStatus(booted.ctx)
+    // A session-keyed assembly: its cache key carries the id + cwd, so the boot
+    // prime never matches it and the first assembly is a miss.
+    const assemblyContext = assembleContextFor({
+      session: { header: { id: 'ses-idle', cwd: booted.root } },
+    } as never)
+    const first = await booted.ctx.systemPrompt.assemble(assemblyContext)
+    // The miss keeps the PRE-GATE content for that one assembly — this is what
+    // guarantees an ACTIVE session never loses its harness rules on prompt 1.
+    expect(first.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text).toContain('Morning Star (mstar)')
+    expect(first.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text).toBe(`mstar engine status: v${PLUGIN_VERSION}`)
+    // After the background read settles, the selection decides: no ACTIVE
+    // workflow ⇒ both surfaces contribute nothing.
+    let sectionText = 'cold'
+    for (let attempt = 0; attempt < 500 && sectionText !== ''; attempt++) {
+      const { promise, resolve } = Promise.withResolvers<void>()
+      setTimeout(resolve, 10)
+      await promise
+      const assembly = await booted.ctx.systemPrompt.assemble(assemblyContext)
+      sectionText = assembly.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text
+    }
+    expect(sectionText).toBe('')
+    const settled = await booted.ctx.systemPrompt.assemble(assemblyContext)
+    expect(settled.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)!.text).toBe('')
+  })
+
   it('(b3) an ACTIVE workspace restores BOTH surfaces — the full pointer block and the engine-status digest', async () => {
     booted = await bootApp({ seedV2: true })
     const assembly = await assembleWithEngineStatus(booted.ctx)
@@ -270,7 +298,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     let assembly = await booted.ctx.systemPrompt.assemble(assemblyContext)
     for (let attempt = 0; attempt < 20; attempt++) {
       const context = assembly.contexts.find((entry) => entry.name === ENGINE_STATUS_CONTEXT_NAME)
-      if (context !== undefined && context.text !== '') break
+      if (context !== undefined && context.text.includes('workflow wf-2')) break
       await settleInjectChild()
       assembly = await booted.ctx.systemPrompt.assemble(assemblyContext)
     }
@@ -602,12 +630,17 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
       const assemblyContext = assembleContextFor(agent)
       // Let the inject child land the registration (the (f) pattern).
       await settleInjectChild()
-      // The miss does not await: the provider is synchronous, so the first
-      // render is EMPTY (no workflow context is known yet) and the store read
-      // runs behind it. dsh drops an empty context, so nothing is injected.
-      const firstText = (await ctx.systemPrompt.assemble(assemblyContext))
-        .contexts.find((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)?.text
-      expect(firstText).toBe('')
+      // The miss does not await: the synchronous provider keeps the PRE-GATE
+      // content for this one assembly (the version line, plus the full pointer
+      // block in the section), because a real session's key carries its id +
+      // cwd and always misses first. The store read runs behind it and decides
+      // the next assembly — so an ACTIVE session never loses the harness rules
+      // on its first prompt.
+      const firstAssembly = await ctx.systemPrompt.assemble(assemblyContext)
+      const firstText = firstAssembly.contexts.find((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)?.text
+      expect(firstText).toBe(`mstar engine status: v${PLUGIN_VERSION}`)
+      const firstSection = firstAssembly.sections.find((section) => section.name === HARNESS_RULES_SECTION_NAME)!.text
+      expect(firstSection).toContain('Morning Star (mstar)')
 
       // After the in-flight refresh settles, the same agent renders the store.
       let text = firstText ?? ''

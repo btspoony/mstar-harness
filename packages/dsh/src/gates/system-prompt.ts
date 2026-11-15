@@ -14,6 +14,13 @@
  *   without a workflow and carries no workflow state. dsh's `renderPrompt` /
  *   `renderContextSections` drop empty text, so an empty provider string means
  *   "no contribution" rather than a blank line.
+ * - A cache MISS is NOT "no workflow": a real session's key carries its id +
+ *   cwd, so its first assembly always misses the boot prime, and the
+ *   synchronous provider cannot await the read. That one assembly keeps the
+ *   PRE-GATE content (full pointer block + version line); the next assembly
+ *   follows the read selection. Without it an ACTIVE session loses the
+ *   harness rules on its first prompt while a workflow-less one keeps them
+ *   forever — the exact inversion this gate exists to avoid.
  * - The section is a POINTER block (presence / enforcement word / resolved
  *   `{HARNESS_DIR}` / one read-mstar-harness-core directive) — deliberately
  *   minimal, never a rules dump (plan pointer-block constraint). The
@@ -257,22 +264,40 @@ export function registerHarnessPrompt(
         // assembly, so a mid-session soft/hard flip lands on the next
         // assembly — in zero-config and explicit-config deployments alike.
         text: (context) => {
-          // No mstar business context ⇒ no mstar pointer block: the presence
-          // line, enforcement word, harness dir and the read-core directive
-          // constrain nothing without a workflow, and would steer the model
-          // into a rule set it does not need. The delegation contract is the
-          // one exception — it governs dispatch, not the workflow.
-          if (!hasActiveWorkflow(statusCache.payloadFor(context))) {
-            return teamLayerMounted(ctx) ? TEAM_DELEGATION_CONTRACT : ''
-          }
           const harnessDir = resolveAssemblyHarnessDir(context, options.resolver, bootHarnessDir)
-          return harnessRulesText(harnessDir, sectionEnforcement(harnessDir), teamLayerMounted(ctx))
+          const teamMounted = teamLayerMounted(ctx)
+          const payload = statusCache.payloadFor(context)
+          // A cache MISS is "not read yet", NOT "no workflow": a real
+          // session's key carries its id + cwd, so its FIRST assembly always
+          // misses and the synchronous provider cannot await the read. Keep
+          // the pre-gate pointer block for that one assembly (the background
+          // read decides the next one), or an ACTIVE session would lose the
+          // harness path, enforcement word and read-core directive exactly
+          // once, with no fallback left to carry them.
+          if (payload === undefined || hasActiveWorkflow(payload)) {
+            return harnessRulesText(harnessDir, sectionEnforcement(harnessDir), teamMounted)
+          }
+          // Read, and no ACTIVE workflow: the pointer block constrains nothing
+          // and would steer the model into a rule set it does not need. The
+          // delegation contract is the one exception — it governs dispatch,
+          // not the workflow.
+          return teamMounted ? TEAM_DELEGATION_CONTRACT : ''
         },
       })
       disposeContext = view.context({
         name: ENGINE_STATUS_CONTEXT_NAME,
         order: ENGINE_STATUS_CONTEXT_ORDER,
-        text: (context) => engineStatusSummary(statusCache.payloadFor(context)),
+        text: (context) => {
+          const payload = statusCache.payloadFor(context)
+          if (payload !== undefined) return engineStatusSummary(payload)
+          // Miss: keep the pre-gate version line for this one assembly. The
+          // synchronous builder reads no store, so it cannot resolve the
+          // selection — but it carries the manifest version, and dropping the
+          // line would leave the catalog row's watermark fallback (disabled
+          // while this registration is live) as the only channel.
+          const harnessDir = resolveAssemblyHarnessDir(context, options.resolver, bootHarnessDir)
+          return `mstar engine status: v${buildCatalogPayload(ctx, harnessDir).version}`
+        },
       })
       systemPromptCtx.effect(function* () {
         yield () => {
@@ -424,9 +449,12 @@ function hasActiveWorkflow(payload: MstarEngineStatusPayload | undefined): paylo
 interface EngineStatusCache {
   /**
    * The per-workspace payload, or `undefined` when this workspace has not been
-   * read yet (the cache MISS starts the bounded background read and answers
-   * `undefined`; the next assembly after it settles is store-backed) or its
-   * entry expired past the TTL. Never blocks and never reads the store inline.
+   * read yet. A MISS starts the bounded background read and answers
+   * `undefined`; the CALLER keeps its pre-gate fallback for that one assembly
+   * (dropping it would cost a real session's first prompt, whose key carries
+   * the session id + cwd and therefore never matches the boot prime). An entry
+   * expired past the TTL is returned as-is and refreshed behind the reader.
+   * Never blocks and never reads the store inline.
    */
   payloadFor(context: object): MstarEngineStatusPayload | undefined
 }
@@ -521,10 +549,11 @@ const DIGEST_PLAN_CAP = 8
  * `workflow <id> (<type>) <status> | plans: <id>(<status>) … [| branch: <base>
  * → <target>] [| gate: …]` line. Every non-active session (an unresolved
  * workspace, an empty/absent active set — `state === null`, a `'terminal'` /
- * `'error'` selection — or a cache miss, which passes `undefined`) renders the
- * EMPTY string: dsh's `renderPrompt` drops empty sections, so the model
- * context carries no mstar digest at all. The version line is not a standalone
- * fact worth a section — it changes no decision without a workflow. The
+ * `'error'` selection) renders the EMPTY string: dsh's `renderPrompt` drops
+ * empty sections, so the model context carries no mstar digest at all. A
+ * cache MISS never reaches this renderer — the caller falls back to the
+ * pre-gate version line for that one assembly. The version line is not a
+ * standalone fact worth a section — it changes no decision without a workflow. The
  * catalog's terminal-mtime history fallback is therefore structurally
  * unreachable from this surface without touching `resolveReadWorkflow`.
  *
