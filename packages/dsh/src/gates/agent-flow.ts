@@ -1827,15 +1827,14 @@ function bufferActivationChildEnd(pairing: AgentFlowPairing, parentSessionId: st
     // report another turn's outcome (e.g. `error` for an `ok` first turn). An
     // eviction marker is the one record a real end may replace — it carries no
     // outcome of its own.
-    // The FIRST end belongs to this activation: it is the turn the creating
+    // The FIRST record belongs to this activation: it is the turn the creating
     // dispatch started. A later end comes from a `send_message` that woke the
     // same child, and settling the creating dispatch from that later turn would
     // report another turn's outcome (e.g. `error` for an `ok` first turn). An
-    // eviction marker is the one record a real end may replace — it carries no
-    // outcome of its own.
-    const existing = ends.get(childId)
-    if (existing !== undefined && existing.evicted !== true) return
-    if (existing !== undefined) ends.delete(childId)
+    // eviction marker stays authoritative for the same reason: once the record
+    // is gone the dispatch has no settlement to reconcile, and letting a later
+    // turn fill the slot would settle it from the wrong turn instead.
+    if (ends.has(childId)) return
     sweepUnclaimableChildEnds(pairing)
     // No dispatch of this scope in flight → no ref can ever claim the record.
     if (claimableDispatchesOf(pairing, parentSessionId) === 0) return

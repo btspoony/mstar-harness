@@ -402,7 +402,8 @@ deep` seats — with the shipped file's body as `script`, passed verbatim
 (package root `workflows/<name>.js`; checkout `packages/dsh/workflows/<name>.js`),
 and `meta` + `args` from the call contract in
 `references/dsh-workflow-scripts.md`. For **1–2** seats **`subagent`** is the
-carrier — read-only fan-out never takes a teammate at any N. Following the tool's
+carrier; on a Team-mode root that call creates the durable teammate, so a 1–2
+seat round takes a seat unless it routes through `workflow`. Following the tool's
 own guidance, while `subagent` is available the two-seat default tier of
 `/amazing-pr-review` shows two subagent cards and no `workflow-run` node.
 

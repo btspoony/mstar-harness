@@ -8,9 +8,9 @@
  *
  * - `ctx.get('agentTeams')` is the Team-layer presence probe (the task board);
  *   rc.3 exposes the board only — there is no member/roster read to consult;
- * - `ctx.get('subagents')` owns member identity (`namesOf` / `resolveName` /
- *   `listDescendants`): a service missing any of the three is not a surface,
- *   so nothing can be resolved through it — never a guessed id;
+ * - `ctx.get('subagents')` owns member identity (`resolveName` /
+ *   `listDescendants`): a service missing either read is not a surface, so
+ *   nothing can be resolved through it — never a guessed id;
  * - the dispatch gate is NAME-keyed on the three Team carriers, and
  *   `tools/pre-execute` runs BEFORE the registry resolves a tool, so an
  *   unmounted carrier is still gated (only what happens AFTER an allowed call
@@ -24,7 +24,6 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { bootApp, executeToolCall, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import {
-  agentNameOf,
   resolveMemberId,
   subagentSurfaceOf,
   teamServicePresent,
@@ -67,7 +66,6 @@ const rootAgent = { session: { header: {} } }
 
 /** One complete subagent surface, as the ledger's structural probe sees it. */
 const completeSurface = {
-  namesOf: () => ({ self: 'reviewer/checker' }),
   resolveName: (_caller: unknown, name: string) => `child-${name}`,
   listDescendants: () => [],
 }
@@ -130,17 +128,16 @@ describe('team presence — the Team layer is a service probe, never a roster re
     expect(teamServicePresent({ get: () => { throw new Error('boom') } })).toBe(false)
   })
 
-  it('the subagent surface needs ALL three subagent-tree reads — a partial service is no surface', () => {
+  it('the subagent surface needs every subagent-tree read the ledger uses — a partial service is no surface', () => {
     expect(subagentSurfaceOf({ get: () => completeSurface })).toBe(completeSurface)
-    expect(subagentSurfaceOf({ get: () => ({ namesOf: completeSurface.namesOf, resolveName: completeSurface.resolveName }) })).toBeUndefined()
+    expect(subagentSurfaceOf({ get: () => ({ resolveName: completeSurface.resolveName }) })).toBeUndefined()
     expect(subagentSurfaceOf({ get: () => ({}) })).toBeUndefined()
     expect(subagentSurfaceOf({ get: () => { throw new Error('boom') } })).toBeUndefined()
     expect(subagentSurfaceOf({ get: () => undefined })).toBeUndefined()
   })
 
-  it('member identity: namesOf names the live agent, resolveName maps a member name onto its child id', async () => {
+  it('member identity: resolveName maps a member name onto its child id', async () => {
     const surface = subagentSurfaceOf({ get: () => completeSurface })
-    expect(agentNameOf(surface, { id: 'live' })).toBe('reviewer/checker')
     expect(await resolveMemberId(surface, { id: 'lead' }, 'reviewer')).toBe('child-reviewer')
   })
 

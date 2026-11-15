@@ -9,12 +9,13 @@
  * - the service name `agentTeams` (`ctx.get('agentTeams')`). Its presence is
  *   the Team-layer probe; on dsh 0.2.2-rc.3 it exposes the task board only —
  *   there is no member or roster read.
- * - the subagent surface (`ctx.get('subagents')`): `namesOf(agent).self`
- *   names a live agent, `resolveName(caller, name, signal)` turns a
- *   model-facing member name into the child `SessionId` that
- *   `subagent/end` carries, and `listDescendants(rootSessionId, signal?)`
- *   walks the subagent tree. A teammate IS a continuable `subagent` /
- *   `subagent_fork` child, so the subagent catalog owns member identity.
+ * - the subagent surface (`ctx.get('subagents')`): `resolveName(caller, name,
+ *   signal)` turns a model-facing member name into the child `SessionId`
+ *   that `subagent/end` carries, and `listDescendants(rootSessionId,
+ *   signal?)` walks the subagent tree. A teammate IS a continuable
+ *   `subagent` / `subagent_fork` child, so the subagent catalog owns member
+ *   identity. Nothing here reads a member's own name: the ledger resolves
+ *   names, it never renders them.
  *
  * Nothing here fabricates an identity: an absent service, a read that throws,
  * or an unresolvable name all return `undefined`, and the caller records an
@@ -29,8 +30,6 @@ export type TeamStopReason = 'completed' | 'aborted' | 'error' | 'max-tokens' | 
 
 /** The structural subagent service surface the ledger needs from `ctx.subagents`. */
 export interface SubagentSurface {
-  /** `{ self, parent, ... }` for one live agent: `self` is its slash path from the root. */
-  namesOf(agent: unknown): unknown
   /** Resolve one member name visible to `caller` to that child's `SessionId`. */
   resolveName(caller: unknown, name: string, signal?: AbortSignal): unknown
   /** Every descendant of `rootSessionId` (the subagent tree read). */
@@ -79,25 +78,8 @@ export function subagentSurfaceOf(ctx: TeamServiceContext): SubagentSurface | un
     const service = ctx.get('subagents')
     if (typeof service !== 'object' || service === null) return undefined
     const rec = asRecord(service)
-    if (typeof rec?.namesOf !== 'function' || typeof rec.resolveName !== 'function' || typeof rec.listDescendants !== 'function') return undefined
+    if (typeof rec?.resolveName !== 'function' || typeof rec.listDescendants !== 'function') return undefined
     return service as unknown as SubagentSurface
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * The live agent's own subagent-tree NAME (`namesOf(agent).self`). A missing
- * surface, a throwing read, a non-string, or an empty name yields `undefined`
- * — never a fabricated name.
- * @param surface - the resolved optional subagent surface.
- * @param agent - the live agent to name.
- */
-export function agentNameOf(surface: SubagentSurface | undefined, agent: unknown): string | undefined {
-  if (surface === undefined) return undefined
-  try {
-    const self = asRecord(surface.namesOf(agent))?.self
-    return typeof self === 'string' && self !== '' ? self : undefined
   } catch {
     return undefined
   }
