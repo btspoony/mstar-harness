@@ -74,6 +74,24 @@ function runScenarioOn(bin: string, scenario: string, dir: string): { status: nu
   return { status: run.status ?? -1, output: `${run.stdout}${run.stderr}`.trim() };
 }
 
+/** Interpreter banner for a failure report: the binary that ran, and its version. */
+function describeInterpreter(runtime: string, bin: string): string {
+  let version = Bun.version;
+  if (runtime !== "bun") {
+    // A binary that cannot be spawned has a null stdout; the spawn error is
+    // reported instead of letting `.stdout.trim()` throw a TypeError that hides
+    // the scenario failure this banner is attached to.
+    const probe = spawnSync(bin, ["--version"], { encoding: "utf8" });
+    const banner = probe.stdout?.trim() ?? "";
+    const failure = probe.error as NodeJS.ErrnoException | undefined;
+    version =
+      banner !== ""
+        ? banner
+        : `version probe failed (${failure?.code ?? `exit ${probe.status}`})`;
+  }
+  return `${runtime} ${version} (${bin}) on ${process.platform}`;
+}
+
 const SCENARIOS: string[] = [
   "import-lazy",
   "below-floor-refusal",
@@ -159,6 +177,17 @@ describe("store-db runtime floors (declared manifest floor)", () => {
 
 });
 
+describe("scenario failure reporting", () => {
+  test("an interpreter banner survives a version probe that cannot spawn", () => {
+    // A binary that cannot be spawned leaves the probe stdout null; the banner
+    // must name the binary and the spawn error instead of throwing a TypeError.
+    const missing = join(ROOT, "no-such-interpreter");
+    const banner = describeInterpreter("node", missing);
+    expect(banner).toContain(missing);
+    expect(banner).toMatch(/version probe failed \([A-Z]+/);
+  });
+});
+
 describe.each([
   { runtime: "node", bin: NODE_BIN },
   { runtime: "bun", bin: process.execPath },
@@ -173,8 +202,7 @@ describe.each([
         // local red never reads as a store defect. The binary that actually ran is
         // named, not `process.version`: inside a Bun run that is Bun's Node-compat
         // version, not the spawned interpreter's.
-        const version = runtime === "bun" ? Bun.version : spawnSync(bin, ["--version"], { encoding: "utf8" }).stdout.trim();
-        const interpreter = `${runtime} ${version} (${bin}) on ${process.platform}`;
+        const interpreter = describeInterpreter(runtime, bin);
         const rawReadNote = result.output.includes("unable to open database file")
           ? `\nThis leg's raw read-only open of a cleanly closed WAL store needs the empty -wal journal that a clean` +
             ` close removes; node:sqlite creates it, Bun refuses on this platform. The supported interpreter is the` +
