@@ -20,11 +20,14 @@
  *
  * Real settle pairing is apply-scoped. `tools/post-execute` pairs a dispatch
  * only to its verified completion result; a background job settles when its
- * terminal job snapshot arrives. Unpaired calls, malformed results, and
- * continuable calls without terminal evidence are never fabricated as
- * settlements. A catalog listener joins an observed child session to the
- * reserved dispatch call window, preserving the observed child identity and
- * linking it to the same selected workflow generation.
+ * terminal job snapshot arrives; a `subagent` / `subagent_fork` activation
+ * (which returns `{ kind: 'activation', name }` — started, not settled) is
+ * paired to the child that name resolves to and settles only on that child's
+ * `subagent/end`. Unpaired calls, malformed results, and continuable calls
+ * without terminal evidence are never fabricated as settlements. A catalog
+ * listener joins an observed child session to the reserved dispatch call
+ * window, preserving the observed child identity and linking it to the same
+ * selected workflow generation.
  *
  * Module boundary: the entry and adapter import this module explicitly; its
  * public event APIs are re-exported by the entry.
@@ -32,13 +35,6 @@
 import { createHash } from 'node:crypto'
 import { dirname } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
-// The scope-carrier reader of the verified upstream scoped-dispatch channel:
-// `@deepseek-ai/dsh-subagent`'s lifecycle emitter converts the live direct
-// parent into a `scopeTarget` carrier (`lib/index.js` `createLifecycleEmitter`
-// → `carrier(parent)`), and this package must read the SAME module instance —
-// the carrier registry is a module-level WeakMap, so the build keeps this
-// dependency external (package build script) instead of inlining a second copy.
-import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
 import { assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
 import { appendDshLedgerRow, appendDshWorkflowEvent, readDshLedgerWindow } from '@mstar-harness/engine'
 import type { DshSelectedGeneration } from '@mstar-harness/engine'
@@ -55,7 +51,6 @@ import {
   resolveMemberId,
   settleOutcomeOfStopReason,
   subagentSurfaceOf,
-  teamServicePresent,
   type TeamServiceContext,
 } from './team-identity.ts'
 // The SHARED ASCII-control-char strip : the ralph
@@ -73,29 +68,14 @@ export const AGENT_FLOW_CATALOG_SLOT_CAPACITY = 500
 /**
  * Bounded in-memory child pairing slots (apply-scoped, like the call/job
  * pairing maps) — keyed by the child `SessionId` and written only by the
- * subagent activation pairing (one settlement channel). An activation
- * dispatch is paired to its resolved child `SessionId` and consumed by the
- * child's `subagent/end` settlement; a child whose settlement never arrives
- * (service disposal, HMR,
+ * subagent activation pairing. An activation dispatch is paired to its
+ * resolved child `SessionId` and consumed by the child's `subagent/end`
+ * settlement; a child whose settlement never arrives (service disposal, HMR,
  * an upstream shape change) must not grow the map forever. At capacity the
  * OLDEST entry is evicted with an explicit unresolved-continuation row for
  * that dispatch, so the bound never silently drops a pairing.
  */
 export const AGENT_FLOW_TEAM_CHILD_CAPACITY = 1024
-/**
- * Bounded in-memory TEAM member-child END buffer (apply-scoped, like the
- * pairing maps). A team member's initial turn can settle BEFORE its spawn's
- * `tools/post-execute` pairing write (the early-end reconcile race): the paired path used to drop
- * that `subagent/end` record silently, so the dispatch never settled. The
- * record is buffered instead and reconciled when the pairing write lands.
- * Styled after {@link AGENT_FLOW_TEAM_CHILD_CAPACITY} — which bounds the
- * pairing MAP, not this buffer; the two bounds count independently (and by
- * construction this one can never need more slots: an unmatched end exists
- * only while its spawn's pairing write is still in flight). At capacity the
- * OLDEST record is evicted with an explicit unresolved marker that names the
- * child id, states the eviction, and states that no settle was fabricated.
- */
-export const AGENT_FLOW_TEAM_END_BUFFER_CAPACITY = 1024
 /** Stable identity namespace for verified native workflow events. */
 export const WORKFLOW_EVENT_ID_PREFIX = 'wfe1'
 /** Stable identity namespace for live tool-call rows. */
@@ -533,24 +513,35 @@ export interface AgentFlowPairing {
   /**
    * Child `SessionId` → the dispatch that started it. Populated by the
    * subagent activation branch: the tool returns `{ kind: 'activation',
-   * name }` and the subagent surface resolves that member name to the child
+   * name }` and the subagent surface resolves that name to the child
    * `SessionId` (started, not settled); consumed by the child's
    * `subagent/end` settlement, or evicted at
    * {@link AGENT_FLOW_TEAM_CHILD_CAPACITY}. Optional so existing pairing
-   * constructors stay valid; both branches create it lazily.
+   * constructors stay valid; the activation branch creates it lazily.
    */
   teamDispatchByChildId?: Map<string, AgentFlowDispatchRef>
   /**
-   * Child `SessionId` → the `stopReason` of the child's `subagent/end`
-   * settlement that arrived BEFORE its activation pairing write (the
-   * early-end reconcile race). Created lazily by the end-buffer path
-   * (existing pairing constructors stay valid); the pairing write reconciles
-   * against it first — a hit settles from the buffered record and consumes
-   * the entry, so no dispatch can settle twice. Bounded by
-   * {@link AGENT_FLOW_TEAM_END_BUFFER_CAPACITY} (independent of the pairing
-   * map's own bound).
+   * The activation PAIRING WINDOW: the recorded activation dispatches whose
+   * created child id is not known yet because the returned name is still
+   * being resolved to a child `SessionId` (an asynchronous surface read).
+   * The window is entered BEFORE that read starts and left exactly once —
+   * resolution landed, name unresolvable, or resolution failed — so the set
+   * is bounded by the in-flight activation dispatches of the apply.
    */
-  teamEndBuffer?: Map<string, unknown>
+  activationResolutions?: Set<AgentFlowDispatchRef>
+  /**
+   * Child `SessionId` → the `stopReason` of a child `subagent/end` that
+   * arrived BEFORE its activation pairing was keyed. The child is published
+   * inside the tool call, so its end can precede even the tool's
+   * `tools/post-execute`; a record is admitted only while its DIRECT PARENT
+   * still has a recorded dispatch in flight (a call not yet post-executed, or
+   * a ref in {@link activationResolutions}), and never beyond that window's
+   * size — one in-flight ref consumes at most one record, and a refused record
+   * is reported with no settle fabricated. Reconciliation consumes the entry
+   * (a child end settles a dispatch at most once); an end that arrives with
+   * no claimable dispatch is unpaired for good and is not stored.
+   */
+  endsAwaitingActivation?: Map<string, unknown>
   /**
    * The call-window catalog join's slots: the EXACT parent Session object →
    * (RAW delegation label → candidate). A `null` slot is a consumed or
@@ -851,11 +842,12 @@ function appendEvent(
  * first RAW-label slot under the live parent Session, when the exec carries
  * one) — the child-identity join's step 1; admission is all-or-nothing and
  * never affects the dispatch, the pairing, or a later settle. TEAM carriers
- * are the ONE exception to both the unconditional record and the catalog
- * reservation: with the experimental team service absent they record nothing
- * at all, and when present they never reserve a call-window slot (their
- * identity comes from the subagent surface, not the raw
- * label), so a team call cannot permanently consume one of the 500 slots.
+ * ({@link TEAM_DISPATCH_TOOLS}) are the ONE exception to both the
+ * unconditional record and the catalog reservation: with the team service
+ * absent they record nothing at all, and when present they never reserve a
+ * call-window slot — a board write or an inbox acceptance starts no child, so
+ * a reservation could only sit inert and permanently consume one of the 500
+ * slots.
  * @param input - the harness dir; the dispatching exec's agent id; the
  * Assignment text; the gate's violations; the hard-enforcement resolution;
  * the apply-scoped pairing store (the adapter passes its own; direct callers
@@ -904,9 +896,9 @@ export function recordDispatch(input: {
     }
     const toolName = input.exec !== undefined ? execToolName(input.exec) : undefined
     const teamTool = toolName !== undefined && isTeamDispatchToolName(toolName)
-    // Team channel absent → the team tools record nothing (the experimental
-    // service is the ONLY source of member identity the ledger can pair on;
-    // without it a team row would be an unpaired, unexplained dispatch).
+    // Team channel absent → the team tools record nothing: the board and the
+    // inbox are that service's surface, so a composition without it has no
+    // team call to attribute.
     if (teamTool && input.teamPresent !== true) return
     const header = assignmentHeaderRegion(input.prompt)
     const fields = parseAssignmentFields(header)
@@ -973,9 +965,9 @@ export function recordDispatch(input: {
           // a candidate-admission throw must not claim the (already
           // successful) pairing registration failed, and a missing live
           // Session / label simply admits no candidate. TEAM carriers are
-          // excluded: their member identity comes from the roster read and
-          // their post-execute branch never marks a call-window candidate, so
-          // a reservation would sit inert and permanently consume a slot.
+          // excluded: their post-execute branch never marks a call-window
+          // candidate (they start no child), so a reservation would sit inert
+          // and permanently consume a slot.
           if (!teamTool) {
             try {
               reserveCatalogCandidate(input.pairing, ref, input.exec)
@@ -1686,12 +1678,12 @@ function recordContinuationUnresolved(ref: AgentFlowDispatchRef, reason: string)
 }
 
 /**
- * The explicit unresolved continuation for a member end whose stop reason is
- * outside the settled vocabulary. Shared by the paired path
- * ({@link handleTeamChildSettled}) and the reconcile path
- * ({@link pairTeamMemberChild}) so the two can never drift.
+ * The explicit unresolved continuation for a child end whose stop reason is
+ * outside the settled vocabulary. Shared by the live path
+ * ({@link handleActivationChildSettled}) and the reconcile path
+ * ({@link pairActivationChildRef}) so the two can never drift.
  */
-function recordTeamStopUnresolved(ref: AgentFlowDispatchRef, childId: string, stopReason: unknown): void {
+function recordChildStopUnresolved(ref: AgentFlowDispatchRef, childId: string, stopReason: unknown): void {
   recordContinuationUnresolved(
     ref,
     `subagent/end for child ${childId} carried an unrecognized stop reason (${String(stopReason)}) — no settle is fabricated`,
@@ -1699,111 +1691,92 @@ function recordTeamStopUnresolved(ref: AgentFlowDispatchRef, childId: string, st
 }
 
 /**
- * Resolve the live direct parent of one `subagent/end` edge from the channel
- * the upstream emitter actually uses. Verified installed shape
- * (`@deepseek-ai/dsh-subagent@0.2.x` `lib/index.js` `createLifecycleEmitter`
- * + `@deepseek-ai/cordis` `EventsService.dispatch`): the emitter converts the
- * parent into a `scopeTarget(this, parent)` carrier that rides as
- * `dispatchArgs[0]`; cordis `dispatch` SHIFTS that first argument as the
- * dispatch `this` and binds every listener to it, so the callback receives
- * ONLY `(info)` — the parent is NEVER a second listener argument. The
- * receiver therefore carries the parent: `carrierKeyOf(this)` reads the
- * exact live parent object the carrier was keyed by (the same agent the
- * roster read consumes). A future upstream that forwards the parent as a
- * real second argument wins outright (forwarded guard first); anything else
- * — a plain unscoped emit (`this` of `null`), a non-carrier receiver —
- * reports `undefined` and the caller degrades conservatively (no gate pass,
- * no buffer insert, never a fabricated parent).
+ * How many recorded dispatches of one direct parent Session are still in
+ * flight and may yet claim a child end: the calls not yet post-executed (the
+ * child is published INSIDE the tool call, so its end can precede
+ * `tools/post-execute`), plus the activation dispatches whose name→child
+ * resolution has not landed. Both collections hold only in-flight work, so this
+ * number is small and is the exact upper bound for
+ * {@link AgentFlowPairing.endsAwaitingActivation}: one in-flight ref consumes at
+ * most one record. Only an activation ref can actually pair (a child id must
+ * match), so a record admitted for a channel that starts no child simply stays
+ * unclaimed within that same bound.
  */
-function parentOfSubagentEnd(receiver: unknown, forwarded: unknown): unknown {
-  if (forwarded !== undefined) return forwarded
-  return carrierKeyOf(receiver)
+function claimableDispatchesOf(pairing: AgentFlowPairing, parentSessionId: string): number {
+  let claimable = 0
+  for (const ref of pairing.dispatchByCallId.values()) {
+    if (ref.agent === parentSessionId) claimable += 1
+  }
+  for (const ref of pairing.activationResolutions ?? []) {
+    if (ref.agent === parentSessionId) claimable += 1
+  }
+  return claimable
 }
 
 /**
- * Buffer one unmatched team child `subagent/end` (the early-end reconcile
- * race: the
- * member's turn settled before its spawn's pairing write). Nothing is
- * buffered while the team service is absent — without the service nothing
- * buffers and nothing throws. At capacity the OLDEST record is
- * evicted with an explicit unresolved marker naming the child id and stating
- * that no settle was fabricated. The marker is deliberately NOT a
- * {@link recordContinuationUnresolved} row: an unmatched end carries NO
- * dispatch ref — no identity to attribute and no ledger target to append to
- * — and attributing it to any in-flight spawn would fabricate an identity,
- * so the explicit marker rides the module warn sink with the same text
- * contract. Contained — never throws into the `subagent/end` event.
+ * Keep one child `subagent/end` that arrived before its activation pairing was
+ * keyed. Admission is deliberately narrow: a record is kept only while its
+ * direct parent still has a dispatch in flight, and never beyond the number of
+ * those dispatches. At capacity the record is REFUSED with a warn rather than
+ * evicting one a pending dispatch may still claim; nothing is settled
+ * here — an unkeyed end carries no dispatch identity, so no outcome can be
+ * fabricated for it. An end with no claimable dispatch is unpaired for good
+ * and is not stored at all, so this store can never outlive the window that
+ * reads it. Contained — never throws into the `subagent/end` event.
  */
-function bufferTeamChildEnd(ctx: TeamServiceContext, pairing: AgentFlowPairing, parent: unknown, childId: string, stopReason: unknown): void {
+function bufferActivationChildEnd(pairing: AgentFlowPairing, parentSessionId: string, childId: string, stopReason: unknown): void {
   try {
-    if (!teamServicePresent(ctx)) return
-    const buffer = (pairing.teamEndBuffer ??= new Map<string, unknown>())
-    buffer.delete(childId) // a re-woken member's later end is the fresher record (LRU refresh)
-    if (buffer.size >= AGENT_FLOW_TEAM_END_BUFFER_CAPACITY) {
-      const oldestKey = buffer.keys().next().value
-      if (oldestKey !== undefined) {
-        buffer.delete(oldestKey)
-        log(
-          'warn',
-          `team member child end for child ${oldestKey} was evicted from the bounded end buffer (${String(AGENT_FLOW_TEAM_END_BUFFER_CAPACITY)} slots) before its spawn pairing was written — no settle is fabricated`,
-        )
-      }
+    const claimable = claimableDispatchesOf(pairing, parentSessionId)
+    if (claimable === 0) return
+    const ends = (pairing.endsAwaitingActivation ??= new Map<string, unknown>())
+    ends.delete(childId) // a re-woken child's later end is the fresher record
+    if (ends.size >= claimable) {
+      log(
+        'warn',
+        `child end for ${childId} was not kept for activation reconciliation (${String(claimable)} claimable dispatches of its parent) — no settle is fabricated`,
+      )
+      return
     }
-    buffer.set(childId, stopReason)
+    ends.set(childId, stopReason)
   } catch (error) {
-    log('error', `team end buffer insert failed (contained): ${errorMessage(error)}`)
+    log('error', `activation child end buffer insert failed (contained): ${errorMessage(error)}`)
   }
 }
 
 /**
- * Consume the buffered end record for `childId`, when one exists. The entry
- * is consumed on read — one end record can settle its dispatch exactly once,
- * and the pairing write must never leave it behind.
+ * Pair one activation dispatch with the child `SessionId` its returned name
+ * resolved to. RECONCILE FIRST: the child's end may have arrived while that
+ * resolution was in flight and been kept by
+ * {@link bufferActivationChildEnd} — on a hit the dispatch settles from that
+ * record through the SAME outcome mapping as the live path
+ * (`completed→ok`, `aborted/refusal→denied`, `error/max-tokens→error`,
+ * unrecognized → explicit unresolved continuation) and NO live pairing entry
+ * is written (the record is consumed, so the dispatch can never settle
+ * twice). Otherwise the ref is keyed by child id and the child's own
+ * `subagent/end` settles it; at capacity the OLDEST pairing is evicted with
+ * an explicit unresolved-continuation row for its dispatch — a bounded map
+ * never drops a pairing silently. The ref also carries the resolved child id
+ * so the eventual settle names the child.
  */
-function consumeBufferedTeamEnd(pairing: AgentFlowPairing, childId: string): { stopReason: unknown } | undefined {
-  const buffer = pairing.teamEndBuffer
-  if (buffer === undefined || !buffer.has(childId)) return undefined
-  const stopReason = buffer.get(childId)
-  buffer.delete(childId)
-  return { stopReason }
-}
-
-/**
- * Pair one activation dispatch with the child `SessionId` the subagent
- * surface resolved. RECONCILE FIRST: the child's end may have arrived
- * before this pairing write and been buffered (the early-end reconcile
- * buffer) — on a buffer hit
- * the dispatch settles from the buffered record through the SAME outcome
- * mapping as the paired path (`completed→ok`, `aborted/refusal→denied`,
- * `error/max-tokens→error`, unrecognized → explicit unresolved continuation)
- * and NO live pairing entry is written (the buffered entry is consumed, so
- * the dispatch can never settle twice). At capacity the OLDEST pairing is
- * evicted with an explicit unresolved-continuation row for its dispatch — a
- * bounded map never drops a pairing silently. The ref also carries the
- * observed child id so the eventual settle names the child.
- *
- * Also the pairing producer for the `subagent` ACTIVATION result: the
- * installed tool returns `{ kind: 'activation', name }` — started, not
- * settled — and the name is resolved to the child `SessionId` through the
- * subagent surface, so the SAME keyed-by-child map and `subagent/end`
- * settlement pair that dispatch too. The pairing write lands when the async
- * name resolution settles; an end that arrives before it is reconciled from
- * the end buffer (team service mounted).
- */
-function pairTeamMemberChild(pairing: AgentFlowPairing, childId: string, ref: AgentFlowDispatchRef): void {
-  const buffered = consumeBufferedTeamEnd(pairing, childId)
+function pairActivationChildRef(pairing: AgentFlowPairing, childId: string, ref: AgentFlowDispatchRef): void {
+  const ends = pairing.endsAwaitingActivation
+  let buffered: { stopReason: unknown } | undefined
+  if (ends !== undefined && ends.has(childId)) {
+    buffered = { stopReason: ends.get(childId) }
+    ends.delete(childId)
+  }
+  ref.childId = childId
   if (buffered !== undefined) {
-    ref.childId = childId
     const outcome = settleOutcomeOfStopReason(buffered.stopReason)
     if (outcome === undefined) {
-      recordTeamStopUnresolved(ref, childId, buffered.stopReason)
+      recordChildStopUnresolved(ref, childId, buffered.stopReason)
       return
     }
     recordSettleWithRef(ref, outcome, undefined, childId)
     return
   }
   const map = teamChildPairs(pairing)
-  if (map.has(childId)) return // first pairing wins; a later message re-waking the member adds nothing
+  if (map.has(childId)) return // first pairing wins; a later message re-waking the child adds nothing
   if (map.size >= AGENT_FLOW_TEAM_CHILD_CAPACITY) {
     const oldestKey = map.keys().next().value
     if (oldestKey !== undefined) {
@@ -1812,23 +1785,25 @@ function pairTeamMemberChild(pairing: AgentFlowPairing, childId: string, ref: Ag
       if (evicted !== undefined) {
         recordContinuationUnresolved(
           evicted,
-          `team member child pairing capacity reached (${String(AGENT_FLOW_TEAM_CHILD_CAPACITY)} slots) — the oldest pairing was evicted before its member turn completed`,
+          `activation child pairing capacity reached (${String(AGENT_FLOW_TEAM_CHILD_CAPACITY)} slots) — the oldest pairing was evicted before its child turn completed`,
         )
       }
     }
   }
   map.set(childId, ref)
-  ref.childId = childId
 }
 
 /**
- * Pair one activation dispatch with the child session its returned member name
- * resolves to. The subagent surface read is ASYNC, so the pairing write lands
- * when it settles and the child's `subagent/end` then settles the dispatch
- * through the shared keyed-by-child channel — the tool return itself settles
- * nothing. A missing or unresolvable name records the explicit unresolved
- * continuation instead. Fully contained: the floating resolution never rejects
- * into the tool seam.
+ * Pair one activation dispatch with the child session its returned name
+ * resolves to. The subagent surface read is ASYNC, so the window is entered
+ * BEFORE it starts: until it settles, an end for the resolved child is kept by
+ * {@link bufferActivationChildEnd} and reconciled by
+ * {@link pairActivationChildRef} — the tool return itself settles nothing. The
+ * window is left exactly once (resolution landed, name unresolvable, or
+ * resolution failed), so one dispatch can never pair twice and the reconcile
+ * store never outlives the resolutions that can consume it. A missing or
+ * unresolvable name records the explicit unresolved continuation instead.
+ * Fully contained: the floating resolution never rejects into the tool seam.
  */
 function pairActivationChild(input: {
   ctx: TeamServiceContext
@@ -1844,37 +1819,45 @@ function pairActivationChild(input: {
   }
   const execRec = asRecord(input.exec)
   const signal = execRec?.signal instanceof AbortSignal ? execRec.signal : undefined
+  // Enter the window BEFORE the async read: a child end that lands while the
+  // name resolves is admitted against this ref and reconciled below.
+  const resolutions = (pairing.activationResolutions ??= new Set<AgentFlowDispatchRef>())
+  resolutions.add(ref)
   void resolveMemberId(subagentSurfaceOf(ctx), execRec?.agent, name, signal)
     .then((childId) => {
+      resolutions.delete(ref)
       if (childId === undefined) {
         recordContinuationUnresolved(ref, `the activation child "${name}" is not resolvable to a child session — its turn completion is unknown`)
         return
       }
-      pairTeamMemberChild(pairing, childId, ref)
+      pairActivationChildRef(pairing, childId, ref)
     })
     .catch((error: unknown) => {
+      resolutions.delete(ref)
       log('error', `activation child pairing failed (contained): ${errorMessage(error)}`)
     })
 }
 
 /**
- * The Agent Teams half of the `tools/post-execute` seam. A team carrier that
- * produced a dispatch record is NEVER settled at tool return: `send_message`
- * only means the target inbox ACCEPTED the message, and the task-board writes
- * are not delegation completions at all. The branch:
+ * The Agent Teams half of the `tools/post-execute` seam. After rc.3 the Team
+ * channel is the shared task board plus the inbox: `team_task_create`,
+ * `team_task_update` and `send_message` are the only carriers, and none of
+ * them is a delegation completion (a board write records coordination, an
+ * inbox acceptance only means the target accepted the message). A team carrier
+ * that produced a dispatch record is therefore NEVER settled at tool return;
+ * the branch:
  *
  * - consumes the agent-namespaced call key in EVERY path (the map holds only
  *   in-flight calls), so team calls cannot grow it without bound and a later
  *   same-id call from another channel can never settle this ref (the key also
  *   carries the tool name);
  * - a failed call settles `error` — the call provably did not land;
- * - every other shape records the explicit unresolved continuation instead of
- *   a fabricated completion.
+ * - every other shape records the explicit unresolved continuation stating
+ *   that the carrier is not a delegation completion.
  *
  * Fully contained — the post-execute waterfall must always reach `next()`.
  */
 function handleTeamPostExecute(input: {
-  ctx: TeamServiceContext
   pairing: AgentFlowPairing
   exec: unknown
   name: string
@@ -1898,7 +1881,7 @@ function handleTeamPostExecute(input: {
     }
     recordContinuationUnresolved(
       dispatchRef,
-      `the ${name} carrier completed without an attributable member turn — inbox acceptance and task-board writes are not delegation completions`,
+      `the ${name} carrier returned without a delegation completion — a task-board write and an inbox acceptance are not delegation completions`,
     )
   } finally {
     // The call is CONSUMED on every team path — never leave a team ref in the
@@ -1908,41 +1891,39 @@ function handleTeamPostExecute(input: {
 }
 
 /**
- * The member-turn settlement half: `subagent/end` for a paired member child
- * completes the dispatch that spawned it. A teammate is an ordinary
- * continuable subagent child whose initial turn settlement carries the child
- * id and the terminal stop reason, so this row is a REAL completion (mapped
- * outcome) rather than a tool-return guess. An end whose pairing map entry is
- * pairs it. An end whose pairing map entry is missing — or whose pairing MAP
- * does not exist yet (no spawn-pairing write ever happened) — is the early-end
- * reconcile race (the member's turn settled before the spawn's
- * pairing write): the record is BUFFERED for the pairing write's reconcile
- * ({@link bufferTeamChildEnd} — team children only, service mounted only)
- * instead of the old silent drop. An unrecognized stop reason records the
- * explicit unresolved continuation — never a guessed outcome.
- * Contained: a throwing handler never escapes the session/tool event.
+ * The child-turn settlement half: `subagent/end` for a paired child completes
+ * the dispatch that created it. A teammate is an ordinary continuable subagent
+ * child whose initial turn settlement carries the child id and the terminal
+ * stop reason, so this row is a REAL completion (mapped outcome) rather than a
+ * tool-return guess. A pairing-map hit consumes the entry and settles; a miss
+ * means the end beat its activation pairing write (the child is published
+ * inside the tool call, so its end can precede `tools/post-execute` or the
+ * async name resolution), and the record is kept for that reconcile
+ * ({@link bufferActivationChildEnd}) — never dropped silently, and never
+ * stored when no recorded dispatch of the child's direct parent can claim it.
+ * An unrecognized stop reason records the explicit unresolved continuation —
+ * never a guessed outcome. Contained: a throwing handler never escapes the
+ * session/tool event.
  */
-function handleTeamChildSettled(ctx: TeamServiceContext, pairing: AgentFlowPairing, parent: unknown, info: unknown): void {
+function handleActivationChildSettled(pairing: AgentFlowPairing, info: unknown): void {
   const rec = asRecord(info)
   const childId = rec?.id
   if (typeof childId !== 'string' || childId === '') return
   const map = pairing.teamDispatchByChildId
   const ref = map?.get(childId)
   if (map === undefined || ref === undefined) {
-    // The end-buffer admission is ROSTER-gated, never pairing-map-gated: the
-    // team map may not exist yet (a store before its first spawn-pairing
-    // write), and an end arriving that early must still be BUFFERED so the
-    // later FIRST pairing write reconciles and settles it — never silently
-    // dropped because a lazily-created map was absent.
-    bufferTeamChildEnd(ctx, pairing, parent, childId, rec?.stopReason)
+    const parentSessionId = rec?.parentSessionId
+    if (typeof parentSessionId === 'string' && parentSessionId !== '') {
+      bufferActivationChildEnd(pairing, parentSessionId, childId, rec?.stopReason)
+    }
     return
   }
-  // Consumed once: the spawn's initial turn is the dispatch's continuation; a
-  // later re-woken turn of the same member is a new (unrecorded) message.
+  // Consumed once: the child's initial turn is the dispatch's continuation; a
+  // later re-woken turn of the same child is a new (unrecorded) message.
   map.delete(childId)
   const outcome = settleOutcomeOfStopReason(rec?.stopReason)
   if (outcome === undefined) {
-    recordTeamStopUnresolved(ref, childId, rec?.stopReason)
+    recordChildStopUnresolved(ref, childId, rec?.stopReason)
     return
   }
   recordSettleWithRef(ref, outcome, undefined, childId)
@@ -1973,11 +1954,11 @@ function handleTeamChildSettled(ctx: TeamServiceContext, pairing: AgentFlowPairi
  *   copied from its value onto any row;
  * - `{ kind: 'activation', name }` (the installed dsh `subagent` /
  *   `subagent_fork` return — STARTED, not settled) → no settle at tool
- *   return; the returned member name is resolved to the child `SessionId`
- *   through the subagent surface and paired, and the child's `subagent/end`
- *   settles the dispatch through the SAME keyed-by-child channel and outcome
- *   mapping; a missing or unresolvable name records the explicit unresolved
- *   continuation instead;
+ *   return; the activation pairing window opens, the returned name is resolved
+ *   to the child `SessionId` through the subagent surface, and the child's
+ *   `subagent/end` settles the dispatch through the keyed-by-child channel
+ *   and outcome mapping; a missing or unresolvable name records the explicit
+ *   unresolved continuation instead;
  * - any other successful value → the explicit unresolved continuation (the
  *   seam cannot attribute it to a child turn, so it never settles `ok`).
  * The consumed `dispatchByCallId` entry is DELETED after the branch resolves
@@ -2003,15 +1984,16 @@ function handleTeamChildSettled(ctx: TeamServiceContext, pairing: AgentFlowPairi
  * throwing record never propagates.
  *
  * - a TEAM carrier ({@link TEAM_DISPATCH_TOOLS}) → the team branch
- *   ({@link handleTeamPostExecute}): never settled at tool return; every shape
- *   except a failed call records an explicit unresolved continuation, and the
- *   call key is always consumed.
+ *   ({@link handleTeamPostExecute}): the board/inbox carriers start no child,
+ *   so they are never settled at tool return; every shape except a failed call
+ *   records an explicit unresolved continuation, and the call key is always
+ *   consumed.
  *
  * The SAME registration also observes `subagent/end` (the verified
- * continuable-child settlement edge) for the member-child pairing: an
- * activation-paired dispatch completes when its child's initial turn settles,
+ * continuable-child settlement edge) for the activation pairing: an
+ * activation-created dispatch completes when its child's initial turn settles,
  * not when the creation call returns. An untagged registration at the plugin
- * apply observes every scoped child edge upstream.
+ * apply observes every child edge upstream.
  *
  * Cordis typing note: `ctx.on` only accepts declared event keys and
  * `tools/post-execute` / `subagent/end` are not declared by this package's
@@ -2021,8 +2003,8 @@ function handleTeamChildSettled(ctx: TeamServiceContext, pairing: AgentFlowPairi
  * @param config - the plugin Config (dispatch-tool matching).
  * @param pairing - the apply-scoped pairing store (dispatchByCallId read,
  * dispatchByJobId written by the background branch, catalogBySession
- * advanced/retired here, teamDispatchByChildId written/consumed by the team
- * branch).
+ * advanced/retired here, activationResolutions / endsAwaitingActivation /
+ * teamDispatchByChildId maintained by the activation pairing).
  */
 export function registerSettleListener(ctx: Context, config: Config, pairing: AgentFlowPairing): void {
   const dispatchTools = config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]
@@ -2032,11 +2014,10 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
       const execRec = asRecord(exec)
       const name = execRec === undefined ? undefined : execRec.name
       if (typeof name === 'string' && isTeamDispatchToolName(name)) {
-        // Team carrier: its tool return is NOT a completion (member creation /
-        // inbox acceptance / task-board write). The branch consumes the call
-        // key on every path and either pairs the member child or records the
-        // explicit unresolved continuation.
-        handleTeamPostExecute({ ctx, pairing, exec, name, result })
+        // Team carrier: its tool return is NOT a completion (an inbox
+        // acceptance / a task-board write). The branch consumes the call key on
+        // every path and records the explicit unresolved continuation.
+        handleTeamPostExecute({ pairing, exec, name, result })
       } else if (typeof name !== 'string' || !dispatchTools.includes(name)) {
         // Non-dispatch tool call → no record (the waterfall still delegates below).
       } else {
@@ -2145,24 +2126,20 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
     return next === undefined ? undefined : next()
   }
   ctx.on(SETTLE_SEAM as never, listener as never)
-  // The member-turn settlement edge (verified `@deepseek-ai/dsh-subagent`
-  // event): a team member is a continuable child, so its initial turn's
-  // terminal settlement carries the child id + stop reason. The live direct
-  // parent arrives as the scoped-dispatch RECEIVER (cordis `dispatch` shifts
-  // the emitter's `scopeTarget` carrier into the bound `this` and invokes the
-  // callback with `(info)` alone — see {@link parentOfSubagentEnd}), so the
-  // handler is a plain function expression: an arrow function would capture
-  // this module's `this` and lose the carrier. A paired child is consumed
-  // here; an unpaired team-child end (roster-listed, service mounted) is
-  // buffered for the pairing write's reconcile; every other subagent end is
-  // ignored.
-  ctx.on('subagent/end' as never, function (this: unknown, info: unknown, parent: unknown): void {
+  // The child-turn settlement edge (verified `@deepseek-ai/dsh-subagent`
+  // event): an activation child is a continuable subagent, so its initial
+  // turn's terminal settlement carries the child id, its direct parent's
+  // session id and the stop reason — everything the pairing needs, read from
+  // the payload alone. A paired child is consumed here; an end that beat its
+  // activation pairing write is kept for that reconcile; every other child end
+  // is ignored.
+  ctx.on('subagent/end' as never, ((info: unknown): void => {
     try {
-      handleTeamChildSettled(ctx, pairing, parentOfSubagentEnd(this, parent), info)
+      handleActivationChildSettled(pairing, info)
     } catch (error) {
-      log('error', `team member settle failed (contained): ${errorMessage(error)}`)
+      log('error', `activation child settle failed (contained): ${errorMessage(error)}`)
     }
-  } as never)
+  }) as never)
   // The pairing trace is emitted at most ONCE per logger binding (≈ once per
   // apply): repeated registrations (tests, HMR) must not re-spam.
   if (!settleNoteLogged) {
