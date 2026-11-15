@@ -2,16 +2,16 @@
  * host.test.ts — proof for capability-based dsh detection.
  *
  * A live dsh session exposes a delegation channel chosen by its profile: the
- * `subagent` tool, or the Agent Teams tools `spawn_teammate` /
- * `team_task_create` (`@deepseek-ai/dsh-experimental-tool-agent-team`). Any
- * one of them must resolve to `dsh`, while the ordered rows other hosts own
- * keep winning ahead of it.
+ * `subagent` tool, or the Agent Teams tool `team_task_create`
+ * (`@deepseek-ai/dsh-experimental-tool-agent-team`). Any one of them must
+ * resolve to `dsh`, while the ordered rows other hosts own keep winning
+ * ahead of it.
  */
 import { describe, expect, test } from "bun:test";
 import { detectHost } from "./host.js";
 
 describe("detectHost -- every dsh delegation token resolves to dsh", () => {
-  for (const signal of ["subagent", "spawn_teammate", "team_task_create"] as const) {
+  for (const signal of ["subagent", "team_task_create"] as const) {
     test(`${signal} -> dsh`, () => {
       expect(detectHost([signal])).toBe("dsh");
     });
@@ -28,6 +28,6 @@ describe("detectHost -- the other rows keep their order", () => {
   });
 
   test("subagent_type wins over a dsh token (cursor row stays first)", () => {
-    expect(detectHost(["subagent_type", "spawn_teammate"])).toBe("cursor");
+    expect(detectHost(["subagent_type", "team_task_create"])).toBe("cursor");
   });
 });
