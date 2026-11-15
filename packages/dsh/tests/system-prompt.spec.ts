@@ -197,9 +197,11 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     const readOnlyLine = withText.split('\n').find((line) => line.startsWith('read-only: '))
     expect(readOnlyLine).toBeDefined()
     expect(readOnlyLine).toContain('`subagent` only')
-    expect(readOnlyLine).toContain('fan-out of 3+ goes to `workflow`')
-    // `subagent_fork` is named only as the carrier NOT to use.
+    expect(readOnlyLine).toContain('Fan-out of 3+ goes to `workflow`')
+    // The fork is named only as the DISQUALIFIED carrier (it inherits the
+    // conversation), and the 1-2-seat branch discloses the roster cost.
     expect(readOnlyLine).not.toContain('`subagent` / `subagent_fork`')
+    expect(readOnlyLine).toContain('also joins the roster')
   })
 
   it('(b) no ACTIVE workflow ⇒ the engine-status context is EMPTY — not even the version line (D1)', async () => {

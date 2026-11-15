@@ -371,7 +371,7 @@ function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
  */
 const TEAM_DELEGATION_CONTRACT = [
   'delegation: Agent Teams is mounted — writable work defaults to one durable teammate per writable track: `subagent` / `subagent_fork` (legacy `spawn_teammate`) creates that teammate on a Team-mode root, and a roster name never returns, so reuse it via `send_message` instead of one call per task.',
-  'read-only: 1–2 read-only seats go to `subagent` only — a `subagent_fork` inherits the completed conversation, so review and audit seats would lose their fresh context; fan-out of 3+ goes to `workflow` because on a Team-mode root the creation call itself (`subagent`, `subagent_fork` or legacy `spawn_teammate`) makes a roster teammate, so read-only fan-out never takes one. A profile that disables the direct `subagent` rows carries read-only work of any size through `workflow`, whose script is chosen by the work.',
+  'read-only: 1–2 read-only seats go to `subagent` only (a `subagent_fork` inherits the completed conversation, so review and audit seats would lose their fresh context); on a Team-mode root that same call also joins the roster, and a roster name never returns, so budget one per track and reuse it via `send_message`. Fan-out of 3+ goes to `workflow`, whose children are fresh one-shot subagents and never join the roster; a profile that disables the direct `subagent` rows carries read-only work of any size through `workflow`, whose script is chosen by the work.',
   'dispatch prompt: every delegation prompt — `workflow agent()` included — opens with "## Assignment" and "Execute as: <role>"; the role gate cannot repair a header-less `workflow` child.',
 ].join('\n')
 
