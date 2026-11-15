@@ -11,7 +11,7 @@ import type { AgentFlowView } from '../src/types.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { resolveExecutionLedgerTarget } from '../src/gates/workflow-selection.ts'
 
-import { seedActiveWorkflow, selectedGenerationFor } from './harness.ts'
+import { activationTick, provideTeamServices, seedActiveWorkflow, selectedGenerationFor } from './harness.ts'
 const roots: string[] = []
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
@@ -58,9 +58,10 @@ describe('agent-flow native event rows', () => {
     expect(readFlow(workflowDir, 'wf-1')?.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', role: 'fullstack-dev' })
     expect(readDshLedgerWindow({ harnessDir }, 'wf-1', 10)).toHaveLength(2)
   })
-  it('pairs the real post-execute settle to its selected-generation dispatch', async () => {
+  it('pairs the child subagent/end to its selected-generation dispatch, never the creation return', async () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     const ctx = new Context()
+    provideTeamServices(ctx, [{ name: 'reviewer', childId: 'child-session' }])
     const pairing: AgentFlowPairing = {
       dispatchByCallId: new Map(),
       dispatchByJobId: new Map(),
@@ -84,10 +85,16 @@ describe('agent-flow native event rows', () => {
     })
     // Cordis accepts runtime event names beyond its declared event map.
     const emitter = ctx as unknown as { emit(event: string, ...args: unknown[]): void }
-    emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'foreground', runId: 'child-session' } })
+    // The rc.3 creation result is STARTED, not settled: no row may appear here.
+    emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'activation', name: 'reviewer' } })
+    await activationTick()
+    expect(readFlow(workflowDir)?.events.map((event) => event.kind)).toEqual(['dispatch'])
+    expect(pairing.dispatchByCallId.size).toBe(0)
+    expect(pairing.teamDispatchByChildId?.size).toBe(1)
+    // The child's own turn settlement is the completion this dispatch pairs to.
+    emitLifecycleEnd(ctx, { id: 'child-session', stopReason: 'completed' })
     expect(readFlow(workflowDir)?.events.map((event) => event.kind)).toEqual(['settle', 'dispatch'])
     expect(readFlow(workflowDir)?.events[0]).toMatchObject({ kind: 'settle', role: 'fullstack-dev', childId: 'child-session' })
-    expect(pairing.dispatchByCallId.size).toBe(0)
     const persisted = readDshLedgerWindow({ harnessDir }, 'wf-1', 10)?.map((line) => JSON.parse(line) as { kind: string; eventId?: string }) ?? []
     const settle = persisted.find((event) => event.kind === 'settle')
     expect(settle?.eventId).toBe(callIdentity('settle', 'session-1', 'call-1')?.eventId)
@@ -100,6 +107,7 @@ describe('agent-flow native event rows', () => {
     // distinct even across a projection restart.
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     const ctx = new Context()
+    provideTeamServices(ctx, [{ name: 'reviewer', childId: 'child-scoped' }])
     const pairing: AgentFlowPairing = {
       dispatchByCallId: new Map(),
       dispatchByJobId: new Map(),
@@ -122,7 +130,9 @@ describe('agent-flow native event rows', () => {
       hard: false,
     })
     const emitter = ctx as unknown as { emit(event: string, ...args: unknown[]): void }
-    emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'foreground', runId: 'child-scoped' } })
+    emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'activation', name: 'reviewer' } })
+    await activationTick()
+    emitLifecycleEnd(ctx, { id: 'child-scoped', stopReason: 'completed' })
     const persisted = (readDshLedgerWindow({ harnessDir }, 'wf-1', 10) ?? []).map((line) => JSON.parse(line) as { kind: string; callId?: string })
     expect(persisted.find((row) => row.kind === 'dispatch')?.callId).toBe('call-scoped-1')
     expect(persisted.find((row) => row.kind === 'settle')?.callId).toBe('call-scoped-1')
@@ -327,6 +337,7 @@ Catalog correlation regression.
       dispatchByJobId: new Map(),
       catalogBySession: new WeakMap(),
     }
+    provideTeamServices(ctx, [{ name: 'first', childId: 'first-child' }, { name: 'second', childId: 'second-child' }])
     registerSettleListener(ctx, {}, pairing)
     const emitter = ctx as unknown as { emit(event: string, ...args: unknown[]): void }
     const prompt = `## Assignment
@@ -367,8 +378,12 @@ Catalog correlation regression.
     const sameCallSecond = dispatch('shared-call', 'session-2', secondTarget!.workflowDir, { storeId: secondTarget!.storeId, epoch: secondTarget!.epoch })
     updateWorkflowSessionBinding(harnessDir, 'session-1', root, { selectedWorkflowId: 'wf-2', excludedBeforeSeq: 0 })
     expect(await resolveExecutionLedgerTarget('session-1', root)).toBeNull()
-    postExecute(sameCallSecond, { isError: false, value: { kind: 'foreground', runId: 'second-child' } })
-    postExecute(sameCallFirst, { isError: false, value: { kind: 'foreground', runId: 'first-child' } })
+    postExecute(sameCallSecond, { isError: false, value: { kind: 'activation', name: 'second' } })
+    postExecute(sameCallFirst, { isError: false, value: { kind: 'activation', name: 'first' } })
+    await activationTick()
+    // Each dispatch settles from ITS OWN child's end, keyed per workflow.
+    emitLifecycleEnd(ctx, { id: 'second-child', stopReason: 'completed' })
+    emitLifecycleEnd(ctx, { id: 'first-child', stopReason: 'completed' })
     const events = readFlow(workflowDir)?.events ?? []
     const secondEvents = readFlow(secondWorkflowDir, 'wf-2')?.events ?? []
     expect(events).toContainEqual(expect.objectContaining({ kind: 'settle', outcome: 'denied', taskRef: 'killed-job', durationMs: 40 }))
@@ -444,6 +459,7 @@ Catalog correlation regression.
       dispatchByJobId: new Map(),
       catalogBySession: new WeakMap(),
     }
+    provideTeamServices(ctx, [{ name: 'reviewer', childId: 'sub-child-1' }])
     registerSettleListener(ctx, {}, pairing)
     const exec = { callId: 'activation-call', name: 'subagent', agent: { id: 'session-1' } }
     recordDispatch({
@@ -465,7 +481,8 @@ Catalog correlation regression.
     // The installed dsh `subagent` return shape: STARTED, not settled. The
     // false-settle signature (a settle row ≈ the tool return while the child
     // is still running) must be gone.
-    emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'activation', subagentId: 'sub-child-1' } })
+    emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'activation', name: 'reviewer' } })
+    await activationTick()
     expect(readFlow(workflowDir)?.events.map((event) => event.kind)).toEqual(['dispatch'])
     expect(pairing.dispatchByCallId.size).toBe(0)
     expect(pairing.teamDispatchByChildId?.size).toBe(1)
@@ -485,6 +502,7 @@ Catalog correlation regression.
       dispatchByJobId: new Map(),
       catalogBySession: new WeakMap(),
     }
+    provideTeamServices(ctx, [{ name: 'reviewer', childId: 'sub-child-fail' }])
     registerSettleListener(ctx, {}, pairing)
     const exec = { callId: 'activation-fail-call', name: 'subagent', agent: { id: 'session-1' } }
     recordDispatch({
@@ -502,7 +520,8 @@ Catalog correlation regression.
       hard: false,
     })
     const emitter = ctx as unknown as { emit(event: string, ...args: unknown[]): void }
-    emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'activation', subagentId: 'sub-child-fail' } })
+    emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'activation', name: 'reviewer' } })
+    await activationTick()
     expect(readFlow(workflowDir)?.events.map((event) => event.kind)).toEqual(['dispatch'])
     emitLifecycleEnd(ctx, { id: 'sub-child-fail', stopReason: 'error' })
     const events = readFlow(workflowDir)?.events ?? []
@@ -510,7 +529,7 @@ Catalog correlation regression.
     expect(events.some((event) => event.kind === 'settle' && event.outcome === 'ok')).toBe(false)
   })
 
-  it('leaves a malformed activation result (no usable subagentId) unsettled and unpaired', async () => {
+  it('records the explicit unresolved continuation for an activation without a usable child name', async () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
     const ctx = new Context()
     const pairing: AgentFlowPairing = {
@@ -536,17 +555,23 @@ Catalog correlation regression.
     })
     const emitter = ctx as unknown as { emit(event: string, ...args: unknown[]): void }
     emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'activation' } })
-    // No usable child identity → nothing mappable: honest no-settle, no
-    // pairing entry (the dispatch row stands open, never a fabricated ok).
-    expect(readFlow(workflowDir)?.events.map((event) => event.kind)).toEqual(['dispatch'])
+    await activationTick()
+    // No usable child identity → the explicit unresolved continuation, never
+    // silence and never a fabricated settle.
+    const events = readFlow(workflowDir)?.events ?? []
+    expect(events.map((event) => event.kind)).toEqual(['continuation', 'dispatch'])
+    expect(events.find((event) => event.kind === 'continuation')).toMatchObject({
+      state: 'unresolved',
+      callId: 'activation-malformed-call',
+      reason: expect.stringContaining('no child name'),
+    })
+    expect(events.some((event) => event.kind === 'settle')).toBe(false)
     expect(pairing.teamDispatchByChildId?.size ?? 0).toBe(0)
     expect(pairing.dispatchByCallId.size).toBe(0)
   })
 
-  it('joins the activation child identity through the call-window catalog (subagent-link)', async () => {
+  it('records the explicit unresolved continuation when a dispatch call returns no result payload', async () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
-    const source: unknown[] = []
-    const parent = { id: 'session-1', seq: 1, eventAt: (seq: number) => source[seq] }
     const ctx = new Context()
     const pairing: AgentFlowPairing = {
       dispatchByCallId: new Map(),
@@ -554,12 +579,7 @@ Catalog correlation regression.
       catalogBySession: new WeakMap(),
     }
     registerSettleListener(ctx, {}, pairing)
-    const exec = {
-      callId: 'link-call',
-      name: 'subagent',
-      agent: { id: 'session-1', session: parent },
-      arguments: { description: 'linked' },
-    }
+    const exec = { callId: 'no-result-call', name: 'subagent', agent: { id: 'session-1' } }
     recordDispatch({
       harnessDir,
       workflowId: 'wf-1',
@@ -574,17 +594,17 @@ Catalog correlation regression.
       violations: [],
       hard: false,
     })
-    source[1] = {
-      type: 'subagent/catalog', seq: 1, time: 2,
-      data: { version: 0, childCreatedAt: 2, childId: 'sub-child-link', label: 'linked', mode: 'continuable' },
-    }
-    parent.seq = 2
     const emitter = ctx as unknown as { emit(event: string, ...args: unknown[]): void }
-    // The activation's own subagentId authorizes the identity join: the
-    // catalog child must be exactly the returned child.
-    emitter.emit(SETTLE_SEAM, exec, { isError: false, value: { kind: 'activation', subagentId: 'sub-child-link' } })
+    // No result payload at all → no completion signal to attribute.
+    emitter.emit(SETTLE_SEAM, exec, undefined)
     const events = readFlow(workflowDir)?.events ?? []
-    expect(events).toContainEqual(expect.objectContaining({ kind: 'subagent-link', childId: 'sub-child-link', label: 'linked', role: 'fullstack-dev' }))
+    expect(events.map((event) => event.kind)).toEqual(['continuation', 'dispatch'])
+    expect(events.find((event) => event.kind === 'continuation')).toMatchObject({
+      state: 'unresolved',
+      callId: 'no-result-call',
+      reason: expect.stringContaining('no result payload'),
+    })
     expect(events.some((event) => event.kind === 'settle')).toBe(false)
+    expect(pairing.dispatchByCallId.size).toBe(0)
   })
 })

@@ -18,7 +18,7 @@
  *   background shape) → one dispatch event, then the settled jobs event →
  *   one PAIRED settle — the `registerSettleListener` dispatchTools match
  *   covers fork (verify, no code change beyond `DEFAULT_DISPATCH_TOOLS`),
- *   plus the bare-context foreground pairing probe with an EMPTY config
+ *   plus the bare-context activation pairing probe with an EMPTY config
  *   (the DEFAULT tool set alone matches `subagent_fork`);
  * - (d) a fork child (Assignment-seeded, same prompt shape) whose start
  *   SELECTS the configured role preset on the native activation spec — the
@@ -42,7 +42,7 @@ import { readAgentFlow, recordDispatch, SETTLE_SEAM } from '../src/index.ts'
 import type { AgentFlowView } from '../src/index.ts'
 import { registerSettleListener, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
-import { FakeJobRegistry, FakeSubagentProvider, FakeSubagentService, bootApp, executeToolCall, seedActiveWorkflow, selectedGenerationFor, startActivationViaNativeChannel, type BootResult } from './harness.ts'
+import { FakeJobRegistry, FakeSubagentProvider, FakeSubagentService, activationTick, bootApp, executeToolCall, provideTeamServices, seedActiveWorkflow, selectedGenerationFor, startActivationViaNativeChannel, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -288,7 +288,7 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
     expect(settleEvent.paired).toBe(true) // the settle carries the paired identity
   })
 
-  it('(c2) the DEFAULT dispatchTools match subagent_fork — foreground settle with an EMPTY config', async () => {
+  it('(c2) the DEFAULT dispatchTools match subagent_fork — the activation settles on its child end with an EMPTY config', async () => {
     // Bare-context pairing probe (agent-flow settle pattern): register the
     // settle listener with an EMPTY config and confirm a fork-tool exec is
     // matched by the DEFAULT tool set — the listener must pick up fork
@@ -296,6 +296,7 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
     const { root, harnessDir, workflowDir } = await tempHarness('dsh-fork-settle-default-')
     const ctx = new Context()
     const pairing = pairingOf()
+    provideTeamServices(ctx, [{ name: 'fork-child', childId: 'fork-run-1' }])
     const priorSink = setAgentFlowLogger(() => {})
     try {
       registerSettleListener(ctx, {}, pairing)
@@ -315,17 +316,21 @@ describe('fork settle — ledger records fork dispatch + settle (dispatchTools-d
       })
       expect(pairing.dispatchByCallId.get('sess-1\u0000subagent_fork\u0000fork-c1')).toBeDefined()
 
-      // The fork post-execute settles with the PAIRED identity — the
-      // listener's DEFAULT dispatchTools include `subagent_fork`.
+      // The fork creation returns the activation shape: STARTED, not settled.
+      // The listener's DEFAULT dispatchTools include `subagent_fork`, so the
+      // returned name is resolved and the child end settles the dispatch.
       emitUndeclared(
         ctx, SETTLE_SEAM,
         { callId: 'fork-c1', name: 'subagent_fork', agent: { id: 'sess-1' } },
-        { isError: false, value: { kind: 'foreground', runId: 'r1', output: [] } },
+        { isError: false, value: { kind: 'activation', name: 'fork-child' } },
       )
+      await activationTick()
+      expect(readAgentFlow(workflowDir, 'wf-1')!.events.map((e) => e.kind)).toEqual(['dispatch'])
+      emitUndeclared(ctx, 'subagent/end', { id: 'fork-run-1', stopReason: 'completed' })
 
       const view = readAgentFlow(workflowDir, 'wf-1')!
       expect(view.events.map((e) => e.kind)).toEqual(['settle', 'dispatch'])
-      expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', role: 'fullstack-dev' })
+      expect(view.events[0]).toMatchObject({ kind: 'settle', outcome: 'ok', role: 'fullstack-dev', childId: 'fork-run-1' })
     } finally {
       setAgentFlowLogger(priorSink)
       await ctx.fiber.dispose().catch(() => {})

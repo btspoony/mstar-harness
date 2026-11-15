@@ -176,17 +176,26 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     booted = await bootApp()
     const without = await assembleWithEngineStatus(booted.ctx)
     const withoutText = without.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text
-    // No Team service → `spawn_teammate` is not callable, so the contract must
-    // not name it; the pointer block stays exactly as it was.
-    expect(withoutText).not.toContain('spawn_teammate')
+    // No Team service → the task board does not exist, so no contract is
+    // injected: the pointer block stays exactly as it was.
+    expect(withoutText).not.toContain('delegation:')
+    expect(withoutText).not.toContain('team_task_')
 
-    booted.ctx.provide('agentTeams' as never, { listMembers: () => [] } as never)
+    // Any mounted board service is presence — rc.3 exposes no member read, so
+    // the fixture provides a board-shaped object and nothing else.
+    booted.ctx.provide('agentTeams' as never, { isEnabled: () => false, setEnabled: () => {} } as never)
     const withTeam = await assembleWithEngineStatus(booted.ctx)
     const withText = withTeam.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text
     // The two facts a coordinator otherwise finds only in
-    // `mstar-host` → `references/dsh.md`: the default channel, and the header
-    // shape every delegation prompt needs (workflow children included).
-    expect(withText).toContain('`spawn_teammate` is the default channel for writable work')
+    // `mstar-host` → `references/dsh.md`: the channel that CREATES a teammate,
+    // and the header shape every delegation prompt needs (workflow children
+    // included).
+    expect(withText).toContain('delegation: Agent Teams is mounted')
+    expect(withText).toContain('`subagent` / `subagent_fork` create the durable teammate for writable work')
+    expect(withText).toContain('`team_task_*` is the shared board')
+    // The removed rc.2 creation tool is never named by the injected contract.
+    // Split so this negative pin is not itself a stale-carrier mention.
+    expect(withText).not.toContain(['spawn', 'teammate'].join('_'))
     expect(withText).toContain('"## Assignment" and "Execute as: <role>"')
     expect(withText).toContain('`workflow agent()` included')
   })

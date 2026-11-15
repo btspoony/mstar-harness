@@ -1,11 +1,11 @@
 /**
- * Task 3 — the SAME dispatch gate covers the dsh Agent Teams tools.
+ * The SAME dispatch gate covers the rc.3 Agent Teams carriers.
  *
- * The installed tool surface (`@deepseek-ai/dsh-experimental-tool-agent-team`
- * 0.2.1-rc.2) carries the Assignment-shaped text in other fields than
- * `subagent`'s `{ description, prompt }`:
+ * A teammate is created by the ordinary `subagent` / `subagent_fork` tools, so
+ * the creation call's Assignment text rides the subagent branch and NOT this
+ * one. What is left on the Team side is the shared board and the inbox, each
+ * carrying the text in its own field:
  *
- * - `spawn_teammate`     → `prompt`
  * - `team_task_create`   → `description`
  * - `team_task_update`   → `description` (absent on a status-only update)
  * - `send_message`       → `message`
@@ -91,10 +91,6 @@ const subagentExec = (prompt: string): ToolExecution => toolExec('subagent', { d
 /** The `subagent_fork` sibling — same args, own tool name. */
 const forkExec = (prompt: string): ToolExecution => toolExec('subagent_fork', { description: 'probe', prompt })
 
-/** `spawn_teammate` args (`name`, `description`, `prompt`, `context`). */
-const spawnTeammateExec = (args: { description?: string; prompt?: string }): ToolExecution =>
-  toolExec('spawn_teammate', { name: 'reviewer', description: args.description ?? 'Review the diff.', context: 'fresh', ...(args.prompt === undefined ? {} : { prompt: args.prompt }) })
-
 /** `team_task_create` args (`subject`, `description`, optional lists). */
 const teamTaskCreateExec = (description: string): ToolExecution =>
   toolExec('team_task_create', { subject: 'Review the change', description })
@@ -127,82 +123,34 @@ const codesOf = (advisory: DispatchGateAdvisory | undefined): string[] =>
 /* ---------------------------------- carrier map ---------------------------------- */
 
 describe('team dispatch gate — the exported carrier contract', () => {
-  it('TEAM_DISPATCH_TOOLS maps the four fixed Agent Teams carriers; DEFAULT_DISPATCH_TOOLS stays exactly the subagent pair', () => {
+  it('TEAM_DISPATCH_TOOLS maps exactly the three rc.3 Team carriers; DEFAULT_DISPATCH_TOOLS stays the subagent pair', () => {
     expect(TEAM_DISPATCH_TOOLS).toEqual({
-      spawn_teammate: 'prompt',
       team_task_create: 'description',
       team_task_update: 'description',
       send_message: 'message',
     })
+    // The removed rc.2 creation tool is not a carrier (split so this negative
+    // pin is not itself a stale-carrier mention).
+    expect(Object.keys(TEAM_DISPATCH_TOOLS)).not.toContain(['spawn', 'teammate'].join('_'))
     expect([...DEFAULT_DISPATCH_TOOLS]).toEqual(['subagent', 'subagent_fork'])
   })
 })
 
-/* ---------------------------------- spawn_teammate ---------------------------------- */
+/* ---------------------------------- names outside the map ---------------------------------- */
 
-describe('team dispatch gate — spawn_teammate (prompt carrier)', () => {
-  it('an Assignment-shaped prompt yields the SAME violation set as subagent (warn mode)', async () => {
-    const app = booted = await bootApp()
-    const advisories = captureAdvisories(app.ctx)
-
-    expect(await app.ctx.waterfall('tools/pre-execute', subagentExec(MISSING_EXECUTE_AS), defaultAllow)).toEqual({ kind: 'allow' })
-    expect(await app.ctx.waterfall('tools/pre-execute', spawnTeammateExec({ prompt: MISSING_EXECUTE_AS }), defaultAllow)).toEqual({ kind: 'allow' })
-
-    expect(advisories).toHaveLength(2)
-    expect(advisories[0]!.tool).toBe('subagent')
-    expect(advisories[1]!.tool).toBe('spawn_teammate')
-    expect(codesOf(advisories[1])).toEqual(codesOf(advisories[0]))
-    expect(codesOf(advisories[1])).toContain('assignment.field.missing-execute-as')
-  })
-
-  it('an Assignment-shaped prompt vetoes identically under Enforcement: hard, naming the actual carrier tool', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
-    let secondRan = false
-    app.ctx.on('tools/pre-execute', () => {
-      secondRan = true
-      return Promise.resolve<PreToolDecision>({ kind: 'allow' })
-    })
-
-    const subagent = await app.ctx.waterfall('tools/pre-execute', subagentExec(MISSING_EXECUTE_AS), defaultAllow)
-    const spawn = await app.ctx.waterfall('tools/pre-execute', spawnTeammateExec({ prompt: MISSING_EXECUTE_AS }), defaultAllow)
-
-    expect(secondRan).toBe(false) // deny without next() short-circuits the waterfall
-    expect(subagent.kind).toBe('deny')
-    expect(spawn.kind).toBe('deny')
-    expect(spawn.kind === 'deny' && spawn.reason).toContain('assignment.field.missing-execute-as')
-    // The deny reason names the tool that carried the prompt, not `subagent`.
-    expect(spawn.kind === 'deny' && spawn.reason).toContain('(spawn_teammate)')
-  })
-
-  it('the carrier is `prompt`, not `description`: an Assignment-shaped description with an ordinary prompt stays silent', async () => {
+describe('team dispatch gate — the branch is keyed on the fixed carrier names only', () => {
+  it('a name outside the map is not a Team carrier, even with a carrier-shaped description', async () => {
+    // The map is fixed-name keyed (a renamed or future carrier stays ungated
+    // until its name is added — there is no Config key for team names). A
+    // carrier-shaped `description` alone never selects this branch.
     const app = booted = await bootApp({ enforcement: 'hard' })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall(
       'tools/pre-execute',
-      spawnTeammateExec({ description: MISSING_EXECUTE_AS, prompt: COORDINATION_MESSAGE }),
+      toolExec('team_carrier_renamed', { subject: 'Review.', description: MISSING_EXECUTE_AS }),
       defaultAllow,
     )
-
-    expect(decision).toEqual({ kind: 'allow' })
-    expect(advisories).toHaveLength(0)
-  })
-
-  it('a non-Assignment prompt produces no decision and no advisory (no false positive)', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
-    const advisories = captureAdvisories(app.ctx)
-
-    const decision = await app.ctx.waterfall('tools/pre-execute', spawnTeammateExec({ prompt: COORDINATION_MESSAGE }), defaultAllow)
-
-    expect(decision).toEqual({ kind: 'allow' })
-    expect(advisories).toHaveLength(0)
-  })
-
-  it('a missing prompt produces no decision (missing carrier = no gate decision)', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
-    const advisories = captureAdvisories(app.ctx)
-
-    const decision = await app.ctx.waterfall('tools/pre-execute', spawnTeammateExec({}), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
@@ -318,18 +266,18 @@ describe('team dispatch gate — the subagent/subagent_fork verdicts are unchang
 /* ---------------------------------- renamed instances ---------------------------------- */
 
 describe('team dispatch gate — renamed team tools are out of reach (documented caveat)', () => {
-  it('a renamed team tool is NOT matched by the fixed name map — even with an Assignment-shaped prompt', async () => {
+  it('a renamed team tool is NOT matched by the fixed name map — even with an Assignment-shaped description', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall(
       'tools/pre-execute',
-      // A renamed instance (e.g. a second mounted Agent Teams row with a
-      // deployment-specific toolName) keeps the same args shape but not the
-      // fixed default name. Like the `DEFAULT_DISPATCH_TOOLS` list, the team
-      // carrier map is fixed-name keyed: a renamed tool stays ungated until
-      // its name is added (there is no Config key for team names — deliberate).
-      toolExec('spawn_teammate_renamed', { name: 'reviewer', description: 'Review.', prompt: MISSING_EXECUTE_AS }),
+      // A renamed instance (a second mounted team row with a deployment-specific
+      // toolName) keeps the same args shape but not the fixed default name. Like
+      // the `DEFAULT_DISPATCH_TOOLS` list, the team carrier map is fixed-name
+      // keyed: a renamed tool stays ungated until its name is added (there is no
+      // Config key for team names — deliberate).
+      toolExec('team_task_create_renamed', { subject: 'Review.', description: MISSING_EXECUTE_AS }),
       defaultAllow,
     )
 
@@ -342,18 +290,19 @@ describe('team dispatch gate — renamed team tools are out of reach (documented
 
 describe('team dispatch gate — the team branch is TERMINAL for the names it owns', () => {
   it('a team name also configured in Config.dispatchTools is gated ONCE (no fall-through double gate)', async () => {
-    // `spawn_teammate` also carries `args.prompt`, so without a terminal team
-    // branch the warn-mode pass used to fall through into the subagent match
-    // and run the whole core a second time — two decisions, two advisories and
-    // (on an ACTIVE workflow) two dispatch rows for one call.
-    const app = booted = await bootApp({ dispatchTools: ['subagent', 'spawn_teammate'] })
+    // A carrier name is matched by the Team branch AND (when configured in
+    // `dispatchTools`) by the ordinary text branch; without a terminal Team
+    // branch the warn-mode pass would run the whole core a second time — two
+    // decisions, two advisories and (on an ACTIVE workflow) two dispatch rows
+    // for one call.
+    const app = booted = await bootApp({ dispatchTools: ['subagent', 'team_task_create'] })
     const advisories = captureAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', spawnTeammateExec({ prompt: MISSING_EXECUTE_AS }), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', teamTaskCreateExec(MISSING_EXECUTE_AS), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
-    expect(advisories[0]!.tool).toBe('spawn_teammate')
+    expect(advisories[0]!.tool).toBe('team_task_create')
     expect(codesOf(advisories[0])).toContain('assignment.field.missing-execute-as')
   })
 })
@@ -361,18 +310,6 @@ describe('team dispatch gate — the team branch is TERMINAL for the names it ow
 /* ---------------------------------- non-string / empty carriers ---------------------------------- */
 
 describe('team dispatch gate — non-string and empty carriers produce no decision and never throw', () => {
-  it('spawn_teammate with a non-string prompt (42) is a silent pass-through', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
-    const advisories = captureAdvisories(app.ctx)
-
-    const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('spawn_teammate', {
-      name: 'reviewer', description: 'Review.', context: 'fresh', prompt: 42,
-    }), defaultAllow)
-
-    expect(decision).toEqual({ kind: 'allow' })
-    expect(advisories).toHaveLength(0)
-  })
-
   it('team_task_create with a null description is a silent pass-through', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
     const advisories = captureAdvisories(app.ctx)
@@ -409,7 +346,7 @@ describe('team dispatch gate — non-string and empty carriers produce no decisi
     const app = booted = await bootApp({ enforcement: 'hard' })
     const advisories = captureAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('spawn_teammate', null), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('team_task_create', null), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
