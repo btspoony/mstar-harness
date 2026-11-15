@@ -254,7 +254,7 @@ function textOf(row: UserMessage): string {
 
 describe('mstar-engine-status catalog — pre-step composition (REAL-composition boot)', () => {
   it('appends the catalog MessageSource; the text appears in the composed session log', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
     const inbox = [inboxMessage()]
 
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
@@ -306,7 +306,7 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
       ].join('\n'),
     })
 
-    const app = booted = await bootApp({ root })
+    const app = booted = await bootApp({ root, seedV2: true })
 
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
@@ -318,7 +318,7 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
   })
 
   it('serves the cached build within the catalog TTL — a compass appearing after the build is not read, and no row is re-appended (D2)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
     // Prime the session cache (D4: no boot pre-seed — the first pre-step
     // builds it). A compass that appears afterwards is not read until the TTL
     // expires (or a ledger invalidation drops the entry).
@@ -354,7 +354,7 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     // data with undefined-valued object properties as non-lossless JSON
     // (round failure: `session event "user/message" carries
     // non-JSON-serializable data`).
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
 
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
@@ -384,7 +384,7 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
   })
 
   it('composes with later deciders — appends to the final delegated decision, not a fabricated one', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
     const inbox = [inboxMessage()]
     // A later-mounted listener (e.g. another catalog) replaces the message set
     // with its own enter decision; the mstar listener must build on THAT.
@@ -518,7 +518,7 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
   })
 
   it('two steps in DIFFERENT turns with unchanged state append the row once (the retired turn term, D2)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
     const first = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
     expect(catalogRowOf(first).source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
 
@@ -532,7 +532,7 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
   })
 
   it('derives the panel projection ONCE per cache build — two steps on an unchanged payload re-use it (D2)', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ seedV2: true })
     const realDigest = catalog.panelDigestOf
     let projections = 0
     const digestSpy = spyOn(catalog, 'panelDigestOf').mockImplementation((input: Parameters<typeof realDigest>[0]) => {
@@ -585,18 +585,21 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
     expect(emissionRow(harnessDir, SESSION_ID, root).turn).toBe(1)
   })
 
-  it('a panel-visible change with identical rendered text persists the payload without appending a row (the split gate + revision exclusion, D2)', async () => {
+  it('a panel-visible change in a non-active workspace persists the payload without appending a row (the split gate + revision exclusion, D2)', async () => {
     const app = booted = await bootApp({ catalogTtlMs: 0 })
     await seedStore(app.harnessDir)
-    // Error-branch state (no ACTIVE lifecycle): the error line REPLACES the
-    // data line, so the open-issue facts below are panel-only.
-    const first = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepAtWorkspace(app.root, 1), defaultEnter([]))).row
-    const firstText = textOf(first)
-    expect(firstText).toContain('workflow selection: ERROR')
+    // Error-branch state (no ACTIVE lifecycle): no model row is injected, but
+    // the payload and the persisted panel snapshot still carry the verdict —
+    // the open-issue facts below are panel-only.
+    const first = await app.ctx.waterfall('agent/pre-step', stepAtWorkspace(app.root, 1), defaultEnter([]))
+    expect(first.kind).toBe('enter')
+    expect(first.kind === 'enter' && first.messages).toEqual([])
+    expect(emissionOf(app.harnessDir, SESSION_ID, app.root).state)
+      .toMatchObject({ selection: { kind: 'error', code: 'workflow.selection.no-active' } })
 
     await seedOpenIssue(app.harnessDir, { title: 'a panel-visible issue', severity: 'high', operationId: 'op-panel-1' })
 
-    // Identical text → the model row is not re-spent…
+    // A panel-only change still appends nothing…
     const second = await app.ctx.waterfall('agent/pre-step', stepAtWorkspace(app.root, 2), defaultEnter([]))
     expect(second.kind).toBe('enter')
     expect(second.kind === 'enter' && second.messages).toEqual([])
@@ -613,6 +616,29 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
     expect(third.kind).toBe('enter')
     expect(third.kind === 'enter' && third.messages).toEqual([])
     expect((await readExecutionState({ harnessDir: app.harnessDir })).token).toBe(tokenBefore)
+  })
+
+  it('a transition from an error selection to an ACTIVE workflow appends exactly one row', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-transition-'))
+    const harnessDir = join(root, 'harness')
+    const app = booted = await bootApp({ root, harnessDir, catalogTtlMs: 0 })
+    await seedStore(app.harnessDir)
+
+    // Step 1: no ACTIVE lifecycle ⇒ an error selection, and no model row.
+    const first = await app.ctx.waterfall('agent/pre-step', stepAtWorkspace(root, 1), defaultEnter([]))
+    expect(first.kind).toBe('enter')
+    expect(first.kind === 'enter' && first.messages).toEqual([])
+
+    // The workflow registers between steps: the rendered text moves from the
+    // error line to the active delta, so the change key appends ONE row.
+    await seedActiveWorkflow(harnessDir, 'wf-late', [], {}, SESSION_ID, root, 'wf-late')
+    const row = catalogRowOf(await app.ctx.waterfall('agent/pre-step', stepAtWorkspace(root, 2), defaultEnter([]))).row
+    expect(textOf(row)).toContain('workflow: wf-late (active)')
+
+    // An unchanged following step appends nothing more.
+    const third = await app.ctx.waterfall('agent/pre-step', stepAtWorkspace(root, 3), defaultEnter([]))
+    expect(third.kind).toBe('enter')
+    expect(third.kind === 'enter' && third.messages).toEqual([])
   })
 
   it('state === null (no resolved {HARNESS_DIR}) composes no mstar-engine row and records no digest (D4)', async () => {
@@ -854,7 +880,7 @@ describe('compact engine-status delta — the model-row comparison key', () => {
 })
 
 describe('mstar-engine-status catalog — status.missing is an identifiable error state (row-trim finding A)', () => {
-  it('renders an ERROR row with a recovery path for a RESOLVED harness dir, never a suppressed state (A)', async () => {
+  it('renders the error verdict with a recovery path for the panel/CLI and injects no model row (A)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-status-missing-'))
     const harnessDir = join(root, 'harness')
     const app = booted = await bootApp({ root, harnessDir })
@@ -876,12 +902,11 @@ describe('mstar-engine-status catalog — status.missing is an identifiable erro
     expect(text).toContain('mstar workflow register')
     expect(text).toContain('mstar iteration register')
 
-    // The gate keys on the resolved harness dir, not on a null state: the real
-    // pre-step emits a row for this workspace even though its authority answers
-    // an error selection. `status.missing` itself is file/sync-route only, so
-    // the async route's own verdict (`workflow.selection.no-active` with an
-    // ACTIVE store) is the shape it must render here — the same PRESENT-state
-    // error branch the sync `status.missing` above now reaches.
+    // The payload still carries the verdict — but the listener injects a row
+    // ONLY for an ACTIVE selection, so the real pre-step composes no catalog
+    // message for this workspace. `status.missing` itself is file/sync-route
+    // only, so the async route's own verdict (`workflow.selection.no-active`
+    // with an ACTIVE store) is what the payload must name here.
     await seedStore(app.harnessDir)
     const asyncPayload = await buildCatalogPayloadWithStore(app.ctx, harnessDir)
     expect(asyncPayload.state).not.toBeNull()
@@ -891,9 +916,7 @@ describe('mstar-engine-status catalog — status.missing is an identifiable erro
     })
     const inbox = [inboxMessage()]
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
-    const rowText = textOf(catalogRowOf(decision).row)
-    expect(rowText).toContain('workflow selection: ERROR (')
-    expect(rowText).toContain('mstar workflow register')
+    expect(decision).toEqual({ kind: 'enter', messages: inbox })
   })
 })
 
@@ -1296,6 +1319,8 @@ describe('catalog teardown — fiber.dispose removes the pre-step listener (HMR-
   it('disposes the listener on fiber.dispose and a reloaded fiber restores it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-'))
     const harnessDir = join(root, 'harness')
+    // An ACTIVE workflow context: the listener injects the row only for one.
+    await seedActiveWorkflow(harnessDir, 'wf-teardown', [], {}, SESSION_ID, root, 'wf-teardown')
     const ctx = new Context()
     // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
     // before apply — same loader-guarantee the real dsh app provides.
@@ -1418,6 +1443,10 @@ Pick.
     expect(payload.state?.plans).toEqual([])
     expect(payload.state?.direction).toBeNull()
     expect(payload.iteration).toBeUndefined()
+    // The picker error is CLI-refusal prose, not step guidance: no model row.
+    const inbox = [inboxMessage()]
+    const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
+    expect(decision).toEqual({ kind: 'enter', messages: inbox })
   })
 
   it('state, direction and iteration gate all come from the same selected workflow', async () => {

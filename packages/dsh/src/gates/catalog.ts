@@ -597,6 +597,12 @@ export function plansSegment(plans: readonly HarnessPlanView[], cap: number): st
  * the issue authority could not be read (and the watermark trio on the
  * registration-less fallback) — never more.
  *
+ * This function is a PURE projection: it also renders the
+ * `workflow selection: ERROR …` line for a non-active selection, which the
+ * panel and CLI surfaces consume. The model row is a different obligation —
+ * {@link preStepCatalogListener} injects the block only for an ACTIVE workflow
+ * context, so an error/terminal line never reaches the step messages.
+ *
  * The row text is also the emission comparison key's model half
  * ({@link preStepCatalogListener}): dropping a field here drops it from the
  * re-emission trigger too, which is what stops an incidental count change from
@@ -627,9 +633,10 @@ export function renderEngineStatusCatalog(
   const state = source.state
   if (state !== null) {
     if (state.selection.kind === 'error') {
-      // Clear selection error (v1/unmigrated root, no snapshots): the
-      // operator-visible reason replaces the data line — the aggregates
-      // are empty by construction and must not read as "no plans".
+      // Clear selection error (v1/unmigrated root, no snapshots): the reason
+      // replaces the data line for the panel/CLI readers — the aggregates are
+      // empty by construction and must not read as "no plans". The pre-step
+      // listener withholds this line from the model row (non-active selection).
       lines.push(`workflow selection: ERROR (${state.selection.code}) ${state.selection.message}`)
     } else {
       const segments = [`workflow: ${state.selection.workflowId} (${state.selection.kind})`]
@@ -1272,13 +1279,13 @@ export interface PreStepCatalogOptions {
 /**
  * Advisory `agent/pre-step` waterfall listener (agent
  * catalog): delegates through `next()` (never `reject` — that would block the
- * step — and never replaces the delegated messages) and appends the ONE
- * unified `mstar-engine` catalog message to the composed step
- * messages, so the durable session log carries it (model-visible ⟺ logged,
- * MessageSource form): the `<mstar_engine_status>` block renders ONE compact
- * delta line — selected workflow, non-Done plans, branch anchors, and the
- * iteration phase-gate verdict when a steering compass + an ACTIVE execution
- * workflow resolve.
+ * step — and never replaces the delegated messages) and, when an ACTIVE
+ * workflow context resolves for this session, appends the ONE unified
+ * `mstar-engine` catalog message to the composed step messages, so the durable
+ * session log carries it (model-visible ⟺ logged, MessageSource form): the
+ * `<mstar_engine_status>` block renders ONE compact delta line — selected
+ * workflow, non-Done plans, branch anchors, and the iteration phase-gate
+ * verdict when a steering compass + an ACTIVE execution workflow resolve.
  *
  * Change-driven re-emission (D2): per session+workspace, the row is appended on
  * first emission and then only when its rendered text changed — the row's own
@@ -1291,10 +1298,13 @@ export interface PreStepCatalogOptions {
  * the panel and appends nothing. The start of a new turn is NOT a trigger for
  * either: an unchanged workspace shows the row once, not once per turn.
  * A workspace with no resolved `{HARNESS_DIR}` composes no row at all and
- * records no digest (the projection would be an empty wrapper). The gate keys
- * on the RESOLVED HARNESS DIR, never on a null state: a selection verdict
- * (`status.missing` included) is an operator-visible error row, so suppressing
- * it would hide both the cause and its recovery from the model.
+ * records no digest (the projection would be an empty wrapper). The row is
+ * appended ONLY for an ACTIVE selection: `state === null` and every non-active
+ * verdict (`no-active`, `unbound-multi-active`, `status.missing`,
+ * `store.not-initialized`, a terminal lifecycle) is CLI-refusal prose, not step
+ * guidance, so the model context gets no row — the verdict still reaches the
+ * panel through the persisted snapshot, and its recovery stays a CLI
+ * operation.
  *
  * Watermark fallback: when no `system-prompt` registration is CONFIRMED live
  * (`showWatermark` — a boolean or a per-step predicate), the row re-renders the
@@ -1377,9 +1387,9 @@ export async function preStepCatalogListener(
     // No resolved `{HARNESS_DIR}` ⇒ the payload carries no state section, and
     // after D1 the rendered block would be an empty `<mstar_engine_status>`
     // wrapper: compose no row and record no digest (there is nothing that could
-    // change later without a harness dir appearing). The predicate is the
-    // RESOLVED DIR, not the state: `state === null` means exactly "no harness
-    // dir", and a selection verdict for a resolved workspace must render.
+    // change later without a harness dir appearing). This is a DIFFERENT skip
+    // from the injection gate below: a non-active verdict still records its
+    // digest and persists the panel snapshot, it just appends no model row.
     if (harnessDir === null) return decision
     const messages = [...decision.messages]
     // Re-evaluated PER STEP: the fallback follows confirmed live registration,
@@ -1409,23 +1419,32 @@ export async function preStepCatalogListener(
     //
     // A new turn alone is NOT a trigger for either. Per session+workspace, so
     // different sessions/workspaces keep independent digests.
+    // Inject ONLY for an ACTIVE workflow context: an unresolvable/no-workflow
+    // selection is CLI-refusal prose, not step guidance. The payload and the
+    // panel snapshot still carry the verdict (the persist below is not gated),
+    // so only the model-facing row is withheld.
+    const workflowContext = catalogPayload.state !== null && catalogPayload.state.selection.kind === 'active'
     const rowChanged = prior === undefined || prior.text !== text
     const panelChanged = prior === undefined || prior.panelKey !== panelKey
-    if (rowChanged) {
+    const rowAppended = rowChanged && workflowContext
+    if (rowAppended) {
       messages.push(createUserMessage({ source: engineStatusSource(), content: [{ type: 'text', text }] }))
     }
     // The EMISSION turn of the row the model last saw: this step's turn when
-    // the row is (re)appended, the retained one otherwise — a panel-only update
-    // and a retried persist both leave it alone. The snapshot records WHEN THE
-    // MODEL SAW the row, so relabelling it with a step that appended nothing
-    // would make the panel's freshness footer and the session evidence disagree.
-    const emittedTurn = rowChanged || prior === undefined ? payload.turn : prior.emittedTurn
+    // the row is (re)appended, the retained one otherwise — a panel-only
+    // update, a withheld (non-ACTIVE) row and a retried persist all leave it
+    // alone. The snapshot records WHEN THE MODEL SAW the row, so relabelling it
+    // with a step that appended nothing would make the panel's freshness footer
+    // and the session evidence disagree. The one exception is the very first
+    // digest: with no row history to retain, it records this step (the moment
+    // the snapshot was first composed).
+    const emittedTurn = rowAppended || prior === undefined ? payload.turn : prior.emittedTurn
     // The emission TIME has the same obligation: capture it when the row is
     // appended, retain it otherwise, and repeat it to a retried persist. The
     // store write is a separate obligation that may land later, so stamping the
     // write's own clock would report the retry as the freshness time even
     // though the model saw the row earlier.
-    const emittedAt = rowChanged || prior === undefined ? new Date().toISOString() : prior.emittedAt
+    const emittedAt = rowAppended || prior === undefined ? new Date().toISOString() : prior.emittedAt
     // The persist is a separate obligation with its OWN trigger set: the model
     // row changed, the panel projection changed (the panel renders more than
     // the row), or the last attempt degraded (a transient store failure must

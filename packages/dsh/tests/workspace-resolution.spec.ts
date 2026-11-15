@@ -309,6 +309,9 @@ describe('agent/pre-step — per-workspace source staleness (no config)', () => 
   it('an unchanged workspace does not re-inject; a NEW workspace resolves fresh', async () => {
     const ws = await makeWorkspace('dsh-ws-stale-')
     await mkdir(join(ws, '.agents'), { recursive: true })
+    // An ACTIVE workflow in this workspace: the catalog row is injected only
+    // for one, and this suite is about per-workspace resolution of that row.
+    await seedActiveWorkflow(join(ws, '.agents'), 'wf-ws-stale', [], {}, 'seed-ws-stale', ws)
     booted = await bootApp({ harnessDir: null })
 
     // First pre-step of ws: no compass yet → soft (cache built on first use).
@@ -329,6 +332,7 @@ describe('agent/pre-step — per-workspace source staleness (no config)', () => 
     // A NEW workspace with the hard compass seeded BEFORE its first use
     // resolves fresh (per-workspace first-use build + independent digest).
     const ws2 = await makeWorkspace('dsh-ws-stale-2-')
+    await seedActiveWorkflow(join(ws2, '.agents'), 'wf-ws-stale-2', [], {}, 'seed-ws-stale-2', ws2)
     await seedHarness(join(ws2, '.agents'), {
       'iterations/ws-stale-2/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',
     })

@@ -70,8 +70,9 @@ function stepPayloadOf(sessionId: string, cwd: string, messages: UserMessage[], 
 
 describe('engine-status emission — written at the real change-driven emission', () => {
   it('persists the emitted payload keyed by session.header.id and cwd', async () => {
-    const app = (booted = await bootApp())
-    await seedStore(app.harnessDir)
+    // An ACTIVE workflow context (seedV2 creates its store): the model row is
+    // injected only for one.
+    const app = (booted = await bootApp({ seedV2: true }))
     const inbox = [inboxMessage()]
     const decision = await app.ctx.waterfall(
       'agent/pre-step',
@@ -105,8 +106,7 @@ describe('engine-status emission — written at the real change-driven emission'
     // TTL 0 rebuilds the payload at every step, so a change is visible
     // immediately — and an UNCHANGED rebuild (whose only difference is the
     // emission's own store-revision write) must still emit nothing.
-    const app = (booted = await bootApp({ catalogTtlMs: 0 }))
-    await seedStore(app.harnessDir)
+    const app = (booted = await bootApp({ catalogTtlMs: 0, seedV2: true }))
     const inbox = [inboxMessage()]
     for (const step of [1, 2, 3]) {
       const decision = await app.ctx.waterfall(
@@ -139,9 +139,8 @@ describe('engine-status emission — written at the real change-driven emission'
     expect(stored?.state.residuals).toEqual([{ severity: 'high', count: 1 }])
   })
 
-  it('writes the replacement generation only for a real change, and refuses a write carrying the retired generation', async () => {
-    const app = (booted = await bootApp({ catalogTtlMs: 0 }))
-    await seedStore(app.harnessDir)
+  it('writes an emission only on a real change, and refuses a write carrying the retired generation', async () => {
+    const app = (booted = await bootApp({ catalogTtlMs: 0, seedV2: true }))
     const inbox = [inboxMessage()]
     const first = await app.ctx.waterfall(
       'agent/pre-step',
@@ -153,21 +152,21 @@ describe('engine-status emission — written at the real change-driven emission'
     // The generation the first emission was built under (the one it persisted with).
     const retired = await readExecutionState({ harnessDir: app.harnessDir })
 
-    // Replace the authority generation.
-    for (const suffix of ['', '-wal', '-shm']) rmSync(join(app.harnessDir, `store.db${suffix}`), { force: true })
-    const replacement = await initializeStore({ harnessDir: app.harnessDir })
-    replacement.close()
-
-    // No change → no emission, so the retired row is not resurrected and
-    // nothing is written into the replacement generation.
+    // No change → no emission and no write: the stored row stays the first one.
     const unchanged = await app.ctx.waterfall(
       'agent/pre-step',
       stepPayloadOf('ses_generation', app.root, inbox, 2),
       defaultEnter(inbox),
     )
     expect(unchanged.kind === 'enter' && unchanged.messages.length).toBe(inbox.length)
-    const afterReplacement = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)
-    expect(afterReplacement.kind === 'ok' && afterReplacement.emission).toBeUndefined()
+    const afterUnchanged = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)
+    expect(afterUnchanged.kind === 'ok' && afterUnchanged.emission?.turn).toBe(1)
+
+    // Replace the authority generation: the retired row is not resurrected and
+    // nothing is written into the replacement generation by the swap itself.
+    for (const suffix of ['', '-wal', '-shm']) rmSync(join(app.harnessDir, `store.db${suffix}`), { force: true })
+    const replacement = await initializeStore({ harnessDir: app.harnessDir })
+    replacement.close()
 
     // A REAL change in the replacement generation lands an emission with the
     // CURRENT generation. The change here is panel-only (a new issue moves the
@@ -179,6 +178,9 @@ describe('engine-status emission — written at the real change-driven emission'
       stepPayloadOf('ses_generation', app.root, inbox, 3),
       defaultEnter(inbox),
     )
+    // The change is panel-only for the MODEL row (the workflow left with the
+    // retired generation, so nothing is injected): the snapshot is persisted,
+    // but the freshness turn still names the step the model last saw a row in.
     expect(changed.kind === 'enter' && changed.messages.length).toBe(inbox.length)
     const writtenRead = readDshStatusEmission({ harnessDir: app.harnessDir }, 'ses_generation', app.root)
     expect(writtenRead.kind === 'ok' && writtenRead.emission?.turn).toBe(1)
@@ -198,15 +200,16 @@ describe('engine-status emission — written at the real change-driven emission'
     expect(retiredRead.kind === 'ok' && retiredRead.emission).toBeUndefined()
   })
 
-  it('retries a degraded persist on a later UNCHANGED step without re-appending the row', async () => {
+  it('retries a degraded persist on a later step without appending a model row', async () => {
     // Default TTL: each session+workspace keeps ONE cached payload across the
     // three steps, so every step after the first carries the same rendered text
     // and panel projection (the change gate stays closed).
     const app = (booted = await bootApp())
     const inbox = [inboxMessage()]
-    // (a) No ACTIVE store yet: the row IS emitted, and its persist degrades.
-    // The window brackets the FIRST emission, which is the only clock the
-    // stored row may name.
+    // (a) No ACTIVE store yet: no workflow context, so NO model row is injected
+    // — the persist still degrades (nothing to write to). The window brackets
+    // the first emission decision, which is the only clock the stored row may
+    // name.
     const firstStart = Date.now()
     const first = await app.ctx.waterfall(
       'agent/pre-step',
@@ -214,7 +217,7 @@ describe('engine-status emission — written at the real change-driven emission'
       defaultEnter(inbox),
     )
     const firstEnd = Date.now()
-    expect(first.kind === 'enter' && first.messages.length).toBe(inbox.length + 1)
+    expect(first.kind === 'enter' && first.messages.length).toBe(inbox.length)
     expect(emissionRow(app.harnessDir, 'ses_retry', app.root).kind).toBe('unavailable')
 
     // (b) The store becomes ACTIVE. The payload is unchanged, so no second row
@@ -277,9 +280,8 @@ describe('engine-status emission — written at the real change-driven emission'
     // The host provides no `system-prompt` service: `registerHarnessPrompt`
     // fails open and injects neither `mstar:harness-rules` nor
     // `mstar:engine-status`, so the row is the ONLY channel for the version /
-    // harness dir / enforcement facts.
-    const app = (booted = await bootApp({ withoutSystemPrompt: true }))
-    await seedStore(app.harnessDir)
+    // harness dir / enforcement facts — for an ACTIVE workflow context.
+    const app = (booted = await bootApp({ withoutSystemPrompt: true, seedV2: true }))
     const inbox = [inboxMessage()]
     const decision = await app.ctx.waterfall(
       'agent/pre-step',
@@ -294,8 +296,7 @@ describe('engine-status emission — written at the real change-driven emission'
   })
 
   it('still emits the row but persists no row when the agent carries no session id', async () => {
-    const app = (booted = await bootApp())
-    await seedStore(app.harnessDir)
+    const app = (booted = await bootApp({ seedV2: true }))
     const inbox = [inboxMessage()]
     const decision = await app.ctx.waterfall(
       'agent/pre-step',

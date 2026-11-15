@@ -591,19 +591,16 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     await seedExecutionAuthority(harnessDir, [{ id: 'wf-db', planId: 'plan-db', planStatus: 'InProgress' }])
     await seedRetiredRegister(harnessDir, 'wf-file-stale', 'plan-file')
 
-    // The provider is the SYNCHRONOUS consumer: it rebuilds through
-    // `buildCatalogPayload(ctx, harnessDir)` with no store facts. PRE-fix the
-    // synchronous builder's default route was the file resolver, so the digest
-    // rendered the leftover `status.json` lifecycle as the authority's:
+    // The provider reads the cached per-workspace payload; this workspace's
+    // cached selection is NOT active (the retired register cannot supply one),
+    // so the context injects NOTHING. PRE-fix the digest rendered the leftover
+    // `status.json` lifecycle as the authority's:
     // `workflow wf-file-stale (plan) running | plans: plan-file(InProgress)`.
-    // The synchronous authority guard makes the selection a structured
-    // refusal instead — the digest is the version watermark ALONE.
     const assembly = await app.ctx.systemPrompt.assemble()
     const context = assembly.contexts.find((c) => c.name === ENGINE_STATUS_CONTEXT_NAME)
     expect(context).toBeDefined()
     const text = context!.text
-    expect(text.startsWith('mstar engine status: v')).toBe(true)
-    expect(text.split('\n')).toHaveLength(1)
+    expect(text).toBe('')
     expect(text).not.toContain('wf-file-stale')
     expect(text).not.toContain('plan-file')
   })
