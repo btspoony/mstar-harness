@@ -46,12 +46,12 @@
     "@mstar-harness/engine": "^4.6.1"
   },
   "devDependencies": {
-    "@oh-my-pi/pi-coding-agent": "^18.18.3",
+    "@oh-my-pi/pi-coding-agent": "^18.19.0",
     "@types/hast": "^3.0.0",
     "@types/mdast": "^4.0.0",
     "@types/node": "^26.6.6",
     "github-slugger": "^2.0.0",
-    "hast-util-from-html": "^2.0.3",
+    "hast-util-from-html": "^2.1.0",
     "mdast-util-from-markdown": "^2.0.3",
     "mdast-util-gfm": "^3.1.0",
     "mdast-util-to-string": "^4.0.0",
