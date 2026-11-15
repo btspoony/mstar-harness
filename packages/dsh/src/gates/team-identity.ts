@@ -1,12 +1,12 @@
 /**
  * Agent Teams identity resolution for the agent-flow ledger.
  *
- * The official Agent Teams packages are EXPERIMENTAL and stay OPTIONAL: this
- * module reads them STRUCTURALLY — no value or type import from
- * `@deepseek-ai/dsh-experimental-agent-team` / `-tool-agent-team` — so the
- * plugin keeps loading (and the ledger keeps recording nothing for team
- * tools) on a composition that mounts no team bundle. Two verified surfaces
- * are consumed:
+ * The official Agent Teams packages stay OPTIONAL: this module reads them
+ * STRUCTURALLY — no value or type import from `@deepseek-ai/dsh-agent-team` /
+ * `-tool-agent-team` (the `dsh-experimental-*` names before dsh 0.2.2-rc.3)
+ * — so the plugin keeps loading (and the ledger keeps recording nothing for
+ * team tools) on a composition that mounts no team bundle. Two verified
+ * surfaces are consumed:
  *
  * - the service name `agentTeams` (`ctx.get('agentTeams')`), whose
  *   `listMembers(agent)` roster read carries each teammate's child

@@ -7,26 +7,32 @@ channels.
 
 ## Channel shape
 
-- **Nine tools, installed per member.** `spawn_teammate`, `send_message`,
-  `list_agents`, `wait_agent`, `interrupt_agent`, `team_task_create` /
+- **Eight team tools, installed per member.** `spawn_teammate`,
+  `send_message`, `list_agents`, `wait_agent`, `team_task_create` /
   `team_task_list` / `team_task_get` / `team_task_update`. Every member — Lead
-  and teammates — receives the same nine definitions; the domain service
-  enforces Lead-only creation and interruption, so the toolset is not the
-  authority boundary.
-- **The nine tools address TEAM MEMBERS, not every subagent.** `list_agents`,
-  `send_message` and `interrupt_agent` resolve roster targets. A child started
-  through the direct `subagent` tool is not on that roster, so on a profile that
-  mounts both surfaces it is invisible here and a `send_message` /
-  `interrupt_agent` call on its id refuses with `TEAM_MEMBER_NOT_FOUND`. Channel
-  choice → `dsh.md` § Pick the delegation channel before you delegate.
+  and teammates — receives the same eight definitions; the domain service
+  enforces Lead-only creation, so the toolset is not the authority boundary.
+  `interrupt_agent` is the ninth name but a SEPARATE row
+  (`tool-subagent-control`): dsh ships it OFF in every factory profile since
+  0.2.2-rc.3 (`interrupt: false` in the base and web presets), so treat it as
+  unavailable unless a profile patch turns it on.
+- **The team tools address TEAM MEMBERS, not every subagent.** `list_agents`,
+  `send_message` and (where enabled) `interrupt_agent` resolve roster targets.
+  A child started through the direct `subagent` tool is not on that roster, so
+  on a profile that mounts both surfaces it is invisible here and a
+  `send_message` / `interrupt_agent` call on its id refuses with
+  `TEAM_MEMBER_NOT_FOUND`. Channel choice → `dsh.md` § Pick the delegation
+  channel before you delegate.
 - **Any root session is the implicit Lead**; a teammate is a continuable
   subagent child of that Lead. `spawn_teammate` sends the initial task
   unchanged, `send_message` steers a running member at its nearest step
   boundary and starts or resumes an inactive one.
 - **Availability is profile-composed.** When `spawn_teammate` is absent from
   the toolset the Team layer is not mounted — use the `subagent` channel and
-  never attempt the protocol below. Mounted, the shipped Team profile layer
-  disables the legacy direct-delegation rows; it does not disable `workflow`.
+  never attempt the protocol below. Mounted, the shipped `dsh-web-app` surface
+  disables the host-plane direct-delegation rows while its presets mount them
+  per Session again, so both surfaces can be live; `workflow` stays mounted
+  either way.
 - **One Team per root session.** Roster entries and the task board are durable
   in the Lead session log; a fresh root starts an empty Team.
 
@@ -49,7 +55,8 @@ interruption, task owners — and it is immutable for the Team's lifetime.
   later failed is still taken (`TEAM_MEMBER_NAME_TAKEN`), so retries use the
   next free seat ordinal.
 - The roster shows `role: lead` or `role: teammate`; use the name (target) in
-  `send_message`, `interrupt_agent`, and task `owner` / `reassign` fields.
+  `send_message` (and `interrupt_agent` where the profile enables it), and task
+  `owner` / `reassign` fields.
 
 ## Plan-row ⇄ team-task mirroring
 
