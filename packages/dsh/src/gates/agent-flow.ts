@@ -77,6 +77,23 @@ export const AGENT_FLOW_CATALOG_SLOT_CAPACITY = 500
  * that dispatch, so the bound never silently drops a pairing.
  */
 export const AGENT_FLOW_TEAM_CHILD_CAPACITY = 1024
+/**
+ * Bounded in-memory early-end records per accounting scope (a direct parent
+ * Session, or the unparented bucket — the only cross-parent scope). The record
+ * count is deliberately NOT bounded by the scope's in-flight dispatch count: a
+ * record no in-flight ref can ever claim is a legitimate leftover (a re-woken
+ * child, a non-Assignment `subagent` child, a `workflow agent()` child), and
+ * refusing it would let it spend the chance of a genuine early end whose ref is
+ * still waiting. Capacity is a memory bound only, so overflow replaces the
+ * OLDEST record of the scope with an eviction marker: the dispatch that would
+ * have claimed it records an explicit unresolved continuation instead of
+ * silently losing its settle.
+ * shortcut: eviction markers are not capacity-counted, so a scope that
+ * overflows within one window holds one marker per evicted record until that
+ * window closes; count them too (oldest-marker eviction) if a producer can
+ * storm one parent's window past this capacity.
+ */
+export const AGENT_FLOW_ACTIVATION_END_CAPACITY = 1024
 /** Stable identity namespace for verified native workflow events. */
 export const WORKFLOW_EVENT_ID_PREFIX = 'wfe1'
 /** Stable identity namespace for live tool-call rows. */
@@ -499,6 +516,14 @@ export interface AgentFlowCatalogJoin {
 export interface ActivationChildEndRecord {
   parentSessionId?: string
   stopReason: unknown
+  /**
+   * The record was evicted at {@link AGENT_FLOW_ACTIVATION_END_CAPACITY}: the
+   * end it carried is gone, so the ref that would claim it records the explicit
+   * unresolved continuation instead of keying a pairing that can never settle.
+   * A marker holds no capacity; it is dropped with its scope (the window
+   * close), so the marker set is bounded by the window, not by the capacity.
+   */
+  evicted?: true
 }
 
 /**
@@ -549,12 +574,15 @@ export interface AgentFlowPairing {
    * tool call, so its end can precede even the tool's `tools/post-execute`.
    * Admission is PER DIRECT PARENT ({@link ActivationChildEndRecord}): a record
    * is kept only while its parent has a recorded dispatch in flight (a call not
-   * yet post-executed, or a ref in {@link activationResolutions}) and never
-   * beyond that parent's count of them, so two parents can never consume each
-   * other's budget. Once a parent has no in-flight dispatch left nothing can
-   * claim its records, so they are dropped at that point
-   * ({@link sweepUnclaimableChildEnds}) rather than occupying the budget for the
-   * apply's lifetime; that eviction is what keeps a LATER genuine early end
+   * yet post-executed, or a ref in {@link activationResolutions}), so two
+   * parents can never consume each other's budget. The COUNT is not bounded by
+   * the parent's in-flight refs — a record no ref can ever claim is a
+   * legitimate leftover — only the per-scope capacity
+   * ({@link AGENT_FLOW_ACTIVATION_END_CAPACITY}, whose overflow evicts the
+   * oldest record with a marker). Once a parent has no in-flight dispatch left
+   * nothing can claim its records, so they are dropped at that point
+   * ({@link sweepUnclaimableChildEnds}) rather than occupying capacity for the
+   * apply's lifetime; that release is what keeps a LATER genuine early end
    * admissible. Reconciliation consumes the entry (a child end settles a
    * dispatch at most once).
    */
@@ -1712,14 +1740,16 @@ function recordChildStopUnresolved(ref: AgentFlowDispatchRef, childId: string, s
  * flight and may yet claim a child end: the calls not yet post-executed (the
  * child is published INSIDE the tool call, so its end can precede
  * `tools/post-execute`), plus the activation dispatches whose name→child
- * resolution has not landed. Only an ACTIVATION ref can pair (a child id must
- * match), so this number is an upper bound on the records that parent may
- * claim, never a promise that each of them will be claimed: a call that starts
- * no activation child leaves its slot permanently unconsumed, which is why the
- * unclaimed records are dropped once the parent's count reaches `0`
- * ({@link sweepUnclaimableChildEnds}). `undefined` counts EVERY in-flight ref
- * of the pairing — the lifetime test for a record whose payload carried no
- * parent (an unparented record has no narrower scope).
+ * resolution has not landed. This is the WINDOW test, not a bound on the store:
+ * a record is admitted and kept while a ref of its scope may still arrive, and
+ * dropped once the count reaches `0` ({@link sweepUnclaimableChildEnds}).
+ * It is NOT an upper bound on the records held: only an ACTIVATION ref can pair
+ * (a child id must match), and a call that starts no activation child leaves a
+ * record no ref can ever claim, so counting that leftover against a waiting
+ * ref's chance would drop a genuine early end (its capacity bound is
+ * {@link AGENT_FLOW_ACTIVATION_END_CAPACITY}). `undefined` counts EVERY
+ * in-flight ref of the pairing — the lifetime test for a record whose payload
+ * carried no parent (an unparented record has no narrower scope).
  */
 function claimableDispatchesOf(pairing: AgentFlowPairing, parentSessionId: string | undefined): number {
   let claimable = 0
@@ -1758,32 +1788,46 @@ function sweepUnclaimableChildEnds(pairing: AgentFlowPairing): void {
 /**
  * Keep one child `subagent/end` that arrived before its activation pairing was
  * keyed. Admission is PER DIRECT PARENT and deliberately narrow: a record is
- * kept only while its own parent still has a dispatch in flight, and never
- * beyond that parent's count of them (one in-flight ref consumes at most one
- * record). At that bound every waiting ref of the parent already owns a
- * candidate, so the refused end has no ref left to pair with — it is REFUSED
- * with a warn rather than evicting one a pending dispatch may still claim.
- * Nothing is settled here: an unkeyed end carries no dispatch identity, so no
- * outcome can be fabricated for it. Contained — never throws into the
- * `subagent/end` event.
+ * kept only while its own parent still has a dispatch in flight — never past
+ * that window — but the count is NOT bounded by the parent's in-flight refs. A
+ * record no ref can ever claim (a re-woken child's end, a non-Assignment
+ * `subagent` child, a `workflow agent()` child) is a legitimate leftover, and
+ * bounding the store by the ref count would make it spend the chance of a
+ * genuine early end whose ref is still waiting. The one bound is the per-scope
+ * capacity {@link AGENT_FLOW_ACTIVATION_END_CAPACITY}: at capacity the OLDEST
+ * record of the scope is replaced by an eviction marker, so the dispatch that
+ * would have claimed it records the explicit unresolved continuation (the warn
+ * names that consequence) instead of a silent loss. Nothing is settled here: an
+ * unkeyed end carries no dispatch identity, so no outcome can be fabricated for
+ * it. Contained — never throws into the `subagent/end` event.
  */
 function bufferActivationChildEnd(pairing: AgentFlowPairing, parentSessionId: string | undefined, childId: string, stopReason: unknown): void {
   try {
     const ends = (pairing.endsAwaitingActivation ??= new Map<string, ActivationChildEndRecord>())
     ends.delete(childId) // a re-woken child's later end is the fresher record
     sweepUnclaimableChildEnds(pairing)
-    const claimable = claimableDispatchesOf(pairing, parentSessionId)
-    if (claimable === 0) return
+    // No dispatch of this scope in flight → no ref can ever claim the record.
+    if (claimableDispatchesOf(pairing, parentSessionId) === 0) return
+    // Capacity is per scope and counts only live records (an eviction marker
+    // holds no slot); the OLDEST live record is the one evicted.
     let owned = 0
-    for (const record of ends.values()) {
-      if (record.parentSessionId === parentSessionId) owned += 1
+    let oldest: string | undefined
+    for (const [id, record] of ends) {
+      if (record.parentSessionId !== parentSessionId || record.evicted === true) continue
+      owned += 1
+      oldest ??= id
     }
-    if (owned >= claimable) {
+    if (owned >= AGENT_FLOW_ACTIVATION_END_CAPACITY && oldest !== undefined) {
+      const evicted = ends.get(oldest)
+      ends.set(oldest, {
+        ...(evicted?.parentSessionId !== undefined ? { parentSessionId: evicted.parentSessionId } : {}),
+        stopReason: evicted?.stopReason,
+        evicted: true,
+      })
       log(
         'warn',
-        `child end for ${childId} was not kept for activation reconciliation (${String(claimable)} claimable dispatches of its parent, ${String(owned)} end(s) already waiting) — no settle is fabricated`,
+        `child end for ${oldest} was evicted at the early-end capacity (${String(AGENT_FLOW_ACTIVATION_END_CAPACITY)} records per parent) before its activation pairing was keyed — the dispatch that created it records an explicit unresolved continuation instead of a settle`,
       )
-      return
     }
     ends.set(childId, { ...(parentSessionId !== undefined ? { parentSessionId } : {}), stopReason })
   } catch (error) {
@@ -1800,10 +1844,13 @@ function bufferActivationChildEnd(pairing: AgentFlowPairing, parentSessionId: st
  * (`completed→ok`, `aborted/refusal→denied`, `error/max-tokens→error`,
  * unrecognized → explicit unresolved continuation) and NO live pairing entry
  * is written (the record is consumed, so the dispatch can never settle
- * twice). Otherwise the ref is keyed by child id and the child's own
- * `subagent/end` settles it; at capacity the OLDEST pairing is evicted with
- * an explicit unresolved-continuation row for its dispatch — a bounded map
- * never drops a pairing silently. The ref also carries the resolved child id
+ * twice). An EVICTION marker is a hit with no outcome to map: the ref records
+ * the explicit unresolved continuation naming the capacity, never a pairing
+ * whose settle can no longer arrive. Otherwise the ref is keyed by child id and
+ * the child's own `subagent/end` settles it; at capacity the OLDEST pairing is
+ * evicted with an explicit unresolved-continuation row for its dispatch — a
+ * bounded map never drops a pairing silently. The ref also carries the
+ * resolved child id
  * so the eventual settle names the child.
  */
 function pairActivationChildRef(pairing: AgentFlowPairing, childId: string, ref: AgentFlowDispatchRef): void {
@@ -1811,6 +1858,13 @@ function pairActivationChildRef(pairing: AgentFlowPairing, childId: string, ref:
   const buffered = ends?.get(childId)
   if (buffered !== undefined) ends?.delete(childId)
   ref.childId = childId
+  if (buffered?.evicted === true) {
+    recordContinuationUnresolved(
+      ref,
+      `the child end for ${childId} was evicted at the early-end capacity (${String(AGENT_FLOW_ACTIVATION_END_CAPACITY)} records per parent) before this dispatch was paired — its continuation cannot be reconciled, no settle is fabricated`,
+    )
+    return
+  }
   if (buffered !== undefined) {
     const outcome = settleOutcomeOfStopReason(buffered.stopReason)
     if (outcome === undefined) {
@@ -2004,8 +2058,10 @@ function handleTeamPostExecute(input: {
  * means the end beat its activation pairing write (the child is published
  * inside the tool call, so its end can precede `tools/post-execute` or the
  * async name resolution), and the record is kept for that reconcile
- * ({@link bufferActivationChildEnd}) — never dropped silently, and never
- * stored when no recorded dispatch of the child's direct parent can claim it.
+ * ({@link bufferActivationChildEnd}) — never dropped silently, and stored only
+ * while a dispatch of the child's direct parent (for a payload that carried
+ * none, of the whole pairing) is still in flight: a closed window admits
+ * nothing.
  * An unrecognized stop reason records the explicit unresolved continuation —
  * never a guessed outcome. Contained: a throwing handler never escapes the
  * session/tool event.
