@@ -16,6 +16,9 @@
  * 2. Carrier vocabulary (#555 acceptance 2) — every `<tool>.<field>` carrier
  *    citation in those documents must match the owning carrier map, and
  *    `dsh-agent-teams.md` must still name every carrier tool.
+ *    Its negative leg is the mirror image: a carrier rc.3 removed must not
+ *    reappear in the owning declaration or in `dsh-agent-teams.md`, so a
+ *    future edit cannot silently reintroduce a tool the host no longer ships.
  * 3. README pin (I-000829) — `packages/dsh/README.i18n.yaml` records exactly
  *    the sibling `README*.md` files of its package, one record each, and each
  *    recorded blob hash equals `git hash-object <file>`.
@@ -318,6 +321,42 @@ export function checkCarrierVocabulary(
 }
 
 /* ------------------------------------------------------------------ */
+/* Removed carriers (the vocabulary check's negative leg)              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Carrier names rc.3 removed. The list is a literal on purpose: the tools it
+ * names have no live authority left to read, and naming them here is what makes
+ * the refusal possible.
+ */
+export const REMOVED_CARRIERS = ["spawn_teammate"] as const;
+
+/**
+ * Check 2, negative leg — a removed carrier cannot come back. The owning
+ * declaration and the team document are scanned line by line: a map entry, or a
+ * sentence telling a reader to call the tool, is one named row.
+ *
+ * shortcut: the NAME is refused anywhere in those two files, so neither can
+ * explain the removal by quoting it; the changelog fragment carries that
+ * history. Upgrade if a gated document ever needs an in-place "removed" note.
+ */
+export function checkRemovedCarriers(docs: readonly Doc[]): string[] {
+  const rows: string[] = [];
+  for (const doc of docs) {
+    doc.text.split(/\r?\n/).forEach((line, index) => {
+      for (const name of REMOVED_CARRIERS) {
+        if (!new RegExp(`\\b${name}\\b`).test(line)) continue;
+        rows.push(
+          `${doc.rel}:${index + 1} names removed carrier "${name}" - rc.3 creates a teammate with ` +
+            "`subagent` / `subagent_fork` (a continuable child), so this tool no longer exists; drop the mention",
+        );
+      }
+    });
+  }
+  return rows;
+}
+
+/* ------------------------------------------------------------------ */
 /* README pin                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -478,6 +517,14 @@ if (import.meta.main) {
     }
   }
 
+  const teamDoc = docs.find((doc) => doc.rel === TEAM_DOC);
+  const removedInput: Doc[] = [];
+  if (carrierSource !== null) removedInput.push({ rel: CARRIER_SOURCE_REL, text: carrierSource });
+  if (teamDoc !== undefined) removedInput.push(teamDoc);
+  const removedRows = checkRemovedCarriers(removedInput);
+  rows.push(...removedRows);
+  const removedSummary = removedRows.length === 0 ? "clean" : `${removedRows.length} violation(s)`;
+
   let pinSummary = "recorder unread";
   if (!existsSync(join(root, README_RECORDER))) {
     rows.push(`${README_RECORDER}:1 the README language-pair recorder is missing`);
@@ -493,7 +540,7 @@ if (import.meta.main) {
     pinSummary = `${pin.recorded} recorded blob hashes match git hash-object`;
   }
 
-  const seatSummary = `${seats.blocks} Assignment header block(s) scanned, ${seats.rows.length} seat-bounding violation(s); carrier vocabulary ${carrierSummary}; README pin ${pinSummary}`;
+  const seatSummary = `${seats.blocks} Assignment header block(s) scanned, ${seats.rows.length} seat-bounding violation(s); carrier vocabulary ${carrierSummary}; removed carriers ${removedSummary}; README pin ${pinSummary}`;
 
   if (rows.length > 0) {
     console.error(`dsh-contract-lint: ${rows.length} violation(s) found\n`);

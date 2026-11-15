@@ -124,7 +124,7 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 
 `tools/pre-execute` 监听器作用于委派工具：解析载荷中的 Assignment 文本，在头区域上运行 engine 的**单一**派发闸门组合（`composeDispatchGate`——形状守卫、`validateAssignmentFields`、`antiRecursionPrecheck`、默认分支闸门、头区域强制执行；opencode/omp/CLI 绑定使用同一组合，违规码按构造即相同），外加 dsh 侧 worktree L1/L2 检查与租约闸门。拒绝通道为**不调用** `next()` 而返回 `PreToolDecision { kind: 'deny', reason }`；告警模式记录日志、发出 `mstar/dispatch-gate` 并委托。非 Assignment 提示与非委派工具保持惰性。两种模式下 engine 故障都降级为放行，且降级**可观测**：catch 路径发出 `degraded: true` 的插件自有咨询 + error 日志，使 hard 部署能察觉控制失效而非静默放行。以 `prepend` 注册，防止更早挂载的决策监听器把本闸门短路在不可达处。
 
-**每个委派载体都被把关**：已配置的 `dispatchTools`（默认 `subagent` / `subagent_fork`）**以及** Agent Teams 载体——`spawn_teammate`、`team_task_create`、`team_task_update`、`send_message`。
+**每个委派载体都被把关**：已配置的 `dispatchTools`（默认 `subagent` / `subagent_fork`）**以及** Agent Teams 载体——`team_task_create`、`team_task_update`、`send_message`。持久 teammate 由 `subagent` / `subagent_fork` 本身创建（经 subagent catalog 命名的可续接子代理），因此创建调用按普通 subagent 派发把关。
 
 ### Lease gate
 
@@ -436,7 +436,7 @@ catalog 行在委托之后追加到组合步骤消息的**末尾**——请求�
 - **Bundled 镜像是构建期同步**——`harness-skills/` + `harness-commands/` 由 `bundle-assets` 在构建时产出（仓库根 `skills/` + `commands/` 镜像；gitignore）。未跑 `bundle-assets` 的检出不挂载 bundled 技能、不注册命令（默认挂载惰性，而非报错）。
 - **profile-bundle 安装到 `web` profile：registry 与 local checkout**——`dsh plugin --profile web add @mstar-harness/dsh`（registry）与 `add <本地检出>` 为受支持途径，均走同一 pnpm + reconcile 机制（reconcile 步骤把 `@mstar-harness/dsh` 并入 `dsh.profile.bundles`）。local checkout 需要先执行 `bun run build`——本包没有 `prepare` 脚本（monorepo 显式构建各包），未构建的检出会装入空的 `dist/`。
 - **`lintSkillWrite` 类型化否决尚未接入生产**——传入文档分支的 hard 否决（`SkillLintVetoError`，码 `skill-lint.veto`）已导出并测试覆盖，但尚无生产调用方：engine `HostAdapter` 没有携带内容的技能写入钩子（只有 `beforeStatusWrite`/`beforeDispatch`/`beforeMerge`），且 fs intent 槽位内容盲。接线随未来携带内容的钩子落地；在此之前监听器路径只通过修复逃生咨询执行（从不否决）。
-- **CLI 宿主信号列表与 engine 联合一致**——CLI 的 `hostSignals` 列表（`packages/commands/src/families/local.ts`）接受与 engine `ToolSignal` 联合相同的 token，包括 `subagent` 与 Agent Teams 载体 `spawn_teammate` / `team_task_create`；因此 `mstar host detect --signals subagent` 解析为 `dsh` 而不再被拒绝，未知 token 仍返回 usage 信封。
+- **CLI 宿主信号列表与 engine 联合一致**——CLI 的 `hostSignals` 列表（`packages/commands/src/families/local.ts`）接受与 engine `ToolSignal` 联合相同的 token，包括 `subagent` 与 Agent Teams 的 `team_task_create` token；因此 `mstar host detect --signals subagent` 解析为 `dsh` 而不再被拒绝，未知 token 仍返回 usage 信封。
 - **入口是 `src/gates/*` 之上的模块索引**——`src/index.ts` 提供 gate 模块的具名导出，保留插件 manifest、单一 cordis augmentation 点、命令注册与 `apply()` 启动接线，不再冻结导出数量。入口必须仅使用具名导出，因为存在 default export 时 dsh Loader 会丢弃 namespace metadata；service 导出同时向消费者提供 `ctx.dshMstar` 的类型 augmentation。
 - **engine dsh 行待上游化**——engine `host.ts` 的 dsh 改动（`DetectResult`、`ToolSignal`、`resolveSkillRoot`）位于 mstar-workflow engine 镜像，计划经用户授权的上游 PR 合入 mstar-harness；`mstar-host` 技能镜像（§ Detect / § Resolve loaded skill root / `references/dsh.md`）随之一并更新。
 - **迭代 stepper：Step 1 为 compass 驱动，Step 5 为 schema 驱动**——工作流面板的 Step 1（iteration-start）在 steering compass `status: active`（Phase 1 进行中）时为当前步（无 gate 判定 → 无 PASS/FAIL 徽标）；Step 5（merge-ready）是 engine 闸门永不点亮为当前的 schema 常量（transition 只覆盖 Phase 2→3→4，merge-ready 从不是 gate transition）；仅当 Step 4 为当前步时作为 `next` 渲染，其余为 idle——已记录于迭代 guide，非缺陷。完整面板限制清单见 Web 客户端插件一节。
