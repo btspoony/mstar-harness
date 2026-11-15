@@ -51,6 +51,7 @@ import {
   resolveMemberId,
   settleOutcomeOfStopReason,
   subagentSurfaceOf,
+  type SubagentSurface,
   type TeamServiceContext,
 } from './team-identity.ts'
 // The SHARED ASCII-control-char strip : the ralph
@@ -488,6 +489,19 @@ export interface AgentFlowCatalogJoin {
 }
 
 /**
+ * One buffered child `subagent/end` awaiting its activation pairing.
+ * `parentSessionId` is the payload's DIRECT parent — the accounting scope of
+ * admission and eviction, so a record occupies only the budget of the parent
+ * whose dispatch can claim it. Absent only when the payload carried none: the
+ * record is then accounted against the whole pairing's in-flight dispatches
+ * (never dropped silently on the strength of a missing field).
+ */
+export interface ActivationChildEndRecord {
+  parentSessionId?: string
+  stopReason: unknown
+}
+
+/**
  * The apply-scoped pairing store (
  * decision D1 — created in the entry `apply`, same lifetime as the catalog
  * cache; an HMR restart resets it, and completions outside the window stay
@@ -530,18 +544,21 @@ export interface AgentFlowPairing {
    */
   activationResolutions?: Set<AgentFlowDispatchRef>
   /**
-   * Child `SessionId` → the `stopReason` of a child `subagent/end` that
-   * arrived BEFORE its activation pairing was keyed. The child is published
-   * inside the tool call, so its end can precede even the tool's
-   * `tools/post-execute`; a record is admitted only while its DIRECT PARENT
-   * still has a recorded dispatch in flight (a call not yet post-executed, or
-   * a ref in {@link activationResolutions}), and never beyond that window's
-   * size — one in-flight ref consumes at most one record, and a refused record
-   * is reported with no settle fabricated. Reconciliation consumes the entry
-   * (a child end settles a dispatch at most once); an end that arrives with
-   * no claimable dispatch is unpaired for good and is not stored.
+   * Child `SessionId` → the record of a child `subagent/end` that arrived
+   * BEFORE its activation pairing was keyed. The child is published inside the
+   * tool call, so its end can precede even the tool's `tools/post-execute`.
+   * Admission is PER DIRECT PARENT ({@link ActivationChildEndRecord}): a record
+   * is kept only while its parent has a recorded dispatch in flight (a call not
+   * yet post-executed, or a ref in {@link activationResolutions}) and never
+   * beyond that parent's count of them, so two parents can never consume each
+   * other's budget. Once a parent has no in-flight dispatch left nothing can
+   * claim its records, so they are dropped at that point
+   * ({@link sweepUnclaimableChildEnds}) rather than occupying the budget for the
+   * apply's lifetime; that eviction is what keeps a LATER genuine early end
+   * admissible. Reconciliation consumes the entry (a child end settles a
+   * dispatch at most once).
    */
-  endsAwaitingActivation?: Map<string, unknown>
+  endsAwaitingActivation?: Map<string, ActivationChildEndRecord>
   /**
    * The call-window catalog join's slots: the EXACT parent Session object →
    * (RAW delegation label → candidate). A `null` slot is a consumed or
@@ -1695,49 +1712,80 @@ function recordChildStopUnresolved(ref: AgentFlowDispatchRef, childId: string, s
  * flight and may yet claim a child end: the calls not yet post-executed (the
  * child is published INSIDE the tool call, so its end can precede
  * `tools/post-execute`), plus the activation dispatches whose name→child
- * resolution has not landed. Both collections hold only in-flight work, so this
- * number is small and is the exact upper bound for
- * {@link AgentFlowPairing.endsAwaitingActivation}: one in-flight ref consumes at
- * most one record. Only an activation ref can actually pair (a child id must
- * match), so a record admitted for a channel that starts no child simply stays
- * unclaimed within that same bound.
+ * resolution has not landed. Only an ACTIVATION ref can pair (a child id must
+ * match), so this number is an upper bound on the records that parent may
+ * claim, never a promise that each of them will be claimed: a call that starts
+ * no activation child leaves its slot permanently unconsumed, which is why the
+ * unclaimed records are dropped once the parent's count reaches `0`
+ * ({@link sweepUnclaimableChildEnds}). `undefined` counts EVERY in-flight ref
+ * of the pairing — the lifetime test for a record whose payload carried no
+ * parent (an unparented record has no narrower scope).
  */
-function claimableDispatchesOf(pairing: AgentFlowPairing, parentSessionId: string): number {
+function claimableDispatchesOf(pairing: AgentFlowPairing, parentSessionId: string | undefined): number {
   let claimable = 0
   for (const ref of pairing.dispatchByCallId.values()) {
-    if (ref.agent === parentSessionId) claimable += 1
+    if (parentSessionId === undefined || ref.agent === parentSessionId) claimable += 1
   }
   for (const ref of pairing.activationResolutions ?? []) {
-    if (ref.agent === parentSessionId) claimable += 1
+    if (parentSessionId === undefined || ref.agent === parentSessionId) claimable += 1
   }
   return claimable
 }
 
 /**
- * Keep one child `subagent/end` that arrived before its activation pairing was
- * keyed. Admission is deliberately narrow: a record is kept only while its
- * direct parent still has a dispatch in flight, and never beyond the number of
- * those dispatches. At capacity the record is REFUSED with a warn rather than
- * evicting one a pending dispatch may still claim; nothing is settled
- * here — an unkeyed end carries no dispatch identity, so no outcome can be
- * fabricated for it. An end with no claimable dispatch is unpaired for good
- * and is not stored at all, so this store can never outlive the window that
- * reads it. Contained — never throws into the `subagent/end` event.
+ * Drop the buffered child ends whose pairing can no longer arrive: once a
+ * parent has no in-flight dispatch left, nothing can consume its records, so
+ * keeping them would only spend the budget of a LATER window. Called at every
+ * point where a window closes (a call's post-execute or team return, a name
+ * resolution landing or failing, and an end arriving for an already-closed
+ * window) — this is the eviction that closes the interleaving where a
+ * permanently unclaimable record refused the next genuine early end and lost
+ * its settle. Safe to call anywhere: it only removes records that are already
+ * dead. Contained.
  */
-function bufferActivationChildEnd(pairing: AgentFlowPairing, parentSessionId: string, childId: string, stopReason: unknown): void {
+function sweepUnclaimableChildEnds(pairing: AgentFlowPairing): void {
+  const ends = pairing.endsAwaitingActivation
+  if (ends === undefined || ends.size === 0) return
   try {
+    for (const [childId, record] of ends) {
+      if (claimableDispatchesOf(pairing, record.parentSessionId) === 0) ends.delete(childId)
+    }
+  } catch (error) {
+    log('error', `activation child end sweep failed (contained): ${errorMessage(error)}`)
+  }
+}
+
+/**
+ * Keep one child `subagent/end` that arrived before its activation pairing was
+ * keyed. Admission is PER DIRECT PARENT and deliberately narrow: a record is
+ * kept only while its own parent still has a dispatch in flight, and never
+ * beyond that parent's count of them (one in-flight ref consumes at most one
+ * record). At that bound every waiting ref of the parent already owns a
+ * candidate, so the refused end has no ref left to pair with — it is REFUSED
+ * with a warn rather than evicting one a pending dispatch may still claim.
+ * Nothing is settled here: an unkeyed end carries no dispatch identity, so no
+ * outcome can be fabricated for it. Contained — never throws into the
+ * `subagent/end` event.
+ */
+function bufferActivationChildEnd(pairing: AgentFlowPairing, parentSessionId: string | undefined, childId: string, stopReason: unknown): void {
+  try {
+    const ends = (pairing.endsAwaitingActivation ??= new Map<string, ActivationChildEndRecord>())
+    ends.delete(childId) // a re-woken child's later end is the fresher record
+    sweepUnclaimableChildEnds(pairing)
     const claimable = claimableDispatchesOf(pairing, parentSessionId)
     if (claimable === 0) return
-    const ends = (pairing.endsAwaitingActivation ??= new Map<string, unknown>())
-    ends.delete(childId) // a re-woken child's later end is the fresher record
-    if (ends.size >= claimable) {
+    let owned = 0
+    for (const record of ends.values()) {
+      if (record.parentSessionId === parentSessionId) owned += 1
+    }
+    if (owned >= claimable) {
       log(
         'warn',
-        `child end for ${childId} was not kept for activation reconciliation (${String(claimable)} claimable dispatches of its parent) — no settle is fabricated`,
+        `child end for ${childId} was not kept for activation reconciliation (${String(claimable)} claimable dispatches of its parent, ${String(owned)} end(s) already waiting) — no settle is fabricated`,
       )
       return
     }
-    ends.set(childId, stopReason)
+    ends.set(childId, { ...(parentSessionId !== undefined ? { parentSessionId } : {}), stopReason })
   } catch (error) {
     log('error', `activation child end buffer insert failed (contained): ${errorMessage(error)}`)
   }
@@ -1760,11 +1808,8 @@ function bufferActivationChildEnd(pairing: AgentFlowPairing, parentSessionId: st
  */
 function pairActivationChildRef(pairing: AgentFlowPairing, childId: string, ref: AgentFlowDispatchRef): void {
   const ends = pairing.endsAwaitingActivation
-  let buffered: { stopReason: unknown } | undefined
-  if (ends !== undefined && ends.has(childId)) {
-    buffered = { stopReason: ends.get(childId) }
-    ends.delete(childId)
-  }
+  const buffered = ends?.get(childId)
+  if (buffered !== undefined) ends?.delete(childId)
   ref.childId = childId
   if (buffered !== undefined) {
     const outcome = settleOutcomeOfStopReason(buffered.stopReason)
@@ -1776,7 +1821,15 @@ function pairActivationChildRef(pairing: AgentFlowPairing, childId: string, ref:
     return
   }
   const map = teamChildPairs(pairing)
-  if (map.has(childId)) return // first pairing wins; a later message re-waking the child adds nothing
+  if (map.has(childId)) {
+    // First pairing wins; the second dispatch gets the explicit marker instead
+    // of a silence no later event can repair (the child's end already fired).
+    recordContinuationUnresolved(
+      ref,
+      `the activation child ${childId} is already paired with another dispatch — this dispatch's continuation cannot be paired (first pairing wins)`,
+    )
+    return
+  }
   if (map.size >= AGENT_FLOW_TEAM_CHILD_CAPACITY) {
     const oldestKey = map.keys().next().value
     if (oldestKey !== undefined) {
@@ -1794,16 +1847,54 @@ function pairActivationChildRef(pairing: AgentFlowPairing, childId: string, ref:
 }
 
 /**
+ * Confirm that a resolved activation id is a DIRECT child of the dispatching
+ * session before it is keyed as a pairing. The installed surface's
+ * `resolveName` ECHOES a bare token it could not match (a Session id-shaped
+ * string, `lead` → the tree root, or an id from another tree), so a returned
+ * id is not by itself a child that can ever emit `subagent/end`: keying one
+ * would leave its dispatch with neither a settle nor a marker. POSITIVE
+ * evidence only — a read that fails or is unavailable confirms nothing and the
+ * pairing proceeds exactly as before, so a degraded catalog read never becomes
+ * a lost settle by itself.
+ * shortcut: one call walks the whole subtree (listDescendants is the only
+ * catalog read on the structural surface); switch to a direct-children surface
+ * when upstream exposes one.
+ */
+async function isDirectChildOf(
+  surface: SubagentSurface | undefined,
+  parentSessionId: string | undefined,
+  childId: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (surface === undefined || parentSessionId === undefined) return true
+  try {
+    const rows = await surface.listDescendants(parentSessionId, signal)
+    if (!Array.isArray(rows)) return true
+    for (const row of rows) {
+      const rec = asRecord(row)
+      if (rec?.id !== childId) continue
+      return rec?.parentId === parentSessionId
+    }
+    return false
+  } catch {
+    return true
+  }
+}
+
+/**
  * Pair one activation dispatch with the child session its returned name
- * resolves to. The subagent surface read is ASYNC, so the window is entered
- * BEFORE it starts: until it settles, an end for the resolved child is kept by
- * {@link bufferActivationChildEnd} and reconciled by
+ * resolves to. The subagent surface reads are ASYNC, so the window is entered
+ * BEFORE they start and left only after the resolved id is CONFIRMED to be a
+ * direct child of this session ({@link isDirectChildOf}): until then, an end
+ * for that child is kept by {@link bufferActivationChildEnd} and reconciled by
  * {@link pairActivationChildRef} — the tool return itself settles nothing. The
- * window is left exactly once (resolution landed, name unresolvable, or
- * resolution failed), so one dispatch can never pair twice and the reconcile
- * store never outlives the resolutions that can consume it. A missing or
- * unresolvable name records the explicit unresolved continuation instead.
- * Fully contained: the floating resolution never rejects into the tool seam.
+ * window is left exactly once (confirmed, name unresolvable, unconfirmed id, or
+ * read failed), so one dispatch can never pair twice and the reconcile store
+ * never outlives the resolutions that can consume it. A missing, unresolvable
+ * or unconfirmed name records the explicit unresolved continuation instead, and
+ * every close point sweeps the records whose window just shut
+ * ({@link sweepUnclaimableChildEnds}). Fully contained: the floating
+ * resolution never rejects into the tool seam.
  */
 function pairActivationChild(input: {
   ctx: TeamServiceContext
@@ -1813,27 +1904,39 @@ function pairActivationChild(input: {
   name: string | undefined
 }): void {
   const { ctx, pairing, ref, name } = input
+  const parentSessionId = ref.agent !== undefined && ref.agent !== '' ? ref.agent : undefined
   if (name === undefined) {
     recordContinuationUnresolved(ref, 'the activation result carried no child name — its child session cannot be resolved')
+    sweepUnclaimableChildEnds(pairing)
     return
   }
   const execRec = asRecord(input.exec)
   const signal = execRec?.signal instanceof AbortSignal ? execRec.signal : undefined
-  // Enter the window BEFORE the async read: a child end that lands while the
-  // name resolves is admitted against this ref and reconciled below.
+  const surface = subagentSurfaceOf(ctx)
+  // Enter the window BEFORE the async reads: a child end that lands while the
+  // name resolves and the resolved id is confirmed is admitted against this ref
+  // and reconciled below.
   const resolutions = (pairing.activationResolutions ??= new Set<AgentFlowDispatchRef>())
   resolutions.add(ref)
-  void resolveMemberId(subagentSurfaceOf(ctx), execRec?.agent, name, signal)
-    .then((childId) => {
+  void resolveMemberId(surface, execRec?.agent, name, signal)
+    .then(async (resolved) => {
+      const childId = resolved !== undefined && (await isDirectChildOf(surface, parentSessionId, resolved, signal)) ? resolved : undefined
       resolutions.delete(ref)
       if (childId === undefined) {
-        recordContinuationUnresolved(ref, `the activation child "${name}" is not resolvable to a child session — its turn completion is unknown`)
-        return
+        recordContinuationUnresolved(
+          ref,
+          resolved === undefined
+            ? `the activation child "${name}" is not resolvable to a child session — its turn completion is unknown`
+            : `the activation name "${name}" resolved to ${resolved}, which is not a child of this session — no child turn can settle this dispatch`,
+        )
+      } else {
+        pairActivationChildRef(pairing, childId, ref)
       }
-      pairActivationChildRef(pairing, childId, ref)
+      sweepUnclaimableChildEnds(pairing)
     })
     .catch((error: unknown) => {
       resolutions.delete(ref)
+      sweepUnclaimableChildEnds(pairing)
       log('error', `activation child pairing failed (contained): ${errorMessage(error)}`)
     })
 }
@@ -1885,8 +1988,10 @@ function handleTeamPostExecute(input: {
     )
   } finally {
     // The call is CONSUMED on every team path — never leave a team ref in the
-    // call map (unbounded growth / false cross-call settle).
+    // call map (unbounded growth / false cross-call settle). Closing the window
+    // also retires any child end that was only waiting for THIS ref.
     pairing.dispatchByCallId.delete(key)
+    sweepUnclaimableChildEnds(pairing)
   }
 }
 
@@ -1912,10 +2017,15 @@ function handleActivationChildSettled(pairing: AgentFlowPairing, info: unknown):
   const map = pairing.teamDispatchByChildId
   const ref = map?.get(childId)
   if (map === undefined || ref === undefined) {
+    // A payload without a parent id is NOT a reason to drop the end: it is
+    // admitted unscoped and lifetime-tested against the whole pairing.
     const parentSessionId = rec?.parentSessionId
-    if (typeof parentSessionId === 'string' && parentSessionId !== '') {
-      bufferActivationChildEnd(pairing, parentSessionId, childId, rec?.stopReason)
-    }
+    bufferActivationChildEnd(
+      pairing,
+      typeof parentSessionId === 'string' && parentSessionId !== '' ? parentSessionId : undefined,
+      childId,
+      rec?.stopReason,
+    )
     return
   }
   // Consumed once: the child's initial turn is the dispatch's continuation; a
@@ -1924,9 +2034,12 @@ function handleActivationChildSettled(pairing: AgentFlowPairing, info: unknown):
   const outcome = settleOutcomeOfStopReason(rec?.stopReason)
   if (outcome === undefined) {
     recordChildStopUnresolved(ref, childId, rec?.stopReason)
-    return
+  } else {
+    recordSettleWithRef(ref, outcome, undefined, childId)
   }
-  recordSettleWithRef(ref, outcome, undefined, childId)
+  // The pairing this window could claim is consumed: retire any end still
+  // waiting on a dispatch that will never arrive.
+  sweepUnclaimableChildEnds(pairing)
 }
 
 /**
@@ -2105,8 +2218,13 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
               )
             }
           } else {
-            // No result payload at all → nothing mappable, no identity join.
+            // No result payload at all → nothing mappable and no completion
+            // signal: the explicit unresolved continuation, never a silent drop.
             retireCatalogCandidate(pairing, dispatchRef)
+            recordContinuationUnresolved(
+              dispatchRef,
+              `the ${name} call returned no result payload — its continuation cannot be paired`,
+            )
           }
         }
         // The call is CONSUMED — each callId pairs exactly once (map pruning,
@@ -2114,7 +2232,12 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
         // entry is deleted after the post-execute branch resolves the call, so
         // the map holds only in-flight calls (a no-op when the key was never
         // registered or already consumed).
-        if (key !== undefined) pairing.dispatchByCallId.delete(key)
+        if (key !== undefined) {
+          pairing.dispatchByCallId.delete(key)
+          // The call window is CLOSED here: a child end buffered against this
+          // ref can no longer pair, so it stops occupying its parent's budget.
+          sweepUnclaimableChildEnds(pairing)
+        }
       }
     } catch (error) {
       log('error', `settle record failed (contained): ${errorMessage(error)}`)
