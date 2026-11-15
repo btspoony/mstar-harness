@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [4.7.0] - 2026-11-15
+
+### Harness
+
+- **dsh 插件与宿主技能现按 rc.3 的 Agent Teams 接口把关与描述。** `@mstar-harness/dsh` 将三个 Team 载体（`team_task_create` / `team_task_update` 的 `description`、`send_message.message`）记录为非终结载体，任务板写入与 inbox 接收不再伪造委派结果；durable teammate 由普通 `subagent` / `subagent_fork` 派发创建（`{ kind: 'activation', name }`，仅由子 agent 的 `subagent/end` 结算），成员身份经 subagent catalog（`namesOf` / `resolveName` / `listDescendants`）解析。
+- **无兼容层的删除项：** `spawn_teammate`、Team roster 读取、roster 时代的成员命名文法、`provisioning` / `failed` 两个在线成员状态、`{ sent: true }` 发送结果与 `noProgress` 等待结果。注入的提示契约、派发与台账闸门、dsh 的两份 README、委派通道知识笔记随之更新；contract-lint 新增一条负向腿，被移除的载体名一旦重新出现在载体映射或 `dsh-agent-teams.md` 中即拒绝。
+- **宿主检测词表不再接受已移除的工具。** `ToolSignal` 与 `mstar host detect --signals` 只接受 rc.3 的 dsh 通道（`subagent`、`team_task_create`）；被移除的载体现在是未知 token，走既有的 usage 拒绝。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.7.0**。
+
 ## [4.6.2] - 2026-11-15
 
 ### 版本对齐

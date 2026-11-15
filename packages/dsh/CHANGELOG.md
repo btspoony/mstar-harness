@@ -6,6 +6,24 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.7.0] - 2026-11-15
+
+### Changed
+
+- **ACTIVE-only engine status**: the dsh pre-step listener appends the `<mstar_engine_status>` catalog row **only when the rendered selection is an ACTIVE workflow**: no workflow or an unresolvable selection (`no-active`, `unbound-multi-active`, `status.missing`, `store.not-initialized`, terminal history) injects no model row, while the persisted `dsh_status_emissions` panel snapshot still carries the verdict.
+- **System prompt follows the same predicate**: without an ACTIVE workflow context the `mstar:engine-status` context is empty (**version line included**) and the `mstar:harness-rules` section carries only the Agent Teams delegation contract (nothing when that layer is unmounted) — so a workspace with no mstar business context gets no mstar state or harness-rules injection (the delegation contract stays: it governs dispatch, not a workflow).
+- **`dsh-llm-fallbacks` pin raised to `0.8.8`, the first release on the `^0.2.2-rc.3` peer corridor.** Both hand-written literals move together as the recorded dependency-boundary rule requires: `@mstar-harness/dsh` devDependency `0.8.6` → `0.8.8` and the CLI install-spec constant `mstar.dshLlmFallbacks` `0.8.2` → `0.8.8` (that literal had drifted a minor behind the package pin). Nothing upgrades an installed host: `doctor --target dsh` reports the older fallbacks row `drifted` until `init --target dsh` re-adds the pinned spec.
+- **Audited, not assumed.** `dist/index.d.ts` and `dist/seeds.d.ts` are byte-identical between `0.8.6` and `0.8.8`, so the consumed `FallbacksService` surface and the seed/effective-role types are unchanged and the local structural mirror needs no edit. The cross-version differences are the peer corridor itself (`^0.2.2-rc.1` → `^0.2.2-rc.3`), implementation-side error wrapping, and `dist/subagents-seam.d.ts`, which now reads the flattened `SubagentActivationSpec` (rc.3 extends the start request instead of nesting it). That seam is internal to the plugin: `packages/dsh/src` imports nothing from the package, so no mstar code path changes.
+- Workspace verification: the seven `fallbacks-*` / `peer-deps` suites 60 pass with zero skips, and both type gates (`typecheck:src`, `typecheck:tests`) exit clean.
+- **The dsh plugin and host skills now gate and describe the rc.3 Agent Teams surface.** `@mstar-harness/dsh` records the three Team carriers (`team_task_create` / `team_task_update` `description`, `send_message.message`) as non-terminal, so a board write or an inbox acceptance no longer fabricates a delegation outcome; a durable teammate is created by the ordinary `subagent` / `subagent_fork` dispatch (`{ kind: 'activation', name }`, settled only from the child's `subagent/end`), and member identity resolves through the subagent catalog (`namesOf` / `resolveName` / `listDescendants`).
+- **Removed with no compatibility shim:** `spawn_teammate`, the Team roster read, the roster-era member-name grammar, the `provisioning` / `failed` live member states, the `{ sent: true }` send result and the `noProgress` wait result. The injected prompt contract, the dispatch and ledger gates, the dsh READMEs and the delegation-channel knowledge note follow; a contract-lint leg refuses the removed carrier name if it reappears in the carrier map or `dsh-agent-teams.md`.
+- **Host-detect vocabulary no longer accepts the retired tool.** `ToolSignal` and `mstar host detect --signals` accept only rc.3's dsh channels (`subagent`, `team_task_create`); the removed carrier is now an unknown token with the ordinary usage refusal.
+- **Team delegation contract**: the injected Agent Teams contract now names the real channels — writable work defaults to one durable teammate per writable track (`subagent` / `subagent_fork`, legacy `spawn_teammate`) reused via `send_message`; 1–2 read-only seats go to `subagent` only (a fork inherits the conversation), and a 1–2-seat dispatch on a Team-mode root joins the roster, so a read-only seat is not a free one; fan-out of 3+ goes to `workflow`, whose children never join the roster; and a profile that disables the direct `subagent` rows carries read-only work of any size through `workflow`, whose script is chosen by the work.
+
+- Version alignment with harness **4.7.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.7.0**.
+
 ## [4.6.2] - 2026-11-15
 
 ### Changed
