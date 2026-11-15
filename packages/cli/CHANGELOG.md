@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.6.2] - 2026-11-15
+
+### Changed
+
+- **A mixed argv names the option that needs a value.** When an argv carries both a surplus positional and a value-less option, the diagnostic reports the option index the recovery text already names.
+- **The push report keeps the engine's residue cause.** An unresolved residue on a truncated scan reports the engine's page-bound cause instead of the generic wording that suggested a `--release` the next call refuses.
+- **Both delivery-anchor warnings are reported.** A registration whose base, work and target collide returns every matching warning in one envelope, so one repair does not leave a second collision unadvised.
+
+- Version alignment with harness **4.6.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.6.2**.
+
 ## [4.6.1] - 2026-11-14
 
 ### Fixed
