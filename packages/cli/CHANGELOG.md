@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.7.0] - 2026-11-15
+
+### Changed
+
+- **`dsh-llm-fallbacks` pin raised to `0.8.8`, the first release on the `^0.2.2-rc.3` peer corridor.** Both hand-written literals move together as the recorded dependency-boundary rule requires: `@mstar-harness/dsh` devDependency `0.8.6` → `0.8.8` and the CLI install-spec constant `mstar.dshLlmFallbacks` `0.8.2` → `0.8.8` (that literal had drifted a minor behind the package pin). Nothing upgrades an installed host: `doctor --target dsh` reports the older fallbacks row `drifted` until `init --target dsh` re-adds the pinned spec.
+- **Audited, not assumed.** `dist/index.d.ts` and `dist/seeds.d.ts` are byte-identical between `0.8.6` and `0.8.8`, so the consumed `FallbacksService` surface and the seed/effective-role types are unchanged and the local structural mirror needs no edit. The cross-version differences are the peer corridor itself (`^0.2.2-rc.1` → `^0.2.2-rc.3`), implementation-side error wrapping, and `dist/subagents-seam.d.ts`, which now reads the flattened `SubagentActivationSpec` (rc.3 extends the start request instead of nesting it). That seam is internal to the plugin: `packages/dsh/src` imports nothing from the package, so no mstar code path changes.
+- Workspace verification: the seven `fallbacks-*` / `peer-deps` suites 60 pass with zero skips, and both type gates (`typecheck:src`, `typecheck:tests`) exit clean.
+
+- Version alignment with harness **4.7.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.7.0**.
+
 ## [4.6.2] - 2026-11-15
 
 ### Changed

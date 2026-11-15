@@ -8,6 +8,18 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.7.0] - 2026-11-15
+
+### Harness
+
+- **The dsh plugin and host skills now gate and describe the rc.3 Agent Teams surface.** `@mstar-harness/dsh` records the three Team carriers (`team_task_create` / `team_task_update` `description`, `send_message.message`) as non-terminal, so a board write or an inbox acceptance no longer fabricates a delegation outcome; a durable teammate is created by the ordinary `subagent` / `subagent_fork` dispatch (`{ kind: 'activation', name }`, settled only from the child's `subagent/end`), and member identity resolves through the subagent catalog (`namesOf` / `resolveName` / `listDescendants`).
+- **Removed with no compatibility shim:** `spawn_teammate`, the Team roster read, the roster-era member-name grammar, the `provisioning` / `failed` live member states, the `{ sent: true }` send result and the `noProgress` wait result. The injected prompt contract, the dispatch and ledger gates, the dsh READMEs and the delegation-channel knowledge note follow; a contract-lint leg refuses the removed carrier name if it reappears in the carrier map or `dsh-agent-teams.md`.
+- **Host-detect vocabulary no longer accepts the retired tool.** `ToolSignal` and `mstar host detect --signals` accept only rc.3's dsh channels (`subagent`, `team_task_create`); the removed carrier is now an unknown token with the ordinary usage refusal.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.7.0**.
+
 ## [4.6.2] - 2026-11-15
 
 ### Version alignment
