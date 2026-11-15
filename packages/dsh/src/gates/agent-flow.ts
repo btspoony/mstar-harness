@@ -19,15 +19,17 @@
  * file-lock, or runtime file-fallback state participates in event processing.
  *
  * Real settle pairing is apply-scoped. `tools/post-execute` pairs a dispatch
- * only to its verified completion result; a background job settles when its
- * terminal job snapshot arrives; a `subagent` / `subagent_fork` activation
- * (which returns `{ kind: 'activation', name }` — started, not settled) is
- * paired to the child that name resolves to and settles only on that child's
- * `subagent/end`. Unpaired calls, malformed results, and continuable calls
- * without terminal evidence are never fabricated as settlements. A catalog
- * listener joins an observed child session to the reserved dispatch call
- * window, preserving the observed child identity and linking it to the same
- * selected workflow generation.
+ * only to its verified completion result; the installed dsh `subagent` /
+ * `subagent_fork` activation (which returns `{ kind: 'activation', name }` —
+ * started, not settled) is paired to the child that name resolves to and
+ * settles only on that child's `subagent/end`. Both rc.3 delegation tools
+ * return `activation` only, so no other success shape reaches this seam from
+ * them: unpaired calls and malformed results are never fabricated as
+ * settlements.
+ * The job-settle pairing and the call-window catalog join are retained with
+ * their entry wiring (`jobs.events`, `session/event`) but are unreachable
+ * from rc.3's delegation tools — no background or continuable result ever
+ * authorizes them.
  *
  * Module boundary: the entry and adapter import this module explicitly; its
  * public event APIs are re-exported by the entry.
@@ -88,10 +90,11 @@ export const AGENT_FLOW_TEAM_CHILD_CAPACITY = 1024
  * OLDEST record of the scope with an eviction marker: the dispatch that would
  * have claimed it records an explicit unresolved continuation instead of
  * silently losing its settle.
- * shortcut: eviction markers are not capacity-counted, so a scope that
- * overflows within one window holds one marker per evicted record until that
- * window closes; count them too (oldest-marker eviction) if a producer can
- * storm one parent's window past this capacity.
+ * Exact invariant: LIVE records <= capacity; markers <= overflow insertions
+ * within one open window (each overflow insert adds one marker and one live
+ * key, so a window held open by a storm grows markers without bound).
+ * shortcut: markers are not capacity-counted; count them too (oldest-marker
+ * eviction) if a producer can storm one parent's window past this capacity.
  */
 export const AGENT_FLOW_ACTIVATION_END_CAPACITY = 1024
 /** Stable identity namespace for verified native workflow events. */
@@ -183,12 +186,14 @@ export const AGENT_FLOW_LOGGER = 'mstar/agent-flow'
  */
 export const SETTLE_SEAM = 'tools/post-execute'
 /**
- * The once-per-apply settle-pairing trace. Dispatch carriers PAIR through the
- * tool seam (a started child settles on its own `subagent/end`, never at tool
- * return); background jobs settle from the jobs lifecycle event stream.
+ * The once-per-apply settle-pairing trace. A delegation carrier PAIRS through
+ * the tool seam and settles on its own completion edge — the child
+ * `subagent/end` its `activation` name resolves to, never the tool return.
+ * No rc.3 delegation tool produces a background or continuable result, so the
+ * jobs-lifecycle channel stays wired but unused.
  */
 export const SETTLE_SEAM_PAIRING_NOTE =
-  `settle seam "${SETTLE_SEAM}" IS part of the verified dsh-tools registry surface (runPostExecute dispatches it for every tool call) — dispatch carriers pair here and settle on their own completion edge (child \`subagent/end\`, background jobs from ctx.inject(['jobs']) → jobs.events settled notifications); only UNPAIRED payloads (non-dispatch tools, calls outside the apply-scoped pairing window) stay dispatch-only — never a fabricated settle`
+  `settle seam "${SETTLE_SEAM}" IS part of the verified dsh-tools registry surface (runPostExecute dispatches it for every tool call) — a delegation carrier pairs here and settles on its own completion edge (the child \`subagent/end\` its rc.3 \`activation\` name resolves to, never the tool return); only UNPAIRED payloads (non-dispatch tools, calls outside the apply-scoped pairing window) stay dispatch-only — never a fabricated settle`
 
 /** Dispatch verdict vocabulary (spec §2.1.3). */
 export type DispatchVerdict = 'ok' | 'advisory' | 'denied'
@@ -453,15 +458,16 @@ export interface AgentFlowDispatchRef {
   taskId?: string
   /**
    * The child session's stable id, once an upstream seam actually supplied
-   * one: the catalog join copies the observed catalog `childId` onto this
-   * ref (the same object survives into `dispatchByJobId`, so a background
-   * settle then carries it). Omitted until known — never a synthetic id and
-   * never a registry job id.
+   * one: the activation child end passes it to the settle; the catalog join
+   * would copy an observed catalog `childId` here, but it is unreachable
+   * from rc.3's delegation tools. Omitted until known — never a synthetic id
+   * and never a registry job id.
    */
   childId?: string
   /**
-   * The registry job id of the background call this dispatch started
-   * (observed at `tools/post-execute`, paired by `recordJobSettle`). A
+   * The registry job id of a background call this dispatch started — written
+   * only by the `{ kind: 'background', jobId }` result branch, which no
+   * rc.3 delegation tool produces (both return `activation`). A
    * jobs-registry key (`<kind>-N`) — NEVER a child session id and never the
    * `Task N` tag.
    */
@@ -470,8 +476,8 @@ export interface AgentFlowDispatchRef {
    * The admitted call-window catalog CANDIDATE of this dispatch: the live
    * parent Session it runs on plus the RAW delegation label that names its
    * slot. Present only while a reservation is live — `recordDispatch`
-   * installs it, and the post-execute branch either advances it to eligible
-   * or retires it (both release this field). Its presence is what lets the
+   * installs it and every result shape retires it; no rc.3 result can advance
+   * it to eligible, so the join never matches. Its presence is what lets the
    * post-execute path find the join without re-deriving the session.
    */
   catalog?: { session: AgentFlowSessionView; label: string }
@@ -495,9 +501,11 @@ export interface AgentFlowSessionView {
 /**
  * One pending call-window catalog candidate: the recorded dispatch ref and
  * the `fromSeq` window start. `result` marks ELIGIBILITY — an inert
- * candidate (no `result` yet, awaiting its post-execute branch) can never be
- * matched by a catalog, and the slot's `null` tombstone is a
- * consumed/rejected candidate, never a second one.
+ * candidate (no `result` yet) can never be matched by a catalog, and the
+ * slot's `null` tombstone is a consumed/rejected candidate, never a second
+ * one. In rc.3 NOTHING sets `result`: eligibility came only from the
+ * `background` / `continuable` result branches, and both delegation tools
+ * return `activation`.
  */
 export interface AgentFlowCatalogJoin {
   ref: AgentFlowDispatchRef
@@ -547,7 +555,13 @@ export interface AgentFlowPairing {
    * by the post-execute branch — the map holds only in-flight calls.
    */
   dispatchByCallId: Map<string, AgentFlowDispatchRef>
-  /** Registry background-job id (`JobSnapshot.id`) → the dispatch that started it (populated by the post-execute background branch; consumed by `recordJobSettle`). */
+  /**
+   * Registry background-job id (`JobSnapshot.id`) → the dispatch that started
+   * it. NO rc.3 writer: only the post-execute `{ kind: 'background', jobId }`
+   * branch populated it, and both rc.3 delegation tools return `activation`.
+   * Consumed by `recordJobSettle` from the entry's jobs listener, so the map
+   * and its consumer stay wired while recording nothing for rc.3 tools.
+   */
   dispatchByJobId: Map<string, AgentFlowDispatchRef>
   /**
    * Child `SessionId` → the dispatch that started it. Populated by the
@@ -595,7 +609,10 @@ export interface AgentFlowPairing {
    * Keying on the session OBJECT (not its id) is what makes the namespace
    * session-incarnation safe and delimiter-free; per Session the map holds at
    * most `AGENT_FLOW_CATALOG_SLOT_CAPACITY` slots (new keys are refused at capacity —
-   * existing pending entries and tombstones are retained).
+   * existing pending entries and tombstones are retained). Every candidate
+   * stays inert (see {@link AgentFlowCatalogJoin}), so no `subagent-link` row
+   * is emitted for an rc.3 delegation call; the observer registration stays
+   * wired from the entry.
    */
   catalogBySession: WeakMap<object, Map<string, AgentFlowCatalogJoin | null>>
 }
@@ -2113,14 +2130,6 @@ function handleActivationChildSettled(pairing: AgentFlowPairing, info: unknown):
  * - `result.isError === true` OR an `error` payload present → settle `error`
  *   immediately (fabrication guard — the dispatch
  *   call failed; a result carrying `error` without `isError` never settles ok);
- * - successful `result.value` shape `{ kind: 'background', jobId }` with a
- *   valid jobId (the registry id, `<kind>-N` — never a child session id) →
- *   store `jobId → dispatchRef` and the bounded job id as the ref's `taskRef`
- *   (so the eventual settled jobs event carries it); `{ kind: 'background' }`
- *   WITHOUT a valid jobId → nothing mappable (no settle);
- * - `{ kind: 'continuable', subagentId }` → no terminal signal this round →
- *   no settle (documented limit — the child owns its turns), and NOTHING is
- *   copied from its value onto any row;
  * - `{ kind: 'activation', name }` (the installed dsh `subagent` /
  *   `subagent_fork` return — STARTED, not settled) → no settle at tool
  *   return; the activation pairing window opens, the returned name is resolved
@@ -2128,25 +2137,25 @@ function handleActivationChildSettled(pairing: AgentFlowPairing, info: unknown):
  *   `subagent/end` settles the dispatch through the keyed-by-child channel
  *   and outcome mapping; a missing or unresolvable name records the explicit
  *   unresolved continuation instead;
+ * - the retired `{ kind: 'background', jobId }` / `{ kind: 'continuable',
+ *   subagentId }` shapes → no rc.3 delegation tool produces them (both return
+ *   `activation`), so they reach the seam only from a custom
+ *   `Config.dispatchTools` entry; their pairing machinery stays wired and
+ *   their own comments say so;
  * - any other successful value → the explicit unresolved continuation (the
  *   seam cannot attribute it to a child turn, so it never settles `ok`).
  * The consumed `dispatchByCallId` entry is DELETED after the branch resolves
  * the call (map pruning — each callId
  * pairs exactly once; the map holds only in-flight calls).
  *
- * Catalog candidate (steps 2–3 of the child-identity join): the SAME branch
- * decides the dispatch's reserved call-window catalog candidate — a valid
- * background result makes it eligible expecting the job's `one-shot` catalog
- * (after the job pairing + `taskRef` are in place), a valid continuable
- * result makes it eligible for exactly the returned `subagentId`, and every
- * other outcome (activation — whose resolved child id arrives after this
- * seam — other success, tool error, missing result payload, malformed
- * result, invalid background job id) retires it to its
- * tombstone. Eligibility then runs the catch-up walk over
- * `[fromSeq, session.seq)` through the same matcher the live observer uses,
- * so a catalog appended before this seam ran is still recovered. Both
- * candidate helpers are self-contained: a throwing join degrades to a log
- * line and NEVER costs the settle/awarded identity its row.
+ * Catalog candidate: the SAME branch retires the dispatch's reserved
+ * call-window catalog candidate to its tombstone on every shape this seam
+ * observes — activation (whose resolved child id arrives after this seam),
+ * other success, tool error, missing result payload. Eligibility (the retired
+ * background / continuable branches) is unreachable from rc.3's delegation
+ * tools, so no candidate turns matchable and no `subagent-link` row is
+ * emitted for an rc.3 delegation call. The retire helper is self-contained:
+ * a throwing join degrades to a log line and NEVER costs the settle its row.
  *
  * The waterfall MUST be delegated via `next()` on every path — returning
  * without calling `next` bails the chain and breaks every tool call. A
@@ -2170,10 +2179,10 @@ function handleActivationChildSettled(pairing: AgentFlowPairing, info: unknown):
  * string (the event bus dispatches any name).
  * @param ctx - registrant context (fiber disposal unwinds the listeners).
  * @param config - the plugin Config (dispatch-tool matching).
- * @param pairing - the apply-scoped pairing store (dispatchByCallId read,
- * dispatchByJobId written by the background branch, catalogBySession
- * advanced/retired here, activationResolutions / endsAwaitingActivation /
- * teamDispatchByChildId maintained by the activation pairing).
+ * @param pairing - the apply-scoped pairing store (dispatchByCallId read and
+ * consumed here, catalogBySession retired here, activationResolutions /
+ * endsAwaitingActivation / teamDispatchByChildId maintained by the activation
+ * pairing; no rc.3 delegation tool writes dispatchByJobId).
  */
 export function registerSettleListener(ctx: Context, config: Config, pairing: AgentFlowPairing): void {
   const dispatchTools = config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]
@@ -2348,8 +2357,11 @@ export interface JobDoneSnapshot {
 /**
  * Record a background-job settle from a terminal jobs lifecycle event. The
  * projection's registry job id must hit `dispatchByJobId`; a miss records
- * NOTHING (honest degrade, never fabricated). Outcome mapping:
- * `completed → ok` / `killed → denied` / `failed → error`;
+ * NOTHING (honest degrade, never fabricated). No rc.3 delegation tool writes
+ * that map (both return `activation`), so this settles only a call whose
+ * tool result carried `{ kind: 'background', jobId }` — reachable from a
+ * custom `Config.dispatchTools` entry, not from rc.3's own tools. Outcome
+ * mapping: `completed → ok` / `killed → denied` / `failed → error`;
  * `durationMs = finishedAt − startedAt` when both are present. After a
  * successful settle the consumed entry is deleted; a non-terminal projection
  * records nothing and keeps the entry so a later terminal event can settle.
@@ -2381,6 +2393,16 @@ export function recordJobSettle(snapshot: JobDoneSnapshot, pairing: AgentFlowPai
 }
 
 /* ---------------------------------- subagent catalog join (child session identity) ---------------------------------- */
+/*
+ * NO rc.3 delegation tool feeds this join. Eligibility is set only by a
+ * `{ kind: 'background' }` / `{ kind: 'continuable' }` tool result; both
+ * rc.3 delegation tools return `activation`, whose resolved child id arrives
+ * after the post-execute seam and is paired by the activation branch instead
+ * (that seam retires the reserved candidate). The reservation and the live
+ * `session/event` observer stay wired from the plugin entry for a deployment
+ * that lists another `Config.dispatchTools` name, but no rc.3 delegation
+ * call emits a `subagent-link` row.
+ */
 
 /**
  * Reserve the FIRST raw-label call-window slot for one recorded dispatch
@@ -2391,7 +2413,8 @@ export function recordJobSettle(snapshot: JobDoneSnapshot, pairing: AgentFlowPai
  * one is admitted no candidate at all. The slot is reserved INERT — no
  * catalog can match it until the post-execute branch marks it eligible, so a
  * catalog that arrives before the tool's result is known can never be
- * attributed by itself.
+ * attributed by itself. An rc.3 delegation call's slot stays inert forever:
+ * its `activation` result retires the candidate.
  *
  * Admission is all-or-nothing and never affects the dispatch or its settle:
  * a missing/malformed live Session (`id` / non-negative safe `seq` below the
@@ -2513,7 +2536,9 @@ function consumeCatalogCandidate(
 /**
  * Make one dispatch's reserved candidate ELIGIBLE and run its catch-up window
  * (join steps 2–3), invoked from the post-execute result branch with the
- * result shape it authorized. The catch-up walks `eventAt(seq)` over
+ * result shape it authorized. No rc.3 delegation tool reaches it: both return
+ * `activation`, whose branch retires the candidate instead. The catch-up
+ * walks `eventAt(seq)` over
  * `[fromSeq, session.seq)` in sequence order — no whole-log copy — and stops
  * at the first match; this is what recovers the catalog the continuable path
  * necessarily appends BEFORE the tool returns, hence before this seam.
@@ -2597,7 +2622,8 @@ function retireCatalogCandidate(pairing: AgentFlowPairing, ref: AgentFlowDispatc
  * (`childCreatedAt` is validated upstream, it is not another ledger clock).
  * The row is written ONLY from a candidate that actually matched, and only
  * from the ref of a dispatch that was really recorded: a link is never a
- * guess or a synthesis.
+ * guess or a synthesis. No rc.3 delegation call produces one (see the join's
+ * section note): the projection keeps rendering legacy rows.
  *
  * Attribution follows the dispatch, not the clock: the row lands in
  * the native directory recorded when its dispatch was appended, never in today's
@@ -2673,8 +2699,10 @@ export function recordSubagentLink(input: { ref: AgentFlowDispatchRef; childId: 
  *
  * No cold scan and no `session/created` backfill: a catalog written before
  * apply has no surviving dispatch ref, so it can never label a future
- * same-label dispatch. Contained — a throwing observation never escapes the
- * session append.
+ * same-label dispatch. No rc.3 delegation tool makes a slot eligible, so this
+ * observer joins nothing for rc.3 calls; it stays registered (the entry wires
+ * it) for a deployment that lists another `Config.dispatchTools` name.
+ * Contained — a throwing observation never escapes the session append.
  * @param ctx - registrant context (fiber disposal unwinds the observer).
  * @param pairing - the apply-scoped pairing store (the slots).
  */

@@ -322,12 +322,12 @@ export class DshHostAdapter extends Service implements HostAdapter {
             workflowId: source.workflowId,
             resolvedWorkflowDir: join(harnessDir, source.dir),
             selectedGeneration: { storeId: source.storeId, epoch: source.epoch },
-            // Team carriers record only while the optional experimental team
-            // service is mounted (member identity has no other verified
-            // source); both channels' names are pairing-eligible, an
-            // unknown/custom exec-bound name records its row but registers no
-            // pairing entry (item: a name the settle seam declines leaves no
-            // in-memory state behind).
+            // Team carriers record only while the optional team service (the
+            // board/inbox surface) is mounted — member identity comes from
+            // `ctx.get('subagents')`, not from that service; both channels'
+            // names are pairing-eligible, an unknown/custom exec-bound name
+            // records its row but registers no pairing entry (item: a name the
+            // settle seam declines leaves no in-memory state behind).
             teamPresent: teamServicePresent(this.ctx),
             pairingTools: [...(this.config.dispatchTools ?? [...DEFAULT_DISPATCH_TOOLS]), ...Object.keys(TEAM_DISPATCH_TOOLS)],
           })

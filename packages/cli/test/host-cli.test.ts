@@ -26,10 +26,17 @@ describe("mstar host detect — tool-shape host matrix", () => {
     });
   }
 
-  test("unknown signal token → usage, exit 2", () => {
+  test("unknown signal token → usage, exit 2, and the refusal lists the accepted tokens", () => {
     const result = runCli(["host", "detect", "--signals", "question,nope"]);
     expect(result.exitCode).toBe(2);
-    expect(cliEnvelope(result).message).toBe('unknown signal "nope"');
+    const message = cliEnvelope(result).message;
+    expect(message.startsWith('unknown signal "nope"')).toBe(true);
+    // Recovery: the operator is told exactly which tokens are accepted, so a
+    // retired token names what to pass instead.
+    expect(message).toContain("accepted: ");
+    expect(message).toContain("subagent");
+    expect(message).toContain("team_task_create");
+    expect(message).not.toContain("spawn_teammate");
   });
 
   test("empty --signals → usage, exit 2", () => {
