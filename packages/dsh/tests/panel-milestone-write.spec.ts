@@ -104,9 +104,8 @@ async function seedProject(harnessDir: string): Promise<void> {
 }
 
 /**
- * Attach one issue to a milestone directly in the store. The assign CHANNEL
- * needs a coordinator execution binding a fixture cannot mint (its refusal is
- * covered by its own test); the emptiness rule under test only needs the row.
+ * Attach one issue to a milestone directly in the store, so the removal suite
+ * holds a non-empty milestone without depending on the assign CHANNEL.
  */
 async function assignDirectly(harnessDir: string, milestoneId: string | null, issueId: string): Promise<void> {
   const handle = await openStore({ harnessDir }, 'write')
@@ -540,30 +539,78 @@ describe('the client surface — one request per write, arguments intact', () =>
   })
 })
 
-describe('milestoneAssign — engine authorization passes through verbatim', () => {
-  it('surfaces the engine scope refusal when no coordinator binding exists', async () => {
+describe('milestoneAssign — the requested seat authorizes the write, not a session binding', () => {
+  it('assigns with no coordinator binding, and refuses a leaf actor verbatim', async () => {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
     await seedStore(app.harnessDir)
     liveSession(app, 'ses_assign', app.root)
     const endpoint = endpointOf(app)
+    await seedProject(app.harnessDir)
     const issueId = await seedOpenIssue(app.harnessDir, {
       title: 'Unassigned fixture issue',
       severity: 'low',
       operationId: 'op-assign-seed',
     })
-    const result = await endpoint.milestoneAssign(
+    const created = await endpoint.milestoneAdd(
+      'ses_assign',
+      app.root,
+      '_default',
+      { name: 'Assign target', target: null, ordinal: 0 },
+      { operationId: 'op-assign-create', expectedStoreRevision: await observedRevision(endpoint, 'ses_assign', app.root) },
+    )
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    const milestoneId = (created.receipt as { milestoneId: string }).milestoneId
+
+    // This workspace holds no coordinator execution session at all: the seat
+    // named on the request is the authorization, so the assignment goes through.
+    const assigned = await endpoint.milestoneAssign(
       'ses_assign',
       app.root,
       issueId,
-      { projectId: '_default', milestoneId: null, reason: 'fixture unassign' },
-      { operationId: 'op-assign-1', actor: 'project-manager', expectedRevision: 1, expectedStoreRevision: await observedRevision(endpoint, 'ses_assign', app.root) },
+      { projectId: '_default', milestoneId, reason: 'fixture assign' },
+      {
+        operationId: 'op-assign-1',
+        actor: 'project-manager',
+        expectedRevision: 1,
+        expectedStoreRevision: await observedRevision(endpoint, 'ses_assign', app.root),
+      },
     )
-    // This workspace holds no ACTIVE coordinator execution session for the
-    // fixture DSH session, so the engine refuses; the channel's job is to pass
-    // that refusal through untouched.
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.code).toBe('issue.scope-refused')
-    expect(result.message.length).toBeGreaterThan(0)
+    expect(assigned.ok).toBe(true)
+    if (!assigned.ok) return
+    expect(assigned.receipt).toMatchObject({ issueId, revision: 2 })
+
+    // A leaf actor holds no capture seat: the engine's own refusal passes through.
+    const refusedSeat = await endpoint.milestoneAssign(
+      'ses_assign',
+      app.root,
+      issueId,
+      { projectId: '_default', milestoneId: null, reason: 'leaf attempt' },
+      {
+        operationId: 'op-assign-leaf',
+        actor: 'fullstack-dev',
+        expectedRevision: 2,
+        expectedStoreRevision: await observedRevision(endpoint, 'ses_assign', app.root),
+      },
+    )
+    expect(refusedSeat.ok).toBe(false)
+    if (refusedSeat.ok) return
+    expect(refusedSeat.code).toBe('issue.scope-refused')
+    expect(refusedSeat.message).toContain('fullstack-dev')
+  })
+
+  it('refuses a session whose target does not resolve, before the verb runs', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await seedStore(app.harnessDir)
+    const endpoint = endpointOf(app)
+    const result = await endpoint.milestoneAssign(
+      'ses_unknown',
+      app.root,
+      'I-000001',
+      { projectId: '_default', milestoneId: null, reason: 'no target' },
+      { operationId: 'op-assign-no-target', actor: 'project-manager', expectedRevision: 1, expectedStoreRevision: 0 },
+    )
+    expect(result).toMatchObject({ ok: false, code: 'store.not-active' })
+    expect(result.ok === false && result.message.length).toBeGreaterThan(0)
   })
 })

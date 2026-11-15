@@ -69,7 +69,7 @@ import {
   type SessionCwdResolution,
 } from '../session-cwd.ts'
 import { leafSignalStateOf, type LeafSignalState, type PanelSnapshotRead } from './panel-snapshot.ts'
-import { readPanelSnapshot, resolveWorkflowId, type PanelRetainedReader } from './read-panel-snapshot.ts'
+import { readPanelSnapshot, type PanelRetainedReader } from './read-panel-snapshot.ts'
 
 /**
  * One per-view read's answer. The engine's own envelope passes through
@@ -387,13 +387,12 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
 
   /**
    * Assign one issue to a milestone - or unassign it with `milestoneId: null`
-   * (engine `assignIssueMilestone`). The verb authorizes against the ACTIVE
-   * coordinator execution session bound to this DSH session, so the workflow
-   * id of that identity is resolved SERVER-side from the session pick and the
-   * registry, exactly like the reads. A bound session's authorization outcome
-   * (including `issue.scope-refused`) passes through verbatim; a session that
-   * resolves NO active workflow never reaches the verb, and this adapter names
-   * that cause itself under the same code.
+   * (engine `assignIssueMilestone`). The verb authorizes against the SEAT named
+   * on the request (`mutation.actor`), never a session, so no workflow id is
+   * resolved here and a workspace with no coordinator binding still writes. The
+   * engine's authorization outcome (including `issue.scope-refused`) passes
+   * through verbatim; a target that does not resolve never reaches the verb and
+   * is answered as the adapter's own `store.not-active`, like every write here.
    */
   async milestoneAssign(
     sessionId: string,
@@ -411,24 +410,7 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
           message: "write refused: " + (target.kind === 'no-harness' ? 'no harness root resolves for this workspace' : target.reason),
         }
       }
-      const workflowId = await resolveWorkflowId(target.harnessDir, target.sessionId, target.cwd)
-      if (workflowId === undefined) {
-        // Adapter-worded, not verbatim: the engine never ran because this
-        // session has no active workflow to authorize against. The CODE is the
-        // engine's own family so the client maps one axis; the message names
-        // the real cause instead of an identity mismatch the store never saw.
-        return {
-          ok: false,
-          code: 'issue.scope-refused',
-          message: 'No active workflow resolves for this session, so no coordinator seat authorizes the assignment.',
-        }
-      }
-      const receipt = await assignIssueMilestone(
-        { harnessDir: target.harnessDir, caller: { sessionId: target.sessionId, role: 'coordinator', workflowId } },
-        issueId,
-        input,
-        mutation,
-      )
+      const receipt = await assignIssueMilestone({ harnessDir: target.harnessDir }, issueId, input, mutation)
       return { ok: true, receipt }
     } catch (error) {
       return refused(error)
