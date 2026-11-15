@@ -59,7 +59,7 @@ const textOf = (row: UserMessage | undefined): string =>
  * ========================================================================== */
 
 describe('mstar-engine-status — open-issue facts come from the store', () => {
-  it('no store at all → residualFindings null + an explicit unavailable disclosure', async () => {
+  it('no store at all → no model row, and the payload names the unavailable cause', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-noroot-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -71,14 +71,14 @@ describe('mstar-engine-status — open-issue facts come from the store', () => {
 
     const decision = await booted.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
-    const row = lastMessage(decision)
-    if (row?.source.kind !== 'mstar-engine') return
+    // No ACTIVE workflow context ⇒ no catalog message is composed: the
+    // verdict is panel/CLI-only.
+    expect(lastMessage(decision)).toBeUndefined()
     const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
     expect(payload.state).toMatchObject({ residuals: [], residualFindings: null })
+    expect(payload.state?.selection).toMatchObject({ kind: 'error', code: 'store.not-initialized' })
     expect(payload.state?.storeFacts?.kind).toBe('unavailable')
     expect(payload.state?.storeFacts?.diagnostic).toContain('store.not-initialized')
-    // The model-facing row says so rather than claiming "none open".
-    expect(textOf(row)).toContain('workflow selection: ERROR (store.not-initialized)')
   })
 
   it('an active store with no open issue → residualFindings [] (an authoritative empty answer)', async () => {
@@ -174,7 +174,7 @@ describe('mstar-engine-status — open-issue detail order, fields and cap', () =
 // Disposition: doneAt normalization was asserted only over legacy snapshot plan rows; ACTIVE plan rows are covered by store-backed consumers.
 
 describe('mstar-engine-status — advisory degrade (state section null)', () => {
-  it('no status.json → the row still appends and the state section discloses the authority verdict', async () => {
+  it('no status.json → no row is appended while the payload discloses the authority verdict', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-absent-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
@@ -184,16 +184,14 @@ describe('mstar-engine-status — advisory degrade (state section null)', () => 
 
     expect(decision.kind).toBe('enter')
     if (decision.kind !== 'enter') return
-    expect(decision.messages).toHaveLength(1)
-    const row = lastMessage(decision)
-    if (row?.source.kind !== 'mstar-engine') return
-    // The catalog payload is NOT persisted on the row's source — it is read
-    // from the same builder the pre-step listener rendered the row from.
+    // No ACTIVE workflow resolves ⇒ the step messages carry no catalog row.
+    expect(decision.messages).toHaveLength(0)
+    expect(lastMessage(decision)).toBeUndefined()
+    // The catalog payload is NOT persisted on a row's source — it is read from
+    // the same builder the pre-step listener rendered from.
     const payload = await buildCatalogPayloadWithStore(booted!.ctx, harnessDir)
     expect(payload.state?.selection).toMatchObject({ kind: 'error', code: 'store.not-initialized' })
     expect(payload.state?.storeFacts?.kind).toBe('unavailable')
-    const text = textOf(row)
-    expect(text).not.toContain('plans:')
   })
 
   it('no harness dir (agent-less, no config) → no row is composed (state: null)', async () => {

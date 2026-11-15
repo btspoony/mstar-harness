@@ -31,7 +31,7 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { SkillLintAdvisory } from '../src/index.ts'
-import { FakeAgentPresetRegistry, FakeLoaderRegistry, FakeSubagentProvider, FakeSubagentService } from './harness.ts'
+import { FakeAgentPresetRegistry, FakeLoaderRegistry, FakeSubagentProvider, FakeSubagentService, seedActiveWorkflow } from './harness.ts'
 
 /** Violating writable Assignment (missing Execute as — the field-gate case). */
 const MISSING_EXECUTE_AS = `## Assignment
@@ -145,6 +145,8 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-hmr-'))
     const harnessDir = join(root, 'harness')
     const skillRoot = join(root, 'skills')
+    // An ACTIVE workflow context: the catalog row is injected only for one.
+    await seedActiveWorkflow(harnessDir)
     const ctx = new Context()
     // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
     // before apply — same loader-guarantee the real dsh app provides.
