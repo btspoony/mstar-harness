@@ -40,6 +40,7 @@ import {
   upgradeStore,
   type StoreContext,
 } from "./store-db.js";
+import { withRawRead } from "./store-file-probe.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-db-test-"));
 // The scenario bundle runs as a copied module, so it needs the published layout
@@ -71,49 +72,6 @@ afterAll(() => {
 function runScenarioOn(bin: string, scenario: string, dir: string): { status: number; output: string } {
   const run = spawnSync(bin, [BUNDLE, scenario, dir], { encoding: "utf8", timeout: 60_000 });
   return { status: run.status ?? -1, output: `${run.stdout}${run.stderr}`.trim() };
-}
-
-/**
- * The store file's own bytes: WAL in the header, and no `-wal`/`-shm` beside it.
- * The shape SQLite's own clean close leaves behind.
- */
-function isQuiescedWalStoreFile(dbPath: string): boolean {
-  try {
-    const header = readFileSync(dbPath).subarray(0, 100);
-    return header[18] === 2 && header[19] === 2 && !existsSync(`${dbPath}-wal`) && !existsSync(`${dbPath}-shm`);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Read a store file without changing it, through the real driver.
- *
- * SQLite reads a WAL database THROUGH its `-wal` file, so a store whose last
- * clean close folded the journal into the database file cannot be read by a
- * plain read-only open at all: node:sqlite creates that empty journal inside its
- * own open, while Bun refuses with SQLITE_CANTOPEN "unable to open database
- * file". The `immutable` form reads the same bytes without the WAL machinery,
- * which is exact for the quiesced shape - the database file holds the whole
- * committed state - so it is tried only for that shape: every other store keeps
- * the ordinary read-only open, and a broken file still reports its own error.
- * Same body as `execution-recovery.test.ts`'s `withRawRead`.
- */
-function withRawRead<T>(dbPath: string, run: (db: DatabaseSync) => T): T {
-  const read = (spec: string): T => {
-    const db = new DatabaseSync(spec, { readOnly: true });
-    try {
-      return run(db);
-    } finally {
-      db.close();
-    }
-  };
-  try {
-    return read(dbPath);
-  } catch (error) {
-    if (!isQuiescedWalStoreFile(dbPath)) throw error;
-    return read(`file:${dbPath}?immutable=1`);
-  }
 }
 
 const SCENARIOS: string[] = [
@@ -755,7 +713,7 @@ describe("migration 7 - project_milestones", () => {
       handle.close();
       await expect(upgradeStore({ harnessDir: dir })).rejects.toMatchObject({ code });
       expect(versionsBefore).toEqual(
-        withRawRead(join(dir, "store.db"), (db) => db.prepare("select * from schema_version order by version").all()),
+        withRawRead(DatabaseSync, join(dir, "store.db"), (db) => db.prepare("select * from schema_version order by version").all()),
       );
     }
   });
@@ -1017,7 +975,7 @@ describe("store-db schema-unsupported reports store / build / first-unknown dist
     // The baseline and the post-refusal read both go through the real driver,
     // so the rows keep the driver's own shape and the comparison needs no
     // annotation or suppression.
-    const versionsBefore = withRawRead(join(dir, "store.db"), (db) =>
+    const versionsBefore = withRawRead(DatabaseSync, join(dir, "store.db"), (db) =>
       db.prepare("select version from schema_version order by version").all(),
     );
 
@@ -1043,7 +1001,7 @@ describe("store-db schema-unsupported reports store / build / first-unknown dist
     });
     // No state write: the guard refuses before any mutation and every row stands.
     expect(
-      withRawRead(join(dir, "store.db"), (db) => db.prepare("select version from schema_version order by version").all()),
+      withRawRead(DatabaseSync, join(dir, "store.db"), (db) => db.prepare("select version from schema_version order by version").all()),
     ).toEqual(versionsBefore);
   });
 });
