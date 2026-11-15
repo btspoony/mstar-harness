@@ -38,6 +38,7 @@ import { assembleContextFor, type Agent } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import { bootApp, fakeChild, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { PERSONA_INTERPOLATION_HAZARD, stripInterpolationHazard } from '../src/gates/_shared.ts'
+import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { HarnessResolver } from '../src/index.ts'
 import {
   ENGINE_STATUS_CONTEXT_NAME,
@@ -238,6 +239,34 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
       `mstar engine status: v${PLUGIN_VERSION}`,
       'workflow wf-1 (plan) running | plans: none registered',
     ])
+  })
+
+  it('(b4) several ACTIVE lifecycles + a durable session pick ⇒ BOTH surfaces follow the pick (the catalog hint rule)', async () => {
+    booted = await bootApp({ seedV2: true })
+    // Two ACTIVE lifecycles: without the session's durable pick this resolves
+    // as an unbound multi-active selection, so only the hint can select one.
+    await seedActiveWorkflow(booted.harnessDir, 'wf-2', [], {}, 'seed-wf-2', booted.root, null)
+    expect(updateWorkflowSessionBinding(booted.harnessDir, 'ses-pick', booted.root, {
+      selectedWorkflowId: 'wf-2',
+      excludedBeforeSeq: 0,
+    }).kind).toBe('written')
+    const assemblyContext = assembleContextFor({
+      session: { header: { id: 'ses-pick', cwd: booted.root } },
+    } as never)
+    // The per-session cache entry starts as a miss (the background read fills
+    // it); the next assembly follows the pick — the SAME selection the
+    // pre-step catalog row makes with the same hint.
+    let assembly = await booted.ctx.systemPrompt.assemble(assemblyContext)
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const context = assembly.contexts.find((entry) => entry.name === ENGINE_STATUS_CONTEXT_NAME)
+      if (context !== undefined && context.text !== '') break
+      await settleInjectChild()
+      assembly = await booted.ctx.systemPrompt.assemble(assemblyContext)
+    }
+    const section = assembly.sections.find((entry) => entry.name === HARNESS_RULES_SECTION_NAME)!.text
+    const context = assembly.contexts.find((entry) => entry.name === ENGINE_STATUS_CONTEXT_NAME)!.text
+    expect(section).toContain('Morning Star (mstar)')
+    expect(context).toContain('workflow wf-2 (plan) running')
   })
 
   // Disposition: only legacy status.json/snapshot.json transport assertions were removed; the ACTIVE graph's consumer rendering rules remain tested below.

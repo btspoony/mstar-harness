@@ -79,8 +79,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import { resolveRepoEnforcement } from '@mstar-harness/engine'
 import type { EnforcementFlag } from '@mstar-harness/engine'
 import type { MstarEngineStatusPayload } from '../types.ts'
-import { DEFAULT_CATALOG_TTL_MS, buildCatalogPayload, buildCatalogPayloadWithStore, gateSegment, plansSegment } from './catalog.ts'
-import { stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
+import { catalogCacheKey, DEFAULT_CATALOG_TTL_MS, buildCatalogPayload, buildCatalogPayloadWithStore, gateSegment, plansSegment, selectionHintFor } from './catalog.ts'
+import { sessionHintOf, stripInterpolationHazard, type HarnessResolver } from './_shared.ts'
+import type { SessionHint } from './workflow-selection.ts'
 
 /** Logger label for the harness-prompt injection (dsh logger naming: `<scope>/<subject>`). */
 export const HARNESS_PROMPT_LOGGER = 'mstar/harness-prompt'
@@ -439,39 +440,51 @@ function engineStatusCache(
   resolver: HarnessResolver,
   bootHarnessDir: string | null,
 ): Promise<EngineStatusCache> {
-  const memo = new Map<string | null, { payload: MstarEngineStatusPayload; builtAt: number }>()
-  const pending = new Map<string | null, Promise<void>>()
-  const refresh = (harnessDir: string | null): Promise<void> => {
-    const active = pending.get(harnessDir)
+  // Keyed by the catalog's OWN session key (harness dir + session + cwd + the
+  // durable pick): the prompt must resolve the SAME selection the pre-step
+  // catalog does, or a session with several ACTIVE lifecycles that already
+  // picked one would read an unbound selection here and lose its harness
+  // instructions while the pre-step row selected correctly.
+  const memo = new Map<string, { payload: MstarEngineStatusPayload; builtAt: number }>()
+  const pending = new Map<string, Promise<void>>()
+  const refresh = (key: string, harnessDir: string | null, hint: SessionHint | undefined): Promise<void> => {
+    const active = pending.get(key)
     if (active !== undefined) return active
     const request = (harnessDir === null
-      ? Promise.resolve(buildCatalogPayload(ctx, null))
-      : buildCatalogPayloadWithStore(ctx, harnessDir)
+      ? Promise.resolve(buildCatalogPayload(ctx, null, hint))
+      : buildCatalogPayloadWithStore(ctx, harnessDir, hint)
     ).then((payload) => {
-      memo.set(harnessDir, { payload, builtAt: Date.now() })
+      memo.set(key, { payload, builtAt: Date.now() })
     }).catch((error: unknown) => {
       log('warn', `mstar:engine-status ACTIVE catalog read failed: ${errorMessage(error)}`)
-      if (!memo.has(harnessDir)) {
-        memo.set(harnessDir, { payload: buildCatalogPayload(ctx, harnessDir), builtAt: Date.now() })
+      if (!memo.has(key)) {
+        memo.set(key, { payload: buildCatalogPayload(ctx, harnessDir, hint), builtAt: Date.now() })
       }
     }).finally(() => {
-      pending.delete(harnessDir)
+      pending.delete(key)
     })
-    pending.set(harnessDir, request)
+    pending.set(key, request)
     return request
   }
 
   return (async () => {
-    await refresh(bootHarnessDir)
+    // Prime the boot workspace with no session hint — the key an agent-less
+    // assembly reads.
+    await refresh(catalogCacheKey(bootHarnessDir, '', '', undefined), bootHarnessDir, undefined)
     return {
       payloadFor(context: object): MstarEngineStatusPayload | undefined {
         const harnessDir = resolveAssemblyHarnessDir(context, resolver, bootHarnessDir)
-        const entry = memo.get(harnessDir)
+        // The assembly's own session identity, folded with its DURABLE pick —
+        // the pre-step catalog's hint rule (`selectionHintFor`).
+        const identity = sessionHintOf((context as { agent?: unknown } | null | undefined)?.agent)
+        const hint = identity === undefined ? undefined : selectionHintFor(harnessDir, identity)
+        const key = catalogCacheKey(harnessDir, identity?.sessionId ?? '', identity?.cwd ?? '', hint)
+        const entry = memo.get(key)
         if (entry === undefined) {
-          void refresh(harnessDir)
+          void refresh(key, harnessDir, hint)
           return undefined
         }
-        if (Date.now() - entry.builtAt >= DEFAULT_CATALOG_TTL_MS) void refresh(harnessDir)
+        if (Date.now() - entry.builtAt >= DEFAULT_CATALOG_TTL_MS) void refresh(key, harnessDir, hint)
         return entry.payload
       },
     }
