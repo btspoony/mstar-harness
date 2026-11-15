@@ -52,12 +52,8 @@ import type { Config } from './_shared.ts'
 import { isNaValue, planIdOf, sessionIdOf, DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from './dispatch.ts'
 import {
   isTeamDispatchToolName,
-  memberFailedOfSpawnResult,
-  memberIdOfName,
-  memberNameOfSpawnResult,
   settleOutcomeOfStopReason,
-  teamRosterOf,
-  type TeamRosterRead,
+  teamServicePresent,
   type TeamServiceContext,
 } from './team-identity.ts'
 // The SHARED ASCII-control-char strip : the ralph
@@ -1722,33 +1718,11 @@ function parentOfSubagentEnd(receiver: unknown, forwarded: unknown): unknown {
 }
 
 /**
- * True when `childId` is a child session the team service's roster currently
- * lists (service-level rows carry the child `SessionId` in `id`) — the
- * team-membership test that keeps a NON-team child end out of the end
- * buffer. Structural on the same roster surface `memberIdOfName` reads; the
- * upstream `subagent/end` edge travels with the live direct parent as its
- * scoped-dispatch receiver (resolved by {@link parentOfSubagentEnd}), and
- * that parent is the roster read's agent. An absent roster, an unreadable
- * roster, or a non-live parent reports `false` (never a throw).
- */
-function rosterHasChildId(roster: TeamRosterRead | undefined, parent: unknown, childId: string): boolean {
-  if (roster === undefined || parent === undefined || parent === null) return false
-  try {
-    const members = roster.listMembers(parent)
-    if (!Array.isArray(members)) return false
-    return members.some((entry) => asRecord(entry)?.id === childId)
-  } catch {
-    return false
-  }
-}
-
-/**
  * Buffer one unmatched team child `subagent/end` (the early-end reconcile
  * race: the
- * member's turn settled before its spawn's pairing write). Only a
- * roster-listed team child while the team service is mounted is buffered — a
- * non-team child end never enters the buffer, and without the service
- * nothing buffers and nothing throws. At capacity the OLDEST record is
+ * member's turn settled before its spawn's pairing write). Nothing is
+ * buffered while the team service is absent — without the service nothing
+ * buffers and nothing throws. At capacity the OLDEST record is
  * evicted with an explicit unresolved marker naming the child id and stating
  * that no settle was fabricated. The marker is deliberately NOT a
  * {@link recordContinuationUnresolved} row: an unmatched end carries NO
@@ -1759,9 +1733,7 @@ function rosterHasChildId(roster: TeamRosterRead | undefined, parent: unknown, c
  */
 function bufferTeamChildEnd(ctx: TeamServiceContext, pairing: AgentFlowPairing, parent: unknown, childId: string, stopReason: unknown): void {
   try {
-    const roster = teamRosterOf(ctx)
-    if (roster === undefined) return
-    if (!rosterHasChildId(roster, parent, childId)) return
+    if (!teamServicePresent(ctx)) return
     const buffer = (pairing.teamEndBuffer ??= new Map<string, unknown>())
     buffer.delete(childId) // a re-woken member's later end is the fresher record (LRU refresh)
     if (buffer.size >= AGENT_FLOW_TEAM_END_BUFFER_CAPACITY) {
@@ -1848,20 +1820,15 @@ function pairTeamMemberChild(pairing: AgentFlowPairing, childId: string, ref: Ag
 
 /**
  * The Agent Teams half of the `tools/post-execute` seam. A team carrier that
- * produced a dispatch record is NEVER settled at tool return: the spawn's
- * return only means the member was CREATED (upstream `spawn_teammate` returns
- * as soon as the member is durable `active`, without waiting for its turn),
- * `send_message` only means the target inbox ACCEPTED the message, and the
- * task-board writes are not delegation completions at all. The branch:
+ * produced a dispatch record is NEVER settled at tool return: `send_message`
+ * only means the target inbox ACCEPTED the message, and the task-board writes
+ * are not delegation completions at all. The branch:
  *
  * - consumes the agent-namespaced call key in EVERY path (the map holds only
  *   in-flight calls), so team calls cannot grow it without bound and a later
  *   same-id call from another channel can never settle this ref (the key also
  *   carries the tool name);
- * - a failed call (the upstream tool throws on creation failure) settles
- *   `error` — the member is provably gone;
- * - a `spawn_teammate` success whose member is resolvable in the roster pairs
- *   the member child id for the member's `subagent/end` settlement;
+ * - a failed call settles `error` — the call provably did not land;
  * - every other shape records the explicit unresolved continuation instead of
  *   a fabricated completion.
  *
@@ -1886,37 +1853,14 @@ function handleTeamPostExecute(input: {
       return
     }
     if (resultRec.isError === true || resultRec.error !== undefined) {
-      // The call itself failed (a failed spawn leaves a durable `failed`
-      // member upstream): a REAL terminal, not a fabricated `ok`.
+      // The call itself failed: a REAL terminal, not a fabricated `ok`.
       recordSettleWithRef(dispatchRef, 'error', undefined)
       return
     }
-    const value = resultRec.value
-    if (name !== 'spawn_teammate') {
-      recordContinuationUnresolved(
-        dispatchRef,
-        `the ${name} carrier completed without an attributable member turn — inbox acceptance and task-board writes are not delegation completions`,
-      )
-      return
-    }
-    if (memberFailedOfSpawnResult(value)) {
-      recordSettleWithRef(dispatchRef, 'error', undefined)
-      return
-    }
-    const memberName = memberNameOfSpawnResult(value)
-    if (memberName === undefined) {
-      recordContinuationUnresolved(dispatchRef, 'spawn_teammate returned no member name — the member child session cannot be resolved')
-      return
-    }
-    const childId = memberIdOfName(teamRosterOf(input.ctx), asRecord(input.exec)?.agent, memberName)
-    if (childId === undefined) {
-      recordContinuationUnresolved(
-        dispatchRef,
-        `team member "${memberName}" is not resolvable in the live roster — its child session and turn completion are unknown`,
-      )
-      return
-    }
-    pairTeamMemberChild(pairing, childId, dispatchRef)
+    recordContinuationUnresolved(
+      dispatchRef,
+      `the ${name} carrier completed without an attributable member turn — inbox acceptance and task-board writes are not delegation completions`,
+    )
   } finally {
     // The call is CONSUMED on every team path — never leave a team ref in the
     // call map (unbounded growth / false cross-call settle).
@@ -2023,14 +1967,13 @@ function handleTeamChildSettled(ctx: TeamServiceContext, pairing: AgentFlowPairi
  * throwing record never propagates.
  *
  * - a TEAM carrier ({@link TEAM_DISPATCH_TOOLS}) → the team branch
- *   ({@link handleTeamPostExecute}): never settled at tool return; the
- *   `spawn_teammate` member is paired to its child session and settled by the
- *   member's `subagent/end`, every other shape records an explicit unresolved
- *   continuation, and the call key is always consumed.
+ *   ({@link handleTeamPostExecute}): never settled at tool return; every shape
+ *   except a failed call records an explicit unresolved continuation, and the
+ *   call key is always consumed.
  *
  * The SAME registration also observes `subagent/end` (the verified
- * continuable-child settlement edge) for the member-child pairing: a
- * `spawn_teammate` dispatch completes when its member's initial turn settles,
+ * continuable-child settlement edge) for the member-child pairing: an
+ * activation-paired dispatch completes when its child's initial turn settles,
  * not when the creation call returns. An untagged registration at the plugin
  * apply observes every scoped child edge upstream.
  *
