@@ -2005,7 +2005,14 @@ function pairActivationChild(input: {
   resolutions.add(ref)
   void resolveMemberId(surface, execRec?.agent, name, signal)
     .then(async (resolved) => {
-      const childId = resolved !== undefined && (await isDirectChildOf(surface, parentSessionId, resolved, signal)) ? resolved : undefined
+      // A buffered end for this id is stronger evidence than the catalog read:
+      // the child already ended inside this window, so a tree that no longer
+      // lists it must not turn a real settle into an unresolved continuation.
+      const buffered = resolved !== undefined ? pairing.endsAwaitingActivation?.get(resolved) : undefined
+      const childId = resolved !== undefined
+        && (buffered !== undefined || await isDirectChildOf(surface, parentSessionId, resolved, signal))
+        ? resolved
+        : undefined
       resolutions.delete(ref)
       if (childId === undefined) {
         recordContinuationUnresolved(
@@ -2297,12 +2304,16 @@ export function registerSettleListener(ctx: Context, config: Config, pairing: Ag
               )
             }
           } else {
-            // No result payload at all → nothing mappable and no completion
-            // signal: the explicit unresolved continuation, never a silent drop.
+            // The call returned something that is not a result record (a
+            // primitive, an array, null): no mappable shape, so the explicit
+            // continuation names the real cause instead of claiming the call
+            // returned nothing.
             retireCatalogCandidate(pairing, dispatchRef)
             recordContinuationUnresolved(
               dispatchRef,
-              `the ${name} call returned no result payload — its continuation cannot be paired`,
+              result === undefined
+                ? `the ${name} call returned no result payload — its continuation cannot be paired`
+                : `the ${name} call returned a non-record payload — its continuation cannot be paired`,
             )
           }
         }

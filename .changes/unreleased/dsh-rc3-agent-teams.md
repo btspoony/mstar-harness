@@ -1,5 +1,5 @@
 ---
-packages: root, dsh
+packages: root, dsh, engine, commands
 ---
 
 - **The dsh plugin and host skills now gate and describe the rc.3 Agent Teams surface.** `@mstar-harness/dsh` records the three Team carriers (`team_task_create` / `team_task_update` `description`, `send_message.message`) as non-terminal, so a board write or an inbox acceptance no longer fabricates a delegation outcome; a durable teammate is created by the ordinary `subagent` / `subagent_fork` dispatch (`{ kind: 'activation', name }`, settled only from the child's `subagent/end`), and member identity resolves through the subagent catalog (`namesOf` / `resolveName` / `listDescendants`).

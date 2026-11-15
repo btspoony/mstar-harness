@@ -171,9 +171,9 @@ files, not replies:
   excess into the artifact and point at it.
 - **A settlement notice is a signal, not a deliverable channel.** `send_message` / a
   settle event says that work finished (status + where); it never carries the work.
-- **The same bound governs the task board.** A task `description` carries the
-  assignment (up to 16384 characters); an outcome written through `team_task_update`
-  states the result and the artifact path, not the narrative.
+- **The same bound governs the task board.** A task `description` is coordination
+  text (ids, scope, acceptance, result, artifact path — never the `## Assignment`
+  header region, which rides the task's own carrier); an outcome states the path.
 
 ## Capacity
 
