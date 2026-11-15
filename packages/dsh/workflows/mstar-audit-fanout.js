@@ -43,9 +43,10 @@ const FINDING = {
   },
 }
 
-// Per-category seat gate: the sweep/stop filter that seat applies before it returns.
-// The judgment method stays in the category's reference (security-review.md for the
-// security seat); a gate never restates it.
+// Per-category seat-surface prefix: the facts that seat has to sweep before it
+// returns, and the observations that are leads rather than findings. It is not the
+// judgment method - that stays in the category's reference (security-review.md for
+// the security seat), which the prefix points the seat at.
 const GATE = {
   security: `Security gate - this seat applies it before returning; the judgment method stays in ${a.auditRef}/security-review.md, sections 2 (exploitability) and 13 (exclusions), which you read.
 Must check:

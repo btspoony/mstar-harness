@@ -138,7 +138,9 @@ describe("dsh-workflow-scripts fan-out pool bound (behaviour, host-core-count-in
     const others = ALL_CATEGORIES.filter((category) => category !== "security");
     expect(others.length).toBeGreaterThan(0);
     for (const category of others) {
-      expect(prompts.get(category) ?? "").not.toContain("Must check:");
+      for (const marker of ["Must check:", "Not evidence - notes as a lead"]) {
+        expect(prompts.get(category) ?? "").not.toContain(marker);
+      }
     }
   });
 });

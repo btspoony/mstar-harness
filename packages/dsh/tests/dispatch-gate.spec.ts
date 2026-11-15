@@ -591,7 +591,7 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
 
 /* -------------------- boot diagnostic: explicit soft vs a repo hard arm -------------------- */
 
-describe('boot enforcement diagnostic — Config soft suppresses a repo/compass hard arm (I-001147)', () => {
+describe('boot enforcement diagnostic — Config soft suppresses a repo/compass hard arm', () => {
   it('stays silent under Config enforcement: soft; the same compass arm fires it without the override', async () => {
     const app = booted = await bootApp()
     // The repo-LEVEL hard arm: an ACTIVE iteration compass declaring
