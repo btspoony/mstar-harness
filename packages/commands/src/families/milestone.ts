@@ -23,7 +23,7 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
     : id === "milestone.update"
       ? "Read the current milestone and store revision, then retain only the intended patch. Run mstar milestone update --project project-id --id milestone-id --expect-store 0 --operation retry-id."
       : id === "milestone.assign"
-      ? "Verify the issue and milestone ids and the issue/store revisions the request was planned against, then retry as the project-manager seat. Run mstar milestone assign --project project-id --issue issue-id --reason reason --expect-issue 0 --expect-store 0 --operation retry-id --actor project-manager."
+      ? "Verify the issue and milestone ids and the issue/store revisions the request was planned against, then retry as the project-manager seat. Run mstar milestone assign --project project-id --issue issue-id --id milestone-id --reason reason --expect-issue 0 --expect-store 0 --operation retry-id --actor project-manager, or pass --clear instead of --id to unassign."
         : "Select the existing milestone project and retry the requested read.";
   if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id }, recovery: fallbackRecovery });
   return refusalEnvelope({ command: id, status: "refused", code: code ?? `${id}.internal-error`, exitCode: 1, message, details: { operation: id, ...details }, recovery: recovery ?? fallbackRecovery });
