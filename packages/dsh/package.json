@@ -171,7 +171,7 @@
     "bun-types": "^1.4.4",
     "clsx": "^2.0.0",
     "diff": "^9.0.0",
-    "dsh-llm-fallbacks": "0.8.6",
+    "dsh-llm-fallbacks": "0.8.8",
     "immer": "^11.2.10",
     "js-yaml": "^5.4.3",
     "katex": "^0.19.1",
