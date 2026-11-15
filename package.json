@@ -1,7 +1,7 @@
 {
   "name": "morning-star",
   "version": "4.6.1",
-  "description": "Morning Star \u2014 harness engineering workflow platform: TS Harness Workflow Engine + judgment skills, shipped as an Agent Plugin",
+  "description": "Morning Star — harness engineering workflow platform: TS Harness Workflow Engine + judgment skills, shipped as an Agent Plugin",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -63,5 +63,8 @@
   "omp": {
     "name": "morning-star-harness",
     "description": "Morning Star multi-agent harness skills and iteration commands for omp."
+  },
+  "overrides": {
+    "@deepseek-ai/dsh-client-ui-plugin-manager": "0.2.2-rc.3"
   }
 }
