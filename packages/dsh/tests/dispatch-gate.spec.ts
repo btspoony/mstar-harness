@@ -589,6 +589,38 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
 
 /* ---------------------------------- F7: derived caller ---------------------------------- */
 
+/* -------------------- boot diagnostic: explicit soft vs a repo hard arm -------------------- */
+
+describe('boot enforcement diagnostic — Config soft suppresses a repo/compass hard arm (I-001147)', () => {
+  it('stays silent under Config enforcement: soft; the same compass arm fires it without the override', async () => {
+    const app = booted = await bootApp()
+    // The repo-LEVEL hard arm: an ACTIVE iteration compass declaring
+    // `enforcement: hard` — the arm `resolveRepoEnforcement` reads BELOW the
+    // explicit Config override (precedence: Config > .mstarc > compass).
+    await seedHarness(app.harnessDir, {
+      'iterations/20260101-demo/delivery-compass.md': '---\niteration_id: 20260101-demo\nstatus: active\nenforcement: hard\n---\n',
+    })
+    // The apply-time warn fires before any test exporter can listen, so
+    // re-apply the plugin row on the same context (the HMR shape).
+    await app.pluginFiber!.dispose()
+    const warns = captureDispatchWarns(app.ctx)
+    const bootDiagnostics = (): string[] => warns.filter((warn) => warn.startsWith('Enforcement: hard is active'))
+
+    // Contrast first: with no explicit override the compass hardens the boot,
+    // so the unset-`dispatchTools` diagnostic fires — proof the arm is read.
+    let fiber = await app.ctx.plugin(entry, { harnessDir: app.harnessDir })
+    expect(bootDiagnostics()).toHaveLength(1)
+    expect(bootDiagnostics()[0]).toContain('dispatchTools is unset')
+
+    // The explicit soft rolls the arm back: the very same diagnostic is silent.
+    await fiber.dispose()
+    warns.length = 0
+    fiber = await app.ctx.plugin(entry, { harnessDir: app.harnessDir, enforcement: 'soft' })
+    expect(bootDiagnostics()).toHaveLength(0)
+    await fiber.dispose()
+  })
+})
+
 describe('F7 — the anti-recursion caller is DERIVED from the calling session, never invented', () => {
   it('dispatchCallerOf: a ROOT session reads the explicit binding verbatim (or the coordinator); a child/unreadable session is EMPTY', () => {
     expect(dispatchCallerOf({ dispatchBinding: 'fullstack-dev' }, rootAgent)).toBe('fullstack-dev')
