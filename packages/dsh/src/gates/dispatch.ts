@@ -111,10 +111,12 @@ export const DEFAULT_WORKFLOW_TOOLS = ['workflow', 'ralph'] as const
 
 /**
  * The fixed dsh Agent Teams tool names the dispatch gate matches, mapped to
- * the argument field that carries the Assignment-shaped text (the installed
- * `@deepseek-ai/dsh-experimental-tool-agent-team` 0.2.1-rc.2 surface:
- * `spawn_teammate.prompt`, `team_task_create.description`,
- * `team_task_update.description`, `send_message.message`).
+ * the argument field that carries the Assignment-shaped text (the
+ * `@deepseek-ai/dsh-tool-agent-team` surface: `team_task_create.description`,
+ * `team_task_update.description`, `send_message.message`, plus
+ * `spawn_teammate.prompt` — legacy-profile only, since rc.3 factory profiles
+ * create members with `subagent` / `subagent_fork`, whose carrier is `prompt`
+ * and which `DEFAULT_DISPATCH_TOOLS` already gates).
  *
  * The team tools are gated by THEIR OWN branch, never by addition to
  * `DEFAULT_DISPATCH_TOOLS` (that list stays `['subagent', 'subagent_fork']`).

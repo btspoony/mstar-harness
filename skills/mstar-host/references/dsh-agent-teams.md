@@ -1,9 +1,9 @@
 # dsh Agent Teams reference
 
 Load when the dsh profile mounts the Agent Teams layer — it is then the DEFAULT
-delegation channel: members are created with `subagent` / `subagent_fork` (or a
-legacy `spawn_teammate`) and tracked through the four `team_task_*` tools.
-Channel selection → `dsh.md` § Delegation channels.
+delegation channel: teammates are `subagent` / `subagent_fork` children (legacy:
+`spawn_teammate`) tracked through the four `team_task_*` tools. Channel selection
+→ `dsh.md` § Delegation channels.
 
 ## Channel shape
 
@@ -12,17 +12,17 @@ Channel selection → `dsh.md` § Delegation channels.
   `subagent_fork`, listed with `list_agents` and steered with `send_message`;
   `tool-agent-team` owns only the four task tools, while `list_agents` /
   `send_message` / `wait_agent` come from `tool-subagent-control`. The domain
-  service enforces Lead-only creation, so the toolset is not the authority
-  boundary. `spawn_teammate` is NOT an rc.3 factory tool — it came from the
-  removed `@deepseek-ai/dsh-experimental-agent-team-profile` and exists only
-  where a legacy profile is still installed. `interrupt_agent` is the same
-  control row, shipped OFF in every factory profile since 0.2.2-rc.3
-  (`interrupt: false`), so treat it as unavailable without a profile patch.
-- **The team tools address TEAM MEMBERS, not every subagent.** `list_agents`,
-  `send_message` and (where enabled) `interrupt_agent` resolve roster targets; a
-  direct `subagent` child is not on that roster, so a call on its id refuses with
-  `TEAM_MEMBER_NOT_FOUND`. Channel choice → `dsh.md` § Pick the delegation
-  channel before you delegate.
+  service enforces Lead-only creation. `spawn_teammate` is NOT an rc.3 factory
+  tool — it came from the removed
+  `@deepseek-ai/dsh-experimental-agent-team-profile`, so only a legacy profile
+  has it. `interrupt_agent` is the same control row, shipped OFF in every
+  factory profile since 0.2.2-rc.3, so treat it as unavailable without a patch.
+- **A teammate IS a continuable subagent child.** It is created by `subagent` /
+  `subagent_fork` (a legacy profile creates it with `spawn_teammate`) and
+  addressed by `list_agents` / `send_message` / `wait_agent`. A one-off,
+  non-continuable child takes no board participation: it cannot own a task, and
+  a task-board call against it refuses with `TEAM_MEMBER_NOT_FOUND`. Channel
+  choice → `dsh.md` § Pick the delegation channel before you delegate.
 - **Any root session is the implicit Lead**; a teammate is a continuable
   subagent child of that Lead. The creation call (`subagent`, `subagent_fork`
   or a legacy `spawn_teammate`) sends the initial task unchanged, and
@@ -76,7 +76,8 @@ task id.
 
 ### Exactly one gated carrier per Assignment — every time
 
-`TEAM_DISPATCH_TOOLS` makes four calls dispatch carriers — `spawn_teammate.prompt`,
+`TEAM_DISPATCH_TOOLS` makes four calls dispatch carriers — the creation call's
+`prompt` (`subagent` on rc.3; legacy `spawn_teammate.prompt`),
 `team_task_create.description`, `team_task_update.description` and
 `send_message.message` — and every Assignment-shaped call is recorded as its own
 dispatch. Both failure directions are real:
@@ -95,7 +96,7 @@ dispatch. Both failure directions are real:
 
 | Task on the reused track | Carrier |
 |---|---|
-| the track's FIRST task | `spawn_teammate.prompt` (the spawn is the dispatch) |
+| the track's FIRST task | the creation call's `prompt` — `subagent` on rc.3; legacy `spawn_teammate.prompt` (the creation IS the dispatch) |
 | every LATER task on that track | `send_message.message` (the steer IS the dispatch) |
 | never | `team_task_create.description` / `team_task_update.description` — the board row is the coordination record, always non-Assignment text (ids, scope, acceptance) |
 
@@ -177,7 +178,7 @@ the durable material in files, not in replies:
   that sets one does not activate (`TEAM_INVALID_CONFIG`). Teammates are
   ordinary subagent children, so width comes from `maxActiveSubagents` (default
   **8 concurrent children**) and `maxDepth` (default **1** — a teammate does not
-  delegate further unless raised). The Lead is implicit, addressable as `lead`.
+  delegate further unless raised).
 - **The activation pool caps concurrency.** A spawn past the free pool is
   rejected with `subagent limit reached (active child limit: N)`; there is no
   team-specific `TEAM_MEMBER_LIMIT`.
@@ -198,8 +199,7 @@ while the activation pool is small — 8 concurrent children by default, so a
 | Plan QC tri | `workflow` fan-out | read-only, N≥3, one run |
 
 - **Review isolation and roster economy are not in conflict.** A reviewer needs a
-  fresh CONTEXT, not a durable identity: `workflow` children never join the Team,
-  so each review is isolated while the roster stays untouched.
+  fresh CONTEXT, not a durable identity; `workflow` children never join the Team.
 - **Budget the width before the first spawn.** `tracks + reserved recovery ≤
   maxActiveSubagents` (8 by default), leaving one free slot for a failed track.
 - **A wave does NOT deliver a new seat — it moves an existing member.** Capacity
@@ -226,13 +226,14 @@ while the activation pool is small — 8 concurrent children by default, so a
 
 ## Worktree hand-off and write isolation
 
-- **The spawn has no `cwd` field; the member does.** `spawn_teammate` gives every
-  teammate the Lead's working directory as its STARTING directory — it is a full
-  agent, not a sandboxed function, so it enters an assigned checkout through its
-  own tools (absolute paths, or a directory change of its own). Parallel writable
-  tracks therefore work: create one worktree per track first (repository
-  procedure, L2 isolation), then state each member's absolute checkout path in
-  its initial prompt.
+- **The creation call's `cwd` is only a STARTING directory.** `subagent` /
+  `subagent_fork` give every teammate the Lead's working directory unless the
+  call names one (a legacy `spawn_teammate` has no `cwd` field at all) — it is a
+  full agent, not a sandboxed function, so it enters an assigned checkout
+  through its own tools (absolute paths, or a directory change of its own).
+  Parallel writable tracks therefore work: create one worktree per track first
+  (repository procedure, L2 isolation), then state each member's absolute
+  checkout path in its initial prompt.
 - **The prompt carries the absolute address; the board carries a legal scope.**
   A teammate that is never told which checkout belongs to it will edit the shared
   cwd, so the initial prompt must name the absolute worktree path, the branch,
@@ -265,4 +266,4 @@ while the activation pool is small — 8 concurrent children by default, so a
 | locks | `write_scopes` warns; concurrent writes can still interleave |
 | merges, rebases, or review gates | the Lead integrates and verifies; no tool merges member work |
 | automatic ownership release | `complete` keeps the owner; `release`, `reopen`, and `reassign` are explicit calls |
-| per-teammate model or preset selection | `spawn_teammate` takes name, description, prompt, and `context` (`fresh` / `fork`) only; the roster model inherits the Lead's, and `fork` means inherited conversation, not a different preset |
+| per-teammate model or preset selection | the creation call fixes the member's name and prompt; `fresh` vs `fork` is the tool choice (`subagent` vs `subagent_fork`) on rc.3, a `context` field on a legacy `spawn_teammate`. The model inherits the Lead's, and `fork` means inherited conversation, not a different preset |
