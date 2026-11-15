@@ -90,10 +90,13 @@ the host profile instead of reporting a bare refusal. Enumerate first —
 `dsh --profile <name> --dump-config` prints the composed loader tree, disabled
 rows included, so it names the missing row. Then recover through the host
 composition: the Team rows ship in `@deepseek-ai/dsh-base` and Team mode is a
-per-Session selection that is OFF by default, so turn it on for the Session (the
-root conversation's Use Agent Teams switch) or start new roots with
-`agent-team.config.defaultEnabled: true`; when a row exists but is disabled,
-`dsh --patch <file.yml>` adds a patch-list overlay (the upstream
+per-Session selection that is OFF by default, so turn it on for the Session
+(**Enable agent teamwork** in the root conversation's model & reasoning menu) or
+start new roots with `agent-team.config.defaultEnabled: true`; on an rc.3
+factory surface members are then created with `subagent` / `subagent_fork` (the
+legacy `spawn_teammate` comes only from the removed
+`@deepseek-ai/dsh-experimental-agent-team-profile`); when a row exists but is
+disabled, `dsh --patch <file.yml>` adds a patch-list overlay (the upstream
 `apps/cli/config/examples/team-mode.yml` is the shipped example). These take effect at the
 NEXT boot — the composition is re-read at launch, not in a running session — so
 the current session keeps its toolset: keep executing inline, or report `Blocked`
@@ -192,11 +195,12 @@ children that never join the roster. Budget, member migration between tracks (a 
 shipped `dsh-web-app` surface disables the host-plane `subagent` /
 `subagent_fork` rows, but its agent presets mount the delegation tools per
 Session again (`cordis`, `ptc` and `standard` all do), so one profile can expose
-BOTH surfaces. When `spawn_teammate` is mounted, Agent Teams is the
-starting channel and a `subagent` child is a one-off seat the board does not track
-— see § Pick the delegation channel before you delegate for the coexistence
-limits. When `spawn_teammate` is absent the Team layer is not mounted — use
-`subagent` and never attempt the Team protocol. `workflow` rides alongside both.
+BOTH surfaces. When the `team_task_*` tools are available (Team mode on for the
+root), Agent Teams is the starting channel and a `subagent` child is a one-off
+seat the board does not track — see § Pick the delegation channel before you
+delegate for the coexistence limits. When they are absent Team mode is off or the
+layer is not mounted — use `subagent` and never attempt the Team protocol.
+`workflow` rides alongside both.
 
 Team protocol — roster naming, plan-row ⇄ team-task mirroring, wake
 discipline, capacity, and worktree hand-off — → **`references/dsh-agent-teams.md`**.
