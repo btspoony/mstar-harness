@@ -374,10 +374,10 @@ function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
 }
 
 /**
- * The delegation contract: which channel is the default and what shape every
- * dispatch prompt must take. The `teamLayerMounted` gate guards the
- * team/roster sentences — without that layer the roster-reuse wording would
- * name a surface the session does not have.
+ * The delegation contract: which channel creates the teammate and what shape
+ * every dispatch prompt must take. Appended only when the Agent Teams service
+ * is mounted — without it the `team_task_*` board does not exist, so the
+ * first line would name a board the session cannot write to.
  *
  * Recorded cost of that gate: on a NON-Team composition, where `subagent` is
  * the delegation channel, the third line's dispatch-header rule is withheld.
@@ -389,14 +389,14 @@ function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
  *
  * Both facts are otherwise reachable only through `mstar-host` →
  * `references/dsh.md`, which a coordinator that is mid-task on something else
- * does not open; a session that never reads it sends writable work through
- * `subagent` and hand-writes header-less `workflow agent()` prompts, and
- * neither the dispatch gate (no pre-start seam on `workflow`) nor the role
- * gate (reads only `Execute as`) can correct that after the fact.
+ * does not open; a session that never reads it dispatches writable work
+ * without a board row and hand-writes header-less `workflow agent()` prompts,
+ * and neither the dispatch gate (no pre-start seam on `workflow`) nor the
+ * role gate (reads only `Execute as`) can correct that after the fact.
  */
 const TEAM_DELEGATION_CONTRACT = [
-  'delegation: Agent Teams is mounted — writable work defaults to one durable teammate per writable track: `subagent` / `subagent_fork` (legacy `spawn_teammate`) creates that teammate on a Team-mode root, and a roster name never returns, so reuse it via `send_message` instead of one call per task.',
-  'read-only: 1–2 read-only seats go to `subagent` only (a `subagent_fork` inherits the completed conversation, so review and audit seats would lose their fresh context); on a Team-mode root that same call also joins the roster, and a roster name never returns, so a read-only seat is not a free one. Fan-out of 3+ goes to `workflow`, whose children are fresh one-shot subagents and never join the roster; a profile that disables the direct `subagent` rows carries read-only work of any size through `workflow`, whose script is chosen by the work.',
+  'delegation: Agent Teams is mounted — writable work defaults to one durable teammate per writable track: `subagent` / `subagent_fork` creates that teammate on a Team-mode root, and that teammate is reused through `send_message` instead of one creation call per task; `team_task_*` is the shared board coordinating the work.',
+  'read-only: 1–2 read-only seats go to `subagent` only (a `subagent_fork` inherits the completed conversation, so review and audit seats would lose their fresh context); on a Team-mode root that same call also creates a continuable child, which is reused by name, so a read-only seat is not a free one. Fan-out of 3+ goes to `workflow`, whose children are fresh one-shot subagents and never join the team; a profile that disables the direct `subagent` rows carries read-only work of any size through `workflow`, whose script is chosen by the work.',
   'dispatch prompt: every delegation prompt — `workflow agent()` included — opens with "## Assignment" and "Execute as: <role>"; the role gate cannot repair a header-less `workflow` child.',
 ].join('\n')
 

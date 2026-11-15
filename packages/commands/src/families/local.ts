@@ -73,7 +73,7 @@ import { compareSemver } from "../host-health/version-compare.js";
 
 const doctorTargets = ["opencode", "cursor", "codex", "zcode", "omp", "dsh", "kimi"] as const;
 const hostSignals = [
-  "subagent_type", "question", "task_subagent", "task_agent_batch", "ask", "hub", "subagent", "spawn_teammate",
+  "subagent_type", "question", "task_subagent", "task_agent_batch", "ask", "hub", "subagent",
   "team_task_create", "Agent", "AgentSwarm", "AskUserQuestion", "EnterPlanMode", "TodoWrite", "plan_slash", "goal",
   "functions.*", "tool_search",
 ] as const;
@@ -780,7 +780,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         const signals = input.signals.split(",").map((signal) => signal.trim()).filter((signal) => signal !== "");
         if (signals.length === 0) return refusalEnvelope({ command: "host.detect", status: "usage", code: "command.invalid-input", exitCode: 2, message: "usage: host detect --signals <comma-list>" });
         const unknown = signals.find((signal) => !hostSignals.includes(signal as (typeof hostSignals)[number]));
-        if (unknown !== undefined) return refusalEnvelope({ command: "host.detect", status: "usage", code: "command.invalid-input", exitCode: 2, message: `unknown signal ${JSON.stringify(unknown)}` });
+        if (unknown !== undefined) return refusalEnvelope({ command: "host.detect", status: "usage", code: "command.invalid-input", exitCode: 2, message: `unknown signal ${JSON.stringify(unknown)} — accepted: ${hostSignals.join(", ")}` });
         return ok("host.detect", { host: detectHost(signals as ToolSignal[]) });
       },
     }),

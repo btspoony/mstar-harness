@@ -1,7 +1,7 @@
 ---
 module: packages/dsh
 date: 2026-10-19
-last_updated: 2026-10-19
+last_updated: 2026-11-15
 severity: medium
 track: knowledge
 problem_type: architecture_pattern
@@ -18,7 +18,9 @@ related_components:
   - skills/mstar-host/references/dsh-agent-teams.md
   - packages/dsh/src/gates/dispatch.ts
   - packages/dsh/src/gates/agent-flow.ts
-  - "@deepseek-ai/dsh-experimental-agent-team"
+  - "@deepseek-ai/dsh-agent-team"
+  - "@deepseek-ai/dsh-tool-agent-team"
+  - "@deepseek-ai/dsh-tool-subagent-control"
   - "@deepseek-ai/dsh-tool-subagent"
   - "@deepseek-ai/dsh-tool-workflow"
 applies_when:
@@ -33,25 +35,32 @@ plan_id: "<plan-id>, <plan-id>, <plan-id>"
 ## Context
 
 dsh ships three model-facing delegation surfaces, and a profile can expose several at once:
-`subagent`/`subagent_fork` (one-shot activation + settlement notice), the nine Agent Teams tools
-(`spawn_teammate`, task board, `wait_agent`, `send_message`; teammates are continuable subagent
-children), and `workflow` (a JS script over fresh one-shot `agent()` calls). MStar originally keyed
-host detection, the Assignment dispatch gate, and the agent-flow ledger on the `subagent` tool
-alone — so a team-only profile was invisible, ungated, and unrecorded. The contract that now holds
-(PR #538 + the iter-<plan-id> plans):
+`subagent`/`subagent_fork` (activation + the child's settlement notice; in rc.3 the same call is
+also how a durable teammate is created), the Agent Teams layer (the `team_task_*` board,
+`send_message`, `wait_agent`; a teammate IS a continuable subagent child), and `workflow` (a JS
+script over fresh one-shot `agent()` calls). MStar originally keyed host detection, the Assignment
+dispatch gate, and the agent-flow ledger on the `subagent` tool alone — so a team-only profile was
+invisible, ungated, and unrecorded. The rc.3 contract that holds:
 
 - **Selection is by work shape, not by tool preference.** One self-contained Assignment →
   `subagent`. Multi-seat / role-persistent / multi-round → Agent Teams. Read-only N≥3 fan-out →
   `workflow` (chunked to the 8-slot child pool). Skills must capability-detect and never assume a
   tool exists.
 - **One gate stack covers every carrier.** `DEFAULT_DISPATCH_TOOLS` stays
-  `['subagent','subagent_fork']`; team carriers (`spawn_teammate.prompt`,
-  `team_task_create/update.description`, `send_message.message`) route through the same core via a
-  separate terminal branch. The gate fires only on Assignment-shaped text.
-- **The ledger never settles at tool return.** `subagent` returns `{kind:'activation'}` and
-  `spawn_teammate` returns at member creation — both mean "started". Only the child's own
-  completion (the verified `subagent/end` settlement) records the outcome; unpaired shapes record
-  an explicit `continuation/unresolved` row instead of a fabricated `ok`.
+  `['subagent','subagent_fork']`; the three rc.3 team carriers
+  (`team_task_create/update.description`, `send_message.message`) route through the same core via a
+  separate non-terminal branch. The gate fires only on Assignment-shaped text.
+- **The ledger never settles at tool return.** `subagent` / `subagent_fork` return
+  `{ kind:'activation', name }` — "started". Only the child's own completion (the verified
+  `subagent/end` settlement) records the outcome; the three team carriers are non-terminal for the
+  ledger and record an explicit `continuation/unresolved` row instead of a fabricated `ok`.
+- **Member identity comes from the subagent catalog, not a roster.** rc.3 has no member/roster read:
+  `ctx.agentTeams` exposes `isEnabled`, `setEnabled`, `createTask`, `getTask`, `listTasks` and
+  `updateTask` only, and the pre-rc.3 member settlement shape (a creation call returning a member
+  record) is gone with it. A member's name is its slash path from the root (`reviewer/checker`;
+  1–32 lower-case letters, digits and hyphens starting with a letter, `lead` reserved, unique among
+  one creator's children), resolved through `ctx.get('subagents')` (`namesOf` / `resolveName` /
+  `listDescendants`). Refusals are `INVALID_AGENT_NAME` / `DUPLICATE_AGENT_NAME`.
 
 ## Guidance
 
@@ -59,11 +68,14 @@ alone — so a team-only profile was invisible, ungated, and unrecorded. The con
   `description` / `message`); a missing or non-string carrier means no gate decision, never a
   throw.
 - Team semantics that surprise: `inactive` ≠ done; task **readiness never starts the owner** (the
-  Lead must `send_message`/`reassign`); `failed` means creation failed and permanently occupies the
-  name and a member slot; the board's `writeScopes` is advisory — isolation comes from worktrees.
-- Capacity: `maxMembers` 8 in the shipped bundle (Lead counts), `maxActiveSubagents` 8 with hard
-  reject (no queue), workflow `maxConcurrentAgents = min(16, cores−2)` — the last two are
-  independent, so fan-out templates must chunk to ≤ 8 themselves.
+  Lead must `send_message`/`reassign`); a teammate is an ordinary subagent child, so `list_agents`
+  reports `running` / `inactive` / `corrupt` / `unsupported` / `unavailable` and no live
+  `provisioning` / `failed` member phase; the board's `writeScopes` is advisory — isolation comes
+  from worktrees.
+- Capacity: width comes from the subagent activation pool (`maxActiveSubagents` 8 with hard reject —
+  no queue) and `maxDepth` 1, plus the board's `maxTasks` 256; workflow
+  `maxConcurrentAgents = min(16, cores−2)` is independent of both, so fan-out templates must chunk
+  to the pool width themselves.
 - Panel honesty: project the durable `continuation` row and derive a distinct non-running entity
   state; deriving `running` from "dispatch without a paired settle" turns protocol-standard task
   writes into phantom work.
@@ -112,7 +124,7 @@ pair is exactly as discoverable as the slot it points at.
 
 ## Examples
 
-- `packages/dsh/src/gates/dispatch.ts` — `TEAM_DISPATCH_TOOLS` carrier map + the terminal team
+- `packages/dsh/src/gates/dispatch.ts` — `TEAM_DISPATCH_TOOLS` carrier map + the non-terminal team
   branch before the `dispatchTools` match.
 - `packages/dsh/src/gates/agent-flow.ts` — team post-execute branch (no settle at return), the
   `subagent/end` pairing, the activation normalization (started-not-settled), and the projected

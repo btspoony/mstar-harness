@@ -28,15 +28,15 @@ Task category: audit
 
 ## Seat count — which carrier runs N seats
 
-**N ≥ 3** is the `workflow` tool's designed width; **1–2 seats are carried by `subagent`**, and read-only fan-out never takes a teammate at any N. Where the Team layer disables `subagent`, the script follows the work, not the seat count: a 2-seat PR review runs § 3 with the tier's two domain lenses, and a 2-category audit runs § 2 with two `categories` (§ 3 requires `target` + `diffBase`, so it never carries an audit). Separately, a one-seat SDD task review must not consume a roster slot, so one-seat § 4 run is a **supported** route on a Team profile, not an improvisation. Any other 1–2 read-only delegation routes the same way: SDD task review → § 4, 2-seat PR review → § 3, 2-category audit → § 2. Writable fan-out never uses `workflow` — it has no per-child pre-start veto seam.
+**N ≥ 3** is the `workflow` tool's designed width; **1–2 seats are carried by `subagent`**, and on a Team-mode root that call IS the teammate creation, so such a round takes one of the activation pool's seats. When the seats must stay off the durable teammate budget, the script follows the work, not the seat count: a 2-seat PR review runs § 3 with the tier's two domain lenses, and a 2-category audit runs § 2 with two `categories` (§ 3 requires `target` + `diffBase`, so it never carries an audit). Separately, a one-seat SDD task review must not consume a durable teammate seat, so a one-seat § 4 run is a **supported** route, not an improvisation. Any other 1–2 read-only delegation routes the same way: SDD task review → § 4, 2-seat PR review → § 3, 2-category audit → § 2. Writable fan-out never uses `workflow` — it has no per-child pre-start veto seam.
 
 | Operator path | Script | Seats |
 |---|---|---|
 | Plan QC tri (`Execution mode: sdd`, conversation-only review) | § 1 `mstar-qc-tri` | 3 (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) |
-| `/codebase-audit` large-repo category fan-out | § 2 `mstar-audit-fanout` | 9 (one per audit category); 2 on a Team-only profile |
+| `/codebase-audit` large-repo category fan-out | § 2 `mstar-audit-fanout` | 9 (one per audit category) |
 | `/amazing-pr-review deep` | § 3 `mstar-pr-seats` | 3–4 (2–3 domain + optional cross-domain security) |
-| `/amazing-pr-review` default tier on a Team-only profile | § 3 `mstar-pr-seats` | 2 domain lenses the tier selected |
-| SDD task review that must not take a Team roster seat | § 4 `mstar-review-single` | 1 |
+| `/amazing-pr-review` default tier, seats kept off the durable teammate budget | § 3 `mstar-pr-seats` | 2 domain lenses the tier selected |
+| SDD task review that must not take a durable teammate seat | § 4 `mstar-review-single` | 1 |
 
 ## 1. `mstar-qc-tri` — plan QC tri-review
 
@@ -58,7 +58,7 @@ Task category: audit
 
 ## 2. `mstar-audit-fanout` — large-repo category fan-out
 
-**File** `@mstar-harness/dsh/workflows/mstar-audit-fanout.js` (this repo: `packages/dsh/workflows/mstar-audit-fanout.js`) · **Use** `/codebase-audit` on a repo large enough to need per-category read-only fan-out; a Team-only profile runs it at two `categories`. Reconciling, vetting and the review report stay with the audit executor (main agent).
+**File** `@mstar-harness/dsh/workflows/mstar-audit-fanout.js` (this repo: `packages/dsh/workflows/mstar-audit-fanout.js`) · **Use** `/codebase-audit` on a repo large enough to need per-category read-only fan-out. Reconciling, vetting and the review report stay with the audit executor (main agent).
 
 **`meta`**
 ```json
@@ -78,7 +78,7 @@ Task category: audit
 
 ## 3. `mstar-pr-seats` — `/amazing-pr-review deep` seats
 
-**File** `@mstar-harness/dsh/workflows/mstar-pr-seats.js` (this repo: `packages/dsh/workflows/mstar-pr-seats.js`) · **Use** the `deep` tier (3–4 seats) once the review worktree and diff basis are resolved; on a Team-only profile it IS the `default`-tier carrier, run with the tier's two domain lenses. Do not use it for the `default` tier while `subagent` is available, nor for `quick`. Its 3–4 seats sit within the child pool by construction.
+**File** `@mstar-harness/dsh/workflows/mstar-pr-seats.js` (this repo: `packages/dsh/workflows/mstar-pr-seats.js`) · **Use** the `deep` tier (3–4 seats) once the review worktree and diff basis are resolved; it is also the `default`-tier carrier when those seats must stay off the durable teammate budget, run with the tier's two domain lenses. Do not use it for `quick`. Its 3–4 seats sit within the child pool by construction.
 
 **`meta`**
 ```json
@@ -96,13 +96,13 @@ Task category: audit
 
 ## 4. `mstar-review-single` — one read-only task-review seat
 
-**File** `@mstar-harness/dsh/workflows/mstar-review-single.js` (this repo: `packages/dsh/workflows/mstar-review-single.js`) · **Use** one fresh-context SDD task reviewer that must not consume a Team roster slot (a teammate is a durable seat and the roster is finite). The run costs one `workflow-run` node instead of a subagent card — the price of keeping the reviewer off the roster; one seat is far below the child pool, so no chunking applies.
+**File** `@mstar-harness/dsh/workflows/mstar-review-single.js` (this repo: `packages/dsh/workflows/mstar-review-single.js`) · **Use** one fresh-context SDD task reviewer that must not consume a durable teammate seat (a teammate is durable and the pool is finite). The run costs one `workflow-run` node instead of a subagent card — the price of keeping the reviewer off the durable budget; one seat is far below the child pool, so no chunking applies.
 
 **This is Mode A, the SDD task reviewer, and the only mode it has.** The argument guard requires the task fields, so a PR or audit review cannot be routed here; the header's `Task category` is therefore not `audit` (an `audit` category selects `code-reviewer` Mode B and would run the wrong workflow). Writable work never uses this route.
 
 **`meta`**
 ```json
-{ "name": "mstar-review-single", "description": "One read-only SDD task-review seat (code-reviewer Mode A, fresh context, no roster seat), returning the complete canonical task-review report.", "whenToUse": "dsh host: a mandatory SDD task review that must not consume a Team roster seat (the Team profile disables the direct subagent rows).", "phases": [{ "title": "task-review", "detail": "One fresh-context Mode A task reviewer." }] }
+{ "name": "mstar-review-single", "description": "One read-only SDD task-review seat (code-reviewer Mode A, fresh context, no durable teammate seat), returning the complete canonical task-review report.", "whenToUse": "dsh host: a mandatory SDD task review that must not consume a durable teammate seat.", "phases": [{ "title": "task-review", "detail": "One fresh-context Mode A task reviewer." }] }
 ```
 
 `args` — every key except `reviewerFocus` is a required string; the guard throws naming what is missing:

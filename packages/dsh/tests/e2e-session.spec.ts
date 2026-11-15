@@ -512,7 +512,7 @@ describe('bundledSkillDir — launch-cwd resolution', () => {
  * ========================================================================== */
 
 describe('agent-flow — real settle pairing (real call through the composed registry)', () => {
-  it('a real subagent call through the composed registry records a dispatch AND a paired settle (post-execute foreground completion)', async () => {
+  it('a real subagent call through the composed registry records a dispatch AND the explicit unresolved continuation (never a tool-return settle)', async () => {
     booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, dispatchBinding: 'qc-specialist' })
     // Seed an ACTIVE execution row before invoking the composed agent-flow writer.
     await seedActiveWorkflow(booted.harnessDir, 'wf-1', [], {}, 'seed-wf-1', booted.root, 'wf-1')
@@ -545,17 +545,19 @@ describe('agent-flow — real settle pairing (real call through the composed reg
     })
     expect(result.isError).toBe(false)
 
-    // Dispatch recorded with the session's agent id AND a paired settle: the
-    // registry's post-execute waterfall fired for the same callId — the
-    // pairing store hit → the foreground result ('subagent result') settles
-    // `ok` carrying the dispatch identity (role from the Assignment). v3
-    // layout: the ledger lives in the ACTIVE workflow dir.
+    // Dispatch recorded with the session's agent id AND the explicit unresolved
+    // continuation: the registry's post-execute waterfall fired for the same
+    // callId, and the plain string result ('subagent result') is not a child
+    // turn — the rc.3 ledger never fabricates a settle from a tool return.
+    // Activation pairing (`{ kind: 'activation', name }` → `subagent/end`) is
+    // covered by agent-flow.spec.ts / team-agent-flow.spec.ts. v3 layout: the
+    // ledger lives in the ACTIVE workflow dir.
     const view = readAgentFlow(join(booted.harnessDir, 'workflows/wf-1'), 'wf-1')
     expect(view).not.toBeNull()
     expect(view!.events).toHaveLength(2)
     expect(view!.events[0]).toMatchObject({
-      kind: 'settle',
-      outcome: 'ok',
+      kind: 'continuation',
+      state: 'unresolved',
       agent: 'e2e-agent',
       role: 'fullstack-dev', // the paired dispatch's Execute as (fixture valid.md)
       planId: null,

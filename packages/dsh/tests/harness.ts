@@ -244,6 +244,50 @@ export class FakeSubagentService extends Service {
   }
 }
 
+/** One fake teammate: the model-facing name and the child SessionId `subagent/end` carries. */
+export interface FakeTeamMember {
+  /** The name a delegation names (rc.3: a subagent-tree path). */
+  name: string
+  /** The child session that name resolves to. */
+  childId: string
+}
+
+/**
+ * The two OPTIONAL rc.3 services the Agent Teams ledger reads, mounted by hand
+ * on a bare `Context` or a booted app root (`ctx.provide` after apply works:
+ * every read is per-call, never captured at apply):
+ *
+ * - `agentTeams` — the task-board service. rc.3 exposes the board only, so the
+ *   ledger's presence probe is the WHOLE surface this fixture needs; there is
+ *   deliberately no member/roster read to fake.
+ * - `subagents` — the subagent-tree reads member identity resolves through
+ *   (`namesOf` / `resolveName` / `listDescendants`). `resolveName` answers
+ *   from the fixture's name → child-SessionId map, so an activation dispatch
+ *   pairs to the exact child whose `subagent/end` the test emits.
+ */
+export function provideTeamServices(ctx: Context, members: readonly FakeTeamMember[] = []): void {
+  const byName = new Map(members.map((member) => [member.name, member.childId]))
+  ctx.provide('agentTeams' as never, { isEnabled: () => false, setEnabled: () => {} } as never)
+  ctx.provide('subagents' as never, {
+    namesOf: () => undefined,
+    resolveName: (_caller: unknown, name: string) => byName.get(name),
+    // Every fixture member is a DIRECT child of the session that asks: the
+    // ledger confirms a resolved id against this read before keying a pairing.
+    listDescendants: (rootSessionId: string) =>
+      members.map((member) => ({ id: member.childId, parentId: rootSessionId })),
+  } as never)
+}
+
+/**
+ * One macrotask: the activation name → child-SessionId resolution is async
+ * (`resolveName` is awaited before the pairing write), so a test that asserts
+ * the pairing map — or wants the child end to arrive AFTER the pairing — yields
+ * once here.
+ */
+export function activationTick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 /**
  * Minimal in-memory `agentPresets` registry: the surface the channel reads
  * (`readDocument(id)` for apply-time id validation). The channel never

@@ -753,7 +753,7 @@ function promptText(request: SubagentStartRequestView): string {
  * relative value, an omitted one, and a whitespace-only one alike (upstream
  * resolves it as a relative segment) — is `resolve(parentBase, cwd ?? '.')`.
  * Treating an omitted cwd as non-harness would exempt exactly the channel the
- * gate exists for (`subagent` / `spawn_teammate` omit it and inherit the
+ * gate exists for (`subagent` / `subagent_fork` omit it and inherit the
  * parent directory).
  *
  * @param request - the start request under gate.

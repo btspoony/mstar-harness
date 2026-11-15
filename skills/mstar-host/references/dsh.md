@@ -77,7 +77,7 @@ subagent child, so the channels differ by the BOARD, not by the tool name:
 
 | `team_task_*` available (Team mode on) | Use |
 |---|---|
-| yes | Agent Teams (§ Delegation channels): one board task per Assignment, one durable teammate per track, each created with `subagent` / `subagent_fork` (legacy: `spawn_teammate`) |
+| yes | Agent Teams (§ Delegation channels): one board task per Assignment, one durable teammate per track, each created with `subagent` / `subagent_fork` |
 | no | the direct channel — one `subagent` / `subagent_fork` call per Assignment, a one-off seat the board does not track; with neither surface, read-only work may fan out through `workflow` and anything else uses the recovery below |
 
 **When neither surface is mounted**, `workflow` carries READ-ONLY fan-out only —
@@ -90,10 +90,9 @@ rows included), naming the missing row. Then recover through the host
 composition: the Team rows ship in `@deepseek-ai/dsh-base` and Team mode is a
 per-Session selection that is OFF by default, so turn it on for the Session
 (**Enable agent teamwork** in the root conversation's model & reasoning menu) or
-start new roots with `agent-team.config.defaultEnabled: true`; on an rc.3
-factory surface members are then created with `subagent` / `subagent_fork` (only
-a legacy `@deepseek-ai/dsh-experimental-agent-team-profile` still has
-`spawn_teammate`); when a row exists but is disabled, `dsh --patch <file.yml>`
+start new roots with `agent-team.config.defaultEnabled: true`; members are then
+created with `subagent` / `subagent_fork`; when a row exists but is disabled,
+`dsh --patch <file.yml>`
 adds a patch-list overlay (upstream
 `apps/cli/config/examples/team-mode.yml`); either way this takes effect at the
 NEXT boot — the composition is re-read at launch, not in a running session — so
@@ -103,14 +102,15 @@ naming the missing tool and that recovery only after it fails.
 **Coexistence is the trap.** A teammate is a continuable subagent child, so one
 `subagent` call creates either a Team member or a one-off direct child. What
 differs is board participation: `list_agents` / `send_message` / `wait_agent`
-address continuable children, while a one-off, non-continuable child cannot own
-a task and a task-board call against it refuses with `TEAM_MEMBER_NOT_FOUND`
-(`active teammate "<id>" not found`) — do not retry it, do not rename it, and do
-not spawn a second child for the same work. `interrupt_agent` is OFF in the
+address continuable children, while a one-off, non-continuable child takes no board
+participation: it is never listed, and a board `reassign` to it refuses with
+`TEAM_MEMBER_NOT_FOUND` (`agent "<name>" is not a continuable descendant of this
+task board's root`) — do not retry it, do not rename it, and do not spawn a second
+child for the same work. `interrupt_agent` is OFF in the
 factory profiles (`tool-subagent-control.interrupt: false`) unless a patch
 enables it.
 
-**Activation is not failure.** `started subagent <id>` proves the child started;
+**Activation is not failure.** `started subagent <name>` proves the child started;
 absence from `list_agents` proves nothing. Wait for the settlement notice, and
 never replace a running child with a second spawn because you could not see it.
 
@@ -119,7 +119,7 @@ never replace a running child with a second spawn because you could not see it.
 | dsh tool | Harness use |
 |----------|-------------|
 | **`subagent`** / **`subagent_fork`** | Direct-delegation channel — one Assignment per invoke, returned at activation start (default `toolName`; a renamed instance must be declared via Config `dispatchTools`). The default channel on a profile WITHOUT the Team layer; also a one-off seat the board does not track. `subagent_fork` is the variant that seeds the child with the completed conversation (§ Delegation channels) |
-| **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` (+ `subagent` / `subagent_fork`, which CREATE the teammate; a legacy profile uses `spawn_teammate`) | Agent Teams — the DEFAULT dispatch channel whenever the Team layer is mounted and Team mode is on (one board task per Assignment, one teammate per track). `interrupt_agent` ships OFF in the factory profiles since dsh 0.2.2-rc.3 (enable `tool-subagent-control.interrupt` in a profile patch). Protocol → `references/dsh-agent-teams.md` |
+| **`team_task_create`** / `team_task_list` / `team_task_get` / `team_task_update` / **`wait_agent`** / **`send_message`** / `list_agents` / `interrupt_agent` (+ `subagent` / `subagent_fork`, which CREATE the teammate) | Agent Teams — the DEFAULT dispatch channel whenever the `team_task_*` tools are available (Team mode on for the root session): one board task per Assignment, one teammate per track. `interrupt_agent` ships OFF in the factory profiles since dsh 0.2.2-rc.3 (enable `tool-subagent-control.interrupt` in a profile patch). Protocol → `references/dsh-agent-teams.md` |
 | **`workflow`** | Read-only fan-out — one run, one conversation `workflow-run` node. N≥3 is its design width; a one-seat read-only run is supported when no direct delegation can carry it (§ Read-only fan-out via the `workflow` tool; script files under `workflows/`, call contract → `references/dsh-workflow-scripts.md`) |
 | **`mcp__mstar__mstar_<family>`** | The writable mstar command surface — one MCP tool per command family with an `action` argument (`mstar_plan` → `bind`/`prepare`/`progress`/`complete`, `mstar_workflow` → `register`, `mstar_issue` → `add`/`close`, `mstar_sdd` → `workspace`/`task-brief`, `mstar_iteration` → `gate`, `mstar_design_md` / `mstar_compound` / `mstar_roles` → `validate`, `mstar_audit` → `scaffold`/`secret-scan`/`supply-chain`). The one shared connection carries no identity of its own; the shipped row passes `--trust-caller-session-id`, so the per-call `sessionId` selector is published there (a connection launched without the flag publishes none and refuses a supplied one). A call may name the control root through `harness` when the connection is unpinned. An operation needing a session identity passes `sessionId` on an opted-in connection, or uses the native tool where one exists (plan bind, audit validate, execution clear), or the CLI (the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface) |
 | **`mstar_plan_bind`** | Native bind — the only producer of the dsh-local durable record: it binds the engine coordinator row AND writes the session's `executionBinding` slot plus the adoption receipt that ledger attribution reads (the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface). A coordinating session that wants dsh-local ledger attribution uses this tool, not the MCP action |
@@ -134,7 +134,7 @@ The dsh `subagent` tool is the DIRECT delegation channel (schema rendered by
 `subagent`) — the one that carries an Assignment when the Team layer is not
 mounted, and the shape below is what its callers emit. On a Team-mode profile the
 same Assignment text goes out through a board task + a teammate created with
-`subagent` / `subagent_fork` (legacy: `spawn_teammate`) (§ Delegation channels).
+`subagent` / `subagent_fork` (§ Delegation channels).
 Either way the dispatch gate validates the
 **Assignment header region** (`## Assignment`
 + `**Execute as**` / `**Delegation**` / `**Task category**` / `**Working
@@ -156,9 +156,9 @@ read-only fan-out surface.
 
 | Channel | Surface | Use when | Not for |
 |---|---|---|---|
-| **Agent Teams** — the four `team_task_*` tools + a durable teammate created with `subagent` / `subagent_fork` (legacy: `spawn_teammate`) + `wait_agent` + `send_message` (+ `list_agents`, `interrupt_agent`) | a durable named roster plus a shared task board; a teammate IS a continuable subagent child carrying the ordinary agent toolset (it can enter an assigned checkout through its own tools), and any root session is the implicit Lead | **the default whenever the layer is mounted and Team mode is on** — list the plan's tasks on the board first (one task per Assignment), then create one teammate per track: multi-task plans, parallel writable tracks, and any seat that must stay addressable across rounds or be steered by name | read-only fan-out while `workflow` is mounted |
-| **`subagent`** / **`subagent_fork`** | one model-facing call per Assignment; `{ kind: 'activation', subagentId }` at start, settlement notice at finish; continuable on the providers this deployment configures | the documented fallback when Team mode is off or the layer is not mounted; on a Team-mode root the SAME call creates a track's teammate (that is why a teammate is a subagent child); also single one-off lookups that need no roster | work that must stay addressable across turns, or read-only fan-out while `workflow` is mounted |
-| **`workflow`** | one model-written JS script over `agent()` / `parallel()` / `pipeline()`; its children are fresh one-shot subagents, never Team members | read-only fan-out of N≥3 seats (plan QC tri, audit categories, PR-review seats), chunked to the activation-pool width; a single read-only seat routes here when no direct delegation can carry it (Team profile, where `subagent` is disabled and a review must not take a roster seat) | writable fan-out — it has no per-child pre-start veto seam |
+| **Agent Teams** — the four `team_task_*` tools + a durable teammate created with `subagent` / `subagent_fork` + `wait_agent` + `send_message` (+ `list_agents`, `interrupt_agent`) | durable named teammates plus a shared task board; a teammate IS a continuable subagent child carrying the ordinary agent toolset (it can enter an assigned checkout through its own tools), and any root session is the implicit Lead | **the default whenever the `team_task_*` tools are available (Team mode on for the root)** — list the plan's tasks on the board first (one task per Assignment), then create one teammate per track: multi-task plans, parallel writable tracks, and any seat that must stay addressable across rounds or be steered by name | read-only fan-out while `workflow` is mounted |
+| **`subagent`** / **`subagent_fork`** | one model-facing call per Assignment; `{ kind: 'activation', name }` at start, settlement notice at finish; continuable on the providers this deployment configures | the documented fallback when Team mode is off or the layer is not mounted; on a Team-mode root the SAME call creates a track's teammate (that is why a teammate is a subagent child); also single one-off lookups that need no durable seat | work that must stay addressable across turns, or read-only fan-out while `workflow` is mounted |
+| **`workflow`** | one model-written JS script over `agent()` / `parallel()` / `pipeline()`; its children are fresh one-shot subagents, never Team members | read-only fan-out of N≥3 seats (plan QC tri, audit categories, PR-review seats), chunked to the activation-pool width; a single read-only seat routes here when no direct delegation can carry it (a task review must stay off the durable teammate budget) | writable fan-out — it has no per-child pre-start veto seam |
 
 **Parallel writable tracks are a Team workload, not a Team exclusion.** The
 channel does not create checkouts for you — that stays the repository's worktree
@@ -171,7 +171,7 @@ outside the workspace omits the field, its prompt being the whole address
 Keep disjoint seats in disjoint directories, and leave integration to the Lead.
 
 **Every Assignment has EXACTLY one gated carrier.** The creation call's `prompt`
-(`subagent` on rc.3; legacy `spawn_teammate.prompt`), `team_task_create.description`,
+(`subagent` / `subagent_fork`), `team_task_create.description`,
 `team_task_update.description` and `send_message.message` are all dispatch
 carriers. Two carriers for one piece of
 work leave a permanently unresolved duplicate in the ledger; **zero carriers
@@ -183,10 +183,10 @@ that creation call's `prompt`, every later task on that track in the
 `send_message` that starts it (§ `references/dsh-agent-teams.md` § Exactly one
 gated carrier per Assignment).
 
-**Seats are budgeted per track, not per task.** The roster has no removal
-operation and a name never returns, so one durable teammate per writable track
+**Seats are budgeted per track, not per task.** A child's name is not recycled while
+its creator's catalog records it, so one durable teammate per writable track
 (reused via `send_message`) is the plan shape; task reviewers are fresh-context
-`workflow` children that never join the roster. Budget, member migration between
+`workflow` children that take no durable seat. Budget, member migration between
 tracks (a wave moves a member, it adds no seat), and the pool-bound recovery →
 `references/dsh-agent-teams.md` § Capacity.
 
@@ -201,7 +201,7 @@ delegate for the coexistence limits. When they are absent Team mode is off or th
 layer is not mounted — use `subagent` and never attempt the Team protocol.
 `workflow` rides alongside both.
 
-Team protocol — roster naming, plan-row ⇄ team-task mirroring, wake
+Team protocol — member naming, plan-row ⇄ team-task mirroring, wake
 discipline, capacity, and worktree hand-off — → **`references/dsh-agent-teams.md`**.
 
 ## Gates and enforcement
@@ -231,7 +231,7 @@ prompt (role binding in the prompt — `Execute as` / `Act as` + skill load;
 there is no separate `agent` field, the Assignment body IS the prompt). **Which
 tool carries it is the mounted channel's decision** (§ Delegation channels):
 with Agent Teams (Team mode on), one board task plus one teammate per assignee,
-created with `subagent` / `subagent_fork` (legacy: `spawn_teammate`); with Team
+created with `subagent` / `subagent_fork`; with Team
 mode off, one bare `subagent` call per Assignment. **N
 assignees = N independent delegations** on either channel (dispatch-gate
 口径: one assistant message carries all N invokes — the gate counts each
@@ -262,7 +262,7 @@ non-harness exemption is judged at the child's EFFECTIVE start directory (an
 absolute `cwd` as-is, a relative one resolved against the parent's CURRENT
 directory, an omitted one inherited from it — the working-directory projection
 the runtime itself resolves against, never the immutable header alone), so the
-default `subagent` / `subagent_fork` / legacy `spawn_teammate` starts — which
+default `subagent` / `subagent_fork` starts — which
 omit `cwd` — are gated by
 the directory the parent is in NOW rather than exempted. A request already
 carrying `agentPreset` and an unknown provider are exempt too. `off` skips only
@@ -275,8 +275,8 @@ binding) without a reload.
 tool declares **`isConcurrencySafe: () => true`**, so a batch of invokes emitted
 in ONE assistant message is admitted concurrently instead of serialized. Each
 call is a **one-shot activation**, not a synchronous run: it returns
-`{ kind: 'activation', subagentId }` (rendered `started subagent <id>`) as soon
-as the runtime accepts the child, and the parent receives a **settlement
+`{ kind: 'activation', name }` (rendered `started subagent <name>`) as soon as
+the runtime accepts the child, and the parent receives a **settlement
 notice** when that child finishes — the call itself waits for nothing. The
 tool's input schema is `cwd` / `description` / `prompt` plus the optional
 preset and child-route fields: it has **no background-mode parameter** and **no
@@ -297,8 +297,8 @@ Dispatch consequences:
 - **A missing or rejected invoke is dispatch-incomplete for its seat** — record
   it plainly and recover as the owning skill allows. It is never a reason to
   declare the whole batch `Blocked`: there is no background mode to switch to.
-- **Activation is not completion.** A returned `subagentId` proves only that
-  the child started; completion evidence is the settlement notice (and, where
+- **Activation is not completion.** A returned `name` proves only that the child
+  started; completion evidence is the settlement notice (and, where
   the role hands back a report, the child's closing message).
 
 **Leaf completion discipline — closing message, not the report tool (PM
@@ -340,7 +340,7 @@ No-argument iteration-drive resumes the primary coordinator's workflow; nonempty
   `qc-specialist-2`, `qc-specialist-3`), each body **Act as** the respective QC
   role + QC skill load. Channel follows the **`QC report path`** field: a
   plan-backed QC seat must itself write its report file, so it routes through a
-  **writable** channel (Agent Teams roster seat; `subagent` when the Team layer
+  **writable** channel (an Agent Teams teammate; `subagent` when the Team layer
   is not mounted) — `workflow` children are read-only and only carry the
   plan-QC tri when the Assignment explicitly declares conversation-only review
   (`QC report path: N/A`), in which case the caller persists
@@ -354,7 +354,7 @@ No-argument iteration-drive resumes the primary coordinator's workflow; nonempty
   run CONCURRENTLY (wall ≈ single seat). There is no serialization promise
   either way — a PM that waits for each settlement before emitting the next
   invoke is what spaces the batch out and costs the wall time. The call return
-  (`started subagent <id>`) is an activation, never a completion. A seat that
+  (`started subagent <name>`) is an activation, never a completion. A seat that
   cannot be started at all → **`Blocked`**.
 - **`inline`**: **N=1**.
 
@@ -378,7 +378,7 @@ No-argument iteration-drive resumes the primary coordinator's workflow; nonempty
   CLI `mstar pr-review post --pr <n> --body-file <path>`; optional inline
   findings use `findings: "<file.json>"` / `--findings <file.json>`.
   MCP workspace/control-root requirements remain those in § MCP delivery.
-  Read-only seats never post, including on a Team-only profile.
+  Read-only seats never post.
 - **Body and event:** follow **mstar-audit** →
   [§ Report template](../../mstar-audit/references/pr-review.md#report-template-github-review-body)
   and publish with event **`COMMENT`**, per
@@ -402,43 +402,39 @@ deep` seats — with the shipped file's body as `script`, passed verbatim
 (package root `workflows/<name>.js`; checkout `packages/dsh/workflows/<name>.js`),
 and `meta` + `args` from the call contract in
 `references/dsh-workflow-scripts.md`. For **1–2** seats **`subagent`** is the
-carrier — read-only fan-out never takes a teammate at any N. Following the tool's
+carrier; on a Team-mode root that call creates the durable teammate, so a 1–2
+seat round takes a seat unless it routes through `workflow`. Following the tool's
 own guidance, while `subagent` is available the two-seat default tier of
 `/amazing-pr-review` shows two subagent cards and no `workflow-run` node.
 
-**Where the Team layer disables `subagent`, pick the script by the WORK, not by
-the seat count.** `mstar-review-single` (§ 4) is an SDD **task**-review script
-and only that: its guard requires `planId`, `taskId`, `reviewCwd`, `branch`,
-`briefPath` and `implementerReport`, so a PR or audit review cannot feed it —
-placeholder inputs force its task-review mode and return task reports instead of
-findings. On a Team-only profile the carriers are:
-
-| Work | Carrier |
-|---|---|
-| SDD task review (one fresh-context reviewer, no roster seat) | § 4 `mstar-review-single` — the one-seat route below |
-| 2-seat **PR review** (`/amazing-pr-review` default tier) | § 3 `mstar-pr-seats` with the two domain lenses the tier selected — its guard accepts 2–3 labels (`args.domains must hold 2-3 domain labels`), so two labels are legal; the run's seats are what the tier asked for (plus the cross-domain security seat only when the tier selected one) |
-| 2-category **codebase audit** | § 2 `mstar-audit-fanout` with `categories: [<c1>, <c2>]` — an audit reviews a REPO, not a diff, and § 2's guard asks only for `repo`, `auditRef` and `recon`; `categories` is optional (absent → all nine categories), so two labels are the two-seat form. § 3 is not an audit carrier: it requires `target` and `diffBase` |
-| a 2-seat PR review that still cannot run in that profile | no § 4 substitute and no wrapper: run the deep tier once a `subagent`-capable profile is available, or a single-seat audit |
+**Pick the script by the WORK, not by the seat count.** `mstar-review-single` (§ 4)
+is an SDD **task**-review script and only that: its guard requires `planId`,
+`taskId`, `reviewCwd`, `branch`, `briefPath` and `implementerReport`, so a PR or
+audit review cannot feed it — placeholder inputs force its task-review mode and
+return task reports instead of findings. A 2-seat PR review runs § 3 `mstar-pr-seats`
+with the two domain lenses the tier selected (its guard accepts 2–3 labels,
+`args.domains must hold 2-3 domain labels`), and a 2-category codebase audit runs
+§ 2 `mstar-audit-fanout` with `categories: [<c1>, <c2>]` — an audit reviews a REPO,
+not a diff, and § 3 is not an audit carrier: it requires `target` and `diffBase`.
 
 A § 3 run at two-domain width is a **domain-seat run at the default tier's width**,
 not a "2-seat fan-out" and not one node per seat: the operator sees the one
 `workflow-run` node that run produces. A § 2 run is the same shape at category
 width — one `workflow-run` node, one child per named category.
 
-**One read-only seat is supported when nothing else can carry it.** On a Team
-profile the direct `subagent` rows are disabled, and a task review needs a fresh
-context without taking a roster seat — so a **one-seat `workflow` run** is the
-supported route there, with the shipped `workflows/mstar-review-single.js`
-passed as `script` and its call contract in `references/dsh-workflow-scripts.md`
-§ 4. It costs one
-`workflow-run` node instead of a subagent card; that is the price of keeping the
-reviewer off the roster, not an unsupported workaround.
+**One read-only seat is supported when nothing else can carry it.** A task review
+needs a fresh context without taking a durable teammate seat — so a **one-seat
+`workflow` run** is the supported route, with the shipped
+`workflows/mstar-review-single.js` passed as `script` and its call contract in
+`references/dsh-workflow-scripts.md` § 4. It costs one `workflow-run` node instead
+of a subagent card; that is the price of keeping the reviewer off the durable
+budget, not an unsupported workaround.
 
 **Read-only only.** A workflow child is a delegated child (the shipped `spawn`
 provider pins `approval: never` for the whole delegation), and the run has **no
 per-child pre-start veto seam** — so a script is never the channel for writable
 work; writable fan-out goes through the mounted delegation channel
-(`subagent` / `subagent_fork`, or a legacy `spawn_teammate`) behind the dispatch
+(`subagent` / `subagent_fork`) behind the dispatch
 and lease gates.
 Seats return findings in their result payload and must never depend on writing
 files — the caller persists the seat reports.
@@ -469,9 +465,9 @@ never pass the deferred `agentType` option: the engine rejects it loudly.
 |---|---|---|---|---|
 | `/codebase-audit` (large repo) | ≥3 | native `workflow` | `mstar-audit-fanout` | conversation `workflow-run` node |
 | `/amazing-pr-review deep` | ≥3 | native `workflow` | `mstar-pr-seats` | same |
-| `/amazing-pr-review` default tier | 2 | `subagent`; on a Team-only profile (no `subagent`) § 3 `mstar-pr-seats` with the tier's two domain lenses — `mstar-review-single` is SDD task review only | `mstar-pr-seats` (Team-only) | two subagent cards while `subagent` is available; otherwise that single § 3 run node |
+| `/amazing-pr-review` default tier | 2 | `subagent`; when the seats must stay off the durable teammate budget, § 3 `mstar-pr-seats` with the tier's two domain lenses | `mstar-pr-seats` | two subagent cards, else that one § 3 run node |
 | Plan QC tri (PM already in session, no extra slash) | 3 | native `workflow` | `mstar-qc-tri` | conversation `workflow-run` node |
-| Any 1–2 read-only delegation | 1–2 | `subagent`; else the script that matches the work — SDD task review → § 4 `mstar-review-single`, PR review → § 3 `mstar-pr-seats` with the two lenses, codebase audit → § 2 `mstar-audit-fanout` with two `categories` | per the script | subagent cards while `subagent` is available; otherwise the one `workflow-run` node of that run |
+| Any 1–2 read-only delegation | 1–2 | `subagent`; or, to keep the seats off the durable teammate budget, the script that matches the work — SDD task review → § 4 `mstar-review-single`, PR review → § 3 `mstar-pr-seats` with the two lenses, codebase audit → § 2 `mstar-audit-fanout` with two `categories` | per the script | subagent cards; otherwise the one `workflow-run` node of that run |
 
 `meta.name` is the gate identity — keep it kebab-case and on the recommended
 list. With the default Config (`workflowNames` unset) every name is *unknown*,
@@ -565,7 +561,7 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
   gate AND host detection unless `dispatchTools` declares the new name (the
   plugin warns under hard enforcement).
 - A renamed Agent Teams tool (`send_message` / `team_task_create` /
-  `team_task_update`, or the legacy `spawn_teammate`) is out of reach until its
+  `team_task_update`) is out of reach until its
   fixed name is added to the plugin's `TEAM_DISPATCH_TOOLS` map; team names have
   no Config key, so the map is source-only — the same caveat as renamed
   `subagent` instances, one level stricter.

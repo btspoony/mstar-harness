@@ -353,7 +353,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
 
   it('(l) an omitted cwd inherits the HARNESS parent directory → repaired (not exempt)', async () => {
     const { app, provider, workspace } = await bootWithProvider()
-    // `subagent` / `spawn_teammate` omit `cwd`: the child starts in the parent's directory.
+    // `subagent` / `subagent_fork` omit `cwd`: the child starts in the parent's directory.
     await startActivationViaNativeChannel(app, specFor({ ...textPrompt(FIELD_ROLE_PROMPT), parent: parentAgent(workspace) }))
 
     const sent = provider.starts[0]!.request as RecordedRequest

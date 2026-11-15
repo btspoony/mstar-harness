@@ -21,8 +21,10 @@ import {
 } from "../packages/engine/src/index.ts";
 import {
   DOCS,
+  REMOVED_CARRIERS,
   TEAM_DOC,
   checkCarrierVocabulary,
+  checkRemovedCarriers,
   checkFenceParity,
   checkReadmePin,
   checkSeatBounding,
@@ -390,6 +392,24 @@ describe("checkCarrierVocabulary — citations match the owning carrier map", ()
   });
 });
 
+describe("checkRemovedCarriers — a removed carrier cannot come back", () => {
+  const [removed] = REMOVED_CARRIERS;
+
+  test("a document naming a removed carrier is one named row; a clean one passes", () => {
+    // The name is the fixture: derived from the guard's own list, never restated.
+    const stale: Doc = { rel: "fixture.md", text: "First dispatch via `" + removed + "`, then the board." };
+    const rows = checkRemovedCarriers([stale]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toStartWith("fixture.md:1 ");
+    expect(rows[0]).toContain(`names removed carrier "${removed}"`);
+    expect(rows[0]).toContain("`subagent` / `subagent_fork`");
+    // The same sentence with the rc.3 carrier is clean, and so is the live tree.
+    expect(checkRemovedCarriers([{ rel: "fixture.md", text: "First dispatch via `subagent`, then the board." }])).toEqual([]);
+    expect(checkRemovedCarriers([{ rel: TEAM_DOC, text: read(TEAM_DOC) }])).toEqual([]);
+    expect(checkRemovedCarriers([{ rel: CARRIER_SOURCE, text: read(CARRIER_SOURCE) }])).toEqual([]);
+  });
+});
+
 describe("checkReadmePin — recorded blob hashes equal git hash-object", () => {
   const recorderRel = "pkg/README.i18n.yaml";
   const packageDir = "pkg";
@@ -576,6 +596,8 @@ describe("dsh-contract-lint executable — the current tree passes", () => {
     expect(scanned).not.toBeNull();
     expect(Number(scanned![1])).toBeGreaterThan(0);
     expect(stdout).toContain("carrier vocabulary");
+    // The negative leg is wired, not merely exported.
+    expect(stdout).toContain("removed carriers clean");
     expect(stdout).toContain("README pin");
     expect(stdout).toContain(`${Object.keys(carrierMap()).length} carrier tools`);
   });

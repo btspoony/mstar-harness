@@ -1,52 +1,33 @@
 /**
- * Issue #545 item ① — the Agent Teams dispatch arm on a TEAM-ONLY surface.
+ * The Agent Teams capability probe on the rc.3 surface.
  *
- * ## What the code actually decides (read before trusting the issue's wording)
+ * rc.3 removed the roster AND the team-only composition: a teammate is an
+ * ordinary continuable `subagent` / `subagent_fork` child, so there is no
+ * "team tools but no subagent tools" surface left to describe. What remains is
+ * two independent structural probes plus the fixed carrier names:
  *
- * Channel selection is **name-keyed, not capability-keyed**. `gateDispatch`
- * (`src/gates/dispatch.ts`) runs the workflow branch, then the Agent Teams
- * branch on the FIXED tool name:
+ * - `ctx.get('agentTeams')` is the Team-layer presence probe (the task board);
+ *   rc.3 exposes the board only — there is no member/roster read to consult;
+ * - `ctx.get('subagents')` owns member identity (`resolveName` /
+ *   `listDescendants`): a service missing either read is not a surface, so
+ *   nothing can be resolved through it — never a guessed id;
+ * - the dispatch gate is NAME-keyed on the three Team carriers, and
+ *   `tools/pre-execute` runs BEFORE the registry resolves a tool, so an
+ *   unmounted carrier is still gated (only what happens AFTER an allowed call
+ *   changes).
  *
- *   `isTeamDispatchTool(exec.name)` → `gateTeamDispatch(...)`   (dispatch.ts:131-150, branch at :1148)
- *   else `config.dispatchTools ?? DEFAULT_DISPATCH_TOOLS` → `gateAssignmentText(...)`
- *
- * There is no `ctx.tools.get('subagent')` (or any other mounted-surface probe)
- * anywhere on that path: the presence or absence of the `subagent` tool does
- * not choose the branch, and cannot. And because `tools/pre-execute` runs
- * BEFORE the registry resolves the tool, the gate fires on the CALL NAME even
- * when the team tool is unmounted — absence of the tool is never a bypass;
- * `unknown tool` appears only after a gate-allowed call reaches resolution.
- *
- * This fixture therefore pins the truthful pair — and the registry ORDER is
- * part of the truth, not an implementation detail: `tools/pre-execute` runs
- * BEFORE the registry resolves the tool, so a team-name CALL is gated even on a
- * composition that never mounted the team tool. Absence of the tool is not a
- * way around the Assignment gate; it only changes what happens AFTER an allowed
- * call (the registry's own `unknown tool` refusal instead of a dispatch).
- *
- * - **team-only** — the team tools are registered, `subagent` is not: the team
- *   branch is selected on the real registered tool, allows a valid Assignment,
- *   and vetoes a malformed one under `Enforcement: hard` (the gate does not
- *   need `subagent` to exist to enforce its own arm);
- * - **subagent-only** — `subagent` is registered, no team tool is: a
- *   `spawn_teammate`-shaped call with a malformed Assignment is still vetoed by
- *   the team branch (naming the carrier); with a valid Assignment it passes the
- *   gate and is then refused as an unknown tool — no silent success, no
- *   dispatch record. The `subagent` arm on the same composition still vetoes,
- *   proving the difference is tool presence, not a capability switch.
- *
- * The fixture uses `ctx.tools.execute(...)` (the real registry pipeline:
- * pre-execute waterfall → resolution → body), so "mounted / not mounted" is the
- * registry's own fact, not a test-fiction.
- *
- * Nothing ② (live ledger observation) or ③ (team-only plan run) covers here:
- * both need a real team-only deployment and stay recorded as limits.
+ * Nothing here covers a live rc.3 deployment: that stays with the operator.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
-import { defineTool, type PreToolDecision } from '@deepseek-ai/dsh-tools'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import { bootApp, executeToolCall, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
+import {
+  resolveMemberId,
+  subagentSurfaceOf,
+  teamServicePresent,
+} from '../src/gates/team-identity.ts'
 
 let booted: BootResult | undefined
 let seq = 0
@@ -83,55 +64,35 @@ Do the thing, evidence-first.
 /** The ROOT calling session (no `header.parentSession`) — the one the gate reads. */
 const rootAgent = { session: { header: {} } }
 
+/** One complete subagent surface, as the ledger's structural probe sees it. */
+const completeSurface = {
+  resolveName: (_caller: unknown, name: string) => `child-${name}`,
+  listDescendants: () => [],
+}
+
 let bodyRan = 0
 
-/**
- * Register the real-named team tool the gate matches. Its body only counts a
- * run: the fixture asserts policy, never the upstream tool's own behaviour.
- */
-function registerTeamTool(app: BootResult): void {
+/** Register the real-named Team carrier the gate matches; its body only counts a run. */
+function registerBoardTool(app: BootResult): void {
   app.ctx.tools.register(defineTool({
-    name: 'spawn_teammate',
-    description: 'spawn an Agent Teams teammate',
+    name: 'team_task_create',
+    description: 'create a task-board row',
     parameters: {
-      name: { type: 'string', required: true },
-      description: { type: 'string', required: true },
-      prompt: { type: 'string' },
-      context: { type: 'string' },
+      subject: { type: 'string', required: true },
+      description: { type: 'string' },
     },
     output: {
       schema: {
         type: 'object',
         additionalProperties: false,
-        properties: { kind: { type: 'string', required: true, const: 'team' } },
+        properties: { id: { type: 'string', required: true } },
       },
-      render: () => [{ type: 'text', text: 'teammate spawned' }],
+      render: () => [{ type: 'text', text: 'task created' }],
     },
     execute: async () => {
       bodyRan += 1
-      return { kind: 'team' as const }
+      return { id: 'T-1' }
     },
-  }))
-}
-
-/** Register the `subagent` name (the mixed-surface control on a subagent-only composition). */
-function registerSubagentTool(app: BootResult): void {
-  app.ctx.tools.register(defineTool({
-    name: 'subagent',
-    description: 'delegate to a subagent',
-    parameters: {
-      description: { type: 'string', required: true },
-      prompt: { type: 'string', required: true },
-    },
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: { kind: { type: 'string', required: true, const: 'subagent' } },
-      },
-      render: () => [{ type: 'text', text: 'subagent ran' }],
-    },
-    execute: async () => ({ kind: 'subagent' as const }),
   }))
 }
 
@@ -158,131 +119,85 @@ function captureAdvisories(ctx: BootResult['ctx']): DispatchGateAdvisory[] {
   return advisories
 }
 
-/* ---------------------------------- team-only ---------------------------------- */
+/* ---------------------------------- presence probes ---------------------------------- */
 
-describe('team-only surface — no `subagent` tool, the team arm is selected and enforced', () => {
-  it('registers no subagent, still vetoes a malformed Assignment through spawn_teammate', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
-    registerTeamTool(app)
-
-    // The capability fact this fixture exists for: the composition has the team
-    // tool and NOT the subagent tool.
-    expect(app.ctx.tools.get('subagent')).toBeUndefined()
-    expect(app.ctx.tools.get('spawn_teammate')).toBeDefined()
-
-    bodyRan = 0
-    const denied = await callTool(app, 'spawn_teammate', {
-      name: 'reviewer',
-      description: 'Review the diff.',
-      prompt: MISSING_EXECUTE_AS,
-      context: 'fresh',
-    })
-
-    expect(denied.isError).toBe(true)
-    const text = textOf(denied)
-    expect(text).toContain('assignment.field.missing-execute-as')
-    // The refusal names the carrier tool that actually ran the gate.
-    expect(text).toContain('(spawn_teammate)')
-    expect(bodyRan).toBe(0)
+describe('team presence — the Team layer is a service probe, never a roster read', () => {
+  it('any agentTeams object is presence; a missing service or a throwing read is not', () => {
+    expect(teamServicePresent({ get: () => ({}) })).toBe(true)
+    expect(teamServicePresent({ get: () => undefined })).toBe(false)
+    expect(teamServicePresent({ get: () => { throw new Error('boom') } })).toBe(false)
   })
 
-  it('allows a valid writable Assignment on the same surface, with no advisory', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
-    const advisories = captureAdvisories(app.ctx)
-    registerTeamTool(app)
-
-    bodyRan = 0
-    const allowed = await callTool(app, 'spawn_teammate', {
-      name: 'reviewer',
-      description: 'Review the diff.',
-      prompt: VALID_WRITABLE,
-      context: 'fresh',
-    })
-
-    expect(allowed.isError).toBe(false)
-    expect(bodyRan).toBe(1)
-    expect(advisories).toHaveLength(0)
+  it('the subagent surface needs every subagent-tree read the ledger uses — a partial service is no surface', () => {
+    expect(subagentSurfaceOf({ get: () => completeSurface })).toBe(completeSurface)
+    expect(subagentSurfaceOf({ get: () => ({ resolveName: completeSurface.resolveName }) })).toBeUndefined()
+    expect(subagentSurfaceOf({ get: () => ({}) })).toBeUndefined()
+    expect(subagentSurfaceOf({ get: () => { throw new Error('boom') } })).toBeUndefined()
+    expect(subagentSurfaceOf({ get: () => undefined })).toBeUndefined()
   })
 
-  it('the pre-execute decision itself is the team branch, not a subagent fall-through', async () => {
-    const app = booted = await bootApp({ enforcement: 'hard' })
-    // Dispatch the waterfall exactly as the registry does, on a surface without
-    // `subagent`: a deny here can only come from the team branch (the subagent
-    // branch needs a `prompt` carrier on a name in DEFAULT_DISPATCH_TOOLS).
-    const decision = await app.ctx.waterfall(
-      'tools/pre-execute',
-      {
-        callId: `cap-${++seq}`,
-        name: 'spawn_teammate',
-        arguments: { name: 'reviewer', description: 'Review the diff.', prompt: MISSING_EXECUTE_AS },
-        agent: rootAgent,
-        signal: new AbortController().signal,
-      } as never,
-      () => Promise.resolve<PreToolDecision>({ kind: 'allow' }),
-    )
-    expect(decision.kind).toBe('deny')
-    expect(decision.kind === 'deny' && decision.reason).toContain('(spawn_teammate)')
+  it('member identity: resolveName maps a member name onto its child id', async () => {
+    const surface = subagentSurfaceOf({ get: () => completeSurface })
+    expect(await resolveMemberId(surface, { id: 'lead' }, 'reviewer')).toBe('child-reviewer')
+  })
+
+  it('an unresolvable, throwing or empty name yields undefined — never a guessed id', async () => {
+    const surface = subagentSurfaceOf({ get: () => completeSurface })
+    expect(await resolveMemberId(surface, {}, '')).toBeUndefined()
+    expect(await resolveMemberId(undefined, {}, 'reviewer')).toBeUndefined()
+    const absent = subagentSurfaceOf({ get: () => ({ ...completeSurface, resolveName: () => undefined }) })
+    expect(await resolveMemberId(absent, {}, 'reviewer')).toBeUndefined()
+    const throwing = subagentSurfaceOf({ get: () => ({ ...completeSurface, resolveName: () => { throw new Error('boom') } }) })
+    expect(await resolveMemberId(throwing, {}, 'reviewer')).toBeUndefined()
   })
 })
 
-/* ---------------------------------- subagent-only ---------------------------------- */
+/* ---------------------------------- name-keyed gate ---------------------------------- */
 
-describe('subagent-only surface — the gate runs BEFORE tool resolution, so absence is no bypass', () => {
-  it('a spawn_teammate-shaped call is still gated by the team branch without the tool being mounted', async () => {
+describe('team dispatch gate — name-keyed before tool resolution, so absence is no bypass', () => {
+  it('an unmounted board carrier is still vetoed by policy, naming the carrier', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
     const advisories = captureAdvisories(app.ctx)
-    registerSubagentTool(app)
+    expect(app.ctx.tools.get('team_task_create')).toBeUndefined()
 
-    // The team tool is genuinely absent from this composition.
-    expect(app.ctx.tools.get('spawn_teammate')).toBeUndefined()
-    expect(app.ctx.tools.get('subagent')).toBeDefined()
+    const denied = await callTool(app, 'team_task_create', { subject: 'Review the change', description: MISSING_EXECUTE_AS })
 
-    const denied = await callTool(app, 'spawn_teammate', {
-      name: 'reviewer',
-      description: 'Review the diff.',
-      prompt: MISSING_EXECUTE_AS,
-      context: 'fresh',
-    })
-
-    // Truthful behaviour: `tools/pre-execute` runs BEFORE the registry resolves
-    // the tool, and the team branch is keyed on the CALL NAME — so an absent
-    // team tool is not a way around the Assignment gate. The call is refused by
-    // policy, naming the carrier, not with an unknown-tool error.
+    // `tools/pre-execute` runs BEFORE resolution and the branch is keyed on the
+    // CALL NAME, so an absent carrier is refused by policy — naming the
+    // carrier, never the registry's unknown-tool error.
     if (!denied.isError) throw new Error('expected the dispatch gate to deny the call')
     expect(denied.error.message).toContain('assignment.field.missing-execute-as')
-    expect(denied.error.message).toContain('(spawn_teammate)')
+    expect(denied.error.message).toContain('(team_task_create)')
     expect(advisories).toHaveLength(0)
   })
 
-  it('a VALID Assignment passes the gate and only then fails as the registry\'s unknown tool', async () => {
+  it('a valid Assignment passes the gate and only then fails as the registry unknown tool', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
-    registerSubagentTool(app)
 
-    const refused = await callTool(app, 'spawn_teammate', {
-      name: 'reviewer',
-      description: 'Review the diff.',
-      prompt: VALID_WRITABLE,
-      context: 'fresh',
-    })
+    const refused = await callTool(app, 'team_task_create', { subject: 'Review the change', description: VALID_WRITABLE })
 
     // The gate has no objection (the Assignment is valid); the composition does,
     // and the refusal is the registry's own — no silent success, no dispatch.
     if (!refused.isError) throw new Error('expected the registry to refuse the unregistered tool')
     expect(refused.error.message.toLowerCase()).toContain('unknown tool')
-    expect(refused.error.message).toContain('spawn_teammate')
+    expect(refused.error.message).toContain('team_task_create')
   })
 
-  it('the same composition still vetoes its OWN subagent arm (the difference is tool presence)', async () => {
+  it('a registered board tool runs a valid call exactly once and never a malformed one', async () => {
     const app = booted = await bootApp({ enforcement: 'hard' })
-    registerSubagentTool(app)
+    const advisories = captureAdvisories(app.ctx)
+    registerBoardTool(app)
 
-    const denied = await callTool(app, 'subagent', {
-      description: 'delegate',
-      prompt: MISSING_EXECUTE_AS,
-    })
-
+    bodyRan = 0
+    const denied = await callTool(app, 'team_task_create', { subject: 'Review the change', description: MISSING_EXECUTE_AS })
     expect(denied.isError).toBe(true)
     expect(textOf(denied)).toContain('assignment.field.missing-execute-as')
-    expect(textOf(denied)).toContain('(subagent)')
+    expect(textOf(denied)).toContain('(team_task_create)')
+    expect(bodyRan).toBe(0)
+
+    const allowed = await callTool(app, 'team_task_create', { subject: 'Review the change', description: VALID_WRITABLE })
+    expect(allowed.isError).toBe(false)
+    expect(bodyRan).toBe(1)
+    expect(advisories).toHaveLength(0)
   })
 })

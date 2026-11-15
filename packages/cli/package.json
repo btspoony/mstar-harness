@@ -27,7 +27,7 @@
     "node": ">=24.18.0"
   },
   "mstar": {
-    "dshLlmFallbacks": "0.8.2"
+    "dshLlmFallbacks": "0.8.8"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",

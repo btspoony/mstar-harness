@@ -47,7 +47,7 @@ PM writes/updates at `{SDD_DIR}/implementer-session.json` when starting or conti
 }
 ```
 
-`host` names the host the ledger belongs to, and `host_agent_id` is the same field on every host: what a resume addresses. On **dsh** that is the durable teammate's `target` in Agent Teams mode, or the continuable `subagent` id on a direct-only profile (no resume token exists there — the id is the resume handle).
+`host` names the host the ledger belongs to, and `host_agent_id` is the same field on every host: what a resume addresses. On **dsh** that is the subagent path name `list_agents` shows (`lead` for the root, `reviewer/checker` for a child): `send_message({ agent, message })` addresses that name, or a session id — no resume token exists, so the name is the handle.
 
 After each completed task review, PM sets `last_task` to N. **Do not** resume if `host_agent_id` is missing — fall back to `fresh` for that task.
 
@@ -97,7 +97,7 @@ Max **3** tasks per micro-batch without user override. See `project-manager.md` 
 | **Cursor** | `Task` with `resume: <host_agent_id>` — **`mstar-host/references/cursor.md`** § SDD sticky |
 | **OpenCode** | Resume only if task tool supports it; else micro-batch or `fresh` per task |
 | **Codex** | Thread resume only when callable multi-agent tool documents agent id; else micro-batch or `fresh` |
-| **dsh** | **Agent Teams mode (default):** the durable teammate is resumed by name — `send_message` with its `target` — so the teammate, not a resume token, carries the context. **Direct-`subagent` mode:** continuation resume through the recorded continuable id (`send_message`, which takes `agent_id` there). Either way a second child is never spawned for the same work — **`mstar-host/references/dsh.md`** § Pick the delegation channel before you delegate + § Delegation channels |
+| **dsh** | **Agent Teams mode (default):** the durable teammate is resumed by name — `send_message({ agent, message })` addresses the `list_agents` name path (`reviewer/checker`; root is `lead`) — so the teammate, not a resume token, carries the context. **Direct-`subagent` mode:** continuation resume is the same `{ agent, message }` call with the recorded child's name; no separate id field exists. Either way a second child is never spawned for the same work — **`mstar-host/references/dsh.md`** § Pick the delegation channel before you delegate + § Delegation channels |
 
 ## PM NEVER (sticky)
 

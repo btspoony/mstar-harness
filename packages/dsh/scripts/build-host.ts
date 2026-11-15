@@ -34,7 +34,6 @@ const ENTRIES = ['src/index.ts', 'src/invariant.ts'] as const
 export const EXTERNALS = [
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-llm',
-  '@deepseek-ai/dsh-scope',
   '@deepseek-ai/dsh-skill-filesystem',
   '@deepseek-ai/dsh-storage-domain',
   '@deepseek-ai/dsh-tools',
