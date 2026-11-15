@@ -108,14 +108,15 @@ function textPrompt(text: string): RecordedRequest {
 }
 
 /**
- * One activation spec for `provider`: the request under test plus any field
- * the channel does not consume (forwarded verbatim) — `signal`, `label`,
- * `childId`, `delivery`.
+ * One activation spec for `provider`: the request fields under test plus any
+ * field the channel does not consume (forwarded verbatim) — `signal`,
+ * `label`, `childId`, `delivery`. The spec extends the request (dsh
+ * 0.2.2-rc.3), so the request fields sit on the spec itself.
  */
 function specFor(provider: string, request: RecordedRequest, extra: Record<string, unknown> = {}): SubagentActivationSpecView {
   // Boundary cast: this fixture deliberately carries fields beyond the view
-  // (the channel must forward them verbatim) and a signal the view omits.
-  const spec = { provider, request, signal: new AbortController().signal, ...extra }
+  // (the channel must forward them verbatim).
+  const spec = { provider, ...request, signal: new AbortController().signal, ...extra }
   return spec as unknown as SubagentActivationSpecView
 }
 
@@ -217,8 +218,8 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
 
       expect(provider.starts).toHaveLength(2)
       // Identity, not just absence: no merge happened at all.
-      expect(provider.starts[0]!.request).toBe(unmapped.request)
-      expect(provider.starts[1]!.request).toBe(plain.request)
+      expect(provider.starts[0]!.request).toBe(unmapped)
+      expect(provider.starts[1]!.request).toBe(plain)
       expect(provider.starts[0]!.request).not.toHaveProperty('agentPreset')
       expect(provider.starts[1]!.request).not.toHaveProperty('agentPreset')
       expect(captured).toHaveLength(0) // no-op is silent
@@ -274,7 +275,7 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
       await startActivationViaNativeChannel(app, spec)
 
       expect(provider.starts).toHaveLength(1)
-      expect(provider.starts[0]!.request).toBe(spec.request)
+      expect(provider.starts[0]!.request).toBe(spec)
       expect(captured).toHaveLength(1)
       expect(captured[0]![0]).toBe('debug')
       expect(captured[0]![1]).toContain('does not support independent preset selection')
@@ -292,7 +293,7 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     try {
       await startActivationViaNativeChannel(app, spec)
 
-      expect(provider.starts[0]!.request).toBe(spec.request) // identity — untouched
+      expect(provider.starts[0]!.request).toBe(spec) // identity — untouched
       expect(provider.starts[0]!.request.agentPreset).toBe('caller-preset')
       expect(captured).toHaveLength(0)
     } finally {
@@ -311,8 +312,8 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
       await startActivationViaNativeChannel(app, imageOnly)
 
       expect(provider.starts).toHaveLength(2)
-      expect(provider.starts[0]!.request).toBe(empty.request)
-      expect(provider.starts[1]!.request).toBe(imageOnly.request)
+      expect(provider.starts[0]!.request).toBe(empty)
+      expect(provider.starts[1]!.request).toBe(imageOnly)
       expect(captured).toHaveLength(0) // nothing to parse → silent no-op
     } finally {
       restore()
@@ -408,21 +409,20 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     }
   })
 
-  it('(h2) a poisoned merge warns ONCE and forwards the ORIGINAL request', async () => {
+  it('(h2) a poisoned merge warns ONCE and forwards the ORIGINAL spec', async () => {
     const { app, provider } = await bootWithProvider('fake-spawn')
 
-    // A request whose `prompt` getter throws drives the merge into its catch:
-    // the ORIGINAL request object reaches the service (the channel adds no
+    // A spec whose `prompt` getter throws drives the merge into its catch:
+    // the ORIGINAL spec object reaches the service (the channel adds no
     // failure surface of its own).
-    const hostile: RecordedRequest = {}
-    Object.defineProperty(hostile, 'prompt', { get() { throw new Error('prompt exploded') } })
-    const spec = specFor('fake-spawn', hostile)
+    const spec = specFor('fake-spawn', {})
+    Object.defineProperty(spec, 'prompt', { get() { throw new Error('prompt exploded') } })
     const { captured, restore } = captureLogs()
     try {
       await startActivationViaNativeChannel(app, spec)
 
       expect(provider.starts).toHaveLength(1)
-      expect(provider.starts[0]!.request).toBe(hostile)
+      expect(provider.starts[0]!.request).toBe(spec)
       expect(captured).toHaveLength(1)
       expect(captured[0]![0]).toBe('warn')
       expect(captured[0]![1]).toContain('degraded to pass-through')
@@ -660,15 +660,14 @@ describe('native role-preset channel — wrapper mechanics', () => {
 
       const received = boot.service.specs[0]!
       // The merge rebuilds the spec by spreading it: every non-consumed field
-      // survives, and the selection lands on the request.
+      // survives, and the selection lands on the spec.
       expect(received.provider).toBe('fake-spawn')
       expect(received.label).toBe('child label')
       expect(received.childId).toBe('child-1')
       expect(received.delivery).toBe('caller')
       expect(received.signal).toBeInstanceOf(AbortSignal)
       // Boundary cast: the recorded spec is an untyped bag (the channel spreads it).
-      const receivedRequest = received.request as RecordedRequest
-      expect(receivedRequest.agentPreset).toBe(PRESET_ID)
+      expect((received as RecordedRequest).agentPreset).toBe(PRESET_ID)
     } finally {
       await boot.dispose()
     }

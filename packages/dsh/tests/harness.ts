@@ -173,7 +173,7 @@ export class FakeSubagentProvider {
   }
   /** Descriptive-only flag (`SubagentProvider.inheritsParentContext`). */
   readonly inheritsParentContext: boolean
-  /** The resolved requests, in start order (post-selection, post-gate). */
+  /** The forwarded activation specs, in start order (post-selection, post-gate). */
   readonly starts: Array<{ request: { agentPreset?: string; cwd?: string; prompt?: unknown } }> = []
 
   constructor(name: string, options: { agentPresetCapability?: boolean; inheritsParentContext?: boolean } = {}) {
@@ -232,11 +232,15 @@ export class FakeSubagentService extends Service {
    * Establish one child: fail loud the way the real runtime does for an
    * unknown provider (`NO_PROVIDER` — the channel deliberately does not shadow
    * it), otherwise delegate to the provider's `start`.
+   *
+   * Since dsh 0.2.2-rc.3 the activation spec EXTENDS the start request, so the
+   * provider receives the forwarded spec (the request fields plus the
+   * activation-only ones the provider ignores).
    */
-  startActivation(spec: { provider: string; request: { agentPreset?: string; prompt?: unknown } }): Promise<unknown> {
+  startActivation(spec: Parameters<SubagentsServiceView['startActivation']>[0]): Promise<unknown> {
     const provider = this.getProvider(spec.provider)
     if (provider === undefined) throw new Error(`NO_PROVIDER: no subagent provider registered as '${spec.provider}'`)
-    return Promise.resolve(provider.start(spec.request))
+    return Promise.resolve(provider.start(spec))
   }
 }
 

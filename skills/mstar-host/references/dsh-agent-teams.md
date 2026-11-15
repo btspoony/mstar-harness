@@ -1,34 +1,42 @@
 # dsh Agent Teams reference
 
 Load when the dsh profile mounts the Agent Teams layer — it is then the DEFAULT
-delegation channel, and plan work runs through `spawn_teammate`, `team_task_*`,
-`wait_agent`, and `send_message`. Channel selection → `dsh.md` § Delegation
-channels.
+delegation channel: teammates are `subagent` / `subagent_fork` children (legacy:
+`spawn_teammate`) tracked through the four `team_task_*` tools. Channel selection
+→ `dsh.md` § Delegation channels.
 
 ## Channel shape
 
-- **Nine tools, installed per member.** `spawn_teammate`, `send_message`,
-  `list_agents`, `wait_agent`, `interrupt_agent`, `team_task_create` /
-  `team_task_list` / `team_task_get` / `team_task_update`. Every member — Lead
-  and teammates — receives the same nine definitions; the domain service
-  enforces Lead-only creation and interruption, so the toolset is not the
-  authority boundary.
-- **The nine tools address TEAM MEMBERS, not every subagent.** `list_agents`,
-  `send_message` and `interrupt_agent` resolve roster targets. A child started
-  through the direct `subagent` tool is not on that roster, so on a profile that
-  mounts both surfaces it is invisible here and a `send_message` /
-  `interrupt_agent` call on its id refuses with `TEAM_MEMBER_NOT_FOUND`. Channel
+- **Team surface: the four `team_task_*` tools plus the shared control
+  tools.** On an rc.3 factory surface members are created with `subagent` /
+  `subagent_fork`, listed with `list_agents` and steered with `send_message`;
+  `tool-agent-team` owns only the four task tools, while `list_agents` /
+  `send_message` / `wait_agent` come from `tool-subagent-control`. The domain
+  service enforces Lead-only creation. `spawn_teammate` is NOT an rc.3 factory
+  tool — it came from the removed
+  `@deepseek-ai/dsh-experimental-agent-team-profile`, so only a legacy profile
+  has it. `interrupt_agent` is the same control row, shipped OFF in every
+  factory profile since 0.2.2-rc.3, so treat it as unavailable without a patch.
+- **A teammate IS a continuable subagent child.** It is created by `subagent` /
+  `subagent_fork` (a legacy profile creates it with `spawn_teammate`) and
+  addressed by `list_agents` / `send_message` / `wait_agent`. A one-off,
+  non-continuable child takes no board participation: it cannot own a task, and
+  a task-board call against it refuses with `TEAM_MEMBER_NOT_FOUND`. Channel
   choice → `dsh.md` § Pick the delegation channel before you delegate.
 - **Any root session is the implicit Lead**; a teammate is a continuable
-  subagent child of that Lead. `spawn_teammate` sends the initial task
-  unchanged, `send_message` steers a running member at its nearest step
-  boundary and starts or resumes an inactive one.
-- **Availability is profile-composed.** When `spawn_teammate` is absent from
-  the toolset the Team layer is not mounted — use the `subagent` channel and
-  never attempt the protocol below. Mounted, the shipped Team profile layer
-  disables the legacy direct-delegation rows; it does not disable `workflow`.
-- **One Team per root session.** Roster entries and the task board are durable
-  in the Lead session log; a fresh root starts an empty Team.
+  subagent child of that Lead. The creation call (`subagent`, `subagent_fork`
+  or a legacy `spawn_teammate`) sends the initial task unchanged, and
+  `send_message` steers a running member at its nearest step boundary.
+- **Availability is profile-composed.** The team tools resolve availability at
+  step preparation, so they are absent while Team mode is OFF for the root — the
+  rc.3 factory default (**Enable agent teamwork** in the root conversation's
+  model & reasoning menu, or `agent-team.config.defaultEnabled: true` in a
+  profile patch). While they are absent use `subagent` and never attempt the
+  protocol below; when they are available the shipped `dsh-web-app` surface has
+  the host-plane direct rows disabled while its presets mount them per Session
+  again. `workflow` stays mounted either way.
+- **One Team per root session.** Roster entries and the task board are durable in
+  the Lead session log; a fresh root starts an empty Team.
 
 ## Roster naming
 
@@ -49,7 +57,8 @@ interruption, task owners — and it is immutable for the Team's lifetime.
   later failed is still taken (`TEAM_MEMBER_NAME_TAKEN`), so retries use the
   next free seat ordinal.
 - The roster shows `role: lead` or `role: teammate`; use the name (target) in
-  `send_message`, `interrupt_agent`, and task `owner` / `reassign` fields.
+  `send_message` (and `interrupt_agent` where the profile enables it), and task
+  `owner` / `reassign` fields.
 
 ## Plan-row ⇄ team-task mirroring
 
@@ -67,7 +76,8 @@ task id.
 
 ### Exactly one gated carrier per Assignment — every time
 
-`TEAM_DISPATCH_TOOLS` makes four calls dispatch carriers — `spawn_teammate.prompt`,
+`TEAM_DISPATCH_TOOLS` makes four calls dispatch carriers — the creation call's
+`prompt` (`subagent` on rc.3; legacy `spawn_teammate.prompt`),
 `team_task_create.description`, `team_task_update.description` and
 `send_message.message` — and every Assignment-shaped call is recorded as its own
 dispatch. Both failure directions are real:
@@ -86,7 +96,7 @@ dispatch. Both failure directions are real:
 
 | Task on the reused track | Carrier |
 |---|---|
-| the track's FIRST task | `spawn_teammate.prompt` (the spawn is the dispatch) |
+| the track's FIRST task | the creation call's `prompt` — `subagent` on rc.3; legacy `spawn_teammate.prompt` (the creation IS the dispatch) |
 | every LATER task on that track | `send_message.message` (the steer IS the dispatch) |
 | never | `team_task_create.description` / `team_task_update.description` — the board row is the coordination record, always non-Assignment text (ids, scope, acceptance) |
 
@@ -162,44 +172,41 @@ the durable material in files, not in replies:
 
 ## Capacity
 
-- **The Team layer caps the roster.** The shipped profile sets
-  `maxMembers: 8`; that cap counts **created teammates**, while the Lead is
-  implicit and addressable as `lead`. The 9th creation is refused with
-  `Team member limit 8 reached` (`TEAM_MEMBER_LIMIT`).
-- **The activation pool caps concurrency.** The subagent manager defaults to
-  **8 concurrent children** (`maxActiveSubagents`); a spawn beyond the free
-  pool is rejected (`subagent limit reached (active child limit: 8)`).
+- **The Team layer declares no roster cap of its own.** Since 0.2.2-rc.3
+  `agent-team` config is only `maxTasks` (default 256) and `defaultEnabled`;
+  `maxMembers` / `maxMessageBytes` / `disposalTimeoutMs` were REMOVED and a row
+  that sets one does not activate (`TEAM_INVALID_CONFIG`). Teammates are
+  ordinary subagent children, so width comes from `maxActiveSubagents` (default
+  **8 concurrent children**) and `maxDepth` (default **1** — a teammate does not
+  delegate further unless raised).
+- **The activation pool caps concurrency.** A spawn past the free pool is
+  rejected with `subagent limit reached (active child limit: N)`; there is no
+  team-specific `TEAM_MEMBER_LIMIT`.
 - **Failures are permanent.** A `failed` creation keeps its roster entry — its
-  name and its roster slot — because the roster has no removal tool. Plan the
-  team width against both caps; when the roster is full, do not invent a ninth
-  member: keep the remaining work inside the existing seats and record the cap
-  as the reason the remaining rows are not dispatched.
+  name stays taken — because the roster has no removal operation. Plan the width
+  against the pool and the depth limit, and record the bound on the plan row.
 
 ### Seat budget: one seat per track, never one per task
 
-The roster is **finite and non-recyclable**, so a seat policy of "a fresh
-teammate for every task" exhausts it and then cannot dispatch the remaining work
-— on a Team profile the direct `subagent` rows are disabled, so there is no
-cheap escape once the roster is full.
+The roster is **non-recyclable** (no removal operation, a name never returns)
+while the activation pool is small — 8 concurrent children by default, so a
+"fresh teammate per task" policy churns names, checkouts and context for no gain.
 
 | Work | Seat | Why |
 |---|---|---|
-| Implementer | **one durable teammate per WRITABLE TRACK**, reused across that track's tasks via `send_message` | the track keeps its checkout, branch, and context; a new seat per task is what exhausts the roster |
-| Task reviewer | **not a roster seat** — a `workflow` single-seat read-only run (or `subagent` when mounted) | review isolation wants a fresh context per task, and fresh-context children outside the roster do not consume the cap. The one-seat `workflow` route is a **supported** path when no direct delegation can carry the seat — template `dsh-workflow-scripts.md` § 4 `mstar-review-single`; rules `dsh.md` § Read-only fan-out |
+| Implementer | **one durable teammate per WRITABLE TRACK**, reused across that track's tasks via `send_message` | the track keeps its checkout, branch, and context; a new seat per task churns the pool and the name space for no gain |
+| Task reviewer | **not a roster seat** — a `workflow` single-seat read-only run (or `subagent` when mounted) | review isolation wants a fresh context per task, and fresh-context children outside the roster take no durable seat. The one-seat `workflow` route is a **supported** path when no direct delegation can carry the seat — template `dsh-workflow-scripts.md` § 4 `mstar-review-single`; rules `dsh.md` § Read-only fan-out |
 | Plan QC tri | `workflow` fan-out | read-only, N≥3, one run |
 
 - **Review isolation and roster economy are not in conflict.** A reviewer needs a
-  fresh CONTEXT, not a durable identity: `workflow` children are fresh one-shot
-  subagents that never join the Team, so each task review is isolated while the
-  roster stays untouched.
+  fresh CONTEXT, not a durable identity; `workflow` children never join the Team.
 - **Budget the width before the first spawn.** `tracks + reserved recovery ≤
-  maxMembers`; leave at least one free slot so a genuinely failed track can be
-  re-seated.
-- **A wave does NOT free capacity — it moves an existing member.** Idle is not
-  freed: `maxMembers` counts created teammates and the roster has no removal
-  operation, so waiting for a wave to finish never yields a new seat. When a plan
-  has more writable tracks than `maxMembers - reserved`, the supported move is to
-  **reassign an idle member to the later track** and tell it the new address:
+  maxActiveSubagents` (8 by default), leaving one free slot for a failed track.
+- **A wave does NOT deliver a new seat — it moves an existing member.** Capacity
+  is the activation pool plus a name space that never returns, so a finished
+  wave is not a budget for the next track. When a plan has more writable tracks
+  than the pool minus reserved recovery, the supported move is to **reassign an
+  idle member to the later track** and tell it the new address:
   1. `list_agents` → pick a teammate that is `inactive` and whose track is
      genuinely finished (its board task is `complete`).
   2. `team_task_get` the later track's board task, then `team_task_update`
@@ -210,22 +217,23 @@ cheap escape once the roster is full.
      header-free wake-up would leave the task ungated.
   Record the migration on the plan row. If no member is free, the remaining
   tracks wait; if they cannot wait, run their read-only work as `workflow` seats
-  and record the cap as the reason the remaining writable rows are not
+  and record the bound as the reason the remaining writable rows are not
   dispatched.
-- **When the cap is reached, the recovery is documented, not manual.** Keep the
-  remaining rows on their existing track owners, or run them as `workflow`
-  read-only work, and record the cap as the reason in the plan row — never a
-  ninth spawn attempt, and never a hand-edited roster.
+- **When the pool is exhausted, the recovery is documented, not manual.** Keep
+  the remaining rows on their existing track owners, or run them as `workflow`
+  read-only work, and record the bound as the reason in the plan row — never a
+  spawn retry against a full pool, and never a hand-edited roster.
 
 ## Worktree hand-off and write isolation
 
-- **The spawn has no `cwd` field; the member does.** `spawn_teammate` gives every
-  teammate the Lead's working directory as its STARTING directory — it is a full
-  agent, not a sandboxed function, so it enters an assigned checkout through its
-  own tools (absolute paths, or a directory change of its own). Parallel writable
-  tracks therefore work: create one worktree per track first (repository
-  procedure, L2 isolation), then state each member's absolute checkout path in
-  its initial prompt.
+- **The creation call's `cwd` is only a STARTING directory.** `subagent` /
+  `subagent_fork` give every teammate the Lead's working directory unless the
+  call names one (a legacy `spawn_teammate` has no `cwd` field at all) — it is a
+  full agent, not a sandboxed function, so it enters an assigned checkout
+  through its own tools (absolute paths, or a directory change of its own).
+  Parallel writable tracks therefore work: create one worktree per track first
+  (repository procedure, L2 isolation), then state each member's absolute
+  checkout path in its initial prompt.
 - **The prompt carries the absolute address; the board carries a legal scope.**
   A teammate that is never told which checkout belongs to it will edit the shared
   cwd, so the initial prompt must name the absolute worktree path, the branch,
@@ -258,4 +266,4 @@ cheap escape once the roster is full.
 | locks | `write_scopes` warns; concurrent writes can still interleave |
 | merges, rebases, or review gates | the Lead integrates and verifies; no tool merges member work |
 | automatic ownership release | `complete` keeps the owner; `release`, `reopen`, and `reassign` are explicit calls |
-| per-teammate model or preset selection | `spawn_teammate` takes name, description, prompt, and `context` (`fresh` / `fork`) only; the roster model inherits the Lead's, and `fork` means inherited conversation, not a different preset |
+| per-teammate model or preset selection | the creation call fixes the member's name and prompt; `fresh` vs `fork` is the tool choice (`subagent` vs `subagent_fork`) on rc.3, a `context` field on a legacy `spawn_teammate`. The model inherits the Lead's, and `fork` means inherited conversation, not a different preset |
