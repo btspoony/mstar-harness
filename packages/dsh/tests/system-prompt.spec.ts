@@ -191,6 +191,15 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(withText).toContain('one durable teammate per writable track')
     expect(withText).toContain('"## Assignment" and "Execute as: <role>"')
     expect(withText).toContain('`workflow agent()` included')
+    // The read-only clause names its carriers explicitly: 1-2 seats go to
+    // `subagent` only (a fork inherits the conversation), while fan-out and a
+    // `subagent`-disabled profile route through `workflow`.
+    const readOnlyLine = withText.split('\n').find((line) => line.startsWith('read-only: '))
+    expect(readOnlyLine).toBeDefined()
+    expect(readOnlyLine).toContain('`subagent` only')
+    expect(readOnlyLine).toContain('fan-out of 3+ goes to `workflow`')
+    // `subagent_fork` is named only as the carrier NOT to use.
+    expect(readOnlyLine).not.toContain('`subagent` / `subagent_fork`')
   })
 
   it('(b) no ACTIVE workflow ⇒ the engine-status context is EMPTY — not even the version line (D1)', async () => {

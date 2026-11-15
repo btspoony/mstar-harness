@@ -355,10 +355,12 @@ function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
  * name a surface the session does not have.
  *
  * Recorded cost of that gate: on a NON-Team composition, where `subagent` is
- * the delegation channel, the third line's dispatch-header rule is withheld
- * even though the dispatch and role gates still veto a header-less `subagent`
- * prompt (`dispatch.ts` `DEFAULT_DISPATCH_TOOLS`). Shipping the header rule
- * unconditionally would close it; that is a separate behaviour change.
+ * the delegation channel, the third line's dispatch-header rule is withheld.
+ * Under `hard` enforcement the dispatch/role gates still deny a header-less
+ * `subagent` prompt (`dispatch.ts` `DEFAULT_DISPATCH_TOOLS`), but the default
+ * deployment is soft/warn-only, so there the rule is simply uncovered.
+ * Shipping the header rule unconditionally would close it; that is a separate
+ * behaviour change.
  *
  * Both facts are otherwise reachable only through `mstar-host` →
  * `references/dsh.md`, which a coordinator that is mid-task on something else
@@ -369,7 +371,7 @@ function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
  */
 const TEAM_DELEGATION_CONTRACT = [
   'delegation: Agent Teams is mounted — writable work defaults to one durable teammate per writable track: `subagent` / `subagent_fork` (legacy `spawn_teammate`) creates that teammate on a Team-mode root, and a roster name never returns, so reuse it via `send_message` instead of one call per task.',
-  'read-only: 1–2 read-only seats default to `subagent` / `subagent_fork`; read-only fan-out of 3+ goes to `workflow`, which also carries a single seat only when nothing else can (a Team profile whose direct `subagent` rows are disabled) — a `subagent` call on a Team-mode root joins the roster, so read-only fan-out stays off it.',
+  'read-only: 1–2 read-only seats go to `subagent` only — a `subagent_fork` inherits the completed conversation, so review and audit seats would lose their fresh context and a Team-mode root burns a roster slot; fan-out of 3+ goes to `workflow`, and a profile that disables the direct `subagent` rows carries read-only work of any size through `workflow`, whose script is chosen by the work.',
   'dispatch prompt: every delegation prompt — `workflow agent()` included — opens with "## Assignment" and "Execute as: <role>"; the role gate cannot repair a header-less `workflow` child.',
 ].join('\n')
 
