@@ -6,6 +6,26 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.6.2] - 2026-11-15
+
+### Changed
+
+- **The plugin-level below-floor runtime refusal is covered again.** A test installs the engine stub before importing the plugin, proves no store read happens, and restores the real exports afterwards so the replacement cannot leak into later files of the same process.
+- **The frontmatter parity test asserts a parsed value.** The real-asset half compares a loaded `description` against an independent parse of the same file, for one agent and one command, instead of checking that keys exist.
+- **The engine-status first render is a stated contract.** A workspace key that is not yet memoized answers with the version-only summary while the store-backed read warms in the background; a spec pins that first render and the second one after the refresh.
+- Raised the `@deepseek-ai/dsh-*` corridor from `^0.2.2-rc.1` to `^0.2.2-rc.3` (63 `peerDependencies` entries plus six dev-only helper packages; the `@deepseek-ai/cordis ~4.1.0` peer still holds).
+- Adapted the native role-preset channel to the flattened activation spec: since `0.2.2-rc.3` `SubagentActivationSpec` extends the start request instead of nesting it, so the channel merges `agentPreset` into the spec itself and forwards it by identity; the compile-time surface gate in `role-persona.spec.ts` now holds again.
+- Migrated the activation-spec fixtures (`role-persona`, `role-gate`, `fork-gate`, `hmr-safety`, `persona-seam-probe`, `install-doctor-e2e`) and the fake `subagents` service to the same shape.
+- The install-surface doctor e2e arms its preset-selection assertion only against an installed artifact built for this source tree's dsh corridor, so a published plugin one corridor behind no longer fails the source-level contract.
+- Followed the upstream Team package renames (`dsh-agent-team` / `dsh-tool-agent-team`, the removed `dsh-experimental-agent-team-profile` overlay) in the host reference docs, and recorded that `interrupt_agent` ships OFF in every factory profile since `0.2.2-rc.3` (`tool-subagent-control.interrupt: false`).
+- **`milestone assign` authorizes like every other direct issue write.** The only route that sets or changes an issue's milestone membership now takes `--actor project-manager` plus the `--expect-issue` / `--expect-store` revision CAS inside its write transaction, instead of resolving an acquired workflow coordinator session — so a milestone can be assigned or cleared with no workflow bound. `issue move` still writes the column, but only to clear it: a project move drops the membership and the move receipt reports the dropped id as `clearedMilestoneId`. A non-`project-manager` actor is still refused `issue.scope-refused`, and stale revisions still refuse with their existing codes.
+- **The session selector is gone on both routes.** `milestone.assign` publishes no `sessionId` context option, no `--session-id` and no `--session-ref` on the CLI or over MCP; the issue write boundary drops `MutationContext.sessionRef` together with the scoped-session resolver and the ACTIVE binding re-check they fed. `--actor`, `--expect-issue`, `--expect-store`, `--operation` and the idempotent replay are unchanged.
+- **The dsh panel assign channel no longer needs a coordinator binding.** It passes only the resolved harness root, so a workspace with no active workflow writes instead of being refused; an unresolvable target is answered as the adapter's own `store.not-active`, like every other panel write.
+
+- Version alignment with harness **4.6.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.6.2**.
+
 ## [4.6.1] - 2026-11-14
 
 ### Changed

@@ -8,6 +8,12 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.6.2] - 2026-11-15
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.6.2**.
+
 ## [4.6.1] - 2026-11-14
 
 ### Fixed

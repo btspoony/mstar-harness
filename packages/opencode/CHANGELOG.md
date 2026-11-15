@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.6.2] - 2026-11-15
+
+### Changed
+
+- **The plugin-level below-floor runtime refusal is covered again.** A test installs the engine stub before importing the plugin, proves no store read happens, and restores the real exports afterwards so the replacement cannot leak into later files of the same process.
+- **The frontmatter parity test asserts a parsed value.** The real-asset half compares a loaded `description` against an independent parse of the same file, for one agent and one command, instead of checking that keys exist.
+- **The engine-status first render is a stated contract.** A workspace key that is not yet memoized answers with the version-only summary while the store-backed read warms in the background; a spec pins that first render and the second one after the refresh.
+
+- Version alignment with harness **4.6.2** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.6.2**.
+
 ## [4.6.1] - 2026-11-14
 
 ### Bundled harness skills (`harness-skills/` at publish)

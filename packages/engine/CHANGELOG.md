@@ -6,6 +6,21 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.6.2] - 2026-11-15
+
+### Changed
+
+- **Split the scratch-write refusal from the Git-read one.** `coordination.git-scratch-unavailable` now covers a failed delivery-diff scratch write with `{ path, cause }`; `coordination.git-unavailable` keeps the Git-read and probe-warning meaning. `workflowCloseRecovery` selects its recovery by code alone.
+- **One `state_json` guard chain.** `readWorkflowView` and `readActiveLifecycleBranchDocs` share the same checks in the same order, and every refusal the projection keeps has a direct test.
+- **The store-db suite no longer reports interpreter-only failures.** A raw read-only open retries a quiesced WAL store with `?immutable=1`, and an unsupported interpreter is named in the failure output.
+- **`milestone assign` authorizes like every other direct issue write.** The only route that sets or changes an issue's milestone membership now takes `--actor project-manager` plus the `--expect-issue` / `--expect-store` revision CAS inside its write transaction, instead of resolving an acquired workflow coordinator session — so a milestone can be assigned or cleared with no workflow bound. `issue move` still writes the column, but only to clear it: a project move drops the membership and the move receipt reports the dropped id as `clearedMilestoneId`. A non-`project-manager` actor is still refused `issue.scope-refused`, and stale revisions still refuse with their existing codes.
+- **The session selector is gone on both routes.** `milestone.assign` publishes no `sessionId` context option, no `--session-id` and no `--session-ref` on the CLI or over MCP; the issue write boundary drops `MutationContext.sessionRef` together with the scoped-session resolver and the ACTIVE binding re-check they fed. `--actor`, `--expect-issue`, `--expect-store`, `--operation` and the idempotent replay are unchanged.
+- **The dsh panel assign channel no longer needs a coordinator binding.** It passes only the resolved harness root, so a workspace with no active workflow writes instead of being refused; an unresolvable target is answered as the adapter's own `store.not-active`, like every other panel write.
+
+- Version alignment with harness **4.6.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.6.2**.
+
 ## [4.6.1] - 2026-11-14
 
 ### Changed
