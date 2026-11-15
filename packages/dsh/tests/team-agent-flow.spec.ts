@@ -550,6 +550,34 @@ describe('team agent flow — early-end admission keeps genuine ends and is hone
     expect(state(pairing)).toEqual({ call: 0, child: 0 })
   })
 
+  it('settles the FIRST end when a later turn ends before the name resolves', async () => {
+    const fixture = await activeFixture()
+    const ctx = new Context()
+    const pairing = newPairing()
+    provideTeamServices(ctx, [{ name: 'reviewer', childId: 'child-turn' }])
+    registerSettleListener(ctx, {}, pairing)
+    const exec = subagentExec('call-turn')
+    recordOn(fixture, exec, pairing)
+
+    // The creating dispatch starts; its own child ends with `completed`, then
+    // the parent wakes the same teammate and that later turn ends with `error`
+    // — all before the async name resolution lands.
+    emit(ctx, SETTLE_SEAM, exec, activationResult('reviewer'))
+    emitLifecycleEnd(ctx, { id: 'child-turn', stopReason: 'completed', parentSessionId: 'session-1' })
+    emitLifecycleEnd(ctx, { id: 'child-turn', stopReason: 'error', parentSessionId: 'session-1' })
+
+    await activationTick()
+
+    // The creating dispatch settles from the turn IT started: a later wake-up
+    // must never rewrite its outcome.
+    const rows = settlesOf(fixture.harnessDir)
+    expect(rows).toEqual([
+      expect.objectContaining({ outcome: 'ok', childId: 'child-turn', role: 'fullstack-dev' }),
+    ])
+    expect(ledgerRows(fixture.harnessDir).some((row) => row.kind === 'continuation')).toBe(false)
+    expect(state(pairing)).toEqual({ call: 0, child: 0 })
+  })
+
   it('evicts the oldest early end at the capacity and records the explicit unresolved continuation', async () => {
     const fixture = await activeFixture()
     const ctx = new Context()

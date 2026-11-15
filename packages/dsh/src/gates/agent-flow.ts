@@ -1821,7 +1821,21 @@ function sweepUnclaimableChildEnds(pairing: AgentFlowPairing): void {
 function bufferActivationChildEnd(pairing: AgentFlowPairing, parentSessionId: string | undefined, childId: string, stopReason: unknown): void {
   try {
     const ends = (pairing.endsAwaitingActivation ??= new Map<string, ActivationChildEndRecord>())
-    ends.delete(childId) // a re-woken child's later end is the fresher record
+    // The FIRST end belongs to this activation: it is the turn the creating
+    // dispatch started. A later end comes from a `send_message` that woke the
+    // same child, and settling the creating dispatch from that later turn would
+    // report another turn's outcome (e.g. `error` for an `ok` first turn). An
+    // eviction marker is the one record a real end may replace — it carries no
+    // outcome of its own.
+    // The FIRST end belongs to this activation: it is the turn the creating
+    // dispatch started. A later end comes from a `send_message` that woke the
+    // same child, and settling the creating dispatch from that later turn would
+    // report another turn's outcome (e.g. `error` for an `ok` first turn). An
+    // eviction marker is the one record a real end may replace — it carries no
+    // outcome of its own.
+    const existing = ends.get(childId)
+    if (existing !== undefined && existing.evicted !== true) return
+    if (existing !== undefined) ends.delete(childId)
     sweepUnclaimableChildEnds(pairing)
     // No dispatch of this scope in flight → no ref can ever claim the record.
     if (claimableDispatchesOf(pairing, parentSessionId) === 0) return
