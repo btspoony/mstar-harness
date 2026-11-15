@@ -1,15 +1,15 @@
 import { engineErrorFacts } from "./family-refusal.js";
 import { refusalEnvelope } from "../envelope.js";
-import { addMilestone, assignIssueMilestone, executionContextFor, queryMilestones, resolveProcessHarnessDir, updateMilestone, withStoreRead, type MilestonePatch, type MutationContext, type StoreContext } from "@mstar-harness/engine";
+import { addMilestone, assignIssueMilestone, queryMilestones, resolveProcessHarnessDir, updateMilestone, withStoreRead, type MilestonePatch, type MutationContext, type StoreContext } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
-const schema = z.object({ project: z.string().optional(), id: z.string().optional(), name: z.string().optional(), ordinal: z.number().int().nonnegative().optional(), target: z.string().optional(), clearTarget: z.boolean().optional(), status: z.enum(["planned", "active", "delivered", "dropped"]).optional(), issue: z.string().optional(), reason: z.string().optional(), expectIssue: z.number().int().nonnegative().optional(), expectStore: z.number().int().nonnegative().optional(), operation: z.string().optional(), sessionRef: z.string().optional(), actor: z.string().optional(), harness: z.string().optional(), clear: z.boolean().optional() });
+const schema = z.object({ project: z.string().optional(), id: z.string().optional(), name: z.string().optional(), ordinal: z.number().int().nonnegative().optional(), target: z.string().optional(), clearTarget: z.boolean().optional(), status: z.enum(["planned", "active", "delivered", "dropped"]).optional(), issue: z.string().optional(), reason: z.string().optional(), expectIssue: z.number().int().nonnegative().optional(), expectStore: z.number().int().nonnegative().optional(), operation: z.string().optional(), actor: z.string().optional(), harness: z.string().optional(), clear: z.boolean().optional() });
 type Input = z.infer<typeof schema>;
 const verbs = ["add", "update", "assign", "list", "status"] as const;
-const flags: Record<keyof Input, string> = { project:"--project <id>",id:"--id <id>",name:"--name <name>",ordinal:"--ordinal <n>",target:"--target <YYYY-MM-DD>",clearTarget:"--clear-target",status:"--status <status>",issue:"--issue <id>",reason:"--reason <text>",expectIssue:"--expect-issue <n>",expectStore:"--expect-store <n>",operation:"--operation <id>",sessionRef:"--session-ref <wire>",actor:"--actor <role>",harness:"--harness <root>",clear:"--clear" };
-const options: Record<(typeof verbs)[number], (keyof Input)[]> = { add:["project","name","ordinal","target","expectStore","operation","harness"], update:["project","id","name","ordinal","target","clearTarget","status","expectStore","operation","harness"], assign:["project","issue","id","clear","reason","expectIssue","expectStore","operation","sessionRef","actor","harness"], list:["project","harness"], status:["project","id","harness"] };
+const flags: Record<keyof Input, string> = { project:"--project <id>",id:"--id <id>",name:"--name <name>",ordinal:"--ordinal <n>",target:"--target <YYYY-MM-DD>",clearTarget:"--clear-target",status:"--status <status>",issue:"--issue <id>",reason:"--reason <text>",expectIssue:"--expect-issue <n>",expectStore:"--expect-store <n>",operation:"--operation <id>",actor:"--actor <role>",harness:"--harness <root>",clear:"--clear" };
+const options: Record<(typeof verbs)[number], (keyof Input)[]> = { add:["project","name","ordinal","target","expectStore","operation","harness"], update:["project","id","name","ordinal","target","clearTarget","status","expectStore","operation","harness"], assign:["project","issue","id","clear","reason","expectIssue","expectStore","operation","actor","harness"], list:["project","harness"], status:["project","id","harness"] };
 const required: Record<(typeof verbs)[number], (keyof Input)[]> = { add:["project","name","ordinal","expectStore","operation"], update:["project","id","expectStore","operation"], assign:["project","issue","reason","expectIssue","expectStore","operation","actor"], list:["project"], status:["project","id"] };
 class UsageError extends Error {}
 function requireValue(value: string | undefined, flag: string): string { if (value === undefined || !value.trim()) throw new UsageError(`${flag} is required`); return value.trim(); }
@@ -23,7 +23,7 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
     : id === "milestone.update"
       ? "Read the current milestone and store revision, then retain only the intended patch. Run mstar milestone update --project project-id --id milestone-id --expect-store 0 --operation retry-id."
       : id === "milestone.assign"
-      ? "Verify the issue and milestone ids and revisions. Run under the acquired ACTIVE coordinator identity; optionally supply --session-ref as a checked constraint. Run mstar milestone assign --project project-id --issue issue-id --reason reason --expect-issue 0 --expect-store 0 --operation retry-id --actor project-manager."
+      ? "Verify the issue and milestone ids and the issue/store revisions the request was planned against, then retry as the project-manager seat. Run mstar milestone assign --project project-id --issue issue-id --reason reason --expect-issue 0 --expect-store 0 --operation retry-id --actor project-manager."
         : "Select the existing milestone project and retry the requested read.";
   if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id }, recovery: fallbackRecovery });
   return refusalEnvelope({ command: id, status: "refused", code: code ?? `${id}.internal-error`, exitCode: 1, message, details: { operation: id, ...details }, recovery: recovery ?? fallbackRecovery });
@@ -43,16 +43,8 @@ async function run(id: string, input: Input, invocation: InvocationContext): Pro
   }
   if ((input.id !== undefined) === (input.clear === true)) throw new UsageError("exactly one of --id or --clear is required");
   if (input.expectIssue === undefined) throw new UsageError("--expect-issue is required");
-  const acquired = invocation.executionIdentity;
-  if (acquired === undefined) {
-    throw new UsageError("milestone.assign requires an acquired workflow coordinator identity; run it from the workflow's acquired coordinator session.");
-  }
-  if (acquired.role !== "coordinator") {
-    return refusalEnvelope({ command: id, status: "refused", code: "issue.scope-refused", exitCode: 1, message: "The acquired identity does not hold the workflow coordinator seat.", recovery: "Issue milestone assignment belongs to the workflow's acquired coordinator session; bind a coordinator first with mstar plan bind --execution true --coordinator true --workflow <workflow-id>." });
-  }
-  const execution = executionContextFor(store, acquired);
-  const mutation: MutationContext & {expectedStoreRevision:number} = {operationId,actor:requireValue(input.actor,"--actor"),...(input.sessionRef === undefined ? {} : {sessionRef:input.sessionRef}),expectedRevision:input.expectIssue,expectedStoreRevision:input.expectStore};
-  return envelope(id,await assignIssueMilestone(execution,requireValue(input.issue,"--issue"),{projectId,milestoneId:input.clear ? null : requireValue(input.id,"--id"),reason:requireValue(input.reason,"--reason")},mutation));
+  const mutation: MutationContext & {expectedStoreRevision:number} = {operationId,actor:requireValue(input.actor,"--actor"),expectedRevision:input.expectIssue,expectedStoreRevision:input.expectStore};
+  return envelope(id,await assignIssueMilestone(store,requireValue(input.issue,"--issue"),{projectId,milestoneId:input.clear ? null : requireValue(input.id,"--id"),reason:requireValue(input.reason,"--reason")},mutation));
  } catch(error) { return failure(id, error); }
 }
 export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] {
@@ -75,7 +67,6 @@ export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] {
         ...(name === "expectStore" || name === "expectIssue" ? { tokenKind: "revision" as const } : {}),
       })),
       ...(verb === "assign" ? [
-        { name: "sessionRef", ownership: "caller" as const, route, required: false, constraint: "optional checked constraint: when supplied, must match the acquired coordinator identity" },
         { name: "id", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "exactly-one" as const, members: [{ name: "id" }, { name: "clear", whenTrue: true }] }, constraint: "exactly one of id or clear=true is required" },
         { name: "clear", ownership: "caller" as const, route, required: false, constraint: "only true selects unassignment; false does not select this alternative" },
       ] : []),
@@ -96,9 +87,7 @@ export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] {
             key, flags: flags[key], required: required[verb].includes(key),
             ...(verb === "update" && key === "clearTarget" ? { help: "Optional: only true clears target, and it cannot be combined with --target. False does not select a patch." } : {}),
             ...(verb === "update" && key === "target" ? { help: "Optional target patch; mutually exclusive with --clear-target=true." } : {}),
-            ...(verb === "assign" && key === "sessionRef" ? { help: "Optional checked constraint on the acquired coordinator identity; never pass a session file path." } : {}),
           })),
-          ...(verb === "assign" ? [{ key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" as const }] : []),
         ],
       },
       input: schema.pick(Object.fromEntries(opts.map((key) => [key, true])) as never),
