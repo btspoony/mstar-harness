@@ -18,7 +18,9 @@ related_components:
   - skills/mstar-host/references/dsh-agent-teams.md
   - packages/dsh/src/gates/dispatch.ts
   - packages/dsh/src/gates/agent-flow.ts
-  - "@deepseek-ai/dsh-experimental-agent-team"
+  - "@deepseek-ai/dsh-agent-team"
+  - "@deepseek-ai/dsh-tool-agent-team"
+  - "@deepseek-ai/dsh-tool-subagent-control"
   - "@deepseek-ai/dsh-tool-subagent"
   - "@deepseek-ai/dsh-tool-workflow"
 applies_when:
@@ -122,7 +124,7 @@ pair is exactly as discoverable as the slot it points at.
 
 ## Examples
 
-- `packages/dsh/src/gates/dispatch.ts` — `TEAM_DISPATCH_TOOLS` carrier map + the terminal team
+- `packages/dsh/src/gates/dispatch.ts` — `TEAM_DISPATCH_TOOLS` carrier map + the non-terminal team
   branch before the `dispatchTools` match.
 - `packages/dsh/src/gates/agent-flow.ts` — team post-execute branch (no settle at return), the
   `subagent/end` pairing, the activation normalization (started-not-settled), and the projected
