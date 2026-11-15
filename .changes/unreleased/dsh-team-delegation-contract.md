@@ -3,7 +3,7 @@ category: Changed
 packages: dsh
 ---
 
-- The injected Agent Teams delegation contract now names the real channels: writable work defaults to one durable teammate per writable track (`subagent` / `subagent_fork`, legacy `spawn_teammate`) reused via `send_message`, and read-only seats/fan-out go to `workflow` — a `subagent` call on a Team-mode root joins the roster, so it is never the read-only route.
+- **Team delegation contract**: the injected Agent Teams contract now names the real channels — writable work defaults to one durable teammate per writable track (`subagent` / `subagent_fork`, legacy `spawn_teammate`) reused via `send_message`; 1–2 read-only seats default to `subagent`, read-only fan-out of 3+ goes to `workflow`, and a single seat uses a one-seat `workflow` run only when nothing else can carry it.
 
 <!-- CN -->
-- 注入的 Agent Teams 派发契约改为点名真实通道：可写工作默认按可写轨道复用一个耐久 teammate（`subagent` / `subagent_fork`，旧名 `spawn_teammate`），用 `send_message` 复用；只读席位与只读扇出走 `workflow`——Team-mode root 上的 `subagent` 调用会占用 roster，故绝不是只读通道。
+- **Team 派发契约**：注入的 Agent Teams 契约改为点名真实通道——可写工作默认按可写轨道复用一个耐久 teammate（`subagent` / `subagent_fork`，旧名 `spawn_teammate`），用 `send_message` 复用；1–2 个只读席位默认走 `subagent`，3+ 只读扇出走 `workflow`，单席位只有在别无选择时才用 one-seat `workflow` 运行。
