@@ -328,20 +328,20 @@ function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
 }
 
 /**
- * The delegation contract: which channel is the default and what shape every
- * dispatch prompt must take. Appended only when the Agent Teams service is
- * mounted — without it `spawn_teammate` does not exist, so the first line
- * would name a tool the session cannot call.
+ * The delegation contract: which channel creates the teammate and what shape
+ * every dispatch prompt must take. Appended only when the Agent Teams service
+ * is mounted — without it the `team_task_*` board does not exist, so the
+ * first line would name a board the session cannot write to.
  *
  * Both facts are otherwise reachable only through `mstar-host` →
  * `references/dsh.md`, which a coordinator that is mid-task on something else
- * does not open; a session that never reads it sends writable work through
- * `subagent` and hand-writes header-less `workflow agent()` prompts, and
- * neither the dispatch gate (no pre-start seam on `workflow`) nor the role
- * gate (reads only `Execute as`) can correct that after the fact.
+ * does not open; a session that never reads it dispatches writable work
+ * without a board row and hand-writes header-less `workflow agent()` prompts,
+ * and neither the dispatch gate (no pre-start seam on `workflow`) nor the
+ * role gate (reads only `Execute as`) can correct that after the fact.
  */
 const TEAM_DELEGATION_CONTRACT = [
-  'delegation: Agent Teams is mounted — `spawn_teammate` is the default channel for writable work (one durable teammate per writable track); `subagent` is a one-off read-only seat.',
+  'delegation: Agent Teams is mounted — `subagent` / `subagent_fork` create the durable teammate for writable work (one per writable track); `team_task_*` is the shared board coordinating that work.',
   'dispatch prompt: every delegation prompt — `workflow agent()` included — opens with "## Assignment" and "Execute as: <role>"; the role gate cannot repair a header-less `workflow` child.',
 ].join('\n')
 
