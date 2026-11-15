@@ -7,11 +7,13 @@
  * per name per layer, verified `scope/src/store.ts`).
  *
  * Content discipline:
- * - Both surfaces inject ONLY when the session's workspace resolves an ACTIVE
- *   workflow (the pre-step catalog row's predicate): a workspace with no
- *   mstar business context gets no mstar prompt content at all. dsh's
- *   `renderPrompt` / `renderContextSections` drop empty text, so an empty
- *   provider string means "no contribution" rather than a blank line.
+ * - Model-visible mstar content is gated on the session's workspace resolving
+ *   an ACTIVE workflow (the pre-step catalog row's predicate). Without one the
+ *   pointer block and the engine-status digest contribute NOTHING; only the
+ *   Agent Teams delegation contract can remain — it governs dispatch with or
+ *   without a workflow and carries no workflow state. dsh's `renderPrompt` /
+ *   `renderContextSections` drop empty text, so an empty provider string means
+ *   "no contribution" rather than a blank line.
  * - The section is a POINTER block (presence / enforcement word / resolved
  *   `{HARNESS_DIR}` / one read-mstar-harness-core directive) — deliberately
  *   minimal, never a rules dump (plan pointer-block constraint). The
@@ -360,7 +362,8 @@ function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
  * gate (reads only `Execute as`) can correct that after the fact.
  */
 const TEAM_DELEGATION_CONTRACT = [
-  'delegation: Agent Teams is mounted — `spawn_teammate` is the default channel for writable work (one durable teammate per writable track); `subagent` is a one-off read-only seat.',
+  'delegation: Agent Teams is mounted — writable work defaults to one durable teammate per writable track: `subagent` / `subagent_fork` (legacy `spawn_teammate`) creates that teammate on a Team-mode root, and a roster name never returns, so reuse it via `send_message` instead of one call per task.',
+  'read-only: one-off read-only seats and read-only fan-out go to `workflow` — a `subagent` call on a Team-mode root joins the roster, so it is never the read-only route.',
   'dispatch prompt: every delegation prompt — `workflow agent()` included — opens with "## Assignment" and "Execute as: <role>"; the role gate cannot repair a header-less `workflow` child.',
 ].join('\n')
 

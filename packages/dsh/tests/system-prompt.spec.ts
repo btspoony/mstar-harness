@@ -188,7 +188,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     // The two facts a coordinator otherwise finds only in
     // `mstar-host` → `references/dsh.md`: the default channel, and the header
     // shape every delegation prompt needs (workflow children included).
-    expect(withText).toContain('`spawn_teammate` is the default channel for writable work')
+    expect(withText).toContain('one durable teammate per writable track')
     expect(withText).toContain('"## Assignment" and "Execute as: <role>"')
     expect(withText).toContain('`workflow agent()` included')
   })
@@ -221,7 +221,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     const withTeam = await assembleWithEngineStatus(booted.ctx)
     const withText = withTeam.sections.find((s) => s.name === HARNESS_RULES_SECTION_NAME)!.text
     // The dispatch contract governs dispatch with or without a workflow.
-    expect(withText).toContain('`spawn_teammate` is the default channel for writable work')
+    expect(withText).toContain('one durable teammate per writable track')
     expect(withText).toContain('"## Assignment" and "Execute as: <role>"')
     expect(withText).not.toContain('Morning Star (mstar)')
     expect(withText).not.toContain('harness dir:')
