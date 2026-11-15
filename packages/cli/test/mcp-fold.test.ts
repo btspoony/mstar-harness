@@ -527,7 +527,7 @@ describe("folded MCP command families", () => {
       const published = tools.find((tool) => tool.name === "mstar_milestone");
       if (published === undefined) throw new Error("unpublished family tool: mstar_milestone");
       expect((published.inputSchema.properties ?? {}).sessionId).toBeUndefined();
-      expect(published.inputSchema["x-mstar-selectors"] ?? []).toEqual([]);
+      expect(published.inputSchema["x-mstar-selectors"]).toBeUndefined();
 
       const admitted = envelope(await call(client, "mstar_milestone", {
         action: "assign",
