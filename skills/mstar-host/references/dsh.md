@@ -354,7 +354,7 @@ No-argument iteration-drive resumes the primary coordinator's workflow; nonempty
   run CONCURRENTLY (wall ≈ single seat). There is no serialization promise
   either way — a PM that waits for each settlement before emitting the next
   invoke is what spaces the batch out and costs the wall time. The call return
-  (`started subagent <id>`) is an activation, never a completion. A seat that
+  (`started subagent <name>`) is an activation, never a completion. A seat that
   cannot be started at all → **`Blocked`**.
 - **`inline`**: **N=1**.
 
