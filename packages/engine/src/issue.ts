@@ -8,7 +8,6 @@
  */
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
-import type { ExecutionContext, ExecutionSessionRef } from "./execution-store.js";
 import { MIGRATIONS, openStore, readStoreAuthority, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 
 
@@ -40,7 +39,6 @@ export type Disposition = (typeof ISSUE_DISPOSITIONS)[number];
 export type MutationContext = {
   operationId: string;
   actor: string;
-  sessionRef?: string;
   expectedRevision?: number;
 };
 
@@ -806,12 +804,11 @@ export type ComposedTransactionRevision = {
 
 /**
  * The mutation identity a handle-taking body runs as (see `MutationContext`):
- * the idempotency key and the audited actor, without any session file. The
- * public entry points carry a `MutationContext` (which is assignable here) and
- * authorize it themselves before the transaction they own; the DB coordination
- * route supplies the same shape from its own store-held session.
+ * the idempotency key and the audited actor. The public entry points authorize
+ * a `MutationContext` themselves before the transaction they own; the DB
+ * coordination route supplies the same shape from its own store-held session.
  */
-export type AuthorizedIssueMutation = Omit<MutationContext, "sessionRef">;
+export type AuthorizedIssueMutation = MutationContext;
 
 /**
  * The transaction of ONE public issue mutation: this transport opens the store,
@@ -1465,84 +1462,6 @@ function requireCaptureSeat(actor: string): void {
   }
 }
 
-/**
- * Resolve the acquired coordinator binding, using an optional wire reference
- * only as a checked constraint on that independently acquired identity.
- */
-async function readScopedSession(context: ExecutionContext, sessionRefWire: string | undefined): Promise<ExecutionSessionRef> {
-  const { decodeExecutionSessionRef, resumeExecutionSession } = await import("./execution-session.js");
-  let sessionRef: ExecutionSessionRef | undefined;
-  if (sessionRefWire !== undefined) {
-    try {
-      sessionRef = decodeExecutionSessionRef(sessionRefWire);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new IssueError(
-        "issue.scope-refused",
-        `${message}. Obtain the current ACTIVE coordinator identity and retry; file-envelope inputs are not accepted. --session-ref is an optional checked constraint.`,
-      );
-    }
-    if (
-      sessionRef.workflowId !== context.caller.workflowId ||
-      sessionRef.role !== context.caller.role ||
-      sessionRef.sessionId !== context.caller.sessionId
-    ) {
-      throw refuseAuthority("The supplied --session-ref constraint does not match the acquired coordinator identity");
-    }
-  }
-  try {
-    return (await resumeExecutionSession(context, sessionRef)).data;
-  } catch (error) {
-    if (error instanceof IssueError) throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    const recovery = sessionRef === undefined
-      ? "Reacquire or bind the current coordinator identity and retry"
-      : "The supplied --session-ref constraint is not current; reacquire the coordinator identity and retry";
-    throw new IssueError(
-      "issue.scope-refused",
-      `${message}. ${recovery}; --session-ref is an optional checked constraint, not a session file.`,
-    );
-  }
-}
-
-function assertSessionBinding(
-  db: StoreDb,
-  authority: { storeId: string; epoch: number },
-  session: ExecutionSessionRef,
-): void {
-  if (session.storeId !== authority.storeId || session.epoch !== authority.epoch) {
-    throw refuseAuthority("The acquired coordinator identity belongs to a stale or different ACTIVE store authority");
-  }
-  const row = db.prepare(
-    "select epoch, state from execution_sessions where workflow_id = ? and role = 'coordinator' and session_id = ?",
-  ).get(session.workflowId, session.sessionId) as { epoch?: unknown; state?: unknown } | undefined;
-  if (row?.state !== "active" || row.epoch !== session.epoch) {
-    throw refuseAuthority(`Workflow ${session.workflowId} has no matching ACTIVE coordinator session binding`);
-  }
-}
-
-/** A refusal for an acquired identity or optional wire-reference mismatch. */
-function refuseAuthority(message: string): IssueError {
-  return new IssueError(
-    "issue.scope-refused",
-    `${message}. Reacquire the current ACTIVE coordinator identity; any --session-ref must match it. File-envelope inputs are not accepted.`,
-  );
-}
-
-async function authorizeMutation(
-  context: ExecutionContext,
-  mutation: Pick<MutationContext, "actor" | "sessionRef">,
-): Promise<ExecutionSessionRef> {
-  const session = await readScopedSession(context, mutation.sessionRef);
-  const seat = issueWriteSeat(session.role);
-  if (mutation.actor.trim() !== seat) {
-    throw new IssueError(
-      "issue.scope-refused",
-      `Actor "${mutation.actor}" is not the "${seat}" coordinator seat authorized by the ACTIVE session.`,
-    );
-  }
-  return session;
-}
 function requireExpectedRevision(mutation: MutationContext, current: number): void {
   if (mutation.expectedRevision === undefined) {
     throw new IssueError("issue.revision-conflict", "expectedRevision is mandatory for triage, disposition, relation and project changes");
@@ -2074,11 +1993,12 @@ export async function moveIssue(
 }
 
 export async function assignIssueMilestone(
-  context: ExecutionContext,
+  context: StoreContext,
   issueId: string,
   input: { projectId: string; milestoneId: string | null; reason: string },
   mutation: MutationContext & { expectedStoreRevision: number },
 ): Promise<IssueReceipt> {
+  requireCaptureSeat(mutation.actor);
   if (typeof input.projectId !== "string" || !input.projectId.trim() || typeof input.reason !== "string" || !input.reason.trim()) {
     throw new IssueError("milestone.invalid-input", "projectId and reason must be nonblank");
   }
@@ -2087,7 +2007,6 @@ export async function assignIssueMilestone(
   }
   const projectId = input.projectId.trim();
   const reason = input.reason.trim();
-  const session = await authorizeMutation(context, mutation);
   if (!mutation.operationId?.trim() || !Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) {
     throw new IssueError("issue.scope-refused", "operationId and expectedStoreRevision are required");
   }
@@ -2098,7 +2017,6 @@ export async function assignIssueMilestone(
   });
   return withWrite(context, (handle) => {
     const db = handle.db;
-    assertSessionBinding(db, handle, session);
     const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
     if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7) {
       throw new IssueError("milestone.schema-outdated", 'Milestone assignment requires schema 7; run "mstar store upgrade --operator <name>" first.');

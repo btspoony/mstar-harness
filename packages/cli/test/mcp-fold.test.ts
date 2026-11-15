@@ -486,7 +486,6 @@ describe("folded MCP command families", () => {
   test("a session selector the selected action does not read refuses before admission", async () => {
     const cases = [
       { tool: "mstar_status", id: "status.tech-debt", action: "tech-debt", accepting: ["workflow-close"] },
-      { tool: "mstar_milestone", id: "milestone.list", action: "list", accepting: ["assign"] },
       { tool: "mstar_iteration", id: "iteration.gate", action: "gate", accepting: ["register"] },
       { tool: "mstar_workflow_note", id: "workflow-note.coverage", action: "coverage", accepting: ["append"] },
     ] as const;
@@ -512,6 +511,40 @@ describe("folded MCP command families", () => {
       }
       const coverage = envelope(await call(client, "mstar_workflow_note", { action: "coverage", workflow: "wf-1" }));
       expect(coverage).toMatchObject({ command: "workflow-note.coverage", status: "ok" });
+    });
+  });
+
+  /**
+   * The milestone family carries no identity selector at all: `milestone.assign`
+   * is authorized by the seat named on the request, so no action declares
+   * `sessionId`. The fold therefore publishes neither the property nor the
+   * per-action index, and a selector-less `assign` reaches the command itself —
+   * whatever the store then answers is the action's own business, never the
+   * selector guard's.
+   */
+  test("the milestone family publishes no session selector and admits a selector-less assign", async () => {
+    await withClient(async (client, tools) => {
+      const published = tools.find((tool) => tool.name === "mstar_milestone");
+      if (published === undefined) throw new Error("unpublished family tool: mstar_milestone");
+      expect((published.inputSchema.properties ?? {}).sessionId).toBeUndefined();
+      expect(published.inputSchema["x-mstar-selectors"]).toBeUndefined();
+
+      const admitted = envelope(await call(client, "mstar_milestone", {
+        action: "assign",
+        project: "selector-free-project",
+        issue: "I-SELECTOR-FREE",
+        id: "m-selector-free",
+        reason: "selector-free admission",
+        expectIssue: 0,
+        expectStore: 0,
+        operation: "op-selector-free-assign",
+        actor: "project-manager",
+      }));
+      // The action's own definition answered — not the transport's selector guard.
+      expect(admitted.command).toBe("milestone.assign");
+      expect(admitted.details?.selectors).toBeUndefined();
+      expect(admitted.message).not.toContain("does not declare");
+      expect(admitted.details?.recovery ?? "").not.toContain("drop");
     });
   });
 

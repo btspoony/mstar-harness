@@ -1988,7 +1988,7 @@ describe("schema-owned loss inventory", () => {
     // A real membership move AFTER the point, through the published verb: the
     // inventoried issue row must disclose that the association moved.
     await assignIssueMilestone(
-      contextOf(world.context, world.caller),
+      world.context,
       membership.issueId,
       { projectId: PROJECT_ID, milestoneId: first.milestoneId, reason: "inventory regression" },
       { operationId: "op-membership-assign", actor: "project-manager", expectedRevision: 1, expectedStoreRevision: storeRevision() },
@@ -2039,7 +2039,7 @@ describe("schema-owned loss inventory", () => {
     // `coverage_json`), and a native host-state row (the fifth Dsh domain) — the
     // three facts T4a's F1 correction named plus the host domain.
     await assignIssueMilestone(
-      contextOf(world.context, world.caller),
+      world.context,
       finding.issueId,
       { projectId: PROJECT_ID, milestoneId: milestone.milestoneId, reason: "whole-domain restore" },
       { operationId: "op-whole-domain-assign", actor: "project-manager", expectedRevision: 1, expectedStoreRevision: storeRevision() },
