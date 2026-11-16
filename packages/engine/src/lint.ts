@@ -14,6 +14,9 @@
  * upgrade path; a workaround is labeled `simplify:` / `temporary`, explains
  * why, and records the removal path in the plan/status artifact before the
  * task is claimed complete.
+ * - Commented-out code and ownerless TODO: `skills/mstar-coding-behavior/
+ * references/comments.md` § MUST NOT — the file's history is the archive, and
+ * a marker with no issue reference, key or removal path holds nobody.
  * - SDD verification evidence: `mstar-sdd/references/file-handoffs.md`
  * § Verification evidence — completion and fix reports retain the affected
  * test file(s), command and actual output, or applicable scoped-check evidence.
@@ -39,6 +42,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
+import vm from "node:vm";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
@@ -54,10 +58,15 @@ function violation(severity: Severity, code: string, message: string, fix?: stri
 const COMMENT_INTRODUCER = "(?:\\/\\/|\\/\\*|#|;|--|\\s\\*)";
 
 /**
- * A `simplify:` marker found in a file, with its 1-based line number and the
- * trimmed comment line (lint reporting).
+ * A `simplify:` marker found in a file, with its 1-based line number, the
+ * trimmed comment line (lint reporting), and the recorded upgrade path
+ * (`upgrade: ...`, or `null` when the marker names none).
  */
-export type SimplifyMarker = { line: number; text: string };
+export type SimplifyMarker = { line: number; text: string; upgradePath: string | null };
+
+/** The `upgrade` clause of a bounded shortcut (comments.md § Markers: a
+ * `simplify:` marker records a ceiling and a removal path). */
+const UPGRADE_PATH_RE = /\bupgrade[^;,]*/i;
 
 /**
  * Find `simplify:` marker comments (mstar-coding-behavior § Decision Rules:
@@ -69,15 +78,16 @@ export type SimplifyMarker = { line: number; text: string };
  * introducer (`//`, `/*`, `*`, `#`, `;`, `--`) precedes `simplify:` —
  * case-insensitive, any column (leading or trailing comments). Pure prose
  * like "we simplify: the interface" carries no comment introducer and is
- * never reported. No judgment about whether the marker actually names a
- * ceiling/upgrade path — discovery only; callers may inspect `text`.
+ * never reported. Completeness is the upgrade clause only: the ceiling is the
+ * text right after `simplify:`, so no word list is needed.
  */
 export function findSimplifyMarkers(fileText: string): SimplifyMarker[] {
   const markers: SimplifyMarker[] = [];
   const re = new RegExp(`${COMMENT_INTRODUCER}\\s*simplify\\s*:`, "i");
   const lines = fileText.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    if (re.test(lines[i])) markers.push({ line: i + 1, text: lines[i].trim() });
+    if (!re.test(lines[i])) continue;
+    markers.push({ line: i + 1, text: lines[i].trim(), upgradePath: UPGRADE_PATH_RE.exec(lines[i])?.[0] ?? null });
   }
   return markers;
 }
@@ -170,6 +180,127 @@ export function findTemporaryMarkers(fileText: string): TemporaryMarkerResult {
     }
   }
   return { ok: violations.length === 0, violations, markers };
+}
+
+/** Comment-only line; a run of these is one candidate block. Triple-slash
+ * directives (`/// <reference ... />`) are excluded — a directive, not code
+ * kept in a comment. */
+const COMMENT_ONLY_RE = /^\s*\/\/(?!\/)/;
+/** The `//` prefix plus at most one following space, so the body reads as the
+ * author wrote it. */
+const COMMENT_PREFIX_RE = /^\s*\/\/ ?/;
+/** A statement terminator. A label (`TODO: later`) or a bare word is not code. */
+const STATEMENT_TERMINATOR_RE = /[;}]$/;
+
+/**
+ * Does this text compile as a program? `vm.Script` parses without running it,
+ * which is the real-parser gate a line regex cannot provide: wrapped prose,
+ * section headings and label-only comments fail it, commented statements pass.
+ * It behaves identically under Bun and Node, so the tests prove the shipped
+ * behaviour without an AST package in the engine bundle.
+ *
+ * shortcut: TypeScript-only syntax (`: T` annotations, `export`, top-level
+ * `return`) is not a script, so those commented blocks stay unreported;
+ * upgrade when a TypeScript parser fits the shipped engine bundle.
+ */
+function parsesAsScript(text: string): boolean {
+  try {
+    new vm.Script(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A commented-out code block: the 1-based line where its comment run starts,
+ * and that run's first line (reporting). */
+export type CommentedCodeFinding = { line: number; text: string };
+
+/**
+ * Find commented-out code (comments.md § MUST NOT: "commented-out code — it is
+ * a live sample that the pattern is current; the file's history is the
+ * archive"). Each run of consecutive `//`-only lines is stripped and parsed as
+ * one program; a run that ends in a statement terminator and compiles is code
+ * kept in a comment, reported at its first line.
+ */
+export function findCommentedCode(fileText: string): CommentedCodeFinding[] {
+  const findings: CommentedCodeFinding[] = [];
+  const lines = fileText.split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length) {
+    if (!COMMENT_ONLY_RE.test(lines[i])) {
+      i += 1;
+      continue;
+    }
+    const start = i;
+    const body: string[] = [];
+    while (i < lines.length && COMMENT_ONLY_RE.test(lines[i])) {
+      body.push(lines[i].replace(COMMENT_PREFIX_RE, ""));
+      i += 1;
+    }
+    const text = body.join("\n").trimEnd();
+    if (!STATEMENT_TERMINATOR_RE.test(text) || !parsesAsScript(text)) continue;
+    findings.push({ line: start + 1, text: body.find((line) => line.trim() !== "")?.trim() ?? "" });
+  }
+  return findings;
+}
+
+/** Tracking references that satisfy the ownerless-TODO rule (comments.md
+ * § MUST NOT "an ownerless TODO": "no name, issue reference or removal path
+ * means nobody removes it") — issue number `#123`, issue key `ABC-12`, or the
+ * removal-path vocabulary a `temporary` marker already accepts. */
+const TODO_TRACKING_PATTERNS: readonly RegExp[] = [/#\d+/, /\b[A-Z][A-Z0-9]+-\d+\b/, ...REMOVAL_PATH_PATTERNS];
+
+/** Blank out string-literal contents (quotes kept, escapes honored) so a
+ * marker token inside a string — a fixture asserting this very check, for
+ * instance — is not read as a comment. Single-line scan: a template literal
+ * spanning lines only masks its opening line. */
+function maskStrings(line: string): string {
+  let out = "";
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote === null) {
+      if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+      out += ch;
+      continue;
+    }
+    if (ch === "\\") {
+      out += "  ";
+      i += 1;
+      continue;
+    }
+    if (ch === quote) {
+      quote = null;
+      out += ch;
+      continue;
+    }
+    out += " ";
+  }
+  return out;
+}
+
+/** A TODO/FIXME comment carrying no tracking reference, at its 1-based line. */
+export type UntrackedTodo = { line: number; marker: "TODO" | "FIXME"; text: string };
+
+/**
+ * Find `TODO` / `FIXME` comments with no tracking reference, so nobody is held
+ * to them (comments.md § MUST NOT "an ownerless TODO"). Markers are matched
+ * case-sensitively on comment-context lines: the convention is uppercase, and
+ * lowercase prose ("the todo list") is not a marker.
+ */
+export function findUntrackedTodos(fileText: string): UntrackedTodo[] {
+  const findings: UntrackedTodo[] = [];
+  const re = new RegExp(`${COMMENT_INTRODUCER}\\s*(TODO|FIXME)\\b`);
+  const lines = fileText.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const commentContext = maskStrings(lines[i]);
+    const match = re.exec(commentContext);
+    if (match === null) continue;
+    if (TODO_TRACKING_PATTERNS.some((pattern) => pattern.test(commentContext))) continue;
+    findings.push({ line: i + 1, marker: match[1] as UntrackedTodo["marker"], text: lines[i].trim() });
+  }
+  return findings;
 }
 
 /**

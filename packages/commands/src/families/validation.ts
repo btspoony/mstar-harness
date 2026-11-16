@@ -19,6 +19,8 @@ import {
   workflowEntryPreDispatchCheck,
   findSimplifyMarkers,
   findTemporaryMarkers,
+  findCommentedCode,
+  findUntrackedTodos,
   findEphemeralCitations,
   findProvenanceCitations,
   isReadOnlyAssignmentRole,
@@ -308,7 +310,14 @@ function lintOne(file: string, type?: LintType, prVariant = false): { violations
     case "strategy": violations.push(...lintStrategySections(text).violations); break;
     case "report": violations.push(...assertSddTddTriple(text).violations); break;
     case "code": {
-      for (const marker of findSimplifyMarkers(text)) markers.push(`simplify marker @${marker.line}: ${marker.text}`);
+      // The comment checks below are advisory this round (markers, exit 0);
+      // the severity switch ships with the baseline repair.
+      for (const marker of findSimplifyMarkers(text)) {
+        const gap = marker.upgradePath === null ? " (no upgrade path)" : "";
+        markers.push(`simplify marker @${marker.line}: ${marker.text}${gap}`);
+      }
+      for (const todo of findUntrackedTodos(text)) markers.push(`untracked ${todo.marker} @${todo.line}: ${todo.text}`);
+      for (const finding of findCommentedCode(text)) markers.push(`commented-out code @${finding.line}: ${finding.text}`);
       const temporary = findTemporaryMarkers(text);
       for (const marker of temporary.markers) markers.push(`temporary marker @${marker.line}: ${marker.text} (${marker.removalPath === null ? "no removal path" : `removal: ${marker.removalPath}`})`);
       violations.push(...temporary.violations); break;

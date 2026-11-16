@@ -39,10 +39,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   assertSddTddTriple,
+  findCommentedCode,
   findEphemeralCitations,
   findProvenanceCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
+  findUntrackedTodos,
   lintAdrTree,
   lintSkillFrontmatter,
   lintSpecsDoc,
@@ -433,6 +435,100 @@ describe("findTemporaryMarkers", () => {
     const result = findTemporaryMarkers('const re = /\\s*temporary\\b/;');
     expect(result.ok).toBe(true);
     expect(result.markers).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findCommentedCode — skills/mstar-coding-behavior/references/comments.md
+// § MUST NOT ("commented-out code: the file's history is the archive")
+// ---------------------------------------------------------------------------
+
+describe("findCommentedCode", () => {
+  test("reports a complete statement on a comment line", () => {
+    const findings = findCommentedCode("const y = 2;\n// const x = 1;\n");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].line).toBe(2);
+    expect(findings[0].text).toContain("const x = 1;");
+  });
+
+  test("reports one finding per comment run, at the run's first line", () => {
+    const findings = findCommentedCode("// const cache = new Map();\n// cache.set(key, value);\nconst live = 1;\n");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].line).toBe(1);
+  });
+
+  test("does not report a wrapped prose continuation that ends in a terminator", () => {
+    const source =
+      "// The scanner joins every comment line in the run and\n// parses the result as one program;\nconst live = 1;\n";
+    expect(findCommentedCode(source)).toEqual([]);
+  });
+
+  test("does not report a section heading such as `// Vocabulary (contract §3)`", () => {
+    expect(findCommentedCode("// Vocabulary (contract \u00a73)\nconst live = 1;\n")).toEqual([]);
+  });
+
+  test("does not report a label-only comment (`// TODO: later` is a TODO, not code)", () => {
+    expect(findCommentedCode("// TODO: later\nconst live = 1;\n")).toEqual([]);
+  });
+
+  test("does not report a trailing comment after live code", () => {
+    expect(findCommentedCode("const x = 1; // const y = 2;\n")).toEqual([]);
+  });
+
+  test("ignores triple-slash directives", () => {
+    expect(findCommentedCode("/// <reference path=\"./types.d.ts\" />\nconst live = 1;\n")).toEqual([]);
+  });
+
+  test("returns [] for empty input", () => {
+    expect(findCommentedCode("")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findUntrackedTodos — comments.md § MUST NOT ("an ownerless TODO: no name,
+// issue reference or removal path means nobody removes it")
+// ---------------------------------------------------------------------------
+
+describe("findUntrackedTodos", () => {
+  test("reports a TODO comment with no tracking reference", () => {
+    const findings = findUntrackedTodos("// TODO: later\nconst x = 1;\n");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].line).toBe(1);
+    expect(findings[0].marker).toBe("TODO");
+    expect(findings[0].text).toContain("later");
+  });
+
+  test("reports FIXME the same way", () => {
+    expect(findUntrackedTodos("// FIXME: reset the cache\n").map((finding) => finding.marker)).toEqual(["FIXME"]);
+  });
+
+  test("accepts an issue reference in any of the supported forms", () => {
+    expect(findUntrackedTodos("// TODO(#123): later\n")).toEqual([]);
+    expect(findUntrackedTodos("// TODO: later - tracked in #123\n")).toEqual([]);
+    expect(findUntrackedTodos("// TODO(MSTAR-77): later\n")).toEqual([]);
+  });
+
+  test("accepts a removal path from the temporary-marker vocabulary", () => {
+    expect(findUntrackedTodos("// TODO: drop the shim - removal tracked in status.json\n")).toEqual([]);
+  });
+
+  test("ignores lowercase prose and marker text outside a comment", () => {
+    expect(findUntrackedTodos("// the todo list lives in the plan\n")).toEqual([]);
+    expect(findUntrackedTodos('const message = "TODO: later";\n')).toEqual([]);
+    expect(findUntrackedTodos('expect(find("// TODO: later")).toBe(1);\n')).toEqual([]);
+  });
+});
+
+describe("findSimplifyMarkers completeness", () => {
+  test("records a missing upgrade path as null", () => {
+    const markers = findSimplifyMarkers("// simplify: naive scan\n");
+    expect(markers).toHaveLength(1);
+    expect(markers[0].upgradePath).toBeNull();
+  });
+
+  test("records the upgrade path when the marker carries one", () => {
+    const markers = findSimplifyMarkers("// simplify: naive scan; upgrade: index the map\n");
+    expect(markers[0].upgradePath).toContain("upgrade: index the map");
   });
 });
 

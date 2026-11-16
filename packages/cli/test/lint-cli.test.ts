@@ -172,6 +172,23 @@ Check result: exit 0; changed scope line found.
     });
   });
 
+  test("incomplete simplify, untracked TODO and commented-out code → advisory markers, exit 0", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(
+        file,
+        "// simplify: naive scan\nconst a = 1;\n// TODO: later\nconst b = 2;\n// const x = 1;\nconst c = 3;\n",
+      );
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      const markers = lintResults(result)[0]?.markers.join("\n");
+      expect(markers).toContain("simplify marker @1");
+      expect(markers).toContain("(no upgrade path)");
+      expect(markers).toContain("untracked TODO @3");
+      expect(markers).toContain("commented-out code @5");
+    });
+  });
+
   test("dir walk aggregates violations → exit 1", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "20260808-bad-plan.md"), "# Plan\n\n## Goal\nShip TBD.\n");
