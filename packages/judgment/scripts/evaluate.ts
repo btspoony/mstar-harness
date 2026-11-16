@@ -52,7 +52,7 @@ function artifactPath(root: string, rel: string, invalidMessage: string): string
 function readArtifact(root: string, rel: string): string {
   const canonical = artifactPath(root, rel, "Invalid artifact path"), relPath = relative(root, canonical);
   if (relPath === ".." || relPath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || !statSync(canonical).isFile() || statSync(canonical).size > 16_777_216) return fail("Artifact outside authorized root or exceeds limit");
-  // simplify: reads stay untranslated — translating them caused an end-to-end regression (I-001095).
+  // simplify: reads stay untranslated (translating them caused an end-to-end regression), upgrade: translate them once the I-001095 cause is reproduced and named.
   return readFileSync(canonical, "utf8");
 }
 function readJson<T>(root: string, rel: string): T {

@@ -384,6 +384,11 @@ describe("findSimplifyMarkers", () => {
   test("returns [] for empty input", () => {
     expect(findSimplifyMarkers("")).toEqual([]);
   });
+
+  test("ignores marker text inside a string literal (a fixture asserting this check)", () => {
+    expect(findSimplifyMarkers('const s = "// simplify: naive scan";\n')).toEqual([]);
+    expect(findSimplifyMarkers("const t = `\n// simplify: naive scan\n`;\n")).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -430,11 +435,30 @@ describe("findTemporaryMarkers", () => {
   });
 
   test("regex quantifiers are not markers (regression: `\\s*temporary` in code)", () => {
- // The `*` before "temporary" here is a quantifier, not a block-comment
- // continuation — a bare `*` introducer would false-positive on it.
+    // The `*` before "temporary" here is a quantifier, not a block-comment
+    // continuation — a bare `*` introducer would false-positive on it.
     const result = findTemporaryMarkers('const re = /\\s*temporary\\b/;');
     expect(result.ok).toBe(true);
     expect(result.markers).toEqual([]);
+  });
+
+  test("ignores marker text inside a string literal (a fixture asserting this check)", () => {
+    expect(findTemporaryMarkers("const t = `\n// temporary: hack\n`;\n").markers).toEqual([]);
+    expect(findTemporaryMarkers('writeFileSync(file, "// temporary: hack\\n");\n').markers).toEqual([]);
+  });
+
+  test("requires the label shape: the ordinary adjective is not a marker", () => {
+    const result = findTemporaryMarkers(
+      "/**\n * Writes a temporary file beside the ledger.\n * The TEMPORARY table is dropped after the read.\n * temporary harness roots keep each case isolated.\n */\n",
+    );
+    expect(result.markers).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  test("accepts the colon and spaced-dash label forms", () => {
+    expect(findTemporaryMarkers("// temporary: hack\n").markers).toHaveLength(1);
+    expect(findTemporaryMarkers("// TEMPORARY \u2014 offline path\n").markers).toHaveLength(1);
+    expect(findTemporaryMarkers("// temporary - offline path\n").markers).toHaveLength(1);
   });
 });
 

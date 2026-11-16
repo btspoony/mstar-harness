@@ -310,11 +310,21 @@ function lintOne(file: string, type?: LintType, prVariant = false): { violations
     case "strategy": violations.push(...lintStrategySections(text).violations); break;
     case "report": violations.push(...assertSddTddTriple(text).violations); break;
     case "code": {
-      // The comment checks below are advisory this round (markers, exit 0);
-      // the severity switch ships with the baseline repair.
+      // A `simplify:` marker records a ceiling and an upgrade path, so one
+      // without the upgrade path is a violation (comments.md § Markers); the
+      // untracked-TODO and commented-out-code findings stay advisory markers.
       for (const marker of findSimplifyMarkers(text)) {
-        const gap = marker.upgradePath === null ? " (no upgrade path)" : "";
-        markers.push(`simplify marker @${marker.line}: ${marker.text}${gap}`);
+        if (marker.upgradePath === null) {
+          violations.push({
+            ok: false,
+            severity: "medium",
+            code: "lint.simplify.no-upgrade-path",
+            message: `simplify marker at line ${marker.line} records no upgrade path - name when to upgrade (comments.md \u00a7 Markers)`,
+            fix: 'state the upgrade clause on the marker, e.g. "simplify: <limit>, upgrade: <when>"',
+          });
+          continue;
+        }
+        markers.push(`simplify marker @${marker.line}: ${marker.text}`);
       }
       for (const todo of findUntrackedTodos(text)) markers.push(`untracked ${todo.marker} @${todo.line}: ${todo.text}`);
       for (const finding of findCommentedCode(text)) markers.push(`commented-out code @${finding.line}: ${finding.text}`);

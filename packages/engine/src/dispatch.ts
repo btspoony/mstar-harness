@@ -387,11 +387,7 @@ export function parseAssignmentBranchForms(assignmentText: string): AssignmentBr
   }
   if (fields.branchPolicy !== undefined && fields.branchPolicy !== "") {
  // Loose prefix capture (gate target) + strict full-form capture (reason).
- // simplify: separator `\s*` on both sides permits zero-width pathological
- // spacing ("direct on main -hotfix — reason" splits into branch "main" +
- // reason "hotfix — reason"); accepted — greedy `\S+` parses
- // realistic hyphenated branch names correctly. Tighten to `\s+(?:[—–]|--|-)\s*`
- // if mis-splits ever surface.
+ // simplify: separator `\s*` on both sides permits zero-width pathological spacing ("direct on main -hotfix — reason" splits into branch "main" + reason "hotfix — reason"), accepted because greedy `\S+` parses realistic hyphenated branch names correctly, upgrade: tighten to `\s+(?:[—–]|--|-)\s*` if mis-splits ever surface.
     const direct = fields.branchPolicy.match(/^direct\s+on\s+(\S+)/i);
     if (direct) {
       const strict = fields.branchPolicy.match(/^direct\s+on\s+(\S+)(?:\s*(?:[\u2014\u2013]|--|-)\s*(.+))?$/);

@@ -1070,13 +1070,11 @@ jobs:
       - name: Lint help reachability
         run: bun run lint:help-reachability
 
-      # Code comments: commented-out code, an untracked TODO and a `simplify:`
-      # marker without an upgrade path are advisory markers for now, so the
-      # baseline (existing `temporary` violations included) cannot fail the
-      # job. The baseline repair switches them to violations and drops
-      # continue-on-error in the same change.
-      - name: Lint code comments (advisory)
-        continue-on-error: true
+      # Code comments: a `simplify:` marker without an upgrade path and a
+      # `temporary` marker without a removal path are violations, so this step
+      # gates the job. An untracked TODO and commented-out code are still
+      # advisory markers and do not fail it.
+      - name: Lint code comments
         run: node packages/cli/dist/mstar-harness.js lint packages --type code
 
   pack-consumers:

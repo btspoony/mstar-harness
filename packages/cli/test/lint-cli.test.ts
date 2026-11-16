@@ -162,7 +162,7 @@ Check result: exit 0; changed scope line found.
     });
   });
 
-  test("code file with simplify marker → advisory only, exit 0", () => {
+  test("code file with a complete simplify marker → exit 0, marker printed", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "scan.ts");
       writeFileSync(file, "// simplify: naive scan; upgrade: index the map\nconst y = 2;\n");
@@ -172,20 +172,29 @@ Check result: exit 0; changed scope line found.
     });
   });
 
-  test("incomplete simplify, untracked TODO and commented-out code → advisory markers, exit 0", () => {
+  test("simplify without an upgrade path → lint.simplify.no-upgrade-path, exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// simplify: naive scan\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toContain("lint.simplify.no-upgrade-path");
+      expect(lintResults(result)[0]?.markers).toEqual([]);
+    });
+  });
+
+  test("untracked TODO and commented-out code → advisory markers, exit 0", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "scan.ts");
       writeFileSync(
         file,
-        "// simplify: naive scan\nconst a = 1;\n// TODO: later\nconst b = 2;\n// const x = 1;\nconst c = 3;\n",
+        "const a = 1;\n// TODO: later\nconst b = 2;\n// const x = 1;\nconst c = 3;\n",
       );
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(0);
       const markers = lintResults(result)[0]?.markers.join("\n");
-      expect(markers).toContain("simplify marker @1");
-      expect(markers).toContain("(no upgrade path)");
-      expect(markers).toContain("untracked TODO @3");
-      expect(markers).toContain("commented-out code @5");
+      expect(markers).toContain("untracked TODO @2");
+      expect(markers).toContain("commented-out code @4");
     });
   });
 
