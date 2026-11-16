@@ -8,6 +8,23 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.7.1] - 2026-11-16
+
+### Harness
+
+- **Tracked-product fixes stay out of the integration worktree.** The iteration close record for that round now names one deviation: on 2026-10-23, a CI bundle-freshness fix rebuilt and pushed `hooks/*.mjs` from the integration worktree during the Phase-5 loop, instead of a fix feature worktree merged back after review. The preventing check already exists — the control-root / integration-worktree product-edit ban in `skills/mstar-iteration/references/phase-2-worktree-lease.md`, stated in the Phase-scope line under "When it applies" and again in §2.3 step 3, restated with its Phase-5 twin in `skills/mstar-iteration/references/phase-4-5-pr-delivery.md` §5.0 — and this record adds no new guard.
+- **The quiesced-WAL store probe has one home (no user-visible behaviour).** `packages/engine` test support gains `store-file-probe.ts` (`store-test-runtime.ts` keeps the lazy driver constructor); the store and recovery suites share it instead of each carrying a private copy of the quiesced-shape gate and the raw read-with-retry.
+- **A scenario version probe that cannot spawn names the interpreter instead of throwing.** The store suite's failure banner reports `version probe failed (<spawn error code>)` with the binary path, so a missing interpreter surfaces as the scenario failure rather than a `TypeError` on a null stdout.
+- **The zero-match push residue cause names both exits.** When no remote issue carries the correlation marker, the engine cause now offers `--release <localId>` and `--adopt <localId>=<issueUrl|externalId>`; which exit applies stays the operator's call, and `issue-sync` covers the message.
+- **The boot diagnostic stays silent under an explicit soft.** `packages/dsh` dispatch-gate tests pin the precedence Config > `.mstarc` > compass: the same active-iteration `enforcement: hard` arm that fires the unset-`dispatchTools` diagnostic without an override leaves it silent under `enforcement: 'soft'`.
+- **Replay assertions compare the replayed receipt, not just its exit code.** Operation-id replay cases in `packages/cli` and `packages/commands` deep-compare the served receipt against the commit it replays through the shared `receiptStable` helper, which excludes only the `replayed` marker — `recovery` is compared, so a sidecar change that keeps exit 0 now fails.
+- **The `--session-ref` claim is scoped to execution-bound verbs.** The host-neutral MCP authority note says the "supplied ⇒ checked, omitted ⇒ derived" constraint holds for the execution-bound verbs `workflow` / `plan` / `session` / `iteration`, rather than "the mutation verbs" as a class.
+- **The audit fan-out security seat carries must-check / not-evidence lists.** The `mstar-audit-fanout` seat template gains a per-category gate whose security entry lists the entry points and boundary facts the seat must sweep and the observations that are leads rather than findings; `skills/mstar-audit/references/codebase-audit.md` points at that same gate table so the prose dispatch path cannot drift, and the behaviour suite requires both markers in the security seat prompt and in no other.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.7.1**.
+
 ## [4.7.0] - 2026-11-15
 
 ### Harness

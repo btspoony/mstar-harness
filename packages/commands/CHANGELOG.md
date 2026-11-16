@@ -6,6 +6,26 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.7.1] - 2026-11-16
+
+### Changed
+
+- **`reloaded` is documented for a stateless per-invocation consumer.** The `AttestationDisposition` doc comment in `packages/engine/src/store-activation.ts` and the published `activationAttestationDocumentConstraints` text in `packages/commands/src/activation-attestation.ts` now state the rule: a stateless per-invocation consumer (the CLI) is attested `reloaded` although no reload event occurs — nothing of it outlives an invocation, so its next invocation under the current epoch is the whole reload, and the value attests that no old process survived the barrier.
+- Documentation only: no disposition value, payload shape or validation branch changed. The constraint row reaches operators through the `--help` text built in `packages/commands/src/families/store.ts` and `families/workflow.ts`, and through the schema description.
+- **The `refuse-nohost` import case is deterministic (test-only).** `packages/commands/src/families/issue-sync.test.ts` no longer lets ambient state decide the outcome: it points `MSTAR_LINEAR_CREDENTIAL` at an empty path inside the fixture, deletes `LINEAR_API_KEY` and stubs `fetch` to throw, which the built-in transport maps to `unreachable`. Previously a stored credential at `~/.config/mstar/linear/credential.json` refused `linear.reauth-required` from `resolveStoredToken` before any provider was assembled — failing the case on a machine that had ever run `mstar linear auth` — while with no credential the assembly spent a real call to `mcp.linear.app` whose network result became the probe state, so the case passed without exercising what it asserted.
+- The stubbed transport records its call, so the case now asserts exactly one `linear.host-unavailable` after proving the built-in provider was built and reached the wire. The guard against a `linear.list-unimplemented` refusal is kept.
+- **The quiesced-WAL store probe has one home (no user-visible behaviour).** `packages/engine` test support gains `store-file-probe.ts` (`store-test-runtime.ts` keeps the lazy driver constructor); the store and recovery suites share it instead of each carrying a private copy of the quiesced-shape gate and the raw read-with-retry.
+- **A scenario version probe that cannot spawn names the interpreter instead of throwing.** The store suite's failure banner reports `version probe failed (<spawn error code>)` with the binary path, so a missing interpreter surfaces as the scenario failure rather than a `TypeError` on a null stdout.
+- **The zero-match push residue cause names both exits.** When no remote issue carries the correlation marker, the engine cause now offers `--release <localId>` and `--adopt <localId>=<issueUrl|externalId>`; which exit applies stays the operator's call, and `issue-sync` covers the message.
+- **The boot diagnostic stays silent under an explicit soft.** `packages/dsh` dispatch-gate tests pin the precedence Config > `.mstarc` > compass: the same active-iteration `enforcement: hard` arm that fires the unset-`dispatchTools` diagnostic without an override leaves it silent under `enforcement: 'soft'`.
+- **Replay assertions compare the replayed receipt, not just its exit code.** Operation-id replay cases in `packages/cli` and `packages/commands` deep-compare the served receipt against the commit it replays through the shared `receiptStable` helper, which excludes only the `replayed` marker — `recovery` is compared, so a sidecar change that keeps exit 0 now fails.
+- **The `--session-ref` claim is scoped to execution-bound verbs.** The host-neutral MCP authority note says the "supplied ⇒ checked, omitted ⇒ derived" constraint holds for the execution-bound verbs `workflow` / `plan` / `session` / `iteration`, rather than "the mutation verbs" as a class.
+- **The audit fan-out security seat carries must-check / not-evidence lists.** The `mstar-audit-fanout` seat template gains a per-category gate whose security entry lists the entry points and boundary facts the seat must sweep and the observations that are leads rather than findings; `skills/mstar-audit/references/codebase-audit.md` points at that same gate table so the prose dispatch path cannot drift, and the behaviour suite requires both markers in the security seat prompt and in no other.
+
+- Version alignment with harness **4.7.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.7.1**.
+
 ## [4.7.0] - 2026-11-15
 
 ### Changed

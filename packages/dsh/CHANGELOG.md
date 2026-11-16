@@ -6,6 +6,24 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.7.1] - 2026-11-16
+
+### Changed
+
+- **The dispatch gate is split into cohesive modules (no behaviour change).** `packages/dsh/src/gates/dispatch.ts` drops from 1228 lines to 107 by moving each concern into its own module — `dispatch-assignment.ts` (197), `dispatch-core.ts` (137), `dispatch-lease.ts` (114), `dispatch-listener.ts` (218), `dispatch-workflow-branch.ts` (258), `dispatch-workflow.ts` (78), `dispatch-worktree.ts` (217) — the largest being `dispatch-workflow-branch.ts` at 258 lines. What stays in `dispatch.ts` is the shared terminology (`DISPATCH_LOGGER`, `DEFAULT_DISPATCH_TOOLS`, `DEFAULT_WORKFLOW_TOOLS`, `TEAM_DISPATCH_TOOLS`, `isTeamDispatchTool`, `DispatchGateAdvisory`), which imports no dispatch sibling so `scripts/dsh-contract-lint.ts` can keep resolving the carrier map by that path.
+- Imports follow the new direction: `adapter` → `status`, `dispatch`, `dispatch-assignment`, `dispatch-core`, `dispatch-lease`, `_shared`; `dispatch-core` → `dispatch-worktree` → `dispatch-assignment`; `dispatch-lease` → `dispatch-assignment`; `dispatch-workflow-branch` → `dispatch-workflow`, `dispatch`; `dispatch-listener` → `dispatch-assignment`, `dispatch-workflow-branch`, `dispatch`. `dispatch-*` imports of `adapter` / `agent-flow` stay type-only, so the runtime graph remains acyclic, and the `tools/pre-execute` entry now resolves `preExecuteListener` from `dispatch-listener`. `packages/dsh/docs/entry-split-inventory.md` §11 and its dependency graph record the split.
+- **The quiesced-WAL store probe has one home (no user-visible behaviour).** `packages/engine` test support gains `store-file-probe.ts` (`store-test-runtime.ts` keeps the lazy driver constructor); the store and recovery suites share it instead of each carrying a private copy of the quiesced-shape gate and the raw read-with-retry.
+- **A scenario version probe that cannot spawn names the interpreter instead of throwing.** The store suite's failure banner reports `version probe failed (<spawn error code>)` with the binary path, so a missing interpreter surfaces as the scenario failure rather than a `TypeError` on a null stdout.
+- **The zero-match push residue cause names both exits.** When no remote issue carries the correlation marker, the engine cause now offers `--release <localId>` and `--adopt <localId>=<issueUrl|externalId>`; which exit applies stays the operator's call, and `issue-sync` covers the message.
+- **The boot diagnostic stays silent under an explicit soft.** `packages/dsh` dispatch-gate tests pin the precedence Config > `.mstarc` > compass: the same active-iteration `enforcement: hard` arm that fires the unset-`dispatchTools` diagnostic without an override leaves it silent under `enforcement: 'soft'`.
+- **Replay assertions compare the replayed receipt, not just its exit code.** Operation-id replay cases in `packages/cli` and `packages/commands` deep-compare the served receipt against the commit it replays through the shared `receiptStable` helper, which excludes only the `replayed` marker — `recovery` is compared, so a sidecar change that keeps exit 0 now fails.
+- **The `--session-ref` claim is scoped to execution-bound verbs.** The host-neutral MCP authority note says the "supplied ⇒ checked, omitted ⇒ derived" constraint holds for the execution-bound verbs `workflow` / `plan` / `session` / `iteration`, rather than "the mutation verbs" as a class.
+- **The audit fan-out security seat carries must-check / not-evidence lists.** The `mstar-audit-fanout` seat template gains a per-category gate whose security entry lists the entry points and boundary facts the seat must sweep and the observations that are leads rather than findings; `skills/mstar-audit/references/codebase-audit.md` points at that same gate table so the prose dispatch path cannot drift, and the behaviour suite requires both markers in the security seat prompt and in no other.
+
+- Version alignment with harness **4.7.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.7.1**.
+
 ## [4.7.0] - 2026-11-15
 
 ### Changed
