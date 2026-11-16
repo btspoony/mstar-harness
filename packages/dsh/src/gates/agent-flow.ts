@@ -47,7 +47,9 @@ import type { AgentFlowContinuationEventView, AgentFlowEventView, AgentFlowSumma
 export type { AgentFlowContinuationEventView }
 import { asRecord } from './_shared.ts'
 import type { Config } from './_shared.ts'
-import { isNaValue, planIdOf, sessionIdOf, DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from './dispatch.ts'
+import { DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from './dispatch.ts'
+import { isNaValue, planIdOf } from './dispatch-assignment.ts'
+import { sessionIdOf } from './dispatch-core.ts'
 import {
   isTeamDispatchToolName,
   resolveMemberId,

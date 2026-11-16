@@ -55,10 +55,8 @@ import { leafSeatToolListener, registerLeafSeatShellEnv } from './gates/leaf-sea
 import { DshHostAdapter } from './gates/adapter.ts'
 import type { DshHostAdapterOptions } from './gates/adapter.ts'
 import { resolveExecutionLedgerTarget } from './gates/workflow-selection.ts'
-import {
-  preExecuteListener,
-  DISPATCH_LOGGER,
-} from './gates/dispatch.ts'
+import { DISPATCH_LOGGER } from './gates/dispatch.ts'
+import { preExecuteListener } from './gates/dispatch-listener.ts'
 import type { DispatchGateAdvisory } from './gates/dispatch.ts'
 import {
   AGENT_FLOW_LOGGER,

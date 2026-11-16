@@ -281,7 +281,7 @@ export function liveConfigValue<T>(value: T | LiveConfigRef | undefined): T | un
  * ROOT-session identity and is read only there; it is NEVER the caller for a
  * child session or for a session the gate cannot read, which fail closed with
  * `dispatch.anti-recursion.empty-binding` whatever the field says, because a
- * leaf must not dispatch. Derivation: `dispatchCallerOf` in `dispatch.ts`.
+ * leaf must not dispatch. Derivation: `dispatchCallerOf` in `dispatch-core.ts`.
  */
 export const ROOT_SESSION_DISPATCH_BINDING = 'project-manager'
 

@@ -38,16 +38,10 @@ import { harnessDocKindOfTarget, validateStatusDoc, validateStatusValue, type Ha
 import { storeAuthorityRefusals } from './store-authority.ts'
 import { readExecutionWorkflowSource } from './workflow-selection.ts'
 import type { SessionHint } from './workflow-selection.ts'
-import {
-  dispatchGateCore,
-  leaseGateViolations,
-  assignmentTextFromFields,
-  isAssignmentShaped,
-  planIdOf,
-  resolveDispatchHard,
-  DEFAULT_DISPATCH_TOOLS,
-  TEAM_DISPATCH_TOOLS,
-} from './dispatch.ts'
+import { DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from './dispatch.ts'
+import { assignmentTextFromFields, isAssignmentShaped, planIdOf, resolveDispatchHard } from './dispatch-assignment.ts'
+import { dispatchGateCore } from './dispatch-core.ts'
+import { leaseGateViolations } from './dispatch-lease.ts'
 import { recordDispatch, recordWorkflowVerdict as appendWorkflowVerdict, AGENT_FLOW_LOGGER } from './agent-flow.ts'
 import type { AgentFlowPairing, WorkflowVerdictInput } from './agent-flow.ts'
 import { teamServicePresent } from './team-identity.ts'

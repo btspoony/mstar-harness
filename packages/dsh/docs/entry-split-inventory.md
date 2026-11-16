@@ -140,7 +140,14 @@ gates/* ──> gates/_shared.ts
 | `gates/status.ts` | §8 | `isStatusTarget`、`resolveSeamHard`（引自 `_shared.ts`）、`validateStatusValue`、`validateStatusDoc`、`gateStatusIntent`、`writeIntentListener`、`editIntentListener` + `LOGGER_NAME` | `StatusGateAdvisory`（type） | `writeIntentListener`、`editIntentListener`（entry）、`validateStatusValue`、`validateStatusDoc`（adapter） |
 | `gates/skill-lint.ts` | §9 | `SkillLintVetoError`、`stripFrontmatter`、`lintSkillDoc`、`lintSkillWrite`、`skillRootsOf`、`isSkillTarget`、`skillNameOf`、`skillCanonicalForm`、`gateSkillIntent`、`skillWriteIntentListener` + `SKILL_LINT_LOGGER` | `SkillLintAdvisory`（type）、`SkillLintVetoError`、`lintSkillDoc`、`lintSkillWrite` | `skillWriteIntentListener`（entry） |
 | `gates/seams.ts` | §10 | 全部 seam 门禁（见 §1 表 §10 列）+ `SEAM_LOGGERS` | `SeamId`（type）、`SeamLintAdvisory`（type）、`SeamVetoError`、`lintSeamWrite`、`lintDesignMdWrite`、`lintAuditWrite`、`lintCompoundWrite`、`lintRolesWrite` | `seamWriteIntentListener`（entry）、`validateDesignDoc`/`validateAuditDoc`/`validateCompoundDoc`/`validateRolesState`（tools） |
-| `gates/dispatch.ts` | §11 | 全部 dispatch 门禁 + `DISPATCH_LOGGER`、`DEFAULT_DISPATCH_TOOLS`、`ASSIGNMENT_HEADING_RE`、`ASSIGNMENT_FIELD_RE` | `DispatchGateAdvisory`（type） | `preExecuteListener`（entry）、`dispatchGateCore`/`leaseGateViolations`/`assignmentTextFromFields`/`resolveDispatchHard`/`DISPATCH_LOGGER`（adapter + entry boot warn） |
+| `gates/dispatch.ts` | §11 | **固定术语**：`DISPATCH_LOGGER`、`DEFAULT_DISPATCH_TOOLS`、`DEFAULT_WORKFLOW_TOOLS`、`TEAM_DISPATCH_TOOLS`（carrier map）、`isTeamDispatchTool`、`DispatchGateAdvisory` — 叶子模块，不 import 任何 dispatch 兄弟模块（carrier map 留在此处：`scripts/dsh-contract-lint.ts` 按此路径解析其权威） | `DispatchGateAdvisory`（type） | `DISPATCH_LOGGER`（entry boot warn）、`DEFAULT_DISPATCH_TOOLS`/`TEAM_DISPATCH_TOOLS`（adapter、agent-flow、team-identity） |
+| `gates/dispatch-assignment.ts` | §11 | Assignment header 语法：`ASSIGNMENT_HEADING_RE`/`ASSIGNMENT_FIELD_RE`、`assignmentHeaderValue`/`assignmentHeaderValues`、`firstToken`、`stripWrappingCodeSpan`、`isNaValue`、`planIdOf`、`isAssignmentShaped`、`resolveDispatchHard`、`assignmentTextFromFields` | — | adapter、agent-flow、dispatch-lease、dispatch-worktree、dispatch-listener、dispatch-core（sessionIdOf） |
+| `gates/dispatch-core.ts` | §11 | `sessionIdOf`、`callingSessionOf`、`dispatchCallerOf`、`dispatchGateCore`（engine 单一组合 + worktree 增量） | — | adapter（`dispatchGate`）、agent-flow、dispatch-listener |
+| `gates/dispatch-lease.ts` | §11 | `leaseViolation`、`leaseGateViolations`（dsh 增量 lease 检查） | — | adapter |
+| `gates/dispatch-worktree.ts` | §11 | `worktreeViolation`、`activeSnapshotRows`、`worktreeL2Violations`、`worktreeL1Violations` | — | dispatch-core |
+| `gates/dispatch-workflow.ts` | §11 | `WorkflowGateInput`、`workflowGateInputOf` | — | dispatch-workflow-branch、workflow-policy（type-only） |
+| `gates/dispatch-workflow-branch.ts` | §11 | `writableFanOutUncovered`、`gateWorkflow`（P-a/P-b/P-c + durable verdict row） | — | dispatch-listener |
+| `gates/dispatch-listener.ts` | §11 | `denyReason`、`gateAssignmentText`、`gateTeamDispatch`、`gateDispatch`、`preExecuteListener`（deny 短路 / degrade 包络） | — | entry（`tools/pre-execute`） |
 | `gates/adapter.ts` | §13 | `DshHostAdapterOptions`、`DshHostAdapter`（含 `statusGate`/`dispatchGate`/`beforeStatusWrite`/`beforeDispatch`/`beforeMerge`）+ `HOST_LOGGER` | `DshHostAdapterOptions`（type）、`DshHostAdapter` | — |
 | `gates/catalog.ts` | §14 + §15 视图映射 | catalog 全部函数 + `CATALOG_LOGGER`、`DEFAULT_CATALOG_TTL_MS`、`EXPLICIT_CACHE_KEY`、`RESIDUAL_SEVERITIES` | — | `preStepCatalogListener`、`buildCatalogSources`、`DEFAULT_CATALOG_TTL_MS`、`EXPLICIT_CACHE_KEY`、`createCatalogInvalidation`、type `CatalogCacheEntry`/`EmissionDigest`/`CatalogInvalidation`（entry 接线） |
 | ~~`gates/tools.ts`~~ | §15 注册 | **已移除（历史）**：`registerSddIterationTools`、`registerSeamTools`、`ITERATION_VIOLATION_SCHEMA` 随 MCP 家族折叠删除；原生工具现注册在 `gates/native-commands.ts` | — | — |
@@ -158,7 +165,12 @@ gates/* ──> gates/_shared.ts
 
 ```
 src/index.ts ──> _shared / status / skill-lint / seams / dispatch / catalog / tools / adapter / service / types
-adapter ──> status, dispatch, _shared          （status/dispatch 对 adapter 仅 type-only import → 擦除，运行时无环）
+adapter ──> status, dispatch, dispatch-assignment, dispatch-core, dispatch-lease, _shared
+              （dispatch-* 对 adapter / agent-flow 仅 type-only import → 擦除，运行时无环）
+dispatch-core ──> dispatch-worktree ──> dispatch-assignment
+dispatch-lease ──> dispatch-assignment
+dispatch-workflow-branch ──> dispatch-workflow, dispatch（叶子术语模块）
+dispatch-listener ──> dispatch-assignment, dispatch-workflow-branch, dispatch
 tools   ──> seams, _shared
 status / skill-lint / seams / dispatch / catalog ──> _shared
 ```
@@ -174,11 +186,11 @@ status / skill-lint / seams / dispatch / catalog ──> _shared
 | `new DshMstar(ctx, …)` | `service.ts`（不变） | §2 |
 | `new DshHostAdapter(ctx, { resolver, config })` | `adapter` | §13 |
 | `ctx.plugin(skill-filesystem, skillLocalConfig(config))` | `_shared` | §12 |
-| boot warn（hard 缺 binding/tools）`ctx.logger(DISPATCH_LOGGER)` | `dispatch` | §11/§18 |
+| boot warn（hard 缺 binding/tools）`ctx.logger(DISPATCH_LOGGER)` | `dispatch`（术语模块） | §11/§18 |
 | `fs/write-intent` → `writeIntentListener` / `editIntentListener` | `status` | §8 |
 | `fs/write-intent` → `skillWriteIntentListener` | `skill-lint` | §9 |
 | `fs/write-intent` → `seamWriteIntentListener` ×4（`seams` 数组） | `seams` | §10 |
-| `tools/pre-execute` → `preExecuteListener` | `dispatch` | §11 |
+| `tools/pre-execute` → `preExecuteListener` | `dispatch-listener` | §11 |
 | `agent/pre-step` → `preStepCatalogListener` + cache（`buildCatalogSources`/`DEFAULT_CATALOG_TTL_MS`/`EXPLICIT_CACHE_KEY`/`CatalogCacheEntry`/`EmissionDigest`） | `catalog` | §14 |
 | `registerSddIterationTools` / `registerSeamTools` | `tools` | §15 |
 | `registerMstarCommands` | entry（保留） | §16 |

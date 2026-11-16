@@ -34,7 +34,7 @@
  * RESOLVED decisions (`allow` | `deny`) keyed by workflow name.
  *
  * Cache-key normalization (the congruence fix): every key — the gate's `metaName` (composed through
- * {@link normalizeWorkflowName} in dispatch.ts `workflowGateInputOf`), the
+ * {@link normalizeWorkflowName} in dispatch-workflow.ts `workflowGateInputOf`), the
  * run-start observation's `runName` (workflow-ledger.ts), and the explicit
  * `record()` / `markAsked()` APIs (which normalize internally) — is
  * the ASCII-control-char-stripped, UNCAPPED name. One shared function, both
@@ -69,7 +69,7 @@
  * 's dispatch.ts.
  */
 import type { Config } from './_shared.ts'
-import type { WorkflowGateInput } from './dispatch.ts'
+import type { WorkflowGateInput } from './dispatch-workflow.ts'
 
 /**
  * The workflow-gate advisory/deny violation code for a name outside the P-a
@@ -93,7 +93,7 @@ const WORKFLOW_NAME_CONTROL_CHARS = /[\u0000-\u001F\u007F]/g
  * Strip ASCII control characters (newlines / tabs / CR — the log-forging
  * surface( from one workflow name. THE shared P-c cache-key
  * normalization : the gate's `metaName` (composed in
- * dispatch.ts `workflowGateInputOf`) and the run-start observation's
+ * dispatch-workflow.ts `workflowGateInputOf`) and the run-start observation's
  * `runName` (workflow-ledger.ts) MUST key the ask cache through the SAME
  * function — a raw-vs-stripped mismatch (e.g. `au\u0000dit` gating under
  * one key while the observation records another) would re-ask a resolved

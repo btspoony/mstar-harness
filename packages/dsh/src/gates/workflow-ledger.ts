@@ -56,7 +56,7 @@ import { asRecord } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
 // The SHARED P-c cache-key normalization : the run-start
 // observation MUST key the ask cache through the SAME function the gate
-// composes `metaName` with (dispatch.ts `workflowGateInputOf`), or a
+// composes `metaName` with (dispatch-workflow.ts `workflowGateInputOf`), or a
 // control-char name re-asks forever. Also the display-field control-char
 // strip this consumer used to own locally (`sanitizeLedgerDisplay`) — now
 // one shared implementation for the run name AND the label/phase fields.

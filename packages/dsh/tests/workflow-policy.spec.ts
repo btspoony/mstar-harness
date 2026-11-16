@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { WorkflowAskCache, WORKFLOW_LEASE_UNCOVERED_CODE, WORKFLOW_NAME_UNKNOWN_CODE, normalizeWorkflowName, workflowNameUnknown, workflowPolicy } from '../src/gates/workflow-policy.ts'
 import type { Config } from '../src/gates/_shared.ts'
-import type { WorkflowGateInput } from '../src/gates/dispatch.ts'
+import type { WorkflowGateInput } from '../src/gates/dispatch-workflow.ts'
 
 const input = (overrides: Partial<WorkflowGateInput> = {}): WorkflowGateInput => ({
   tool: 'workflow',
