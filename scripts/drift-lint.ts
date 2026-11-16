@@ -1168,7 +1168,8 @@ const PROVENANCE_SCAN_EXTS = [".ts", ".md"];
  * whitespace requirement, so `statement;// comment` qualifies). Returns -1
  * when no occurrence qualifies. simplify: detection inherits commentMask's
  * own ceiling — the regex-vs-division heuristic documented in
- * scripts/ascii-literal-utils.ts. */
+ * scripts/ascii-literal-utils.ts. upgrade: read the block state off the
+ * engine's shared scanner once a false positive costs a real citation. */
 function trailingCommentStart(line: string, mask: Uint8Array, base: number): number {
   let idx = line.indexOf("//");
   while (idx !== -1) {
@@ -1193,7 +1194,8 @@ function trailingCommentStart(line: string, mask: Uint8Array, base: number): num
  * line-level first-token heuristic on top of the mask; residual ceilings =
  * the unconditional `*` line (over-inclusive once its block comment has
  * closed) and commentMask's own regex-vs-division heuristic
- * (scripts/ascii-literal-utils.ts). */
+ * (scripts/ascii-literal-utils.ts). upgrade: derive the line's real start
+ * from the shared scanner when a mis-read line costs a real citation. */
 function tsCommentLines(text: string): string {
   const mask = commentMask(text);
   const out: string[] = [];

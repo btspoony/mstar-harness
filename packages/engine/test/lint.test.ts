@@ -370,6 +370,27 @@ describe("findSimplifyMarkers", () => {
     expect(markers[0].line).toBe(1);
   });
 
+  test("keeps a same-line bound on a trailing marker for every introducer form", () => {
+    const cases = [
+      "const x = 1; // simplify: naive scan; upgrade: index the map\n",
+      "x = 1  # simplify: naive scan; upgrade: index the map\n",
+      "(define x 1) ; simplify: naive scan; upgrade: index the map\n",
+      "SELECT 1 -- simplify: naive scan; upgrade: index the map\n",
+      "x = 1; /* simplify: naive scan; upgrade: index the map */\n",
+    ];
+    for (const text of cases) {
+      const markers = findSimplifyMarkers(text);
+      expect(markers).toHaveLength(1);
+      expect(markers[0]!.bound ?? "").toContain("upgrade: index the map");
+    }
+  });
+
+  test("a trailing marker whose line states no bound keeps none (the exit-1 case)", () => {
+    const markers = findSimplifyMarkers("x = 1  # simplify: naive scan\n");
+    expect(markers).toHaveLength(1);
+    expect(markers[0]!.bound).toBeNull();
+  });
+
   test("matches SIMPLIFY: case-insensitively", () => {
     const markers = findSimplifyMarkers(SIMPLIFY_UPPERCASE);
     expect(markers).toHaveLength(1);

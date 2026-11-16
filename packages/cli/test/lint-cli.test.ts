@@ -223,6 +223,26 @@ Check result: exit 0; changed scope line found.
     });
   });
 
+  test("a trailing marker after code keeps its same-line bound → exit 0", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.py");
+      writeFileSync(file, "x = 1  # simplify: naive scan; upgrade: index the map\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      expect(lintResults(result)[0]?.markers.join("\n")).toContain("simplify marker @1");
+    });
+  });
+
+  test("a trailing marker after code with no bound → lint.simplify.no-upgrade-path, exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.sh");
+      writeFileSync(file, "x=1  # simplify: naive scan\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toContain("lint.simplify.no-upgrade-path");
+    });
+  });
+
   test("untracked TODO and commented-out code → advisory markers, exit 0", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "scan.ts");

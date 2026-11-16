@@ -101,7 +101,7 @@ export function findSimplifyMarkers(fileText: string): SimplifyMarker[] {
     if (match === null) continue;
     if (!isMarkerToken(scan, offsets[i], match.index, masked[i], SIMPLIFY_INTRODUCER_RE)) continue;
     if (QUOTE_CHARS[lines[i][match.index - 1]] === true) continue;
-    markers.push({ line: i + 1, text: lines[i].trim(), bound: commentBlockBound(lines, commentOnly, i, scan, offsets) });
+    markers.push({ line: i + 1, text: lines[i].trim(), bound: commentBlockBound(lines, masked, commentOnly, i, match.index, scan, offsets) });
   }
   return markers;
 }
@@ -158,11 +158,32 @@ function isMarkerToken(scan: Uint8Array, base: number, at: number, maskedLine: s
   return klass === SOURCE_CODE && introducerRe.test(maskedLine);
 }
 
+/** Introducers that open a comment after code on the same line. The match is
+ * read from the masked line, so a `#` or `//` inside a literal starts
+ * nothing. `--` requires following whitespace: `--x` is a decrement. */
+const TRAILING_INTRODUCER_RE = /\/\/|\/\*|#|;|--(?=\s|$)/g;
+
+/** The last introducer at or before `before` in `maskedLine`, or -1. The
+ * marker line of a trailing marker carries code the scanner classifies
+ * SOURCE_CODE, so its comment text starts at this introducer, not at a
+ * SOURCE_COMMENT span. */
+function introducerBefore(maskedLine: string, before: number): number {
+  let found = -1;
+  for (const match of maskedLine.matchAll(TRAILING_INTRODUCER_RE)) {
+    if (match.index > before) break;
+    found = match.index;
+  }
+  return found;
+}
+
 /** One line's comment text: the whole line when it is comment-only, otherwise
- * only the tail the scanner classifies as a comment. Code is never a bound, so
- * a code line contributes nothing. */
-function commentLineText(line: string, commentOnly: boolean, scan: Uint8Array, base: number): string {
+ * the tail from the comment introducer before `before` (or from the scanner's
+ * first comment character). Code is never a bound, so a code line without an
+ * introducer contributes nothing. */
+function commentLineText(line: string, maskedLine: string, commentOnly: boolean, scan: Uint8Array, base: number, before: number): string {
   if (commentOnly) return line;
+  const introducer = introducerBefore(maskedLine, before);
+  if (introducer !== -1) return line.slice(introducer);
   for (let i = 0; i < line.length; i++) {
     if (scan[base + i] === SOURCE_COMMENT) return line.slice(i);
   }
@@ -171,21 +192,24 @@ function commentLineText(line: string, commentOnly: boolean, scan: Uint8Array, b
 
 /** The comment text of the block around line `index`: the maximal run of
  * adjacent comment-only lines that contains it, plus the marker line itself,
- * each reduced to its comment content. */
-function commentBlockText(lines: readonly string[], commentOnly: readonly boolean[], index: number, scan: Uint8Array, offsets: readonly number[]): string {
+ * each reduced to its comment content. `before` is the marker's column, so a
+ * trailing marker's line keeps the comment tail that holds its bound. */
+function commentBlockText(lines: readonly string[], masked: readonly string[], commentOnly: readonly boolean[], index: number, before: number, scan: Uint8Array, offsets: readonly number[]): string {
   let start = index;
   while (start > 0 && commentOnly[start - 1]) start -= 1;
   let end = index;
   while (end + 1 < lines.length && commentOnly[end + 1]) end += 1;
   const parts: string[] = [];
-  for (let i = start; i <= end; i++) parts.push(commentLineText(lines[i], commentOnly[i], scan, offsets[i]));
+  for (let i = start; i <= end; i++) {
+    parts.push(commentLineText(lines[i], masked[i], commentOnly[i], scan, offsets[i], i === index ? before : Infinity));
+  }
   return parts.join("\n");
 }
 
 /** The bound recorded for the marker on line `index`: the first `upgrade:`
  * clause or removal/tracking reference anywhere in its comment block. */
-function commentBlockBound(lines: readonly string[], commentOnly: readonly boolean[], index: number, scan: Uint8Array, offsets: readonly number[]): string | null {
-  const block = commentBlockText(lines, commentOnly, index, scan, offsets);
+function commentBlockBound(lines: readonly string[], masked: readonly string[], commentOnly: readonly boolean[], index: number, before: number, scan: Uint8Array, offsets: readonly number[]): string | null {
+  const block = commentBlockText(lines, masked, commentOnly, index, before, scan, offsets);
   const clause = UPGRADE_PATH_RE.exec(block);
   if (clause !== null) return clause[0];
   for (const pattern of REMOVAL_PATH_PATTERNS) {
@@ -266,9 +290,10 @@ export function findTemporaryMarkers(fileText: string): TemporaryMarkerResult {
   const offsets = lineOffsets(fileText);
   const commentOnly = commentOnlyLines(lines, scan, offsets);
   for (let i = 0; i < lines.length; i++) {
-    if (!re.test(masked[i])) continue;
+    const labelled = re.exec(masked[i]);
+    if (labelled === null) continue;
     const text = lines[i].trim();
-    const block = commentBlockText(lines, commentOnly, i, scan, offsets);
+    const block = commentBlockText(lines, masked, commentOnly, i, labelled.index, scan, offsets);
     let removalPath: string | null = null;
     for (const pattern of REMOVAL_PATH_PATTERNS) {
       const match = pattern.exec(block);
