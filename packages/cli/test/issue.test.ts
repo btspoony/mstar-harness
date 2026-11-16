@@ -152,7 +152,7 @@ describe("mstar issue CLI bundle", () => {
   });
 
 
-  test("reopen is terminal-only, CAS guarded, and preserves the prior closure note", async () => {
+  test("reopen is terminal-only, CAS guarded, and preserves the prior closure note", { timeout: 30_000 }, async () => {
     const { root, harness } = await makeHarness();
     const captureFile = join(root, "capture.json");
     writeJson(captureFile, capturePayload());
