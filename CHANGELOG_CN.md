@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+## [4.7.1] - 2026-11-16
+
+### Harness
+
+- **产品修复不落在 integration worktree。** 该轮迭代的 close record 现在记录了一处偏离：2026-10-23，一次 CI bundle 新鲜度修复在 Phase-5 循环中从 integration worktree 重建并推送 `hooks/*.mjs`，而非走 fix feature worktree、经 review 后合并回来。防止复发的检查已经存在——`skills/mstar-iteration/references/phase-2-worktree-lease.md` 的「When it applies」Phase-scope 行与 §2.3 step 3 中的 control-root / integration-worktree 产品编辑禁令，其 Phase-5 对应条款在 `skills/mstar-iteration/references/phase-4-5-pr-delivery.md` §5.0——本记录不新增任何 guard。
+- **quiesced-WAL store 探针归一（无用户可见行为）。** `packages/engine` 测试支持新增 `store-file-probe.ts`（`store-test-runtime.ts` 保留惰性 driver 构造）；store 与 recovery 两套用例共用它，不再各自保留一份 quiesced-shape 闸门与 raw read-with-retry。
+- **版本探针无法 spawn 时场景失败点名解释器，不再抛出。** store 用例的失败横幅改为报告 `version probe failed (<spawn 错误码>)` 与二进制路径，缺失解释器呈现为场景失败而非 null stdout 上的 `TypeError`。
+- **零匹配 push 残留的 cause 同时点名两个出口。** 当没有远端 issue 携带关联标记时，engine 的 cause 现在给出 `--release <localId>` 与 `--adopt <localId>=<issueUrl|externalId>`；选哪个出口仍由操作者判断，`issue-sync` 覆盖该消息。
+- **显式 soft 下启动诊断保持静默。** `packages/dsh` 的 dispatch-gate 用例钉住优先级 Config > `.mstarc` > compass：同一条 active iteration 的 `enforcement: hard` 分支在无覆盖时会触发 unset-`dispatchTools` 诊断，而在 `enforcement: 'soft'` 下静默。
+- **重放断言比对重放出的 receipt，而非只看退出码。** `packages/cli` 与 `packages/commands` 的 operation-id 重放用例经共享的 `receiptStable` 助手逐字段比对被重放的 commit（只排除 `replayed` 标记，`recovery` 参与比较）；退出码为 0 但字段变化的回归现在会失败。
+- **`--session-ref` 的说法收窄到 execution-bound 动作。** host-neutral MCP authority 笔记写明「给出即校验、省略即推导」这一约束适用于 execution-bound 的 `workflow` / `plan` / `session` / `iteration`，而非「mutation 动作」这一类。
+- **audit fan-out 的 security 席位带上 must-check / not-evidence 清单。** `mstar-audit-fanout` 席位模板新增按类别的闸门，security 条目列出该席位必须扫过的入口与边界事实，以及只算线索、不算 finding 的观察；`skills/mstar-audit/references/codebase-audit.md` 点名同一张闸门表（harness 仓库 `packages/dsh/workflows/mstar-audit-fanout.js` 的 `seatPrompt`），以免 prose 派发路径漂移；行为用例要求两个标记都出现在 security 席位提示词中，且不出现在其他席位。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.7.1**。
+
 ## [4.7.0] - 2026-11-15
 
 ### Harness
