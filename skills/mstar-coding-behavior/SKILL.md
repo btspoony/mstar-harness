@@ -40,6 +40,7 @@ Treat ordinary agent mistakes as expected usage. Prioritize **discoverability, f
 - Keep agent-authored content and mutations revisable through supported public operations. Avoid one-way restrictions or hidden manual repair; protect truly irreversible actions without making routine edits irreversible.
 - Refusals must name the actual cause and exact supported recovery, not a generic block or an undocumented escape. When authority or an external prerequisite is missing, identify it honestly rather than inventing a bypass.
 - Preserve real errors, distinctions, and partial outcomes. Never swallow or normalize away failures, fabricate success, or silently substitute a fallback that changes the meaning of the result.
+- When a correction returns, move it up the ladder instead of restating it: remove the choice → deterministic check → runtime verification → prose (`references/constraint-ladder.md`).
 
 ### Surgical diagnosis and review
 
