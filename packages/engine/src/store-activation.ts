@@ -128,6 +128,11 @@ export type AttestationConsumerKind = "cli" | "host-plugin" | "hook" | "coordina
  * upgraded, or explicitly excluded from this control root. There is no
  * "pending"/"running" value — an un-attested old binary cannot be waved
  * through, because a marker or a warning is not a fence against it.
+ *
+ * A stateless per-invocation consumer (the CLI) is attested `reloaded` even
+ * though no reload event occurs: nothing of it outlives an invocation, so its
+ * next invocation under the current epoch is the whole reload, and the value
+ * attests that no old process survived the barrier.
  */
 export type AttestationDisposition =
   | "reloaded"
