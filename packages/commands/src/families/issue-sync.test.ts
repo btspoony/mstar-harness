@@ -217,12 +217,41 @@ describe("refusals before any write", () => {
     // `issueProvider`, so every real environment refused
     // `linear.list-unimplemented` no matter how it was configured. With no
     // override the command now assembles its own provider, so the run reaches
-    // the probe and fails on the transport (unreachable) rather than on a
-    // missing capability.
+    // the probe and fails on the transport rather than on a missing capability.
+    //
+    // Both halves of the ambient state are pinned, because either one decided
+    // this case's outcome on its own: an expired stored credential refused
+    // `linear.reauth-required` before the provider was ever built, and a usable
+    // one spent a real call to mcp.linear.app whose network result became the
+    // probe state. Neither may reach the assertion.
     const f = await fixture("refuse-nohost", null);
-    const result = await runImport(f.context);
-    expect(result.code).not.toBe("linear.list-unimplemented");
-    expect(["linear.host-unavailable", "linear.access-denied"]).toContain(result.code);
+    const storedPath = process.env.MSTAR_LINEAR_CREDENTIAL;
+    const apiKey = process.env.LINEAR_API_KEY;
+    const realFetch = globalThis.fetch;
+    const transportCalls: string[] = [];
+    // A path inside the fixture that holds nothing: the credential store this
+    // process would otherwise read is invisible, present or not.
+    process.env.MSTAR_LINEAR_CREDENTIAL = join(ROOT, "no-host", "no-credential.json");
+    delete process.env.LINEAR_API_KEY;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      transportCalls.push(String(input));
+      // The built-in transport maps a throwing fetch to `unreachable`.
+      throw new TypeError("fetch failed: fixture transport");
+    }) as unknown as typeof fetch;
+    try {
+      const result = await runImport(f.context);
+      // Reaching the transport is what proves the built-in provider ran: a
+      // refusal on a missing capability never builds one.
+      expect(transportCalls).toHaveLength(1);
+      expect(result.code).not.toBe("linear.list-unimplemented");
+      expect(result.code).toBe("linear.host-unavailable");
+    } finally {
+      globalThis.fetch = realFetch;
+      if (storedPath === undefined) delete process.env.MSTAR_LINEAR_CREDENTIAL;
+      else process.env.MSTAR_LINEAR_CREDENTIAL = storedPath;
+      if (apiKey === undefined) delete process.env.LINEAR_API_KEY;
+      else process.env.LINEAR_API_KEY = apiKey;
+    }
   });
 });
 
