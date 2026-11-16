@@ -13,6 +13,8 @@ Read `mstar-harness-core` before the first pass — lifecycle, authorization and
 
 Two neighbours own different tests of the same file: `mstar-skill-authoring` judges whether a skill is well formed (name, description shape, five-question body, progressive disclosure), and `mstar-coding-behavior` judges implementation behavior. Whether the prose inside is resolvable at HEAD is this skill's judgment; neither restates it. Durable knowledge documents carry three classes this file does not list — prose date stamps, machine-local paths and bilingual zh/en mixing — owned by `mstar-knowledge/references/compound-workflow.md`; where a knowledge document is in scope both lists apply, and that specific list wins on overlap.
 
+Comment necessity is the third boundary: `mstar-coding-behavior/references/comments.md` decides whether a comment should exist at all, this skill only whether its sentence resolves at HEAD.
+
 ## Scope
 
 Require an explicit `scope` — paths, globs or a named artifact. When it is missing, report the missing input and stop; do not infer a repository-wide sweep or open an interview.
