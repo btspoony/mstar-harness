@@ -128,9 +128,10 @@ function lineOffsets(text: string): number[] {
 }
 
 /** A line-leading introducer the C-family scanner does not classify (`#`, `;`,
- * `--` open shell, YAML, TOML, Lisp and SQL comments), so a such line is
- * comment content the block search may read. */
-const LINE_COMMENT_ONLY_RE = /^\s*(?:#|;|--)/;
+ * `--` open shell, YAML, TOML, Lisp and SQL comments), so such a line is
+ * comment content the block search may read. `--` requires following
+ * whitespace: `--x` in C-family code is a decrement, not a comment. */
+const LINE_COMMENT_ONLY_RE = /^\s*(?:#|;|--(?=\s|$))/;
 
 /** Per-line "comment-only" flag: the line carries comment content and no code.
  * A marker's comment block is the maximal run of adjacent lines that are

@@ -625,6 +625,12 @@ describe("findSimplifyMarkers completeness", () => {
     }
   });
 
+  test("a `--x` decrement line is code, so a bound on it is invisible", () => {
+    const markers = findSimplifyMarkers("// simplify: naive scan\n--x; upgrade: index the map\n");
+    expect(markers).toHaveLength(1);
+    expect(markers[0].bound).toBeNull();
+  });
+
   test("an apostrophe in a comment does not hide the rest of the block", () => {
     const markers = findSimplifyMarkers(
       "# don't retry the batch on a partial write\n# simplify: naive scan\n# upgrade: index the map\n",
