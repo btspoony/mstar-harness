@@ -634,7 +634,7 @@ export async function reconcilePendingCreate(
         localId,
         cause:
           found.length === 0
-            ? "no remote issue carries this item's correlation marker; the interrupted create is not confirmed either way - if you can establish the remote absence yourself, re-run push with --release <localId>"
+            ? "no remote issue carries this item's correlation marker; the interrupted create is not confirmed either way - if you can confirm the issue is gone, release the residue with --release <localId>, or record the identity with --adopt <localId>=<issueUrl|externalId> when you can see it"
             : `${found.length} remote issues carry this item's correlation marker; adopting any of them would be a guess`,
       });
       continue;

@@ -40,6 +40,7 @@ import {
   upgradeStore,
   type StoreContext,
 } from "./store-db.js";
+import { withRawRead } from "./store-file-probe.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-db-test-"));
 // The scenario bundle runs as a copied module, so it needs the published layout
@@ -73,47 +74,22 @@ function runScenarioOn(bin: string, scenario: string, dir: string): { status: nu
   return { status: run.status ?? -1, output: `${run.stdout}${run.stderr}`.trim() };
 }
 
-/**
- * The store file's own bytes: WAL in the header, and no `-wal`/`-shm` beside it.
- * The shape SQLite's own clean close leaves behind.
- */
-function isQuiescedWalStoreFile(dbPath: string): boolean {
-  try {
-    const header = readFileSync(dbPath).subarray(0, 100);
-    return header[18] === 2 && header[19] === 2 && !existsSync(`${dbPath}-wal`) && !existsSync(`${dbPath}-shm`);
-  } catch {
-    return false;
+/** Interpreter banner for a failure report: the binary that ran, and its version. */
+function describeInterpreter(runtime: string, bin: string): string {
+  let version = Bun.version;
+  if (runtime !== "bun") {
+    // A binary that cannot be spawned has a null stdout; the spawn error is
+    // reported instead of letting `.stdout.trim()` throw a TypeError that hides
+    // the scenario failure this banner is attached to.
+    const probe = spawnSync(bin, ["--version"], { encoding: "utf8" });
+    const banner = probe.stdout?.trim() ?? "";
+    const failure = probe.error as NodeJS.ErrnoException | undefined;
+    version =
+      banner !== ""
+        ? banner
+        : `version probe failed (${failure?.code ?? `exit ${probe.status}`})`;
   }
-}
-
-/**
- * Read a store file without changing it, through the real driver.
- *
- * SQLite reads a WAL database THROUGH its `-wal` file, so a store whose last
- * clean close folded the journal into the database file cannot be read by a
- * plain read-only open at all: node:sqlite creates that empty journal inside its
- * own open, while Bun refuses with SQLITE_CANTOPEN "unable to open database
- * file". The `immutable` form reads the same bytes without the WAL machinery,
- * which is exact for the quiesced shape - the database file holds the whole
- * committed state - so it is tried only for that shape: every other store keeps
- * the ordinary read-only open, and a broken file still reports its own error.
- * Same body as `execution-recovery.test.ts`'s `withRawRead`.
- */
-function withRawRead<T>(dbPath: string, run: (db: DatabaseSync) => T): T {
-  const read = (spec: string): T => {
-    const db = new DatabaseSync(spec, { readOnly: true });
-    try {
-      return run(db);
-    } finally {
-      db.close();
-    }
-  };
-  try {
-    return read(dbPath);
-  } catch (error) {
-    if (!isQuiescedWalStoreFile(dbPath)) throw error;
-    return read(`file:${dbPath}?immutable=1`);
-  }
+  return `${runtime} ${version} (${bin}) on ${process.platform}`;
 }
 
 const SCENARIOS: string[] = [
@@ -201,6 +177,17 @@ describe("store-db runtime floors (declared manifest floor)", () => {
 
 });
 
+describe("scenario failure reporting", () => {
+  test("an interpreter banner survives a version probe that cannot spawn", () => {
+    // A binary that cannot be spawned leaves the probe stdout null; the banner
+    // must name the binary and the spawn error instead of throwing a TypeError.
+    const missing = join(ROOT, "no-such-interpreter");
+    const banner = describeInterpreter("node", missing);
+    expect(banner).toContain(missing);
+    expect(banner).toMatch(/version probe failed \([A-Z]+/);
+  });
+});
+
 describe.each([
   { runtime: "node", bin: NODE_BIN },
   { runtime: "bun", bin: process.execPath },
@@ -215,8 +202,7 @@ describe.each([
         // local red never reads as a store defect. The binary that actually ran is
         // named, not `process.version`: inside a Bun run that is Bun's Node-compat
         // version, not the spawned interpreter's.
-        const version = runtime === "bun" ? Bun.version : spawnSync(bin, ["--version"], { encoding: "utf8" }).stdout.trim();
-        const interpreter = `${runtime} ${version} (${bin}) on ${process.platform}`;
+        const interpreter = describeInterpreter(runtime, bin);
         const rawReadNote = result.output.includes("unable to open database file")
           ? `\nThis leg's raw read-only open of a cleanly closed WAL store needs the empty -wal journal that a clean` +
             ` close removes; node:sqlite creates it, Bun refuses on this platform. The supported interpreter is the` +
@@ -755,7 +741,7 @@ describe("migration 7 - project_milestones", () => {
       handle.close();
       await expect(upgradeStore({ harnessDir: dir })).rejects.toMatchObject({ code });
       expect(versionsBefore).toEqual(
-        withRawRead(join(dir, "store.db"), (db) => db.prepare("select * from schema_version order by version").all()),
+        withRawRead(DatabaseSync, join(dir, "store.db"), (db) => db.prepare("select * from schema_version order by version").all()),
       );
     }
   });
@@ -1017,7 +1003,7 @@ describe("store-db schema-unsupported reports store / build / first-unknown dist
     // The baseline and the post-refusal read both go through the real driver,
     // so the rows keep the driver's own shape and the comparison needs no
     // annotation or suppression.
-    const versionsBefore = withRawRead(join(dir, "store.db"), (db) =>
+    const versionsBefore = withRawRead(DatabaseSync, join(dir, "store.db"), (db) =>
       db.prepare("select version from schema_version order by version").all(),
     );
 
@@ -1043,7 +1029,7 @@ describe("store-db schema-unsupported reports store / build / first-unknown dist
     });
     // No state write: the guard refuses before any mutation and every row stands.
     expect(
-      withRawRead(join(dir, "store.db"), (db) => db.prepare("select version from schema_version order by version").all()),
+      withRawRead(DatabaseSync, join(dir, "store.db"), (db) => db.prepare("select version from schema_version order by version").all()),
     ).toEqual(versionsBefore);
   });
 });

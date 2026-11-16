@@ -15,6 +15,10 @@
  * constant and the slice expressions now fails the depth assertion instead of
  * passing.
  *
+ * A second case pins the security seat gate: the generated security prompt must
+ * carry both list markers, and no other category's prompt may — the gate is
+ * prompt content that reaches the child, not a comment beside the template.
+ *
  * Run: `bun test scripts/dsh-workflow-script-bounds.test.ts` (repo root).
  */
 import { describe, expect, it } from "bun:test";
@@ -40,6 +44,7 @@ const POOL_CAP = 8;
 function makeDoubles() {
   const depth = { current: 0, max: 0 };
   const launched: string[] = [];
+  const prompts = new Map<string, string>();
   const phases: string[] = [];
   const logs: string[] = [];
 
@@ -49,6 +54,7 @@ function makeDoubles() {
       throw new Error("agent double: could not resolve the category from the seat prompt");
     }
     launched.push(category);
+    prompts.set(category, prompt);
     depth.current += 1;
     depth.max = Math.max(depth.max, depth.current);
     // One macrotask tick: concurrent seats genuinely overlap, no wall-clock dependence.
@@ -67,7 +73,7 @@ function makeDoubles() {
   const phase = (title: string) => phases.push(title);
   const log = (message: string) => logs.push(message);
 
-  return { agent, parallel, phase, log, depth, launched, phases, logs };
+  return { agent, parallel, phase, log, depth, launched, prompts, phases, logs };
 }
 
 /**
@@ -119,5 +125,22 @@ describe("dsh-workflow-scripts fan-out pool bound (behaviour, host-core-count-in
     // overlap) yet never exceed the pool's hard-reject cap on any host.
     expect(depth.max).toBeGreaterThanOrEqual(2);
     expect(depth.max).toBeLessThanOrEqual(POOL_CAP);
+  });
+
+  it("the security seat prompt carries both seat-gate list markers and no other seat does", async () => {
+    const { prompts } = await runFanoutScript(script, DEFAULT_ARGS);
+
+    const security = prompts.get("security") ?? "";
+    // Both lists must survive template rendering into the prompt the child receives.
+    expect(security).toContain("Must check:");
+    expect(security).toContain("Not evidence - notes as a lead, never a finding:");
+
+    const others = ALL_CATEGORIES.filter((category) => category !== "security");
+    expect(others.length).toBeGreaterThan(0);
+    for (const category of others) {
+      for (const marker of ["Must check:", "Not evidence - notes as a lead"]) {
+        expect(prompts.get(category) ?? "").not.toContain(marker);
+      }
+    }
   });
 });

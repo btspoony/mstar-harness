@@ -23,7 +23,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { CLI_ROOT, runCli as spawnCli, type RunResult } from "./harness";
+import { CLI_ROOT, receiptStable, runCli as spawnCli, type RunResult } from "./harness";
 
 const WORKFLOW_ID = "20260918-iteration-register-cli";
 const COMPASS_REF = "iterations/20260918-iteration-register-cli/delivery-compass.md";
@@ -230,12 +230,15 @@ describe("mstar iteration register", () => {
   });
   test("an exact retry replays the same ACTIVE registration without changing state", async () => {
     await setupHarness(async (harness) => {
-      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
+      const first = runCli(registerArgs(harness));
+      expect(first.exitCode).toBe(0);
       const before = await registeredState(harness);
 
       const retry = runCli(registerArgs(harness));
       expect(retry.exitCode).toBe(0);
       expect(envelope(retry)).toMatchObject({ command: "iteration.register", status: "ok", code: "iteration.register.ok" });
+      // The served replay reproduces the recorded receipt, not merely exit 0.
+      expect(receiptStable(envelope(retry).data)).toEqual(receiptStable(envelope(first).data));
       expect(await registeredState(harness)).toEqual(before);
     });
   });

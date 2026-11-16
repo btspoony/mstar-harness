@@ -33,7 +33,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { executeCommand } from "@mstar-harness/commands";
-import { runCli as runCliProcess, SRC_ENTRY, type RunResult } from "./harness";
+import { receiptStable, runCli as runCliProcess, SRC_ENTRY, type RunResult } from "./harness";
 import {
   encodeExecutionSessionRef,
   getCatalog,
@@ -565,6 +565,8 @@ describe("mstar session run — documented invocation", () => {
     const retried = runCli(progressArgs, fixture, identity);
     expect(retried.exitCode, retried.stdout).toBe(0);
     expect(dataOf(retried).replayed).toBe(true);
+    // The replay reproduces the recorded receipt field for field, not only its marker.
+    expect(receiptStable(dataOf(retried))).toEqual(receiptStable(dataOf(progressed)));
 
     // The authority itself holds the mutation (the CLI's claim is not the proof).
     const stored = await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID, planId: PLAN_ID });

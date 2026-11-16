@@ -1123,6 +1123,7 @@ describe("push — the credential scope preflight", () => {
     expect(again.data?.items).toEqual([expect.objectContaining({ localId: "I-000806", outcome: "unresolved" })]);
     expect(again.data?.items[0]?.cause).toContain("no remote issue carries this item's correlation marker");
     expect(again.data?.items[0]?.cause).toContain("--release <localId>");
+    expect(again.data?.items[0]?.cause).toContain("--adopt <localId>=<issueUrl|externalId>");
     expect(writes).toHaveLength(1);
 
     const db = await f.db();

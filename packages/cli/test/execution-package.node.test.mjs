@@ -214,6 +214,19 @@ function ok(result, label) {
   }
 }
 
+/**
+ * The replay-stable half of one execution receipt: what a served replay must
+ * reproduce field for field. `replayed` IS the replay marker, so it legitimately
+ * differs between a commit and its replay; every other field — including the
+ * `recovery` sidecar, which the engine re-exposes from the RECORDED receipt — is
+ * the recorded receipt and must compare equal.
+ */
+function receiptStable(receipt) {
+  const stable = { ...receipt };
+  delete stable.replayed;
+  return stable;
+}
+
 function coordinatorIdentity() {
   return { source: "local", sessionId: COORDINATOR_ID, workflowId: WORKFLOW_ID, role: "coordinator" };
 }
@@ -508,6 +521,8 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   assert.equal(retried.data.replayed, true, "an identical retry must replay the recorded receipt, not re-commit");
   assert.equal(retried.data.operationId, "progress-1");
   assert.equal(retried.data.data.plan.status, "InReview");
+  // The replay reproduces the recorded receipt field for field, not only its marker.
+  assert.deepEqual(receiptStable(retried.data), receiptStable(progressed.data));
 
   // --- the AUTHORITY's own truth, not the CLI's claim ---------------------
   const authority = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID, planId: PLAN_ID });

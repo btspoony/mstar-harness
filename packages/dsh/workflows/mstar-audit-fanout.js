@@ -43,6 +43,24 @@ const FINDING = {
   },
 }
 
+// Per-category seat-surface prefix: the facts that seat has to sweep before it
+// returns, and the observations that are leads rather than findings. It is not the
+// judgment method - that stays in the category's reference (security-review.md for
+// the security seat), which the prefix points the seat at.
+const GATE = {
+  security: `Security gate - this seat applies it before returning; the judgment method stays in ${a.auditRef}/security-review.md, sections 2 (exploitability) and 13 (exclusions), which you read.
+Must check:
+- every entry point recon named - route/handler, CLI arg, upload/body/webhook, AI/tool boundary - before any sink is reported
+- the boundary the hit crosses (anonymous, another tenant, a lower-privilege caller) and what crosses it
+- the check that binds this principal to this resource on this exact path (authn is not authz)
+- the neutralizer or deployment layer that could refute the hit (framework escaping, middleware, CDN/WAF)
+Not evidence - notes as a lead, never a finding:
+- an OWASP/lint deviation with no attacker-reachable path from a named entry point
+- a dangerous sink fed by server-controlled config, a signed value, or a constant
+- a secret-shaped string in a fixture, test, placeholder, or a symbol name
+- "potentially" / "could" without the request the attacker actually sends`,
+}
+
 const seatPrompt = (category) => `## Assignment
 
 Execute as: code-reviewer
@@ -60,8 +78,7 @@ Read-only audit seat (one category of a parallel fan-out; the audit executor rec
 Recon facts already established: ${a.recon}
 
 Load in order: ${a.auditRef}/audit-playbook.md section for your category plus the section "Finding format" (read it first — findings must match that shape exactly); for the security category also read ${a.auditRef}/security-review.md. Open every location you cite yourself, in ${a.repo}.
-
-Report only what you can evidence: exact file:line anchors, a concrete impact, an honest effort on the XS-XL scale, the risk of the fix, and a HIGH/MED/LOW confidence. LOW-confidence items are allowed but are leads, not report findings. Do not edit any file, do not run project-wide suites, never reproduce secret values.
+${GATE[category] ? `${GATE[category]}\n\n` : '\n'}Report only what you can evidence: exact file:line anchors, a concrete impact, an honest effort on the XS-XL scale, the risk of the fix, and a HIGH/MED/LOW confidence. LOW-confidence items are allowed but are leads, not report findings. Do not edit any file, do not run project-wide suites, never reproduce secret values.
 
 Return ONLY the JSON object matching the provided schema (category, findings, notes). Put the truncated-coverage declaration and any non-finding leads in notes.`
 
