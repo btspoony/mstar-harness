@@ -385,6 +385,21 @@ describe("findSimplifyMarkers", () => {
     expect(findSimplifyMarkers("")).toEqual([]);
   });
 
+  test("detects a marker opened mid-sentence inside a comment", () => {
+    const midSentence = findSimplifyMarkers("// refused. simplify: FIFO chain - one queue.\n");
+    expect(midSentence).toHaveLength(1);
+    expect(midSentence[0].line).toBe(1);
+    const continuation = findSimplifyMarkers(
+      "// Serialized request execution: new work after close is refused.\n// simplify: FIFO chain - the store's read transactions are the bottleneck.\n",
+    );
+    expect(continuation.map((marker) => marker.line)).toEqual([2]);
+  });
+
+  test("ignores a quoted or backticked token that names the label", () => {
+    expect(findSimplifyMarkers("// A `simplify:` marker records a ceiling.\n")).toEqual([]);
+    expect(findSimplifyMarkers('// the "simplify:" label is defined in comments.md\n')).toEqual([]);
+  });
+
   test("ignores marker text inside a string literal (a fixture asserting this check)", () => {
     expect(findSimplifyMarkers('const s = "// simplify: naive scan";\n')).toEqual([]);
     expect(findSimplifyMarkers("const t = `\n// simplify: naive scan\n`;\n")).toEqual([]);
@@ -503,6 +518,11 @@ describe("findCommentedCode", () => {
     expect(findCommentedCode("/// <reference path=\"./types.d.ts\" />\nconst live = 1;\n")).toEqual([]);
   });
 
+  test("does not report commented-out code inside a string or template literal", () => {
+    expect(findCommentedCode("const t = `\n// const x = 1;\n`;\n")).toEqual([]);
+    expect(findCommentedCode('const t = "// const x = 1;";\n')).toEqual([]);
+  });
+
   test("returns [] for empty input", () => {
     expect(findCommentedCode("")).toEqual([]);
   });
@@ -536,6 +556,13 @@ describe("findUntrackedTodos", () => {
     expect(findUntrackedTodos("// TODO: drop the shim - removal tracked in status.json\n")).toEqual([]);
   });
 
+  test("a technical standard or encoding name is not a tracking reference", () => {
+    expect(findUntrackedTodos("// TODO: handle UTF-8 names\n")).toHaveLength(1);
+    expect(findUntrackedTodos("// TODO: SHA-256 the digest\n")).toHaveLength(1);
+    expect(findUntrackedTodos("// TODO: ISO-8601 dates\n")).toHaveLength(1);
+    expect(findUntrackedTodos("// FIXME: HTTP-2 upgrade\n")).toHaveLength(1);
+  });
+
   test("ignores lowercase prose and marker text outside a comment", () => {
     expect(findUntrackedTodos("// the todo list lives in the plan\n")).toEqual([]);
     expect(findUntrackedTodos('const message = "TODO: later";\n')).toEqual([]);
@@ -544,15 +571,30 @@ describe("findUntrackedTodos", () => {
 });
 
 describe("findSimplifyMarkers completeness", () => {
-  test("records a missing upgrade path as null", () => {
+  test("records a missing bound as null", () => {
     const markers = findSimplifyMarkers("// simplify: naive scan\n");
     expect(markers).toHaveLength(1);
-    expect(markers[0].upgradePath).toBeNull();
+    expect(markers[0].bound).toBeNull();
   });
 
-  test("records the upgrade path when the marker carries one", () => {
+  test("records the upgrade clause when the marker carries one", () => {
     const markers = findSimplifyMarkers("// simplify: naive scan; upgrade: index the map\n");
-    expect(markers[0].upgradePath).toContain("upgrade: index the map");
+    expect(markers[0].bound).toContain("upgrade: index the map");
+  });
+
+  test("accepts an upgrade clause on a continuation line of the same comment block", () => {
+    const markers = findSimplifyMarkers("// simplify: naive scan\n// upgrade: index the map\n");
+    expect(markers[0].bound).toContain("upgrade: index the map");
+  });
+
+  test("accepts a removal/tracking reference as the bound", () => {
+    const markers = findSimplifyMarkers("// simplify: naive scan\n// removal tracked in status.json\n");
+    expect(markers[0].bound).toContain("status.json");
+  });
+
+  test("a comment block with neither bound form records null", () => {
+    const markers = findSimplifyMarkers("// simplify: naive scan\n// the scan is quadratic\n");
+    expect(markers[0].bound).toBeNull();
   });
 });
 

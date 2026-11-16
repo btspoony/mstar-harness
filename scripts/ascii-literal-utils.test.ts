@@ -15,6 +15,13 @@
  */
 import { describe, expect, test } from "bun:test";
 import { commentMask } from "./ascii-literal-utils.ts";
+import { commentMask as engineCommentMask } from "../packages/engine/src/comment-scan.ts";
+
+describe("commentMask — one implementation", () => {
+  test("this module re-exports the engine tokenizer, not a copy", () => {
+    expect(commentMask).toBe(engineCommentMask);
+  });
+});
 
 /** Non-ASCII characters at positions the mask treats as CODE (not comment). */
 function unmaskedNonAscii(src: string): string {

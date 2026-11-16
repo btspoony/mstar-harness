@@ -310,17 +310,18 @@ function lintOne(file: string, type?: LintType, prVariant = false): { violations
     case "strategy": violations.push(...lintStrategySections(text).violations); break;
     case "report": violations.push(...assertSddTddTriple(text).violations); break;
     case "code": {
-      // A `simplify:` marker records a ceiling and an upgrade path, so one
-      // without the upgrade path is a violation (comments.md § Markers); the
-      // untracked-TODO and commented-out-code findings stay advisory markers.
+      // A `simplify:` marker records a ceiling and a bound - an `upgrade:`
+      // clause or a removal/tracking reference (comments.md § Markers); one
+      // without a bound is a violation. The untracked-TODO and
+      // commented-out-code findings stay advisory markers.
       for (const marker of findSimplifyMarkers(text)) {
-        if (marker.upgradePath === null) {
+        if (marker.bound === null) {
           violations.push({
             ok: false,
             severity: "medium",
             code: "lint.simplify.no-upgrade-path",
-            message: `simplify marker at line ${marker.line} records no upgrade path - name when to upgrade (comments.md \u00a7 Markers)`,
-            fix: 'state the upgrade clause on the marker, e.g. "simplify: <limit>, upgrade: <when>"',
+            message: `simplify marker at line ${marker.line} records no bound - state when to upgrade or where its removal is tracked (comments.md \u00a7 Markers)`,
+            fix: 'state the bound on the marker or a continuation line of its comment block, e.g. "simplify: <limit>, upgrade: <when>" or "removal tracked in status.json"',
           });
           continue;
         }

@@ -46,6 +46,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
 import vm from "node:vm";
+import { SOURCE_CODE, SOURCE_COMMENT, maskLiterals, scanSource } from "./comment-scan.js";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
@@ -62,14 +63,16 @@ const COMMENT_INTRODUCER = "(?:\\/\\/|\\/\\*|#|;|--|\\s\\*)";
 
 /**
  * A `simplify:` marker found in a file, with its 1-based line number, the
- * trimmed comment line (lint reporting), and the recorded upgrade path
- * (`upgrade: ...`, or `null` when the marker names none).
+ * trimmed comment line (lint reporting), and the recorded bound — an
+ * `upgrade:` clause or a removal/tracking reference (`null` when the marker
+ * names neither).
  */
-export type SimplifyMarker = { line: number; text: string; upgradePath: string | null };
+export type SimplifyMarker = { line: number; text: string; bound: string | null };
 
-/** The `upgrade` clause of a bounded shortcut (comments.md § Markers: a
- * `simplify:` marker records a ceiling and a removal path). */
-const UPGRADE_PATH_RE = /\bupgrade[^;,]*/i;
+/** The `upgrade:` clause of a bounded shortcut (comments.md § Markers: a
+ * `simplify:` marker records a ceiling and a bound). Line-scoped: the clause
+ * never spans a newline. */
+const UPGRADE_PATH_RE = /\bupgrade[^\n;,]*/i;
 
 /**
  * Find `simplify:` marker comments (mstar-coding-behavior § Decision Rules:
@@ -77,23 +80,98 @@ const UPGRADE_PATH_RE = /\bupgrade[^;,]*/i;
  * global lock, O(n²) scan, naive heuristic — is marked with a `simplify:`
  * comment naming the ceiling and the upgrade path).
  *
- * Heuristic (documented, conservative): a marker is a line where a comment
- * introducer (`//`, `/*`, `*`, `#`, `;`, `--`) precedes `simplify:` —
- * case-insensitive, any column (leading or trailing comments). Pure prose
- * like "we simplify: the interface" carries no comment introducer and is
- * never reported. Completeness is the upgrade clause only: the ceiling is the
- * text right after `simplify:`, so no word list is needed.
+ * Heuristic (documented, conservative): the token `simplify:` appears inside
+ * a comment — case-insensitive, any column, mid-sentence included — and is
+ * not a quoted mention of the label (`` `simplify:` ``, `"simplify:"`). String
+ * and regex literals are masked first, so a fixture quoting a marker is not
+ * read as one, and prose outside a comment carries no marker at all. The
+ * bound is searched across the marker's whole comment block, because the house
+ * style writes it on a continuation line.
  */
 export function findSimplifyMarkers(fileText: string): SimplifyMarker[] {
-  const markers: SimplifyMarker[] = [];
-  const re = new RegExp(`${COMMENT_INTRODUCER}\\s*simplify\\s*:`, "i");
   const lines = fileText.split(/\r?\n/);
-  const masked = maskStringLiterals(fileText).split(/\r?\n/);
+  const masked = maskLiterals(fileText).split(/\r?\n/);
+  const scan = scanSource(fileText);
+  const offsets = lineOffsets(fileText);
+  const commentOnly = commentOnlyLines(lines, scan, offsets);
+  const markers: SimplifyMarker[] = [];
   for (let i = 0; i < lines.length; i++) {
-    if (!re.test(masked[i])) continue;
-    markers.push({ line: i + 1, text: lines[i].trim(), upgradePath: UPGRADE_PATH_RE.exec(lines[i])?.[0] ?? null });
+    const match = SIMPLIFY_TOKEN_RE.exec(lines[i]);
+    if (match === null) continue;
+    if (!isMarkerToken(scan, offsets[i], match.index, masked[i], SIMPLIFY_INTRODUCER_RE)) continue;
+    if (QUOTE_CHARS[lines[i][match.index - 1]] === true) continue;
+    markers.push({ line: i + 1, text: lines[i].trim(), bound: commentBlockBound(lines, commentOnly, i) });
   }
   return markers;
+}
+
+/** The `simplify:` label: the token plus the space that opens its ceiling
+ * text. `simplify:/temporary` (a prose mention of both labels) is not one. */
+const SIMPLIFY_TOKEN_RE = /\bsimplify\s*:(?=\s|$)/i;
+/** Introducers the scanner does not classify (`#`, `;`, `--` open comments in
+ * shell, YAML, TOML, Lisp and SQL), so a line starting with one still offers a
+ * comment context. */
+const NON_C_INTRODUCERS = "#|;|--";
+const SIMPLIFY_INTRODUCER_RE = new RegExp(`(?:${NON_C_INTRODUCERS})\\s*simplify\\s*:`, "i");
+/** A quote character immediately before the token turns it into a mention of
+ * the label, never a marker. */
+const QUOTE_CHARS: Readonly<Record<string, true>> = { "`": true, '"': true, "'": true };
+
+/** Offset of every line start in `text` (1-based line N is `offsets[N - 1]`). */
+function lineOffsets(text: string): number[] {
+  const offsets = [0];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n") offsets.push(i + 1);
+  }
+  return offsets;
+}
+
+/** Per-line "comment-only" flag: the line carries comment content and no code.
+ * A marker's comment block is the maximal run of adjacent lines that are
+ * comment-only, plus the marker line itself. */
+function commentOnlyLines(lines: readonly string[], scan: Uint8Array, offsets: readonly number[]): boolean[] {
+  return lines.map((line, index) => {
+    const base = offsets[index];
+    let hasComment = false;
+    for (let i = 0; i < line.length; i++) {
+      if (/\s/.test(line[i])) continue;
+      if (scan[base + i] !== SOURCE_COMMENT) return false;
+      hasComment = true;
+    }
+    return hasComment;
+  });
+}
+
+/** True when the marker token at `at` is comment content: the scanner classifies
+ * `//`, `/*` and `*` continuations, and a non-C introducer on the line covers
+ * the languages it does not. A string or regex literal never counts. */
+function isMarkerToken(scan: Uint8Array, base: number, at: number, maskedLine: string, introducerRe: RegExp): boolean {
+  const klass = scan[base + at];
+  if (klass === SOURCE_COMMENT) return true;
+  return klass === SOURCE_CODE && introducerRe.test(maskedLine);
+}
+
+/** The comment block around line `index`: the maximal run of adjacent
+ * comment-only lines that contains it, plus the marker line itself. */
+function commentBlockText(lines: readonly string[], commentOnly: readonly boolean[], index: number): string {
+  let start = index;
+  while (start > 0 && commentOnly[start - 1]) start -= 1;
+  let end = index;
+  while (end + 1 < lines.length && commentOnly[end + 1]) end += 1;
+  return lines.slice(start, end + 1).join("\n");
+}
+
+/** The bound recorded for the marker on line `index`: the first `upgrade:`
+ * clause or removal/tracking reference anywhere in its comment block. */
+function commentBlockBound(lines: readonly string[], commentOnly: readonly boolean[], index: number): string | null {
+  const block = commentBlockText(lines, commentOnly, index);
+  const clause = UPGRADE_PATH_RE.exec(block);
+  if (clause !== null) return clause[0];
+  for (const pattern of REMOVAL_PATH_PATTERNS) {
+    const reference = pattern.exec(block);
+    if (reference !== null) return reference[0];
+  }
+  return null;
 }
 
 /**
@@ -146,24 +224,28 @@ const REMOVAL_PATH_PATTERNS: readonly RegExp[] = [
  * "temporarily" is not a label) opens a label — a colon or a spaced dash.
  * That shape is what separates the label from the ordinary adjective: "a
  * temporary file", "TEMPORARY table" and "it is a temporary measure" carry no
- * label delimiter and are never markers. String literals are masked first, so
- * a fixture quoting a marker is not read as one. Removal-path detection uses
- * the pattern set above; a version mention alone ("remove in v2.0.0") is NOT a
- * plan/status artifact reference and is reported, per the strict convention
- * wording.
+ * label delimiter and are never markers. String and template literals are
+ * masked first, so a fixture quoting a marker is not read as one. Removal-path
+ * detection uses the pattern set above across the marker's whole comment block;
+ * a version mention alone ("remove in v2.0.0") is NOT a plan/status artifact
+ * reference and is reported, per the strict convention wording.
  */
 export function findTemporaryMarkers(fileText: string): TemporaryMarkerResult {
   const markers: TemporaryMarker[] = [];
   const violations: ValidationResult[] = [];
   const re = new RegExp(`${COMMENT_INTRODUCER}\\s*temporary\\b(?:\\s*:|\\s[\\u2013\\u2014-]\\s)`, "i");
   const lines = fileText.split(/\r?\n/);
-  const masked = maskStringLiterals(fileText).split(/\r?\n/);
+  const masked = maskLiterals(fileText).split(/\r?\n/);
+  const scan = scanSource(fileText);
+  const offsets = lineOffsets(fileText);
+  const commentOnly = commentOnlyLines(lines, scan, offsets);
   for (let i = 0; i < lines.length; i++) {
     if (!re.test(masked[i])) continue;
     const text = lines[i].trim();
+    const block = commentBlockText(lines, commentOnly, i);
     let removalPath: string | null = null;
     for (const pattern of REMOVAL_PATH_PATTERNS) {
-      const match = pattern.exec(text);
+      const match = pattern.exec(block);
       if (match) {
         removalPath = match[0];
         break;
@@ -223,20 +305,23 @@ export type CommentedCodeFinding = { line: number; text: string };
  * a live sample that the pattern is current; the file's history is the
  * archive"). Each run of consecutive `//`-only lines is stripped and parsed as
  * one program; a run that ends in a statement terminator and compiles is code
- * kept in a comment, reported at its first line.
+ * kept in a comment, reported at its first line. The run is detected on the
+ * masked view, so a `//` line inside a string or template literal (a fixture
+ * asserting this very check) is not a comment.
  */
 export function findCommentedCode(fileText: string): CommentedCodeFinding[] {
   const findings: CommentedCodeFinding[] = [];
   const lines = fileText.split(/\r?\n/);
+  const masked = maskLiterals(fileText).split(/\r?\n/);
   let i = 0;
   while (i < lines.length) {
-    if (!COMMENT_ONLY_RE.test(lines[i])) {
+    if (!COMMENT_ONLY_RE.test(masked[i])) {
       i += 1;
       continue;
     }
     const start = i;
     const body: string[] = [];
-    while (i < lines.length && COMMENT_ONLY_RE.test(lines[i])) {
+    while (i < lines.length && COMMENT_ONLY_RE.test(masked[i])) {
       body.push(lines[i].replace(COMMENT_PREFIX_RE, ""));
       i += 1;
     }
@@ -249,133 +334,21 @@ export function findCommentedCode(fileText: string): CommentedCodeFinding[] {
 
 /** Tracking references that satisfy the ownerless-TODO rule (comments.md
  * § MUST NOT "an ownerless TODO": "no name, issue reference or removal path
- * means nobody removes it") — issue number `#123`, issue key `ABC-12`, or the
- * removal-path vocabulary a `temporary` marker already accepts. */
-const TODO_TRACKING_PATTERNS: readonly RegExp[] = [/#\d+/, /\b[A-Z][A-Z0-9]+-\d+\b/, ...REMOVAL_PATH_PATTERNS];
+ * means nobody removes it") — an issue number `#123`, a project key inside the
+ * marker's paren (`TODO(ABC-12)`), an explicit issue/ticket/ADR reference, or
+ * the removal-path vocabulary a `temporary` marker already accepts. A bare
+ * `KEY-<n>` shape is NOT accepted: it also matches standard and encoding names
+ * (`UTF-8`, `SHA-256`, `ISO-8601`), which would exempt exactly the TODO
+ * comments most likely to linger. */
+const TODO_TRACKING_PATTERNS: readonly RegExp[] = [
+  /#\d+/,
+  /\b(?:TODO|FIXME)\([A-Z][A-Z0-9]*-\d+\)/,
+  /\b(?:issue|ticket)\s+#?\d+\b/i,
+  /\bADR[-\s]\d+\b/,
+  ...REMOVAL_PATH_PATTERNS,
+];
 
-/** Characters after which `/` opens a regex literal rather than division, and
- * the keywords with the same effect — the antecedent heuristic
- * `scripts/ascii-literal-utils.ts` shares (a regex char class may hold a quote
- * or a backtick, which must not open a phantom string). */
-const REGEX_ANTECEDENTS: Readonly<Record<string, true>> = {
-  "(": true, "[": true, "{": true, ",": true, ";": true, ":": true, "=": true, "!": true,
-  "&": true, "|": true, "?": true, "+": true, "-": true, "*": true, "%": true, "<": true,
-  ">": true, "~": true, "^": true, "/": true,
-};
-const REGEX_KEYWORDS: Readonly<Record<string, true>> = {
-  return: true, case: true, throw: true, typeof: true, instanceof: true, in: true,
-  of: true, new: true, delete: true, void: true, do: true, else: true, yield: true, await: true,
-};
 
-/** Blank out string-literal interiors (quotes kept, escapes honored) across a
- * whole file, so a marker token inside a string — a fixture asserting this
- * very check, for instance — is not read as a comment. Comment interiors stay
- * intact, because that is where a marker lives; only quoted, template-literal
- * and regex-literal bodies are blanked. Newlines are preserved, so a masked
- * line keeps the 1-based number of the source line it came from.
- *
- * Regex-vs-division is the antecedent heuristic `scripts/ascii-literal-utils.ts`
- * uses: `/` opens a literal after an operator, `(`, `,`, `=`, a regex keyword
- * (`return`, `typeof`, …) or at file start, and is division otherwise. Without
- * it a regex char class holding a quote (`/["'`]/`) or a backtick
- * (`/`([^`\n]+)`/`) opens a phantom string and blanks the rest of the file,
- * which is how a real marker goes missing.
- *
- * shortcut: a `${...}` interpolation is blanked with its template, so a marker
- * inside one is missed; upgrade to a real tokenizer if that ever occurs. */
-function maskStringLiterals(fileText: string): string {
-  let out = "";
-  let quote: string | null = null;
-  let lineComment = false;
-  let blockComment = false;
-  let inRegex = false;
-  let regexInClass = false;
-  let prevSig = ""; // last significant char, regex-vs-division antecedent
-  let lastToken = ""; // last identifier, regex-keyword antecedent
-  for (let i = 0; i < fileText.length; i++) {
-    const ch = fileText[i];
-    if (ch === "\n") {
-      out += ch;
-      if (quote !== null && quote !== "`") quote = null; // a quoted string cannot span lines
-      lineComment = false;
-      inRegex = false; // an unterminated regex is not a literal
-      continue;
-    }
-    if (lineComment) {
-      out += ch;
-      continue;
-    }
-    if (blockComment) {
-      out += ch;
-      if (ch === "*" && fileText[i + 1] === "/") {
-        out += "/";
-        i += 1;
-        blockComment = false;
-      }
-      continue;
-    }
-    if (inRegex) {
-      if (ch === "\\" && fileText[i + 1] !== "\n") {
-        out += "  ";
-        i += 1;
-        continue;
-      }
-      if (ch === "[") regexInClass = true;
-      else if (ch === "]") regexInClass = false;
-      else if (ch === "/" && !regexInClass) {
-        out += ch;
-        inRegex = false;
-        prevSig = ")"; // a completed regex is an operand, so a following `/` divides
-        lastToken = "";
-        continue;
-      }
-      out += ch === "\\" ? ch : " ";
-      continue;
-    }
-    if (quote === null) {
-      if (ch === "/" && fileText[i + 1] === "/") {
-        out += "//";
-        i += 1;
-        lineComment = true;
-        continue;
-      }
-      if (ch === "/" && fileText[i + 1] === "*") {
-        out += "/*";
-        i += 1;
-        blockComment = true;
-        continue;
-      }
-      if (ch === "/" && (prevSig === "" || Object.hasOwn(REGEX_ANTECEDENTS, prevSig) || Object.hasOwn(REGEX_KEYWORDS, lastToken))) {
-        out += ch;
-        inRegex = true;
-        regexInClass = false;
-        continue;
-      }
-      if (ch === '"' || ch === "'" || ch === "`") quote = ch;
-      out += ch;
-      if (!/\s/.test(ch)) {
-        // `++` / `--` complete an operand, so the next `/` divides.
-        prevSig = (ch === "+" || ch === "-") && prevSig === ch ? ")" : ch;
-        lastToken = /[A-Za-z0-9_$]/.test(ch) ? lastToken + ch : "";
-      }
-      continue;
-    }
-    if (ch === "\\" && fileText[i + 1] !== "\n") {
-      out += "  ";
-      i += 1;
-      continue;
-    }
-    if (ch === quote) {
-      quote = null;
-      out += ch;
-      prevSig = ")"; // a closed literal is an operand
-      lastToken = "";
-      continue;
-    }
-    out += ch === "\\" ? ch : " ";
-  }
-  return out;
-}
 
 /** A TODO/FIXME comment carrying no tracking reference, at its 1-based line. */
 export type UntrackedTodo = { line: number; marker: "TODO" | "FIXME"; text: string };
@@ -390,7 +363,7 @@ export function findUntrackedTodos(fileText: string): UntrackedTodo[] {
   const findings: UntrackedTodo[] = [];
   const re = new RegExp(`${COMMENT_INTRODUCER}\\s*(TODO|FIXME)\\b`);
   const lines = fileText.split(/\r?\n/);
-  const masked = maskStringLiterals(fileText).split(/\r?\n/);
+  const masked = maskLiterals(fileText).split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const commentContext = masked[i];
     const match = re.exec(commentContext);

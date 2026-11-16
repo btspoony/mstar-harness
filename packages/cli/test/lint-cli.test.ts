@@ -183,6 +183,26 @@ Check result: exit 0; changed scope line found.
     });
   });
 
+  test("a marker opened mid-sentence with no bound → exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "server.ts");
+      writeFileSync(file, "// refused. simplify: FIFO chain - one queue.\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toContain("lint.simplify.no-upgrade-path");
+    });
+  });
+
+  test("a bound on a continuation comment line → exit 0", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "server.ts");
+      writeFileSync(file, "// refused. simplify: FIFO chain - one queue.\n// upgrade: per-route queues once a profile shows the queue.\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      expect(lintResults(result)[0]?.markers.join("\n")).toContain("simplify marker @1");
+    });
+  });
+
   test("untracked TODO and commented-out code → advisory markers, exit 0", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "scan.ts");

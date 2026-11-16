@@ -40,7 +40,7 @@ A comment is an input to the next change: whoever edits the line reads it before
 
 ## Checkable vs judgement
 
-A check can see: marker tokens with no tracking reference, commented-out blocks, a marker whose ceiling or removal path is missing, and a marker the diff copies into a new site. A check cannot see whether the comment still holds, whether it restates the code, or whether a shortcut is genuinely bounded. The first set is lint territory; the second is review territory, and rewording a rule does not move it between them.
+A check can see: marker tokens with no tracking reference, commented-out blocks, a marker whose ceiling or removal path is missing, and a marker the diff copies into a new site. A check cannot see whether the comment still holds, whether it restates the code, or whether a shortcut is genuinely bounded. The first set is lint territory; the second is review territory, and rewording a rule does not move it between them. Of the first set, only a label without its bound is a gating violation: an ownerless `TODO` and a commented-out block are advisory markers that no gate reads, so a clean lint run says nothing about them.
 
 ## Drift rule
 
@@ -48,4 +48,6 @@ A change that edits a line verifies the adjacent comment in the same edit: delet
 
 ## Markers
 
-`simplify:` / `temporary` record a ceiling and a removal path; the tracking entry is the task's plan or issue. The marker never licenses the pattern: once its ceiling is exceeded, its removal path is gone, or the pattern is copied into a new site, it is a defect to report, not a documented decision. A marker without tracking and removal path is a comment that licenses repetition — delete it with the code it excused, or add the bounds.
+Labels: `simplify: <ceiling>`, and `temporary` written `temporary:`, `temporary —` or `temporary -` — never the bare adjective, and a bare quoted token (`` `simplify:` ``, `"simplify:"`) names the label without being a marker. Each label is bounded by an `upgrade: <when>` clause or by a removal/tracking reference (`#123`, `status.json`, `plans/<file>`), stated on the label line or anywhere in the same comment block; the tracking entry is the task's plan or issue.
+
+The marker never licenses the pattern: once its ceiling is exceeded, its removal path is gone, or the pattern is copied into a new site, it is a defect to report, not a documented decision. A marker without that bound is a comment that licenses repetition — delete it with the code it excused, or add the bound.

@@ -1070,10 +1070,11 @@ jobs:
       - name: Lint help reachability
         run: bun run lint:help-reachability
 
-      # Code comments: a `simplify:` marker without an upgrade path and a
-      # `temporary` marker without a removal path are violations, so this step
-      # gates the job. An untracked TODO and commented-out code are still
-      # advisory markers and do not fail it.
+      # Code comments: a `simplify:` label without a bound (an `upgrade:`
+      # clause or a removal/tracking reference) and a `temporary` label without
+      # a removal path are violations, so this step gates the job. An untracked
+      # TODO and commented-out code are advisory markers only: this step does
+      # not certify that none exist.
       - name: Lint code comments
         run: node packages/cli/dist/mstar-harness.js lint packages --type code
 
