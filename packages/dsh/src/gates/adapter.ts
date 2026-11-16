@@ -38,23 +38,18 @@ import { harnessDocKindOfTarget, validateStatusDoc, validateStatusValue, type Ha
 import { storeAuthorityRefusals } from './store-authority.ts'
 import { readExecutionWorkflowSource } from './workflow-selection.ts'
 import type { SessionHint } from './workflow-selection.ts'
-import {
-  dispatchGateCore,
-  leaseGateViolations,
-  assignmentTextFromFields,
-  isAssignmentShaped,
-  planIdOf,
-  resolveDispatchHard,
-  DEFAULT_DISPATCH_TOOLS,
-  TEAM_DISPATCH_TOOLS,
-} from './dispatch.ts'
+import { DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from './dispatch.ts'
+import { assignmentTextFromFields, isAssignmentShaped, planIdOf, resolveDispatchHard } from './dispatch-assignment.ts'
+import { dispatchGateCore } from './dispatch-core.ts'
+import { leaseGateViolations } from './dispatch-lease.ts'
 import { recordDispatch, recordWorkflowVerdict as appendWorkflowVerdict, AGENT_FLOW_LOGGER } from './agent-flow.ts'
 import type { AgentFlowPairing, WorkflowVerdictInput } from './agent-flow.ts'
 import { teamServicePresent } from './team-identity.ts'
 // P-c first-seen ask cache :
 // apply-scoped, owned here (constructed with the adapter) so the dispatch
 // gate and tests share ONE instance per plugin apply. workflow-policy
-// imports dispatch.ts type-only — no runtime cycle.
+// imports `WorkflowGateInput` from dispatch-workflow.ts type-only — no
+// runtime cycle.
 import { WorkflowAskCache } from './workflow-policy.ts'
 /** Logger label for the host adapter (dsh logger naming: `<scope>/<subject>`). */
 const HOST_LOGGER = 'mstar/host-adapter'
@@ -213,7 +208,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * single decision.
    *
    * The store is the plugin's only durable picker state, and it is read at
-   * THIS composition edge: `dispatch.ts` (and the writers in `agent-flow.ts`)
+   * THIS composition edge: `dispatch-core.ts` (and the writers in `agent-flow.ts`)
    * receive plain hints and never touch the store — no circular
    * `agent-flow → store → agent-flow` import.
    *
@@ -346,7 +341,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
    *   Task 4 — the durable ledger row for every
    * gated workflow/ralph call: verdict + metaName/objective + mode, via the
    * ledger plan's record path). `gateWorkflow` routes the record through
-   * this adapter method so dispatch.ts stays free of a runtime agent-flow
+   * this adapter method so dispatch-workflow-branch.ts stays free of a runtime agent-flow
    * import (the ledger imports dispatch helpers — the adapter is the
    * acyclic junction, the same role it plays for `dispatchGate`). The
    * underlying record is fully try/catch-contained (a failing ledger write

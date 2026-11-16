@@ -29,7 +29,10 @@ import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './har
 import * as entry from '../src/index.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
-import { planIdOf, preExecuteListener, dispatchCallerOf, DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
+import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
+import { planIdOf } from '../src/gates/dispatch-assignment.ts'
+import { dispatchCallerOf } from '../src/gates/dispatch-core.ts'
+import { preExecuteListener } from '../src/gates/dispatch-listener.ts'
 import { DshHostAdapter } from '../src/gates/adapter.ts'
 import { HarnessResolver, ROOT_SESSION_DISPATCH_BINDING, type Config } from '../src/gates/_shared.ts'
 

@@ -20,6 +20,7 @@ export const activationAttestationDocumentConstraints: readonly Readonly<{ path:
   { path: "consumers", rule: "At least one installed consumer is required." },
   { path: "consumers[].runtimeVersion", rule: `Must be "node" and meet the declared floor: node >= ${readDeclaredNodeFloor() ?? "the manifest's engines.node"}. Bun is the development toolchain and is never a consumer runtime.` },
   { path: "consumers[].current", rule: "Exactly one consumer is current, and that consumer's kind must be coordinator." },
+  { path: "consumers[].disposition", rule: "A stateless per-invocation consumer (the CLI) is attested reloaded although no reload event occurs: nothing of it outlives an invocation, so its next invocation under the current epoch is the whole reload." },
   { path: "*", rule: "Only the declared keys at the top level and in operator, consumers[], and stoppedSessions[] are accepted; undeclared credential fields are refused by name." },
   { path: "stoppedSessions[].state", rule: "Only stopped or reloaded sessions are accepted." },
 ];
