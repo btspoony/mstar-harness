@@ -71,8 +71,9 @@ export type SimplifyMarker = { line: number; text: string; bound: string | null 
 
 /** The `upgrade:` clause of a bounded shortcut (comments.md § Markers: a
  * `simplify:` marker records a ceiling and a bound). Line-scoped: the clause
- * never spans a newline. */
-const UPGRADE_PATH_RE = /\bupgrade[^\n;,]*/i;
+ * never spans a newline. The colon is required — a bare "upgrade" word states
+ * no plan. */
+const UPGRADE_PATH_RE = /\bupgrade\s*:[^\n;,]*/i;
 
 /**
  * Find `simplify:` marker comments (mstar-coding-behavior § Decision Rules:
@@ -100,7 +101,7 @@ export function findSimplifyMarkers(fileText: string): SimplifyMarker[] {
     if (match === null) continue;
     if (!isMarkerToken(scan, offsets[i], match.index, masked[i], SIMPLIFY_INTRODUCER_RE)) continue;
     if (QUOTE_CHARS[lines[i][match.index - 1]] === true) continue;
-    markers.push({ line: i + 1, text: lines[i].trim(), bound: commentBlockBound(lines, commentOnly, i) });
+    markers.push({ line: i + 1, text: lines[i].trim(), bound: commentBlockBound(lines, commentOnly, i, scan, offsets) });
   }
   return markers;
 }
@@ -126,6 +127,11 @@ function lineOffsets(text: string): number[] {
   return offsets;
 }
 
+/** A line-leading introducer the C-family scanner does not classify (`#`, `;`,
+ * `--` open shell, YAML, TOML, Lisp and SQL comments), so a such line is
+ * comment content the block search may read. */
+const LINE_COMMENT_ONLY_RE = /^\s*(?:#|;|--)/;
+
 /** Per-line "comment-only" flag: the line carries comment content and no code.
  * A marker's comment block is the maximal run of adjacent lines that are
  * comment-only, plus the marker line itself. */
@@ -135,7 +141,7 @@ function commentOnlyLines(lines: readonly string[], scan: Uint8Array, offsets: r
     let hasComment = false;
     for (let i = 0; i < line.length; i++) {
       if (/\s/.test(line[i])) continue;
-      if (scan[base + i] !== SOURCE_COMMENT) return false;
+      if (scan[base + i] !== SOURCE_COMMENT) return LINE_COMMENT_ONLY_RE.test(line);
       hasComment = true;
     }
     return hasComment;
@@ -151,20 +157,34 @@ function isMarkerToken(scan: Uint8Array, base: number, at: number, maskedLine: s
   return klass === SOURCE_CODE && introducerRe.test(maskedLine);
 }
 
-/** The comment block around line `index`: the maximal run of adjacent
- * comment-only lines that contains it, plus the marker line itself. */
-function commentBlockText(lines: readonly string[], commentOnly: readonly boolean[], index: number): string {
+/** One line's comment text: the whole line when it is comment-only, otherwise
+ * only the tail the scanner classifies as a comment. Code is never a bound, so
+ * a code line contributes nothing. */
+function commentLineText(line: string, commentOnly: boolean, scan: Uint8Array, base: number): string {
+  if (commentOnly) return line;
+  for (let i = 0; i < line.length; i++) {
+    if (scan[base + i] === SOURCE_COMMENT) return line.slice(i);
+  }
+  return "";
+}
+
+/** The comment text of the block around line `index`: the maximal run of
+ * adjacent comment-only lines that contains it, plus the marker line itself,
+ * each reduced to its comment content. */
+function commentBlockText(lines: readonly string[], commentOnly: readonly boolean[], index: number, scan: Uint8Array, offsets: readonly number[]): string {
   let start = index;
   while (start > 0 && commentOnly[start - 1]) start -= 1;
   let end = index;
   while (end + 1 < lines.length && commentOnly[end + 1]) end += 1;
-  return lines.slice(start, end + 1).join("\n");
+  const parts: string[] = [];
+  for (let i = start; i <= end; i++) parts.push(commentLineText(lines[i], commentOnly[i], scan, offsets[i]));
+  return parts.join("\n");
 }
 
 /** The bound recorded for the marker on line `index`: the first `upgrade:`
  * clause or removal/tracking reference anywhere in its comment block. */
-function commentBlockBound(lines: readonly string[], commentOnly: readonly boolean[], index: number): string | null {
-  const block = commentBlockText(lines, commentOnly, index);
+function commentBlockBound(lines: readonly string[], commentOnly: readonly boolean[], index: number, scan: Uint8Array, offsets: readonly number[]): string | null {
+  const block = commentBlockText(lines, commentOnly, index, scan, offsets);
   const clause = UPGRADE_PATH_RE.exec(block);
   if (clause !== null) return clause[0];
   for (const pattern of REMOVAL_PATH_PATTERNS) {
@@ -190,21 +210,26 @@ export type TemporaryMarker = {
 export type TemporaryMarkerResult = GateResult & { markers: TemporaryMarker[] };
 
 /**
- * Removal-path patterns (mstar-coding-behavior § Decision Rules: "record
- * the removal path in the plan/status artifact"). A marker satisfies the
- * convention when its line references one of these — first match wins:
+ * Bound patterns (mstar-coding-behavior § Decision Rules: "record the removal
+ * path in the plan/status artifact"). A marker satisfies the bound when its
+ * comment block references one of these — first match wins:
  * 1. `status.json` (the plan-harness status artifact)
- * 2. `R#<n>` (residual entry)
- * 3. the word `residual` (residual tracker / notes)
+ * 2. `R#<n>` (residual entry) or `residual R<n>`
+ * 3. `#<n>` (issue reference, the form comments.md lists)
  * 4. a `plans/<file>` path (e.g. `plans/20991231-example.md`)
  * 5. a dated plan id ("plan 20991231-example-plan")
  * 6. "tracked/recorded/logged/scheduled/listed/noted in <artifact>"
  * 7. an explicit "removal path: <artifact>" label
+ *
+ * A bare `residual` word is NOT one: it is ordinary prose in a comment that
+ * discusses residuals, so it bounds nothing. The pattern requires the entry
+ * id ("residual R7").
  */
 const REMOVAL_PATH_PATTERNS: readonly RegExp[] = [
   /status\.json/i,
   /R#\d+/i,
-  /\bresiduals?\b/i,
+  /\bresiduals?\s+R[#-]?\w*\d+/i,
+  /#\d+/,
   /plans?\/[\w./-]+/i,
   /\bplans?\s+20\d{6}[-.\w]*/i,
   /\b(?:tracked|recorded|logged|scheduled|listed|noted)\s+in\s+[\w./-]+/i,
@@ -242,7 +267,7 @@ export function findTemporaryMarkers(fileText: string): TemporaryMarkerResult {
   for (let i = 0; i < lines.length; i++) {
     if (!re.test(masked[i])) continue;
     const text = lines[i].trim();
-    const block = commentBlockText(lines, commentOnly, i);
+    const block = commentBlockText(lines, commentOnly, i, scan, offsets);
     let removalPath: string | null = null;
     for (const pattern of REMOVAL_PATH_PATTERNS) {
       const match = pattern.exec(block);

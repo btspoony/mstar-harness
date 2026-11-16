@@ -14,7 +14,7 @@ A comment is an input to the next change: whoever edits the line reads it before
 |---|---|
 | External constraint — a platform, protocol or third-party behavior the code cannot choose | It appears nowhere in the file |
 | Contract pointer — the one path to the spec, ADR or issue that owns the rule | It resolves at HEAD, and the owner is not restated |
-| Bounded shortcut — `simplify: <limit>, <when to upgrade>` | It records a ceiling and a removal path |
+| Bounded shortcut — `simplify: <limit>, <when to upgrade>` | It records a ceiling and a bound |
 | Generated marker — "do not edit, regenerate from X" | It prevents an edit the generator would undo |
 | Public-API contract types cannot express — unit, ordering, ownership, aliasing | It states an obligation a caller relies on |
 | Uncheckable ordering or safety constraint — a required sequence no test or lint can see | It is the only surface the actor reads at that step |
@@ -40,7 +40,7 @@ A comment is an input to the next change: whoever edits the line reads it before
 
 ## Checkable vs judgement
 
-A check can see: marker tokens with no tracking reference, commented-out blocks, a marker whose ceiling or removal path is missing, and a marker the diff copies into a new site. A check cannot see whether the comment still holds, whether it restates the code, or whether a shortcut is genuinely bounded. The first set is lint territory; the second is review territory, and rewording a rule does not move it between them. Of the first set, only a label without its bound is a gating violation: an ownerless `TODO` and a commented-out block are advisory markers that no gate reads, so a clean lint run says nothing about them.
+A check can see: marker tokens with no tracking reference, commented-out blocks, a marker whose ceiling or bound is missing, and a marker the diff copies into a new site. A check cannot see whether the comment still holds, whether it restates the code, or whether a shortcut is genuinely bounded. The first set is lint territory; the second is review territory, and rewording a rule does not move it between them. Of the first set, only a label without its bound is a gating violation: an ownerless `TODO` and a commented-out block are advisory markers that no gate reads, so a clean lint run says nothing about them.
 
 ## Drift rule
 
@@ -50,4 +50,4 @@ A change that edits a line verifies the adjacent comment in the same edit: delet
 
 Labels: `simplify: <ceiling>`, and `temporary` written `temporary:`, `temporary —` or `temporary -` — never the bare adjective, and a bare quoted token (`` `simplify:` ``, `"simplify:"`) names the label without being a marker. Each label is bounded by an `upgrade: <when>` clause or by a removal/tracking reference (`#123`, `status.json`, `plans/<file>`), stated on the label line or anywhere in the same comment block; the tracking entry is the task's plan or issue.
 
-The marker never licenses the pattern: once its ceiling is exceeded, its removal path is gone, or the pattern is copied into a new site, it is a defect to report, not a documented decision. A marker without that bound is a comment that licenses repetition — delete it with the code it excused, or add the bound.
+The marker never licenses the pattern: once its ceiling is exceeded, its bound is gone, or the pattern is copied into a new site, it is a defect to report, not a documented decision. A marker without that bound is a comment that licenses repetition — delete it with the code it excused, or add the bound.

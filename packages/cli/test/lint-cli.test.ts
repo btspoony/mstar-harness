@@ -203,6 +203,26 @@ Check result: exit 0; changed scope line found.
     });
   });
 
+  test("the #123 reference comments.md lists satisfies the bound → exit 0", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// simplify: naive scan\n// removal tracked in #123\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      expect(lintViolationCodes(result)).toEqual([]);
+    });
+  });
+
+  test("a code line carrying a bare residual word is not a bound → exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// simplify: naive scan\nconst residual = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toContain("lint.simplify.no-upgrade-path");
+    });
+  });
+
   test("untracked TODO and commented-out code → advisory markers, exit 0", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "scan.ts");

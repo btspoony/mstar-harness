@@ -108,6 +108,19 @@ describe("commentMask — regex vs division heuristic (regression)", () => {
   });
 });
 
+describe("commentMask — an unterminated quote bails at the newline", () => {
+  test("a stray quote in code does not blank the next line's comment", () => {
+    const src = "const s = 'oops\n// 中文注释\n";
+    expect(unmaskedNonAscii(src)).toBe("");
+    expect(maskedText(src)).toContain("中文注释");
+  });
+
+  test("an apostrophe in a shell comment does not blank the following comment", () => {
+    const src = "# don't retry\n// 中文注释\n";
+    expect(maskedText(src)).toContain("中文注释");
+  });
+});
+
 describe("commentMask — regex char class with quote characters", () => {
   test("quotes inside a regex char class do not open strings", () => {
     const src = 'const re = /["\'`]/; // 注释\n';

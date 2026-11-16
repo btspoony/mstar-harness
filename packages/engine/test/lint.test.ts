@@ -422,7 +422,7 @@ describe("findTemporaryMarkers", () => {
     expect(result.markers[2].removalPath).toBeNull();
   });
 
-  test("accepts markers referencing status.json / residual as the removal path", () => {
+  test("accepts status.json as the removal path", () => {
     const result = findTemporaryMarkers(TEMPORARY_FIXTURE);
     expect(result.markers[0].removalPath).toBe("status.json");
     expect(result.violations.some((v) => v.code === "lint.temporary.no-removal-path")).toBe(true); // only the path-less one
@@ -474,6 +474,14 @@ describe("findTemporaryMarkers", () => {
     expect(findTemporaryMarkers("// temporary: hack\n").markers).toHaveLength(1);
     expect(findTemporaryMarkers("// TEMPORARY \u2014 offline path\n").markers).toHaveLength(1);
     expect(findTemporaryMarkers("// temporary - offline path\n").markers).toHaveLength(1);
+  });
+
+  test("a stray residual word is not a removal path", () => {
+    const result = findTemporaryMarkers("// temporary: hack. some residual note\n");
+    expect(result.markers[0].removalPath).toBeNull();
+    expect(findTemporaryMarkers("// temporary: hack; removal tracked in status.json\n").markers[0].removalPath).toBe(
+      "status.json",
+    );
   });
 });
 
@@ -595,6 +603,44 @@ describe("findSimplifyMarkers completeness", () => {
   test("a comment block with neither bound form records null", () => {
     const markers = findSimplifyMarkers("// simplify: naive scan\n// the scan is quadratic\n");
     expect(markers[0].bound).toBeNull();
+  });
+
+  test("accepts the #123 tracking reference comments.md lists", () => {
+    const markers = findSimplifyMarkers("// simplify: naive scan; removal tracked in #123\n");
+    expect(markers[0].bound).toBe("#123");
+  });
+
+  test("a bare upgrade word is not the bound clause (only upgrade: is)", () => {
+    const markers = findSimplifyMarkers("// simplify: naive scan; upgrade later maybe\n");
+    expect(markers[0].bound).toBeNull();
+    expect(findSimplifyMarkers("// simplify: naive scan; upgrade: index the map\n")[0].bound).toBe(
+      "upgrade: index the map",
+    );
+  });
+
+  test("reads the bound across a shell/YAML comment block (# and ; introducers)", () => {
+    for (const introducer of ["#", ";", "--"]) {
+      const block = `${introducer} simplify: naive scan\n${introducer} upgrade: index the map\n`;
+      expect(findSimplifyMarkers(block)[0].bound).toBe("upgrade: index the map");
+    }
+  });
+
+  test("an apostrophe in a comment does not hide the rest of the block", () => {
+    const markers = findSimplifyMarkers(
+      "# don't retry the batch on a partial write\n# simplify: naive scan\n# upgrade: index the map\n",
+    );
+    expect(markers).toHaveLength(1);
+    expect(markers[0].bound).toBe("upgrade: index the map");
+  });
+
+  test("a code line in the block does not satisfy the bound", () => {
+    const markers = findSimplifyMarkers("// simplify: naive scan\nconst residual = computeResidual();\n");
+    expect(markers[0].bound).toBeNull();
+  });
+
+  test("a stray residual word is not a tracking reference", () => {
+    expect(findSimplifyMarkers("// simplify: naive scan\n// some residual note\n")[0].bound).toBeNull();
+    expect(findSimplifyMarkers("// simplify: naive scan; upgrade later\n")[0].bound).toBeNull();
   });
 });
 

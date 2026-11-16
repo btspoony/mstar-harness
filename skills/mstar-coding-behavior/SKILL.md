@@ -29,7 +29,7 @@ Start from the user's original outcome, not from the machinery already built.
   3. Use an installed dependency; check its documentation and types before assuming it lacks the capability.
   4. Otherwise write the minimum readable direct solution. Add an established, well-maintained library only when it reduces overall complexity or improves reliability; check maintenance and size, and state the need in one sentence, not a new package for a few lines.
 - Centralize and reuse sources of truth for prompts, contracts, and data instead of copying them; do not invent an abstraction framework to do so.
-- Mark a deliberate bounded shortcut with `simplify:` and its ceiling/upgrade path. For an unavoidable workaround, explain why, label it `simplify:` or `temporary`, and record its removal path in the existing plan/status artifact before claiming completion. Temporary markers must cite that artifact.
+- Mark a deliberate bounded shortcut with `simplify:` and its ceiling/bound. For an unavoidable workaround, explain why, label it `simplify:` or `temporary:`, and record its bound in the existing plan/status artifact before claiming completion. A `temporary` marker must cite that artifact.
 
 ### Agent-facing products
 

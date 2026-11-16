@@ -69,7 +69,10 @@ export function scanSource(src: string): Uint8Array {
         i += 2; // skip escape + escaped char
         continue;
       }
-      if (c === quote) state = "code";
+      // A quote literal never spans a line: an unterminated one (an apostrophe
+      // in prose the scanner read as code) bails to code, so the phantom string
+      // cannot blank the rest of the file — comment content included.
+      if (c === quote || c === "\n") state = "code";
       i++;
       continue;
     }
