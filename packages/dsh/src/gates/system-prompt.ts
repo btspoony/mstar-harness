@@ -382,8 +382,9 @@ function sectionEnforcement(harnessDir: string | null): EnforcementFlag {
  * Recorded cost of that gate: on a NON-Team composition, where `subagent` is
  * the delegation channel, the third line's dispatch-header rule is withheld.
  * Under `hard` enforcement the dispatch/role gates still deny a header-less
- * `subagent` prompt (`dispatch.ts` `DEFAULT_DISPATCH_TOOLS`), but the default
- * deployment is soft/warn-only, so there the rule is simply uncovered.
+ * `subagent` prompt (`DEFAULT_DISPATCH_TOOLS`, declared in the `dispatch.ts`
+ * carrier leaf), but the default deployment is soft/warn-only, so there the
+ * rule is simply uncovered.
  * Shipping the header rule unconditionally would close it; that is a separate
  * behaviour change.
  *

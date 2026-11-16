@@ -63,7 +63,8 @@ import {
 // is routed through the same normalization at the verdict-row WRITE
 // boundary (parity with the W-B2 name/label/phase discipline), so a
 // hostile objective (ESC/ANSI/NEL embedded) never reaches the ledger view.
-// workflow-policy imports dispatch.ts type-only — no runtime cycle.
+// workflow-policy's own back-references are `import type` only
+// (dispatch-workflow.ts `WorkflowGateInput`) — this value import closes no cycle.
 import { normalizeWorkflowName } from './workflow-policy.ts'
 
 /** Default native-ledger read window. */

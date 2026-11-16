@@ -62,11 +62,14 @@
  * tests may drive it directly, and an unresolved first-seen re-asks per
  * call until the observation (or an explicit record) lands.
  *
- * Module boundary: no barrel. This module imports dispatch.ts TYPE-ONLY
- * (`WorkflowGateInput` — erased at runtime, no cycle); dispatch.ts imports
- * the policy/cache values from here. The P-a vocabulary
- * (`workflowNameUnknown`, `WORKFLOW_NAME_UNKNOWN_CODE`) centralized HERE from
- * 's dispatch.ts.
+ * Module boundary: no barrel. The one back-edge into a value importer is
+ * `import type { WorkflowGateInput } from './dispatch-workflow.ts'` — erased
+ * at runtime, so it does NOT close the cycle that `dispatch-workflow.ts`
+ * opens by importing `normalizeWorkflowName` from here BY VALUE. The value
+ * importers of this module's policy/cache are `dispatch-workflow-branch.ts`
+ * (`workflowPolicy`) and `adapter.ts` (`WorkflowAskCache`); `dispatch.ts`
+ * imports nothing from here. The P-a vocabulary (`workflowNameUnknown`,
+ * `WORKFLOW_NAME_UNKNOWN_CODE`) is centralized HERE.
  */
 import type { Config } from './_shared.ts'
 import type { WorkflowGateInput } from './dispatch-workflow.ts'
@@ -214,7 +217,7 @@ export type WorkflowPolicyVerdict =
  *
  * P-b: `input.uncoveredPlanId` (the dispatch gate computes it from the
  * ACTIVE workflow snapshot — `workflows/<id>/snapshot.json`, the v3
- * status.json consumer; see dispatch.ts `writableFanOutUncovered`)
+ * status.json consumer; see dispatch-workflow-branch.ts `writableFanOutUncovered`)
  * → hard denies (reason cites the plan id), warn/ask emit the advisory
  * verdict; `off` always allows. Preempts P-a/P-c: an orphan InProgress plan
  * is a workspace red line independent of the workflow name.

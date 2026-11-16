@@ -19,7 +19,7 @@ import { normalizeWorkflowName } from './workflow-policy.ts'
  * `meta` (workflow) / `objective` (ralph) + the in-flight call.
  */
 export interface WorkflowGateInput {
-  /** The matched tool name (`'workflow'` | `'ralph'` — the gate name-guards on {@link DEFAULT_WORKFLOW_TOOLS} first). */
+  /** The matched tool name (`'workflow'` | `'ralph'` — the gate name-guards on `DEFAULT_WORKFLOW_TOOLS` (dispatch.ts) first). */
   tool: 'workflow' | 'ralph'
   /** `meta.name` for workflow calls — the P-a allowlist input; absent for ralph (no meta). */
   metaName?: string
@@ -30,8 +30,8 @@ export interface WorkflowGateInput {
   /**
    * P-b lease attribution: the calling workspace's first
    * `InProgress` plan lacking a recorded row scope (computed by
-   * {@link writableFanOutUncovered} from the status.json read through the
-   * contained resolver path — `preExecuteListener` already resolved the
+   * `writableFanOutUncovered` in dispatch-workflow-branch.ts from the
+   * status.json read through the contained resolver path — `preExecuteListener` already resolved the
    * harness dir from the calling agent's session workspace). Undefined → no
    * uncovered plan (allow axis). Applies to workflow AND ralph (P-b needs no
    * `meta.name`).

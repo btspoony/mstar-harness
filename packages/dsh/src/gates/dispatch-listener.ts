@@ -137,7 +137,7 @@ async function gateDispatch(
   // The carrying session's hint — derived ONCE per tool call through the
   // adapter (the plugin's only owner of the durable binding store) and shared
   // by the workflow branch, the dispatch branch's selection reads and the
-  // ledger record below. `dispatch.ts` therefore stays free of a runtime
+  // ledger record below. `dispatch-workflow-branch.ts` therefore stays free of a runtime
   // agent-flow / engine-status-store dependency (the adapter is the acyclic
   // junction).
   //

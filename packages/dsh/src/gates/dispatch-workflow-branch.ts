@@ -28,10 +28,11 @@ import { workflowGateInputOf } from './dispatch-workflow.ts'
  * workflow snapshot has any plan `InProgress` LACKING matching
  * recorded scope. Iterates ALL snapshot plan rows (no
  * Assignment header exists on the workflow/ralph branch — unlike
- * {@link leaseGateViolations} / {@link worktreeL1Violations}, which are
- * Assignment-keyed) and REUSES the named plumbing: the
- * {@link activeSnapshotRows} read (the v3 root `plans[]` → active snapshot
- * relocation) and the row's own `metadata.worktree_path` /
+ * `leaseGateViolations` (dispatch-lease.ts) / `worktreeL1Violations`
+ * (dispatch-worktree.ts), which are Assignment-keyed) and REUSES the named
+ * plumbing it imports here: `readExecutionWorkflowSource` / `activeRowsOf`
+ * (workflow-selection.ts) for the active snapshot (the v3 root `plans[]` →
+ * active snapshot relocation) plus the row's own `metadata.worktree_path` /
  * `metadata.working_branch` scope — an InProgress row that records no scope
  * is an uncovered row.
  *
@@ -100,7 +101,7 @@ async function writableFanOutUncovered(
  * verdict row (also precedes malformed-args handling — a malformed call
  * under `off` stays silent).
  *
- * Every other mode composes the {@link WorkflowGateInput} (plus the Task 3
+ * Every other mode composes the `WorkflowGateInput` (dispatch-workflow.ts; plus the Task 3
  * P-b lease attribution: {@link writableFanOutUncovered} over the ACTIVE
  * workflow snapshot (`workflows/<id>/snapshot.json` — the v3 status.json
  * consumer; never the root v1 `plans[]`), resolved through the contained
@@ -123,7 +124,7 @@ async function writableFanOutUncovered(
  * - `ask` → `{kind:'ask', reason}` returned WITHOUT `next()` (terminal —
  *   the registry services it through the approval waterfall; fail-closed
  *   upstream, this gate invents no answerer). P-c: first-seen names ask;
- *   resolved names (via {@link WorkflowAskCache.record}) use the cached
+ *   resolved names (via `WorkflowAskCache.record` — workflow-policy.ts) use the cached
  *   decision, never a re-ask. The ask itself records an `ask` verdict row
  *   (pending resolution — the approval-allow outcome is observed later by
  *   the workflow-ledger consumer's run-start hook).
@@ -184,7 +185,7 @@ export async function gateWorkflow(
     ...(pb.uncoveredPlanId !== undefined ? { uncoveredPlanId: pb.uncoveredPlanId } : {}),
   })
   // — ONE durable verdict row per gated call (the ledger plan's
-  // record path, routed through the adapter so dispatch.ts keeps no runtime
+  // record path, routed through the adapter so this module keeps no runtime
   // agent-flow edge; the record is fully contained — a failing ledger write
   // never reaches the gate). The fail-open paths above (malformed args /
   // unreadable status) record nothing — no policy verdict was produced;

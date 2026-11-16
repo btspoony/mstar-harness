@@ -60,7 +60,8 @@ import type { HarnessResolver } from './_shared.ts'
 // control-char name re-asks forever. Also the display-field control-char
 // strip this consumer used to own locally (`sanitizeLedgerDisplay`) — now
 // one shared implementation for the run name AND the label/phase fields.
-// workflow-policy imports dispatch.ts type-only — no runtime cycle.
+// workflow-policy's back-references are `import type` only —
+// dispatch-workflow.ts `WorkflowGateInput` — so this value import closes no cycle.
 import { normalizeWorkflowName } from './workflow-policy.ts'
 // Type-only (erased at runtime — no cycle): the P-c per-session ask cache
 //  — this consumer
