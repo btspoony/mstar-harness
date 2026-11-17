@@ -590,9 +590,9 @@ describe("findCommentedCode", () => {
 
   test("a hash-dialect file is out of scope, not silently missed", () => {
     // see skills/mstar-coding-behavior/references/comments.md § Checkable vs judgement — C-family comment runs only.
-    const shell = "#!/bin/sh\n# echo old\n# rm -rf /tmp/x\necho hi\n";
-    expect(findCommentedCode(shell, "hash")).toEqual([]);
-    expect(findCommentedCode(shell)).toEqual([]);
+    const cStyledInShell = "#!/bin/sh\n// const x = 1;\necho hi\n";
+    expect(findCommentedCode(cStyledInShell)).toHaveLength(1);
+    expect(findCommentedCode(cStyledInShell, "hash")).toEqual([]);
   });
 });
 
@@ -658,10 +658,12 @@ describe("findUntrackedTodos", () => {
     expect(findUntrackedTodos("# TODO: fix\n")).toHaveLength(1);
   });
 
-  test("a marker must open the comment content, not follow code or prose", () => {
-    expect(findUntrackedTodos("class A { #TODO = 1; } // TODO: remove the shim\n")).toEqual([]);
-    expect(findUntrackedTodos("const x = 1; // TODO: remove the shim\n")).toEqual([]);
-    expect(findUntrackedTodos("// TODO: remove the shim\n")).toHaveLength(1);
+  test("a marker opens the comment content even after code on the line", () => {
+    expect(findUntrackedTodos("class A { #TODO = 1; } // TODO: remove the shim\n")).toHaveLength(1);
+    expect(findUntrackedTodos("const x = 1; // TODO: remove the shim\n")).toHaveLength(1);
+    expect(findUntrackedTodos("/** TODO: remove the shim */\n")).toHaveLength(1);
+    expect(findUntrackedTodos("/* TODO: remove the shim */\n")).toHaveLength(1);
+    expect(findUntrackedTodos("/*\n * TODO: remove the shim\n */\n")).toHaveLength(1);
   });
 
   test("a named owner satisfies the rule (`TODO(alice):`)", () => {
@@ -674,12 +676,12 @@ describe("findUntrackedTodos", () => {
     expect(findUntrackedTodos("// FIXME @bob: drop the shim\n")).toEqual([]);
   });
 
-  test("a line-leading non-C introducer opens the marker (`#`, `--`)", () => {
+  test("a trailing non-C comment opens its own content (`#`, `--`)", () => {
     const cases = [
-      "# TODO: fix the retry\n",
-      "; TODO: drop the shim\n",
-      "-- TODO: reindex\n",
-      "# TODO: fix the retry\n",
+      "echo hi # TODO: fix the retry\n",
+      "key: v # FIXME: drop the shim\n",
+      "select 1; -- TODO: reindex\n",
+      "x = 1 # TODO: fix the retry\n",
     ];
     for (const text of cases) {
       expect(findUntrackedTodos(text)).toHaveLength(1);
@@ -762,6 +764,11 @@ describe("findUnclassifiedComments", () => {
     expect(findUnclassifiedComments("// TODO(#123): drop the shim\n")).toEqual([]);
     expect(findUnclassifiedComments("// TODO(alice): drop the shim\n")).toEqual([]);
     expect(findUnclassifiedComments("// TODO: later\n")).toHaveLength(1);
+  });
+
+  test("a tracked TODO mid-sentence is prose, not a shape", () => {
+    expect(findUnclassifiedComments("// Discuss TODO(alice) as the label spelling.\n")).toHaveLength(1);
+    expect(findUnclassifiedComments("// the word TODO(alice) is not a task here\n")).toHaveLength(1);
   });
 
   test("matches the shapes in every comment form", () => {

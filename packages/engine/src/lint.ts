@@ -520,7 +520,7 @@ export function findUntrackedTodos(fileText: string, dialect: SourceDialect = "c
       if (!isCommentContext(scan, offsets[i], match.index, commentContext)) continue;
       // why: the marker must open the comment content, so prose that merely
       // names it ("the TODO rule") is not a task.
-      if (!MARKER_LINE_LEAD_RE.test(commentContext.slice(0, match.index))) continue;
+      if (!opensCommentContent(commentContext, match.index, scan, offsets[i]!)) continue;
       if (hasTrackingReference(commentContext)) break;
       findings.push({ line: i + 1, marker: match[1] as UntrackedTodo["marker"], text: lines[i].trim() });
       break;
@@ -565,10 +565,34 @@ const COMMENT_SHAPES: readonly RegExp[] = [
  * issue, a removal path) holds somebody to it. */
 const TODO_MARKER_RE = /\b(?:TODO|FIXME)\b/;
 
-/** why: the marker must open the comment content. Allowed before it are the
- * introducer, an optional block-comment `*`, and whitespace; a marker after
- * prose or code is a mention, not a task. */
-const MARKER_LINE_LEAD_RE = /^\s*(?:\/\/|\/\*|\*|#|;|--)?\s*$/;
+/** why: the marker must open the comment content, not merely sit on a
+ * comment-only line. The prefix is read after the last comment introducer, so
+ * trailing code before `//`, a block opener (`/**`, `/*`, a continuation `*`)
+ * and a non-C `#`/`;`/`--` all leave an empty prefix. A marker after prose is
+ * a mention. A non-C introducer counts only where the scanner sees code, so a
+ * `;` or `#` inside comment prose never restarts the content. */
+function opensCommentContent(maskedLine: string, at: number, scan: Uint8Array, lineBase: number): boolean {
+  const before = maskedLine.slice(0, at);
+  if (/^\s*\*\s*$/.test(before)) return true;
+  let index = -1;
+  const consider = (token: string, rule: "start" | "codeOnly"): void => {
+    const found = before.lastIndexOf(token);
+    if (found === -1 || found <= index) return;
+    if (rule === "codeOnly") {
+      if (scan[lineBase + found] !== SOURCE_CODE) return;
+    } else if (found > 0 && scan[lineBase + found - 1] === SOURCE_COMMENT) {
+      return;
+    }
+    index = found;
+  };
+  consider("//", "start");
+  consider("/*", "start");
+  consider("#", "codeOnly");
+  consider(";", "codeOnly");
+  consider("--", "codeOnly");
+  if (index === -1) return before.trim() === "";
+  return before.slice(index).replace(/^(?:\/\/+|\/\*+|\*+|#|;|--)/, "").trim() === "";
+}
 
 /** why: the changed-line gate reads the whole span, so a unit carries both its
  * first and last line together with the body a shape match reads. */
@@ -669,11 +693,12 @@ function documentsExport(lines: readonly string[], afterLine: number): boolean {
   return false;
 }
 
-/** why: a TODO/FIXME is a shape only with a tracking reference, so the token
- * alone cannot classify a line. */
+/** why: a TODO/FIXME is a shape only with a tracking reference, and only when
+ * it opens the comment content — a mid-sentence mention is prose. */
 function hasCommentShape(line: string): boolean {
   if (COMMENT_SHAPES.some((shape) => shape.test(line))) return true;
-  return TODO_MARKER_RE.test(line) && hasTrackingReference(line);
+  if (!TODO_MARKER_RE.test(line) || !hasTrackingReference(line)) return false;
+  return line.search(TODO_MARKER_RE) === 0;
 }
 
 /**
