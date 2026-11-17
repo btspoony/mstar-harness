@@ -1398,27 +1398,9 @@ function referenceTokenOwner(token: string): string | null {
 }
 
 /**
- * Guard 15 — reference entry points. Three properties over `skills/**`:
- * 1. own-skill discovery: every `skills/<skill>/references/**` file is named
- *    inside its own skill — by that skill's `SKILL.md` or by a sibling
- *    reference — so a second-tier file stays reachable. A `## References` row
- *    is the primary form, not the only legal one: any citation site in the own
- *    skill counts, and a file named nowhere in its own skill fails;
- * 2. every `## References` row carrying a reference path states a trigger —
- *    a placeholder pattern (`` `references/<host>.md` ``) is such a path: it is
- *    not resolved as a citation, but it still needs its trigger;
- * 3. a cross-skill citation carries its owner in the path
- *    (`<owner>/references/<file>.md`) — judged by the path, never by whether
- *    the owner name appears somewhere on the line, because the common shape
- *    `**\`owner\`** -> \`references/file.md\`` names the owner and still leaves
- *    the citation unresolvable on its own.
- *
- * Resolution is by longest existing suffix over the on-disk reference set, so
- * nested children (`references/qc-specialist/report-template.md`) and
- * colliding basenames (`report-template.md` under two skills) resolve to the
- * file the citation actually names; an owner prefix disambiguates a collision,
- * otherwise the citing skill's own file wins, otherwise the citation is
- * ambiguous and must name its owner.
+ * Guard 15 — the three properties over `skills/**` and the longest-suffix
+ * resolution rule are stated once, in this file's header (item 15). This
+ * function enforces them.
  */
 export function checkReferenceCorpus(input: {
   files: Array<{ rel: string; text: string }>;
