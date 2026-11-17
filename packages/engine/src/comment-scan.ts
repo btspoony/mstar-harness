@@ -161,7 +161,9 @@ export function scanSource(src: string, dialect: SourceDialect = "c"): Uint8Arra
     // whitespace or open the line.
     // shortcut: an unspaced trailing `#` (`x=1#note`) opens no comment.
     // upgrade: a per-language tokenizer with each grammar's own word rules.
-    if (dialect === "hash" && c === "#" && (i === 0 || /\s/.test(src[i - 1] as string))) {
+    // why: `#!` on line 1 is an execution directive the kernel reads, not
+    // prose about the code, so it stays code in a hash dialect.
+    if (dialect === "hash" && c === "#" && !(i === 0 && next === "!") && (i === 0 || /\s/.test(src[i - 1] as string))) {
       state = "line";
       scan[i] = SOURCE_COMMENT;
       i++;

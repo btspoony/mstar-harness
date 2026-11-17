@@ -827,6 +827,16 @@ describe("findUnclassifiedComments — comment dialect follows the language", ()
     expect(findUnclassifiedComments("# why: the wire format fixes field order\n", "hash")).toEqual([]);
   });
 
+  test("a shebang is an execution directive, not a comment", () => {
+    expect(findUnclassifiedComments("#!/usr/bin/env bash\nset -e\n", "hash")).toEqual([]);
+    expect(findUnclassifiedComments("#!/usr/bin/env python3\nimport sys\n", "hash")).toEqual([]);
+    // why: only the first line is a shebang, so a `#` comment below it still
+    // faces the gate.
+    const findings = findUnclassifiedComments("#!/usr/bin/env bash\n# prints the value\n", "hash");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ line: 2, text: "# prints the value" });
+  });
+
   test("a hash comment that restates the code still fails in a hash language", () => {
     const findings = findUnclassifiedComments("# returns the value\n", "hash");
     expect(findings).toHaveLength(1);

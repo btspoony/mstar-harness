@@ -10,7 +10,7 @@ A comment is an input to the next change: whoever edits the line reads it before
 
 ## MUST
 
-A non-documentation comment passes the lint in one of four shapes: a marker (`simplify:`, `shortcut:`, `temporary:`) together with its bound — an `upgrade:` clause, or a removal/tracking reference (`#123`, `status.json`, `plans/<file>`) — a contract pointer — `see` plus its target (`docs/…`, `plans/…`, `ADR-<n>`, `#<n>`, `issue <n>`, `contract §`, a URL) or that target alone, a declared prefix (`why:`, `invariant:`, `safety:`, `note:`), or `@generated`; a `TODO`/`FIXME` is a fifth only with a tracking reference, and `see` without a target is prose, not a pointer. A bare label is not a shape: it licenses the pattern without bounding it, so the lint rejects it. A `/** … */` block whose next non-empty line starts with `export` is documentation and exempt; the same block above anything else is not.
+A non-documentation comment passes the lint in one of four shapes: a marker (`simplify:`, `shortcut:`, `temporary:`) together with its bound — a removal/tracking reference (`#123`, `status.json`, `plans/<file>`), or for `simplify:`/`shortcut:` an `upgrade:` clause — a contract pointer — `see` plus its target (`docs/…`, `plans/…`, `ADR-<n>`, `#<n>`, `issue <n>`, `contract §`, a URL) or that target alone, a declared prefix (`why:`, `invariant:`, `safety:`, `note:`), or `@generated`; a `TODO`/`FIXME` is a fifth only with a tracking reference, and `see` without a target is prose, not a pointer. A bare label is not a shape: it licenses the pattern without bounding it, so the lint rejects it. A `/** … */` block whose next non-empty line starts with `export` is documentation and exempt; the same block above anything else is not.
 
 | Case | What keeps it |
 |---|---|

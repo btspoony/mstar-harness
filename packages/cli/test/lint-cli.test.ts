@@ -455,6 +455,18 @@ Check result: exit 0; changed scope line found.
     });
   });
 
+  test("a shebang on the first line is not a ratcheted comment", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "run.sh");
+      commitBase(dir, { "run.sh": "set -e\n" });
+      writeFileSync(file, "#!/usr/bin/env bash\nset -e\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(lintViolationCodes(result)).toEqual([]);
+      expect(result.stderr.trim()).toBe("unclassified comments: 0");
+    });
+  });
+
   test("an unclassified hash comment still fails the ratchet in a shell file", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "run.sh");
