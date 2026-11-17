@@ -1,5 +1,5 @@
 /**
- * Source scanner — the ONE literal/comment tokenizer behind both the engine
+ * why: Source scanner — the ONE literal/comment tokenizer behind both the engine
  * comment detectors (`./lint.ts`) and the ASCII-literal tooling
  * (`scripts/lint-ascii-literals.ts`, `scripts/escape-dist-literals.ts`,
  * `scripts/drift-lint.ts`).

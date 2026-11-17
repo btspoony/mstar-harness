@@ -724,14 +724,14 @@ async function awaitSpawn(context: InvocationContext, argv: readonly string[], c
  * no changed line, so the count is read separately from the start. */
 const HUNK_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
 
-/** The C string git writes beside a header when a path holds a quote,
+/** why: the C string git writes beside a header when a path holds a quote,
  * a backslash or a control character — `core.quotePath=false` only turns off
  * octal escaping of non-ASCII bytes, not this quoting. */
 const C_ESCAPES: Readonly<Record<string, string>> = {
   a: "\x07", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v", "\\": "\\", '"': '"',
 };
 
-/** Decode the C-quoted path git wrote into a header field, or return the field
+/** note: decode the C-quoted path git wrote into a header field, or return the field
  * as-is when it is not quoted. A quoted path may be followed by a tab git adds
  * to separate the name from the hunk context; anything after the closing quote
  * is separator. A bare path gets that one trailing tab dropped, which is the

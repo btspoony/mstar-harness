@@ -816,7 +816,7 @@ describe("findUnclassifiedComments", () => {
 describe("findUnclassifiedComments — comment dialect follows the language", () => {
   test("Python floor division is code, not a comment", () => {
     expect(findUnclassifiedComments("return numerator // denominator\n", "hash")).toEqual([]);
-    // the C default keeps its existing reading, so callers that pass no dialect
+    // why: the C default keeps its existing reading, so callers that pass no dialect
     // are unchanged
     expect(findUnclassifiedComments("return numerator // denominator\n")).toHaveLength(1);
   });
