@@ -616,6 +616,12 @@ describe("findUntrackedTodos", () => {
     expect(findUntrackedTodos("class A { #TODO = 1; }\n")).toEqual([]);
   });
 
+  test("a C statement terminator never opens a trailing comment", () => {
+    expect(findUntrackedTodos("class A { #TODO = 1 ; } export function TODO() {}\n")).toEqual([]);
+    expect(findUntrackedTodos("const a = f() ; const TODO = 1;\n")).toEqual([]);
+    expect(findUntrackedTodos("# TODO: fix\n")).toHaveLength(1);
+  });
+
   test("a rejected code-context marker does not shadow a later comment marker on the line", () => {
     const findings = findUntrackedTodos("class A { #TODO = 1; } // TODO: remove the shim\n");
     expect(findings).toHaveLength(1);
@@ -634,7 +640,7 @@ describe("findUntrackedTodos", () => {
     expect(findUntrackedTodos("// FIXME @bob: drop the shim\n")).toEqual([]);
   });
 
-  test("a marker in a trailing non-C comment is still checked (`#`, `;`, `--`)", () => {
+  test("a marker in a trailing non-C comment is still checked (`#`, `--`)", () => {
     const cases = [
       "echo hi # TODO: fix the retry\n",
       "key: v # FIXME: drop the shim\n",

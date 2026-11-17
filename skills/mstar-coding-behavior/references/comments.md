@@ -40,7 +40,7 @@ A comment is an input to the next change: whoever edits the line reads it before
 
 ## Checkable vs judgement
 
-A check can see: marker tokens with no tracking reference, commented-out blocks, a marker whose ceiling or bound is missing, and a marker the diff copies into a new site. A check cannot see whether the comment still holds, whether it restates the code, or whether a shortcut is genuinely bounded. The first set is lint territory; the second is review territory, and rewording a rule does not move it between them. Of the first set, only a label without its bound is a gating violation: an ownerless `TODO` and a commented-out block are advisory markers that no gate reads, so a clean lint run says nothing about them.
+A check can see: marker tokens with no tracking reference, commented-out blocks, a marker whose ceiling or bound is missing, and a marker the diff copies into a new site. A check cannot see whether the comment still holds, whether it restates the code, or whether a shortcut is genuinely bounded. The first set is lint territory; the second is review territory, and rewording a rule does not move it between them. Of the first set, only a label without its bound is a gating violation: an ownerless `TODO` and a commented-out block are advisory markers that no gate reads, so a clean lint run says nothing about them. The commented-code check parses each candidate run with `vm.Script`, so a block left in TypeScript-only syntax (`: T`, `export`, top-level `return`) is not detected at all.
 
 ## Drift rule
 
@@ -52,4 +52,4 @@ Labels: `simplify: <ceiling>`, and `temporary` written `temporary:`, `temporary 
 
 The marker never licenses the pattern: once its ceiling is exceeded, its bound is gone, or the pattern is copied into a new site, it is a defect to report, not a documented decision. A marker without that bound is a comment that licenses repetition — delete it with the code it excused, or add the bound.
 
-The gate reads `packages/` and `scripts/` (`mstar lint <root> --type code`); a marker elsewhere is unenforced, so check it in review.
+The gate reads the code files under `packages/` and `scripts/`, selected by extension (`mstar lint <file>`); a marker elsewhere is unenforced, so check it in review.

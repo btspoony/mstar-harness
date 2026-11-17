@@ -472,17 +472,20 @@ export type UntrackedTodo = { line: number; marker: "TODO" | "FIXME"; text: stri
  * trailing comment for the rest of the line. Whitespace on both sides keeps
  * `x = 1; TODO` (a statement), `#TODO` (a private field) and `--x` (a
  * decrement) out; a line-leading introducer is already covered by
- * `LINE_COMMENT_ONLY_RE`. */
-const STANDALONE_NON_C_INTRODUCER_RE = /(?:^|\s)(?:#|;|--)\s/;
+ * `LINE_COMMENT_ONLY_RE`. `;` is absent: no language this gate reads opens a
+ * comment with it, and C-family code ends a statement there, so the standalone
+ * form would read `let a = 1 ; TODO` — or any later marker on that line — as
+ * comment content. */
+const STANDALONE_NON_C_INTRODUCER_RE = /(?:^|\s)(?:#|--)\s/;
 
 /** True when the marker token at `at` is comment content rather than code: the
- * scanner marks it, or a non-C introducer (`#`, `;`, `--`) the scanner reads as
- * code opens a comment earlier on the line — the line-leading form covers the
- * whole line however far the marker sits from it, the standalone form covers a
- * trailing comment. An identifier that happens to be named after the marker — a
- * declaration, a map key, a private field (`#TODO = 1`) — is neither. A trailing
- * non-C comment written with no space after its introducer (`x = 1 #TODO`) is
- * not detected. */
+ * scanner marks it, or a non-C introducer (`#`, `--`, or a line-leading `;`)
+ * the scanner reads as code opens a comment earlier on the line — the
+ * line-leading form covers the whole line however far the marker sits from it,
+ * the standalone form covers a trailing comment. An identifier that happens to
+ * be named after the marker — a declaration, a map key, a private field
+ * (`#TODO = 1`) — is neither. A trailing non-C comment written with no space
+ * after its introducer (`x = 1 #TODO`) is not detected. */
 function isCommentContext(scan: Uint8Array, base: number, at: number, maskedLine: string): boolean {
   if (scan[base + at] === SOURCE_COMMENT) return true;
   if (scan[base + at] !== SOURCE_CODE) return false;
