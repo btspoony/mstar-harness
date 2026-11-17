@@ -115,4 +115,4 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 ## References
 
-- 承接方反递归共享清单与自检 → **`mstar-roles/references/_shared/leaf-executor-core.md`**（「Shared anti-recursion NEVER」+「Non-Recursive Dispatch Rule (shared shape)」）；本 skill 的 dispatch 专属条目见 § 承接方反递归红线。
+- 承接方反递归共享清单与自检 → **`mstar-roles/references/_shared/leaf-executor-core.md`**（「Shared anti-recursion NEVER」+「Non-Recursive Dispatch Rule (shared shape)」）：派发前自查反递归红线时打开；本 skill 的 dispatch 专属条目见 § 承接方反递归红线。

@@ -83,7 +83,7 @@ QC 编排主链：plan 全部 task + L2 完成后 → PM 按 `Execution mode` �
 
 ## References
 
-- Leaf QC 执行（checklist / 报告模板 / 透镜）→ **`mstar-roles/references/qc-specialist/`**
+- Leaf QC 执行（checklist / 报告模板 / 透镜）→ **`mstar-roles/references/qc-specialist/`**：本席执行 QC 检查、取报告模板或选透镜时打开
 - 捕获契约（唯一权威）→ **`mstar-project-governance`「Issue capture」**
 - Per-task review（L2，implement 波次内）→ **`mstar-sdd`**
-- Review bundle 命名与 QC 触发时机 → **`mstar-artifacts/references/plan-files-and-reports.md`**
+- Review bundle 命名与 QC 触发时机 → **`mstar-artifacts/references/plan-files-and-reports.md`**：排 QC 波次或给 review 报告命名时打开

@@ -64,7 +64,7 @@ Write the main plan under `{PLAN_DIR}` — resolve every path symbol before writ
 
 ## References
 
-- `references/plan-files-and-reports.md` — 主 plan / review bundle 命名、QC 波次、durable summaries
-- `references/status-and-residuals.md` — ACTIVE execution fields, coordinator configuration/progress/completion, issue capture and current severity/lifecycle; migration-source shapes live in **`mstar-project-governance`** `references/migration-source-shapes.md`
-- `references/knowledge-and-designs.md` — 过程产物边界（`{ITERATION_DIR}` / `{PLAN_DIR}` / `{SDD_DIR}` / `{PROJECT_DIR}/references/` / residuals）与 catalog 链接；三层语料（knowledge / specs / adr）契约 → **`mstar-doc-corpus`**
-- `references/plan-workflow-lifecycle-contract.md` — plan-level workflow lifecycle contract: delivery-kind declaration, stages, evidence contracts, engine seams, migration sources
+- `references/plan-files-and-reports.md` — 命名 plan / review bundle、排 QC 波次或写 durable summary 时打开；主 plan / review bundle 命名、QC 波次、durable summaries
+- `references/status-and-residuals.md` — 读写 ACTIVE 执行字段、登记 coordinator progress/completion、捕获 issue 或判 severity/lifecycle 时打开；ACTIVE execution fields, coordinator configuration/progress/completion, issue capture and current severity/lifecycle; migration-source shapes live in **`mstar-project-governance`** `references/migration-source-shapes.md`
+- `references/knowledge-and-designs.md` — 落盘或定位过程产物、判断某产物属过程产物还是三层语料时打开；过程产物边界（`{ITERATION_DIR}` / `{PLAN_DIR}` / `{SDD_DIR}` / `{PROJECT_DIR}/references/` / residuals）与 catalog 链接；三层语料（knowledge / specs / adr）契约 → **`mstar-doc-corpus`**
+- `references/plan-workflow-lifecycle-contract.md` — 注册 workflow、声明 delivery kind、判断某阶段欠什么证据，或 skill 正文与 lifecycle 语义冲突时打开；plan-level workflow lifecycle contract: delivery-kind declaration, stages, evidence contracts, engine seams, migration sources

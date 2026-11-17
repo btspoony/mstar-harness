@@ -199,10 +199,10 @@ Plans are written to **`{PLAN_DIR}`** when persistent plan tracking is enabled. 
 
 ## References
 
-- `references/harness-bootstrap-and-agents-layering.md` — 新仓 harness + AGENTS 分层
-- `references/git-tracking-and-gitignore.md` — 进程 vs 结果跟踪、canonical `.gitignore` snippet、author-owned 判定
-- `references/effort-estimation.md` — agent-oriented 工期（禁人天/FTE）
-- `references/artifact-storage-paths.md` — **产物存储路径 SSOT**（知识文档、CONCEPTS.md、STRATEGY.md 等落盘位置；`mstar-knowledge` 等技能引用此表，不得本地重定义）
-- **`mstar-project-governance`** `references/migration-source-shapes.md` — historical execution/register file shapes; no execution route or live writer
+- `references/harness-bootstrap-and-agents-layering.md` — 初始化新仓 harness、规划 `AGENTS.md` 分层时打开；新仓 harness + AGENTS 分层
+- `references/git-tracking-and-gitignore.md` — 改根 `.gitignore`、判断 `{HARNESS_DIR}` 路径 tracked 还是 ignored 时打开；进程 vs 结果跟踪、canonical `.gitignore` snippet、author-owned 判定
+- `references/effort-estimation.md` — 写 Effort / 工期字段时打开；agent-oriented 工期（禁人天/FTE）
+- `references/artifact-storage-paths.md` — 落盘任何产物、需要路径符号解析结果时打开；**产物存储路径 SSOT**（知识文档、CONCEPTS.md、STRATEGY.md 等落盘位置；`mstar-knowledge` 等技能引用此表，不得本地重定义）
+- **`mstar-project-governance`** `references/migration-source-shapes.md` — 审查 `mstar store upgrade` 迁移映射、需要 historical 文件形状时打开；historical execution/register file shapes; no execution route or live writer
 
 **Current artifact details** (main plans, review bundles / durable summaries, execution/issue fields, knowledge and templates) → **`mstar-artifacts`**.

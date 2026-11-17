@@ -113,4 +113,4 @@ Prepare（specify→clarify→plan，意图/clarify/Roadmap/Recall）→ lock �
 - plan 文件落盘与路径符号 → **`mstar-conventions`**
 - 多 task 默认 `Execution mode: sdd` 的 implement 波次 → **`mstar-sdd`**
 - QC / PM Acceptance 审查链与 residual 登记 → **`mstar-review-qc`**
-- Playbook vs Hotfix → **`references/playbook-vs-hotfix.md`**
+- Playbook vs Hotfix → **`references/playbook-vs-hotfix.md`**：选 Spec-Driven playbook 还是 Hotfix 例外路径、或读 Execute 阶段补充时打开

@@ -136,6 +136,6 @@ For iteration Phase 1, use the shared bridge's prototype-first exception to earl
 
 ## References
 
-- 各宿主适配细则 → `references/<host>.md`（cursor / opencode / omp / dsh / kimi / zcode / codex；计划模式另见 plan-mode bridge references）
-- invoke-capable 宿主并行派发 → `references/parallel-dispatch.md`
+- 各宿主适配细则 → `references/<host>.md`：确认当前宿主、按宿主解析工具形状与入口时打开（cursor / opencode / omp / dsh / kimi / zcode / codex；计划模式另见 plan-mode bridge references）
+- invoke-capable 宿主并行派发 → `references/parallel-dispatch.md`：在可 invoke 宿主派发并行 subagent 时打开
 - 角色加载与参数 → **`mstar-roles`**

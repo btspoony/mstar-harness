@@ -140,8 +140,8 @@ gray-1000: #000   gray-1000: #eee
 
 ## References
 
-- `references/design-md-spec.md` — normative spec: section definitions, token naming conventions, light/dark contract
-- `references/completeness-checklist.md` — three-level audit checklist with detailed criteria per level
+- `references/design-md-spec.md` — open when writing, validating or auditing a DESIGN.md format and token rules; normative spec: section definitions, token naming conventions, light/dark contract
+- `references/completeness-checklist.md` — open when auditing a DESIGN.md level by level; three-level audit checklist with detailed criteria per level
 
 **Templates (this skill):**
 - `templates/DESIGN.md.template` — full template including all Level 1-3 sections with placeholder comments

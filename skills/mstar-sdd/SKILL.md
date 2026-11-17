@@ -136,9 +136,9 @@ Developer check evidence: the task report's command plus its observed result; a 
 
 ## References
 
-- `references/file-handoffs.md` — paths and fix-loop evidence
-- `references/sticky-implementer-session.md` — `fresh` vs `sticky`, ledger, host resume, micro-batch fallback
-- `references/implementer-prompt.md`
-- `references/implementer-continuation-prompt.md`
-- `references/task-reviewer-prompt.md`
-- `mstar-artifacts/references/plan-quality-bar.md` — plan self-containment standard (plans must meet this before SDD dispatch)
+- `references/file-handoffs.md` — open when passing PM↔implementer artifacts as files, writing `context.json` / `progress.md`, or recording fix-loop evidence; paths and fix-loop evidence
+- `references/sticky-implementer-session.md` — open when choosing `fresh` vs `sticky` for a multi-task plan or resuming an implementer on another host; `fresh` vs `sticky`, ledger, host resume, micro-batch fallback
+- `references/implementer-prompt.md` — open when dispatching an SDD implementer on a fresh session (first task or `SDD implementer session: fresh`)
+- `references/implementer-continuation-prompt.md` — open when continuing the same implementer session for Task N>1 (`SDD implementer session: sticky`)
+- `references/task-reviewer-prompt.md` — open when dispatching the one L2 per-task reviewer (spec compliance + code quality)
+- `mstar-artifacts/references/plan-quality-bar.md` — open when dispatching SDD work, to check the plan meets the required self-containment standard; plan self-containment standard (plans must meet this before SDD dispatch)

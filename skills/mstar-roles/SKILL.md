@@ -101,7 +101,7 @@ Correct structural evidence = `mstar roles validate` reports zero mapping and lo
 
 ## References
 
-- Role bodies → `references/<role>.md`; QC methods → `references/qc-specialist/`; PM Acceptance → `references/project-manager/acceptance.md`
+- Role bodies → `references/<role>.md`: open when this session resolves to a Morning Star role; QC methods → `references/qc-specialist/`; PM Acceptance → `references/project-manager/acceptance.md`
 - 全局角色 → `mstar-harness-core` 加载矩阵与专题 skill 索引
 
 - Explicit independent E2E/browser/device requests → `mstar-e2e` (PM orchestrates; `ops-engineer` executes; development acceptance does not trigger it).

@@ -86,7 +86,7 @@ Return the PR identity and current head, latest report path and review URL, tall
 
 ## References
 
-- Review, tier inference, revalidation, settlement, tally, new COMMENT posting and report archival → `mstar-audit` → `references/pr-review.md` §§ Re-review (same target, later head), Verdict synthesis, Review depth (tiers), Comment posting, Local report archive.
-- Iteration-only fix integration and shared push timing → `mstar-iteration` → `references/phase-4-5-pr-delivery.md` §5.0 / §5.1a; legal STOP semantics → `references/command-shared-invariants.md`.
+- open when running a review seat or synthesizing its verdict — Review, tier inference, revalidation, settlement, tally, new COMMENT posting and report archival → `mstar-audit` → `references/pr-review.md` §§ Re-review (same target, later head), Verdict synthesis, Review depth (tiers), Comment posting, Local report archive.
+- open when a verdict turns into an iteration fix batch — Iteration-only fix integration and shared push timing → `mstar-iteration` → `references/phase-4-5-pr-delivery.md` §5.0 / §5.1a; legal STOP semantics → `references/command-shared-invariants.md`.
 - Checkout/write-domain ownership → `mstar-branch-worktree`; Assignment and dispatch shape → `mstar-dispatch-gates`.
-- External review-seat channel → `references/terminal-agent-channel.md`.
+- open when the review runs on a separate live seat (`herdr-core` / `herdr`) — External review-seat channel → `references/terminal-agent-channel.md`.

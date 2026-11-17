@@ -250,6 +250,6 @@ PM selects branches → isolated source tasks → all reviewed commits converge 
 
 - 派发与反递归红线 → **`mstar-dispatch-gates`**
 - SDD implement 波次（file handoff / reviewer）→ **`mstar-sdd`**
-- 迭代 Phase 2 integration worktree + lease 细则 → **`mstar-iteration`** §2（`references/phase-2-worktree-lease.md`）
+- 迭代 Phase 2 integration worktree + lease 细则 → **`mstar-iteration`** §2（`references/phase-2-worktree-lease.md`）：准备或校验 Phase 2 集成 worktree / lease 时打开
 
-- L1 refusal diagnostics (`worktree.l1.*` across CLI/dsh/omp; engine vs host seam) → **`references/l1-refusal-diagnostics.md`**
+- L1 refusal diagnostics (`worktree.l1.*` across CLI/dsh/omp; engine vs host seam) → **`references/l1-refusal-diagnostics.md`**：遇到 L1 拒绝码、或需比较 host 与 engine 行为时打开

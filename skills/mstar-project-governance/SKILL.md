@@ -97,7 +97,7 @@ Live capture and closure use § Issue capture and contract §4 closure authority
 
 ## References
 
-- **`mstar-artifacts`**（`references/status-and-residuals.md`）— 字段语义 SSOT：severity 含义与门禁关系、findings cleanup modes 全文、close 协议、engine-check 查询示例
-- `references/migration-source-shapes.md` — historical register shape, required fields/enums, provenance and closure mapping; no execution route or live writer
+- **`mstar-artifacts`**（`references/status-and-residuals.md`）— 需要 severity/lifecycle 语义、findings cleanup mode 全文或 close 协议时打开；字段语义 SSOT：severity 含义与门禁关系、findings cleanup modes 全文、close 协议、engine-check 查询示例
+- `references/migration-source-shapes.md` — 审查 `mstar store upgrade` 迁移映射、需要 historical register 形状与 closure 映射时打开；historical register shape, required fields/enums, provenance and closure mapping; no execution route or live writer
 - **`mstar-conventions`** — `{PROJECT_DIR}` / `{WORKFLOW_DIR}` 路径符号、`.mstarc` 声明、gitignore 策略
 - **`mstar-review-qc`** — PM QC 编排与 findings 捕获 / QC gate（PM 同轮必读）
