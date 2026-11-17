@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: engine, commands, judgment, skills
+packages: root, engine, commands
 ---
 
 - **Commented-out-code detection declares its language scope.** The check reads C-family comment runs only; a hash-dialect file (shell, Python, Ruby) returns no finding by design, and `comments.md` states the limit instead of implying coverage.
