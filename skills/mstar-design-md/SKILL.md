@@ -136,12 +136,12 @@ gray-1000: #000   gray-1000: #eee
 - Token names are the **SSOT interface** — consumers reference tokens by name, not raw values
 - `references/design-md-spec.md` § Light/Dark rules defines the contract
 
-> **Engine check:** run `mstar design-md validate <dir>` (engine `validateDesignTokenFrontmatter`, `assertLightDarkParity`, `completenessLevel`) to validate the token frontmatter schema above, the light/dark parity of `DESIGN.dark.md` (same token names, different values), and the achieved completeness level. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar design-md validate <dir>` (engine `validateDesignTokenFrontmatter`, `assertLightDarkParity`, `completenessLevel`) to validate the token frontmatter schema above, the light/dark parity of `DESIGN.dark.md` (same token names, different values), and the achieved completeness level. On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## References
 
-- `references/design-md-spec.md` — normative spec: section definitions, token naming conventions, light/dark contract
-- `references/completeness-checklist.md` — three-level audit checklist with detailed criteria per level
+- `references/design-md-spec.md` — open when writing, validating or auditing a DESIGN.md format and token rules; normative spec: section definitions, token naming conventions, light/dark contract
+- `references/completeness-checklist.md` — open when auditing a DESIGN.md level by level; three-level audit checklist with detailed criteria per level
 
 **Templates (this skill):**
 - `templates/DESIGN.md.template` — full template including all Level 1-3 sections with placeholder comments

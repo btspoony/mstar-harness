@@ -14,7 +14,7 @@ Entry spelling differs per host; the **active `mstar-host` reference** owns it (
 | Entry surface | Use |
 |------|-----|
 | Host ships a **`/pm`** command or exposes this **`pm`** skill | → **`project-manager`** for the session (general PM orchestration: single-plan, hotfix, QC waves, dispatch) |
-| Host with no command entry | Same route: **`project-manager`** via `mstar-roles` → `references/project-manager.md` |
+| Host with no command entry | Same route: **`project-manager`** via `mstar-roles` → `mstar-roles/references/project-manager.md` |
 | Formal iteration (host **`commands/`** where shipped) | Phase 1–5 sequencing by the host commands — **without** an iteration the shim still serves ordinary per-plan PM |
 
 **Iteration lifecycle** (optional): host `commands/` may sequence Phase 1–5; semantics SSOT → **`mstar-iteration`**. Not required for ordinary PM work.
@@ -26,7 +26,7 @@ Detect host → **`mstar-host`** → the reference that detection resolves to (p
 ## Load Order
 
 1. `mstar-harness-core`
-2. `mstar-roles` → **`references/project-manager.md`** — required reading list, routing, dispatch-first, iteration branch policy
+2. `mstar-roles` → **`mstar-roles/references/project-manager.md`** — required reading list, routing, dispatch-first, iteration branch policy
 3. Topic skills **on demand** per that file and the active workflow (`mstar-dispatch-gates`, `mstar-iteration`, `mstar-sdd`, `mstar-review-qc`, …)
 
 ## Decision Rules
@@ -44,4 +44,4 @@ Successful entry selects `project-manager` and follows the owning workflow's ver
 
 ## References
 
-Open `mstar-roles` → `references/project-manager.md` for PM procedures; open the active `mstar-host` reference for host entry and routing details.
+Open `mstar-roles` → `mstar-roles/references/project-manager.md` for PM procedures; open the active `mstar-host` reference for host entry and routing details.

@@ -6,7 +6,7 @@ Before any non-trivial PM action, read in order:
 2. `mstar-dispatch-gates` + `mstar-phase-gates` (dispatch + Prepare/Execute gates)
 3. Host adapter: **`mstar-host`** (detect the active host; then Read the reference that detection resolves to)
 4. `mstar-conventions` (path discovery, init, Spec branch summary)
-5. Plan lifecycle authority — `references/project-manager/plan-management.md` + **`mstar-artifacts`** `references/plan-workflow-lifecycle-contract.md`: primary coordinator row operations, declared completion route and evidence — read before first implement dispatch
+5. Plan lifecycle authority — `references/project-manager/plan-management.md` + **`mstar-artifacts`** `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`: primary coordinator row operations, declared completion route and evidence — read before first implement dispatch
 6. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
 7. **`mstar-sdd`** when implement uses **`Execution mode: sdd`**
 8. **On demand:** `mstar-branch-worktree` (parallel implement, QC/PM Acceptance checkout); `mstar-artifacts` (store.db execution/root register and workflow/plan rows, issue capture pointers); `mstar-artifacts` (InReview waves, review bundle naming)
@@ -102,11 +102,11 @@ Detailed conflict priority and dev allocation:
 
 ## Host Dispatch Rule (Critical)
 
-In invoke-based hosts (any host whose active reference exposes a callable invoke / delegation tool), an Assignment Markdown block alone is not dispatch and a dispatch turn is not complete without its matching invokes: the counting rule, dispatch-turn ordering, batch-readiness and the paste-only failure → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules.
+In invoke-based hosts (any host whose active reference exposes a callable invoke / delegation tool), an Assignment Markdown block alone is not dispatch and a dispatch turn is not complete without its matching invokes: the counting rule, dispatch-turn ordering, batch-readiness and the paste-only failure → **`mstar-host`** → `mstar-host/references/parallel-dispatch.md` § Mandatory order / § Hard rules.
 
-> **On dsh:** the mounted layer decides the channel, not the shape of one task — **Agent Teams** is the default on dsh for a root session with Team mode on (the `team_task_*` tools exist only then; one teammate per writable track, each handed its own absolute checkout path in the prompt — which scope the board may carry → `references/dsh-agent-teams.md` § Worktree hand-off and write isolation), **`subagent`** is the fallback when they are absent, and **`workflow`** carries read-only fan-out only. Board protocol, seat budget and wake discipline are not restated here → **`mstar-host`** → `references/dsh.md` § Delegation channels + `references/dsh-agent-teams.md`.
+> **On dsh:** the mounted layer decides the channel, not the shape of one task — **Agent Teams** is the default on dsh for a root session with Team mode on (the `team_task_*` tools exist only then; one teammate per writable track, each handed its own absolute checkout path in the prompt — which scope the board may carry → `mstar-host/references/dsh-agent-teams.md` § Worktree hand-off and write isolation), **`subagent`** is the fallback when they are absent, and **`workflow`** carries read-only fan-out only. Board protocol, seat budget and wake discipline are not restated here → **`mstar-host`** → `mstar-host/references/dsh.md` § Delegation channels + `mstar-host/references/dsh-agent-teams.md`.
 
-**Native-workflow hosts:** when the active host reference declares a native workflow driver instead of a goal loop, iteration progress is that workflow (workflow snapshot phases + dispatch gates + child **settle notifications**), never a goal-round loop. Phase 2 progression is then the **`Rescheduling checkpoint`** (a child settle is a `result-settled` one): dispatch the ready independent work before any wait; waiting is right when a dispatched child already owns that work — **never** a duplicate unit of work against the same worktree. Procedure → `mstar-iteration` `references/phase-2-worktree-lease.md` §2.4; host declaration and its per-step rules → the active `mstar-host` reference.
+**Native-workflow hosts:** when the active host reference declares a native workflow driver instead of a goal loop, iteration progress is that workflow (workflow snapshot phases + dispatch gates + child **settle notifications**), never a goal-round loop. Phase 2 progression is then the **`Rescheduling checkpoint`** (a child settle is a `result-settled` one): dispatch the ready independent work before any wait; waiting is right when a dispatched child already owns that work — **never** a duplicate unit of work against the same worktree. Procedure → `mstar-iteration` `mstar-iteration/references/phase-2-worktree-lease.md` §2.4; host declaration and its per-step rules → the active `mstar-host` reference.
 Dispatch mechanics and templates → `references/project-manager/dispatch-and-assignment.md`.
 
 ---
@@ -121,7 +121,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** write a non-canonical `severity` on a captured issue — use only the machine enum from `mstar-artifacts`.
 - **NEVER** under `Findings cleanup: zero-residual`, park fixable Critical/Warning/Suggestion as open issues or use `Approve with residuals` for them — fix-now + re-review; an open issue only for true blocker-defer + Durable Roadmap (`mstar-artifacts` Findings cleanup modes).
 - **NEVER** use `Task category: quick` to skip mandatory Prepare (`specify → clarify → plan`) for substantive work (`mstar-harness-core` hard rule).
-- **NEVER** dispatch same-repo **≥2 concurrent writable implement** tracks without **`references/parallel-writable-pre-dispatch.md`**（per-track worktree + absolute **`Worktree path`**；**N invokes ≠ isolation** — also `mstar-dispatch-gates` dual-gate table).
+- **NEVER** dispatch same-repo **≥2 concurrent writable implement** tracks without **`mstar-branch-worktree/references/parallel-writable-pre-dispatch.md`**（per-track worktree + absolute **`Worktree path`**；**N invokes ≠ isolation** — also `mstar-dispatch-gates` dual-gate table).
 - **NEVER** point QC at a single dev worktree/`Review cwd` that cannot contain **all** claimed changes from parallel tracks until Git integration lands on one `Working branch` `HEAD` (`mstar-branch-worktree` QC/PM Acceptance alignment).
 - **NEVER** dispatch an acceptance role or choose another acceptance route for UI, size, risk, residuals or report-only work.
 - **NEVER** treat QC approval, a clean checked subset, missing proof or failed evidence as whole-scope acceptance; follow `references/project-manager/acceptance.md`.
@@ -205,7 +205,7 @@ Hard block when:
 ## PM Task Board Contract (Non-Trivial Plan)
 
 - Board tasks map ID/owner/deps to their Assignment; every implement Assignment declares `PM Task Board coverage`.
-- The plan row stays the delivery authority and the board a coordination projection — mirror one board task per Assignment and keep both records in step (dsh Agent Teams board protocol → **`mstar-host`** → `references/dsh-agent-teams.md`).
+- The plan row stays the delivery authority and the board a coordination projection — mirror one board task per Assignment and keep both records in step (dsh Agent Teams board protocol → **`mstar-host`** → `mstar-host/references/dsh-agent-teams.md`).
 - Recovery from board/row drift: a board task with no plan row, or a row with no board task, is reconciled in the same coordination round with the row as authority; never dispatch from the board alone.
 - Default batch size is 1–2 coverage IDs per dispatch; `>= 3` requires the Assignment's `Why batching is safe` field, and a single-batch dispatch states why the whole plan fits one batch.
 

@@ -95,7 +95,7 @@ Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agno
 5. Verify the recorded integration checkout — exists, on `spec_integration_branch`, working tree clean
    before merge operations — via the `--entry` integration-checkout fact (`mstar worktree check
    --workflow <id> --entry`).
-6. 从 **control root** 解析协调面：所有协调面产物（ACTIVE authority、authored plans、iteration package、SDD tree、retained notes）都在 `<main-repo-root>/{HARNESS_DIR}/` 下，逐项路径 → **`mstar-conventions`** `references/artifact-storage-paths.md`。迁移源 root `status.json` / workflow `snapshot.json` / session envelopes **不是**协调面（runtime consumer 读写被拒）；project `residuals.json` 无条件退役为迁移历史，findings 权威始终是 store issues。
+6. 从 **control root** 解析协调面：所有协调面产物（ACTIVE authority、authored plans、iteration package、SDD tree、retained notes）都在 `<main-repo-root>/{HARNESS_DIR}/` 下，逐项路径 → **`mstar-conventions`** `mstar-conventions/references/artifact-storage-paths.md`。迁移源 root `status.json` / workflow `snapshot.json` / session envelopes **不是**协调面（runtime consumer 读写被拒）；project `residuals.json` 无条件退役为迁移历史，findings 权威始终是 store issues。
 7. **Phase 1 route — push the branch.** Push the newly created
    `spec_integration_branch` (`git push -u origin <branch>` — upstream setup
    only). Phase 1 writes only default-gitignored paths: compass / plans / the
@@ -190,7 +190,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
    - PM 载入 **`mstar-sdd`** 后，按依赖与 ownership 派发 **独立 ready tasks 并行** 的 per-task 循环（**不是**一次派发 dev 做全部 tasks）：
      1. `mstar sdd workspace <plan-id>` → `{SDD_DIR}`
      2. `mstar sdd task-brief <plan-file> N` → `{SDD_DIR}/task-N-brief.md`；记录 `BASE_SHA`
-     3. Dispatch **one** implementer subagent（`references/implementer-prompt.md`：brief 路径 + report 路径；**禁止**贴整份 plan）
+     3. Dispatch **one** implementer subagent（`mstar-sdd/references/implementer-prompt.md`：brief 路径 + report 路径；**禁止**贴整份 plan）
      4. Implementer `DONE` → `mstar sdd review-package BASE HEAD` → task diff 文件
      5. Dispatch **one** task reviewer subagent（brief + report + diff + Global Constraints）
      6. Fix until task review is clean; append `{SDD_DIR}/progress.md`; update the authoritative row through `mstar plan progress` and the authored plan checkbox.

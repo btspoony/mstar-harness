@@ -6,7 +6,7 @@
 
 ## Harness 子树内（`{HARNESS_DIR}/` 下）
 
-这些是 agent handoff 用的结构化产物。**Git 跟踪**遵循 `mstar-conventions` SKILL.md「Git 跟踪策略」：**进程本地、结果共享** — `{HARNESS_DIR}` 整体（`plans/`、`iterations/`、`sdd/`、`reviews/`、`status.json`、`workflows/`、`projects/`、`store.db`）默认 gitignored；tracked 结果默认在 `.agents/AGENTS.md`、`.agents/knowledge/**`、`.agents/specs/**`、`.agents/adr/**`（`.mstarc` 声明时以声明为准；这三层不在 `{HARNESS_DIR}` 下，迁移前的 `{HARNESS_DIR}/<kind>/` 仅作 legacy 只读，`mstar path check` 按 Git 实况核对）。 Historical execution/register file shapes (`status.json`, workflow `snapshot.json`, project `residuals.json`) are archive-only — no execution route, no live writer → **`mstar-project-governance`** `references/migration-source-shapes.md`.
+这些是 agent handoff 用的结构化产物。**Git 跟踪**遵循 `mstar-conventions` SKILL.md「Git 跟踪策略」：**进程本地、结果共享** — `{HARNESS_DIR}` 整体（`plans/`、`iterations/`、`sdd/`、`reviews/`、`status.json`、`workflows/`、`projects/`、`store.db`）默认 gitignored；tracked 结果默认在 `.agents/AGENTS.md`、`.agents/knowledge/**`、`.agents/specs/**`、`.agents/adr/**`（`.mstarc` 声明时以声明为准；这三层不在 `{HARNESS_DIR}` 下，迁移前的 `{HARNESS_DIR}/<kind>/` 仅作 legacy 只读，`mstar path check` 按 Git 实况核对）。 Historical execution/register file shapes (`status.json`, workflow `snapshot.json`, project `residuals.json`) are archive-only — no execution route, no live writer → **`mstar-project-governance`** `mstar-project-governance/references/migration-source-shapes.md`.
 
 | 产物 | 解析后路径（默认 `.mstar/`） | 读写的技能 |
 |------|---------------------------|-----------|
@@ -57,4 +57,4 @@
 
 ## `<category>` 取值
 
-知识文档的 `<category>` 子目录由 **`mstar-doc-corpus`** 的 `references/category-mapping.md` 定义，在 `{KNOWLEDGE_DIR}` 下按需创建。示例：`runtime-errors/`、`conventions/`、`architecture-patterns/` 等。
+知识文档的 `<category>` 子目录由 **`mstar-doc-corpus`** 的 `mstar-doc-corpus/references/category-mapping.md` 定义，在 `{KNOWLEDGE_DIR}` 下按需创建。示例：`runtime-errors/`、`conventions/`、`architecture-patterns/` 等。

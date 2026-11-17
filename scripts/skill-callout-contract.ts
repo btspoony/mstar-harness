@@ -24,7 +24,7 @@ export const ENGINE_CHECK_CONTRACT_HEADING = "## Engine check callouts";
 /** The pointer every callout closes with. The callout carries no second copy
  * of the contract, so this sentence is the only wording that repeats. */
 export const ENGINE_CHECK_CONTRACT_POINTER =
-  "Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.";
+  "Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.";
 
 /** The clause that makes the contract's engine-absent fallback checkable. */
 export const ENGINE_CHECK_FALLBACK_NEEDLE = "the owning skill's text stays authoritative";

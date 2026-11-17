@@ -81,7 +81,7 @@ Role `references/*.md` files include explicit **`NEVER`** sections (anti-recursi
 
 PM consolidated (tri mode): `{SDD_DIR}/review/qc-consolidated.md` (same folder; no `<plan-id>` basename prefix) + durable main-plan summary. Naming SSOT: `mstar-artifacts/references/plan-files-and-reports.md`.
 
-> **Engine check:** run `mstar roles validate` (engine `validateRoleMapping`, `lintLoadOrder`) to validate the mapping and parameter tables above against the on-disk `references/*.md` layout (shared families included) and lint load-order declarations: `mstar-*` topics declare core-first with only exact-identity exemptions; this hub's bootstrap declares the § Load Order decision matrix. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar roles validate` (engine `validateRoleMapping`, `lintLoadOrder`) to validate the mapping and parameter tables above against the on-disk `references/*.md` layout (shared families included) and lint load-order declarations: `mstar-*` topics declare core-first with only exact-identity exemptions; this hub's bootstrap declares the § Load Order decision matrix. On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## Maintenance Rules
 
@@ -101,7 +101,7 @@ Correct structural evidence = `mstar roles validate` reports zero mapping and lo
 
 ## References
 
-- Role bodies → `references/<role>.md`; QC methods → `references/qc-specialist/`; PM Acceptance → `references/project-manager/acceptance.md`
+- Role bodies → `references/<role>.md`: open when this session resolves to a Morning Star role; QC methods → `references/qc-specialist/`; PM Acceptance → `references/project-manager/acceptance.md`
 - 全局角色 → `mstar-harness-core` 加载矩阵与专题 skill 索引
 
 - Explicit independent E2E/browser/device requests → `mstar-e2e` (PM orchestrates; `ops-engineer` executes; development acceptance does not trigger it).

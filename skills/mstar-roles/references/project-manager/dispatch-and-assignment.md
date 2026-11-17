@@ -6,10 +6,10 @@ The concise gate summary remains in `references/project-manager.md`.
 ## Core Dispatch Invariants
 
 - Only `project-manager` dispatches subagents.
-- Each independent Assignment needs one matching host invoke: counting, dispatch-turn ordering, batch-readiness and the paste-only failure → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules.
-- **Same-repo writable parallel tracks**: tool concurrency and worktree isolation are **separate gates**. Before implement invokes, complete **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**.
+- Each independent Assignment needs one matching host invoke: counting, dispatch-turn ordering, batch-readiness and the paste-only failure → **`mstar-host`** → `mstar-host/references/parallel-dispatch.md` § Mandatory order / § Hard rules.
+- **Same-repo writable parallel tracks**: tool concurrency and worktree isolation are **separate gates**. Before implement invokes, complete **`mstar-branch-worktree`** → **`mstar-branch-worktree/references/parallel-writable-pre-dispatch.md`**.
 - **Scope and stopping are explicit**: apply `mstar-harness-core` § 定向执行与验证边界. Give each leaf one result, owned paths/symbols, relevant inputs, named checks/selectors, and an evidence-based stopping condition. Reuse unaffected evidence; do not inject a suite merely because the repo exposes it. Independent ready assignments run concurrently after their dependency/isolation checks.
-- **Review/QC rounds are quantitative, not adjectival**: a read-only review / QC dispatch states a `Budget` (expansion cap) and a `Return shape`, so the seat stops when its assigned questions are answered or the cap is reached, returns the verdict it has plus a truncated-coverage declaration, and never expands until a human steers. Budget defaults, the truncation marker, and its relation to `Unconfirmed` → `mstar-harness-core` § 定向执行与验证边界. The severity bar for the round's findings → `mstar-artifacts` `references/status-and-residuals.md`.
+- **Review/QC rounds are quantitative, not adjectival**: a read-only review / QC dispatch states a `Budget` (expansion cap) and a `Return shape`, so the seat stops when its assigned questions are answered or the cap is reached, returns the verdict it has plus a truncated-coverage declaration, and never expands until a human steers. Budget defaults, the truncation marker, and its relation to `Unconfirmed` → `mstar-harness-core` § 定向执行与验证边界. The severity bar for the round's findings → `mstar-artifacts` `mstar-artifacts/references/status-and-residuals.md`.
 - **Skill preset activation is PM-owned**: each role's preset menu lives in its `Skill Preset (PM-Activated)` section (`mstar-roles/references/<role>.md`), not self-loaded defaults; the omission / `none` / default-`standard` decision → **`mstar-roles`** § Load Order.
 - **One primary coordinator:** project-manager never runs as a subagent or as another per-row PM session (`references/project-manager.md` § Primary coordinator authority).
 - **Plan/task scope travels with Assignment:** absolute Plan Path, plan_id, SDD dir and Control harness root are inherited. Children do not select/prepare rows, mutate workflow/root/shared projections or clear integration exclusion.
@@ -117,7 +117,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **Budget (review / QC seats)**: <expansion cap (file opens / wall clock) — may only tighten the default in `mstar-harness-core` § 定向执行与验证边界, never loosen it; `N/A` on implement / ops rounds — those rounds declare the distinct sibling **`Task budget (implement / ops rounds)`** field below>
 **Task budget (implement / ops rounds)**: <one implementer round closing this task's declared Files list and verification gates, citing the task's `Effort (agent-oriented)` band (`mstar-conventions/references/effort-estimation.md`); required on every non-review, non-audit round — the exact complement of the review-seat `Budget` / audit-round fields above, so non-audit docs/Prepare specialists and orientation roles also declare it, and `writable: false` is not a capacity exemption; the engine check is presence-only on this header region before the body, not prose adequacy; a multi-session Effort band never authorizes a multi-round task — split per `mstar-artifacts/references/plan-quality-bar.md` item 7>
 **Return shape (review / QC seats)**: <what the seat returns and how it stops — verdict + findings shape; a clean round returns `findings: []` explicitly instead of prose; `N/A` when the round produces no findings>
-**Severity bar**: <what this round must treat as blocking — the blocking classes are unsafe-to-ship or significant tech debt; class definitions and the full report-section mapping → `mstar-artifacts` `references/status-and-residuals.md`; `N/A` on rounds with no findings>
+**Severity bar**: <what this round must treat as blocking — the blocking classes are unsafe-to-ship or significant tech debt; class definitions and the full report-section mapping → `mstar-artifacts` `mstar-artifacts/references/status-and-residuals.md`; `N/A` on rounds with no findings>
 **Input provenance**: <how the seat grounds its claims — the command plus observed output for a `declared` / `recorded` / `written` artifact claim, and provenance for an asserted `path:line` citation; `N/A` when the round asserts neither>
 **Deliverables**: ...
 **Acceptance Criteria**:
@@ -206,7 +206,7 @@ Do **not** waive worktree because default-gitignored `plans/` are missing under 
 ## Host-Specific Note
 
 For host behavior details (dispatch turn shape, paste-only failure mode, invoke-count discipline),
-read `mstar-host` → the active host reference and `references/parallel-dispatch.md` as host SSOT for dispatch.
+read `mstar-host` → the active host reference and `mstar-host/references/parallel-dispatch.md` as host SSOT for dispatch.
 
 An Assignment targeting project-manager is a dispatch defect: PM is the sole primary-session coordinator, never a subagent or secondary per-row primary.
 

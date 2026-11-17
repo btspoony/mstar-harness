@@ -56,7 +56,7 @@ mstar status workflow-close --workflow <id> --session-ref <wire> --expect <full-
 
 Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease + root 条目已注销 + `type: plan` 交付证据，§6.1），**不**验证远端 merged 证据，**不**检查物理清理是否完成。
 
-> **Engine check:** run `mstar iteration gate --phase 6 --workflow <id>` (engine `evaluatePostMergeCloseFromExecutionAuthority`) to gate the local post-merge close state（valid terminal shape + 无 dangling lease + root 条目已注销；稳定码 `PHASE6_*`；invalid/unreadable root 不是条目已注销的证明）. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar iteration gate --phase 6 --workflow <id>` (engine `evaluatePostMergeCloseFromExecutionAuthority`) to gate the local post-merge close state（valid terminal shape + 无 dangling lease + root 条目已注销；稳定码 `PHASE6_*`；invalid/unreadable root 不是条目已注销的证明）. On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## Standalone plans & abandonment
 
@@ -71,5 +71,5 @@ Phase 6 完成 = 保留 ACTIVE `mstar status workflow-close` 的实际 applied /
 ## References
 
 - Route / transition-gate SSOT → `mstar-iteration` SKILL.md「Phase route map」+「Phase transition gates」
-- 终态字段 / lease 语义 / `unregisterWorkflow` → `mstar-artifacts/references/status-and-residuals.md`
+- 写 close 收据、判 terminal `completed` + `ended_at`、或需要 lease 语义与 `unregisterWorkflow` 时打开：`mstar-artifacts/references/status-and-residuals.md`
 - cleanup ownership / guard 契约本体（两条时序车道）→ `mstar-branch-worktree`「Worktree / branch cleanup」

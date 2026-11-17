@@ -9,7 +9,7 @@ description: 项目治理：roadmap 内容在 `{HARNESS_DIR}/store.db` 的权威
 
 - 先 Read **`mstar-harness-core`**（SKILL.md；冲突时以 core 为准）。
 - 路径符号（`{PROJECT_DIR}` / `{WORKFLOW_DIR}` 解析与 `.mstarc` 声明）→ **`mstar-conventions`**。
-- 字段语义 SSOT（severity 含义、findings cleanup modes、close 协议全文、engine-check 查询）→ **`mstar-artifacts`**（`references/status-and-residuals.md`）。本 skill 只承载**编写约定与生命周期规则**，不重复字段全文。
+- 字段语义 SSOT（severity 含义、findings cleanup modes、close 协议全文、engine-check 查询）→ **`mstar-artifacts`**（`mstar-artifacts/references/status-and-residuals.md`）。本 skill 只承载**编写约定与生命周期规则**，不重复字段全文。
 
 ## Scope
 
@@ -65,7 +65,7 @@ Payload authoring: consult `mstar-harness schema CaptureInput` for `issue add`, 
 
 Register shape, required fields/enums, provenance and historical in-place closure → `references/migration-source-shapes.md`; this is a migration mapping, never a live writer.
 
-Live capture and closure use § Issue capture and contract §4 closure authority; PM Acceptance owns verification/disposition for all plans, with specialist evidence as needed. Severity, cleanup and issue closure → **`mstar-artifacts`** `references/status-and-residuals.md`; acceptance → **`mstar-roles/references/project-manager/acceptance.md`**.
+Live capture and closure use § Issue capture and contract §4 closure authority; PM Acceptance owns verification/disposition for all plans, with specialist evidence as needed. Severity, cleanup and issue closure → **`mstar-artifacts`** `mstar-artifacts/references/status-and-residuals.md`; acceptance → **`mstar-roles/references/project-manager/acceptance.md`**.
 
 
 ### Findings cleanup（与 Assignment 联动）
@@ -73,7 +73,7 @@ Live capture and closure use § Issue capture and contract §4 closure authority
 - Assignment **`Findings cleanup: zero-residual | allow-residual`** 是唯一 mode 来源（`metadata.findings_cleanup` mirror 已删）；迭代 Phase 2 默认 `allow-residual`。
 - `allow-residual`（默认）：仅 unresolved **critical** 阻止 Approve；离 InReview 前须把每条剩余 open finding 捕获为**本 plan 的 linked open issue**（machine-enum `severity`），并在各决策面披露（issue id + severity + 跟踪位置；close 面另含 blocker-defer 标记）—— 捕获与披露职责全文 → **`mstar-artifacts`**「Findings cleanup modes」。
 - `zero-residual`（显式 opt-in）：可修 findings 当轮 fix → re-review 清干净；仅真 blocker 可 defer 且须 Durable Roadmap + `target`（`critical` 不属 defer —— 定义 → **`mstar-artifacts`**「Findings cleanup modes」）；`nit` 必须当场修或删；waived/risk-accepted 必须关闭，不得留 open。
-- mode 全文与 enforcement → **`mstar-artifacts`** `references/status-and-residuals.md`（「Findings cleanup modes」+ 其 engine check）。
+- mode 全文与 enforcement → **`mstar-artifacts`** `mstar-artifacts/references/status-and-residuals.md`（「Findings cleanup modes」+ 其 engine check）。
 
 ## Workflow
 
@@ -97,7 +97,7 @@ Live capture and closure use § Issue capture and contract §4 closure authority
 
 ## References
 
-- **`mstar-artifacts`**（`references/status-and-residuals.md`）— 字段语义 SSOT：severity 含义与门禁关系、findings cleanup modes 全文、close 协议、engine-check 查询示例
-- `references/migration-source-shapes.md` — historical register shape, required fields/enums, provenance and closure mapping; no execution route or live writer
+- **`mstar-artifacts`**（`mstar-artifacts/references/status-and-residuals.md`）— 需要 severity/lifecycle 语义、findings cleanup mode 全文或 close 协议时打开；字段语义 SSOT：severity 含义与门禁关系、findings cleanup modes 全文、close 协议、engine-check 查询示例
+- `references/migration-source-shapes.md` — 审查 `mstar store upgrade` 迁移映射、需要 historical register 形状与 closure 映射时打开；historical register shape, required fields/enums, provenance and closure mapping; no execution route or live writer
 - **`mstar-conventions`** — `{PROJECT_DIR}` / `{WORKFLOW_DIR}` 路径符号、`.mstarc` 声明、gitignore 策略
 - **`mstar-review-qc`** — PM QC 编排与 findings 捕获 / QC gate（PM 同轮必读）

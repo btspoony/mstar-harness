@@ -71,7 +71,7 @@ Understand:
 
 Discover related existing documents: with no initialized harness store, search `{KNOWLEDGE_DIR}/**/*.md` by the Phase 2 overlap method and record `catalog: n/a (no store)` in the result; a staged store answers the discovery query's `catalog list` / `catalog show`, while an authority-shaped read such as the completeness check and the Phase 6 registration need an active store and report its refusal code. Read `{KNOWLEDGE_DIR}/README.md`, if present, as prose only.
 
-Classify the problem into a track (bug vs knowledge) and category using **`mstar-doc-corpus`** `references/category-mapping.md`.
+Classify the problem into a track (bug vs knowledge) and category using **`mstar-doc-corpus`** `mstar-doc-corpus/references/category-mapping.md`.
 
 ## Phase 2: Overlap detection
 
@@ -99,7 +99,7 @@ Filename: `<sanitized-slug>.md` (lowercase, hyphen-separated, no date prefix).
 
 ### 3.2 Frontmatter
 
-Canonical: **`mstar-doc-corpus`** `references/knowledge-format.md`（字段索引）→ `references/schema.yaml`（字段 SSOT）。本 skill 不枚举字段表。
+Canonical: **`mstar-doc-corpus`** `mstar-doc-corpus/references/knowledge-format.md`（字段索引）→ `references/schema.yaml`（字段 SSOT）。本 skill 不枚举字段表。
 
 ### 3.3 Body
 

@@ -74,6 +74,17 @@
  * `scripts/rule-duplication.allowlist.json` with a reason naming the rule
  * owner — another `skills/` path, or the covered file plus the word `owner` —
  * and allowlisted groups are reported without failing.
+ * 15. skills corpus — reference entry points (`checkReferenceCorpus`):
+ * every `skills/<skill>/references/**` file is referenced from that same
+ * skill, every `## References` row carrying a reference path states a
+ * trigger, and a cross-skill citation writes the owner in the path
+ * (`<owner>/references/<file>.md`) — tested by path, never by whether the
+ * owner name appears elsewhere on the line. References resolve by longest
+ * existing suffix over the on-disk reference set, so nested children
+ * (`references/qc-specialist/report-template.md`) and colliding basenames
+ * (`report-template.md` under two skills) resolve to the file a citation
+ * names; an owner prefix disambiguates a collision, then the citing skill's
+ * own file, and only a genuinely ambiguous basename fails.
  *
  * The forward callout citation check also validates the **binary prefix**
  * of every backticked CLI
@@ -1335,6 +1346,241 @@ export function checkProvenanceScan(files: Array<{ rel: string; text: string }>)
   return { filesScanned, citationsFound, failures };
 }
 
+/* why: Guard 15 helpers — the properties are stated once, in this file's header § 15. */
+
+/** Guard 15 result: corpus sizes plus one failure row per violation. */
+export interface ReferenceCorpusResult {
+  filesChecked: number;
+  referenceFiles: number;
+  citationsChecked: number;
+  failures: string[];
+}
+
+/** why: a reference token is a `.md` path with a `references/` segment or a
+ * subpath. The class includes the placeholder characters so a pattern stays one
+ * token: excluding them would split a `references/` + wildcard path at the star
+ * and resolve its tail as a real citation. */
+const REFERENCE_TOKEN = /[A-Za-z0-9_.\/<>*{}$-]+\.md/g;
+/** why: the same token shape without `g`, because a shared global regex would make `.test()`
+ * stateful across calls (`lastIndex` carries over between rows). It keeps the
+ * placeholder characters so a pattern cell (`` `references/<host>.md` ``) reads
+ * as a path, not as a trigger. */
+const REFERENCE_TOKEN_TEST = /[A-Za-z0-9_./<>*{}$-]+\.md/;
+/** why: a placeholder inside a token makes it a pattern, not a citation. */
+const REFERENCE_PLACEHOLDER = /[<>*{}$]/;
+const isReferenceToken = (token: string): boolean => !REFERENCE_PLACEHOLDER.test(token);
+/** why: a `## References` row states a trigger as a condition clause
+ * (`when …`, `何时`, `…时打开`). A bare description of the file's topic is not
+ * a trigger. Only rows are judged — a prose paragraph in the block is not a
+ * row. */
+const REFERENCE_TRIGGER = /\bwhen\b|何时|时打开/i;
+/** why: the row shapes a list item or a table row of the `## References` block takes. */
+const REFERENCE_ROW = /^\s*(?:[-*+]|\d+\.)\s|^\s*\|/;
+/** why: the header cell names the trigger column in a `## References` table. */
+const REFERENCE_TRIGGER_HEADER = /\bwhen\b|何时/i;
+
+/** why: the owner is the `skills/<skill>` segment of a repo-relative reference path. */
+function referenceOwner(file: string): string {
+  return file.split("/")[1] ?? "";
+}
+
+/** why: the owner a token names is the path segment immediately
+ * before `references/`, so `..`, `../..` and a leading `skills/` all
+ * normalize away (`../../mstar-audit/references/pr-review.md` -> `mstar-audit`). */
+function referenceTokenOwner(token: string): string | null {
+  const at = token.lastIndexOf("references/");
+  if (at < 0) return null;
+  const segments = token
+    .slice(0, at)
+    .split("/")
+    .filter((segment) => segment !== "" && segment !== "." && segment !== "..");
+  return segments.length === 0 ? null : segments[segments.length - 1];
+}
+
+/**
+ * Guard 15 — the three properties over `skills/**` and the longest-suffix
+ * resolution rule are stated once, in this file's header (item 15). This
+ * function enforces them.
+ */
+export function checkReferenceCorpus(input: {
+  files: Array<{ rel: string; text: string }>;
+  referenceFiles: string[];
+}): ReferenceCorpusResult {
+  const failures: string[] = [];
+  const bySuffix = new Map<string, string[]>();
+  for (const file of input.referenceFiles) {
+    const at = file.indexOf("/references/");
+    if (at < 0) continue;
+    const suffix = file.slice(at + "/references/".length);
+    const hits = bySuffix.get(suffix) ?? [];
+    hits.push(file);
+    bySuffix.set(suffix, hits);
+  }
+
+  type Resolution = { file: string; suffix: string } | "ambiguous" | "unresolved";
+  const resolve = (token: string, citing: string): Resolution | null => {
+    const hasReferences = token.includes("references/");
+    const normalized = token.startsWith("skills/") ? token.slice("skills/".length) : token;
+    const tail = hasReferences
+      ? normalized.slice(normalized.lastIndexOf("references/") + "references/".length)
+      : normalized;
+    if (!hasReferences && !tail.includes("/")) return null;
+    const segments = tail.split("/");
+    for (let i = 0; i < segments.length; i++) {
+      const suffix = segments.slice(i).join("/");
+      const hits = bySuffix.get(suffix);
+      if (!hits) continue;
+      if (hits.length === 1) return { file: hits[0]!, suffix };
+      const named = referenceTokenOwner(token);
+      const byOwner = named ? hits.find((hit) => referenceOwner(hit) === named) : undefined;
+      if (byOwner) return { file: byOwner, suffix };
+      const byCiting = hits.find((hit) => referenceOwner(hit) === citing);
+      if (byCiting) return { file: byCiting, suffix };
+      return "ambiguous";
+    }
+    return hasReferences ? "unresolved" : null;
+  };
+
+  const citedFromOwnSkill = new Set<string>();
+  let citationsChecked = 0;
+
+  for (const { rel, text } of input.files) {
+    const citing = rel.split("/")[1] ?? "";
+    const lines = text.split(/\r?\n/);
+    let inReferences = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!;
+      // why: a deeper subheading inside `## References` groups rows without
+      // ending the section, so only `#`/`##` closes it.
+      if (/^#{1,2}\s/.test(line)) {
+        inReferences = line.trim() === "## References";
+      }
+      const rowTokens = [
+        ...new Set(
+          [...line.matchAll(REFERENCE_TOKEN)]
+            // why: a leading `*` is Markdown emphasis around a real path, not a wildcard.
+            .map((m) => m[0]!.replace(/^\*+/, "")),
+        ),
+      ];
+      let rowPath = false;
+      for (const token of rowTokens) {
+        // why: a placeholder path is a row path but not a citation - it names a file
+        // shape, so it skips resolution yet still owes a trigger below.
+        if (!isReferenceToken(token)) {
+          if (token.includes("references/")) rowPath = true;
+          continue;
+        }
+        const resolution = resolve(token, citing);
+        if (resolution === null) continue;
+        rowPath = true;
+        citationsChecked++;
+        if (resolution === "unresolved") {
+          failures.push(`Guard 15 unresolved-reference: ${rel}:${i + 1} reference "${token}" resolves to no reference file - fix the path`);
+          continue;
+        }
+        if (resolution === "ambiguous") {
+          failures.push(
+            `Guard 15 ambiguous-reference: ${rel}:${i + 1} reference "${token}" matches more than one reference file - write the owner path <owner>/references/<file>.md`,
+          );
+          continue;
+        }
+        const owner = referenceOwner(resolution.file);
+        const declared = referenceTokenOwner(token);
+        if (owner === citing) {
+          if (declared !== null && declared !== owner) {
+            failures.push(
+              `Guard 15 owner-mismatch: ${rel}:${i + 1} reference "${token}" names owner "${declared}" but the file belongs to "${owner}"`,
+            );
+          }
+          if (resolution.file !== rel) citedFromOwnSkill.add(resolution.file);
+        } else if (declared === null) {
+          failures.push(
+            `Guard 15 owner-omitted: ${rel}:${i + 1} cross-skill reference "${token}" omits its owner - write "${owner}/references/${resolution.suffix}"`,
+          );
+        } else if (declared !== owner) {
+          failures.push(
+            `Guard 15 owner-mismatch: ${rel}:${i + 1} cross-skill reference "${token}" names owner "${declared}" but the file belongs to "${owner}"`,
+          );
+        }
+      }
+      if (!inReferences || !rowPath) continue;
+
+      if (!REFERENCE_ROW.test(line)) continue;
+      const isTableRow = line.trim().startsWith("|");
+      if (!isTableRow) {
+        if (!REFERENCE_TRIGGER.test(line)) {
+          failures.push(
+            `Guard 15 trigger-missing: ${rel}:${i + 1} References row carries a path but states no trigger - say when to open it`,
+          );
+        }
+        continue;
+      }
+      const splitRow = (row: string): string[] =>
+        row
+          .trim()
+          .replace(/^\|/, "")
+          .replace(/\|$/, "")
+          .split("|")
+          .map((cell) => cell.trim());
+      // why: the `| When | Open |` / `| 何时 | 打开 |` header of this table owns the
+      // trigger column; a table without one falls back to "any cell that
+      // carries no reference path". Derived from this row's own table: a
+      // `## References` section may hold several tables with different column
+      // orders, so a cached index reads the wrong cell in the next table.
+      let header = i;
+      while (header > 0 && lines[header - 1]!.trim().startsWith("|")) header--;
+      const tableHeader = lines[header]!.trim().startsWith("|") ? splitRow(lines[header]!) : [];
+      const tableTriggerColumn = tableHeader.findIndex((cell) => REFERENCE_TRIGGER_HEADER.test(cell));
+      const cells = splitRow(line);
+      const triggered =
+        tableTriggerColumn >= 0
+          ? (cells[tableTriggerColumn] ?? "") !== ""
+          : cells.some((cell) => cell !== "" && !REFERENCE_TOKEN_TEST.test(cell));
+      if (!triggered) {
+        failures.push(
+          `Guard 15 trigger-missing: ${rel}:${i + 1} References row carries a path but its trigger column is empty - say when to open it`,
+        );
+      }
+    }
+  }
+
+  for (const file of input.referenceFiles) {
+    if (citedFromOwnSkill.has(file)) continue;
+    failures.push(
+      `Guard 15 orphan-reference: ${file}: no reference from its own skill - name it in ${referenceOwner(file)}/SKILL.md or in another ${referenceOwner(file)} reference`,
+    );
+  }
+
+  return {
+    filesChecked: input.files.length,
+    referenceFiles: input.referenceFiles.length,
+    citationsChecked,
+    failures,
+  };
+}
+
+/** Guard 15 corpus read: every `skills/**` Markdown file plus the reference
+ * set, both repo-relative. Guard-or-clear-error: an unreadable skills tree
+ * returns one failure row instead of an empty corpus that would pass. */
+export function readReferenceCorpus(repoRoot: string): {
+  files: Array<{ rel: string; text: string }>;
+  referenceFiles: string[];
+  failures: string[];
+} {
+  const files: Array<{ rel: string; text: string }> = [];
+  const referenceFiles: string[] = [];
+  try {
+    for (const absolute of collectFilesUnder(repoRoot, "skills", ".md")) {
+      const rel = relative(repoRoot, absolute);
+      files.push({ rel, text: readFileSync(absolute, "utf8") });
+      if (rel.includes("/references/")) referenceFiles.push(rel);
+    }
+  } catch (error) {
+    return { files: [], referenceFiles: [], failures: [`Guard 15 reference corpus read: ${(error as Error).message}`] };
+  }
+  return { files, referenceFiles, failures: [] };
+}
+
 /** Advisory inventory of oversized test suites; this never contributes failure rows. */
 export function findOversizedTestFiles(repoRoot: string): Array<{ file: string; lines: number }> {
   try {
@@ -1858,6 +2104,23 @@ if (import.meta.main) {
     }
   }
 
+/* why: Guard 15 wiring — the properties are stated once, in this file's header § 15. */
+
+  let references: ReferenceCorpusResult = {
+    filesChecked: 0,
+    referenceFiles: 0,
+    citationsChecked: 0,
+    failures: [],
+  };
+  try {
+    const corpus = readReferenceCorpus(root);
+    references = checkReferenceCorpus({ files: corpus.files, referenceFiles: corpus.referenceFiles });
+    references.failures = [...corpus.failures, ...references.failures];
+  } catch (error) {
+    references.failures = [`Guard 15 reference entry points: ${(error as Error).message}`];
+  }
+  for (const row of references.failures) fail(row);
+
 /* ------------------------------------------------------------------ */
 /* Guard 14: gate-surface self-approval (allowlists + budget manifest) */
 /* ------------------------------------------------------------------ */
@@ -1911,6 +2174,11 @@ if (import.meta.main) {
     skillIndexFailures === 0 ? "OK" : `FAIL (${skillIndexFailures} violation${skillIndexFailures === 1 ? "" : "s"})`
   }`;
 
+  const referenceFailures = references.failures.length;
+  const referenceSummary = `Guard 15 reference entry points ${references.filesChecked} skill files, ${references.referenceFiles} reference files, ${references.citationsChecked} citations, ${
+    referenceFailures === 0 ? "OK" : `FAIL (${referenceFailures} violation${referenceFailures === 1 ? "" : "s"})`
+  }`;
+
   reportOversizedTests();
   reportRuleDuplication(ruleDuplication);
   reportParagraphAnchoring(paragraphAnchoring);
@@ -1918,12 +2186,12 @@ if (import.meta.main) {
     console.error(`drift-lint: ${failures.length} violation(s) found\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
     console.error(
-      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${gateSurfaceSummary}`,
+      `\nchecked ${calloutsChecked} Engine-check callouts (${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins; ${useCliScan.filesScanned} use-cli skill files with ${useCliScan.cliCitationsChecked} full-text citations) against ${engineExports.size} engine exports and ${cliCommands.size} CLI commands; ${categoryTokensChecked} audit category tokens; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files (${ephemeralCitationsFound} ephemeral citations); ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${referenceSummary}; ${gateSurfaceSummary}`,
     );
     process.exit(1);
   }
 
   console.log(
-    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${gateSurfaceSummary}`,
+    `drift-lint: OK — ${calloutsChecked} Engine-check callouts reference real exports (${engineExports.size}) and CLI commands (${cliCommands.size}); ${cliCitationsChecked} CLI citations prefix-checked against ${binNames.length} declared bins (${useCliScan.filesScanned} use-cli skill files, ${useCliScan.cliCitationsChecked} full-text citations); engine spec citations resolve; ${categoryTokensChecked} audit category tokens match AUDIT_CATEGORIES; README bilingual pairing ${bilingualStatus}; ${ephemeralFilesScanned} skill files clean of ephemeral citations; ${rolesSummary}; ${fiveQuestion.checked} runtime mstar-* skills pass five-question lint (${fiveQuestion.failures.length} violations); provenance scan ${provenance.filesScanned} repo text files (${provenance.citationsFound} provenance citations); ${markdownLinksSummary}; ${skillBudgetsSummary}; ${ruleDuplicationSummary}; ${paragraphAnchoringSummary}; ${adrSummary}; ${skillIndexSummary}; ${referenceSummary}; ${gateSurfaceSummary}`,
   );
 }

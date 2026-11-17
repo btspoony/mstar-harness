@@ -52,7 +52,7 @@ Task category: audit
 { "planId": "<plan-id>", "planPath": "<absolute main plan path>", "range": "<base>..<head>", "reviewCwd": "<absolute review worktree>", "branch": "feature/<plan-id>", "sddDir": "<absolute SDD dir>" }
 ```
 
-**Each seat** loads `mstar-roles`, then `references/qc-specialist-shared.md` (identity first), the report template and checklist, and its own lens file; reviews only changed hunks and directly affected interfaces against the plan; reuses unchanged task-review evidence; and must not edit the worktree, post, merge, touch project registers, or run build/test suites. It returns the verdict envelope `{ seat, verdict, summary, findings }` and, only if its sandbox allows, also writes its report path.
+**Each seat** loads `mstar-roles`, then `mstar-roles/references/qc-specialist-shared.md` (identity first), the report template and checklist, and its own lens file; reviews only changed hunks and directly affected interfaces against the plan; reuses unchanged task-review evidence; and must not edit the worktree, post, merge, touch project registers, or run build/test suites. It returns the verdict envelope `{ seat, verdict, summary, findings }` and, only if its sandbox allows, also writes its report path.
 
 **Failure surface** a seat whose child failed resolves to `null`: its verdict is missing and the caller must re-dispatch that seat or report `Blocked` — never synthesize a verdict for it.
 
@@ -85,7 +85,7 @@ Task category: audit
 { "name": "mstar-pr-seats", "description": "Deep PR review: read-only domain review seats (2-3) plus an optional independent cross-domain security seat, each returning findings with a merge class and no verdict.", "whenToUse": "dsh host, /amazing-pr-review deep (3-4 seats) after the review worktree and diff basis are resolved.", "phases": [{ "title": "pr-seats", "detail": "Domain review seats plus the cross-domain security seat." }] }
 ```
 
-`args` — `worktree`, `target`, `diffBase`, `auditRef` and `budgetLine` are required strings; `domains` holds 2–3 labels (the guard throws otherwise) and `security` defaults to true, so the seat count is 3 or 4. `budgetLine` is required because these seats are fire-and-forget and cannot be nudged mid-run: take it from `mstar pr-review budget` plus the review's own clock (`mstar-audit` `references/pr-review.md` § Seat supervision):
+`args` — `worktree`, `target`, `diffBase`, `auditRef` and `budgetLine` are required strings; `domains` holds 2–3 labels (the guard throws otherwise) and `security` defaults to true, so the seat count is 3 or 4. `budgetLine` is required because these seats are fire-and-forget and cannot be nudged mid-run: take it from `mstar pr-review budget` plus the review's own clock (`mstar-audit` `mstar-audit/references/pr-review.md` § Seat supervision):
 ```json
 { "worktree": "<absolute review worktree>", "target": "<owner>/<repo>#<n> | branch:<slug> | diff:<short-sha>", "diffBase": "<base>..<head>", "diffFile": "<pinned diff snapshot, optional>", "auditRef": "<absolute mstar-audit references dir>", "domains": ["code", "tests"], "security": true, "budgetLine": "<tier + shared soft cap + minutes left>" }
 ```

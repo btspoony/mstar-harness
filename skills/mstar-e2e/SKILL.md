@@ -7,7 +7,7 @@ description: Separately requested E2E / real-browser / device / installed-deploy
 
 ## Load Order
 
-Read `mstar-harness-core` first. PM follows `mstar-roles` → `references/project-manager.md` and the existing dispatch/path contracts; the assigned executor reads `mstar-roles` → `references/ops-engineer.md`. Resolve available host tools through `mstar-host` only when needed. No external skill, CLI, or MCP is a required dependency.
+Read `mstar-harness-core` first. PM follows `mstar-roles` → `mstar-roles/references/project-manager.md` and the existing dispatch/path contracts; the assigned executor reads `mstar-roles` → `mstar-roles/references/ops-engineer.md`. Resolve available host tools through `mstar-host` only when needed. No external skill, CLI, or MCP is a required dependency.
 
 ## Scope
 

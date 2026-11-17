@@ -31,7 +31,7 @@ description: Spec-Driven 双阶段门禁：Prepare（specify→clarify→plan）
 
 - **`plan(locked)`** — 冻结基线；实现中出现新约束时**先回写 plan 再继续**。
 - **`tasks`** — 含依赖顺序、并行标记、完成判据；每任务可追踪到 plan、roadmap 批次与验收标准。每任务还须满足单轮容量判据（声明 Effort band、单轮闭合其 Files 与验证门、写明 split point）→ **`mstar-artifacts/references/plan-quality-bar.md`** item 7（Task shape / session fit）。
-  - **并行标签**：≥2 条实现轨同时分派 → `Dispatch mode: parallel independent tracks`；同仓可写并发 → `Worktree isolation: required`（清单 **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**）。
+  - **并行标签**：≥2 条实现轨同时分派 → `Dispatch mode: parallel independent tracks`；同仓可写并发 → `Worktree isolation: required`（清单 **`mstar-branch-worktree`** → **`mstar-branch-worktree/references/parallel-writable-pre-dispatch.md`**）。
 - **`implement`** — 按 tasks 顺序执行；多 task plan **默认** `Execution mode: sdd`（`mstar-sdd`）；hotfix 可 `inline`。完成进入 `InReview`；遵循 **`mstar-coding-behavior`**。
 
 ### 可验证编辑与上下文纪律
@@ -68,7 +68,7 @@ per-plan 门禁通过后，PM 在**迭代层面**管理以下活动（不计入 
 
 per-plan Done 是 per-plan 的闭环终点；compound 是每个 **development plan** `Done` 后的交付尾义务（迭代行与独立 plan 相同），不影响该判定。迭代收口只做 specs/ADR 提升；语义权威 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
 
-> **Engine check:** run `mstar iteration gate --workflow <id> --compass <delivery-compass.md>` (engine `evaluatePhaseGate`) to evaluate the iteration phase-transition gate (Phase 2 → 3 → 4) against the ACTIVE execution authority when iteration-level activities above are reached — per-plan Prepare/Execute gate judgment stays prompt. On `fail` (gate-blocking violations), do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar iteration gate --workflow <id> --compass <delivery-compass.md>` (engine `evaluatePhaseGate`) to evaluate the iteration phase-transition gate (Phase 2 → 3 → 4) against the ACTIVE execution authority when iteration-level activities above are reached — per-plan Prepare/Execute gate judgment stays prompt. On `fail` (gate-blocking violations), do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## Plan 目录与审查证据（启用 `{PLAN_DIR}` 时）
 
@@ -113,4 +113,4 @@ Prepare（specify→clarify→plan，意图/clarify/Roadmap/Recall）→ lock �
 - plan 文件落盘与路径符号 → **`mstar-conventions`**
 - 多 task 默认 `Execution mode: sdd` 的 implement 波次 → **`mstar-sdd`**
 - QC / PM Acceptance 审查链与 residual 登记 → **`mstar-review-qc`**
-- Playbook vs Hotfix → **`references/playbook-vs-hotfix.md`**
+- Playbook vs Hotfix → **`references/playbook-vs-hotfix.md`**：选 Spec-Driven playbook 还是 Hotfix 例外路径、或读 Execute 阶段补充时打开

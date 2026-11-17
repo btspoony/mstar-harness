@@ -35,7 +35,7 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 - **NEVER** use single-seat `qc.md` after **`Execution mode: sdd`** without documented user override.
 - **NEVER** dispatch only QC#2 and QC#3 while skipping QC#1 on initial SDD tri wave — full cross-review required (all three seats).
 - **NEVER** consolidate tri-review into `Approve` when any QC report's alignment fields differ from Assignment (character-level).
-- **NEVER** write a non-canonical `severity` on a captured issue — the machine enum comes from `mstar-artifacts` (`references/status-and-residuals.md`).
+- **NEVER** write a non-canonical `severity` on a captured issue — the machine enum comes from `mstar-artifacts` (`mstar-artifacts/references/status-and-residuals.md`).
 - **NEVER** under `Findings cleanup: zero-residual`, use `Approve with residuals` or leave an issue open for a fixable finding — fix-now + re-review; an open issue only for true blocker-defer + roadmap.
 - **NEVER** drop finding tracking to chat-only when `Approve with residuals` applies — confirmed findings are captured as issues per the capture contract.
 - **NEVER** treat "two of three QC reports arrived" as sufficient — missing seat → `Blocked`.

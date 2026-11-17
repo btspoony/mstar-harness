@@ -16,7 +16,7 @@ Phase 2–5 全程有效（drive + loop 共有的行）：
 |-----------------|------|
 | Product-code edits, test authoring or QC execution (Phase 2) | Dispatch implementer/QC specialists; only bounded PM acceptance checks are direct → `mstar-roles/references/project-manager/acceptance.md` |
 | **多 task plan 用 inline 大包派发**（整份 plan / T1–Tn 贴进一个 dev Assignment） | **SDD**：`mstar-sdd` per-task 循环 — `mstar sdd task-brief` → implementer → `mstar sdd review-package` → task reviewer → `progress.md` |
-| 只写 Assignment 就进入下一 gate | 同轮发出对应 invoke（paste-only 判据 → **`mstar-host`** `references/parallel-dispatch.md` § Hard rules） |
+| 只写 Assignment 就进入下一 gate | 同轮发出对应 invoke（paste-only 判据 → **`mstar-host`** `mstar-host/references/parallel-dispatch.md` § Hard rules） |
 | 最后一个 plan `Done` 后直接开 PR / 汇报结束；§5.2 merge-ready exit 或 PR merged 即宣称交付完成 | **Phase 3 → 4 → 5 → 6** 顺序执行（Phase 6 = PR merged 后 post-merge close，`references/phase-6-post-merge-close.md`） |
 | Phase 5 自己改产品代码 | 需改产品代码时 **dispatch** `fullstack-dev` / `ops-engineer` |
 

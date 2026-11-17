@@ -166,7 +166,7 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 3. **Feature worktree (per plan)** — one distinct subdirectory under the sibling root **`../<repo>.worktrees/`**, outside the checkout, per active `plan_id` (e.g. `../<repo>.worktrees/<plan-id>-<slug>`). The root is `<parent-of-repo-root>/{repo-basename}.worktrees/`, where repo root is the realpath of the Git top-level. From that repo root, create with `mkdir -p ../<repo>.worktrees && git worktree add ../<repo>.worktrees/<plan-id>-<slug> -b <branch>`. This keeps linked checkouts out of the repository scan/edit surface. In-repo `.worktrees/` remains a legal explicit override; registered absolute source and cleanup paths are location-agnostic. Assignment `Worktree path` / `Working branch` must match row `metadata.worktree_path` / `metadata.working_branch` and actual checkout facts; missing/corrected source scope uses ordinary prepare, never a holder or claim.
 4. **L2 track worktrees (within-plan)** — additional distinct directories per parallel implement track under the **same** plan (see **`references/parallel-writable-pre-dispatch.md`**), each with its own PM-approved **`Working branch`**.
 
-> **Engine check:** `mstar worktree check` owns the engine-enforced checkout facts — workflow entry (`--workflow <id> --entry`: branch metadata, main residency, recorded integration checkout exists on its branch and clean, merge-lease state), per-plan L1 (`--workflow <id> --plan <plan-id>`: main residency; main/control, source-metadata and integration checkouts pairwise distinct; actual branch alignment; plus the workflow's merge-lease fact) and L2 (`--l2 --tracks <json>`: parallel writable tracks). These are factual isolation checks scoped to that engine-enforced subset, not per-row session/lease/seal admission, and not clearance of the full pre-dispatch checklist. Workflow-wide integration exclusion and serial real merge proof remain distinct requirements. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** `mstar worktree check` owns the engine-enforced checkout facts — workflow entry (`--workflow <id> --entry`: branch metadata, main residency, recorded integration checkout exists on its branch and clean, merge-lease state), per-plan L1 (`--workflow <id> --plan <plan-id>`: main residency; main/control, source-metadata and integration checkouts pairwise distinct; actual branch alignment; plus the workflow's merge-lease fact) and L2 (`--l2 --tracks <json>`: parallel writable tracks). These are factual isolation checks scoped to that engine-enforced subset, not per-row session/lease/seal admission, and not clearance of the full pre-dispatch checklist. Workflow-wide integration exclusion and serial real merge proof remain distinct requirements. On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## 同仓并发写入与 Git worktree（强制）
 
@@ -202,7 +202,7 @@ Before QC dispatch and PM Acceptance, record implementation-aligned `Review cwd 
 - **Text-identical alignment:** QC Assignments and PM Acceptance reuse the same `plan_id`, review range, cwd and branch for the same scope. Inline/single-seat review keeps these same fields; only seat count differs.
 - 三审并行时三名 reviewer **共用同一组**字段（对业务仓**只读 diff 审查**）；一般不必为每位 reviewer 各开 worktree，除非宿主/环境要求进程级隔离。
 
-> **Engine check:** run `mstar worktree qc-alignment <assignment-file>...`（engine `assertQcAlignment`, `singleReviewSnapshot`）以断言上述 QC/PM Acceptance 对齐字段（tri + PM Acceptance 间 `plan_id` 与 `Review range` / `Diff basis` 逐字相同；派发前 single review snapshot）。On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar worktree qc-alignment <assignment-file>...`（engine `assertQcAlignment`, `singleReviewSnapshot`）以断言上述 QC/PM Acceptance 对齐字段（tri + PM Acceptance 间 `plan_id` 与 `Review range` / `Diff basis` 逐字相同；派发前 single review snapshot）。On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ### 多 worktree 并行 → 单一待审快照（派 QC 前置）
 
@@ -240,7 +240,7 @@ Before QC dispatch and PM Acceptance, record implementation-aligned `Review cwd 
 
 ## Worktree / branch cleanup（merge 后回收）
 
-Ownership, refusals, merge-evidence gates, `--apply` order, and the two legal timing lanes live in **`references/worktree-cleanup.md`** (sole contract body). Call sites: Phase-2 same-round → `mstar-iteration` `references/phase-2-worktree-lease.md`; Phase-6 close → `references/phase-6-post-merge-close.md` §6.4. Dry-run command: `mstar worktree cleanup --workflow <id>` (engine `planWorktreeCleanup`).
+Ownership, refusals, merge-evidence gates, `--apply` order, and the two legal timing lanes live in **`references/worktree-cleanup.md`** (sole contract body). Call sites: Phase-2 same-round → `mstar-iteration` `mstar-iteration/references/phase-2-worktree-lease.md`; Phase-6 close → `mstar-iteration/references/phase-6-post-merge-close.md` §6.4. Dry-run command: `mstar worktree cleanup --workflow <id>` (engine `planWorktreeCleanup`).
 
 ## Workflow
 
@@ -250,6 +250,6 @@ PM selects branches → isolated source tasks → all reviewed commits converge 
 
 - 派发与反递归红线 → **`mstar-dispatch-gates`**
 - SDD implement 波次（file handoff / reviewer）→ **`mstar-sdd`**
-- 迭代 Phase 2 integration worktree + lease 细则 → **`mstar-iteration`** §2（`references/phase-2-worktree-lease.md`）
+- 迭代 Phase 2 integration worktree + lease 细则 → **`mstar-iteration`** §2（`mstar-iteration/references/phase-2-worktree-lease.md`）：准备或校验 Phase 2 集成 worktree / lease 时打开
 
-- L1 refusal diagnostics (`worktree.l1.*` across CLI/dsh/omp; engine vs host seam) → **`references/l1-refusal-diagnostics.md`**
+- L1 refusal diagnostics (`worktree.l1.*` across CLI/dsh/omp; engine vs host seam) → **`references/l1-refusal-diagnostics.md`**：遇到 L1 拒绝码、或需比较 host 与 engine 行为时打开
