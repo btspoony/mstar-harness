@@ -661,9 +661,16 @@ describe("findUntrackedTodos", () => {
   test("a marker opens the comment content even after code on the line", () => {
     expect(findUntrackedTodos("class A { #TODO = 1; } // TODO: remove the shim\n")).toHaveLength(1);
     expect(findUntrackedTodos("const x = 1; // TODO: remove the shim\n")).toHaveLength(1);
+    expect(findUntrackedTodos("/// TODO: remove the shim\n")).toHaveLength(1);
     expect(findUntrackedTodos("/** TODO: remove the shim */\n")).toHaveLength(1);
     expect(findUntrackedTodos("/* TODO: remove the shim */\n")).toHaveLength(1);
     expect(findUntrackedTodos("/*\n * TODO: remove the shim\n */\n")).toHaveLength(1);
+  });
+
+  test("a hash-dialect marker opens its own content", () => {
+    expect(findUntrackedTodos("# TODO: fix the retry\n", "hash")).toHaveLength(1);
+    expect(findUntrackedTodos("x = 1 # TODO: fix the retry\n", "hash")).toHaveLength(1);
+    expect(findUntrackedTodos("# see TODO: not a marker\n", "hash")).toEqual([]);
   });
 
   test("a named owner satisfies the rule (`TODO(alice):`)", () => {

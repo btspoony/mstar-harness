@@ -575,11 +575,16 @@ function opensCommentContent(maskedLine: string, at: number, scan: Uint8Array, l
   const before = maskedLine.slice(0, at);
   if (/^\s*\*\s*$/.test(before)) return true;
   let index = -1;
-  const consider = (token: string, rule: "start" | "codeOnly"): void => {
-    const found = before.lastIndexOf(token);
-    if (found === -1 || found <= index) return;
-    if (rule === "codeOnly") {
-      if (scan[lineBase + found] !== SOURCE_CODE) return;
+  const consider = (token: string, rule: "start" | "codeOrStart"): void => {
+    let found = before.lastIndexOf(token);
+    if (found === -1) return;
+    // why: `///` is one line-comment introducer, so back up to the first slash.
+    if (token === "//") while (found > 0 && before[found - 1] === "/") found -= 1;
+    if (found <= index) return;
+    if (rule === "codeOrStart") {
+      const code = scan[lineBase + found] === SOURCE_CODE;
+      const startsRun = found === 0 || scan[lineBase + found - 1] !== SOURCE_COMMENT;
+      if (!code && !startsRun) return;
     } else if (found > 0 && scan[lineBase + found - 1] === SOURCE_COMMENT) {
       return;
     }
@@ -587,9 +592,9 @@ function opensCommentContent(maskedLine: string, at: number, scan: Uint8Array, l
   };
   consider("//", "start");
   consider("/*", "start");
-  consider("#", "codeOnly");
-  consider(";", "codeOnly");
-  consider("--", "codeOnly");
+  consider("#", "codeOrStart");
+  consider(";", "codeOrStart");
+  consider("--", "codeOrStart");
   if (index === -1) return before.trim() === "";
   return before.slice(index).replace(/^(?:\/\/+|\/\*+|\*+|#|;|--)/, "").trim() === "";
 }
