@@ -342,15 +342,16 @@ Check result: exit 0; changed scope line found.
     });
   });
 
-  test("--diff-base reports a block comment whose interior line moved", () => {
+  test("--diff-base reports a block comment whose interior line moved, and not one it left alone", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "scan.ts");
-      const block = (second: string): string => `/*\n * first prose\n * ${second}\n */\nconst a = 1;\n`;
-      commitBase(dir, { "scan.ts": block("second prose") });
-      writeFileSync(file, block("second prose, edited"));
+      const blocks = (second: string): string =>
+        `/*\n * kept prose\n */\nconst a = 1;\n/*\n * ${second}\n */\nconst b = 2;\n`;
+      commitBase(dir, { "scan.ts": blocks("second prose") });
+      writeFileSync(file, blocks("second prose, edited"));
       const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
       expect(result.exitCode).toBe(0);
-      expect(lintResults(result)[0]?.markers.join("\n")).toBe("unclassified comment @1: /*");
+      expect(lintResults(result)[0]?.markers).toEqual(["unclassified comment @5: /*"]);
       expect(result.stderr.trim()).toBe("unclassified comments: 1");
     });
   });
