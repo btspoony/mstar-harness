@@ -446,7 +446,6 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
 
   const foundModules = new Set<string>();
   if (moduleNames.size > 0) {
- // simplify: bounded walk (5000 entries) keeps symbol heuristics cheap on large repos, upgrade: raise the cap if module resolution misses in monorepos.
     let walked = 0;
     const stack = [repoRoot];
     while (stack.length > 0 && walked < MAX_WALK_FILES) {

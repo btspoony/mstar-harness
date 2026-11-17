@@ -365,7 +365,7 @@ function lintOne(file: string, type?: LintType, prVariant = false, touched?: Tou
         }
       }
       for (const todo of findUntrackedTodos(text, dialect)) markers.push(`untracked ${todo.marker} @${todo.line}: ${todo.text}`);
-      for (const finding of findCommentedCode(text)) markers.push(`commented-out code @${finding.line}: ${finding.text}`);
+      for (const finding of findCommentedCode(text, dialect)) markers.push(`commented-out code @${finding.line}: ${finding.text}`);
       const temporary = findTemporaryMarkers(text, dialect);
       for (const marker of temporary.markers) markers.push(`temporary marker @${marker.line}: ${marker.text} (${marker.removalPath === null ? "no removal path" : `removal: ${marker.removalPath}`})`);
       violations.push(...temporary.violations); break;

@@ -1,19 +1,18 @@
 /**
  * Engine lint module — deterministic lint checks ported from skill prose.
  *
- * Roadmap §8.2 `lint` row + §4.5 Lint layer (`simplify:` / `temporary` marker presence; SDD TDD
+ * Roadmap §8.2 `lint` row + §4.5 Lint layer (bounded marker presence; SDD TDD
  * triple in completion reports; plan-quality-bar checks; skill frontmatter
  * contract; STRATEGY.md required sections). Skill text stays the semantic
  * SSOT (roadmap D5) — this module implements the deterministic subset and
  * never forks semantics.
  *
  * Spec sources (each function cites the source section):
- * - simplify:/temporary markers: `mstar-coding-behavior` SKILL.md § Decision
- * Rules: a deliberate shortcut with a known
- * ceiling is marked with a `simplify:` comment naming the ceiling and the
- * upgrade path; a workaround is labeled `simplify:` / `temporary`, explains
- * why, and records the removal path in the plan/status artifact before the
- * task is claimed complete.
+ * - Marker bounds and shapes: `mstar-coding-behavior/references/comments.md`
+ * § Markers — a deliberate shortcut is `simplify:` or its spelling
+ * `shortcut:`, naming the ceiling and one bound (`upgrade: <when>` or a
+ * tracking reference); a workaround is `temporary:` with its removal path.
+ * SKILL.md § Decision Rules keeps the workaround sentence alone.
  * - Commented-out code and ownerless TODO: `skills/mstar-coding-behavior/
  * references/comments.md` § MUST NOT — the file's history is the archive, and
  * a marker with no issue reference, key or removal path holds nobody.
@@ -407,8 +406,13 @@ export type CommentedCodeFinding = { line: number; text: string };
  * kept in a comment, reported at its first line. The run is detected on the
  * masked view, so a `//` line inside a string or template literal (a fixture
  * asserting this very check) is not a comment.
+ *
+ * note: C-family comment runs only. A hash-dialect file (shell, Python, Ruby)
+ * returns no finding by design — this engine has no parser for those
+ * languages, and comments.md § Checkable vs judgement states the limit.
  */
-export function findCommentedCode(fileText: string): CommentedCodeFinding[] {
+export function findCommentedCode(fileText: string, dialect: SourceDialect = "c"): CommentedCodeFinding[] {
+  if (dialect === "hash") return [];
   const findings: CommentedCodeFinding[] = [];
   const lines = fileText.split(/\r?\n/);
   const masked = maskLiterals(fileText).split(/\r?\n/);
@@ -514,6 +518,9 @@ export function findUntrackedTodos(fileText: string, dialect: SourceDialect = "c
     // comment marker after it.
     for (const match of commentContext.matchAll(re)) {
       if (!isCommentContext(scan, offsets[i], match.index, commentContext)) continue;
+      // why: the marker must open the comment content, so prose that merely
+      // names it ("the TODO rule") is not a task.
+      if (!opensCommentContent(commentContext, match.index, scan, offsets[i]!)) continue;
       if (hasTrackingReference(commentContext)) break;
       findings.push({ line: i + 1, marker: match[1] as UntrackedTodo["marker"], text: lines[i].trim() });
       break;
@@ -557,6 +564,40 @@ const COMMENT_SHAPES: readonly RegExp[] = [
 /** why: the marker is a shape only when a tracking reference (an owner, an
  * issue, a removal path) holds somebody to it. */
 const TODO_MARKER_RE = /\b(?:TODO|FIXME)\b/;
+
+/** why: the marker must open the comment content, not merely sit on a
+ * comment-only line. The prefix is read after the last comment introducer, so
+ * trailing code before `//`, a block opener (`/**`, `/*`, a continuation `*`)
+ * and a non-C `#`/`;`/`--` all leave an empty prefix. A marker after prose is
+ * a mention. A non-C introducer counts only where the scanner sees code, so a
+ * `;` or `#` inside comment prose never restarts the content. */
+function opensCommentContent(maskedLine: string, at: number, scan: Uint8Array, lineBase: number): boolean {
+  const before = maskedLine.slice(0, at);
+  if (/^\s*\*\s*$/.test(before)) return true;
+  let index = -1;
+  const consider = (token: string, rule: "start" | "codeOrStart"): void => {
+    let found = before.lastIndexOf(token);
+    if (found === -1) return;
+    // why: `///` is one line-comment introducer, so back up to the first slash.
+    if (token === "//") while (found > 0 && before[found - 1] === "/") found -= 1;
+    if (found <= index) return;
+    if (rule === "codeOrStart") {
+      const code = scan[lineBase + found] === SOURCE_CODE;
+      const startsRun = found === 0 || scan[lineBase + found - 1] !== SOURCE_COMMENT;
+      if (!code && !startsRun) return;
+    } else if (found > 0 && scan[lineBase + found - 1] === SOURCE_COMMENT) {
+      return;
+    }
+    index = found;
+  };
+  consider("//", "start");
+  consider("/*", "start");
+  consider("#", "codeOrStart");
+  consider(";", "codeOrStart");
+  consider("--", "codeOrStart");
+  if (index === -1) return before.trim() === "";
+  return before.slice(index).replace(/^(?:\/\/+|\/\*+|\*+|#|;|--)/, "").trim() === "";
+}
 
 /** why: the changed-line gate reads the whole span, so a unit carries both its
  * first and last line together with the body a shape match reads. */
@@ -657,11 +698,12 @@ function documentsExport(lines: readonly string[], afterLine: number): boolean {
   return false;
 }
 
-/** why: a TODO/FIXME is a shape only with a tracking reference, so the token
- * alone cannot classify a line. */
+/** why: a TODO/FIXME is a shape only with a tracking reference, and only when
+ * it opens the comment content — a mid-sentence mention is prose. */
 function hasCommentShape(line: string): boolean {
   if (COMMENT_SHAPES.some((shape) => shape.test(line))) return true;
-  return TODO_MARKER_RE.test(line) && hasTrackingReference(line);
+  if (!TODO_MARKER_RE.test(line) || !hasTrackingReference(line)) return false;
+  return line.search(TODO_MARKER_RE) === 0;
 }
 
 /**
