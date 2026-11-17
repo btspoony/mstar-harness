@@ -209,8 +209,10 @@ function commentLineText(line: string, maskedLine: string, commentOnly: boolean,
   let runStart = start;
   while (runStart < line.length && scan[base + runStart] !== SOURCE_COMMENT) runStart += 1;
   if (runStart === line.length) return line.slice(start);
-  // The block-comment close is delimiter, not text.
-  return line.slice(start, commentRunEnd(line, runStart, scan, base)).replace(/\*\/\s*$/, "");
+  const run = line.slice(start, commentRunEnd(line, runStart, scan, base));
+  // A block-comment close is delimiter, not text; a `//` run has no close, so
+  // its `*/` is content the bound search must keep.
+  return line.startsWith("/*", runStart) ? run.replace(/\*\/\s*$/, "") : run;
 }
 
 /** The comment text of the block around line `index`: the maximal run of
@@ -423,15 +425,14 @@ export function findCommentedCode(fileText: string): CommentedCodeFinding[] {
 
 /** Tracking references that satisfy the ownerless-TODO rule (comments.md
  * § MUST NOT "an ownerless TODO": "no name, issue reference or removal path
- * means nobody removes it") — a named owner `TODO(alice)` / `TODO @alice`, an
- * issue number `#123`, a project key inside the marker's paren
- * (`TODO(ABC-12)`), an explicit issue/ticket/ADR reference, or the removal-path
- * vocabulary a `temporary` marker already accepts. A bare `KEY-<n>` shape is
- * NOT accepted: it also matches standard and encoding names (`UTF-8`,
- * `SHA-256`, `ISO-8601`), which would exempt exactly the TODO comments most
- * likely to linger. */
+ * means nobody removes it") — an `@name`, an issue number `#123`, an explicit
+ * issue/ticket/ADR reference, or the removal-path vocabulary a `temporary`
+ * marker already accepts. A named owner in the marker's paren
+ * (`TODO(alice)`) is checked against the stop words below, and a bare
+ * `KEY-<n>` shape is NOT accepted: it also matches standard and encoding names
+ * (`UTF-8`, `SHA-256`, `ISO-8601`), which would exempt exactly the TODO
+ * comments most likely to linger. */
 const TODO_TRACKING_PATTERNS: readonly RegExp[] = [
-  /\b(?:TODO|FIXME)\(\s*[A-Za-z][\w.-]*\s*\)/,
   /\b(?:TODO|FIXME)\s+@[A-Za-z][\w.-]*/,
   /#\d+/,
   /\b(?:issue|ticket)\s+#?\d+\b/i,
@@ -439,19 +440,45 @@ const TODO_TRACKING_PATTERNS: readonly RegExp[] = [
   ...REMOVAL_PATH_PATTERNS,
 ];
 
+/** The paren body of a marker (`TODO(alice)`): the only candidate for a name,
+ * since the body shape alone cannot tell one from filler — `TODO(later)` reads
+ * identically. */
+const TODO_PAREN_OWNER_RE = /\b(?:TODO|FIXME)\(\s*([A-Za-z][\w.-]*)\s*\)/;
 
+/** Words that fit the paren body without naming anyone: `TODO(later)` says
+ * when, `TODO(note)` says what, and none of them holds an owner. */
+const TODO_NON_OWNER_WORDS: ReadonlySet<string> = new Set([
+  "later", "see", "note", "none", "fix", "todo", "tbd", "soon",
+]);
+
+/** True when the marker text carries a tracking reference — a named owner in
+ * its parens, an `@name`, an issue reference, or a removal path. */
+function hasTrackingReference(text: string): boolean {
+  const owner = TODO_PAREN_OWNER_RE.exec(text);
+  if (owner !== null && !TODO_NON_OWNER_WORDS.has(owner[1].toLowerCase())) return true;
+  return TODO_TRACKING_PATTERNS.some((pattern) => pattern.test(text));
+}
 
 /** A TODO/FIXME comment carrying no tracking reference, at its 1-based line. */
 export type UntrackedTodo = { line: number; marker: "TODO" | "FIXME"; text: string };
 
-/** True when the token at `at` on line `index` is comment content rather than
- * code: the scanner marks it, or the line is comment-only under a non-C
- * introducer (`#`, `;`, `--`) the scanner reads as code. An identifier that
- * happens to be named after the marker — a declaration, a map key, a private
- * field — never counts. */
-function isCommentContext(scan: Uint8Array, base: number, at: number, line: string): boolean {
+/** True when the marker token at `at` is comment content rather than code: the
+ * scanner marks it, or it follows a non-C introducer (`#`, `;`, `--`) the
+ * scanner reads as code. That introducer opens a comment when it starts the
+ * line's content, or when it stands as a token of its own with whitespace on
+ * both sides. An identifier that happens to be named after the marker — a
+ * declaration, a map key, a private field (`#TODO = 1`) — is neither, and
+ * `x = 1; TODO` is a statement, `--x` a decrement. A trailing non-C comment
+ * written with no space after its introducer (`x = 1 #TODO`) is not detected.
+ * `match` is the marker regex match on `maskedLine`. */
+function isCommentContext(scan: Uint8Array, base: number, at: number, maskedLine: string, match: RegExpExecArray): boolean {
   if (scan[base + at] === SOURCE_COMMENT) return true;
-  return LINE_COMMENT_ONLY_RE.test(line) && scan[base + at] === SOURCE_CODE;
+  if (scan[base + at] !== SOURCE_CODE) return false;
+  const introducer = match[0].slice(0, match[0].length - match[1].length).trimEnd();
+  if (!/^(?:#|;|--)$/.test(introducer)) return false;
+  const before = maskedLine.slice(0, match.index);
+  if (before.trim() === "") return true;
+  return /\s$/.test(before) && /\s/.test(maskedLine[match.index + introducer.length] ?? "");
 }
 
 /**
@@ -472,8 +499,8 @@ export function findUntrackedTodos(fileText: string): UntrackedTodo[] {
     const match = re.exec(commentContext);
     if (match === null) continue;
     const at = match.index + match[0].length - match[1].length;
-    if (!isCommentContext(scan, offsets[i], at, lines[i])) continue;
-    if (TODO_TRACKING_PATTERNS.some((pattern) => pattern.test(commentContext))) continue;
+    if (!isCommentContext(scan, offsets[i], at, commentContext, match)) continue;
+    if (hasTrackingReference(commentContext)) continue;
     findings.push({ line: i + 1, marker: match[1] as UntrackedTodo["marker"], text: lines[i].trim() });
   }
   return findings;

@@ -625,6 +625,25 @@ describe("findUntrackedTodos", () => {
     expect(findUntrackedTodos("// TODO @alice: rewrite the retry loop\n")).toEqual([]);
     expect(findUntrackedTodos("// FIXME @bob: drop the shim\n")).toEqual([]);
   });
+
+  test("a marker in a trailing non-C comment is still checked (`#`, `;`, `--`)", () => {
+    const cases = [
+      "echo hi # TODO: fix the retry\n",
+      "key: v # FIXME: drop the shim\n",
+      "select 1; -- TODO: reindex\n",
+      "x = 1 # TODO: fix the retry\n",
+    ];
+    for (const text of cases) {
+      expect(findUntrackedTodos(text)).toHaveLength(1);
+    }
+  });
+
+  test("a filler word in the parens is not an owner (`TODO(later)` and friends)", () => {
+    for (const word of ["later", "see", "note", "none", "fix", "todo", "tbd", "soon"]) {
+      expect(findUntrackedTodos(`// TODO(${word}): rewrite the retry loop\n`)).toHaveLength(1);
+      expect(findUntrackedTodos(`// FIXME(${word}): rewrite the retry loop\n`)).toHaveLength(1);
+    }
+  });
 });
 
 describe("findSimplifyMarkers completeness", () => {
@@ -724,6 +743,13 @@ describe("findSimplifyMarkers completeness", () => {
       expect(markers[0].line).toBe(1);
       expect(markers[0].bound).toBeNull();
     }
+  });
+
+  test("a `//` comment whose bound ends in `*/` keeps that text", () => {
+    expect(findSimplifyMarkers("x = 1; // simplify: naive scan; upgrade: wrap in /* */\n")[0].bound).toBe(
+      "upgrade: wrap in /* */",
+    );
+    expect(findSimplifyMarkers("x = 1; // simplify: naive scan; upgrade: */\n")[0].bound).toBe("upgrade: */");
   });
 });
 
