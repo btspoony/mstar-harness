@@ -44,7 +44,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -234,6 +234,50 @@ describe("control write host gate", () => {
   });
 });
 
+
+describe("composeDispatchGate — control root tracked-change leg (writable)", () => {
+  function harnessRepo(prefix: string): string {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+    const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
+    git("init", "-q", "-b", "main");
+    git("config", "user.name", "Fixture");
+    git("config", "user.email", "fixture@example.invalid");
+    writeFileSync(join(root, ".gitignore"), ".mstar/\n");
+    writeFileSync(join(root, "README.md"), "fixture\n");
+    git("add", "-A");
+    git("commit", "-qm", "fixture");
+    return root;
+  }
+
+  test("a writable dispatch on a dirty harness control root is refused", () => {
+    const root = harnessRepo("dispatch-dirty-control-");
+    try {
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      writeFileSync(join(root, "README.md"), "fixture edited\n");
+      const refused = composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root });
+      expect(refused.violations.map((v) => v.code)).toContain("worktree.main.tracked-changes");
+      expect(refused.ok).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a clean harness control root passes and read-only roles are unaffected", () => {
+    const root = harnessRepo("dispatch-clean-control-");
+    try {
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      expect(composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root }).ok).toBe(true);
+      // Ignored process state never dirties the gate.
+      writeFileSync(join(root, ".mstar", "status.json"), "{}\n");
+      expect(composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root }).ok).toBe(true);
+      // Read-only leg skips the tracked-change gate even on a dirty root.
+      writeFileSync(join(root, "README.md"), "fixture edited\n");
+      expect(composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root, writable: false }).ok).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("control write assignment fields", () => {
   const base = {

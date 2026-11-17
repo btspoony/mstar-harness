@@ -49,7 +49,7 @@
 import { isAbsolute, resolve } from "node:path";
 import { canonicalizeNearestExisting } from "./path.js";
 import { probePathOwnership } from "./path-check.js";
-import { readMainWorktree } from "./worktree.js";
+import { assertControlClean, hasHarnessRoot, readMainWorktree } from "./worktree.js";
 import { applyEnforcement } from "./core.js";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
 
@@ -940,6 +940,15 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
       if (branch !== undefined && branch.trim() !== "") {
         const directOnException = parseBranchPolicyDirectOnBranch(text) === branch.trim();
         violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations);
+      }
+      // (4b) Control root tracked-change gate (writable only): a repository with
+      // no harness has no control-root contract, so the leg skips rather than
+      // refuses; an unresolved control root keeps the existing behavior (no
+      // second code on top of the control-domain refusal the control domain
+      // already emits).
+      const main = readMainWorktree(opts.cwd ?? process.cwd());
+      if (main !== null && hasHarnessRoot(main.root)) {
+        violations.push(...assertControlClean({ controlRoot: main }).violations);
       }
     }
 
