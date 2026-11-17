@@ -29,7 +29,7 @@ Start from the user's original outcome, not from the machinery already built.
   3. Use an installed dependency; check its documentation and types before assuming it lacks the capability.
   4. Otherwise write the minimum readable direct solution. Add an established, well-maintained library only when it reduces overall complexity or improves reliability; check maintenance and size, and state the need in one sentence, not a new package for a few lines.
 - Centralize and reuse sources of truth for prompts, contracts, and data instead of copying them; do not invent an abstraction framework to do so.
-- Mark a deliberate bounded shortcut with `simplify:` and its ceiling/upgrade path. For an unavoidable workaround, explain why, label it `simplify:` or `temporary`, and record its removal path in the existing plan/status artifact before claiming completion. Temporary markers must cite that artifact.
+- Mark a deliberate bounded shortcut with `simplify:` and its ceiling/bound. For an unavoidable workaround, explain why, label it `simplify:` or `temporary:`, and record its bound in the existing plan/status artifact before claiming completion. A `temporary` marker must cite that artifact.
 
 ### Agent-facing products
 
@@ -40,6 +40,7 @@ Treat ordinary agent mistakes as expected usage. Prioritize **discoverability, f
 - Keep agent-authored content and mutations revisable through supported public operations. Avoid one-way restrictions or hidden manual repair; protect truly irreversible actions without making routine edits irreversible.
 - Refusals must name the actual cause and exact supported recovery, not a generic block or an undocumented escape. When authority or an external prerequisite is missing, identify it honestly rather than inventing a bypass.
 - Preserve real errors, distinctions, and partial outcomes. Never swallow or normalize away failures, fabricate success, or silently substitute a fallback that changes the meaning of the result.
+- When a correction returns, move it up the ladder instead of restating it: remove the choice → deterministic check → runtime verification → prose (`references/constraint-ladder.md`); a comment states only what the code cannot show, and carries its own bounds (`references/comments.md`).
 
 ### Surgical diagnosis and review
 

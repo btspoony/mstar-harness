@@ -391,8 +391,7 @@ const LINE_SUFFIX_RE = /:\d+(?:-\d+)?$/;
 const ANCHOR_RE = /#[\w.-]+$/;
 /** Directories never walked for module files. */
 const WALK_SKIP_DIRS = new Set(["node_modules", ".git", "dist"]);
-// simplify: bounded walk (5000 entries) so symbol heuristics stay cheap on
-// large repos; raise the cap if module resolution misses in monorepos.
+// simplify: bounded walk (5000 entries) keeps symbol heuristics cheap on large repos, upgrade: raise the cap if module resolution misses in monorepos.
 const MAX_WALK_FILES = 5000;
 
 /**
@@ -447,8 +446,7 @@ export function referenceExists(repoRoot: string, docText: string): ReferenceChe
 
   const foundModules = new Set<string>();
   if (moduleNames.size > 0) {
- // simplify: bounded walk (5000 entries) so symbol heuristics stay cheap on
- // large repos; raise the cap if module resolution misses in monorepos.
+ // simplify: bounded walk (5000 entries) keeps symbol heuristics cheap on large repos, upgrade: raise the cap if module resolution misses in monorepos.
     let walked = 0;
     const stack = [repoRoot];
     while (stack.length > 0 && walked < MAX_WALK_FILES) {

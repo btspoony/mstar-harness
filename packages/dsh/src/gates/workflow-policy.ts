@@ -158,10 +158,7 @@ export class WorkflowAskCache {
   private readonly decisions = new Map<string, WorkflowAskCacheDecision>()
   /** Names that received an `ask` verdict in this apply (W-1 — the observation promotes ONLY asked names to allow). */
   private readonly asked = new Set<string>()
-  // simplify: both collections are uncapped — growth is apply-scoped and only
-  // via ask verdicts / resolved decisions (an unresolved first-seen re-asks
-  // without inserting). Add a cap or TTL if long-lived sessions with high
-  // distinct-name ask volume ever show up in profiling.
+  // simplify: both collections are uncapped (growth is apply-scoped and only via ask verdicts / resolved decisions — an unresolved first-seen re-asks without inserting), upgrade: add a cap or TTL if long-lived sessions with high distinct-name ask volume ever show up in profiling.
   /** The resolved decision for `name`, or undefined when never resolved. */
   get(name: string): WorkflowAskCacheDecision | undefined {
     return this.decisions.get(name)

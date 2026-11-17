@@ -1070,6 +1070,18 @@ jobs:
       - name: Lint help reachability
         run: bun run lint:help-reachability
 
+      # Code comments: a `simplify:` label without a bound (an `upgrade:`
+      # clause or a removal/tracking reference) and a `temporary` label without
+      # a removal path are violations, so this step gates the job. An untracked
+      # TODO and commented-out code are advisory markers only: this step does
+      # not certify that none exist. The two roots are the range comments.md
+      # § Markers states.
+      - name: Lint code comments
+        run: |
+          for root in packages scripts; do
+            node packages/cli/dist/mstar-harness.js lint "$root" --type code
+          done
+
   pack-consumers:
     runs-on: ubuntu-latest
     steps:

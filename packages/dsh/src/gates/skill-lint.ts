@@ -185,9 +185,7 @@ function skillRootsOf(config: Config): string[] {
  * absolute paths; remote/URI backends never resolve under a local root and
  * the gate is inert for them — status-gate discipline).
  *
- * simplify: case-sensitive containment — on case-insensitive
- * filesystems a case-variant path escapes the gate (inert, never a false
- * positive); revisit if case-variant writes become an observed bypass.
+ * simplify: containment is case-sensitive (a case-variant path escapes on a case-insensitive filesystem — inert, never a false positive), upgrade: revisit if case-variant writes become an observed bypass.
  */
 function isSkillTarget(roots: readonly string[], target: FsTarget): boolean {
   if (basename(target.displayPath) !== 'SKILL.md') return false

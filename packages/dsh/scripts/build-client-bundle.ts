@@ -260,9 +260,7 @@ export function transformCssModule(source: string): { classMap: Record<string, s
  * plugin (virtual-id wrapper skipped — bun's plugin `onLoad` fully replaces
  * the module, no native css pipeline involvement).
  *
- * simplify: the css text is emitted as-is (comment-stripped, not minified);
- * the snapshot recipe runs lightningcss. If bundle size ever matters, switch
- * the devDep path (tsdown + the clientBundle recipe) or add a minifier here.
+ * simplify: the css text is emitted as-is (comment-stripped, not minified), upgrade: switch the devDep path (tsdown + the clientBundle recipe) or add a minifier here once bundle size matters — the snapshot recipe runs lightningcss.
  */
 function cssModuleContents(fileId: string): { contents: string; loader: 'js' } {
   const { classMap, css } = transformCssModule(readFileSync(fileId, 'utf8'))

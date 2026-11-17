@@ -214,9 +214,7 @@ function lineStartOf(text: string, index: number): number {
  * line-sorted findings summary (`{ line, type }`).
  */
 export function redactSecrets(text: string, filePath?: string): RedactResult {
- // simplify: single linear scan — line starts are precomputed once (O(n))
- // and per-match lookups are O(log n); the JWT whole-match pattern bounds
- // its segments ({10,1024}) so per-position backtracking is constant.
+ // simplify: single linear scan (line starts precomputed once, O(n) build and O(log n) per lookup; the JWT whole-match pattern bounds its segments ({10,1024}) so per-position backtracking stays constant), upgrade: precompute per-pattern match tables if a scan ever shows up in a redaction profile.
   const starts = buildLineStarts(text);
   const marker = (type: string, index: number) =>
     `[REDACTED ${type}@${lineAt(starts, index)}${filePath === undefined ? "" : ` in ${filePath}`}]`;

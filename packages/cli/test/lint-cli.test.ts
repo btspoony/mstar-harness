@@ -162,13 +162,119 @@ Check result: exit 0; changed scope line found.
     });
   });
 
-  test("code file with simplify marker → advisory only, exit 0", () => {
+  test("code file with a complete simplify marker → exit 0, marker printed", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "scan.ts");
       writeFileSync(file, "// simplify: naive scan; upgrade: index the map\nconst y = 2;\n");
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(0);
       expect(lintResults(result)[0]?.markers.join("\n")).toContain("simplify marker @1");
+    });
+  });
+
+  test("simplify without an upgrade path → lint.simplify.no-upgrade-path, exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// simplify: naive scan\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toContain("lint.simplify.no-upgrade-path");
+      expect(lintResults(result)[0]?.markers).toEqual([]);
+    });
+  });
+
+  test("a marker opened mid-sentence with no bound → exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "server.ts");
+      writeFileSync(file, "// refused. simplify: FIFO chain - one queue.\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toContain("lint.simplify.no-upgrade-path");
+    });
+  });
+
+  test("a bound on a continuation comment line → exit 0", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "server.ts");
+      writeFileSync(file, "// refused. simplify: FIFO chain - one queue.\n// upgrade: per-route queues once a profile shows the queue.\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      expect(lintResults(result)[0]?.markers.join("\n")).toContain("simplify marker @1");
+    });
+  });
+
+  test("the #123 reference comments.md lists satisfies the bound → exit 0", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// simplify: naive scan\n// removal tracked in #123\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      expect(lintViolationCodes(result)).toEqual([]);
+    });
+  });
+
+  test("a code line carrying a bare residual word is not a bound → exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// simplify: naive scan\nconst residual = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toContain("lint.simplify.no-upgrade-path");
+    });
+  });
+
+  test("a trailing marker after code keeps its same-line bound → exit 0", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.py");
+      writeFileSync(file, "x = 1  # simplify: naive scan; upgrade: index the map\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      expect(lintResults(result)[0]?.markers.join("\n")).toContain("simplify marker @1");
+    });
+  });
+
+  test("an `upgrade:` clause with no value does not satisfy the gate → exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// simplify: naive scan; upgrade:\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toContain("lint.simplify.no-upgrade-path");
+    });
+  });
+
+  test("a bound outside the block comment is not read (code after the close) → exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, '/* simplify: naive scan */ const p = "plans/y.md";\n');
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toContain("lint.simplify.no-upgrade-path");
+    });
+  });
+
+  test("a trailing marker after code with no bound → lint.simplify.no-upgrade-path, exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.sh");
+      writeFileSync(file, "x=1  # simplify: naive scan\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toContain("lint.simplify.no-upgrade-path");
+    });
+  });
+
+  test("untracked TODO and commented-out code → advisory markers, exit 0", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(
+        file,
+        "const a = 1;\n// TODO: later\nconst b = 2;\n// const x = 1;\nconst c = 3;\n",
+      );
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      const markers = lintResults(result)[0]?.markers.join("\n");
+      expect(markers).toContain("untracked TODO @2");
+      expect(markers).toContain("commented-out code @4");
     });
   });
 

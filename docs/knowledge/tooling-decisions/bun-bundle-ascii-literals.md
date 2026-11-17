@@ -19,6 +19,7 @@ applies_when:
   - Considering source-level `\uXXXX` escapes as "the fix" for bundle-encoding issues
 related_components:
   - packages/engine/src/dispatch.ts
+  - packages/engine/src/comment-scan.ts
   - scripts/escape-dist-literals.ts
   - scripts/ascii-literal-utils.ts
   - scripts/lint-ascii-literals.ts

@@ -15,6 +15,13 @@
  */
 import { describe, expect, test } from "bun:test";
 import { commentMask } from "./ascii-literal-utils.ts";
+import { commentMask as engineCommentMask } from "../packages/engine/src/comment-scan.ts";
+
+describe("commentMask — one implementation", () => {
+  test("this module re-exports the engine tokenizer, not a copy", () => {
+    expect(commentMask).toBe(engineCommentMask);
+  });
+});
 
 /** Non-ASCII characters at positions the mask treats as CODE (not comment). */
 function unmaskedNonAscii(src: string): string {
@@ -91,6 +98,13 @@ describe("commentMask — regex vs division heuristic (regression)", () => {
     expect(maskedText(src)).toContain("注释");
   });
 
+  test("division after a closed string or template keeps the trailing // comment", () => {
+    for (const src of ['const n = "4" / 2 // 注释\n', "const n = '4' / 2 // 注释\n", "const n = `4` / 2 // 注释\n"]) {
+      expect(unmaskedNonAscii(src)).toBe("");
+      expect(maskedText(src)).toContain("注释");
+    }
+  });
+
   test("plain division and plain regex both leave the trailing comment masked", () => {
     expect(unmaskedNonAscii("const d = a / b; // 注释\n")).toBe("");
     expect(unmaskedNonAscii("const r = /ab/; // 注释\n")).toBe("");
@@ -98,6 +112,19 @@ describe("commentMask — regex vs division heuristic (regression)", () => {
 
   test("division with no trailing comment has no masked region", () => {
     expect(maskedText("const d = a / b;\n")).toBe("");
+  });
+});
+
+describe("commentMask — an unterminated quote bails at the newline", () => {
+  test("a stray quote in code does not blank the next line's comment", () => {
+    const src = "const s = 'oops\n// 中文注释\n";
+    expect(unmaskedNonAscii(src)).toBe("");
+    expect(maskedText(src)).toContain("中文注释");
+  });
+
+  test("an apostrophe in a shell comment does not blank the following comment", () => {
+    const src = "# don't retry\n// 中文注释\n";
+    expect(maskedText(src)).toContain("中文注释");
   });
 });
 

@@ -838,11 +838,7 @@ function shellCommandWords(command: string): string[][] {
  * that only mentions these words (an `echo` argument, a commit message, a
  * generated doc line, a comment) is left untouched, which is what §3.2 requires.
  *
- * simplify: bounded to the CLI's own two program spellings and one command
- * shape. A bind spelled through an unrecognized wrapper (`npx`, a shell alias,
- * a program path) is not redirected — the shell route carries no authority
- * anyway, so that is a UX gap, not a security one. Widen only if a real
- * transport appears.
+ * simplify: bounded to the CLI's own two program spellings and one command shape (a bind spelled through an unrecognized wrapper (`npx`, a shell alias, a program path) is not redirected — the shell route carries no authority anyway, so that is a UX gap, not a security one), upgrade: widen only if a real transport appears.
  */
 function isManagedCoordinatorBind(command: string): boolean {
   for (const words of shellCommandWords(command)) {

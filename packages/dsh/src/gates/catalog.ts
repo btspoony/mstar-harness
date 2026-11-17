@@ -1332,9 +1332,7 @@ export interface PreStepCatalogOptions {
  * throwing message factory) logs and returns the delegated decision
  * unchanged; the advisory listener never aborts the very step it observes.
  *
- * simplify: dev-time stub — the digest is in-memory per app (the real
- * dsh-session log is unavailable at dev time; digest state resets on
- * fiber disposal, which is also HMR-correct).
+ * simplify: the digest is in-memory per app and resets on fiber disposal (HMR-correct), upgrade: read the real dsh-session log once it is reachable at dev time.
  * @param ctx - registrant context (logger for the containment path).
  * @param resolver - the per-workspace `{HARNESS_DIR}` resolver (the probe
  * never starts from the process cwd).

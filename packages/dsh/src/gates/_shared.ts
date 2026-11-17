@@ -286,12 +286,11 @@ export function liveConfigValue<T>(value: T | LiveConfigRef | undefined): T | un
 export const ROOT_SESSION_DISPATCH_BINDING = 'project-manager'
 
 /** Schemastery configuration schema for the plugin consumer. Object keys are optional by default (`.optional()` is a vendored-fork addition not present in npm schemastery); omitted ARRAY keys would materialize as `[]` (schemastery empty-value default — the tool-subagent `toolFilter` pitfall) and omitted DICT keys would materialize as `{}`, so the dispatch keys and the persona keys all preserve omission via `.default(undefined)`. */
-// simplify: the fork's 3.18.4 `.default()` typing defers the property Mode
-// generic, so the inferred meta.default output admits a `Volatile<...>` arm
-// that `Partial<Config>` rejects (3.18.2 accepted this assignment). The cast
-// only relaxes this one initializer check — the runtime value and the declared
-// `z<Config>` contract are unchanged. Drop it when the fork's `.default`
-// return instantiates concretely again.
+// simplify: the cast only relaxes this one initializer check, upgrade: drop it when the fork's `.default` return instantiates concretely again.
+// The fork's 3.18.4 `.default()` typing defers the property Mode generic, so
+// the inferred meta.default output admits a `Volatile<...>` arm that
+// `Partial<Config>` rejects (3.18.2 accepted this assignment); the runtime
+// value and the declared `z<Config>` contract are unchanged.
 export const Config: z<Config> = z.object({
   harnessDir: z.string(),
   enforcement: z.union(['hard', 'soft']),

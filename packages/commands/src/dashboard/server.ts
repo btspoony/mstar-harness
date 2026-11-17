@@ -128,7 +128,8 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
   // Serialized request execution: at most one read transaction runs at a time
   // (plan D2 "serialized request transactions"); new work after close is
   // refused. simplify: FIFO chain — the store's own read transactions are the
-  // bottleneck, so per-route concurrency would not add throughput.
+  // bottleneck, so per-route concurrency would not add throughput; upgrade:
+  // revisit when a dashboard latency profile shows workers waiting on the queue.
   let closed = false;
   let tail: Promise<void> = Promise.resolve();
   const enqueue = <T>(work: () => Promise<T>): Promise<T> => {

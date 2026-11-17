@@ -19,6 +19,8 @@ import {
   workflowEntryPreDispatchCheck,
   findSimplifyMarkers,
   findTemporaryMarkers,
+  findCommentedCode,
+  findUntrackedTodos,
   findEphemeralCitations,
   findProvenanceCitations,
   isReadOnlyAssignmentRole,
@@ -308,7 +310,25 @@ function lintOne(file: string, type?: LintType, prVariant = false): { violations
     case "strategy": violations.push(...lintStrategySections(text).violations); break;
     case "report": violations.push(...assertSddTddTriple(text).violations); break;
     case "code": {
-      for (const marker of findSimplifyMarkers(text)) markers.push(`simplify marker @${marker.line}: ${marker.text}`);
+      // A `simplify:` marker records a ceiling and a bound - an `upgrade:`
+      // clause or a removal/tracking reference (comments.md § Markers); one
+      // without a bound is a violation. The untracked-TODO and
+      // commented-out-code findings stay advisory markers.
+      for (const marker of findSimplifyMarkers(text)) {
+        if (marker.bound === null) {
+          violations.push({
+            ok: false,
+            severity: "medium",
+            code: "lint.simplify.no-upgrade-path",
+            message: `simplify marker at line ${marker.line} records no bound - state when to upgrade or where its removal is tracked (comments.md \u00a7 Markers)`,
+            fix: 'state the bound on the marker or a continuation line of its comment block, e.g. "simplify: <limit>, upgrade: <when>" or "removal tracked in status.json"',
+          });
+          continue;
+        }
+        markers.push(`simplify marker @${marker.line}: ${marker.text}`);
+      }
+      for (const todo of findUntrackedTodos(text)) markers.push(`untracked ${todo.marker} @${todo.line}: ${todo.text}`);
+      for (const finding of findCommentedCode(text)) markers.push(`commented-out code @${finding.line}: ${finding.text}`);
       const temporary = findTemporaryMarkers(text);
       for (const marker of temporary.markers) markers.push(`temporary marker @${marker.line}: ${marker.text} (${marker.removalPath === null ? "no removal path" : `removal: ${marker.removalPath}`})`);
       violations.push(...temporary.violations); break;
