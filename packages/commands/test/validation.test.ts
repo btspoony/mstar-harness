@@ -195,6 +195,32 @@ describe("validation command family", () => {
     expect(conflict).toMatchObject({ status: "refused", code: "dispatch.branch.conflict" });
   });
 
+  test("--control-clean refuses a control root with committable changes and passes a clean one", async () => {
+    const dirty = tempRoot();
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dirty });
+    // The harness is process state, so it is ignored: only real work can fail the check.
+    writeFileSync(path.join(dirty, ".gitignore"), ".mstar/\n");
+    writeFileSync(path.join(dirty, "README.md"), "fixture\n");
+    execFileSync("git", ["add", "-A"], { cwd: dirty });
+    execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "initial"], { cwd: dirty });
+    mkdirSync(path.join(dirty, ".mstar"), { recursive: true });
+    const harness = path.join(dirty, ".mstar");
+    const cleanRoot = await definition("worktree.check").execute({ controlClean: true, harness }, context(dirty));
+    expect(cleanRoot).toMatchObject({ status: "ok" });
+    writeFileSync(path.join(dirty, "README.md"), "fixture edited\n");
+    const refused = await definition("worktree.check").execute({ controlClean: true, harness }, context(dirty));
+    expect(refused).toMatchObject({ status: "refused", exitCode: 1, code: "worktree.main.tracked-changes" });
+    expect(refused.message).toContain("README.md");
+    const refusedDetails = (refused as { details?: { recovery?: string } }).details ?? {};
+    expect(refusedDetails.recovery).toContain("checkout that carries the target branch");
+    // A repository with no harness has no control-root contract: the check skips.
+    const plain = tempRoot();
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: plain });
+    writeFileSync(path.join(plain, "README.md"), "fixture\n");
+    const skipped = await definition("worktree.check").execute({ controlClean: true }, context(plain));
+    expect(skipped).toMatchObject({ status: "ok" });
+  });
+
   test("role conflict preserves the invalid SDD reviewer identity", async () => {
     const cwd = tempRoot();
     const assignment = path.join(cwd, "assignment.md");

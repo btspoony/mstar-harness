@@ -26,6 +26,8 @@ import {
   findEphemeralCitations,
   findProvenanceCitations,
   isReadOnlyAssignmentRole,
+  assertControlClean,
+  hasHarnessRoot,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
   readMainWorktree,
@@ -84,7 +86,7 @@ const tracksSchema = z.array(
 
 type Input = {
   assignmentFile?: string; branch?: string; planId?: string; plan?: string; workflow?: string; harness?: string; integration?: string;
-  mainBranch?: string; control?: string; entry?: boolean; l2?: boolean; tracks?: { worktreePath: string; workingBranch: string }[]; files?: string[]; mode?: string; reviewers?: string[];
+  mainBranch?: string; control?: string; entry?: boolean; l2?: boolean; controlClean?: boolean; tracks?: { worktreePath: string; workingBranch: string }[]; files?: string[]; mode?: string; reviewers?: string[];
   target?: string; type?: string; prVariant?: boolean; diffBase?: string; dir?: string; docPath?: string; knowledgeDir?: string;
   skillDir?: string; rolesDir?: string; skillsDir?: string; reportFile?: string;
 };
@@ -99,7 +101,7 @@ function assignmentExecutionMode(text: string): string {
 const verbs = ["dispatch.validate", "worktree.check", "worktree.qc-alignment", "review.seats", "lint", "design-md.validate", "compound.validate", "skill.lint", "roles.validate", "qc.validate-report"] as const;
 const schemas: Record<(typeof verbs)[number], z.ZodType<Input>> = {
   "dispatch.validate": z.object({ assignmentFile: z.string().optional(), branch: z.string().optional() }),
-  "worktree.check": z.object({ planId: z.string().optional(), plan: z.string().optional(), workflow: z.string().optional(), harness: z.string().optional(), integration: z.string().optional(), mainBranch: z.string().optional(), control: z.string().optional(), entry: z.boolean().optional(), l2: z.boolean().optional(), tracks: tracksSchema.optional() }),
+  "worktree.check": z.object({ planId: z.string().optional(), plan: z.string().optional(), workflow: z.string().optional(), harness: z.string().optional(), integration: z.string().optional(), mainBranch: z.string().optional(), control: z.string().optional(), entry: z.boolean().optional(), l2: z.boolean().optional(), controlClean: z.boolean().optional(), tracks: tracksSchema.optional() }),
   "worktree.qc-alignment": z.object({ files: z.array(z.string()).optional() }),
   "review.seats": z.object({ assignmentFile: z.string().optional(), mode: z.string().optional(), reviewers: z.array(z.string()).optional() }),
   lint: z.object({ target: z.string().optional(), type: z.string().optional(), prVariant: z.boolean().optional(), diffBase: z.string().optional() }),
@@ -413,6 +415,19 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         return gate.ok ? ok(id, gateData(gate)) : rejected(id, gate, "dispatch.assignment.invalid");
       }
       case "worktree.check": {
+        if (input.controlClean) {
+          // Standalone control-clean mode: no --plan/--workflow/--l2 needed. A
+          // repository with no harness (no .mstar/ and no .mstarc at its root)
+          // has no control-root contract, so the check skips instead of refusing.
+          if (input.plan !== undefined || input.planId !== undefined || input.workflow !== undefined) throw new SddScriptError("usage: worktree check --control-clean [--harness <path>] — pass --control-clean alone, not with --plan/--workflow", 2);
+          const main = readMainWorktree(input.harness !== undefined ? path.resolve(input.harness) : context.cwd);
+          if (main === null) return rejected(id, assertControlClean({ controlRoot: null }), "worktree.main.invalid");
+          if (!hasHarnessRoot(main.root)) return ok(id, gateData({ ok: true, violations: [] }));
+          const gate = assertControlClean({ controlRoot: main });
+          return gate.ok
+            ? ok(id, gateData(gate))
+            : refusal(id, gate.violations[0]?.code ?? "worktree.main.invalid", gate.violations[0]?.message ?? "control root tracked-change check failed", gateData(gate), gate.violations[0]?.fix);
+        }
         if (input.l2) {
           // `tracks` reaches here already validated: the typed input field is
           // the boundary contract (published schema == enforced shape), and the
@@ -814,7 +829,7 @@ async function changedLineRanges(context: InvocationContext, ref: string): Promi
 
 const contract: Record<(typeof verbs)[number], { path: string[]; args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; context?: "sessionId" }[]; effects: CommandDefinition["effects"]; description: string }> = {
   "dispatch.validate": { path: ["dispatch", "validate"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "branch", flags: "--branch <branch>" }], effects: ["read", "validate"], description: "Validate Assignment fields and branch protection. Write domain: control requires Worktree path, one branch form, and Control write paths: <path>[, <path>...]; paths are concrete, absolute or relative to Worktree path, and must be gitignored in the control checkout. A trailing / declares a directory; a path without it is checked under both file and directory ignore rules and must be ignored in both." },
-  "worktree.check": { path: ["worktree", "check"], args: [{ key: "planId", required: false, variadic: false }], options: [{ key: "plan", flags: "--plan <plan-id>" }, { key: "workflow", flags: "--workflow <id>" }, { key: "entry", flags: "--entry" }, { key: "harness", flags: "--harness <path>" }, { key: "integration", flags: "--integration <path>" }, { key: "mainBranch", flags: "--main-branch <branch>" }, { key: "control", flags: "--control <path>" }, { key: "l2", flags: "--l2" }, { key: "tracks", flags: "--tracks <json>" }], effects: ["read", "validate", "process"], description: "Check engine-enforced workflow-entry facts or the L1/L2 worktree pre-dispatch gate." },
+  "worktree.check": { path: ["worktree", "check"], args: [{ key: "planId", required: false, variadic: false }], options: [{ key: "plan", flags: "--plan <plan-id>" }, { key: "workflow", flags: "--workflow <id>" }, { key: "entry", flags: "--entry" }, { key: "harness", flags: "--harness <path>" }, { key: "integration", flags: "--integration <path>" }, { key: "mainBranch", flags: "--main-branch <branch>" }, { key: "control", flags: "--control <path>" }, { key: "l2", flags: "--l2" }, { key: "controlClean", flags: "--control-clean" }, { key: "tracks", flags: "--tracks <json>" }], effects: ["read", "validate", "process"], description: "Check engine-enforced workflow-entry facts, the L1/L2 worktree pre-dispatch gate, or the control root tracked-change gate (--control-clean: refuses while the Git main worktree carries committable changes; a repository without .mstar/ or .mstarc has no control-root contract and skips)." },
   "worktree.qc-alignment": { path: ["worktree", "qc-alignment"], args: [{ key: "files", required: true, variadic: true }], options: [], effects: ["read", "validate"], description: "Assert QC/QA Assignment alignment." },
   "review.seats": { path: ["review", "seats"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "mode", flags: "--mode <mode>" }, { key: "reviewers", flags: "--reviewers <list>" }], effects: ["read", "validate"], description: "Map execution mode to QC seat count and assert tri identity." },
   lint: { path: ["lint"], args: [{ key: "target", required: true, variadic: false }], options: [{ key: "type", flags: "--type <type>" }, { key: "prVariant", flags: "--pr-variant" }, { key: "diffBase", flags: "--diff-base <ref>" }], effects: ["read", "validate", "process"], description: "Lint harness artifacts by content type (plan | skill | strategy | report | code | finding | provenance | specs | adr). A directory is walked; only `code` and `provenance` define an extension set, so `--type` narrows that walk only for them (`--type code` is the form the comment gate runs), while every other type walks every collected file - except `specs` and `adr`, which run their own document-layer tree check instead. An unclassified comment without `--diff-base` is an advisory marker, with one `unclassified comments: <n>` summary line on stderr; `--diff-base <ref>` turns it into a violation on any comment line the change adds or modifies (any line of a block counts), which refuses the run and exits 1." },
