@@ -47,10 +47,18 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
 import vm from "node:vm";
 import { SOURCE_CODE, SOURCE_COMMENT, maskLiterals, scanSource } from "./comment-scan.js";
+import type { SourceDialect } from "./comment-scan.js";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
+}
+
+/** why: comment syntax follows the language, so the caller's file name decides
+ * the dialect. Python, shell and Ruby read `#` and treat `//` as arithmetic or
+ * a path; everything else keeps the C rules the lint has always applied. */
+export function sourceDialect(file: string): SourceDialect {
+  return /\.(?:py|sh|bash|zsh|rb)$/i.test(file) ? "hash" : "c";
 }
 
 /** Comment-introducer prefixes before a marker word (line-level scan):
@@ -94,10 +102,10 @@ const UPGRADE_TAIL_RE = /^\s*([^\n;,]*)/;
  * marker at all. The bound is searched across the marker's whole comment
  * block, because the house style writes it on a continuation line.
  */
-export function findSimplifyMarkers(fileText: string): SimplifyMarker[] {
+export function findSimplifyMarkers(fileText: string, dialect: SourceDialect = "c"): SimplifyMarker[] {
   const lines = fileText.split(/\r?\n/);
-  const masked = maskLiterals(fileText).split(/\r?\n/);
-  const scan = scanSource(fileText);
+  const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
+  const scan = scanSource(fileText, dialect);
   const offsets = lineOffsets(fileText);
   const commentOnly = commentOnlyLines(lines, scan, offsets);
   const markers: SimplifyMarker[] = [];
@@ -313,13 +321,13 @@ const REMOVAL_PATH_PATTERNS: readonly RegExp[] = [
  * a version mention alone ("remove in v2.0.0") is NOT a plan/status artifact
  * reference and is reported, per the strict convention wording.
  */
-export function findTemporaryMarkers(fileText: string): TemporaryMarkerResult {
+export function findTemporaryMarkers(fileText: string, dialect: SourceDialect = "c"): TemporaryMarkerResult {
   const markers: TemporaryMarker[] = [];
   const violations: ValidationResult[] = [];
   const re = new RegExp(`${COMMENT_INTRODUCER}\\s*temporary\\b(?:\\s*:|\\s[\\u2013\\u2014-]\\s)`, "i");
   const lines = fileText.split(/\r?\n/);
-  const masked = maskLiterals(fileText).split(/\r?\n/);
-  const scan = scanSource(fileText);
+  const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
+  const scan = scanSource(fileText, dialect);
   const offsets = lineOffsets(fileText);
   const commentOnly = commentOnlyLines(lines, scan, offsets);
   for (let i = 0; i < lines.length; i++) {
@@ -492,12 +500,12 @@ function isCommentContext(scan: Uint8Array, base: number, at: number, maskedLine
  * convention is uppercase, and lowercase prose ("the todo list") is not a
  * marker.
  */
-export function findUntrackedTodos(fileText: string): UntrackedTodo[] {
+export function findUntrackedTodos(fileText: string, dialect: SourceDialect = "c"): UntrackedTodo[] {
   const findings: UntrackedTodo[] = [];
   const re = /\b(TODO|FIXME)\b/g;
   const lines = fileText.split(/\r?\n/);
-  const masked = maskLiterals(fileText).split(/\r?\n/);
-  const scan = scanSource(fileText);
+  const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
+  const scan = scanSource(fileText, dialect);
   const offsets = lineOffsets(fileText);
   for (let i = 0; i < lines.length; i++) {
     const commentContext = masked[i];
@@ -588,7 +596,7 @@ const NON_C_COMMENT_LINE_RE = /^\s*(?:#|;)(?=\s|$)|^\s*--(?=\s|$)/;
  * Only a run that starts its line merges: two comments sharing a line are one
  * unit, but a trailing comment below a line-initial run is a different comment,
  * and joining them would read the code between them as comment text. */
-function commentUnits(fileText: string, scan: Uint8Array, masked: readonly string[], offsets: readonly number[]): CommentUnit[] {
+function commentUnits(fileText: string, scan: Uint8Array, masked: readonly string[], offsets: readonly number[], dialect: SourceDialect): CommentUnit[] {
   const runs: { start: number; end: number; doc: boolean; line: boolean; initial: boolean }[] = [];
   let i = 0;
   while (i < fileText.length) {
@@ -602,7 +610,9 @@ function commentUnits(fileText: string, scan: Uint8Array, masked: readonly strin
       start,
       end: i,
       doc: fileText.startsWith("/**", start) && !fileText.startsWith("/**/", start),
-      line: fileText.startsWith("//", start),
+      // why: `#` is a line comment only in a hash language, where an adjacent
+      // run of them is one wrapped comment exactly like a `//` run.
+      line: fileText.startsWith("//", start) || (dialect === "hash" && fileText.startsWith("#", start)),
       initial: fileText.slice(offsets[lineAt(offsets, start) - 1]!, start).trim() === "",
     });
   }
@@ -671,14 +681,14 @@ function hasCommentShape(line: string): boolean {
  * read, so a trailing `#`/`;`/`--` comment (`x = 1 # note`) is unreported.
  * upgrade: a per-extension comment tokenizer replacing `comment-scan.ts`.
  */
-export function findUnclassifiedComments(fileText: string): UnclassifiedComment[] {
+export function findUnclassifiedComments(fileText: string, dialect: SourceDialect = "c"): UnclassifiedComment[] {
   if (fileText === "") return [];
   const lines = fileText.split(/\r?\n/);
-  const masked = maskLiterals(fileText).split(/\r?\n/);
-  const scan = scanSource(fileText);
+  const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
+  const scan = scanSource(fileText, dialect);
   const offsets = lineOffsets(fileText);
   const findings: UnclassifiedComment[] = [];
-  for (const unit of commentUnits(fileText, scan, masked, offsets)) {
+  for (const unit of commentUnits(fileText, scan, masked, offsets, dialect)) {
     if (unit.body.trim() === "") continue;
     if (unit.doc && documentsExport(lines, unit.endLine)) continue;
     if (unit.body.split("\n").some(hasCommentShape)) continue;

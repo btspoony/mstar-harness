@@ -379,6 +379,93 @@ Check result: exit 0; changed scope line found.
     });
   });
 
+  // why: git C-quotes a path holding a quote, a backslash or a tab even with
+  // core.quotePath=false, and a checkout may set diff.noprefix=true. Either
+  // would leave the map keyed by a path the caller never asks for, so an
+  // unclassified comment would pass the ratchet.
+  test("--diff-base decodes a quoted path, so the ratchet still keys it", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const name = 'scan "quoted" one.ts';
+      const file = join(dir, name);
+      commitBase(dir, { [name]: "const a = 1;\n" });
+      writeFileSync(file, "const a = 1;\n// returns it again\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toEqual(["lint.comment.unclassified"]);
+    });
+  });
+
+  test("--diff-base decodes a quoted path holding a backslash and a tab", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const names = ["back\\slash.ts", "tab\there.ts"];
+      const files = Object.fromEntries(names.map((name) => [name, "const a = 1;\n"]));
+      commitBase(dir, files);
+      for (const name of names) writeFileSync(join(dir, name), "const a = 1;\n// returns it again\n");
+      for (const name of names) {
+        const result = runCli(["lint", join(dir, name), "--diff-base", "HEAD"], { cwd: dir });
+        expect(result.exitCode).toBe(1);
+        expect(lintViolationCodes(result)).toEqual(["lint.comment.unclassified"]);
+      }
+    });
+  });
+
+  test("--diff-base keys a quoted path under diff.noprefix=true", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const name = 'scan "quoted".ts';
+      const file = join(dir, name);
+      commitBase(dir, { [name]: "const a = 1;\n" });
+      execFileSync("git", ["config", "diff.noprefix", "true"], { cwd: dir, stdio: "ignore" });
+      writeFileSync(file, "const a = 1;\n// returns it again\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toEqual(["lint.comment.unclassified"]);
+    });
+  });
+
+  test("--diff-base still reports nothing for an untouched file under diff.noprefix=true", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      commitBase(dir, { "scan.ts": "// returns the value\nconst a = 1;\n" });
+      execFileSync("git", ["config", "diff.noprefix", "true"], { cwd: dir, stdio: "ignore" });
+      const result = runCli(["lint", join(dir, "scan.ts"), "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr.trim()).toBe("unclassified comments: 0");
+    });
+  });
+
+  test("a Python floor division is not a comment, so the ratchet passes it", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.py");
+      commitBase(dir, { "scan.py": "def f(n, d):\n    return n / d\n" });
+      writeFileSync(file, "def f(n, d):\n    return n // d\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(lintViolationCodes(result)).toEqual([]);
+      expect(result.stderr.trim()).toBe("unclassified comments: 0");
+    });
+  });
+
+  test("a hash comment holding a URL classifies in a Python file", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.py");
+      commitBase(dir, { "scan.py": "x = 1\n" });
+      writeFileSync(file, "x = 1\n# https://example.com/wire-format\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr.trim()).toBe("unclassified comments: 0");
+    });
+  });
+
+  test("an unclassified hash comment still fails the ratchet in a shell file", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "run.sh");
+      commitBase(dir, { "run.sh": "set -e\n" });
+      writeFileSync(file, "set -e\n# prints the value\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toEqual(["lint.comment.unclassified"]);
+    });
+  });
+
   test("--diff-base without a changed line stays out of the way of a clean file", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "scan.ts");

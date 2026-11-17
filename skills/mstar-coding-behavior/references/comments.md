@@ -10,7 +10,7 @@ A comment is an input to the next change: whoever edits the line reads it before
 
 ## MUST
 
-A non-documentation comment passes the lint in one of four shapes: a marker (`simplify:`, `shortcut:`, `temporary:`), a contract pointer — `see` plus its target (`docs/…`, `plans/…`, `ADR-<n>`, `#<n>`, `issue <n>`, `contract §`, a URL) or that target alone, a declared prefix (`why:`, `invariant:`, `safety:`, `note:`), or `@generated`; a `TODO`/`FIXME` is a fifth only with a tracking reference, and `see` without a target is prose, not a pointer. A `/** … */` block whose next non-empty line starts with `export` is documentation and exempt; the same block above anything else is not.
+A non-documentation comment passes the lint in one of four shapes: a marker (`simplify:`, `shortcut:`, `temporary:`) together with its bound — an `upgrade:` clause, or a removal/tracking reference (`#123`, `status.json`, `plans/<file>`) — a contract pointer — `see` plus its target (`docs/…`, `plans/…`, `ADR-<n>`, `#<n>`, `issue <n>`, `contract §`, a URL) or that target alone, a declared prefix (`why:`, `invariant:`, `safety:`, `note:`), or `@generated`; a `TODO`/`FIXME` is a fifth only with a tracking reference, and `see` without a target is prose, not a pointer. A bare label is not a shape: it licenses the pattern without bounding it, so the lint rejects it. A `/** … */` block whose next non-empty line starts with `export` is documentation and exempt; the same block above anything else is not.
 
 | Case | What keeps it |
 |---|---|
@@ -42,7 +42,7 @@ A non-documentation comment passes the lint in one of four shapes: a marker (`si
 
 ## Checkable vs judgement
 
-A check can see: marker tokens with no tracking reference, commented-out blocks, a marker whose ceiling or bound is missing, and a marker the diff copies into a new site. A check cannot see whether the comment still holds, whether it restates the code, or whether a shortcut is genuinely bounded. The first set is lint territory; the second is review territory, and rewording a rule does not move it between them. Of the first set, only a label without its bound is a gating violation: an ownerless `TODO` and a commented-out block are advisory markers that no gate reads, so a clean lint run says nothing about them. The commented-code check parses each candidate run with `vm.Script`, so a block left in TypeScript-only syntax (`: T`, `export`, top-level `return`) is not detected at all.
+A check can see: marker tokens with no tracking reference, commented-out blocks, a marker whose ceiling or bound is missing, and a marker the diff copies into a new site. A check cannot see whether the comment still holds, whether it restates the code, or whether a shortcut is genuinely bounded. The first set is lint territory; the second is review territory, and rewording a rule does not move it between them. Whole-tree, only a label without its bound is a violation: an ownerless `TODO` and a commented-out block are advisory markers there, so a clean whole-tree run says nothing about them. Under `--diff-base` the ratchet reads the same markers and fails them on a touched line, so an ownerless `TODO` or a commented-out block a change adds does gate (see § Ratchet). The commented-code check parses each candidate run with `vm.Script`, so a block left in TypeScript-only syntax (`: T`, `export`, top-level `return`) is not detected at all.
 
 ## Drift rule
 

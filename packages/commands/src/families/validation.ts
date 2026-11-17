@@ -22,6 +22,7 @@ import {
   findCommentedCode,
   findUnclassifiedComments,
   findUntrackedTodos,
+  sourceDialect,
   findEphemeralCitations,
   findProvenanceCitations,
   isReadOnlyAssignmentRole,
@@ -316,6 +317,9 @@ const UNCLASSIFIED_MARKER_PREFIX = "unclassified comment @";
 type TouchedLines = readonly (readonly [number, number])[];
 function lintOne(file: string, type?: LintType, prVariant = false, touched?: TouchedLines): { violations: Violation[]; markers: string[] } {
   const text = readFileSync(file, "utf8");
+  // why: the comment rules are the language's, so the file name picks the
+  // dialect - a Python `//` is floor division and a `#` opens its comment.
+  const dialect = sourceDialect(file);
   const violations: Violation[] = [];
   const markers: string[] = [];
   switch (type ?? lintType(file)) {
@@ -327,7 +331,7 @@ function lintOne(file: string, type?: LintType, prVariant = false, touched?: Tou
       // why: comments.md § Markers makes an unbounded marker a violation, and
       // `shortcut:` is the same label as `simplify:`, so both are gated here.
       // The untracked-TODO and commented-out-code findings stay advisory.
-      for (const marker of findSimplifyMarkers(text)) {
+      for (const marker of findSimplifyMarkers(text, dialect)) {
         if (marker.bound === null) {
           violations.push({
             ok: false,
@@ -344,7 +348,7 @@ function lintOne(file: string, type?: LintType, prVariant = false, touched?: Tou
       // finding stays an advisory marker and the count line is its only
       // output; under `--diff-base` a comment the change added or modified
       // (any line of a block moving counts) becomes a violation instead.
-      for (const finding of findUnclassifiedComments(text)) {
+      for (const finding of findUnclassifiedComments(text, dialect)) {
         const changed = touched === undefined
           ? false
           : touched.some(([start, end]) => finding.line <= end && finding.endLine >= start);
@@ -360,9 +364,9 @@ function lintOne(file: string, type?: LintType, prVariant = false, touched?: Tou
           });
         }
       }
-      for (const todo of findUntrackedTodos(text)) markers.push(`untracked ${todo.marker} @${todo.line}: ${todo.text}`);
+      for (const todo of findUntrackedTodos(text, dialect)) markers.push(`untracked ${todo.marker} @${todo.line}: ${todo.text}`);
       for (const finding of findCommentedCode(text)) markers.push(`commented-out code @${finding.line}: ${finding.text}`);
-      const temporary = findTemporaryMarkers(text);
+      const temporary = findTemporaryMarkers(text, dialect);
       for (const marker of temporary.markers) markers.push(`temporary marker @${marker.line}: ${marker.text} (${marker.removalPath === null ? "no removal path" : `removal: ${marker.removalPath}`})`);
       violations.push(...temporary.violations); break;
     }
@@ -719,6 +723,39 @@ async function awaitSpawn(context: InvocationContext, argv: readonly string[], c
 /** why: the new side's count is 0 for a deletion-only hunk, which contributes
  * no changed line, so the count is read separately from the start. */
 const HUNK_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+
+/** The C string git writes beside a header when a path holds a quote,
+ * a backslash or a control character — `core.quotePath=false` only turns off
+ * octal escaping of non-ASCII bytes, not this quoting. */
+const C_ESCAPES: Readonly<Record<string, string>> = {
+  a: "\x07", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v", "\\": "\\", '"': '"',
+};
+
+/** Decode the C-quoted path git wrote into a header field, or return the field
+ * as-is when it is not quoted. A quoted path may be followed by a tab git adds
+ * to separate the name from the hunk context; anything after the closing quote
+ * is separator. A bare path gets that one trailing tab dropped, which is the
+ * only separator git writes for an unquoted name. */
+function diffHeaderPath(field: string): string {
+  if (!field.startsWith('"')) return field.endsWith("\t") ? field.slice(0, -1) : field;
+  let out = "";
+  for (let i = 1; i < field.length; i++) {
+    const c = field[i]!;
+    if (c === '"') return out;
+    if (c !== "\\") { out += c; continue; }
+    const escape = field[i + 1] ?? "";
+    const octal = /^[0-7]{1,3}/.exec(field.slice(i + 1));
+    if (octal !== null) {
+      out += String.fromCharCode(Number.parseInt(octal[0], 8));
+      i += octal[0].length;
+      continue;
+    }
+    out += C_ESCAPES[escape] ?? escape;
+    i += 1;
+  }
+  return out;
+}
+
 /**
  * The lines a change adds or modifies against `ref`, per repository-relative
  * path, plus the root those paths are spelled from. A zero-context diff is the
@@ -734,7 +771,12 @@ async function changedLineRanges(context: InvocationContext, ref: string): Promi
   if (!base.ok || base.stdout === "") throw new SddScriptError(`usage: lint <target> --diff-base <ref> - git merge-base ${ref} HEAD failed: ${base.stderr || "no merge base"}`, 2);
   const top = await awaitSpawn(context, ["git", "rev-parse", "--show-toplevel"]);
   if (!top.ok || top.stdout === "") throw new SddScriptError(`usage: lint <target> --diff-base <ref> - ${context.cwd} is not inside a git checkout: ${top.stderr}`, 2);
-  const diff = await awaitSpawn(context, ["git", "-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", "--no-ext-diff", base.stdout, "--"]);
+  // why: a checkout may set `diff.noprefix=true` and git still C-quotes a path
+  // holding a quote, a backslash or a control character. Forcing both prefixes
+  // and decoding the quoted form keeps the map key the caller's own repo
+  // path; otherwise the lookup misses, defaults to an empty range list, and a
+  // changed unclassified comment passes the ratchet.
+  const diff = await awaitSpawn(context, ["git", "-c", "core.quotePath=false", "diff", "--src-prefix=a/", "--dst-prefix=b/", "--unified=0", "--no-color", "--no-ext-diff", base.stdout, "--"]);
   if (!diff.ok) throw new SddScriptError(`usage: lint <target> --diff-base <ref> - git diff ${base.stdout} failed: ${diff.stderr}`, 2);
   const ranges = new Map<string, [number, number][]>();
   let file: string | undefined;
@@ -749,7 +791,7 @@ async function changedLineRanges(context: InvocationContext, ref: string): Promi
       inHunk = false;
     }
     if (line.startsWith("+++ ")) {
-      const target = line.slice(4).trim();
+      const target = diffHeaderPath(line.slice(4));
       file = target === "/dev/null" ? undefined : target.replace(/^b\//, "");
       continue;
     }

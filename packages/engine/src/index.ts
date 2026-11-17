@@ -450,6 +450,7 @@ export {
   findTemporaryMarkers,
   findUnclassifiedComments,
   findUntrackedTodos,
+  sourceDialect,
   lintAdrTree,
   lintSkillFrontmatter,
   lintSpecsDoc,

@@ -52,6 +52,7 @@ import {
   lintSpecsTree,
   lintStrategySections,
   planQualityBar,
+  sourceDialect,
 } from "../src/lint.js";
 
 /**
@@ -809,6 +810,46 @@ describe("findUnclassifiedComments", () => {
 
   test("returns [] for empty input", () => {
     expect(findUnclassifiedComments("")).toEqual([]);
+  });
+});
+
+describe("findUnclassifiedComments — comment dialect follows the language", () => {
+  test("Python floor division is code, not a comment", () => {
+    expect(findUnclassifiedComments("return numerator // denominator\n", "hash")).toEqual([]);
+    // the C default keeps its existing reading, so callers that pass no dialect
+    // are unchanged
+    expect(findUnclassifiedComments("return numerator // denominator\n")).toHaveLength(1);
+  });
+
+  test("a hash comment is one unit, so a URL inside it classifies", () => {
+    expect(findUnclassifiedComments("# https://example.com/wire-format\n", "hash")).toEqual([]);
+    expect(findUnclassifiedComments("# see docs/adr/0007\n", "hash")).toEqual([]);
+    expect(findUnclassifiedComments("# why: the wire format fixes field order\n", "hash")).toEqual([]);
+  });
+
+  test("a hash comment that restates the code still fails in a hash language", () => {
+    const findings = findUnclassifiedComments("# returns the value\n", "hash");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ line: 1, text: "# returns the value" });
+  });
+
+  test("a slash in a shell path opens no comment", () => {
+    expect(findUnclassifiedComments("src=/usr/local//bin/run\n", "hash")).toEqual([]);
+    expect(findUnclassifiedComments("echo ${#SCREENS[@]}\n", "hash")).toEqual([]);
+  });
+
+  test("code and literals before a hash keep their own reading", () => {
+    expect(findUnclassifiedComments('x = "a # b"\n', "hash")).toEqual([]);
+    expect(findUnclassifiedComments("def f():  # returns the value\n", "hash")).toHaveLength(1);
+  });
+
+  test("the dialect is derived from the extension", () => {
+    for (const file of ["a/b/scan.py", "run.sh", "x.BASH", "lib.zsh", "task.rb"]) {
+      expect(sourceDialect(file)).toBe("hash");
+    }
+    for (const file of ["scan.ts", "scan.tsx", "main.go", "lib.rs", "README.md", "noext"]) {
+      expect(sourceDialect(file)).toBe("c");
+    }
   });
 });
 

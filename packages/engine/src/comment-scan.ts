@@ -4,13 +4,17 @@
  * (`scripts/lint-ascii-literals.ts`, `scripts/escape-dist-literals.ts`,
  * `scripts/drift-lint.ts`).
  *
- * One pass classifies every character of a source file:
- * - `//` line comments and block comments (slash-star ... star-slash);
- * - string awareness (single, double, backtick), with template `${}`
- *   expressions scanned as code so their own literals and comments classify
- *   correctly;
- * - regex-literal awareness (a char class may hold a quote, e.g. /["'`]/), so
- *   a quote inside a regex never opens a phantom string.
+ * One pass classifies every character of a source file under a dialect:
+ * - `c` (the default, so every existing caller is unchanged): `//` line
+ *   comments and block comments (slash-star ... star-slash), with
+ *   string/template/regex awareness;
+ * - `hash` (Python, shell, Ruby): `#` opens a comment to end of line, and
+ *   `//` is arithmetic or a path, never a comment.
+ *
+ * String awareness (single, double, backtick) with template `${}` expressions
+ * scanned as code, so their own literals and comments classify correctly.
+ * Regex-literal awareness (a char class may hold a quote, e.g. /["'`]/) keeps
+ * a quote inside a regex from opening a phantom string.
  *
  * Regex-vs-division is a heuristic: after an adjacent `++`/`--`, after a
  * completed regex, after a closed string or template, or after an operand,
@@ -23,9 +27,20 @@ export const SOURCE_CODE = 0;
 export const SOURCE_COMMENT = 1;
 export const SOURCE_LITERAL = 2;
 
-/** Classify every character of `src`: code, comment content, or string,
- * template, or regex literal content (delimiters and escapes included). */
-export function scanSource(src: string): Uint8Array {
+/**
+ * The comment syntax a file is read with.
+ * - `c`: double-slash line comments and slash-star block comments, with
+ *   regex-literal awareness.
+ * - `hash`: `#` opens a comment to end of line, and the double slash is
+ *   arithmetic (Python floor division) or a path (shell) — never a comment.
+ *   No regex literals exist, so a single slash always divides.
+ */
+export type SourceDialect = "c" | "hash";
+
+/** Classify every character of `src` under `dialect`: code, comment content,
+ * or string, template, or regex literal content (delimiters and escapes
+ * included). */
+export function scanSource(src: string, dialect: SourceDialect = "c"): Uint8Array {
   const scan = new Uint8Array(src.length);
   let state: "code" | "line" | "block" | "sq" | "dq" | "tpl" | "regex" = "code";
   const exprStack: Array<"expr" | "brace"> = []; // template ${...} / object-literal braces
@@ -139,14 +154,27 @@ export function scanSource(src: string): Uint8Array {
       continue;
     }
     // state === "code"
-    if (c === "/" && next === "/") {
+    // why: in a hash-comment language `#` opens the line comment and `//` is
+    // arithmetic (Python floor division) or a path (shell), so C rules would
+    // read `return n // d` as a comment. A marker after `{` or `$`
+    // (`${#SCREENS[@]}`, `$#`) is shell syntax, so the introducer must follow
+    // whitespace or open the line.
+    // shortcut: an unspaced trailing `#` (`x=1#note`) opens no comment.
+    // upgrade: a per-language tokenizer with each grammar's own word rules.
+    if (dialect === "hash" && c === "#" && (i === 0 || /\s/.test(src[i - 1] as string))) {
+      state = "line";
+      scan[i] = SOURCE_COMMENT;
+      i++;
+      continue;
+    }
+    if (dialect === "c" && c === "/" && next === "/") {
       state = "line";
       scan[i] = SOURCE_COMMENT;
       scan[i + 1] = SOURCE_COMMENT;
       i += 2;
       continue;
     }
-    if (c === "/" && next === "*") {
+    if (dialect === "c" && c === "/" && next === "*") {
       state = "block";
       scan[i] = SOURCE_COMMENT;
       scan[i + 1] = SOURCE_COMMENT;
@@ -154,7 +182,10 @@ export function scanSource(src: string): Uint8Array {
       continue;
     }
     if (c === "/") {
-      const startsRegex = Object.hasOwn(regexAntecedent, prevSig) || Object.hasOwn(regexKeywords, lastToken) || prevSig === "";
+      // why: a hash-comment language has no regex literals, so a slash always
+      // divides and `//` stays two of them. Entering the regex state there
+      // would swallow the rest of the line.
+      const startsRegex = dialect === "c" && (Object.hasOwn(regexAntecedent, prevSig) || Object.hasOwn(regexKeywords, lastToken) || prevSig === "");
       if (startsRegex) {
         state = "regex";
         regexInClass = false;
@@ -232,8 +263,8 @@ export function scanSource(src: string): Uint8Array {
 }
 
 /** 1 where the character is comment content (the ASCII tooling's view). */
-export function commentMask(src: string): Uint8Array {
-  const scan = scanSource(src);
+export function commentMask(src: string, dialect: SourceDialect = "c"): Uint8Array {
+  const scan = scanSource(src, dialect);
   const mask = new Uint8Array(src.length);
   for (let i = 0; i < scan.length; i++) {
     if (scan[i] === SOURCE_COMMENT) mask[i] = 1;
@@ -245,8 +276,8 @@ export function commentMask(src: string): Uint8Array {
  * kept, so line numbers survive), comments left intact — the detectors' view:
  * a marker token inside a literal is not a marker, a marker inside a comment
  * still is. */
-export function maskLiterals(src: string): string {
-  const scan = scanSource(src);
+export function maskLiterals(src: string, dialect: SourceDialect = "c"): string {
+  const scan = scanSource(src, dialect);
   let out = "";
   for (let i = 0; i < src.length; i++) {
     out += scan[i] === SOURCE_LITERAL && src[i] !== "\n" ? " " : src[i];
