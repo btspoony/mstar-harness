@@ -587,6 +587,13 @@ describe("findCommentedCode", () => {
   test("returns [] for empty input", () => {
     expect(findCommentedCode("")).toEqual([]);
   });
+
+  test("a hash-dialect file is out of scope, not silently missed", () => {
+    // see skills/mstar-coding-behavior/references/comments.md § Checkable vs judgement — C-family comment runs only.
+    const shell = "#!/bin/sh\n# echo old\n# rm -rf /tmp/x\necho hi\n";
+    expect(findCommentedCode(shell, "hash")).toEqual([]);
+    expect(findCommentedCode(shell)).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -630,6 +637,12 @@ describe("findUntrackedTodos", () => {
     expect(findUntrackedTodos('expect(find("// TODO: later")).toBe(1);\n')).toEqual([]);
   });
 
+  test("prose that names the marker is not a task", () => {
+    expect(findUntrackedTodos("// The untracked-TODO and commented-out-code findings stay advisory.\n")).toEqual([]);
+    expect(findUntrackedTodos("// a label (`TODO: later`) or a bare word is not code\n")).toEqual([]);
+    expect(findUntrackedTodos("// findUntrackedTodos — comments.md § MUST NOT (an ownerless TODO)\n")).toEqual([]);
+  });
+
   test("a code identifier named TODO or FIXME is not a marker", () => {
     expect(findUntrackedTodos("const TODO = 1;\n")).toEqual([]);
     expect(findUntrackedTodos("type FIXME = string;\n")).toEqual([]);
@@ -645,12 +658,10 @@ describe("findUntrackedTodos", () => {
     expect(findUntrackedTodos("# TODO: fix\n")).toHaveLength(1);
   });
 
-  test("a rejected code-context marker does not shadow a later comment marker on the line", () => {
-    const findings = findUntrackedTodos("class A { #TODO = 1; } // TODO: remove the shim\n");
-    expect(findings).toHaveLength(1);
-    expect(findings[0].line).toBe(1);
-    expect(findings[0].marker).toBe("TODO");
-    expect(findings[0].text).toContain("remove the shim");
+  test("a marker must open the comment content, not follow code or prose", () => {
+    expect(findUntrackedTodos("class A { #TODO = 1; } // TODO: remove the shim\n")).toEqual([]);
+    expect(findUntrackedTodos("const x = 1; // TODO: remove the shim\n")).toEqual([]);
+    expect(findUntrackedTodos("// TODO: remove the shim\n")).toHaveLength(1);
   });
 
   test("a named owner satisfies the rule (`TODO(alice):`)", () => {
@@ -663,12 +674,12 @@ describe("findUntrackedTodos", () => {
     expect(findUntrackedTodos("// FIXME @bob: drop the shim\n")).toEqual([]);
   });
 
-  test("a marker in a trailing non-C comment is still checked (`#`, `--`)", () => {
+  test("a line-leading non-C introducer opens the marker (`#`, `--`)", () => {
     const cases = [
-      "echo hi # TODO: fix the retry\n",
-      "key: v # FIXME: drop the shim\n",
-      "select 1; -- TODO: reindex\n",
-      "x = 1 # TODO: fix the retry\n",
+      "# TODO: fix the retry\n",
+      "; TODO: drop the shim\n",
+      "-- TODO: reindex\n",
+      "# TODO: fix the retry\n",
     ];
     for (const text of cases) {
       expect(findUntrackedTodos(text)).toHaveLength(1);
@@ -682,11 +693,11 @@ describe("findUntrackedTodos", () => {
     }
   });
 
-  test("a non-C introducer that starts the line is comment context past a non-adjacent marker", () => {
-    expect(findUntrackedTodos("# see TODO: fix the retry\n")).toHaveLength(1);
-    expect(findUntrackedTodos("; note: TODO: rewrite the retry loop\n")).toHaveLength(1);
-    expect(findUntrackedTodos("-- see TODO: reindex after the migration\n")).toHaveLength(1);
-    expect(findUntrackedTodos("const TODO = 1;\n")).toEqual([]);
+  test("a marker that follows prose on its comment line is not a task", () => {
+    expect(findUntrackedTodos("# see TODO: fix the retry\n")).toEqual([]);
+    expect(findUntrackedTodos("; note: TODO: rewrite the retry loop\n")).toEqual([]);
+    expect(findUntrackedTodos("-- see TODO: reindex after the migration\n")).toEqual([]);
+    expect(findUntrackedTodos("# TODO: reindex after the migration\n")).toHaveLength(1);
   });
 
   test("every parenthesised marker on the line is inspected for an owner", () => {

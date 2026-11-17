@@ -1,19 +1,18 @@
 /**
  * Engine lint module — deterministic lint checks ported from skill prose.
  *
- * Roadmap §8.2 `lint` row + §4.5 Lint layer (`simplify:` / `temporary` marker presence; SDD TDD
+ * Roadmap §8.2 `lint` row + §4.5 Lint layer (bounded marker presence; SDD TDD
  * triple in completion reports; plan-quality-bar checks; skill frontmatter
  * contract; STRATEGY.md required sections). Skill text stays the semantic
  * SSOT (roadmap D5) — this module implements the deterministic subset and
  * never forks semantics.
  *
  * Spec sources (each function cites the source section):
- * - simplify:/temporary markers: `mstar-coding-behavior` SKILL.md § Decision
- * Rules: a deliberate shortcut with a known
- * ceiling is marked with a `simplify:` comment naming the ceiling and the
- * upgrade path; a workaround is labeled `simplify:` / `temporary`, explains
- * why, and records the removal path in the plan/status artifact before the
- * task is claimed complete.
+ * - Marker bounds and shapes: `mstar-coding-behavior/references/comments.md`
+ * § Markers — a deliberate shortcut is `simplify:` or its spelling
+ * `shortcut:`, naming the ceiling and one bound (`upgrade: <when>` or a
+ * tracking reference); a workaround is `temporary:` with its removal path.
+ * SKILL.md § Decision Rules keeps the workaround sentence alone.
  * - Commented-out code and ownerless TODO: `skills/mstar-coding-behavior/
  * references/comments.md` § MUST NOT — the file's history is the archive, and
  * a marker with no issue reference, key or removal path holds nobody.
@@ -407,8 +406,13 @@ export type CommentedCodeFinding = { line: number; text: string };
  * kept in a comment, reported at its first line. The run is detected on the
  * masked view, so a `//` line inside a string or template literal (a fixture
  * asserting this very check) is not a comment.
+ *
+ * note: C-family comment runs only. A hash-dialect file (shell, Python, Ruby)
+ * returns no finding by design — this engine has no parser for those
+ * languages, and comments.md § Checkable vs judgement states the limit.
  */
-export function findCommentedCode(fileText: string): CommentedCodeFinding[] {
+export function findCommentedCode(fileText: string, dialect: SourceDialect = "c"): CommentedCodeFinding[] {
+  if (dialect === "hash") return [];
   const findings: CommentedCodeFinding[] = [];
   const lines = fileText.split(/\r?\n/);
   const masked = maskLiterals(fileText).split(/\r?\n/);
@@ -514,6 +518,9 @@ export function findUntrackedTodos(fileText: string, dialect: SourceDialect = "c
     // comment marker after it.
     for (const match of commentContext.matchAll(re)) {
       if (!isCommentContext(scan, offsets[i], match.index, commentContext)) continue;
+      // why: the marker must open the comment content, so prose that merely
+      // names it ("the TODO rule") is not a task.
+      if (!MARKER_LINE_LEAD_RE.test(commentContext.slice(0, match.index))) continue;
       if (hasTrackingReference(commentContext)) break;
       findings.push({ line: i + 1, marker: match[1] as UntrackedTodo["marker"], text: lines[i].trim() });
       break;
@@ -557,6 +564,11 @@ const COMMENT_SHAPES: readonly RegExp[] = [
 /** why: the marker is a shape only when a tracking reference (an owner, an
  * issue, a removal path) holds somebody to it. */
 const TODO_MARKER_RE = /\b(?:TODO|FIXME)\b/;
+
+/** why: the marker must open the comment content. Allowed before it are the
+ * introducer, an optional block-comment `*`, and whitespace; a marker after
+ * prose or code is a mention, not a task. */
+const MARKER_LINE_LEAD_RE = /^\s*(?:\/\/|\/\*|\*|#|;|--)?\s*$/;
 
 /** why: the changed-line gate reads the whole span, so a unit carries both its
  * first and last line together with the body a shape match reads. */

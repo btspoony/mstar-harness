@@ -36,7 +36,7 @@ function artifactPath(root: string, rel: string): string {
   }
 }
 function readStudyResult(root: string, manifest: StudyManifest, baseline: FrozenBaseline): StudyResult {
-  // simplify: reads stay untranslated (translating them caused an end-to-end regression), upgrade: translate them once the I-001095 cause is reproduced and named.
+  // see packages/judgment/scripts/evaluate.ts — the read-side translation decision and its bound.
   const value = JSON.parse(readFileSync(artifactPath(root, "study-result.json"), "utf8")) as Partial<StudyResult>;
   if (value.schema !== "mstar.shadow-study-result/v1" || typeof value.runId !== "string" ||
       (value.evidenceClass !== "component" && value.evidenceClass !== "synthetic-offline") ||
