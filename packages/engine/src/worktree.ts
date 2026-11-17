@@ -123,7 +123,7 @@ export function assertMainWorktreeResidency(main: MainWorktreeInfo, expectedBran
   return gate(violations);
 }
 
-/** How many changed paths a tracked-changes refusal names before it summarizes. */
+/** invariant: a tracked-changes refusal names at most this many paths, then summarizes the rest. */
 const TRACKED_CHANGE_LIMIT = 20;
 
 /**
@@ -179,7 +179,7 @@ export function assertControlClean(
     );
     return gate(violations);
   }
-  // Porcelain line = two status columns, a space, then the path — the path is
+  // why: a porcelain line is two status columns, a space, then the path — the path is
   // what an operator moves; the columns are not.
   const paths = probe.status
     .split(/\r?\n/)
@@ -277,7 +277,7 @@ export type WorkflowEntryPreDispatchResult = GateResult & {
 };
 
 /**
- * `explicitUntracked` asks Git for untracked files regardless of the checkout's
+ * why: `explicitUntracked` asks Git for untracked files regardless of the checkout's
  * own `status.showUntrackedFiles` setting: a repository configured `no` would
  * otherwise report a clean tree that still holds committable new files. Opt-in
  * so the other callers keep their configured view.

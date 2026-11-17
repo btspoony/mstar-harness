@@ -280,10 +280,10 @@ describe("composeDispatchGate — control root tracked-change leg (writable)", (
     try {
       mkdirSync(join(root, ".mstar"), { recursive: true });
       expect(composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root }).ok).toBe(true);
-      // Ignored process state never dirties the gate.
+      // invariant: ignored process state never dirties the gate.
       writeFileSync(join(root, ".mstar", "status.json"), "{}\n");
       expect(composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root }).ok).toBe(true);
-      // Read-only leg skips the tracked-change gate even on a dirty root.
+      // invariant: the read-only leg skips the tracked-change gate even on a dirty root.
       writeFileSync(join(root, "README.md"), "fixture edited\n");
       expect(composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root, writable: false }).ok).toBe(true);
     } finally {

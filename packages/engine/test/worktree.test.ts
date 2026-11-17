@@ -1645,7 +1645,7 @@ test("workflow entry recovery identifies the owner before switching main", () =>
 });
 
 /**
- * Harness presence is the {HARNESS_DIR} resolution chain, so a legacy `.agents/`
+ * invariant: harness presence is the {HARNESS_DIR} resolution chain, so a legacy `.agents/`
  * or a declared `harness_dir` counts exactly as `.mstar/` does — the gate must not
  * skip a repository that resolves a harness.
  */
@@ -1675,7 +1675,7 @@ describe("hasHarnessRoot — harness presence follows the {HARNESS_DIR} chain", 
 });
 
 /**
- * Control root tracked-change gate — a writable dispatch may not run while the
+ * invariant: a writable dispatch may not run while the
  * checkout that carries the process SSOT has committable changes (they belong to
  * the checkout carrying the target branch). The verdict is Git state only:
  * `git status --porcelain` empty means clean, and ignored paths never appear.
@@ -1735,7 +1735,7 @@ describe("assertControlClean — control root tracked-change gate", () => {
     const root = tmpRoot("control-clean-probe-");
     try {
       const repo = gitRepo(root);
-      // An unusable git executable proves the probe failed; a failure is not a
+      // why: an unusable git executable proves the probe failed — a failure is not a
       // clean verdict, so the gate must fail closed with its recovery.
       const result = assertControlClean({ controlRoot: mainInfo(repo) }, { gitPath: "/nonexistent/git-binary" });
       expect(result.violations.map((entry) => entry.code)).toEqual(["worktree.main.unresolved"]);
@@ -1748,7 +1748,7 @@ describe("assertControlClean — control root tracked-change gate", () => {
     const root = tmpRoot("control-clean-untracked-hidden-");
     try {
       const repo = gitRepo(root);
-      // `status.showUntrackedFiles=no` would answer "clean" for a tree that
+      // why: `status.showUntrackedFiles=no` would answer "clean" for a tree that
       // still holds committable new files.
       git(["config", "status.showUntrackedFiles", "no"], repo);
       writeFileSync(join(repo, "untracked.ts"), "export {};\n");

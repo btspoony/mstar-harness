@@ -943,7 +943,7 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
       }
     }
 
-    // (4b) Control root tracked-change gate — EVERY writable dispatch, not only
+    // why: (4b) the control root tracked-change gate covers EVERY writable dispatch, not only
     // the work domain: the question ("does the process-SSOT checkout hold
     // committable changes?") is domain-independent. A repository with no harness
     // has no control-root contract, so the leg skips rather than refuses; an

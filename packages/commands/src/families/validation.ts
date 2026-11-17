@@ -416,7 +416,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
       }
       case "worktree.check": {
         if (input.controlClean) {
-          // Standalone control-clean mode: it decides one question, so every
+          // why: standalone control-clean mode decides one question, so every
           // other selector is mutually exclusive — accepting one silently would
           // answer the control-root question and skip the selected check.
           // --harness is the one combinable anchor: it names the harness the
@@ -435,17 +435,17 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           if (conflicting.length > 0) {
             throw new SddScriptError(`usage: worktree check --control-clean [--harness <path>] — pass --control-clean alone, not with ${conflicting.join(" / ")}; run the control-root check and ${conflicting.join(" / ")} as separate invocations`, 2);
           }
-          // A relative anchor resolves against the invocation workspace, never
+          // why: a relative anchor resolves against the invocation workspace, never
           // this process's own directory.
           const harnessAnchor = input.harness === undefined ? undefined : path.resolve(context.cwd, input.harness);
           const main = readMainWorktree(harnessAnchor ?? context.cwd);
           if (main === null) return rejected(id, assertControlClean({ controlRoot: null }), "worktree.main.invalid");
-          // A named harness that exists is itself the harness; otherwise the
+          // invariant: a named harness that exists is itself the harness; otherwise the
           // control root's {HARNESS_DIR} resolution chain decides. No declaring
           // harness means no control-root contract: the check skips.
           if (!hasHarnessRoot(main.root) && !(harnessAnchor !== undefined && existsSync(harnessAnchor))) return ok(id, gateData({ ok: true, violations: [] }));
           const gate = assertControlClean({ controlRoot: main });
-          // The literal recovery is what the refusal-quality rule can prove; each
+          // why: the literal recovery is what the refusal-quality rule can prove; each
           // violation's own fix stays in the details.
           return gate.ok
             ? ok(id, gateData(gate))

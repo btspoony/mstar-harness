@@ -198,7 +198,7 @@ describe("validation command family", () => {
   test("--control-clean refuses a control root with committable changes and passes a clean one", async () => {
     const dirty = tempRoot();
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dirty });
-    // The harness is process state, so it is ignored: only real work can fail the check.
+    // why: the harness is process state, so ignoring it keeps only real work in the verdict.
     writeFileSync(path.join(dirty, ".gitignore"), ".mstar/\n");
     writeFileSync(path.join(dirty, "README.md"), "fixture\n");
     execFileSync("git", ["add", "-A"], { cwd: dirty });
@@ -213,7 +213,7 @@ describe("validation command family", () => {
     expect(refused.message).toContain("README.md");
     const refusedDetails = (refused as { details?: { recovery?: string } }).details ?? {};
     expect(refusedDetails.recovery).toContain("checkout that carries the target branch");
-    // A repository with no harness has no control-root contract: the check skips.
+    // invariant: a repository with no harness has no control-root contract, so the check skips.
     const plain = tempRoot();
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: plain });
     writeFileSync(path.join(plain, "README.md"), "fixture\n");
@@ -228,7 +228,7 @@ describe("validation command family", () => {
     execFileSync("git", ["add", "-A"], { cwd });
     execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "initial"], { cwd });
     mkdirSync(path.join(cwd, ".mstar"), { recursive: true });
-    // A clean control root must not turn the combination into a silent success.
+    // why: a clean control root must not turn the combination into a silent success.
     const withL2 = await definition("worktree.check").execute({ controlClean: true, l2: true }, context(cwd));
     expect(withL2).toMatchObject({ status: "usage", exitCode: 2 });
     expect(withL2.message).toContain("--l2");
@@ -244,7 +244,7 @@ describe("validation command family", () => {
     expect(withIntegration.message).toContain("--integration");
   });
   test("--control-clean reads the {HARNESS_DIR} chain and a named --harness anchor", async () => {
-    // Legacy `.agents/` declares a harness: the check runs instead of skipping.
+    // invariant: legacy `.agents/` declares a harness, so the check runs instead of skipping.
     const cwd = tempRoot();
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd });
     writeFileSync(path.join(cwd, ".gitignore"), "state/\n");
@@ -256,8 +256,7 @@ describe("validation command family", () => {
     const legacy = await definition("worktree.check").execute({ controlClean: true }, context(cwd));
     expect(legacy).toMatchObject({ status: "refused", exitCode: 1, code: "worktree.main.tracked-changes" });
 
-    // A named harness anchor asks the presence question about that directory, and
-    // a relative anchor resolves from the invocation workspace.
+    // invariant: a named --harness anchor is the harness asked about, and a relative one resolves from the invocation workspace.
     const plain = tempRoot();
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: plain });
     writeFileSync(path.join(plain, ".gitignore"), "state/\n");
