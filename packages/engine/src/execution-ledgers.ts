@@ -906,7 +906,7 @@ export async function appendWorkflowNote(
     // rewrite when a frame lengthened the leaf, so the remaining window is the
     // stat→rename gap itself: a frame that lands exactly there is still lost,
     // and the ledger stays over its ceiling until the next over-ceiling append
-    // retries. Upgrade to an unconditional maintenance lock if the ceiling must
+    // retries. upgrade: an unconditional maintenance lock, if the ceiling must
     // hold at every instant, which costs a store write connection on every
     // ordinary append.
     await withWorkflowNotesMaintenanceLock(context, () => compactWorkflowNotesLedger(ledgerPath, session.workflowId, frame));

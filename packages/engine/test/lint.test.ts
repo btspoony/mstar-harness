@@ -387,10 +387,10 @@ describe("findSimplifyMarkers", () => {
   });
 
   test("a statement terminator never opens a trailing marker", () => {
-    // A C-family `;` ends a statement, so the marker after it is code.
+    // why: a C-family `;` ends a statement, so the marker after it is code.
     expect(findSimplifyMarkers("(define x 1) ; simplify: naive scan\n")).toEqual([]);
     expect(findSimplifyMarkers("let a = 1 ; simplify: naive scan\n")).toEqual([]);
-    // The line-leading form still opens a Lisp/INI comment.
+    // why: the line-leading form still opens a Lisp/INI comment.
     expect(findSimplifyMarkers("; simplify: naive scan\n")).toHaveLength(1);
   });
 
@@ -508,7 +508,7 @@ describe("findTemporaryMarkers", () => {
 
   test("a statement terminator never opens a trailing temporary marker", () => {
     expect(findTemporaryMarkers("let a = 1 ; temporary: hack\n").markers).toEqual([]);
-    // The forms that do open a comment stay: `#`, `--`, `;`-leading, `//`.
+    // why: these are the forms that do open a comment.
     for (const text of [
       "x = 1  # temporary: hack\n",
       "SELECT 1 -- temporary: hack\n",
@@ -694,10 +694,8 @@ describe("findUntrackedTodos", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// findUnclassifiedComments — comments.md § MUST (a comment earns its place by
-// a declared shape) and the documentation-block exemption
-// ---------------------------------------------------------------------------
+// why: comments.md § MUST is the spec - a comment earns its place by a declared
+// shape - and the documentation-block exemption is its one carve-out.
 
 describe("findUnclassifiedComments", () => {
   test("reports a comment that restates the code", () => {
@@ -722,6 +720,11 @@ describe("findUnclassifiedComments", () => {
     expect(findUnclassifiedComments("// issue 123 records the tradeoff\n")).toEqual([]);
     expect(findUnclassifiedComments("// plans/20991231-example.md owns the removal\n")).toEqual([]);
     expect(findUnclassifiedComments("// contract \u00a74.2\n")).toEqual([]);
+  });
+
+  test("accepts a standalone URL as the pointer target", () => {
+    expect(findUnclassifiedComments("// https://example.com/wire-format\n")).toEqual([]);
+    expect(findUnclassifiedComments("// https://example.com/wire-format fixes the field order\n")).toEqual([]);
   });
 
   test("requires a target after see, so the verb alone is not a pointer", () => {
@@ -755,6 +758,15 @@ describe("findUnclassifiedComments", () => {
     expect(findUnclassifiedComments("# why: the CLI probes before linking\n")).toEqual([]);
     expect(findUnclassifiedComments("; why: INI-style reader\n")).toEqual([]);
     expect(findUnclassifiedComments("-- why: reindex after the migration\n")).toEqual([]);
+  });
+
+  test("an adjacent run of line comments is one unit, like a block", () => {
+    const wrapped = "// returns the value\n// and does it again\nconst a = 1;\n";
+    const findings = findUnclassifiedComments(wrapped);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ line: 1, endLine: 2 });
+    expect(findUnclassifiedComments("// returns the value\n// why: the lock is held\nconst a = 1;\n")).toEqual([]);
+    expect(findUnclassifiedComments("// returns the value\n\n// and again\nconst a = 1;\n")).toHaveLength(2);
   });
 
   test("reads a block comment's shapes past the continuation stars", () => {
@@ -795,6 +807,16 @@ describe("findUnclassifiedComments", () => {
 });
 
 describe("findSimplifyMarkers completeness", () => {
+  test("the shortcut label carries a bound exactly like simplify", () => {
+    const unbounded = findSimplifyMarkers("// shortcut: one queue\n");
+    expect(unbounded).toHaveLength(1);
+    expect(unbounded[0]).toMatchObject({ line: 1, label: "shortcut", bound: null });
+    const bounded = findSimplifyMarkers("// shortcut: one queue; upgrade: split per route\n");
+    expect(bounded[0]).toMatchObject({ line: 1, label: "shortcut" });
+    expect(bounded[0]!.bound).toContain("upgrade: split per route");
+    expect(findSimplifyMarkers("// simplify: naive scan\n")[0]).toMatchObject({ label: "simplify", bound: null });
+  });
+
   test("records a missing bound as null", () => {
     const markers = findSimplifyMarkers("// simplify: naive scan\n");
     expect(markers).toHaveLength(1);

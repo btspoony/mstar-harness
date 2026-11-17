@@ -246,8 +246,8 @@ export class MstarPanelSnapshotClient {
         const finalCode = code !== null && code.startsWith('gateway/') ? code : 'transport-error'
         // shortcut: only the literal `transport-error` is ambiguous to the
         // retry channel, so a future post-commit throw surfacing as
-        // `gateway/internal` is treated as terminal; upgrade when a milestone
-        // verb can throw after committing.
+        // `gateway/internal` is treated as terminal. upgrade: a milestone verb
+        // that can throw after committing.
         return {
           ok: false,
           code: finalCode,

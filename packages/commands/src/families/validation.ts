@@ -231,7 +231,10 @@ function launchDirectoryPaths(command: (typeof verbs)[number], input: Input, con
 
 const codeExtensions: Record<string, true> = Object.fromEntries([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".sh", ".bash", ".zsh", ".rb", ".java", ".kt", ".swift"].map((ext) => [ext, true]));
 const provenanceExtensions: Record<string, true> = { ".md": true, ".ts": true };
-const skipDirs: Record<string, true> = { node_modules: true, ".git": true, dist: true, coverage: true, ".turbo": true };
+/** why: `fixtures` holds deliberately broken artifacts (the `broken-skill`
+ * SKILL.md among them), so a tree walk would report the fixtures' own defects
+ * as the tree's. Other entries are build output no walk reads. */
+const skipDirs: Record<string, true> = { node_modules: true, ".git": true, dist: true, coverage: true, ".turbo": true, fixtures: true };
 type LintType = "plan" | "skill" | "strategy" | "report" | "code" | "finding" | "provenance" | "specs" | "adr";
 function lintType(file: string): LintType | null {
   const base = path.basename(file);
@@ -301,12 +304,11 @@ function parseHeaderField(text: string, label: string): string {
   }
   return "";
 }
-/** Prefix of one advisory marker per unclassified comment; the count line
- * sums them, so the wording lives here once. */
+/** why: the count line sums these markers, so the wording lives here once. */
 const UNCLASSIFIED_MARKER_PREFIX = "unclassified comment @";
-/** `touched` is the file's added/modified line ranges from `--diff-base`:
- * `undefined` leaves every comment reported (no ratchet), an empty list reports
- * none (the change does not touch this file). */
+/** why: the two arms are not the same question - `undefined` means no ratchet
+ * (every comment is reported), an empty list means the diff does not touch this
+ * file, so it reports none. */
 type TouchedLines = readonly (readonly [number, number])[];
 function lintOne(file: string, type?: LintType, prVariant = false, touched?: TouchedLines): { violations: Violation[]; markers: string[] } {
   const text = readFileSync(file, "utf8");
@@ -318,30 +320,41 @@ function lintOne(file: string, type?: LintType, prVariant = false, touched?: Tou
     case "strategy": violations.push(...lintStrategySections(text).violations); break;
     case "report": violations.push(...assertSddTddTriple(text).violations); break;
     case "code": {
-      // A `simplify:` marker records a ceiling and a bound - an `upgrade:`
-      // clause or a removal/tracking reference (comments.md § Markers); one
-      // without a bound is a violation. The untracked-TODO and
-      // commented-out-code findings stay advisory markers.
+      // why: comments.md § Markers makes an unbounded marker a violation, and
+      // `shortcut:` is the same label as `simplify:`, so both are gated here.
+      // The untracked-TODO and commented-out-code findings stay advisory.
       for (const marker of findSimplifyMarkers(text)) {
         if (marker.bound === null) {
           violations.push({
             ok: false,
             severity: "medium",
             code: "lint.simplify.no-upgrade-path",
-            message: `simplify marker at line ${marker.line} records no bound - state when to upgrade or where its removal is tracked (comments.md \u00a7 Markers)`,
-            fix: 'state the bound on the marker or a continuation line of its comment block, e.g. "simplify: <limit>, upgrade: <when>" or "removal tracked in status.json"',
+            message: `${marker.label} marker at line ${marker.line} records no bound - state when to upgrade or where its removal is tracked (comments.md \u00a7 Markers)`,
+            fix: `state the bound on the marker or a continuation line of its comment block, e.g. "${marker.label}: <limit>, upgrade: <when>" or "removal tracked in status.json"`,
           });
           continue;
         }
-        markers.push(`simplify marker @${marker.line}: ${marker.text}`);
+        markers.push(`${marker.label} marker @${marker.line}: ${marker.text}`);
       }
-      // A comment matching no allowed shape (comments.md § MUST) is advisory:
-      // the count line is the gate's only output for it. Under `--diff-base`
-      // only the comments the change adds or modifies are reported, and a block
-      // counts when ANY line of it moved - it reports at its first line.
+      // why: this is the ratchet's whole point - without a diff base the same
+      // finding stays an advisory marker and the count line is its only
+      // output; under `--diff-base` a comment the change added or modified
+      // (any line of a block moving counts) becomes a violation instead.
       for (const finding of findUnclassifiedComments(text)) {
-        if (touched !== undefined && !touched.some(([start, end]) => finding.line <= end && finding.endLine >= start)) continue;
+        const changed = touched === undefined
+          ? false
+          : touched.some(([start, end]) => finding.line <= end && finding.endLine >= start);
+        if (touched !== undefined && !changed) continue;
         markers.push(`${UNCLASSIFIED_MARKER_PREFIX}${finding.line}: ${finding.text}`);
+        if (changed) {
+          violations.push({
+            ok: false,
+            severity: "medium",
+            code: "lint.comment.unclassified",
+            message: `unclassified comment at line ${finding.line} - the shape matches none of comments.md \u00a7 MUST (marker, contract pointer, declared prefix, @generated, tracked TODO)`,
+            fix: 'give the comment a shape: "why: <reason>" / "invariant: <rule>" / "see <target>" / "simplify: <ceiling>, upgrade: <when>", or delete it',
+          });
+        }
       }
       for (const todo of findUntrackedTodos(text)) markers.push(`untracked ${todo.marker} @${todo.line}: ${todo.text}`);
       for (const finding of findCommentedCode(text)) markers.push(`commented-out code @${finding.line}: ${finding.text}`);
@@ -539,9 +552,9 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           return results.some((result) => result.violations.length) ? refusal(id, results[0]!.violations[0]?.code ?? "lint.violations", "lint violations found", { results }, "Resolve each reported lint violation, then rerun mstar lint <target>.") : ok(id, { results });
         }
         const targets = !isDir ? [abs] : forced === "provenance" ? collectTargets(abs, (file) => provenanceExtensions[path.extname(file).toLowerCase()] === true) : collectTargets(abs);
-        // `--diff-base` is the ratchet: a comment is reported only when the
-        // change adds or modifies a line of it. A file the diff does not
-        // mention reports none, so an untouched file stays advisory.
+        // why: `--diff-base` is the ratchet - a finding is reported only when
+        // the change adds or modifies a line of it, and a file the diff does
+        // not mention keeps an empty range list so it reports none.
         const changed = input.diffBase === undefined ? undefined : await changedLineRanges(context, input.diffBase);
         const results = targets.map((file) => {
           const touched = changed === undefined
@@ -549,10 +562,8 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             : (changed.ranges.get(path.relative(changed.root, canonicalPath(file)).split(path.sep).join("/")) ?? []);
           return { file, ...lintOne(file, forced as LintType | undefined, input.prVariant === true, touched) };
         });
-        // The unclassified-comment count is a summary, not a verdict: the
-        // findings ride the results as advisory markers and never fail the
-        // command, so one count line is written beside the envelope (stderr).
-        // Only a run that linted a code file reports it.
+        // why: the count is a summary written beside the envelope, so it is
+        // stderr only; a run that linted no code file reports no count.
         if (targets.some((file) => (forced ?? lintType(file)) === "code")) {
           const unclassified = results.reduce((total, result) => total + result.markers.filter((marker) => marker.startsWith(UNCLASSIFIED_MARKER_PREFIX)).length, 0);
           context.effects.writeStderr?.(`unclassified comments: ${unclassified}`);
@@ -696,7 +707,8 @@ async function awaitSpawn(context: InvocationContext, argv: readonly string[], c
   const result = await context.effects.spawn({ argv, cwd, env: {}, signal: context.signal });
   return { ok: result.exitCode === 0, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
 }
-/** One added/modified range of a zero-context diff hunk on the new side. */
+/** why: the new side's count is 0 for a deletion-only hunk, which contributes
+ * no changed line, so the count is read separately from the start. */
 const HUNK_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
 /**
  * The lines a change adds or modifies against `ref`, per repository-relative
@@ -705,8 +717,8 @@ const HUNK_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
  * carries both, and a deletion-only hunk (`+c,0`) contributes nothing.
  *
  * shortcut: untracked files are absent from `git diff <base>`, so a new file
- * that was never added reports no changed lines; upgrade when a local ratchet
- * must see files `git add` has not staged.
+ * that was never added reports no changed lines. upgrade: stage-aware diffing,
+ * when a local ratchet must see files `git add` has not staged.
  */
 async function changedLineRanges(context: InvocationContext, ref: string): Promise<{ root: string; ranges: Map<string, [number, number][]> }> {
   const base = await awaitSpawn(context, ["git", "merge-base", ref, "HEAD"]);
@@ -717,14 +729,25 @@ async function changedLineRanges(context: InvocationContext, ref: string): Promi
   if (!diff.ok) throw new SddScriptError(`usage: lint <target> --diff-base <ref> - git diff ${base.stdout} failed: ${diff.stderr}`, 2);
   const ranges = new Map<string, [number, number][]>();
   let file: string | undefined;
+  // why: a hunk body line starts with `+`, `-`, ` ` or `\` and may itself
+  // spell `+++ b/x`; reading that as a header would reassign the file, drop
+  // every changed line of the real file after it, and pass the ratchet
+  // vacuously. Headers are therefore read only outside a hunk body.
+  let inHunk = false;
   for (const line of diff.stdout.split("\n")) {
+    if (inHunk) {
+      if (line !== "" && /^[+\- \\]/.test(line)) continue;
+      inHunk = false;
+    }
     if (line.startsWith("+++ ")) {
       const target = line.slice(4).trim();
       file = target === "/dev/null" ? undefined : target.replace(/^b\//, "");
       continue;
     }
     const hunk = HUNK_RE.exec(line);
-    if (hunk === null || file === undefined) continue;
+    if (hunk === null) continue;
+    inHunk = true;
+    if (file === undefined) continue;
     const start = Number(hunk[1]);
     const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
     if (count === 0) continue;
@@ -732,8 +755,9 @@ async function changedLineRanges(context: InvocationContext, ref: string): Promi
     if (list === undefined) ranges.set(file, [[start, start + count - 1]]);
     else list.push([start, start + count - 1]);
   }
-  // A symlinked checkout (`/tmp` -> `/private/tmp`) answers with its physical
-  // path, so the root the caller's targets are spelled from is canonicalized.
+  // why: a symlinked checkout (`/tmp` -> `/private/tmp`) answers with its
+  // physical path, so the root the caller's targets are spelled from is
+  // canonicalized to match.
   return { root: canonicalPath(top.stdout), ranges };
 }
 

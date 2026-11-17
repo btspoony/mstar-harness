@@ -48,7 +48,7 @@ describe("validation command family", () => {
     ]);
     expect(commands.map(({ effects }) => effects)).toEqual([
       ["read", "validate"], ["read", "validate", "process"], ["read", "validate"], ["read", "validate"],
-      ["read", "validate"], ["read", "validate"], ["read", "validate"], ["read", "validate"],
+      ["read", "validate", "process"], ["read", "validate"], ["read", "validate"], ["read", "validate"],
       ["read", "validate"], ["read", "validate"],
     ]);
   });

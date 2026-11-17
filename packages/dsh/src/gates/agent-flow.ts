@@ -96,8 +96,9 @@ export const AGENT_FLOW_TEAM_CHILD_CAPACITY = 1024
  * Exact invariant: LIVE records <= capacity; markers <= overflow insertions
  * within one open window (each overflow insert adds one marker and one live
  * key, so a window held open by a storm grows markers without bound).
- * shortcut: markers are not capacity-counted; count them too (oldest-marker
- * eviction) if a producer can storm one parent's window past this capacity.
+ * shortcut: markers are not capacity-counted. upgrade: count them and evict
+ * the oldest marker, if a producer can storm one parent's window past this
+ * capacity.
  */
 export const AGENT_FLOW_ACTIVATION_END_CAPACITY = 1024
 /** Stable identity namespace for verified native workflow events. */
@@ -1944,7 +1945,7 @@ function pairActivationChildRef(pairing: AgentFlowPairing, childId: string, ref:
  * pairing proceeds exactly as before, so a degraded catalog read never becomes
  * a lost settle by itself.
  * shortcut: one call walks the whole subtree (listDescendants is the only
- * catalog read on the structural surface); switch to a direct-children surface
+ * catalog read on the structural surface). upgrade: a direct-children surface,
  * when upstream exposes one.
  */
 async function isDirectChildOf(
