@@ -6312,7 +6312,7 @@ drop table relations_v19_stage;
 drop table issue_transitions_v19_stage;
 drop table issue_project_moves_v19_stage;
 drop table issue_sync_state_v19_stage;
-`, MIGRATIONS, DSH_HOST_STATE_MIGRATION, EXECUTION_TABLE_NAMES, EXECUTION_MIGRATION, READ_OPEN_ATTEMPTS = 5, READ_OPEN_BACKOFF_MS = 5, dshTransactions, init_store_db, GIT_CAPTURE_MAX_BYTES, MAX_STATUS_CONTENT_LENGTH, STORE_AUTHORITY_FILES, STORE_AUTHORITY_NAMES, KNOWLEDGE_BUG_PROBLEM_TYPES, KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES, KNOWLEDGE_PROBLEM_TYPES, WALK_SKIP_DIRS, DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)", DATED_SLUG_TOKEN_RE, MERGE_CLASSES, MUST_FIX_FIRST = 45, MUST_FIX_EACH_ADDITIONAL = 15, SHOULD_FIX_FIRST = 12, SHOULD_FIX_STEP = 3, SHOULD_FIX_MIN = 2, MAY_FIX_FIRST = 6, MAY_FIX_STEP = 2, MAY_FIX_MIN = 1, MAY_FIX_CAP = 15, NIT_FIRST = 2, NIT_EACH_ADDITIONAL = 1, NIT_CAP = 8, PR_SCORE_SCHEDULE_HINT, TALLY_COUNT_KEYS, ENVELOPE_TALLY_COUNT_KEYS, PR_REVIEW_TIER_BUDGETS, PR_REVIEW_NUDGE_CADENCE, EFFORT_ENUM_RE, RISK_ENUM_RE, CONFIDENCE_ENUM_RE, MERGE_CLASS_ENUM_RE, fsStoreInstances, UNPARSEABLE_JSON, SESSION_DECODER, OTHER_RETIRED_DISPOSITION_SQL, ISSUE_KIND_MAP2, ISSUE_SEVERITY_MAP2, ISSUE_DISPOSITION_MAP, ISSUE_LAST_ACTIVITY_SQL = `(select max(ts) from (
+`, MIGRATIONS, DSH_HOST_STATE_MIGRATION, EXECUTION_TABLE_NAMES, EXECUTION_MIGRATION, READ_OPEN_ATTEMPTS = 5, READ_OPEN_BACKOFF_MS = 5, dshTransactions, init_store_db, GIT_CAPTURE_MAX_BYTES, MAX_STATUS_CONTENT_LENGTH, STORE_AUTHORITY_FILES, STORE_AUTHORITY_NAMES, KNOWLEDGE_BUG_PROBLEM_TYPES, KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES, KNOWLEDGE_PROBLEM_TYPES, WALK_SKIP_DIRS, REMOVAL_PATH_PATTERNS, TODO_TRACKING_PATTERNS, TODO_NON_OWNER_WORDS, DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)", DATED_SLUG_TOKEN_RE, MERGE_CLASSES, MUST_FIX_FIRST = 45, MUST_FIX_EACH_ADDITIONAL = 15, SHOULD_FIX_FIRST = 12, SHOULD_FIX_STEP = 3, SHOULD_FIX_MIN = 2, MAY_FIX_FIRST = 6, MAY_FIX_STEP = 2, MAY_FIX_MIN = 1, MAY_FIX_CAP = 15, NIT_FIRST = 2, NIT_EACH_ADDITIONAL = 1, NIT_CAP = 8, PR_SCORE_SCHEDULE_HINT, TALLY_COUNT_KEYS, ENVELOPE_TALLY_COUNT_KEYS, PR_REVIEW_TIER_BUDGETS, PR_REVIEW_NUDGE_CADENCE, EFFORT_ENUM_RE, RISK_ENUM_RE, CONFIDENCE_ENUM_RE, MERGE_CLASS_ENUM_RE, fsStoreInstances, UNPARSEABLE_JSON, SESSION_DECODER, OTHER_RETIRED_DISPOSITION_SQL, ISSUE_KIND_MAP2, ISSUE_SEVERITY_MAP2, ISSUE_DISPOSITION_MAP, ISSUE_LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
@@ -10473,6 +10473,33 @@ var init_engine = __esm(() => {
     ...KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES
   ];
   WALK_SKIP_DIRS = new Set(["node_modules", ".git", "dist"]);
+  REMOVAL_PATH_PATTERNS = [
+    /status\.json/i,
+    /R#\d+/i,
+    /\bresiduals?\s+R[#-]?\w*\d+/i,
+    /#\d+/,
+    /plans?\/[\w./-]+/i,
+    /\bplans?\s+20\d{6}[-.\w]*/i,
+    /\b(?:tracked|recorded|logged|scheduled|listed|noted)\s+in\s+[\w./-]+/i,
+    /removal\s+path\s*[:=]\s*["'`]?[\w./-]+/i
+  ];
+  TODO_TRACKING_PATTERNS = [
+    /\b(?:TODO|FIXME)\s+@[A-Za-z][\w.-]*/,
+    /#\d+/,
+    /\b(?:issue|ticket)\s+#?\d+\b/i,
+    /\bADR[-\s]\d+\b/,
+    ...REMOVAL_PATH_PATTERNS
+  ];
+  TODO_NON_OWNER_WORDS = new Set([
+    "later",
+    "see",
+    "note",
+    "none",
+    "fix",
+    "todo",
+    "tbd",
+    "soon"
+  ]);
   DATED_SLUG_TOKEN_RE = new RegExp(DATED_SLUG_TOKEN_SOURCE, "g");
   init_path();
   init_audit();

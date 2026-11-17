@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+## [4.7.2] - 2026-11-17
+
+### Harness
+
+- **重复纠正的约束阶梯。** `mstar-coding-behavior` 新增参考：把纠正落到最强的可行约束——移除选项、加确定性检查、运行时验证，最后才写 prose；反复误用的接口按设计缺陷处理（`occurrence >= 2`）。
+- **注释规范与可检查子集。** 新增参考把注释分为必写、禁写与条件写，区分漂移、许可、替代三种失败模式，并规定标记契约：`simplify:` / `temporary:` 必须带 bound（`upgrade:` 子句或跟踪引用），标记不是许可。
+- **`mstar lint --type code` 检查注释。** 注释掉的代码与无主 `TODO` 作为 advisory 提示；缺少 bound 的 `simplify:` / `temporary:` 标记则失败。检测器与 ASCII 字面量工具共用单一 tokenizer（`packages/engine/src/comment-scan.ts`），门禁覆盖 `packages` 与 `scripts`。
+- **收紧 audit 例外。** 已记录的边界决策只有在 ceiling 与移除路径仍成立、且未被复制到新位置时才排除在 finding 之外。
+- **注释必须声明形状。** 非文档注释需匹配下列之一：带 bound 的标记（`simplify:`、`temporary:`、`shortcut:`）、契约指针（`see <target>`，其中 target 为 `docs/…`、`plans/…`、`ADR-<n>`、`#<n>`、`issue <n>`、`contract §` 或 URL；这些形式单独出现也算）、声明前缀（`why:`、`invariant:`、`safety:`、`note:`）、`@generated`，或带跟踪引用的 `TODO`/`FIXME`（只有写出跟踪引用才算形状）。以下两种形态豁免：下一个非空行以 `export` 开头的 `/**` 块，以及首行 `#!` shebang——在 hash 注释语言里它被当作执行指令读取，而不是对代码的说明。
+- **变更行 ratchet。** 两段范围 gate 的 finding 不同。全量步只把无 bound 的标记判为 violation；未分类注释与无跟踪引用的 `TODO` 在全量步下只是 advisory 标记，所以全量步跑绿并不说明它们干净。`mstar lint <target> --type code --diff-base <ref>` 才是把一次变更补齐的 ratchet：新增或修改行上的未分类注释（含无跟踪引用的 `TODO`）一律判为 violation，未被 diff 触及的 finding 永不失败，存量语料不受影响。
+- **CI 拆成两段范围。** 既有的全量 bound 步骤保留所有已跟踪标记的检查；新增的变更行步骤只对 merge base 的 diff 选出的文件执行 ratchet，因此注释契约能拦住一次变更，而不要求它为整个存量语料负责。全量步走 `--type code`；变更行步骤先把 diff 过滤到代码扩展名，再逐文件传 `--diff-base`。
+- **每行 References 都说明何时打开对应文件。** 14 个 skill 的 37 行原先只有主题描述，现在各自带上从目标文件首节推导出的条件。`mstar-coding-behavior` 增加了约束阶梯与注释标准的入口行，并把 standalone 说明并入末句以守住 70 行上限。
+- **跨 skill 引用写明 owner。** 193 处引用其他 skill 的 reference 现在写作 `mstar-<owner>/references/<file>.md`；同 skill 引用保持裸路径。
+- **engine-check callout 指针把 owner 写进路径。** 45 处 callout 与 `ENGINE_CHECK_CONTRACT_POINTER` 现在统一以 ``Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.`` 收尾；路径前单独的 ``**`mstar-use-cli`**`` token 已删除，指针自身即可解析。
+- **Guard 15 守住 reference 文件的可发现性。** `bun run validation:drift` 现在会在以下情况失败：`skills/<skill>/references/**` 文件未被其所属 skill 引用；带路径的 `## References` 行没有写触发条件（条件子句，或表格行的触发列非空；`###` 小组不结束该节检查）；跨 skill 引用未把 owner 写进路径。owner 必须出现在路径里，仅仅出现在行内不算：``**`owner`** → `references/file.md` `` 这种形状会失败，因为单看这个引用无法解析。
+- **引用按最长已存在后缀解析**，因此嵌套子路径（`references/qc-specialist/report-template.md`）与重名 basename（两个 skill 各有一个 `report-template.md`）都能解析到引用真正指的那个文件。重名先由 owner 前缀消歧，其次落到引用方自己的文件；只有真正无法消歧的 basename 才失败，且报错会写明应改成哪个 owner 路径。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.7.2**。
+
 ## [4.7.1] - 2026-11-16
 
 ### Harness

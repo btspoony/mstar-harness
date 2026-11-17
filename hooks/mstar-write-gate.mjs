@@ -14371,6 +14371,33 @@ var KNOWLEDGE_PROBLEM_TYPES = [
   ...KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES
 ];
 var WALK_SKIP_DIRS = new Set(["node_modules", ".git", "dist"]);
+var REMOVAL_PATH_PATTERNS = [
+  /status\.json/i,
+  /R#\d+/i,
+  /\bresiduals?\s+R[#-]?\w*\d+/i,
+  /#\d+/,
+  /plans?\/[\w./-]+/i,
+  /\bplans?\s+20\d{6}[-.\w]*/i,
+  /\b(?:tracked|recorded|logged|scheduled|listed|noted)\s+in\s+[\w./-]+/i,
+  /removal\s+path\s*[:=]\s*["'`]?[\w./-]+/i
+];
+var TODO_TRACKING_PATTERNS = [
+  /\b(?:TODO|FIXME)\s+@[A-Za-z][\w.-]*/,
+  /#\d+/,
+  /\b(?:issue|ticket)\s+#?\d+\b/i,
+  /\bADR[-\s]\d+\b/,
+  ...REMOVAL_PATH_PATTERNS
+];
+var TODO_NON_OWNER_WORDS = new Set([
+  "later",
+  "see",
+  "note",
+  "none",
+  "fix",
+  "todo",
+  "tbd",
+  "soon"
+]);
 var DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)";
 var DATED_SLUG_TOKEN_RE = new RegExp(DATED_SLUG_TOKEN_SOURCE, "g");
 init_path();

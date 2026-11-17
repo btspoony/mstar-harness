@@ -6,6 +6,22 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.7.2] - 2026-11-17
+
+### Harness
+
+- **Constraint ladder for recurring corrections.** `mstar-coding-behavior` gains a reference that routes a correction to the strongest surviving constraint — remove the choice, add a deterministic check, verify at runtime, and only then write prose — and treats a repeatedly misused interface as a design defect (`occurrence >= 2`).
+- **Comment standard with a machine-checked subset.** A new reference classifies comments into must-write, must-not-write and conditional, with drift / license / substitute failure modes and a marker contract: a `simplify:` or `temporary:` label records a bound (an `upgrade:` clause or a tracking reference) and never licenses the pattern.
+- **`mstar lint --type code` checks comments.** It now reports commented-out code and ownerless `TODO` as advisory markers, and fails on a `simplify:` / `temporary:` label without a bound. One shared tokenizer (`packages/engine/src/comment-scan.ts`) serves the detectors and the ASCII-literal tooling. The gate walks `packages` and `scripts`.
+- **Audit exception tightened.** A documented bounded decision stays out of findings only while its ceiling and removal path hold and it has not been copied into a new site.
+- **Comments must declare a shape.** A non-documentation comment now has to match one of: a marker (`simplify:`, `temporary:`, `shortcut:`) with a bound, a contract pointer (`see <target>` where the target is `docs/…`, `plans/…`, `ADR-<n>`, `#<n>`, `issue <n>`, `contract §`, or a URL, and those same forms alone without `see`), a declared prefix (`why:`, `invariant:`, `safety:`, `note:`), `@generated`, or a tracked `TODO`/`FIXME`, which is a shape only when it names a tracking reference. Two shapes are exempt: a `/**` block whose next non-empty line starts with `export`, and a first-line `#!` shebang, which a hash-comment file reads as an execution directive rather than prose.
+- **Changed-line ratchet.** The two ranges gate different findings. Whole-tree, only an unbounded marker is a violation: an unclassified comment and an untracked `TODO` are advisory markers there, so a clean whole-tree run says nothing about them. `mstar lint <target> --type code --diff-base <ref>` is the ratchet that closes the change: it fails every unclassified comment on an added or modified line, an untracked `TODO` included, while an untouched finding never fails, so the existing corpus is untouched.
+- **CI splits the two ranges.** The existing full-range bound step keeps every tracked marker checked, and a new changed-line step runs the ratchet on the files the diff against the merge base selects, so the comment contract gates a change without asking it to answer for the whole corpus. The whole-tree step reads `--type code`; the ratchet step filters the diff to code extensions and passes `--diff-base` per file.
+
+- Version alignment with harness **4.7.2**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.7.2**.
+
 ## [4.7.1] - 2026-11-16
 
 ### Changed
