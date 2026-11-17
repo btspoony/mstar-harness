@@ -1364,8 +1364,10 @@ export interface ReferenceCorpusResult {
  * and resolve its tail as a real citation. */
 const REFERENCE_TOKEN = /[A-Za-z0-9_.\/<>*{}$-]+\.md/g;
 /** Same token shape without `g`: a shared global regex would make `.test()`
- * stateful across calls (`lastIndex` carries over between rows). */
-const REFERENCE_TOKEN_TEST = /[A-Za-z0-9_./-]+\.md/;
+ * stateful across calls (`lastIndex` carries over between rows). It keeps the
+ * placeholder characters so a pattern cell (`` `references/<host>.md` ``) reads
+ * as a path, not as a trigger. */
+const REFERENCE_TOKEN_TEST = /[A-Za-z0-9_./<>*{}$-]+\.md/;
 /** A placeholder inside a token makes it a pattern, not a citation. */
 const REFERENCE_PLACEHOLDER = /[<>*{}$]/;
 const isReferenceToken = (token: string): boolean => !REFERENCE_PLACEHOLDER.test(token);
@@ -1404,7 +1406,9 @@ function referenceTokenOwner(token: string): string | null {
  *    reference — so a second-tier file stays reachable. A `## References` row
  *    is the primary form, not the only legal one: any citation site in the own
  *    skill counts, and a file named nowhere in its own skill fails;
- * 2. every `## References` row carrying a reference path states a trigger;
+ * 2. every `## References` row carrying a reference path states a trigger —
+ *    a placeholder pattern (`` `references/<host>.md` ``) is such a path: it is
+ *    not resolved as a citation, but it still needs its trigger;
  * 3. a cross-skill citation carries its owner in the path
  *    (`<owner>/references/<file>.md`) — judged by the path, never by whether
  *    the owner name appears somewhere on the line, because the common shape
@@ -1473,15 +1477,20 @@ export function checkReferenceCorpus(input: {
         ...new Set(
           [...line.matchAll(REFERENCE_TOKEN)]
             // Leading `*` is Markdown emphasis around a real path, not a wildcard.
-            .map((m) => m[0]!.replace(/^\*+/, ""))
-            .filter(isReferenceToken),
+            .map((m) => m[0]!.replace(/^\*+/, "")),
         ),
       ];
-      const citations: string[] = [];
+      let rowPath = false;
       for (const token of rowTokens) {
+        // A placeholder path is a row path but not a citation: it names a file
+        // shape, so it skips resolution yet still owes a trigger below.
+        if (!isReferenceToken(token)) {
+          if (token.includes("references/")) rowPath = true;
+          continue;
+        }
         const resolution = resolve(token, citing);
         if (resolution === null) continue;
-        citations.push(token);
+        rowPath = true;
         citationsChecked++;
         if (resolution === "unresolved") {
           failures.push(`${rel}:${i + 1} reference "${token}" resolves to no reference file - fix the path`);
@@ -1512,7 +1521,7 @@ export function checkReferenceCorpus(input: {
           );
         }
       }
-      if (!inReferences || citations.length === 0) continue;
+      if (!inReferences || !rowPath) continue;
 
       if (!REFERENCE_ROW.test(line)) continue;
       const isTableRow = line.trim().startsWith("|");

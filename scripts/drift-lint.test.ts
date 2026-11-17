@@ -1900,8 +1900,12 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
     const { files, referenceFiles } = readReferenceCorpus(join(import.meta.dir, ".."));
     const result = checkReferenceCorpus({ files, referenceFiles });
     expect(result.failures).toEqual([]);
-    expect(result.referenceFiles).toBeGreaterThan(100);
-    expect(result.citationsChecked).toBeGreaterThan(500);
+    // Properties, not corpus sizes: the read found reference files at all, and
+    // every one of them needed an own-skill citation, so a passing corpus
+    // checked at least one citation per file. A truncated or vacuous read
+    // fails here; a smaller corpus does not.
+    expect(result.referenceFiles).toBeGreaterThan(0);
+    expect(result.citationsChecked).toBeGreaterThanOrEqual(result.referenceFiles);
   });
 
   test("a reference file with no reference from its own skill fails, naming the file", () => {
@@ -2075,6 +2079,33 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
     ).toEqual([]);
   });
 
+  test("a placeholder References row still needs a trigger", () => {
+    // A placeholder path is not a citation to resolve, but the row is still a
+    // References entry: excluding it from resolution must not also exempt it
+    // from the trigger property.
+    const withRow = (row: string) =>
+      failing({
+        "skills/mstar-alpha/SKILL.md": `## References\n\n- \`references/used.md\` - open when reading alpha.\n\n${row}\n`,
+        "skills/mstar-alpha/references/used.md": "# used\n",
+      });
+    expect(withRow("- `references/<host>.md` - open when the active host applies.")).toEqual([]);
+    const failures = withRow("- `references/<host>.md` - host adapters.");
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/mstar-alpha/SKILL.md:5");
+    expect(failures[0]).toContain("states no trigger");
+  });
+
+  test("a table row whose only other cell is a placeholder path has no trigger", () => {
+    // The header names no trigger column, so the trigger is any cell carrying
+    // no reference path — a placeholder path is still a path, not a trigger.
+    const failures = failing({
+      "skills/mstar-alpha/SKILL.md": `## References\n\n| Open | Notes |\n|------|-------|\n| \`references/<host>.md\` |  |\n`,
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/mstar-alpha/SKILL.md:5");
+    expect(failures[0]).toContain("trigger column is empty");
+  });
+
   test("nested references/_shared paths resolve, same-skill bare and cross-skill owner-prefixed", () => {
     expect(
       failing({
@@ -2090,6 +2121,11 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
   });
 
   test("a nested colliding child needs the owner prefix from another skill", () => {
+    // `qc-specialist/report-template.md` exists under two skills, so only the
+    // longer nested suffix exposes the collision: from gamma the basename
+    // `report-template.md` alone is unique to beta, and a resolution that
+    // stops at the basename silently picks beta instead of reporting the
+    // ambiguity.
     const failures = failing({
       "skills/mstar-alpha/SKILL.md":
         "## References\n\n- `references/qc-specialist/report-template.md` - open when writing alpha's QC report.\n",
@@ -2098,11 +2134,30 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
         "## References\n\n- `references/report-template.md` - open when writing beta's report.\n\n- `references/qc-specialist/report-template.md` - open when writing beta's QC report.\n",
       "skills/mstar-beta/references/report-template.md": "# beta template\n",
       "skills/mstar-beta/references/qc-specialist/report-template.md": "# beta qc template\n",
-      "skills/mstar-alpha/references/extra.md":
-        "# extra\n\n-> `mstar-beta/references/qc-specialist/report-template.md`\n",
+      "skills/mstar-gamma/SKILL.md":
+        "## References\n\n- `references/gamma.md` - open when reading gamma.\n\n- `references/qc-specialist/report-template.md` - open when writing gamma's QC report.\n",
+      "skills/mstar-gamma/references/gamma.md": "# gamma\n",
     });
     expect(failures.length).toBe(1);
-    expect(failures[0]).toContain("skills/mstar-alpha/references/extra.md");
+    expect(failures[0]).toContain("skills/mstar-gamma/SKILL.md:5");
+    expect(failures[0]).toContain("matches more than one reference file");
+  });
+
+  test("naming the owner resolves a nested colliding child for another skill", () => {
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md":
+          "## References\n\n- `references/qc-specialist/report-template.md` - open when writing alpha's QC report.\n",
+        "skills/mstar-alpha/references/qc-specialist/report-template.md": "# alpha qc template\n",
+        "skills/mstar-beta/SKILL.md":
+          "## References\n\n- `references/report-template.md` - open when writing beta's report.\n\n- `references/qc-specialist/report-template.md` - open when writing beta's QC report.\n",
+        "skills/mstar-beta/references/report-template.md": "# beta template\n",
+        "skills/mstar-beta/references/qc-specialist/report-template.md": "# beta qc template\n",
+        "skills/mstar-gamma/SKILL.md":
+          "## References\n\n- `references/gamma.md` - open when reading gamma.\n\n- `mstar-alpha/references/qc-specialist/report-template.md` - open when writing gamma's QC report.\n",
+        "skills/mstar-gamma/references/gamma.md": "# gamma\n",
+      }),
+    ).toEqual([]);
   });
 
   test("a path that names no reference file fails instead of passing silently", () => {
@@ -2120,7 +2175,7 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
     expect(
       failing({
         "skills/mstar-alpha/SKILL.md":
-          "## References\n\n- `references/used.md` - open when reading alpha.\n\n- `references/<host>.md` - open for the active host.\n",
+          "## References\n\n- `references/used.md` - open when reading alpha.\n\n- `references/<host>.md` - open when the active host applies.\n",
         "skills/mstar-alpha/references/used.md": "# used\n",
       }),
     ).toEqual([]);
@@ -2133,7 +2188,7 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
     expect(
       failing({
         "skills/mstar-alpha/SKILL.md":
-          "## References\n\n- `references/used.md` - open when reading alpha.\n\n- `references/*/report-template.md` - one template per role, pick yours when reporting.\n\n- `references/{role}/report-template.md` - same, braced.\n\n- `references/$KIND/report-template.md` - same, dollar form.\n\n- `references/<role>/report-template.md` - same, angled.\n",
+          "## References\n\n- `references/used.md` - open when reading alpha.\n\n- `references/*/report-template.md` - open when reporting for any role.\n\n- `references/{role}/report-template.md` - open when reporting as that role.\n\n- `references/$KIND/report-template.md` - open when reporting for any kind.\n\n- `references/<role>/report-template.md` - open when reporting as that role.\n",
         "skills/mstar-alpha/references/used.md": "# used\n",
         "skills/mstar-beta/SKILL.md": "## References\n\n- `references/report-template.md` - open when writing beta's report.\n",
         "skills/mstar-beta/references/report-template.md": "# beta template\n",
