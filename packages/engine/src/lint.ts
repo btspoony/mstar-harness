@@ -514,9 +514,10 @@ export function findUntrackedTodos(fileText: string): UntrackedTodo[] {
   return findings;
 }
 
-/** A comment that matches no allowed shape: the 1-based line it starts on and
- * that line's trimmed source text (reporting). */
-export type UnclassifiedComment = { line: number; text: string };
+/** A comment that matches no allowed shape: the 1-based lines it spans (a block
+ * is one comment, so the changed-line gate reads the whole span) and its first
+ * line's trimmed source text (reporting). */
+export type UnclassifiedComment = { line: number; endLine: number; text: string };
 
 /** A declared prefix: the comment opens by naming what it states, so the
  * reader can tell a fact from a restatement. Anchored per comment line, so
@@ -536,7 +537,9 @@ const COMMENT_SHAPES: readonly RegExp[] = [
   /\btemporary\s*(?::|[\u2013\u2014-]\s)/i,
   DECLARED_PREFIX_RE,
   // Contract pointers: the one path to the artifact or record owning the rule.
-  /\bsee\b/i,
+  // `see` must name its target, so the English verb alone ("the way to see a
+  // fold") cannot classify a comment as a pointer.
+  /\bsee\s+(?:https?:\/\/|ADR[-\s]?\d|#\d|(?:issue|ticket)\s+#?\d|contract\s*\u00a7|[\w.@-]+\/)/i,
   /\bADR[-\s]?\d+/i,
   /#\d+/,
   /\b(?:issue|ticket)\s+#?\d+/i,
@@ -674,7 +677,7 @@ export function findUnclassifiedComments(fileText: string): UnclassifiedComment[
     if (unit.body.trim() === "") continue;
     if (unit.doc && documentsExport(lines, unit.endLine)) continue;
     if (unit.body.split("\n").some(hasCommentShape)) continue;
-    findings.push({ line: unit.line, text: lines[unit.line - 1]!.trim() });
+    findings.push({ line: unit.line, endLine: unit.endLine, text: lines[unit.line - 1]!.trim() });
   }
   return findings;
 }

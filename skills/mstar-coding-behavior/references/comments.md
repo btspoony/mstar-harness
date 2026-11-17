@@ -10,6 +10,8 @@ A comment is an input to the next change: whoever edits the line reads it before
 
 ## MUST
 
+A non-documentation comment passes the lint in one of four shapes: a marker (`simplify:`, `shortcut:`, `temporary:`), a contract pointer — `see` plus its target (`docs/…`, `plans/…`, `ADR-<n>`, `#<n>`, `issue <n>`, `contract §`, a URL) or that target alone, a declared prefix (`why:`, `invariant:`, `safety:`, `note:`), or `@generated`; a `TODO`/`FIXME` is a fifth only with a tracking reference, and `see` without a target is prose, not a pointer. A `/** … */` block whose next non-empty line starts with `export` is documentation and exempt; the same block above anything else is not.
+
 | Case | What keeps it |
 |---|---|
 | External constraint — a platform, protocol or third-party behavior the code cannot choose | It appears nowhere in the file |
@@ -53,3 +55,5 @@ Labels: `simplify: <ceiling>`, and `temporary` written `temporary:`, `temporary 
 The marker never licenses the pattern: once its ceiling is exceeded, its bound is gone, or the pattern is copied into a new site, it is a defect to report, not a documented decision. A marker without that bound is a comment that licenses repetition — delete it with the code it excused, or add the bound.
 
 The gate reads the code files under `packages/` and `scripts/`, selected by extension (`mstar lint <file>`); a marker elsewhere is unenforced, so check it in review.
+
+**Ratchet:** the existing corpus is advisory — the gate reports the comments a change adds or modifies and nothing else. `mstar lint <file> --diff-base <ref>` resolves the merge base of `<ref>` and HEAD and keeps only the findings whose comment lines that diff touches, a block counting when any line inside it moved; the `unclassified comments: <n>` count it writes to stderr is the change's own. New or edited prose must therefore take a shape, and no bulk rewrite is implied.

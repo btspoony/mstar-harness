@@ -716,11 +716,21 @@ describe("findUnclassifiedComments", () => {
 
   test("accepts a contract pointer", () => {
     expect(findUnclassifiedComments("// see docs/adr/0007\n")).toEqual([]);
+    expect(findUnclassifiedComments("// see https://example.com/archive\n")).toEqual([]);
     expect(findUnclassifiedComments("// ADR-0007 owns this ordering\n")).toEqual([]);
     expect(findUnclassifiedComments("// tracked in #123\n")).toEqual([]);
     expect(findUnclassifiedComments("// issue 123 records the tradeoff\n")).toEqual([]);
     expect(findUnclassifiedComments("// plans/20991231-example.md owns the removal\n")).toEqual([]);
     expect(findUnclassifiedComments("// contract \u00a74.2\n")).toEqual([]);
+  });
+
+  test("requires a target after see, so the verb alone is not a pointer", () => {
+    expect(findUnclassifiedComments("// the only way to see a fold is to open it\n")).toHaveLength(1);
+    expect(findUnclassifiedComments("// see the pairing this run leaves behind\n")).toHaveLength(1);
+  });
+
+  test("carries the span of a block comment", () => {
+    expect(findUnclassifiedComments("/*\n * returns the value\n */\nconst a = 1;\n")[0]).toMatchObject({ line: 1, endLine: 3 });
   });
 
   test("accepts every marker label", () => {

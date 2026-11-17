@@ -1,9 +1,24 @@
 /** Command-owned CLI subprocess coverage; fixture and assertion contracts are preserved. */
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runCli, withTempDir } from "./harness";
 import { cliEnvelope, expectUsageDiagnostic, lintResults, lintViolationCodes } from "./support/cli-assertions";
+
+/** A repository whose base state is `files`, committed: `--diff-base` diffs the
+ * working tree against it, so each ratchet test edits one file after this and
+ * lints the working tree. */
+function commitBase(dir: string, files: Record<string, string>): void {
+  const git = (args: string[]): void => {
+    execFileSync("git", [...args], { cwd: dir, stdio: "ignore" });
+  };
+  const identity = ["-c", "user.email=lint-cli-test@example.com", "-c", "user.name=Lint CLI Test", "-c", "commit.gpgsign=false"];
+  git(["init", "-q"]);
+  for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
+  git([...identity, "add", "-A"]);
+  git([...identity, "commit", "-q", "-m", "base"]);
+}
 
 // ---------------------------------------------------------------------------
 // mstar lint
@@ -302,6 +317,51 @@ Check result: exit 0; changed scope line found.
       expect(markers).toContain("unclassified comment @3: /** Local doc. */");
       expect(markers).not.toContain("@1");
       expect(result.stderr.trim()).toBe("unclassified comments: 1");
+    });
+  });
+
+  test("--diff-base reports the comment on an added line and not the one above it", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      commitBase(dir, { "scan.ts": "// returns the value\nconst a = 1;\n" });
+      writeFileSync(file, "// returns the value\nconst a = 1;\n// returns it again\nconst b = 2;\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(lintResults(result)[0]?.markers.join("\n")).toBe("unclassified comment @3: // returns it again");
+      expect(result.stderr.trim()).toBe("unclassified comments: 1");
+    });
+  });
+
+  test("--diff-base reports nothing for a file the change does not touch", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      commitBase(dir, { "scan.ts": "// returns the value\nconst a = 1;\n" });
+      const result = runCli(["lint", join(dir, "scan.ts"), "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(lintResults(result)[0]?.markers).toEqual([]);
+      expect(result.stderr.trim()).toBe("unclassified comments: 0");
+    });
+  });
+
+  test("--diff-base reports a block comment whose interior line moved", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      const block = (second: string): string => `/*\n * first prose\n * ${second}\n */\nconst a = 1;\n`;
+      commitBase(dir, { "scan.ts": block("second prose") });
+      writeFileSync(file, block("second prose, edited"));
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(lintResults(result)[0]?.markers.join("\n")).toBe("unclassified comment @1: /*");
+      expect(result.stderr.trim()).toBe("unclassified comments: 1");
+    });
+  });
+
+  test("--diff-base with an unresolvable ref is a usage refusal", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      commitBase(dir, { "scan.ts": "// returns the value\nconst a = 1;\n" });
+      const result = runCli(["lint", file, "--diff-base", "no-such-ref"], { cwd: dir });
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toContain("no-such-ref");
     });
   });
 

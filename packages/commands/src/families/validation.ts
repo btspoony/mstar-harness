@@ -84,7 +84,7 @@ const tracksSchema = z.array(
 type Input = {
   assignmentFile?: string; branch?: string; planId?: string; plan?: string; workflow?: string; harness?: string; integration?: string;
   mainBranch?: string; control?: string; entry?: boolean; l2?: boolean; tracks?: { worktreePath: string; workingBranch: string }[]; files?: string[]; mode?: string; reviewers?: string[];
-  target?: string; type?: string; prVariant?: boolean; dir?: string; docPath?: string; knowledgeDir?: string;
+  target?: string; type?: string; prVariant?: boolean; diffBase?: string; dir?: string; docPath?: string; knowledgeDir?: string;
   skillDir?: string; rolesDir?: string; skillsDir?: string; reportFile?: string;
 };
 type Violation = GateResult["violations"][number];
@@ -101,7 +101,7 @@ const schemas: Record<(typeof verbs)[number], z.ZodType<Input>> = {
   "worktree.check": z.object({ planId: z.string().optional(), plan: z.string().optional(), workflow: z.string().optional(), harness: z.string().optional(), integration: z.string().optional(), mainBranch: z.string().optional(), control: z.string().optional(), entry: z.boolean().optional(), l2: z.boolean().optional(), tracks: tracksSchema.optional() }),
   "worktree.qc-alignment": z.object({ files: z.array(z.string()).optional() }),
   "review.seats": z.object({ assignmentFile: z.string().optional(), mode: z.string().optional(), reviewers: z.array(z.string()).optional() }),
-  lint: z.object({ target: z.string().optional(), type: z.string().optional(), prVariant: z.boolean().optional() }),
+  lint: z.object({ target: z.string().optional(), type: z.string().optional(), prVariant: z.boolean().optional(), diffBase: z.string().optional() }),
   "design-md.validate": z.object({ dir: z.string().optional() }),
   "compound.validate": z.object({ docPath: z.string().optional(), knowledgeDir: z.string().optional() }),
   "skill.lint": z.object({ skillDir: z.string().optional() }),
@@ -304,7 +304,11 @@ function parseHeaderField(text: string, label: string): string {
 /** Prefix of one advisory marker per unclassified comment; the count line
  * sums them, so the wording lives here once. */
 const UNCLASSIFIED_MARKER_PREFIX = "unclassified comment @";
-function lintOne(file: string, type?: LintType, prVariant = false): { violations: Violation[]; markers: string[] } {
+/** `touched` is the file's added/modified line ranges from `--diff-base`:
+ * `undefined` leaves every comment reported (no ratchet), an empty list reports
+ * none (the change does not touch this file). */
+type TouchedLines = readonly (readonly [number, number])[];
+function lintOne(file: string, type?: LintType, prVariant = false, touched?: TouchedLines): { violations: Violation[]; markers: string[] } {
   const text = readFileSync(file, "utf8");
   const violations: Violation[] = [];
   const markers: string[] = [];
@@ -331,9 +335,14 @@ function lintOne(file: string, type?: LintType, prVariant = false): { violations
         }
         markers.push(`simplify marker @${marker.line}: ${marker.text}`);
       }
-      // A comment matching no allowed shape (comments.md section MUST) is
-      // advisory: the count line is the gate's only output for it.
-      for (const finding of findUnclassifiedComments(text)) markers.push(`${UNCLASSIFIED_MARKER_PREFIX}${finding.line}: ${finding.text}`);
+      // A comment matching no allowed shape (comments.md § MUST) is advisory:
+      // the count line is the gate's only output for it. Under `--diff-base`
+      // only the comments the change adds or modifies are reported, and a block
+      // counts when ANY line of it moved - it reports at its first line.
+      for (const finding of findUnclassifiedComments(text)) {
+        if (touched !== undefined && !touched.some(([start, end]) => finding.line <= end && finding.endLine >= start)) continue;
+        markers.push(`${UNCLASSIFIED_MARKER_PREFIX}${finding.line}: ${finding.text}`);
+      }
       for (const todo of findUntrackedTodos(text)) markers.push(`untracked ${todo.marker} @${todo.line}: ${todo.text}`);
       for (const finding of findCommentedCode(text)) markers.push(`commented-out code @${finding.line}: ${finding.text}`);
       const temporary = findTemporaryMarkers(text);
@@ -530,8 +539,16 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           return results.some((result) => result.violations.length) ? refusal(id, results[0]!.violations[0]?.code ?? "lint.violations", "lint violations found", { results }, "Resolve each reported lint violation, then rerun mstar lint <target>.") : ok(id, { results });
         }
         const targets = !isDir ? [abs] : forced === "provenance" ? collectTargets(abs, (file) => provenanceExtensions[path.extname(file).toLowerCase()] === true) : collectTargets(abs);
-        
-    const results = targets.map((file) => ({ file, ...lintOne(file, forced as LintType | undefined, input.prVariant === true) }));
+        // `--diff-base` is the ratchet: a comment is reported only when the
+        // change adds or modifies a line of it. A file the diff does not
+        // mention reports none, so an untouched file stays advisory.
+        const changed = input.diffBase === undefined ? undefined : await changedLineRanges(context, input.diffBase);
+        const results = targets.map((file) => {
+          const touched = changed === undefined
+            ? undefined
+            : (changed.ranges.get(path.relative(changed.root, canonicalPath(file)).split(path.sep).join("/")) ?? []);
+          return { file, ...lintOne(file, forced as LintType | undefined, input.prVariant === true, touched) };
+        });
         // The unclassified-comment count is a summary, not a verdict: the
         // findings ride the results as advisory markers and never fail the
         // command, so one count line is written beside the envelope (stderr).
@@ -679,13 +696,53 @@ async function awaitSpawn(context: InvocationContext, argv: readonly string[], c
   const result = await context.effects.spawn({ argv, cwd, env: {}, signal: context.signal });
   return { ok: result.exitCode === 0, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
 }
+/** One added/modified range of a zero-context diff hunk on the new side. */
+const HUNK_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+/**
+ * The lines a change adds or modifies against `ref`, per repository-relative
+ * path, plus the root those paths are spelled from. A zero-context diff is the
+ * whole answer: a modified line is a deletion plus an addition, so the new side
+ * carries both, and a deletion-only hunk (`+c,0`) contributes nothing.
+ *
+ * shortcut: untracked files are absent from `git diff <base>`, so a new file
+ * that was never added reports no changed lines; upgrade when a local ratchet
+ * must see files `git add` has not staged.
+ */
+async function changedLineRanges(context: InvocationContext, ref: string): Promise<{ root: string; ranges: Map<string, [number, number][]> }> {
+  const base = await awaitSpawn(context, ["git", "merge-base", ref, "HEAD"]);
+  if (!base.ok || base.stdout === "") throw new SddScriptError(`usage: lint <target> --diff-base <ref> - git merge-base ${ref} HEAD failed: ${base.stderr || "no merge base"}`, 2);
+  const top = await awaitSpawn(context, ["git", "rev-parse", "--show-toplevel"]);
+  if (!top.ok || top.stdout === "") throw new SddScriptError(`usage: lint <target> --diff-base <ref> - ${context.cwd} is not inside a git checkout: ${top.stderr}`, 2);
+  const diff = await awaitSpawn(context, ["git", "-c", "core.quotePath=false", "diff", "--unified=0", "--no-color", "--no-ext-diff", base.stdout, "--"]);
+  if (!diff.ok) throw new SddScriptError(`usage: lint <target> --diff-base <ref> - git diff ${base.stdout} failed: ${diff.stderr}`, 2);
+  const ranges = new Map<string, [number, number][]>();
+  let file: string | undefined;
+  for (const line of diff.stdout.split("\n")) {
+    if (line.startsWith("+++ ")) {
+      const target = line.slice(4).trim();
+      file = target === "/dev/null" ? undefined : target.replace(/^b\//, "");
+      continue;
+    }
+    const hunk = HUNK_RE.exec(line);
+    if (hunk === null || file === undefined) continue;
+    const start = Number(hunk[1]);
+    const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
+    if (count === 0) continue;
+    const list = ranges.get(file);
+    if (list === undefined) ranges.set(file, [[start, start + count - 1]]);
+    else list.push([start, start + count - 1]);
+  }
+  // A symlinked checkout (`/tmp` -> `/private/tmp`) answers with its physical
+  // path, so the root the caller's targets are spelled from is canonicalized.
+  return { root: canonicalPath(top.stdout), ranges };
+}
 
 const contract: Record<(typeof verbs)[number], { path: string[]; args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; context?: "sessionId" }[]; effects: CommandDefinition["effects"]; description: string }> = {
   "dispatch.validate": { path: ["dispatch", "validate"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "branch", flags: "--branch <branch>" }], effects: ["read", "validate"], description: "Validate Assignment fields and branch protection. Write domain: control requires Worktree path, one branch form, and Control write paths: <path>[, <path>...]; paths are concrete, absolute or relative to Worktree path, and must be gitignored in the control checkout. A trailing / declares a directory; a path without it is checked under both file and directory ignore rules and must be ignored in both." },
   "worktree.check": { path: ["worktree", "check"], args: [{ key: "planId", required: false, variadic: false }], options: [{ key: "plan", flags: "--plan <plan-id>" }, { key: "workflow", flags: "--workflow <id>" }, { key: "entry", flags: "--entry" }, { key: "harness", flags: "--harness <path>" }, { key: "integration", flags: "--integration <path>" }, { key: "mainBranch", flags: "--main-branch <branch>" }, { key: "control", flags: "--control <path>" }, { key: "l2", flags: "--l2" }, { key: "tracks", flags: "--tracks <json>" }], effects: ["read", "validate", "process"], description: "Check engine-enforced workflow-entry facts or the L1/L2 worktree pre-dispatch gate." },
   "worktree.qc-alignment": { path: ["worktree", "qc-alignment"], args: [{ key: "files", required: true, variadic: true }], options: [], effects: ["read", "validate"], description: "Assert QC/QA Assignment alignment." },
   "review.seats": { path: ["review", "seats"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "mode", flags: "--mode <mode>" }, { key: "reviewers", flags: "--reviewers <list>" }], effects: ["read", "validate"], description: "Map execution mode to QC seat count and assert tri identity." },
-  lint: { path: ["lint"], args: [{ key: "target", required: true, variadic: false }], options: [{ key: "type", flags: "--type <type>" }, { key: "prVariant", flags: "--pr-variant" }], effects: ["read", "validate"], description: "Lint harness artifacts by content type (plan | skill | strategy | report | code | finding | provenance | specs | adr)." },
+  lint: { path: ["lint"], args: [{ key: "target", required: true, variadic: false }], options: [{ key: "type", flags: "--type <type>" }, { key: "prVariant", flags: "--pr-variant" }, { key: "diffBase", flags: "--diff-base <ref>" }], effects: ["read", "validate", "process"], description: "Lint harness artifacts by content type (plan | skill | strategy | report | code | finding | provenance | specs | adr). Unclassified comments are advisory markers; one `unclassified comments: <n>` summary line is written to stderr. --diff-base <ref> reports only the comments a change adds or modifies: it resolves the merge base of <ref> and HEAD and keeps findings whose comment lines that diff touches." },
   "design-md.validate": { path: ["design-md", "validate"], args: [{ key: "dir", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate DESIGN.md token frontmatter, parity and completeness." },
   "compound.validate": { path: ["compound", "validate"], args: [{ key: "docPath", required: true, variadic: false }], options: [{ key: "knowledgeDir", flags: "--knowledge-dir <dir>" }], effects: ["read", "validate"], description: "Validate a knowledge document and optional index scope." },
   "skill.lint": { path: ["skill", "lint"], args: [{ key: "skillDir", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Lint a skill directory." },
