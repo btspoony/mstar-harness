@@ -2126,6 +2126,57 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
     ).toEqual([]);
   });
 
+  test("a placeholder inside the path is not truncated and misresolved as a citation", () => {
+    // Each pattern's tail `report-template.md` exists in beta only. The old
+    // token class split at the placeholder and resolved that tail, so alpha was
+    // charged with a cross-skill citation it never wrote.
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md":
+          "## References\n\n- `references/used.md` - open when reading alpha.\n\n- `references/*/report-template.md` - one template per role, pick yours when reporting.\n\n- `references/{role}/report-template.md` - same, braced.\n\n- `references/$KIND/report-template.md` - same, dollar form.\n\n- `references/<role>/report-template.md` - same, angled.\n",
+        "skills/mstar-alpha/references/used.md": "# used\n",
+        "skills/mstar-beta/SKILL.md": "## References\n\n- `references/report-template.md` - open when writing beta's report.\n",
+        "skills/mstar-beta/references/report-template.md": "# beta template\n",
+      }),
+    ).toEqual([]);
+  });
+
+  test("bold and italic emphasis around a path are not placeholders", () => {
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md":
+          "## References\n\n- `references/used.md` - open when reading alpha.\n\n**`references/used.md`** - bold, open when reading alpha.\n",
+        "skills/mstar-alpha/references/used.md": "# used\n",
+      }),
+    ).toEqual([]);
+  });
+
+  test("two tables in one References section each use their own header row", () => {
+    // The first table's trigger column is 0; the second moves it to column 1.
+    // Reusing the cached index reads the path cell as the trigger and passes a
+    // row whose real trigger cell is empty.
+    const failures = failing({
+      "skills/mstar-alpha/SKILL.md":
+        "## References\n\n| When | Open |\n|------|------|\n| naming a plan | `references/used.md` |\n\n| Open | When |\n|------|------|\n| `references/second.md` |  |\n",
+      "skills/mstar-alpha/references/used.md": "# used\n",
+      "skills/mstar-alpha/references/second.md": "# second\n",
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/mstar-alpha/SKILL.md:9");
+    expect(failures[0]).toContain("trigger column is empty");
+  });
+
+  test("two tables with their own non-empty trigger columns both pass", () => {
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md":
+          "## References\n\n| When | Open |\n|------|------|\n| naming a plan | `references/used.md` |\n\n| Open | When |\n|------|------|\n| `references/second.md` | reading the second tier |\n",
+        "skills/mstar-alpha/references/used.md": "# used\n",
+        "skills/mstar-alpha/references/second.md": "# second\n",
+      }),
+    ).toEqual([]);
+  });
+
   test("an unreadable skills tree returns a failure row, never an empty passing corpus", () => {
     const dir = mkdtempSync(join(tmpdir(), "drift-reference-corpus-"));
     try {

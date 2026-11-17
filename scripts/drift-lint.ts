@@ -1359,13 +1359,16 @@ export interface ReferenceCorpusResult {
 }
 
 /** A reference token is a `.md` path with a `references/` segment or a
- * subpath; placeholder forms (`<host>.md`, `*.md`, `{...}`) are patterns,
- * not citations, and never resolve. */
-const REFERENCE_TOKEN = /[A-Za-z0-9_./-]+\.md/g;
+ * subpath. The class includes the placeholder characters so a pattern stays one
+ * token: excluding them would split a `references/` + wildcard path at the star
+ * and resolve its tail as a real citation. */
+const REFERENCE_TOKEN = /[A-Za-z0-9_.\/<>*{}$-]+\.md/g;
 /** Same token shape without `g`: a shared global regex would make `.test()`
  * stateful across calls (`lastIndex` carries over between rows). */
 const REFERENCE_TOKEN_TEST = /[A-Za-z0-9_./-]+\.md/;
+/** A placeholder inside a token makes it a pattern, not a citation. */
 const REFERENCE_PLACEHOLDER = /[<>*{}$]/;
+const isReferenceToken = (token: string): boolean => !REFERENCE_PLACEHOLDER.test(token);
 /** A `## References` row states a trigger as a condition clause
  * (`when …`, `何时`, `…时打开`). A bare description of the file's topic is not
  * a trigger. Only rows are judged — a prose paragraph in the block is not a
@@ -1396,9 +1399,11 @@ function referenceTokenOwner(token: string): string | null {
 
 /**
  * Guard 15 — reference entry points. Three properties over `skills/**`:
- * 1. every `skills/<skill>/references/**` file is referenced from that same
- *    skill (its `SKILL.md` or another of its references), so a second-tier
- *    file stays reachable;
+ * 1. own-skill discovery: every `skills/<skill>/references/**` file is named
+ *    inside its own skill — by that skill's `SKILL.md` or by a sibling
+ *    reference — so a second-tier file stays reachable. A `## References` row
+ *    is the primary form, not the only legal one: any citation site in the own
+ *    skill counts, and a file named nowhere in its own skill fails;
  * 2. every `## References` row carrying a reference path states a trigger;
  * 3. a cross-skill citation carries its owner in the path
  *    (`<owner>/references/<file>.md`) — judged by the path, never by whether
@@ -1459,16 +1464,19 @@ export function checkReferenceCorpus(input: {
     const citing = rel.split("/")[1] ?? "";
     const lines = text.split(/\r?\n/);
     let inReferences = false;
-    let tableTriggerColumn = -1;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!;
       if (/^#{1,6}\s/.test(line)) {
         inReferences = line.trim() === "## References";
-        tableTriggerColumn = -1;
       }
-      const rowTokens = [...new Set([...line.matchAll(REFERENCE_TOKEN)].map((m) => m[0]!))].filter(
-        (token) => !REFERENCE_PLACEHOLDER.test(token),
-      );
+      const rowTokens = [
+        ...new Set(
+          [...line.matchAll(REFERENCE_TOKEN)]
+            // Leading `*` is Markdown emphasis around a real path, not a wildcard.
+            .map((m) => m[0]!.replace(/^\*+/, ""))
+            .filter(isReferenceToken),
+        ),
+      ];
       const citations: string[] = [];
       for (const token of rowTokens) {
         const resolution = resolve(token, citing);
@@ -1523,18 +1531,15 @@ export function checkReferenceCorpus(input: {
           .replace(/\|$/, "")
           .split("|")
           .map((cell) => cell.trim());
-      if (tableTriggerColumn === -1) {
-        // The `| When | Open |` / `| 何时 | 打开 |` header of this table owns
-        // the trigger column; a table without one falls back to "any cell that
-        // carries no reference path".
-        let header = i;
-        while (header > 0 && lines[header - 1]!.trim().startsWith("|")) header--;
-        tableTriggerColumn =
-          lines[header]!.trim().startsWith("|")
-            ? splitRow(lines[header]!).findIndex((cell) => REFERENCE_TRIGGER_HEADER.test(cell))
-            : -1;
-        if (tableTriggerColumn < 0) tableTriggerColumn = -2;
-      }
+      // The `| When | Open |` / `| 何时 | 打开 |` header of this table owns the
+      // trigger column; a table without one falls back to "any cell that
+      // carries no reference path". Derived from this row's own table: a
+      // `## References` section may hold several tables with different column
+      // orders, so a cached index reads the wrong cell in the next table.
+      let header = i;
+      while (header > 0 && lines[header - 1]!.trim().startsWith("|")) header--;
+      const tableHeader = lines[header]!.trim().startsWith("|") ? splitRow(lines[header]!) : [];
+      const tableTriggerColumn = tableHeader.findIndex((cell) => REFERENCE_TRIGGER_HEADER.test(cell));
       const cells = splitRow(line);
       const triggered =
         tableTriggerColumn >= 0
