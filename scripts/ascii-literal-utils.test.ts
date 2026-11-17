@@ -98,6 +98,13 @@ describe("commentMask — regex vs division heuristic (regression)", () => {
     expect(maskedText(src)).toContain("注释");
   });
 
+  test("division after a closed string or template keeps the trailing // comment", () => {
+    for (const src of ['const n = "4" / 2 // 注释\n', "const n = '4' / 2 // 注释\n", "const n = `4` / 2 // 注释\n"]) {
+      expect(unmaskedNonAscii(src)).toBe("");
+      expect(maskedText(src)).toContain("注释");
+    }
+  });
+
   test("plain division and plain regex both leave the trailing comment masked", () => {
     expect(unmaskedNonAscii("const d = a / b; // 注释\n")).toBe("");
     expect(unmaskedNonAscii("const r = /ab/; // 注释\n")).toBe("");

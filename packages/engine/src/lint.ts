@@ -71,9 +71,12 @@ export type SimplifyMarker = { line: number; text: string; bound: string | null 
 
 /** The `upgrade:` clause of a bounded shortcut (comments.md § Markers: a
  * `simplify:` marker records a ceiling and a bound). Line-scoped: the clause
- * never spans a newline. The colon is required — a bare "upgrade" word states
- * no plan. */
+ * never spans a newline. The colon is required, and so is a value after it —
+ * a bare "upgrade" word or an empty "upgrade:" states no plan. */
 const UPGRADE_PATH_RE = /\bupgrade\s*:[^\n;,]*/i;
+/** The value of the clause's own line, or `null` when the colon closes the
+ * line (the value may continue on the next comment line). */
+const UPGRADE_TAIL_RE = /^\s*([^\n;,]*)/;
 
 /**
  * Find `simplify:` marker comments (mstar-coding-behavior § Decision Rules:
@@ -176,18 +179,38 @@ function introducerBefore(maskedLine: string, before: number): number {
   return found;
 }
 
+/** End (exclusive) of the comment run starting at `from`: the scanner stops
+ * marking comment content at the first code character, so code following a
+ * closed block comment never joins the text (a marker's block comment cannot
+ * borrow a bound from the string literal after it). */
+function commentRunEnd(line: string, from: number, scan: Uint8Array, base: number): number {
+  let end = from;
+  while (end < line.length && scan[base + end] === SOURCE_COMMENT) end += 1;
+  return end;
+}
+
 /** One line's comment text: the whole line when it is comment-only, otherwise
  * the tail from the comment introducer before `before` (or from the scanner's
- * first comment character). Code is never a bound, so a code line without an
- * introducer contributes nothing. */
+ * first comment character), cut where the scanner returns to code. Code is
+ * never a bound, so a code line without a comment contributes nothing. */
 function commentLineText(line: string, maskedLine: string, commentOnly: boolean, scan: Uint8Array, base: number, before: number): string {
   if (commentOnly) return line;
-  const introducer = introducerBefore(maskedLine, before);
-  if (introducer !== -1) return line.slice(introducer);
-  for (let i = 0; i < line.length; i++) {
-    if (scan[base + i] === SOURCE_COMMENT) return line.slice(i);
+  let start = introducerBefore(maskedLine, before);
+  if (start === -1) {
+    // No introducer on the line: start at the scanner's first comment character.
+    start = -1;
+    for (let i = 0; i < line.length && start === -1; i++) {
+      if (scan[base + i] === SOURCE_COMMENT) start = i;
+    }
+    if (start === -1) return "";
   }
-  return "";
+  // A non-C introducer (`#`, `;`, `--`) is code to the scanner, so the comment
+  // run starts after the token; an absent run means the whole tail is text.
+  let runStart = start;
+  while (runStart < line.length && scan[base + runStart] !== SOURCE_COMMENT) runStart += 1;
+  if (runStart === line.length) return line.slice(start);
+  // The block-comment close is delimiter, not text.
+  return line.slice(start, commentRunEnd(line, runStart, scan, base)).replace(/\*\/\s*$/, "");
 }
 
 /** The comment text of the block around line `index`: the maximal run of
@@ -207,11 +230,21 @@ function commentBlockText(lines: readonly string[], masked: readonly string[], c
 }
 
 /** The bound recorded for the marker on line `index`: the first `upgrade:`
- * clause or removal/tracking reference anywhere in its comment block. */
+ * clause or removal/tracking reference anywhere in its comment block. A
+ * clause with nothing after its colon keeps reading on the next comment line,
+ * because house style wraps a long bound; the block is already comment-only
+ * text, so the continuation cannot be code. */
 function commentBlockBound(lines: readonly string[], masked: readonly string[], commentOnly: readonly boolean[], index: number, before: number, scan: Uint8Array, offsets: readonly number[]): string | null {
   const block = commentBlockText(lines, masked, commentOnly, index, before, scan, offsets);
   const clause = UPGRADE_PATH_RE.exec(block);
-  if (clause !== null) return clause[0];
+  if (clause !== null) {
+    const tail = UPGRADE_TAIL_RE.exec(clause[0].slice(clause[0].indexOf(":") + 1));
+    if (tail !== null && tail[1].trim() !== "") return clause[0].trim();
+    const continuation = block.slice(clause.index + clause[0].length).split("\n")
+      .map((line) => line.replace(/^\s*(?:\/\/|\/\*|\*|#|;|--)\s*/, "").trim())
+      .find((line) => line !== "");
+    if (continuation !== undefined) return `${clause[0].trim()} ${continuation}`;
+  }
   for (const pattern of REMOVAL_PATH_PATTERNS) {
     const reference = pattern.exec(block);
     if (reference !== null) return reference[0];
@@ -326,6 +359,10 @@ const COMMENT_ONLY_RE = /^\s*\/\/(?!\/)/;
 const COMMENT_PREFIX_RE = /^\s*\/\/ ?/;
 /** A statement terminator. A label (`TODO: later`) or a bare word is not code. */
 const STATEMENT_TERMINATOR_RE = /[;}]$/;
+/** A prose label that happens to parse as a labeled statement: `name: value;`
+ * where the body is a bare reference — no call, assignment or operator, so the
+ * statement does nothing and no one keeps it as code. */
+const PROSE_LABEL_RE = /^\s*[A-Za-z_$][\w$]*\s*:\s*[A-Za-z_$][\w$.]*\s*;\s*$/;
 
 /**
  * Does this text compile as a program? `vm.Script` parses without running it,
@@ -377,6 +414,7 @@ export function findCommentedCode(fileText: string): CommentedCodeFinding[] {
       i += 1;
     }
     const text = body.join("\n").trimEnd();
+    if (PROSE_LABEL_RE.test(text)) continue;
     if (!STATEMENT_TERMINATOR_RE.test(text) || !parsesAsScript(text)) continue;
     findings.push({ line: start + 1, text: body.find((line) => line.trim() !== "")?.trim() ?? "" });
   }
@@ -385,15 +423,17 @@ export function findCommentedCode(fileText: string): CommentedCodeFinding[] {
 
 /** Tracking references that satisfy the ownerless-TODO rule (comments.md
  * § MUST NOT "an ownerless TODO": "no name, issue reference or removal path
- * means nobody removes it") — an issue number `#123`, a project key inside the
- * marker's paren (`TODO(ABC-12)`), an explicit issue/ticket/ADR reference, or
- * the removal-path vocabulary a `temporary` marker already accepts. A bare
- * `KEY-<n>` shape is NOT accepted: it also matches standard and encoding names
- * (`UTF-8`, `SHA-256`, `ISO-8601`), which would exempt exactly the TODO
- * comments most likely to linger. */
+ * means nobody removes it") — a named owner `TODO(alice)` / `TODO @alice`, an
+ * issue number `#123`, a project key inside the marker's paren
+ * (`TODO(ABC-12)`), an explicit issue/ticket/ADR reference, or the removal-path
+ * vocabulary a `temporary` marker already accepts. A bare `KEY-<n>` shape is
+ * NOT accepted: it also matches standard and encoding names (`UTF-8`,
+ * `SHA-256`, `ISO-8601`), which would exempt exactly the TODO comments most
+ * likely to linger. */
 const TODO_TRACKING_PATTERNS: readonly RegExp[] = [
+  /\b(?:TODO|FIXME)\(\s*[A-Za-z][\w.-]*\s*\)/,
+  /\b(?:TODO|FIXME)\s+@[A-Za-z][\w.-]*/,
   /#\d+/,
-  /\b(?:TODO|FIXME)\([A-Z][A-Z0-9]*-\d+\)/,
   /\b(?:issue|ticket)\s+#?\d+\b/i,
   /\bADR[-\s]\d+\b/,
   ...REMOVAL_PATH_PATTERNS,
@@ -404,10 +444,20 @@ const TODO_TRACKING_PATTERNS: readonly RegExp[] = [
 /** A TODO/FIXME comment carrying no tracking reference, at its 1-based line. */
 export type UntrackedTodo = { line: number; marker: "TODO" | "FIXME"; text: string };
 
+/** True when the token at `at` on line `index` is comment content rather than
+ * code: the scanner marks it, or the line is comment-only under a non-C
+ * introducer (`#`, `;`, `--`) the scanner reads as code. An identifier that
+ * happens to be named after the marker — a declaration, a map key, a private
+ * field — never counts. */
+function isCommentContext(scan: Uint8Array, base: number, at: number, line: string): boolean {
+  if (scan[base + at] === SOURCE_COMMENT) return true;
+  return LINE_COMMENT_ONLY_RE.test(line) && scan[base + at] === SOURCE_CODE;
+}
+
 /**
  * Find `TODO` / `FIXME` comments with no tracking reference, so nobody is held
  * to them (comments.md § MUST NOT "an ownerless TODO"). Markers are matched
- * case-sensitively on comment-context lines: the convention is uppercase, and
+ * case-sensitively in comment context: the convention is uppercase, and
  * lowercase prose ("the todo list") is not a marker.
  */
 export function findUntrackedTodos(fileText: string): UntrackedTodo[] {
@@ -415,10 +465,14 @@ export function findUntrackedTodos(fileText: string): UntrackedTodo[] {
   const re = new RegExp(`${COMMENT_INTRODUCER}\\s*(TODO|FIXME)\\b`);
   const lines = fileText.split(/\r?\n/);
   const masked = maskLiterals(fileText).split(/\r?\n/);
+  const scan = scanSource(fileText);
+  const offsets = lineOffsets(fileText);
   for (let i = 0; i < lines.length; i++) {
     const commentContext = masked[i];
     const match = re.exec(commentContext);
     if (match === null) continue;
+    const at = match.index + match[0].length - match[1].length;
+    if (!isCommentContext(scan, offsets[i], at, lines[i])) continue;
     if (TODO_TRACKING_PATTERNS.some((pattern) => pattern.test(commentContext))) continue;
     findings.push({ line: i + 1, marker: match[1] as UntrackedTodo["marker"], text: lines[i].trim() });
   }

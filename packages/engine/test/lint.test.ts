@@ -539,6 +539,15 @@ describe("findCommentedCode", () => {
     expect(findCommentedCode("// TODO: later\nconst live = 1;\n")).toEqual([]);
   });
 
+  test("does not report prose that parses as a labeled statement", () => {
+    expect(findCommentedCode("// fallback: cache;\nconst live = 1;\n")).toEqual([]);
+    expect(findCommentedCode("// note: retry once;\nconst live = 1;\n")).toEqual([]);
+  });
+
+  test("still reports a labeled statement that carries a call", () => {
+    expect(findCommentedCode("// retry: doWork();\nconst live = 1;\n")).toHaveLength(1);
+  });
+
   test("does not report a trailing comment after live code", () => {
     expect(findCommentedCode("const x = 1; // const y = 2;\n")).toEqual([]);
   });
@@ -596,6 +605,25 @@ describe("findUntrackedTodos", () => {
     expect(findUntrackedTodos("// the todo list lives in the plan\n")).toEqual([]);
     expect(findUntrackedTodos('const message = "TODO: later";\n')).toEqual([]);
     expect(findUntrackedTodos('expect(find("// TODO: later")).toBe(1);\n')).toEqual([]);
+  });
+
+  test("a code identifier named TODO or FIXME is not a marker", () => {
+    expect(findUntrackedTodos("const TODO = 1;\n")).toEqual([]);
+    expect(findUntrackedTodos("type FIXME = string;\n")).toEqual([]);
+    expect(findUntrackedTodos("const map = new Map<string, TODO>();\n")).toEqual([]);
+    expect(findUntrackedTodos("const o = { TODO: 1 };\n")).toEqual([]);
+    expect(findUntrackedTodos("x = 1; TODO\n")).toEqual([]);
+    expect(findUntrackedTodos("class A { #TODO = 1; }\n")).toEqual([]);
+  });
+
+  test("a named owner satisfies the rule (`TODO(alice):`)", () => {
+    expect(findUntrackedTodos("// TODO(alice): rewrite the retry loop\n")).toEqual([]);
+    expect(findUntrackedTodos("// FIXME(bob): drop the shim\n")).toEqual([]);
+  });
+
+  test("an `@name` owner satisfies the rule (`TODO @alice:`)", () => {
+    expect(findUntrackedTodos("// TODO @alice: rewrite the retry loop\n")).toEqual([]);
+    expect(findUntrackedTodos("// FIXME @bob: drop the shim\n")).toEqual([]);
   });
 });
 
@@ -668,6 +696,34 @@ describe("findSimplifyMarkers completeness", () => {
   test("a stray residual word is not a tracking reference", () => {
     expect(findSimplifyMarkers("// simplify: naive scan\n// some residual note\n")[0].bound).toBeNull();
     expect(findSimplifyMarkers("// simplify: naive scan; upgrade later\n")[0].bound).toBeNull();
+  });
+
+  test("an `upgrade:` clause with no value after the colon states no plan", () => {
+    expect(findSimplifyMarkers("// simplify: naive scan; upgrade:\n")[0].bound).toBeNull();
+    expect(findSimplifyMarkers("x = 1; // simplify: naive scan upgrade:\n")[0].bound).toBeNull();
+  });
+
+  test("an `upgrade:` clause whose value wraps to the next comment line still bounds", () => {
+    const markers = findSimplifyMarkers("// simplify: naive scan; upgrade:\n// index the map when the scan shows up\n");
+    expect(markers[0].bound).toBe("upgrade: index the map when the scan shows up");
+  });
+
+  test("code after a closed block comment is not the marker's bound", () => {
+    const markers = findSimplifyMarkers('/* simplify: naive scan */ const p = "plans/y.md";\n');
+    expect(markers).toHaveLength(1);
+    expect(markers[0].bound).toBeNull();
+    expect(findSimplifyMarkers("/* simplify: naive scan; upgrade: index */ const p = 1;\n")[0].bound).toBe(
+      "upgrade: index",
+    );
+  });
+
+  test("a division after a closed string or template still opens the trailing comment", () => {
+    for (const literal of ['"4"', "'4'", "`4`"]) {
+      const markers = findSimplifyMarkers(`const n = ${literal} / 2 // simplify: naive scan\n`);
+      expect(markers).toHaveLength(1);
+      expect(markers[0].line).toBe(1);
+      expect(markers[0].bound).toBeNull();
+    }
   });
 });
 

@@ -13,8 +13,9 @@
  *   a quote inside a regex never opens a phantom string.
  *
  * Regex-vs-division is a heuristic: after an adjacent `++`/`--`, after a
- * completed regex, or after an operand, `/` divides, so a trailing `//` still
- * opens a line comment (`i++ / 2 // note`).
+ * completed regex, after a closed string or template, or after an operand,
+ * `/` divides, so a trailing `//` still opens a line comment
+ * (`i++ / 2 // note`, `"4" / 2 // note`).
  */
 
 /** Scan class of a character. */
@@ -72,7 +73,13 @@ export function scanSource(src: string): Uint8Array {
       // A quote literal never spans a line: an unterminated one (an apostrophe
       // in prose the scanner read as code) bails to code, so the phantom string
       // cannot blank the rest of the file — comment content included.
-      if (c === quote || c === "\n") state = "code";
+      if (c === quote || c === "\n") {
+        state = "code";
+        // The literal is a complete operand: a following `/` is division, not
+        // a regex (else `const n = "4" / 2 // note` swallows the line comment).
+        prevSig = ")";
+        lastToken = "";
+      }
       i++;
       continue;
     }
@@ -85,6 +92,9 @@ export function scanSource(src: string): Uint8Array {
       }
       if (c === "`") {
         state = "code";
+        // A closed template is a complete operand — a following `/` divides.
+        prevSig = ")";
+        lastToken = "";
         i++;
         continue;
       }

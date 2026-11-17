@@ -233,6 +233,26 @@ Check result: exit 0; changed scope line found.
     });
   });
 
+  test("an `upgrade:` clause with no value does not satisfy the gate → exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// simplify: naive scan; upgrade:\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toContain("lint.simplify.no-upgrade-path");
+    });
+  });
+
+  test("a bound outside the block comment is not read (code after the close) → exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, '/* simplify: naive scan */ const p = "plans/y.md";\n');
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toContain("lint.simplify.no-upgrade-path");
+    });
+  });
+
   test("a trailing marker after code with no bound → lint.simplify.no-upgrade-path, exit 1", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "scan.sh");
