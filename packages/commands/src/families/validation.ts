@@ -435,9 +435,11 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           if (main === null) return rejected(id, assertControlClean({ controlRoot: null }), "worktree.main.invalid");
           if (!hasHarnessRoot(main.root)) return ok(id, gateData({ ok: true, violations: [] }));
           const gate = assertControlClean({ controlRoot: main });
+          // The literal recovery is what the refusal-quality rule can prove; each
+          // violation's own fix stays in the details.
           return gate.ok
             ? ok(id, gateData(gate))
-            : refusal(id, gate.violations[0]?.code ?? "worktree.main.invalid", gate.violations[0]?.message ?? "control root tracked-change check failed", gateData(gate), gate.violations[0]?.fix);
+            : refusal(id, gate.violations[0]?.code ?? "worktree.main.invalid", gate.violations[0]?.message ?? "control root tracked-change check failed", gateData(gate), "Move the edits to the checkout that carries the target branch (the integration or feature worktree) and commit there; the control root carries only gitignored process state. If Git cannot answer, restore access to the control checkout. Then rerun mstar worktree check --control-clean.");
         }
         if (input.l2) {
           // `tracks` reaches here already validated: the typed input field is
