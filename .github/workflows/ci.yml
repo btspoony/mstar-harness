@@ -1082,8 +1082,9 @@ jobs:
       # collector's extension filter reads the code face and nothing else, so
       # the SKILL.md a whole-type walk would also collect is never handed to
       # the code rules. `fixtures` is pruned by the walk itself (deliberately
-      # broken artifacts), so the two invocations reach the same verdict a
-      # per-file fan-out does, without 837 process spawns.
+      # broken artifacts); the loop over the two roots is the existing walk
+      # shape. The ratchet below is the change: it adds a changed-line step
+      # and leaves this whole-tree gate running as it was.
       - name: Lint code comments (bound gate, whole tree)
         run: |
           set -euo pipefail
