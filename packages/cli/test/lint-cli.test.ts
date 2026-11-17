@@ -278,6 +278,33 @@ Check result: exit 0; changed scope line found.
     });
   });
 
+  test("unclassified comment → advisory marker, exit 0, one count line", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// returns the value\nconst x = f();\n// why: the upstream returns 200 on 429\nconst y = f();\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      expect(lintViolationCodes(result)).toEqual([]);
+      const markers = lintResults(result)[0]?.markers.join("\n");
+      expect(markers).toContain("unclassified comment @1: // returns the value");
+      expect(markers).not.toContain("@3");
+      expect(result.stderr.trim().split("\n")).toEqual(["unclassified comments: 1"]);
+    });
+  });
+
+  test("a documentation block above an export is not reported, one above a local is", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "/** Public API doc. */\nexport const a = 1;\n/** Local doc. */\nconst b = 2;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      const markers = lintResults(result)[0]?.markers.join("\n");
+      expect(markers).toContain("unclassified comment @3: /** Local doc. */");
+      expect(markers).not.toContain("@1");
+      expect(result.stderr.trim()).toBe("unclassified comments: 1");
+    });
+  });
+
   test("dir walk aggregates violations → exit 1", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       writeFileSync(join(dir, "20260808-bad-plan.md"), "# Plan\n\n## Goal\nShip TBD.\n");

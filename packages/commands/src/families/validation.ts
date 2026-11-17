@@ -20,6 +20,7 @@ import {
   findSimplifyMarkers,
   findTemporaryMarkers,
   findCommentedCode,
+  findUnclassifiedComments,
   findUntrackedTodos,
   findEphemeralCitations,
   findProvenanceCitations,
@@ -300,6 +301,9 @@ function parseHeaderField(text: string, label: string): string {
   }
   return "";
 }
+/** Prefix of one advisory marker per unclassified comment; the count line
+ * sums them, so the wording lives here once. */
+const UNCLASSIFIED_MARKER_PREFIX = "unclassified comment @";
 function lintOne(file: string, type?: LintType, prVariant = false): { violations: Violation[]; markers: string[] } {
   const text = readFileSync(file, "utf8");
   const violations: Violation[] = [];
@@ -327,6 +331,9 @@ function lintOne(file: string, type?: LintType, prVariant = false): { violations
         }
         markers.push(`simplify marker @${marker.line}: ${marker.text}`);
       }
+      // A comment matching no allowed shape (comments.md section MUST) is
+      // advisory: the count line is the gate's only output for it.
+      for (const finding of findUnclassifiedComments(text)) markers.push(`${UNCLASSIFIED_MARKER_PREFIX}${finding.line}: ${finding.text}`);
       for (const todo of findUntrackedTodos(text)) markers.push(`untracked ${todo.marker} @${todo.line}: ${todo.text}`);
       for (const finding of findCommentedCode(text)) markers.push(`commented-out code @${finding.line}: ${finding.text}`);
       const temporary = findTemporaryMarkers(text);
@@ -525,6 +532,14 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         const targets = !isDir ? [abs] : forced === "provenance" ? collectTargets(abs, (file) => provenanceExtensions[path.extname(file).toLowerCase()] === true) : collectTargets(abs);
         
     const results = targets.map((file) => ({ file, ...lintOne(file, forced as LintType | undefined, input.prVariant === true) }));
+        // The unclassified-comment count is a summary, not a verdict: the
+        // findings ride the results as advisory markers and never fail the
+        // command, so one count line is written beside the envelope (stderr).
+        // Only a run that linted a code file reports it.
+        if (targets.some((file) => (forced ?? lintType(file)) === "code")) {
+          const unclassified = results.reduce((total, result) => total + result.markers.filter((marker) => marker.startsWith(UNCLASSIFIED_MARKER_PREFIX)).length, 0);
+          context.effects.writeStderr?.(`unclassified comments: ${unclassified}`);
+        }
         return results.some((result) => result.violations.length) ? refusal(id, results.flatMap((r) => r.violations)[0]?.code ?? "lint.violations", "lint violations found", { results }, "Resolve each reported lint violation, then rerun mstar lint <target>.") : ok(id, { results });
       }
       case "design-md.validate": {
