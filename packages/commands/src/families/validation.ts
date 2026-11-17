@@ -416,10 +416,21 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
       }
       case "worktree.check": {
         if (input.controlClean) {
-          // Standalone control-clean mode: no --plan/--workflow/--l2 needed. A
+          // Standalone control-clean mode: it decides one question, so every
+          // other selector is mutually exclusive — accepting one silently would
+          // answer the control-root question and skip the selected check. A
           // repository with no harness (no .mstar/ and no .mstarc at its root)
           // has no control-root contract, so the check skips instead of refusing.
-          if (input.plan !== undefined || input.planId !== undefined || input.workflow !== undefined) throw new SddScriptError("usage: worktree check --control-clean [--harness <path>] — pass --control-clean alone, not with --plan/--workflow", 2);
+          const conflicting = [
+            input.plan === undefined ? undefined : "--plan",
+            input.planId === undefined ? undefined : "the <plan-id> argument",
+            input.workflow === undefined ? undefined : "--workflow",
+            input.l2 === undefined ? undefined : "--l2",
+            input.tracks === undefined ? undefined : "--tracks",
+          ].filter((option): option is string => option !== undefined);
+          if (conflicting.length > 0) {
+            throw new SddScriptError(`usage: worktree check --control-clean [--harness <path>] — pass --control-clean alone, not with ${conflicting.join(" / ")}; run the control-root check and ${conflicting.join(" / ")} as separate invocations`, 2);
+          }
           const main = readMainWorktree(input.harness !== undefined ? path.resolve(input.harness) : context.cwd);
           if (main === null) return rejected(id, assertControlClean({ controlRoot: null }), "worktree.main.invalid");
           if (!hasHarnessRoot(main.root)) return ok(id, gateData({ ok: true, violations: [] }));

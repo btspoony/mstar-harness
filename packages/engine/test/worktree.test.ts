@@ -1700,6 +1700,19 @@ describe("assertControlClean — control root tracked-change gate", () => {
     expect(result.violations.map((entry) => entry.code)).toEqual(["worktree.main.unresolved"]);
   });
 
+  test("a failed status probe refuses as worktree.main.unresolved, never as clean", () => {
+    const root = tmpRoot("control-clean-probe-");
+    try {
+      const repo = gitRepo(root);
+      // An unusable git executable proves the probe failed; a failure is not a
+      // clean verdict, so the gate must fail closed with its recovery.
+      const result = assertControlClean({ controlRoot: mainInfo(repo) }, { gitPath: "/nonexistent/git-binary" });
+      expect(result.violations.map((entry) => entry.code)).toEqual(["worktree.main.unresolved"]);
+      expect(result.violations[0]?.fix).toContain("status --porcelain");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   test("names at most 20 changed paths, then summarizes the rest", () => {
     const status = Array.from({ length: 25 }, (_, index) => ` M file-${index + 1}.ts`).join("\n");
     const result = assertControlClean({ controlRoot: { root: "/repo/main", branch: "main" }, status });

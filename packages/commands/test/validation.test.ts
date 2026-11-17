@@ -221,6 +221,22 @@ describe("validation command family", () => {
     expect(skipped).toMatchObject({ status: "ok" });
   });
 
+  test("--control-clean refuses an invocation shared with the L1/L2 selectors", async () => {
+    const cwd = tempRoot();
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd });
+    writeFileSync(path.join(cwd, ".gitignore"), ".mstar/\n");
+    execFileSync("git", ["add", "-A"], { cwd });
+    execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "initial"], { cwd });
+    mkdirSync(path.join(cwd, ".mstar"), { recursive: true });
+    // A clean control root must not turn the combination into a silent success.
+    const withL2 = await definition("worktree.check").execute({ controlClean: true, l2: true }, context(cwd));
+    expect(withL2).toMatchObject({ status: "usage", exitCode: 2 });
+    expect(withL2.message).toContain("--l2");
+    expect(withL2.message).toContain("separate");
+    const withTracks = await definition("worktree.check").execute({ controlClean: true, tracks: [{ worktreePath: cwd, workingBranch: "main" }] }, context(cwd));
+    expect(withTracks).toMatchObject({ status: "usage", exitCode: 2 });
+    expect(withTracks.message).toContain("--tracks");
+  });
   test("role conflict preserves the invalid SDD reviewer identity", async () => {
     const cwd = tempRoot();
     const assignment = path.join(cwd, "assignment.md");
