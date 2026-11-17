@@ -51,7 +51,7 @@
 
 **顺序记忆**：`observe findings → fix locally early → wait until CI + review wave idle → push batch → wait new wave → repeat`。
 
-> **Engine check:** run `mstar iteration push-cadence [--ci-running] [--review-wave]` (engine `pushCadenceProbe`) to probe the push gate above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar iteration push-cadence [--ci-running] [--review-wave]` (engine `pushCadenceProbe`) to probe the push gate above. On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 History rewrite / force-with-lease / 改写后证据失效规则 SSOT → `mstar-branch-worktree`「History rewrite 与推送安全」节；本节只管 push 时序。
 
 ### 5.1b Review paths and surfaces（HARD — one path, every attached surface settles）

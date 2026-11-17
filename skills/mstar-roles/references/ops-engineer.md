@@ -66,7 +66,7 @@ Topic skills below are **presets activated by PM**, never unconditional dependen
 1. `mstar-harness-core` → `mstar-coding-behavior` → `mstar-dispatch-gates` → `mstar-branch-worktree` (repo writes, production-touching branches)
 2. Typically: `mstar-conventions` (paths)
 3. On demand: `mstar-phase-gates` (hotfix compressed path when assignment says hotfix); `mstar-use-cli` (round runs or interprets CLI commands — worktree/lease checks, reading a refusal code)
-4. Host: `mstar-host` (detect; `mstar-host/references/opencode.md` | `cursor.md` | `codex.md`)
+4. Host: `mstar-host` (detect; `mstar-host/references/opencode.md` | `mstar-host/references/cursor.md` | `mstar-host/references/codex.md`)
 
 ## Completion Report
 

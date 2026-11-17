@@ -42,7 +42,7 @@ Detect from **session tool shapes and available commands** — not from plugin m
 
 Order matters: check `cursor` → `opencode` → `omp` → `dsh` → `kimi` → `zcode` → `codex`. The four Task-shaped tokens are distinct: `subagent_type` (Cursor), `task_subagent` (OpenCode's `subagent` parameter on the `task` tool), `agent`/`tasks[]` (omp), and `subagent` (dsh's own delegation tool). No row shares another's token, so the dsh row collides with none and sits with the agent-tool hosts.
 
-> **Engine check:** run `mstar host detect --signals <comma-list>` (engine `detectHost`) to resolve the detection table above from session tool shapes (prints the host id, or `ambiguous` to fall back on the table + judgment). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar host detect --signals <comma-list>` (engine `detectHost`) to resolve the detection table above from session tool shapes (prints the host id, or `ambiguous` to fall back on the table + judgment). On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## Parallel dispatch (invoke-capable hosts)
 
@@ -115,7 +115,7 @@ Docs name assets as skill **`<name>`** → `scripts/…` / `references/…`. **R
 
 Authoring convention: **`mstar-skill-authoring`** § Skill-relative script and asset paths. Per-host URI / mount detail: `references/<host>.md`.
 
-> **Engine check:** run `mstar host skill-root --host <id> --skill <name>` (engine `resolveSkillRoot`) to resolve the loaded skill root per the table above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar host skill-root --host <id> --skill <name>` (engine `resolveSkillRoot`) to resolve the loaded skill root per the table above. On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## Conflict order（Decision Rules）
 

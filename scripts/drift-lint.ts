@@ -1346,9 +1346,7 @@ export function checkProvenanceScan(files: Array<{ rel: string; text: string }>)
   return { filesScanned, citationsFound, failures };
 }
 
-/* ------------------------------------------------------------------ */
-/* Guard 15 helpers: reference entry points */
-/* ------------------------------------------------------------------ */
+/* why: Guard 15 helpers — the properties are stated once, in this file's header § 15. */
 
 /** Guard 15 result: corpus sizes plus one failure row per violation. */
 export interface ReferenceCorpusResult {
@@ -1358,35 +1356,35 @@ export interface ReferenceCorpusResult {
   failures: string[];
 }
 
-/** A reference token is a `.md` path with a `references/` segment or a
+/** why: a reference token is a `.md` path with a `references/` segment or a
  * subpath. The class includes the placeholder characters so a pattern stays one
  * token: excluding them would split a `references/` + wildcard path at the star
  * and resolve its tail as a real citation. */
 const REFERENCE_TOKEN = /[A-Za-z0-9_.\/<>*{}$-]+\.md/g;
-/** Same token shape without `g`: a shared global regex would make `.test()`
+/** why: the same token shape without `g`, because a shared global regex would make `.test()`
  * stateful across calls (`lastIndex` carries over between rows). It keeps the
  * placeholder characters so a pattern cell (`` `references/<host>.md` ``) reads
  * as a path, not as a trigger. */
 const REFERENCE_TOKEN_TEST = /[A-Za-z0-9_./<>*{}$-]+\.md/;
-/** A placeholder inside a token makes it a pattern, not a citation. */
+/** why: a placeholder inside a token makes it a pattern, not a citation. */
 const REFERENCE_PLACEHOLDER = /[<>*{}$]/;
 const isReferenceToken = (token: string): boolean => !REFERENCE_PLACEHOLDER.test(token);
-/** A `## References` row states a trigger as a condition clause
+/** why: a `## References` row states a trigger as a condition clause
  * (`when …`, `何时`, `…时打开`). A bare description of the file's topic is not
  * a trigger. Only rows are judged — a prose paragraph in the block is not a
  * row. */
 const REFERENCE_TRIGGER = /\bwhen\b|何时|时打开/i;
-/** A list item or a table row of the `## References` block. */
+/** why: the row shapes a list item or a table row of the `## References` block takes. */
 const REFERENCE_ROW = /^\s*(?:[-*+]|\d+\.)\s|^\s*\|/;
-/** Header cell of the trigger column in a `## References` table. */
+/** why: the header cell names the trigger column in a `## References` table. */
 const REFERENCE_TRIGGER_HEADER = /\bwhen\b|何时/i;
 
-/** Owner skill of a repo-relative `skills/<skill>/references/...` path. */
+/** why: the owner is the `skills/<skill>` segment of a repo-relative reference path. */
 function referenceOwner(file: string): string {
   return file.split("/")[1] ?? "";
 }
 
-/** Owner named by an owner-prefixed token: the path segment immediately
+/** why: the owner a token names is the path segment immediately
  * before `references/`, so `..`, `../..` and a leading `skills/` all
  * normalize away (`../../mstar-audit/references/pr-review.md` -> `mstar-audit`). */
 function referenceTokenOwner(token: string): string | null {
@@ -1470,19 +1468,21 @@ export function checkReferenceCorpus(input: {
     let inReferences = false;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!;
-      if (/^#{1,6}\s/.test(line)) {
+      // why: a deeper subheading inside `## References` groups rows without
+      // ending the section, so only `#`/`##` closes it.
+      if (/^#{1,2}\s/.test(line)) {
         inReferences = line.trim() === "## References";
       }
       const rowTokens = [
         ...new Set(
           [...line.matchAll(REFERENCE_TOKEN)]
-            // Leading `*` is Markdown emphasis around a real path, not a wildcard.
+            // why: a leading `*` is Markdown emphasis around a real path, not a wildcard.
             .map((m) => m[0]!.replace(/^\*+/, "")),
         ),
       ];
       let rowPath = false;
       for (const token of rowTokens) {
-        // A placeholder path is a row path but not a citation: it names a file
+        // why: a placeholder path is a row path but not a citation - it names a file
         // shape, so it skips resolution yet still owes a trigger below.
         if (!isReferenceToken(token)) {
           if (token.includes("references/")) rowPath = true;
@@ -1493,12 +1493,12 @@ export function checkReferenceCorpus(input: {
         rowPath = true;
         citationsChecked++;
         if (resolution === "unresolved") {
-          failures.push(`${rel}:${i + 1} reference "${token}" resolves to no reference file - fix the path`);
+          failures.push(`Guard 15 unresolved-reference: ${rel}:${i + 1} reference "${token}" resolves to no reference file - fix the path`);
           continue;
         }
         if (resolution === "ambiguous") {
           failures.push(
-            `${rel}:${i + 1} reference "${token}" matches more than one reference file - write the owner path <owner>/references/<file>.md`,
+            `Guard 15 ambiguous-reference: ${rel}:${i + 1} reference "${token}" matches more than one reference file - write the owner path <owner>/references/<file>.md`,
           );
           continue;
         }
@@ -1507,17 +1507,17 @@ export function checkReferenceCorpus(input: {
         if (owner === citing) {
           if (declared !== null && declared !== owner) {
             failures.push(
-              `${rel}:${i + 1} reference "${token}" names owner "${declared}" but the file belongs to "${owner}"`,
+              `Guard 15 owner-mismatch: ${rel}:${i + 1} reference "${token}" names owner "${declared}" but the file belongs to "${owner}"`,
             );
           }
           if (resolution.file !== rel) citedFromOwnSkill.add(resolution.file);
         } else if (declared === null) {
           failures.push(
-            `${rel}:${i + 1} cross-skill reference "${token}" omits its owner - write "${owner}/references/${resolution.suffix}"`,
+            `Guard 15 owner-omitted: ${rel}:${i + 1} cross-skill reference "${token}" omits its owner - write "${owner}/references/${resolution.suffix}"`,
           );
         } else if (declared !== owner) {
           failures.push(
-            `${rel}:${i + 1} cross-skill reference "${token}" names owner "${declared}" but the file belongs to "${owner}"`,
+            `Guard 15 owner-mismatch: ${rel}:${i + 1} cross-skill reference "${token}" names owner "${declared}" but the file belongs to "${owner}"`,
           );
         }
       }
@@ -1528,7 +1528,7 @@ export function checkReferenceCorpus(input: {
       if (!isTableRow) {
         if (!REFERENCE_TRIGGER.test(line)) {
           failures.push(
-            `${rel}:${i + 1} References row carries a path but states no trigger - say when to open it`,
+            `Guard 15 trigger-missing: ${rel}:${i + 1} References row carries a path but states no trigger - say when to open it`,
           );
         }
         continue;
@@ -1540,7 +1540,7 @@ export function checkReferenceCorpus(input: {
           .replace(/\|$/, "")
           .split("|")
           .map((cell) => cell.trim());
-      // The `| When | Open |` / `| 何时 | 打开 |` header of this table owns the
+      // why: the `| When | Open |` / `| 何时 | 打开 |` header of this table owns the
       // trigger column; a table without one falls back to "any cell that
       // carries no reference path". Derived from this row's own table: a
       // `## References` section may hold several tables with different column
@@ -1556,7 +1556,7 @@ export function checkReferenceCorpus(input: {
           : cells.some((cell) => cell !== "" && !REFERENCE_TOKEN_TEST.test(cell));
       if (!triggered) {
         failures.push(
-          `${rel}:${i + 1} References row carries a path but its trigger column is empty - say when to open it`,
+          `Guard 15 trigger-missing: ${rel}:${i + 1} References row carries a path but its trigger column is empty - say when to open it`,
         );
       }
     }
@@ -1565,7 +1565,7 @@ export function checkReferenceCorpus(input: {
   for (const file of input.referenceFiles) {
     if (citedFromOwnSkill.has(file)) continue;
     failures.push(
-      `${file}: no reference from its own skill - name it in ${referenceOwner(file)}/SKILL.md or in another ${referenceOwner(file)} reference`,
+      `Guard 15 orphan-reference: ${file}: no reference from its own skill - name it in ${referenceOwner(file)}/SKILL.md or in another ${referenceOwner(file)} reference`,
     );
   }
 
@@ -2122,9 +2122,7 @@ if (import.meta.main) {
     }
   }
 
-/* ------------------------------------------------------------------ */
-/* Guard 15: skills corpus — reference entry points */
-/* ------------------------------------------------------------------ */
+/* why: Guard 15 wiring — the properties are stated once, in this file's header § 15. */
 
   let references: ReferenceCorpusResult = {
     filesChecked: 0,

@@ -77,7 +77,7 @@ Topic skills below are **presets activated by PM**, never unconditional dependen
 
 1. `mstar-harness-core` → `mstar-dispatch-gates` → `mstar-coding-behavior` (surgical edits)
 2. Typically: `mstar-conventions` (where deliverables land under `{HARNESS_DIR}` / `docs/`); `mstar-doc-corpus` (corpus shape when the deliverable is a knowledge, specs or ADR document); `mstar-artifacts` (when writing plan or review artifacts); `mstar-prose` when the deliverable's prose is judged against HEAD (on demand, never a default load); `mstar-skill-authoring` when the deliverable is a skill body
-3. Host: `mstar-host` (detect; `mstar-host/references/opencode.md` | `cursor.md` | `codex.md`)
+3. Host: `mstar-host` (detect; `mstar-host/references/opencode.md` | `mstar-host/references/cursor.md` | `mstar-host/references/codex.md`)
 
 ## Completion Report
 

@@ -91,7 +91,7 @@ Topic skills below are **presets activated by PM**, never unconditional dependen
 1. `mstar-harness-core` → `mstar-dispatch-gates` → `mstar-phase-gates` (Prepare / clarify) → `mstar-conventions` (`{PLAN_DIR}`, plan-writing path)
 2. Typically: `mstar-doc-corpus` (specs shape and admission — not knowledge @ start); `mstar-artifacts` (review and **`{ITERATION_DIR}/<id>/` package** artifacts); `mstar-coding-behavior`. Boundaries → **`mstar-iteration/references/iteration-artifact-boundaries.md`**
 3. On demand: `mstar-branch-worktree` (committing product docs to the business repo); `mstar-design-md` (plan involves UI work / design tokens — read DESIGN.md for design specs)
-4. Host: `mstar-host` (detect; `mstar-host/references/opencode.md` | `cursor.md` | `codex.md`)
+4. Host: `mstar-host` (detect; `mstar-host/references/opencode.md` | `mstar-host/references/cursor.md` | `mstar-host/references/codex.md`)
 
 ## Completion Report
 

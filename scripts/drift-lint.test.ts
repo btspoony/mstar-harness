@@ -1885,7 +1885,7 @@ describe("checkGateSurfaceChange — Guard 14 gate-surface self-approval", () =>
 });
 
 describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
-  /** A two-skill fixture corpus: `mstar-alpha` owns a bare reference and a
+  /** why: a two-skill fixture corpus — `mstar-alpha` owns a bare reference and a
    * nested child, `mstar-beta` owns a colliding `report-template.md` plus a
    * second-tier file reached only from another of its references. */
   const corpus = (files: Record<string, string>) => ({
@@ -1900,7 +1900,7 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
     const { files, referenceFiles } = readReferenceCorpus(join(import.meta.dir, ".."));
     const result = checkReferenceCorpus({ files, referenceFiles });
     expect(result.failures).toEqual([]);
-    // Properties, not corpus sizes: the read found reference files at all, and
+    // why: properties, not corpus sizes — the read found reference files at all, and
     // every one of them needed an own-skill citation, so a passing corpus
     // checked at least one citation per file. A truncated or vacuous read
     // fails here; a smaller corpus does not.
@@ -1988,7 +1988,7 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
   });
 
   test("the owner in the path is what passes, not the owner named elsewhere on the line", () => {
-    // The 184-site shape: the skill is named before the arrow, the path is not.
+    // why: this is the half-converted shape — the skill is named before the arrow, the path is not.
     const failures = failing({
       "skills/mstar-alpha/SKILL.md":
         "## References\n\n- `references/used.md` - open when reading alpha.\n\n- `references/deep.md` - open when the deep contract applies.\n",
@@ -2044,7 +2044,7 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
   });
 
   test("a colliding basename cited from a third skill is ambiguous and must name the owner", () => {
-    // alpha and beta each own a `report-template.md`; inside either skill the
+    // why: alpha and beta each own a `report-template.md`; inside either skill the
     // bare citation is that skill's own file (pinned above). From gamma, which
     // owns neither, the basename alone resolves to two files.
     const failures = failing({
@@ -2080,7 +2080,7 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
   });
 
   test("a placeholder References row still needs a trigger", () => {
-    // A placeholder path is not a citation to resolve, but the row is still a
+    // why: a placeholder path is not a citation to resolve, but the row is still a
     // References entry: excluding it from resolution must not also exempt it
     // from the trigger property.
     const withRow = (row: string) =>
@@ -2096,7 +2096,7 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
   });
 
   test("a table row whose only other cell is a placeholder path has no trigger", () => {
-    // The header names no trigger column, so the trigger is any cell carrying
+    // why: the header names no trigger column, so the trigger is any cell carrying
     // no reference path — a placeholder path is still a path, not a trigger.
     const failures = failing({
       "skills/mstar-alpha/SKILL.md": `## References\n\n| Open | Notes |\n|------|-------|\n| \`references/<host>.md\` |  |\n`,
@@ -2121,7 +2121,7 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
   });
 
   test("a nested colliding child needs the owner prefix from another skill", () => {
-    // `qc-specialist/report-template.md` exists under two skills, so only the
+    // why: `qc-specialist/report-template.md` exists under two skills, so only the
     // longer nested suffix exposes the collision: from gamma the basename
     // `report-template.md` alone is unique to beta, and a resolution that
     // stops at the basename silently picks beta instead of reporting the
@@ -2182,7 +2182,7 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
   });
 
   test("a placeholder inside the path is not truncated and misresolved as a citation", () => {
-    // Each pattern's tail `report-template.md` exists in beta only. The old
+    // why: each pattern's tail `report-template.md` exists in beta only. The old
     // token class split at the placeholder and resolved that tail, so alpha was
     // charged with a cross-skill citation it never wrote.
     expect(
@@ -2207,7 +2207,7 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
   });
 
   test("two tables in one References section each use their own header row", () => {
-    // The first table's trigger column is 0; the second moves it to column 1.
+    // why: the first table's trigger column is 0; the second moves it to column 1.
     // Reusing the cached index reads the path cell as the trigger and passes a
     // row whose real trigger cell is empty.
     const failures = failing({
@@ -2228,6 +2228,32 @@ describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
           "## References\n\n| When | Open |\n|------|------|\n| naming a plan | `references/used.md` |\n\n| Open | When |\n|------|------|\n| `references/second.md` | reading the second tier |\n",
         "skills/mstar-alpha/references/used.md": "# used\n",
         "skills/mstar-alpha/references/second.md": "# second\n",
+      }),
+    ).toEqual([]);
+  });
+
+  test("a subheading inside References groups rows without ending trigger checks", () => {
+    // why: only `#`/`##` closes the section; a `### Templates` group must not
+    // exempt the rows under it from the trigger property.
+    const withGroup = (row: string) =>
+      failing({
+        "skills/mstar-alpha/SKILL.md": `## References\n\n- \`references/used.md\` - open when reading alpha.\n\n### Templates\n\n| When | Open |\n|------|------|\n${row}\n`,
+        "skills/mstar-alpha/references/used.md": "# used\n",
+        "skills/mstar-alpha/references/report-template.md": "# template\n",
+      });
+    expect(withGroup("| writing a report | `references/report-template.md` |")).toEqual([]);
+    const failures = withGroup("|  | `references/report-template.md` |");
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/mstar-alpha/SKILL.md:9");
+    expect(failures[0]).toContain("Guard 15 trigger-missing");
+  });
+
+  test("the next level-2 heading still ends trigger checks", () => {
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md":
+          "## References\n\n- `references/used.md` - open when reading alpha.\n\n## Notes\n\n| Open | Notes |\n|------|-------|\n| `references/used.md` |  |\n",
+        "skills/mstar-alpha/references/used.md": "# used\n",
       }),
     ).toEqual([]);
   });

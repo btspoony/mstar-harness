@@ -23,7 +23,7 @@ If you were dispatched as an SDD implementer or task reviewer, skip PM orchestra
 
 **Optional:** **`SDD implementer session: sticky`** — same implementer subagent across sequential tasks on one plan/branch; **task reviewers stay fresh per task**. SSOT → **`references/sticky-implementer-session.md`**.
 
-> **Engine check:** engine `implementerSessionStickyRules` to validate the sticky resume decision above (no CLI form yet). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** engine `implementerSessionStickyRules` to validate the sticky resume decision above (no CLI form yet). On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 **Narration:** at most one short line between tool calls — ledger and file paths carry the record.
 
@@ -68,7 +68,7 @@ Serial integration merge commits use the already-configured identity; missing/fa
 
 Detail: **`references/file-handoffs.md`**.
 
-> **Engine check:** run `mstar sdd workspace <plan-id>` / `mstar sdd task-brief <plan-file> <task-number>` / `mstar sdd review-package <base> <head>` (engine `assertBaseSha`, `sddWorkspace`, `taskBrief`, `reviewPackage`) to drive the loop steps above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar sdd workspace <plan-id>` / `mstar sdd task-brief <plan-file> <task-number>` / `mstar sdd review-package <base> <head>` (engine `assertBaseSha`, `sddWorkspace`, `taskBrief`, `reviewPackage`) to drive the loop steps above. On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 > **On dsh:** implementer, reviewer and plan-QC-tri dispatches follow the mounted delegation channel — **Agent Teams** is the default on dsh for a root session with Team mode on (the `team_task_*` tools exist only then; one durable teammate per writable track, reused across that track's tasks; reviewers and the tri take no durable teammate seat and run as fresh-context `workflow` read-only children — template **`mstar-host`** → `mstar-host/references/dsh-workflow-scripts.md`), **`subagent`** is the fallback (where continuation resume still applies: `implementer-session.json` + `references/implementer-continuation-prompt.md`, host row → `references/sticky-implementer-session.md` § Host mapping), and **`workflow`** carries read-only fan-out only. Board protocol, seat budget and wake discipline are not restated here → **`mstar-host`** → `mstar-host/references/dsh.md` § Delegation channels + `mstar-host/references/dsh-agent-teams.md`.
 
@@ -104,7 +104,7 @@ PM appends on clean review: `Task N: complete (<base>..<head>, review clean, rev
 
 Minor findings → `## Minor (for plan QC)` section in same file.
 
-> **Engine check:** engine `readProgressLedger` to read the ledger above (no CLI form yet). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** engine `readProgressLedger` to read the ledger above (no CLI form yet). On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## Red flags (NEVER)
 
