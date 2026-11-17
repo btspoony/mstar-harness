@@ -273,8 +273,8 @@ export function parseCarrierMap(source: string): CarrierMap {
  *
  * shortcut: bare tool mentions (no dotted field) cannot be scanned this way
  * without matching every snake_case token in the prose, so they are only
- * checked for the map's own keys (the team-document leg); upgrade if a second
- * carrier family appears.
+ * checked for the map's own keys (the team-document leg).
+ * upgrade: a second carrier family appears.
  */
 const CARRIER_CITATION = /\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\.([A-Za-z_$][\w$]*)\b/g;
 
@@ -338,7 +338,7 @@ export const REMOVED_CARRIERS = ["spawn_teammate"] as const;
  *
  * shortcut: the NAME is refused anywhere in those two files, so neither can
  * explain the removal by quoting it; the changelog fragment carries that
- * history. Upgrade if a gated document ever needs an in-place "removed" note.
+ * history. upgrade: a gated document ever needs an in-place "removed" note.
  */
 export function checkRemovedCarriers(docs: readonly Doc[]): string[] {
   const rows: string[] = [];

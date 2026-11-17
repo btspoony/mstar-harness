@@ -80,9 +80,9 @@ const observedRoots = new Map<string, string | null>()
  * unanswered after the engine bind already committed.
  *
  * shortcut: a fixed 250 ms — a healthy backend that occasionally acknowledges
- * slower ages that receipt into the per-process fallback and logs it; upgrade
- * to a configurable bound or a backend-health probe if a supported host
- * reports acknowledgments above it.
+ * slower ages that receipt into the per-process fallback and logs it. upgrade:
+ * a configurable bound or a backend-health probe, if a supported host reports
+ * acknowledgments above it.
  */
 const DURABLE_RECEIPT_BOUND_MS = 250
 

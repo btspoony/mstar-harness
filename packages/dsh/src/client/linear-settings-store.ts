@@ -293,7 +293,8 @@ export class LinearSettingsStore {
    * keeps this from becoming a fetch loop.
    *
    * shortcut: one read per render body call, so a host that renders twice per
-   * commit (StrictMode) adds a read — re-verify if the host enables it.
+   * commit (StrictMode) adds a read. upgrade: cache per commit, if the host
+   * enables StrictMode.
    * @returns the facts this render cycle may decide from, or null when unknown.
    */
   factsForRender(): LinearStatusRead | null {

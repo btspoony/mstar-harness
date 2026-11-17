@@ -1166,10 +1166,12 @@ const PROVENANCE_SCAN_EXTS = [".ts", ".md"];
  * `line`'s offset in it), and the first `//` the mask marks as comment
  * content that is not part of a `://` URL sequence is the comment start (no
  * whitespace requirement, so `statement;// comment` qualifies). Returns -1
- * when no occurrence qualifies. simplify: detection inherits commentMask's
- * own ceiling — the regex-vs-division heuristic documented in
- * packages/engine/src/comment-scan.ts. upgrade: read the block state off the
- * engine's shared scanner once a false positive costs a real citation. */
+ * when no occurrence qualifies. simplify: the search trusts commentMask, so a
+ * `/` the tokenizer reads as division (the regex-vs-division heuristic in
+ * packages/engine/src/comment-scan.ts) masks a real trailing comment as
+ * literal. upgrade: let a parser decide regex-vs-division inside
+ * packages/engine/src/comment-scan.ts and read the comment spans from it when
+ * a masked line costs a real citation. */
 function trailingCommentStart(line: string, mask: Uint8Array, base: number): number {
   let idx = line.indexOf("//");
   while (idx !== -1) {

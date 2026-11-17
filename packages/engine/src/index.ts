@@ -435,6 +435,7 @@ export type {
   SimplifyMarker,
   TemporaryMarker,
   TemporaryMarkerResult,
+  UnclassifiedComment,
   UntrackedTodo,
 } from "./lint.js";
 export {
@@ -447,7 +448,9 @@ export {
   findProvenanceCitations,
   findSimplifyMarkers,
   findTemporaryMarkers,
+  findUnclassifiedComments,
   findUntrackedTodos,
+  sourceDialect,
   lintAdrTree,
   lintSkillFrontmatter,
   lintSpecsDoc,

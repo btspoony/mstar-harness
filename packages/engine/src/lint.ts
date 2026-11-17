@@ -47,10 +47,18 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
 import vm from "node:vm";
 import { SOURCE_CODE, SOURCE_COMMENT, maskLiterals, scanSource } from "./comment-scan.js";
+import type { SourceDialect } from "./comment-scan.js";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
+}
+
+/** why: comment syntax follows the language, so the caller's file name decides
+ * the dialect. Python, shell and Ruby read `#` and treat `//` as arithmetic or
+ * a path; everything else keeps the C rules the lint has always applied. */
+export function sourceDialect(file: string): SourceDialect {
+  return /\.(?:py|sh|bash|zsh|rb)$/i.test(file) ? "hash" : "c";
 }
 
 /** Comment-introducer prefixes before a marker word (line-level scan):
@@ -62,12 +70,13 @@ function violation(severity: Severity, code: string, message: string, fix?: stri
 const COMMENT_INTRODUCER = "(?:\\/\\/|\\/\\*|#|;|--|\\s\\*)";
 
 /**
- * A `simplify:` marker found in a file, with its 1-based line number, the
- * trimmed comment line (lint reporting), and the recorded bound — an
- * `upgrade:` clause or a removal/tracking reference (`null` when the marker
- * names neither).
+ * A bounded-shortcut marker found in a file, with its 1-based line number, the
+ * trimmed comment line (lint reporting), which label opened it, and the
+ * recorded bound — an `upgrade:` clause or a removal/tracking reference
+ * (`null` when the marker names neither). `shortcut:` and `simplify:` are the
+ * same label under two spellings: both record a ceiling and a bound.
  */
-export type SimplifyMarker = { line: number; text: string; bound: string | null };
+export type SimplifyMarker = { line: number; text: string; label: "simplify" | "shortcut"; bound: string | null };
 
 /** The `upgrade:` clause of a bounded shortcut (comments.md § Markers: a
  * `simplify:` marker records a ceiling and a bound). Line-scoped: the clause
@@ -79,44 +88,46 @@ const UPGRADE_PATH_RE = /\bupgrade\s*:[^\n;,]*/i;
 const UPGRADE_TAIL_RE = /^\s*([^\n;,]*)/;
 
 /**
- * Find `simplify:` marker comments (mstar-coding-behavior § Decision Rules:
- * a deliberate shortcut with a known ceiling —
+ * Find bounded-shortcut marker comments (mstar-coding-behavior § Decision
+ * Rules: a deliberate shortcut with a known ceiling —
  * global lock, O(n²) scan, naive heuristic — is marked with a `simplify:`
- * comment naming the ceiling and the upgrade path).
+ * comment naming the ceiling and the upgrade path; comments.md § Markers
+ * spells the same label `simplify:` or `shortcut:`).
  *
- * Heuristic (documented, conservative): the token `simplify:` appears inside
- * a comment — case-insensitive, any column, mid-sentence included — and is
- * not a quoted mention of the label (`` `simplify:` ``, `"simplify:"`). String
- * and regex literals are masked first, so a fixture quoting a marker is not
- * read as one, and prose outside a comment carries no marker at all. The
- * bound is searched across the marker's whole comment block, because the house
- * style writes it on a continuation line.
+ * Heuristic (documented, conservative): the token `simplify:` / `shortcut:`
+ * appears inside a comment — case-insensitive, any column, mid-sentence
+ * included — and is not a quoted mention of the label (`` `simplify:` ``,
+ * `"simplify:"`). String and regex literals are masked first, so a fixture
+ * quoting a marker is not read as one, and prose outside a comment carries no
+ * marker at all. The bound is searched across the marker's whole comment
+ * block, because the house style writes it on a continuation line.
  */
-export function findSimplifyMarkers(fileText: string): SimplifyMarker[] {
+export function findSimplifyMarkers(fileText: string, dialect: SourceDialect = "c"): SimplifyMarker[] {
   const lines = fileText.split(/\r?\n/);
-  const masked = maskLiterals(fileText).split(/\r?\n/);
-  const scan = scanSource(fileText);
+  const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
+  const scan = scanSource(fileText, dialect);
   const offsets = lineOffsets(fileText);
   const commentOnly = commentOnlyLines(lines, scan, offsets);
   const markers: SimplifyMarker[] = [];
   for (let i = 0; i < lines.length; i++) {
     const match = SIMPLIFY_TOKEN_RE.exec(lines[i]);
     if (match === null) continue;
-    if (!isMarkerToken(scan, offsets[i], match.index, masked[i], SIMPLIFY_INTRODUCER_RE)) continue;
+    if (!isCommentContext(scan, offsets[i], match.index, masked[i])) continue;
     if (QUOTE_CHARS[lines[i][match.index - 1]] === true) continue;
-    markers.push({ line: i + 1, text: lines[i].trim(), bound: commentBlockBound(lines, masked, commentOnly, i, match.index, scan, offsets) });
+    markers.push({
+      line: i + 1,
+      text: lines[i].trim(),
+      label: match[1]!.toLowerCase() as SimplifyMarker["label"],
+      bound: commentBlockBound(lines, masked, commentOnly, i, match.index, scan, offsets),
+    });
   }
   return markers;
 }
 
-/** The `simplify:` label: the token plus the space that opens its ceiling
- * text. `simplify:/temporary` (a prose mention of both labels) is not one. */
-const SIMPLIFY_TOKEN_RE = /\bsimplify\s*:(?=\s|$)/i;
-/** Introducers the scanner does not classify (`#`, `;`, `--` open comments in
- * shell, YAML, TOML, Lisp and SQL), so a line starting with one still offers a
- * comment context. */
-const NON_C_INTRODUCERS = "#|;|--";
-const SIMPLIFY_INTRODUCER_RE = new RegExp(`(?:${NON_C_INTRODUCERS})\\s*simplify\\s*:`, "i");
+/** The bound-label tokens: the label plus the space that opens its ceiling
+ * text. `simplify:/temporary` (a prose mention of both labels) is not one, and
+ * the captured group names which of the two labels opened the marker. */
+const SIMPLIFY_TOKEN_RE = /\b(simplify|shortcut)\s*:(?=\s|$)/i;
 /** A quote character immediately before the token turns it into a mention of
  * the label, never a marker. */
 const QUOTE_CHARS: Readonly<Record<string, true>> = { "`": true, '"': true, "'": true };
@@ -150,15 +161,6 @@ function commentOnlyLines(lines: readonly string[], scan: Uint8Array, offsets: r
     }
     return hasComment;
   });
-}
-
-/** True when the marker token at `at` is comment content: the scanner classifies
- * `//`, `/*` and `*` continuations, and a non-C introducer on the line covers
- * the languages it does not. A string or regex literal never counts. */
-function isMarkerToken(scan: Uint8Array, base: number, at: number, maskedLine: string, introducerRe: RegExp): boolean {
-  const klass = scan[base + at];
-  if (klass === SOURCE_COMMENT) return true;
-  return klass === SOURCE_CODE && introducerRe.test(maskedLine);
 }
 
 /** Introducers that open a comment after code on the same line. The match is
@@ -319,18 +321,21 @@ const REMOVAL_PATH_PATTERNS: readonly RegExp[] = [
  * a version mention alone ("remove in v2.0.0") is NOT a plan/status artifact
  * reference and is reported, per the strict convention wording.
  */
-export function findTemporaryMarkers(fileText: string): TemporaryMarkerResult {
+export function findTemporaryMarkers(fileText: string, dialect: SourceDialect = "c"): TemporaryMarkerResult {
   const markers: TemporaryMarker[] = [];
   const violations: ValidationResult[] = [];
   const re = new RegExp(`${COMMENT_INTRODUCER}\\s*temporary\\b(?:\\s*:|\\s[\\u2013\\u2014-]\\s)`, "i");
   const lines = fileText.split(/\r?\n/);
-  const masked = maskLiterals(fileText).split(/\r?\n/);
-  const scan = scanSource(fileText);
+  const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
+  const scan = scanSource(fileText, dialect);
   const offsets = lineOffsets(fileText);
   const commentOnly = commentOnlyLines(lines, scan, offsets);
   for (let i = 0; i < lines.length; i++) {
     const labelled = re.exec(masked[i]);
     if (labelled === null) continue;
+    // why: the label is judged at its own token, like the simplify label - a
+    // statement terminator before it ends the code, it opens no comment.
+    if (!isCommentContext(scan, offsets[i], labelled.index + labelled[0].toLowerCase().indexOf("temporary"), masked[i])) continue;
     const text = lines[i].trim();
     const block = commentBlockText(lines, masked, commentOnly, i, labelled.index, scan, offsets);
     let removalPath: string | null = null;
@@ -378,8 +383,8 @@ const PROSE_LABEL_RE = /^\s*[A-Za-z_$][\w$]*\s*:\s*[A-Za-z_$][\w$.]*\s*;\s*$/;
  * behaviour without an AST package in the engine bundle.
  *
  * shortcut: TypeScript-only syntax (`: T` annotations, `export`, top-level
- * `return`) is not a script, so those commented blocks stay unreported;
- * upgrade when a TypeScript parser fits the shipped engine bundle.
+ * `return`) is not a script, so those commented blocks stay unreported.
+ * upgrade: a TypeScript parser, once one fits the shipped engine bundle.
  */
 function parsesAsScript(text: string): boolean {
   try {
@@ -468,21 +473,17 @@ function hasTrackingReference(text: string): boolean {
 /** A TODO/FIXME comment carrying no tracking reference, at its 1-based line. */
 export type UntrackedTodo = { line: number; marker: "TODO" | "FIXME"; text: string };
 
-/** A non-C introducer standing as a token of its own before the marker opens a
- * trailing comment for the rest of the line. Whitespace on both sides keeps
- * `x = 1; TODO` (a statement), `#TODO` (a private field) and `--x` (a
- * decrement) out; a line-leading introducer is already covered by
- * `LINE_COMMENT_ONLY_RE`. */
-const STANDALONE_NON_C_INTRODUCER_RE = /(?:^|\s)(?:#|;|--)\s/;
+/** why: whitespace on both sides keeps `x = 1; TODO` (a statement), `#TODO`
+ * (a private field) and `--x` (a decrement) out; `;` is absent because
+ * C-family code ends a statement there, so the standalone form would read
+ * `let a = 1 ; TODO`, or any later marker on that line, as comment content. */
+const STANDALONE_NON_C_INTRODUCER_RE = /(?:^|\s)(?:#|--)\s/;
 
-/** True when the marker token at `at` is comment content rather than code: the
- * scanner marks it, or a non-C introducer (`#`, `;`, `--`) the scanner reads as
- * code opens a comment earlier on the line — the line-leading form covers the
- * whole line however far the marker sits from it, the standalone form covers a
- * trailing comment. An identifier that happens to be named after the marker — a
- * declaration, a map key, a private field (`#TODO = 1`) — is neither. A trailing
- * non-C comment written with no space after its introducer (`x = 1 #TODO`) is
- * not detected. */
+/** why: the marker only counts as comment content when the scanner or an
+ * introducer opens a comment before it, so an identifier named after the
+ * marker (a declaration, a map key, a private field `#TODO = 1`) is neither.
+ * shortcut: a trailing `#TODO` with no space after its introducer is not
+ * detected. upgrade: a per-extension tokenizer, when one fits the bundle. */
 function isCommentContext(scan: Uint8Array, base: number, at: number, maskedLine: string): boolean {
   if (scan[base + at] === SOURCE_COMMENT) return true;
   if (scan[base + at] !== SOURCE_CODE) return false;
@@ -499,12 +500,12 @@ function isCommentContext(scan: Uint8Array, base: number, at: number, maskedLine
  * convention is uppercase, and lowercase prose ("the todo list") is not a
  * marker.
  */
-export function findUntrackedTodos(fileText: string): UntrackedTodo[] {
+export function findUntrackedTodos(fileText: string, dialect: SourceDialect = "c"): UntrackedTodo[] {
   const findings: UntrackedTodo[] = [];
   const re = /\b(TODO|FIXME)\b/g;
   const lines = fileText.split(/\r?\n/);
-  const masked = maskLiterals(fileText).split(/\r?\n/);
-  const scan = scanSource(fileText);
+  const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
+  const scan = scanSource(fileText, dialect);
   const offsets = lineOffsets(fileText);
   for (let i = 0; i < lines.length; i++) {
     const commentContext = masked[i];
@@ -517,6 +518,181 @@ export function findUntrackedTodos(fileText: string): UntrackedTodo[] {
       findings.push({ line: i + 1, marker: match[1] as UntrackedTodo["marker"], text: lines[i].trim() });
       break;
     }
+  }
+  return findings;
+}
+
+/** A comment that matches no allowed shape: the 1-based lines it spans (a block
+ * is one comment, so the changed-line gate reads the whole span) and its first
+ * line's trimmed source text (reporting). */
+export type UnclassifiedComment = { line: number; endLine: number; text: string };
+
+/** why: a declared prefix tells a fact from a restatement, and it is anchored
+ * per comment line so `// why: ...` and a block's ` * why: ...` both count. */
+const DECLARED_PREFIX_RE = /^(?:why|invariant|safety|note)\s*:/i;
+
+/** why: comments.md § MUST makes one of these shapes the price of a
+ * non-documentation comment, and anything else is a restatement, a stale note
+ * or a changelog line. */
+const COMMENT_SHAPES: readonly RegExp[] = [
+  // why: the bounded-shortcut vocabulary (comments.md § Markers).
+  /\b(?:simplify|shortcut)\s*:/i,
+  /\btemporary\s*(?::|[\u2013\u2014-]\s)/i,
+  DECLARED_PREFIX_RE,
+  // why: `see` must name its target - the English verb alone ("the way to see
+  // a fold") cannot classify a comment as a pointer.
+  /\bsee\s+(?:https?:\/\/|ADR[-\s]?\d|#\d|(?:issue|ticket)\s+#?\d|contract\s*\u00a7|[\w.@-]+\/)/i,
+  // why: the target alone is a pointer too (comments.md § MUST: "or that
+  // target alone"), and a URL is the one with no in-repo path to anchor on.
+  /https?:\/\/[^\s)]+/i,
+  /\bADR[-\s]?\d+/i,
+  /#\d+/,
+  /\b(?:issue|ticket)\s+#?\d+/i,
+  /\bdocs?\/[\w./-]+/i,
+  /\bplans?\/[\w./-]+/i,
+  /\bcontract\s*\u00a7/i,
+  /@generated\b/i,
+];
+
+/** why: the marker is a shape only when a tracking reference (an owner, an
+ * issue, a removal path) holds somebody to it. */
+const TODO_MARKER_RE = /\b(?:TODO|FIXME)\b/;
+
+/** why: the changed-line gate reads the whole span, so a unit carries both its
+ * first and last line together with the body a shape match reads. */
+type CommentUnit = { line: number; endLine: number; body: string; doc: boolean };
+
+/** why: a block or run may start and end far apart, so a position is mapped to
+ * its 1-based line by binary search over the line-start table. */
+function lineAt(offsets: readonly number[], position: number): number {
+  let low = 0;
+  let high = offsets.length - 1;
+  while (low < high) {
+    const mid = (low + high + 1) >> 1;
+    if (offsets[mid]! <= position) low = mid;
+    else high = mid - 1;
+  }
+  return low + 1;
+}
+
+/** why: shapes are matched against the words, not the delimiters, so each
+ * line's introducer and the closing delimiter are stripped first. */
+function commentBody(raw: string): string {
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:\/\/+|\/\*+|\*+|#|;|--)\s?/, "").replace(/\*+\/\s*$/, "").trim())
+    .join("\n");
+}
+
+/** why: whitespace is required after the introducer so a TypeScript private
+ * field (`#count = 0`) and a shebang (`#!`) stay code, matching the
+ * standalone-introducer rule the TODO detector uses. */
+const NON_C_COMMENT_LINE_RE = /^\s*(?:#|;)(?=\s|$)|^\s*--(?=\s|$)/;
+
+/** why: a block and an adjacent run of line comments are each ONE comment
+ * because that is how a reader takes them; judging lines apart would report the
+ * later lines of one wrapped comment as separate defects. The scanner supplies
+ * the C-family spans, then a line a non-C introducer (`#`, `;`, `--`) opens.
+ * Only a run that starts its line merges: two comments sharing a line are one
+ * unit, but a trailing comment below a line-initial run is a different comment,
+ * and joining them would read the code between them as comment text. */
+function commentUnits(fileText: string, scan: Uint8Array, masked: readonly string[], offsets: readonly number[], dialect: SourceDialect): CommentUnit[] {
+  const runs: { start: number; end: number; doc: boolean; line: boolean; initial: boolean }[] = [];
+  let i = 0;
+  while (i < fileText.length) {
+    if (scan[i] !== SOURCE_COMMENT) {
+      i += 1;
+      continue;
+    }
+    const start = i;
+    while (i < fileText.length && scan[i] === SOURCE_COMMENT) i += 1;
+    runs.push({
+      start,
+      end: i,
+      doc: fileText.startsWith("/**", start) && !fileText.startsWith("/**/", start),
+      // why: `#` is a line comment only in a hash language, where an adjacent
+      // run of them is one wrapped comment exactly like a `//` run.
+      line: fileText.startsWith("//", start) || (dialect === "hash" && fileText.startsWith("#", start)),
+      initial: fileText.slice(offsets[lineAt(offsets, start) - 1]!, start).trim() === "",
+    });
+  }
+  // why: a non-C introducer opens a comment the scanner cannot see, and only a
+  // line with no comment content of its own is added - a line inside a block
+  // already belongs to that block's unit.
+  for (let index = 0; index < masked.length; index++) {
+    const base = offsets[index]!;
+    let hasComment = false;
+    for (let column = 0; column < masked[index]!.length && !hasComment; column++) {
+      if (scan[base + column] === SOURCE_COMMENT) hasComment = true;
+    }
+    if (hasComment || !NON_C_COMMENT_LINE_RE.test(masked[index]!)) continue;
+    runs.push({ start: base + masked[index]!.search(/\S/), end: base + masked[index]!.length, doc: false, line: true, initial: true });
+  }
+  runs.sort((left, right) => left.start - right.start);
+  const merged: typeof runs = [];
+  for (const run of runs) {
+    const last = merged[merged.length - 1];
+    const adjacent = last !== undefined && last.line && run.line && last.initial && run.initial
+      && lineAt(offsets, Math.max(last.start, last.end - 1)) + 1 === lineAt(offsets, run.start);
+    if (adjacent) { last.end = run.end; continue; }
+    merged.push({ ...run });
+  }
+  return merged.map((run): CommentUnit => ({
+    line: lineAt(offsets, run.start),
+    endLine: lineAt(offsets, Math.max(run.start, run.end - 1)),
+    body: commentBody(fileText.slice(run.start, run.end)),
+    doc: run.doc,
+  }));
+}
+
+/** why: this is the only exemption, recognized structurally because the
+ * repository ships no doc generator. Blank lines do not break it; the next
+ * line that carries anything must be the export, so an intervening comment or
+ * another statement is not exempt. */
+function documentsExport(lines: readonly string[], afterLine: number): boolean {
+  for (let index = afterLine; index < lines.length; index++) {
+    const text = lines[index]!.trim();
+    if (text !== "") return /^export\b/.test(text);
+  }
+  return false;
+}
+
+/** why: a TODO/FIXME is a shape only with a tracking reference, so the token
+ * alone cannot classify a line. */
+function hasCommentShape(line: string): boolean {
+  if (COMMENT_SHAPES.some((shape) => shape.test(line))) return true;
+  return TODO_MARKER_RE.test(line) && hasTrackingReference(line);
+}
+
+/**
+ * Find comments that match no allowed shape (comments.md § MUST: an external
+ * constraint, a contract pointer, a bounded shortcut, a generated marker, a
+ * public-API obligation or an uncheckable ordering constraint; § MUST NOT:
+ * restating the code, a changelog line, an ownerless TODO, an untracked
+ * promise). The verdict is advisory: the caller decides the severity, and the
+ * gate reads only the lines a change touches.
+ *
+ * A `/**` block whose next non-empty line starts with `export` is exempt:
+ * that is where the repository's public API documentation lives. A block that
+ * documents a non-exported symbol is not exempt, because the plan exempts the
+ * declaration form, not the block style.
+ *
+ * shortcut: only C-family comment runs and line-leading non-C introducers are
+ * read, so a trailing `#`/`;`/`--` comment (`x = 1 # note`) is unreported.
+ * upgrade: a per-extension comment tokenizer replacing `comment-scan.ts`.
+ */
+export function findUnclassifiedComments(fileText: string, dialect: SourceDialect = "c"): UnclassifiedComment[] {
+  if (fileText === "") return [];
+  const lines = fileText.split(/\r?\n/);
+  const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
+  const scan = scanSource(fileText, dialect);
+  const offsets = lineOffsets(fileText);
+  const findings: UnclassifiedComment[] = [];
+  for (const unit of commentUnits(fileText, scan, masked, offsets, dialect)) {
+    if (unit.body.trim() === "") continue;
+    if (unit.doc && documentsExport(lines, unit.endLine)) continue;
+    if (unit.body.split("\n").some(hasCommentShape)) continue;
+    findings.push({ line: unit.line, endLine: unit.endLine, text: lines[unit.line - 1]!.trim() });
   }
   return findings;
 }

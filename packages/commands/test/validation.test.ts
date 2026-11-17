@@ -48,7 +48,7 @@ describe("validation command family", () => {
     ]);
     expect(commands.map(({ effects }) => effects)).toEqual([
       ["read", "validate"], ["read", "validate", "process"], ["read", "validate"], ["read", "validate"],
-      ["read", "validate"], ["read", "validate"], ["read", "validate"], ["read", "validate"],
+      ["read", "validate", "process"], ["read", "validate"], ["read", "validate"], ["read", "validate"],
       ["read", "validate"], ["read", "validate"],
     ]);
   });
@@ -231,6 +231,19 @@ describe("validation command family", () => {
     writeFileSync(file, "---\nname: valid-skill\ndescription: A fixture skill for validating documents.\n---\nA valid skill.\n");
     const result = await definition("lint").execute({ target: file }, context(cwd));
     expect(result.status).toBe("ok");
+  });
+
+  test("a forced type narrows a directory walk to that type's extensions", async () => {
+    const cwd = tempRoot();
+    const dir = path.join(cwd, "pkg");
+    mkdirSync(dir, { recursive: true });
+    // why: an unbounded marker is a violation only under the code rules, so
+    // this file fails when the walk hands it to `--type code` and passes when
+    // the walk keeps it out.
+    writeFileSync(path.join(dir, "SKILL.md"), "---\nname: valid-skill\ndescription: A fixture skill for validating documents.\n---\n// shortcut: one queue\n");
+    writeFileSync(path.join(dir, "scan.ts"), "// why: the fixture carries no code\n");
+    expect((await definition("lint").execute({ target: dir, type: "code" }, context(cwd))).status).toBe("ok");
+    expect((await definition("lint").execute({ target: dir, type: "provenance" }, context(cwd))).status).toBe("ok");
   });
 
   test("unknown optional validator type is classified as usage", async () => {

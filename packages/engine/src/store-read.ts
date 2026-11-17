@@ -1832,8 +1832,8 @@ function readResidualCounts(db: StoreDb): { open: number; bySeverity: ResidualCo
  * the catalog's own update, with the id ascending on a tie.
  */
 function readLatestIteration(db: StoreDb, projectId: string): IterationDTO | null {
-  // shortcut: the winner is picked from the 200-row page; a project with more
-  // iterations than that is out of scope for this aggregation.
+  // shortcut: the winner is picked from the 200-row page. upgrade: read the
+  // whole iteration list, if a project ever exceeds that.
   const list = readIterationList(db, { projectId, limit: 200 });
   let latest: IterationDTO | null = null;
   let latestKey = "";

@@ -1,9 +1,23 @@
 /** Command-owned CLI subprocess coverage; fixture and assertion contracts are preserved. */
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runCli, withTempDir } from "./harness";
 import { cliEnvelope, expectUsageDiagnostic, lintResults, lintViolationCodes } from "./support/cli-assertions";
+
+/** why: the ratchet diffs the working tree against this commit, so each test
+ * edits one file after seeding and then lints what it wrote. */
+function commitBase(dir: string, files: Record<string, string>): void {
+  const git = (args: string[]): void => {
+    execFileSync("git", [...args], { cwd: dir, stdio: "ignore" });
+  };
+  const identity = ["-c", "user.email=lint-cli-test@example.com", "-c", "user.name=Lint CLI Test", "-c", "commit.gpgsign=false"];
+  git(["init", "-q"]);
+  for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
+  git([...identity, "add", "-A"]);
+  git([...identity, "commit", "-q", "-m", "base"]);
+}
 
 // ---------------------------------------------------------------------------
 // mstar lint
@@ -275,6 +289,244 @@ Check result: exit 0; changed scope line found.
       const markers = lintResults(result)[0]?.markers.join("\n");
       expect(markers).toContain("untracked TODO @2");
       expect(markers).toContain("commented-out code @4");
+    });
+  });
+
+  test("unclassified comment → advisory marker, exit 0, one count line", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// returns the value\nconst x = f();\n// why: the upstream returns 200 on 429\nconst y = f();\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      expect(lintViolationCodes(result)).toEqual([]);
+      const markers = lintResults(result)[0]?.markers.join("\n");
+      expect(markers).toContain("unclassified comment @1: // returns the value");
+      expect(markers).not.toContain("@3");
+      expect(result.stderr.trim().split("\n")).toEqual(["unclassified comments: 1"]);
+    });
+  });
+
+  test("a documentation block above an export is not reported, one above a local is", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "/** Public API doc. */\nexport const a = 1;\n/** Local doc. */\nconst b = 2;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      const markers = lintResults(result)[0]?.markers.join("\n");
+      expect(markers).toContain("unclassified comment @3: /** Local doc. */");
+      expect(markers).not.toContain("@1");
+      expect(result.stderr.trim()).toBe("unclassified comments: 1");
+    });
+  });
+
+  test("--diff-base fails the comment on an added line and not the one above it", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      commitBase(dir, { "scan.ts": "// returns the value\nconst a = 1;\n" });
+      writeFileSync(file, "// returns the value\nconst a = 1;\n// returns it again\nconst b = 2;\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toEqual(["lint.comment.unclassified"]);
+      expect(lintResults(result)[0]?.markers.join("\n")).toBe("unclassified comment @3: // returns it again");
+      expect(result.stderr.trim()).toBe("unclassified comments: 1");
+    });
+  });
+
+  test("--diff-base reports nothing for a file the change does not touch", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      commitBase(dir, { "scan.ts": "// returns the value\nconst a = 1;\n" });
+      const result = runCli(["lint", join(dir, "scan.ts"), "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(lintResults(result)[0]?.markers).toEqual([]);
+      expect(result.stderr.trim()).toBe("unclassified comments: 0");
+    });
+  });
+
+  test("--diff-base fails a block comment whose interior line moved, and not one it left alone", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      const blocks = (second: string): string =>
+        `/*\n * kept prose\n */\nconst a = 1;\n/*\n * ${second}\n */\nconst b = 2;\n`;
+      commitBase(dir, { "scan.ts": blocks("second prose") });
+      writeFileSync(file, blocks("second prose, edited"));
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toEqual(["lint.comment.unclassified"]);
+      expect(lintResults(result)[0]?.markers).toEqual(["unclassified comment @5: /*"]);
+      expect(result.stderr.trim()).toBe("unclassified comments: 1");
+    });
+  });
+
+  test("--diff-base reads a changed line whose body starts with `++` as content, not a header", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      commitBase(dir, { "scan.ts": "const a = 1;\nconst keep = 0;\n" });
+      writeFileSync(file, "const a = 1;\nconst s = `\n++ ${a}\n`;\nconst keep = 0;\n// returns it again\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(1);
+      expect(lintResults(result)[0]?.markers).toEqual(["unclassified comment @6: // returns it again"]);
+    });
+  });
+
+  test("--diff-base follows a path containing a space", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan one.ts");
+      commitBase(dir, { "scan one.ts": "const a = 1;\n" });
+      writeFileSync(file, "const a = 1;\n// returns it again\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toEqual(["lint.comment.unclassified"]);
+    });
+  });
+
+  // why: git C-quotes a path holding a quote, a backslash or a tab even with
+  // core.quotePath=false, and a checkout may set diff.noprefix=true. Either
+  // would leave the map keyed by a path the caller never asks for, so an
+  // unclassified comment would pass the ratchet.
+  test("--diff-base decodes a quoted path, so the ratchet still keys it", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const name = 'scan "quoted" one.ts';
+      const file = join(dir, name);
+      commitBase(dir, { [name]: "const a = 1;\n" });
+      writeFileSync(file, "const a = 1;\n// returns it again\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toEqual(["lint.comment.unclassified"]);
+    });
+  });
+
+  test("--diff-base decodes a quoted path holding a backslash and a tab", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const names = ["back\\slash.ts", "tab\there.ts"];
+      const files = Object.fromEntries(names.map((name) => [name, "const a = 1;\n"]));
+      commitBase(dir, files);
+      for (const name of names) writeFileSync(join(dir, name), "const a = 1;\n// returns it again\n");
+      for (const name of names) {
+        const result = runCli(["lint", join(dir, name), "--diff-base", "HEAD"], { cwd: dir });
+        expect(result.exitCode).toBe(1);
+        expect(lintViolationCodes(result)).toEqual(["lint.comment.unclassified"]);
+      }
+    });
+  });
+
+  test("--diff-base keys a quoted path under diff.noprefix=true", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const name = 'scan "quoted".ts';
+      const file = join(dir, name);
+      commitBase(dir, { [name]: "const a = 1;\n" });
+      execFileSync("git", ["config", "diff.noprefix", "true"], { cwd: dir, stdio: "ignore" });
+      writeFileSync(file, "const a = 1;\n// returns it again\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toEqual(["lint.comment.unclassified"]);
+    });
+  });
+
+  test("--diff-base still reports nothing for an untouched file under diff.noprefix=true", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      commitBase(dir, { "scan.ts": "// returns the value\nconst a = 1;\n" });
+      execFileSync("git", ["config", "diff.noprefix", "true"], { cwd: dir, stdio: "ignore" });
+      const result = runCli(["lint", join(dir, "scan.ts"), "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr.trim()).toBe("unclassified comments: 0");
+    });
+  });
+
+  test("a Python floor division is not a comment, so the ratchet passes it", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.py");
+      commitBase(dir, { "scan.py": "def f(n, d):\n    return n / d\n" });
+      writeFileSync(file, "def f(n, d):\n    return n // d\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(lintViolationCodes(result)).toEqual([]);
+      expect(result.stderr.trim()).toBe("unclassified comments: 0");
+    });
+  });
+
+  test("a hash comment holding a URL classifies in a Python file", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.py");
+      commitBase(dir, { "scan.py": "x = 1\n" });
+      writeFileSync(file, "x = 1\n# https://example.com/wire-format\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr.trim()).toBe("unclassified comments: 0");
+    });
+  });
+
+  test("a shebang on the first line is not a ratcheted comment", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "run.sh");
+      commitBase(dir, { "run.sh": "set -e\n" });
+      writeFileSync(file, "#!/usr/bin/env bash\nset -e\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(lintViolationCodes(result)).toEqual([]);
+      expect(result.stderr.trim()).toBe("unclassified comments: 0");
+    });
+  });
+
+  test("an unclassified hash comment still fails the ratchet in a shell file", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "run.sh");
+      commitBase(dir, { "run.sh": "set -e\n" });
+      writeFileSync(file, "set -e\n# prints the value\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toEqual(["lint.comment.unclassified"]);
+    });
+  });
+
+  test("--diff-base without a changed line stays out of the way of a clean file", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      commitBase(dir, { "scan.ts": "// returns the value\nconst a = 1;\n" });
+      writeFileSync(file, "// returns the value\nconst a = 2;\n");
+      const result = runCli(["lint", file, "--diff-base", "HEAD"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr.trim()).toBe("unclassified comments: 0");
+    });
+  });
+
+  test("--diff-base with an unresolvable ref is a usage refusal", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      commitBase(dir, { "scan.ts": "// returns the value\nconst a = 1;\n" });
+      const result = runCli(["lint", file, "--diff-base", "no-such-ref"], { cwd: dir });
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toContain("no-such-ref");
+    });
+  });
+
+  test("a standalone URL line is classified, exit 0", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// https://example.com/wire-format\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr.trim()).toBe("unclassified comments: 0");
+    });
+  });
+
+  test("an unbounded `shortcut:` marker → lint.simplify.no-upgrade-path, exit 1", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// shortcut: one queue\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(1);
+      expect(lintViolationCodes(result)).toEqual(["lint.simplify.no-upgrade-path"]);
+      expect(lintResults(result)[0]?.violations[0]?.message).toContain("shortcut marker at line 1");
+    });
+  });
+
+  test("a bounded `shortcut:` marker → exit 0", () => {
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      const file = join(dir, "scan.ts");
+      writeFileSync(file, "// shortcut: one queue; upgrade: split per route\nconst a = 1;\n");
+      const result = runCli(["lint", file]);
+      expect(result.exitCode).toBe(0);
+      expect(lintResults(result)[0]?.markers.join("\n")).toContain("shortcut marker @1");
     });
   });
 

@@ -25,7 +25,7 @@ import { z } from 'zod'
  * distinct.
  *
  * shortcut: cast the schema until this package and the host resolve one zod
- * version; upgrade by dropping the cast.
+ * version. upgrade: drop the cast once they do.
  */
 type DomainRecordSchema = Parameters<typeof domainTable<string, string>>[0]
 
@@ -83,8 +83,8 @@ export function executionBindingRootStoreInstalled(): boolean {
  *
  * shortcut: an `open` that never settles on a fiber that is never disposed
  * keeps its activation in flight forever, so the generic no-seam warning stays
- * silent for it; upgrade by bounding the `open` itself (a timeout that closes
- * the late handle) if a supported host is observed to leak one that way.
+ * silent for it. upgrade: bound the `open` itself (a timeout that closes the
+ * late handle), if a supported host is observed to leak one that way.
  */
 export function beginExecutionBindingRootStoreOpening(): number {
   const token = ++lastActivationToken

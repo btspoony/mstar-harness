@@ -1070,17 +1070,68 @@ jobs:
       - name: Lint help reachability
         run: bun run lint:help-reachability
 
-      # Code comments: a `simplify:` label without a bound (an `upgrade:`
-      # clause or a removal/tracking reference) and a `temporary` label without
-      # a removal path are violations, so this step gates the job. An untracked
-      # TODO and commented-out code are advisory markers only: this step does
-      # not certify that none exist. The two roots are the range comments.md
-      # § Markers states.
-      - name: Lint code comments
+      # Code comments, in TWO steps over two different ranges.
+      #
+      # STEP 1 - the BOUND GATE, whole tree. A bounded-shortcut marker
+      # (`simplify:` / `shortcut:`) without an `upgrade:` clause or a
+      # removal/tracking reference, and a `temporary` label without a removal
+      # path, are violations, so this step gates the job. An untracked TODO and
+      # commented-out code are advisory markers only: this step does not
+      # certify that none exist. The roots are the range comments.md
+      # § Markers states, one directory invocation each: `--type code` with the
+      # collector's extension filter reads the code face and nothing else, so
+      # the SKILL.md a whole-type walk would also collect is never handed to
+      # the code rules. `fixtures` is pruned by the walk itself (deliberately
+      # broken artifacts). This step reads every comment in the two roots, so
+      # the corpus it reports is not the change's.
+      - name: Lint code comments (bound gate, whole tree)
         run: |
+          set -euo pipefail
           for root in packages scripts; do
             node packages/cli/dist/mstar-harness.js lint "$root" --type code
           done
+
+      # STEP 2 - the RATCHET, changed lines only (comments.md § Ratchet). The
+      # diff against the merge base selects the files, and `--diff-base` makes
+      # an unclassified comment on an added or modified line a violation. A
+      # whole-tree walk reports ~15k unclassified comments across 823 files,
+      # which no change is expected to answer for, so that corpus stays
+      # advisory: this step lints only what the change touched. The changed set
+      # is the change's own file count, so the per-file fan-out stays.
+      - name: Lint code comments (ratchet, changed lines only)
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          base="${PR_BASE:-${PUSH_BEFORE:-}}"
+          if [ -n "$base" ] && git merge-base "$base" HEAD >/dev/null 2>&1; then
+            merge="$(git merge-base "$base" HEAD)"
+          else
+            # A new branch has no pushed-from commit, so the branch point is the
+            # comparison. fetch-depth: 0 above keeps origin/main reachable.
+            merge="$(git merge-base "origin/${{ github.event.repository.default_branch }}" HEAD 2>/dev/null || true)"
+          fi
+          if [ -z "$merge" ]; then
+            echo "::error::no merge base resolves for the comment gate - the checkout needs fetch-depth: 0"
+            exit 1
+          fi
+          # NUL-delimited end to end: git emits NUL-terminated paths, grep -z
+          # filters whole NUL-terminated records, and xargs -0 splits on NUL
+          # alone - so a path holding a space stays one target. A newline
+          # anywhere in this pipeline (a `tr`, or a grep without -z) hands
+          # xargs a blank-delimited token and splits that path in two. `-z`
+          # also turns off git's path munging, so a non-ASCII or quote-bearing
+          # path reaches the filter unquoted and still matches it.
+          git diff --name-only -z --diff-filter=ACMR "$merge" -- packages scripts \
+            | grep -zE '\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|sh|bash|zsh|rb|java|kt|swift)$' > "$RUNNER_TEMP/comment-changed.bin" || true
+          if [ ! -s "$RUNNER_TEMP/comment-changed.bin" ]; then
+            echo "No changed code file under packages/ or scripts/ - nothing to ratchet."
+            exit 0
+          fi
+          export MSTAR_COMMENT_BASE="$merge"
+          xargs -0 -r -n 1 -P 8 sh -c '
+            node packages/cli/dist/mstar-harness.js lint "$1" --diff-base "$MSTAR_COMMENT_BASE"' sh < "$RUNNER_TEMP/comment-changed.bin"
 
   pack-consumers:
     runs-on: ubuntu-latest

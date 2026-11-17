@@ -1287,7 +1287,8 @@ function movementDiagnostics(movement: Movement | null, attempts: number): Sourc
  * is rebuilt instead of served. The identity is the §5 source fingerprint plus
  * the §5 row render, which cover every input the derived rows are rendered from
  * (shortcut: the frozen catalog pin is re-selected in the same transaction that
- * rewrites the plan row, itself a source — upgrade if a pin ever moves alone).
+ * rewrites the plan row, itself a source. upgrade: select the pin on its own,
+ * if one ever moves alone).
  */
 function publishGeneration(db: StoreDb, capture: ProjectionCapture, transactionOpen = false): RefreshReport {
   const checkedAt = new Date().toISOString();
