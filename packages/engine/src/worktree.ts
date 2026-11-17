@@ -122,6 +122,74 @@ export function assertMainWorktreeResidency(main: MainWorktreeInfo, expectedBran
   return gate(violations);
 }
 
+/** How many changed paths a tracked-changes refusal names before it summarizes. */
+const TRACKED_CHANGE_LIMIT = 20;
+
+/** True when `root` carries a Morning Star harness — the `.mstar/` process root or a tracked `.mstarc` declaration. */
+export function hasHarnessRoot(root: string): boolean {
+  return existsSync(join(root, ".mstar")) || existsSync(join(root, ".mstarc"));
+}
+
+/**
+ * Control root tracked-change gate: a writable dispatch (and the same check as a
+ * standalone verb) refuses while the Git MAIN worktree — the checkout that
+ * carries the process SSOT — has any committable change, because tracked corpus
+ * writes (ADR, knowledge, specs) belong to the checkout that carries the target
+ * branch. The verdict is Git state alone: an empty `git status --porcelain`
+ * means clean, and ignored paths never appear there, so `.mstar/**` cannot fail
+ * it. `input.status` / `opts.statusOf` precompute the probe (tests, host
+ * hooks); an unprovable control root or a failed probe fails closed with
+ * `worktree.main.unresolved` rather than passing.
+ */
+export function assertControlClean(
+  input: { controlRoot: MainWorktreeInfo | null; status?: string },
+  opts: BranchProbeOptions = {},
+): GateResult {
+  const violations: ValidationResult[] = [];
+  const main = input.controlRoot;
+  if (main === null) {
+    violations.push(
+      violation(
+        "high",
+        "worktree.main.unresolved",
+        "control root identity cannot be proved (Git main-worktree discovery failed or is unavailable) \u2014 the tracked-change check refuses instead of passing",
+        "Run `git worktree list --porcelain` from an accessible checkout of this repository, then rerun this check.",
+      ),
+    );
+    return gate(violations);
+  }
+  const probe = input.status === undefined ? probeStatus(main.root, opts) : { status: input.status };
+  if ("error" in probe) {
+    violations.push(
+      violation(
+        "high",
+        "worktree.main.unresolved",
+        `cannot inspect the control root "${main.root}" for tracked changes: ${probe.error}`,
+        `Inspect \`git -C ${shellQuote(main.root)} rev-parse --show-toplevel\` and \`git -C ${shellQuote(main.root)} status --porcelain\`, restore access to the control checkout, then rerun this check.`,
+      ),
+    );
+    return gate(violations);
+  }
+  // Porcelain line = two status columns, a space, then the path — the path is
+  // what an operator moves; the columns are not.
+  const paths = probe.status
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "")
+    .map((line) => (line.length > 3 ? line.slice(3) : line.trim()));
+  if (paths.length === 0) return gate(violations);
+  const listed = paths.slice(0, TRACKED_CHANGE_LIMIT).join(", ");
+  const more = paths.length > TRACKED_CHANGE_LIMIT ? ` \u2026and ${paths.length - TRACKED_CHANGE_LIMIT} more` : "";
+  violations.push(
+    violation(
+      "high",
+      "worktree.main.tracked-changes",
+      `control root "${main.root}" carries ${paths.length} committable change(s): ${listed}${more}`,
+      "Move these edits to the checkout that carries the target branch (the integration or feature worktree) and commit there \u2014 the control root carries only gitignored process state. Then rerun this check.",
+    ),
+  );
+  return gate(violations);
+}
+
 /**
  * L1 pre-dispatch checklist input — the three-domain topology: the
  * Git-derived main worktree (process-SSOT holder), the governing snapshot's

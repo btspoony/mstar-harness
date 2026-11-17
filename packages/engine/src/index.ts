@@ -242,10 +242,12 @@ export type {
 } from "./worktree.js";
 export {
   assertBranchAlignment,
+  assertControlClean,
   assertControlVsFeaturePath,
   assertMainWorktreeResidency,
   assertQcAlignment,
   workflowEntryPreDispatchCheck,
+  hasHarnessRoot,
   isDistinctCheckout,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
