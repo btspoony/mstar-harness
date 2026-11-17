@@ -5,7 +5,7 @@
 
 ## 三棵树分工（HARD）
 
-三棵树中 **specs · knowledge** 的落点、长期价值与写者 → **`mstar-doc-corpus`**（SKILL.md § The three layers；specs 骨架 → `references/specs.md`，knowledge 形状 → `references/knowledge-format.md`）；**iterations** 的落点与写者 → `mstar-artifacts` `references/knowledge-and-designs.md`。本文件其余各节只补充 iteration package 布局、`{SPECS_DIR}/` 准入与角色编辑域。
+三棵树中 **specs · knowledge** 的落点、长期价值与写者 → **`mstar-doc-corpus`**（SKILL.md § The three layers；specs 骨架 → `mstar-doc-corpus/references/specs.md`，knowledge 形状 → `mstar-doc-corpus/references/knowledge-format.md`）；**iterations** 的落点与写者 → `mstar-artifacts` `mstar-artifacts/references/knowledge-and-designs.md`。本文件其余各节只补充 iteration package 布局、`{SPECS_DIR}/` 准入与角色编辑域。
 
 ## `{ITERATION_DIR}/<iteration-id>/` 迭代 package（目录优先）
 

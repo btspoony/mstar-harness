@@ -38,11 +38,11 @@ The scenario file step 6 evaluates:
 
 Small, composable techniques for specific authoring problems; each maps onto one or two principles in the parent `SKILL.md`. Pull one in when it fits — do not encode all six into every skill.
 
-1. **Calibrated examples file** (serves P2/P5) — keep one small reference of real cases distilled into annotated judgments; readers identify the governing principle, not text templates, and it is written back when a new rule settles. In this harness: the Q1–Q8 worked judgments in `mstar-knowledge` `references/compound-workflow.md`.
+1. **Calibrated examples file** (serves P2/P5) — keep one small reference of real cases distilled into annotated judgments; readers identify the governing principle, not text templates, and it is written back when a new rule settles. In this harness: the Q1–Q8 worked judgments in `mstar-knowledge` `mstar-knowledge/references/compound-workflow.md`.
 
 2. **Recall batteries** (serves P5) — for audit/hunt skills: over-matching probes that force a semantic judgment, plus a documented list of known false-positive families; a zero-hit pattern proves nothing until you have seen it match. In this harness: the recon hints `mstar-audit` fans out to scout subagents — scoping facts, domain risk hints, and decided-tradeoff "don't report" pointers.
 
-3. **Overcorrection traps** (adjacent to P6) — a short section per skill naming the failure modes of over-applying its own rules, so the skill guards its own bias. In this harness: the overcorrection-traps row in `mstar-knowledge` `references/compound-workflow.md` (obligation↛endorsement flips, hypotheticals stay marked, delete clauses, not sentences).
+3. **Overcorrection traps** (adjacent to P6) — a short section per skill naming the failure modes of over-applying its own rules, so the skill guards its own bias. In this harness: the overcorrection-traps row in `mstar-knowledge` `mstar-knowledge/references/compound-workflow.md` (obligation↛endorsement flips, hypotheticals stay marked, delete clauses, not sentences).
 
 4. **Required-explicit-input** (adjacent to P3) — when the required scope or answers are missing, report and stop; never infer a repo-wide default. In this harness: `mstar-audit` asks which findings to turn into plans — "do not write 30 plans nobody asked for" — instead of inferring the scope itself.
 

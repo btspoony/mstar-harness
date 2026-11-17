@@ -115,7 +115,7 @@ skill body 自身的经济性归本 skill 判断；其散文是否在 HEAD 可�
 
 ## Engine checks
 
-> **Engine check:** run `mstar skill lint <skill-dir>` to lint the frontmatter contract and the five-question body contract; engine `lintFrontmatter`, `lintFiveQuestion`, `resolveAssetPath` resolves the same contracts plus the skill-relative asset paths above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar skill lint <skill-dir>` to lint the frontmatter contract and the five-question body contract; engine `lintFrontmatter`, `lintFiveQuestion`, `resolveAssetPath` resolves the same contracts plus the skill-relative asset paths above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## 验证门控（Evidence，原则 4 + 6）
 

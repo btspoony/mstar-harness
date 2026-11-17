@@ -36,17 +36,17 @@ description: "Dispatch gates: PM-only leaf dispatch, executor/delegation identit
 
 ## 并发分派完整性门禁（PM 强制 · Evidence）
 
-当 PM 声明「并发分派」时，须同时满足**文案并发**与**工具并发**；宿主封装限制不构成串行理由，无法真实并发时如实报告限制。批调用与逐次异步启动的差异、count 自检、角色绑定字段自检、准备回合与派发回合分离、未齐不发 → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules / § Self-check before send / § Prerequisite vs dispatch turn。
+当 PM 声明「并发分派」时，须同时满足**文案并发**与**工具并发**；宿主封装限制不构成串行理由，无法真实并发时如实报告限制。批调用与逐次异步启动的差异、count 自检、角色绑定字段自检、准备回合与派发回合分离、未齐不发 → **`mstar-host`** → `mstar-host/references/parallel-dispatch.md` § Mandatory order / § Hard rules / § Self-check before send / § Prerequisite vs dispatch turn。
 
 - **QC 席位（分派侧）**：`Execution mode: sdd` 且全部 task 完成后 → `qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 三席**同一条消息**发出，写 `{SDD_DIR}/review/qc1.md`…`qc3.md`；`inline`（hotfix 等）或 Assignment 显式 `QC mode: single` / `QC mode: single — override: <reason>` → `qc-specialist` ×1 写 `{SDD_DIR}/review/qc.md`；`QC re-review: targeted — reviewers: …` → 同条消息发满所列席位数（1–3）。席位计数与模式映射 → **`mstar-review-qc`** § 分派时机。Assignment 须含 branch **review-package** 路径与 report paths；PM 汇总 `qc-consolidated.md` + durable plan summary。
 
 ### 具名 subagent 宿主：文案分派 ≠ 调度完成
 
-在支持具名角色 / Task 的宿主上，`## Assignment` **正文不会**拉起子会话；派发回合的条数、顺序、角色绑定字段与「未齐不发」规则 → **`mstar-host`** → `references/parallel-dispatch.md` § Mandatory order / § Hard rules。
+在支持具名角色 / Task 的宿主上，`## Assignment` **正文不会**拉起子会话；派发回合的条数、顺序、角色绑定字段与「未齐不发」规则 → **`mstar-host`** → `mstar-host/references/parallel-dispatch.md` § Mandatory order / § Hard rules。
 
-> **On dsh:** the mounted layer decides the channel, not the shape of one task — **Agent Teams** is the default on dsh for a root session with Team mode on (the `team_task_*` tools exist only then; one teammate per writable track, each handed its own absolute checkout path in the prompt — which scope the board may carry → `references/dsh-agent-teams.md` § Worktree hand-off and write isolation), **`subagent`** is the fallback when they are absent, and **`workflow`** carries read-only fan-out only. A board-task dispatch counts as a delegation, so the invariant stays **1 Assignment ⇒ 1 delegation** on every channel; board protocol, seat budget and wake discipline are not restated here → **`mstar-host`** → `references/dsh.md` § Delegation channels + `references/dsh-agent-teams.md`.
+> **On dsh:** the mounted layer decides the channel, not the shape of one task — **Agent Teams** is the default on dsh for a root session with Team mode on (the `team_task_*` tools exist only then; one teammate per writable track, each handed its own absolute checkout path in the prompt — which scope the board may carry → `mstar-host/references/dsh-agent-teams.md` § Worktree hand-off and write isolation), **`subagent`** is the fallback when they are absent, and **`workflow`** carries read-only fan-out only. A board-task dispatch counts as a delegation, so the invariant stays **1 Assignment ⇒ 1 delegation** on every channel; board protocol, seat budget and wake discipline are not restated here → **`mstar-host`** → `mstar-host/references/dsh.md` § Delegation channels + `mstar-host/references/dsh-agent-teams.md`.
 
-> **Engine check:** run `mstar dispatch validate <assignment-file> [--branch <branch>]` (engine `validateAssignmentFields`, `assertDefaultBranchProtected`) to validate the Assignment field contract — including the **`Task budget (implement / ops rounds)`** header field on non-review / non-audit rounds: presence-only in the header region, absent / empty / `N/A` → validation fail (field contract → `mstar-roles/references/project-manager/dispatch-and-assignment.md`) — and the default-branch gate (normative default-branch prose: **`mstar-branch-worktree`** SKILL.md § "Git 功能分支门禁（业务仓库）" — this skill covers dispatch mechanics only). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar dispatch validate <assignment-file> [--branch <branch>]` (engine `validateAssignmentFields`, `assertDefaultBranchProtected`) to validate the Assignment field contract — including the **`Task budget (implement / ops rounds)`** header field on non-review / non-audit rounds: presence-only in the header region, absent / empty / `N/A` → validation fail (field contract → `mstar-roles/references/project-manager/dispatch-and-assignment.md`) — and the default-branch gate (normative default-branch prose: **`mstar-branch-worktree`** SKILL.md § "Git 功能分支门禁（业务仓库）" — this skill covers dispatch mechanics only). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## SDD implement 波次（PM only）
 
@@ -70,7 +70,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 | **工具并发** | 同条消息发满 N 次 invoke | 已发 2 个 Task ⇒ 误以为「并行合规」 |
 | **同仓写隔离** | 派发 **前** 每轨独立 `Worktree path` | 只写了 `Working branch` / `checkout -b` |
 
-- 独立模块可并行 **implement 轨道**（不同 dev Assignment）；**同仓 ≥2 可写并发** → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**（先于 invoke；同 plan 多轨 = L2）。
+- 独立模块可并行 **implement 轨道**（不同 dev Assignment）；**同仓 ≥2 可写并发** → **`mstar-branch-worktree`** **`mstar-branch-worktree/references/parallel-writable-pre-dispatch.md`**（先于 invoke；同 plan 多轨 = L2）。
 - **SDD 单 plan 内**：独立 ready tasks 默认并行；每轨先完成 L2 隔离，fresh session 与独立产物路径，PM 唯一写共享 ledger。规则 → **`mstar-sdd`** § Ready-task scheduling。
 - **Cross-plan versus within-plan concurrency:** ready rows may implement in parallel through ordinary leaf dispatch with distinct recorded source checkouts and safe atomic coordination (ACTIVE: control DB transactions/CAS). Without that shared coordination safety choose serial scheduling; an unresolved unsafe parallel Assignment is blocked with that recovery. No missing plans under gitignore, serial policy or worktree waiver waives the parallel safety gate or actual checkout isolation. Procedure → `mstar-iteration` §2.0/§2.4; write-domain ownership → `mstar-branch-worktree` “Harness path SSOT under default gitignore”.
 - **`Write domain: control`**（取值 `control` | `work`，缺省 `work`）：只写控制根 gitignored 过程目标（plans/assignments/sdd/iterations/workflows/projects/reviews/`store.db`）的 Assignment 用它声明，可 `Worktree path` = 控制根 + `Working branch` = 控制检出**当前检出**的分支（默认 `main` 的仓库即 `main`；`main` 只是示例）且豁免默认分支保护，并必须用 **`Control write paths`** 列出实际目标；三种分支写法仍全部有效（含 `Branch policy: direct on <branch> — <reason>`），声明值须与控制检出实际检出的分支一致。同一核验在共享宿主 dispatch 门禁（OpenCode v2 / dsh / omp 的 hard enforcement）内运行——声明 `Write domain: control` 不能绕过宿主硬门禁，控制根不可核验时 dispatch 照旧被拒并给出修复路径；拒绝码 → **`mstar-branch-worktree`** § 控制域写入。
@@ -79,7 +79,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - **Plan QC tri** after SDD task loop；席位与 `inline` 单席例外 → **`mstar-review-qc`** § 分派时机。共用 `Review cwd` / `Working branch` / `plan_id` / `Review range`（**`mstar-branch-worktree`**）。
 - **Tri 同消息规则**：plan QC tri（SDD 或 Assignment 显式 `QC mode: full tri-review`）时三席 **同一条消息**、**同一套** scope 字段。
 
-> **Engine check:** run `mstar worktree check --workflow <id> --plan <plan-id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (engine `l1PreDispatchCheck`, `l2PreDispatchCheck`) to verify the 同仓写隔离 gate above (per-track feature worktree, branch alignment) before parallel dispatch. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar worktree check --workflow <id> --plan <plan-id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (engine `l1PreDispatchCheck`, `l2PreDispatchCheck`) to verify the 同仓写隔离 gate above (per-track feature worktree, branch alignment) before parallel dispatch. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## Specialist review-and-edit dispatch
 

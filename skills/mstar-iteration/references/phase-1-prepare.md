@@ -11,7 +11,7 @@ PM 在新迭代启动时执行。
 ## 1.1 收集上下文
 
 1. 查 catalog 了解历史迭代：`mstar catalog list`（按 kind 过滤，见 help；`{ITERATION_DIR}/README.md` 若存在只是散文导览，**不**是登记表；store 未初始化/未激活时查询拒绝 —— `store.not-initialized` / `store.not-active`，**不**读作「没有迭代」）
-2. 读 `STRATEGY.md`（若存在），对齐战略方向（创建/维护 → `mstar-knowledge` `references/strategy-document.md`）
+2. 读 `STRATEGY.md`（若存在），对齐战略方向（创建/维护 → `mstar-knowledge` `mstar-knowledge/references/strategy-document.md`）
 3. 查 catalog 取 Research 候选：`mstar catalog list`（按 kind / document kind / lifecycle 过滤出 `active` knowledge；见 help；**不**要求阅读全部 knowledge 正文；README 表格不再是权威）
 4. 确定所选 catalog project（未归属使用 `_default`），通过 `mstar roadmap show --project <id>` 读取 `{HARNESS_DIR}/store.db` roadmap 域的未完成路线范围（含上一迭代 `next`），纳入本次迭代范围候选；另用 `mstar milestone list --project <id>` 读取结构化目标。已知项目缺少 roadmap 记录或 milestone 时明确记录 absence；legacy Markdown 仅 transport/history，绝不从项目文件、README 索引行或 catalog 路径回退读取路线内容。读写规则 → **`mstar-project-governance`**。
 5. 读 ADR proposals：先用 `mstar path resolve` 解析 `{ADR_DIR}`，按记录层列出 `{ADR_DIR}/proposed/*/*.md`（`proposed/TEMPLATE.md` 骨架不是候选），逐份读 `Problem` / `Proposal` / `Acceptance criteria` 作为范围与验收种子。只有 `proposed/` 供给候选；ADR 不是 catalog 行（无 `adr` document kind，树内禁建索引），**不**经 `mstar catalog list` 读取；无记录（`proposed/` 缺失、为空或只剩骨架）明确记录 absence。桶语义与记录形态 → **`{ADR_DIR}/README.md`**，不复述。
@@ -147,7 +147,7 @@ plans: []
 | target_branch | <PR target> |
 ```
 
-> **Engine check:** engine `validateCompassFrontmatter` to validate the compass frontmatter above (no CLI form yet). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** engine `validateCompassFrontmatter` to validate the compass frontmatter above (no CLI form yet). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ### Draft contract（PM 初稿的深度契约）
 
@@ -177,7 +177,7 @@ Allowed owners are `product-manager`, `architect`, `writing-specialist` or `PM` 
 - **执行注册**：ACTIVE 的 workflow / plan 行、DB 根 register 与 catalog delta 必须由**同一个 registration journal** 发布（contract §3）。pending 状态 `catalog.registration-pending` 用 `mstar catalog reconcile` 收口（只读列出与 abort 形态见 help）。
 - **限制**：`store.db` 本地且默认 gitignored —— tracked 正文（compass/README 散文）**无法**重建本地 catalog 历史；`discover` 从不假设文件名编码迭代归属或生命周期，未声明项以显式 `unknowns` 披露。
 
-> **Engine check:** engine `readCatalogCompleteness` / `assertCatalogCompleteness` (or read the rows with `mstar catalog list` / `mstar catalog show`) to read the catalog rows above (no CLI form for the completeness report yet). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** engine `readCatalogCompleteness` / `assertCatalogCompleteness` (or read the rows with `mstar catalog list` / `mstar catalog show`) to read the catalog rows above (no CLI form for the completeness report yet). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## 1.5 登记执行状态（formal iteration 必填）
 
@@ -186,7 +186,7 @@ iteration 正式全流程**必须**经 **`mstar iteration register`** 注册到�
 > Execute the active host reference's `## Host hooks` declaration for `direction-lock`; this file defines no host action.
 
 
-- **ACTIVE**：registration journal 写 `{HARNESS_DIR}/store.db` 的 workflow / Todo plan 行、`execution_registry` 与 catalog delta；使用 `--expect <root-execution-token> --operation <id>`，token 经 `mstar status validate` 获取。注册不授权实现。store-pinning / 写入顺序 / rollback 语义 → **`mstar-artifacts`** `references/plan-workflow-lifecycle-contract.md` §4a。输入与 flags 以 `mstar iteration register --help` 为准。
+- **ACTIVE**：registration journal 写 `{HARNESS_DIR}/store.db` 的 workflow / Todo plan 行、`execution_registry` 与 catalog delta；使用 `--expect <root-execution-token> --operation <id>`，token 经 `mstar status validate` 获取。注册不授权实现。store-pinning / 写入顺序 / rollback 语义 → **`mstar-artifacts`** `mstar-artifacts/references/plan-workflow-lifecycle-contract.md` §4a。输入与 flags 以 `mstar iteration register --help` 为准。
 - 分支锚点在 ACTIVE workflow 执行行：`base`（= `iteration_base_branch`，创建 integration 的祖先 ref，**不是**隐式 `main`）、`integration`（= `spec_integration_branch`）、`target`（= PR 目标分支）。
 - 各 plan 行的 `file` 指针统一走**唯一**的注册 plan 解析器：落盘的是**规范绝对路径** `{PLAN_DIR}/<plan-id>.md`，不是调用方拼写的副本。可接受的输入只有规范绝对路径或**规范化 harness 相对路径**；仓库相对拼写 `.mstar/plans/<id>.md` 在第一条 journal 行、snapshot 或任何根写入之前即被拒绝（诊断给出收到的形式、base、期望的规范目标与允许的形式）。既有合法的 harness 相对行仍由同一解析器可读——这是声明的输入形式，不是回退搜索。
 - 各 plan 行 `metadata.iteration_refs`、`spec_integration_branch`、`merge_target`（`merge_target` 通常为 `spec_integration_branch`）由 producer 从 compass / integration 输入**派生**——PM 无需也不应手工构造这些字段。
@@ -195,11 +195,11 @@ compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与**�
 
 ACTIVE 的中途增减范围先经 `mstar plan bind --execution --workflow <id> --coordinator` 获取 coordinator 身份，再经 `mstar plan prepare` 修订受影响 plan 行的 Prepare 配置（source worktree/branch、PM Acceptance gate、findings cleanup；形状见 help）：行集在注册期确定，行配置的修订面是 `mstar plan prepare`。
 
-**中途增减范围（已存在且仍在 Prepare 的 workflow）**：用户/产品批准的范围扩张**不得**手改受保护状态。先以**显式获取的身份**取得该 workflow 的 coordinator 席位 —— 本地操作者用 `mstar plan bind --execution --workflow <id> --coordinator`（引擎从不生成 coordinator id，继承的 `MSTAR_HOST_SESSION_ID` 不授权 coordinator bootstrap），托管宿主走其宿主自有入口而**不经** shell；再经 `mstar plan show` 读取当前 plan 行视图、经 `mstar plan prepare` 修订受影响行的 Prepare 配置（PM Acceptance gate / findings cleanup / source worktree / branch）。行集在注册期确定；integration checkout 与 execution policy 分别经 `mstar workflow integration-worktree` / `mstar workflow execution-policy`。owner 席位丢失时经 `mstar session recover` 恢复（**不是** per-row identity；attestation 由引擎自动生成，`--attestation <path>` 仅为显式覆盖）。字段权威 → **`mstar-artifacts`** `references/status-and-residuals.md`；forms / exit codes → **`mstar-use-cli`** `references/plan-and-workflow.md`。
+**中途增减范围（已存在且仍在 Prepare 的 workflow）**：用户/产品批准的范围扩张**不得**手改受保护状态。先以**显式获取的身份**取得该 workflow 的 coordinator 席位 —— 本地操作者用 `mstar plan bind --execution --workflow <id> --coordinator`（引擎从不生成 coordinator id，继承的 `MSTAR_HOST_SESSION_ID` 不授权 coordinator bootstrap），托管宿主走其宿主自有入口而**不经** shell；再经 `mstar plan show` 读取当前 plan 行视图、经 `mstar plan prepare` 修订受影响行的 Prepare 配置（PM Acceptance gate / findings cleanup / source worktree / branch）。行集在注册期确定；integration checkout 与 execution policy 分别经 `mstar workflow integration-worktree` / `mstar workflow execution-policy`。owner 席位丢失时经 `mstar session recover` 恢复（**不是** per-row identity；attestation 由引擎自动生成，`--attestation <path>` 仅为显式覆盖）。字段权威 → **`mstar-artifacts`** `mstar-artifacts/references/status-and-residuals.md`；forms / exit codes → **`mstar-use-cli`** `mstar-use-cli/references/plan-and-workflow.md`。
 
 ## 1.5.5 产物边界（specs · iterations · knowledge）
 
-Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（HARD）；三棵树的落点、长期价值与写者 → **`mstar-doc-corpus`**（SKILL.md § The three layers）与 **`mstar-artifacts`** `references/knowledge-and-designs.md`（iterations 与其它过程产物）。
+Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（HARD）；三棵树的落点、长期价值与写者 → **`mstar-doc-corpus`**（SKILL.md § The three layers）与 **`mstar-artifacts`** `mstar-artifacts/references/knowledge-and-designs.md`（iterations 与其它过程产物）。
 
 **写入边界**：Phase 1（含 §1.6）的规格落在 `<iteration-id>/specs/`；全局 `{SPECS_DIR}/` 在 Phase 3 iteration-close 提升时写入；`{KNOWLEDGE_DIR}/` 由 **`mstar-knowledge`** 在每个 plan `Done` 后写入。
 

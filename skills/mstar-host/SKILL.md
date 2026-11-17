@@ -42,7 +42,7 @@ Detect from **session tool shapes and available commands** — not from plugin m
 
 Order matters: check `cursor` → `opencode` → `omp` → `dsh` → `kimi` → `zcode` → `codex`. The four Task-shaped tokens are distinct: `subagent_type` (Cursor), `task_subagent` (OpenCode's `subagent` parameter on the `task` tool), `agent`/`tasks[]` (omp), and `subagent` (dsh's own delegation tool). No row shares another's token, so the dsh row collides with none and sits with the agent-tool hosts.
 
-> **Engine check:** run `mstar host detect --signals <comma-list>` (engine `detectHost`) to resolve the detection table above from session tool shapes (prints the host id, or `ambiguous` to fall back on the table + judgment). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar host detect --signals <comma-list>` (engine `detectHost`) to resolve the detection table above from session tool shapes (prints the host id, or `ambiguous` to fall back on the table + judgment). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## Parallel dispatch (invoke-capable hosts)
 
@@ -52,7 +52,7 @@ On **dsh** only, read-only fan-out runs through the native **`workflow`** tool i
 
 ## `/goal` directive (host-agnostic)
 
-**Applicability is by capability, not host identity**: any host that exposes a `/goal` command (currently Codex Goal Mode and omp; other code agents may add it later) attaches a persistent objective to the thread. **Exception — dsh:** mstar **stops arming** a goal there and never uses a `/goal` objective or a goal round loop as the progression driver — dsh runs on the native workflow (workflow snapshot phases + dispatch gates + **subagent settle notifications**; each settle notification is a **`result-settled` Rescheduling checkpoint** — run that checkpoint and dispatch the ready independent work before any wait, never "one settle → one dispatch", per `mstar-iteration` `references/phase-2-worktree-lease.md` §2.4; a manually armed `/goal` stays outside mstar's flow). Full rule → `references/dsh.md`. Rule — **always set the goal to running the complete flow to the end**, never a sub-stage:
+**Applicability is by capability, not host identity**: any host that exposes a `/goal` command (currently Codex Goal Mode and omp; other code agents may add it later) attaches a persistent objective to the thread. **Exception — dsh:** mstar **stops arming** a goal there and never uses a `/goal` objective or a goal round loop as the progression driver — dsh runs on the native workflow (workflow snapshot phases + dispatch gates + **subagent settle notifications**; each settle notification is a **`result-settled` Rescheduling checkpoint** — run that checkpoint and dispatch the ready independent work before any wait, never "one settle → one dispatch", per `mstar-iteration` `mstar-iteration/references/phase-2-worktree-lease.md` §2.4; a manually armed `/goal` stays outside mstar's flow). Full rule → `references/dsh.md`. Rule — **always set the goal to running the complete flow to the end**, never a sub-stage:
 
 - **Advancing an iteration**: set the goal to **complete the entire iteration flow** (`iteration-start → per-plan cycles → iteration-close → PR delivery → PR merge-ready loop`). Do not set a sub-stage goal (e.g. "finish Phase 1 only").
 - **Advancing non-iteration work** (single plan / hotfix / one-off task): set the goal to **complete the entire per-plan flow** (`specify → clarify → plan → tasks → implement → plan QC tri + PM Acceptance → Done`; standalone development plans continue through the delivery tail to verified merge + terminal close — `mstar-harness-core`「最小交付循环」/ `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`). Do not set a sub-stage goal (e.g. "write the plan" or "implement one task").
@@ -115,7 +115,7 @@ Docs name assets as skill **`<name>`** → `scripts/…` / `references/…`. **R
 
 Authoring convention: **`mstar-skill-authoring`** § Skill-relative script and asset paths. Per-host URI / mount detail: `references/<host>.md`.
 
-> **Engine check:** run `mstar host skill-root --host <id> --skill <name>` (engine `resolveSkillRoot`) to resolve the loaded skill root per the table above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar host skill-root --host <id> --skill <name>` (engine `resolveSkillRoot`) to resolve the loaded skill root per the table above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## Conflict order（Decision Rules）
 

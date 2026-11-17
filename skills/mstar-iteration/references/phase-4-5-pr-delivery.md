@@ -51,7 +51,7 @@
 
 **顺序记忆**：`observe findings → fix locally early → wait until CI + review wave idle → push batch → wait new wave → repeat`。
 
-> **Engine check:** run `mstar iteration push-cadence [--ci-running] [--review-wave]` (engine `pushCadenceProbe`) to probe the push gate above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar iteration push-cadence [--ci-running] [--review-wave]` (engine `pushCadenceProbe`) to probe the push gate above. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 History rewrite / force-with-lease / 改写后证据失效规则 SSOT → `mstar-branch-worktree`「History rewrite 与推送安全」节；本节只管 push 时序。
 
 ### 5.1b Review paths and surfaces（HARD — one path, every attached surface settles）
@@ -92,7 +92,7 @@ gh api --paginate "repos/<owner>/<repo>/pulls/<n>/comments?per_page=100" \
   --jq '.[] | select(.commit_id == "'"$SHA"'") | {path, line, body}'
 ```
 
-- **The comment body is the ordinary PR review report, not a bot-specific format.** It carries the same layout and vocabulary as `mstar-audit` → `references/pr-review.md`: the verdict token (`ship it` / `needs fixes` / `blocked` / `incomplete`), the tally table by merge class (`must-fix` / `should-fix` / `may-fix` / `nit`), `## 📋 Review`, and one `### Findings` block per finding with evidence, location, category and merge class. Read it through that contract — the merge class decides whether a finding blocks, and the tally-derived verdict is the same verdict the local path publishes. Do not invent a bot-only parser or a second finding schema.
+- **The comment body is the ordinary PR review report, not a bot-specific format.** It carries the same layout and vocabulary as `mstar-audit` → `mstar-audit/references/pr-review.md`: the verdict token (`ship it` / `needs fixes` / `blocked` / `incomplete`), the tally table by merge class (`must-fix` / `should-fix` / `may-fix` / `nit`), `## 📋 Review`, and one `### Findings` block per finding with evidence, location, category and merge class. Read it through that contract — the merge class decides whether a finding blocks, and the tally-derived verdict is the same verdict the local path publishes. Do not invent a bot-only parser or a second finding schema.
 
 - **Findings live in the comment body, not only in threads.** Read the whole comment: a `(+N more findings omitted)` footer means the merge-class cap hid findings — those still count as reported, so reopen the omitted set from the bot's dashboard or treat them as unresolved rather than assuming only threads exist.
 - **Bind every artifact to one head.** Always the bot check's `head_sha` plus **that check's own conclusion bound to this head**, and each line comment's `commit_id`; the comment's `publication:v1 … sha=` only from a bot that publishes that marker — a marker-less bot (for example Greptile) binds through its check's `head_sha` and bound conclusion alone, with no comment-marker requirement. Every artifact the bot does publish must equal `gh pr view --json headRefOid`. Any other head is a stale round and authorizes nothing, with the single exception below; a short `commit <sha7>` line in the comment is a hint, never the binding value.

@@ -16,7 +16,7 @@ description: "QC orchestration: SDD mandatory plan QC tri-review (`qc1`…`qc3` 
 - Plan QC seats are **reviewers**: assigned changed **diff / logic / risk** lenses and directly affected interfaces — same family as PR review, not a parallel PM Acceptance test lane.
 - **Do not** instruct QC in Assignment to “run the suite / build / lint to confirm” on shared tri cwd; that causes peer `Blocked` and collapses L3 into L4.
 - Runtime proof comes from relevant implementer/CI/ops evidence, consumed by PM Acceptance; only the narrow PM acceptance-check exception permits direct checks. `full tri-review` describes seats, not repository scope. Scope SSOT → **`mstar-harness-core`** § 定向执行与验证边界; QC never broadens exploration or repeats unchanged L2 evidence.
-- Retained check logs are review **inputs, not something QC executes**: QC reviews the code and the declared coverage rationale, never re-runs the cited command, and a log's integrity/outcome is not acceptance — coverage remains reviewer judgment (route → **`mstar-sdd`** `references/file-handoffs.md` § Optional retained output).
+- Retained check logs are review **inputs, not something QC executes**: QC reviews the code and the declared coverage rationale, never re-runs the cited command, and a log's integrity/outcome is not acceptance — coverage remains reviewer judgment (route → **`mstar-sdd`** `mstar-sdd/references/file-handoffs.md` § Optional retained output).
 
 ## 分派时机（与 plan / batch 对齐）
 
@@ -25,9 +25,9 @@ description: "QC orchestration: SDD mandatory plan QC tri-review (`qc1`…`qc3` 
 - **After `Request Changes` (default)**：**Targeted re-review** — PM dispatches only seats that **raised** blocking findings; each updates **the same** `{SDD_DIR}/review/qcN.md` (`## Revalidation`, update verdict). **Do not** spawn `qcN-rev2.md` for targeted re-review. Naming → **`mstar-artifacts/references/plan-files-and-reports.md`** § QC 三审触发时机.
 - **Three-seat re-review**：only when all three seats have affected findings. `QC re-review: full tri-review` denotes seat count, never broader scope; each seat still checks its findings and fix delta. New wave basenames may distinguish reports, but do not reopen unchanged review coverage.
 
-> **On dsh:** the tri seats are read-only and settle in one round, so they run as fresh-context delegated children on that host's read-only fan-out channel; when the Assignment gives seats a report file (`QC report path`), the host routes them through a writable channel instead — channel mechanics are owned by `mstar-host` → `references/dsh.md` § QC default (with the tool unmounted the one-`subagent`-per-seat fallback is unchanged). Seat budget and wake discipline are not restated here → **`mstar-host`** → `references/dsh.md` § Delegation channels + `references/dsh-agent-teams.md`.
+> **On dsh:** the tri seats are read-only and settle in one round, so they run as fresh-context delegated children on that host's read-only fan-out channel; when the Assignment gives seats a report file (`QC report path`), the host routes them through a writable channel instead — channel mechanics are owned by `mstar-host` → `mstar-host/references/dsh.md` § QC default (with the tool unmounted the one-`subagent`-per-seat fallback is unchanged). Seat budget and wake discipline are not restated here → **`mstar-host`** → `mstar-host/references/dsh.md` § Delegation channels + `mstar-host/references/dsh-agent-teams.md`.
 
-> **Engine check:** run `mstar review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]` (engine `executionModeToN`, `assertTriIdentity`) to map `Execution mode` to its QC seat count N above and assert tri identity. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar review seats <assignment-file> [--mode sdd|inline|targeted] [--reviewers <role1,role2,...>]` (engine `executionModeToN`, `assertTriIdentity`) to map `Execution mode` to its QC seat count N above and assert tri identity. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## 三审身份与模型独立性门禁（PM 强制）
 
@@ -69,7 +69,7 @@ Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-
 - **截断报告保留 verdict。** 席位因触达预算而声明 `Truncated coverage:` 时，其 verdict 有效，PM **不得**因此升级为 `Unconfirmed`——`Unconfirmed` 仍是证据通道失败态（见上条传导规则）。
 - **未覆盖范围不改写门禁。** 席位 verdict 只涵盖其已审范围：当 Assignment 范围未被完整覆盖时，**gate decision 不得为 `Approve`**。PM 二选一——把未覆盖范围按 targeted re-review 重新派发（席位在预算内补完），或显式收窄 `Review range` 并把收窄依据记入 `qc-consolidated.md` 后再收敛。截断范围仍按「未提及 = 未审查」在 `qc-consolidated.md` 中如实标注 `unreviewed`，PM 不重审无关内容来补全它。
 
-> **Engine check:** run `mstar qc validate-report <report.md>` on each seat report (and `mstar dispatch validate <assignment-file>` for the Assignment-side round-bounding gate — `Budget` + `Return shape` on review / audit rounds, plus the canonical **`Task budget (implement / ops rounds)`** capacity field on non-review / non-audit rounds; field guidance → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; the review caps above are unchanged; engine `validateQcReport`). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar qc validate-report <report.md>` on each seat report (and `mstar dispatch validate <assignment-file>` for the Assignment-side round-bounding gate — `Budget` + `Return shape` on review / audit rounds, plus the canonical **`Task budget (implement / ops rounds)`** capacity field on non-review / non-audit rounds; field guidance → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; the review caps above are unchanged; engine `validateQcReport`). On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## 证据规则（PM · consolidated 输入）
 
@@ -79,7 +79,7 @@ Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-
 
 ## Workflow
 
-QC 编排主链：plan 全部 task + L2 完成后 → PM 按 `Execution mode` 定座次（sdd 强制 tri **N=3** / inline 单席 **N=1**）→ 同一条消息发满 N 个 QC Assignment（含 branch review-package + `{SDD_DIR}/review/qcN.md` report paths）→ 席位按 `references/qc-specialist/report-template.md` 落盘 verdict → PM 汇总 `{SDD_DIR}/review/qc-consolidated.md`（覆盖语义：**未提及 = 未审查**；汇总层零注入）→ `Request Changes` 走 targeted re-review（同 `qcN.md` `## Revalidation` 原位更新 verdict）→ findings 按 `Findings cleanup` 捕获为 issue / 按 §4 关闭 → durable summary 回写主 plan。
+QC 编排主链：plan 全部 task + L2 完成后 → PM 按 `Execution mode` 定座次（sdd 强制 tri **N=3** / inline 单席 **N=1**）→ 同一条消息发满 N 个 QC Assignment（含 branch review-package + `{SDD_DIR}/review/qcN.md` report paths）→ 席位按 `mstar-roles/references/qc-specialist/report-template.md` 落盘 verdict → PM 汇总 `{SDD_DIR}/review/qc-consolidated.md`（覆盖语义：**未提及 = 未审查**；汇总层零注入）→ `Request Changes` 走 targeted re-review（同 `qcN.md` `## Revalidation` 原位更新 verdict）→ findings 按 `Findings cleanup` 捕获为 issue / 按 §4 关闭 → durable summary 回写主 plan。
 
 ## References
 

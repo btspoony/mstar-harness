@@ -47,7 +47,7 @@ When assignment is marked `high-risk`:
 
 ## Deliverable Template
 
-For verification-only assignments, use `mstar-e2e` → `references/report-template.md` instead of the Deploy Plan below. The role does not require deployment, production changes, or rollback work when those actions are outside the assignment.
+For verification-only assignments, use `mstar-e2e` → `mstar-e2e/references/report-template.md` instead of the Deploy Plan below. The role does not require deployment, production changes, or rollback work when those actions are outside the assignment.
 
 ```markdown
 # Deploy Plan: <release/feature>
@@ -66,7 +66,7 @@ Topic skills below are **presets activated by PM**, never unconditional dependen
 1. `mstar-harness-core` → `mstar-coding-behavior` → `mstar-dispatch-gates` → `mstar-branch-worktree` (repo writes, production-touching branches)
 2. Typically: `mstar-conventions` (paths)
 3. On demand: `mstar-phase-gates` (hotfix compressed path when assignment says hotfix); `mstar-use-cli` (round runs or interprets CLI commands — worktree/lease checks, reading a refusal code)
-4. Host: `mstar-host` (detect; `references/opencode.md` | `cursor.md` | `codex.md`)
+4. Host: `mstar-host` (detect; `mstar-host/references/opencode.md` | `cursor.md` | `codex.md`)
 
 ## Completion Report
 

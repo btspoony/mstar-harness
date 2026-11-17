@@ -2,7 +2,7 @@
 
 Optional **prose** README inside `{ITERATION_DIR}/<iteration-id>/`. Copy when the package has more than a few files beyond `delivery-compass.md`.
 
-It is a guide, not a register: which documents exist, where they live, what kind they are and who owns them is catalog data (contract §1/§4). Nothing here is a duty — there is no "add a row when you add a file" obligation. Read registration state with `mstar catalog list` / `mstar catalog show`; legacy index rows are proposed read-only by `mstar catalog discover` and applied after review with `mstar catalog import`. Authority → `mstar-conventions` SKILL.md § Markdown 索引退役 and `references/artifact-storage-paths.md`.
+It is a guide, not a register: which documents exist, where they live, what kind they are and who owns them is catalog data (contract §1/§4). Nothing here is a duty — there is no "add a row when you add a file" obligation. Read registration state with `mstar catalog list` / `mstar catalog show`; legacy index rows are proposed read-only by `mstar catalog discover` and applied after review with `mstar catalog import`. Authority → `mstar-conventions` SKILL.md § Markdown 索引退役 and `mstar-conventions/references/artifact-storage-paths.md`.
 
 ```markdown
 # <iteration-id>

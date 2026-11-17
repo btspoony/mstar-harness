@@ -109,7 +109,7 @@ Assignment / prompt template:
 
 **IDENTITY:** You ARE `fullstack-dev`. Act as `fullstack-dev` for this task.
 
-Load: `mstar-harness-core` → `mstar-host` → `zcode.md` → `mstar-roles` → `references/fullstack-dev-shared.md` → topic skills per that reference.
+Load: `mstar-harness-core` → `mstar-host` → `zcode.md` → `mstar-roles` → `mstar-roles/references/fullstack-dev-shared.md` → topic skills per that reference.
 
 <task body>
 ```

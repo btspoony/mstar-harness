@@ -4,7 +4,7 @@
 
 Execution authority is the ACTIVE DB domain in `{HARNESS_DIR}/store.db`. There is no file execution route. Root `status.json` and `{WORKFLOW_DIR}/<id>/snapshot.json` are **migration sources / retained history**, not authority.
 
-`mstar store upgrade` directly imports recognized v1/v2 execution sources, preserving original bytes; standalone `mstar migrate` staging is retired. Historical shapes → **`mstar-project-governance`** `references/migration-source-shapes.md` (archive, no execution route or live writer).
+`mstar store upgrade` directly imports recognized v1/v2 execution sources, preserving original bytes; standalone `mstar migrate` staging is retired. Historical shapes → **`mstar-project-governance`** `mstar-project-governance/references/migration-source-shapes.md` (archive, no execution route or live writer).
 
 > **Authority:** ACTIVE execution state is the DB domain. Ordinary coordinator operations are store transactions with CAS receipts. Surviving `status.json` / snapshot files are migration sources / retained history, not live state. A harness with no ACTIVE store has no execution authority.
 
@@ -145,7 +145,7 @@ Non-blocking open issues — `severity` below `critical` on the §3 axis — may
 3. **Critical still blocks**: an unresolved `critical` blocks `Approve`; `medium` / `low` / `nit` may be captured and carried (fix-now remains preferred when cheap).
 4. **Close-time disclosure**: close-time artifacts carry the same open-item list with `id` + `severity` + tracking location + blocker-defer flag — each plan's durable `## Review Gate Summary` (main plan), the iteration compass `## Quality Gate Summary`, and the PR delivery body (`N/A — none open` when empty). A close without these disclosures is not a close. Disclosure does not override critical-blocking, explicit `zero-residual` requirements, or the §4 closure authority: terminalizing a workflow never silently closes its open findings. `mstar status tech-debt` remains the cross-iteration visibility rollup.
 
-> **Engine check:** run `mstar status findings-cleanup <plan-id> [--mode zero-residual|allow-residual]` (engine `findingsCleanupGate`) to enforce the mode above against the **open issues linked to the plan** in `{HARNESS_DIR}/store.db`. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar status findings-cleanup <plan-id> [--mode zero-residual|allow-residual]` (engine `findingsCleanupGate`) to enforce the mode above against the **open issues linked to the plan** in `{HARNESS_DIR}/store.db`. On `fail`, do not proceed — fix and re-run. Contract → **`mstar-use-cli`** `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ---
 
@@ -337,4 +337,4 @@ mstar status tech-debt                                    # open-issue rollup
 
 Import recognized v1/v2 execution sources directly with `mstar store upgrade --operator <name> [--harness <path>]`. Preserve original source bytes; standalone `mstar migrate` staging is retired.
 
-Historical execution/register file shapes, field history and retired validators → **`mstar-project-governance`** `references/migration-source-shapes.md` (no execution route or live writer).
+Historical execution/register file shapes, field history and retired validators → **`mstar-project-governance`** `mstar-project-governance/references/migration-source-shapes.md` (no execution route or live writer).
