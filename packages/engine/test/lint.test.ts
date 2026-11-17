@@ -644,6 +644,18 @@ describe("findUntrackedTodos", () => {
       expect(findUntrackedTodos(`// FIXME(${word}): rewrite the retry loop\n`)).toHaveLength(1);
     }
   });
+
+  test("a non-C introducer that starts the line is comment context past a non-adjacent marker", () => {
+    expect(findUntrackedTodos("# see TODO: fix the retry\n")).toHaveLength(1);
+    expect(findUntrackedTodos("; note: TODO: rewrite the retry loop\n")).toHaveLength(1);
+    expect(findUntrackedTodos("-- see TODO: reindex after the migration\n")).toHaveLength(1);
+    expect(findUntrackedTodos("const TODO = 1;\n")).toEqual([]);
+  });
+
+  test("every parenthesised marker on the line is inspected for an owner", () => {
+    expect(findUntrackedTodos("// TODO(later) then TODO(alice): rewrite the retry loop\n")).toEqual([]);
+    expect(findUntrackedTodos("// TODO(later) then TODO(soon): rewrite the retry loop\n")).toHaveLength(1);
+  });
 });
 
 describe("findSimplifyMarkers completeness", () => {
@@ -750,6 +762,14 @@ describe("findSimplifyMarkers completeness", () => {
       "upgrade: wrap in /* */",
     );
     expect(findSimplifyMarkers("x = 1; // simplify: naive scan; upgrade: */\n")[0].bound).toBe("upgrade: */");
+  });
+
+  test("a block-comment close is stripped when the comment body carries an introducer character", () => {
+    // The `;` after `#12` is comment text, not an opener: the run still
+    // belongs to the `/*` block, so its close is delimiter, never the bound.
+    const markers = findSimplifyMarkers("doIt(); /* fix #12; simplify: naive scan, upgrade: v2 */\n");
+    expect(markers).toHaveLength(1);
+    expect(markers[0].bound).toBe("upgrade: v2");
   });
 });
 

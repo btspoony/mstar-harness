@@ -211,8 +211,12 @@ function commentLineText(line: string, maskedLine: string, commentOnly: boolean,
   if (runStart === line.length) return line.slice(start);
   const run = line.slice(start, commentRunEnd(line, runStart, scan, base));
   // A block-comment close is delimiter, not text; a `//` run has no close, so
-  // its `*/` is content the bound search must keep.
-  return line.startsWith("/*", runStart) ? run.replace(/\*\/\s*$/, "") : run;
+  // its `*/` is content the bound search must keep. The run's start may sit
+  // inside the comment (`;` / `#` / `--` in the body), so read the opener from
+  // the beginning of the comment run itself.
+  let runBegin = runStart;
+  while (runBegin > 0 && scan[base + runBegin - 1] === SOURCE_COMMENT) runBegin -= 1;
+  return line.startsWith("/*", runBegin) ? run.replace(/\*\/\s*$/, "") : run;
 }
 
 /** The comment text of the block around line `index`: the maximal run of
@@ -440,10 +444,11 @@ const TODO_TRACKING_PATTERNS: readonly RegExp[] = [
   ...REMOVAL_PATH_PATTERNS,
 ];
 
-/** The paren body of a marker (`TODO(alice)`): the only candidate for a name,
- * since the body shape alone cannot tell one from filler — `TODO(later)` reads
- * identically. */
-const TODO_PAREN_OWNER_RE = /\b(?:TODO|FIXME)\(\s*([A-Za-z][\w.-]*)\s*\)/;
+/** The paren bodies of the markers (`TODO(alice)`) : the only candidate for a
+ * name, since the body shape alone cannot tell one from filler — `TODO(later)`
+ * reads identically. A line may carry several (`TODO(later) then TODO(alice)`),
+ * so every body is inspected, not just the first. */
+const TODO_PAREN_OWNER_RE = /\b(?:TODO|FIXME)\(\s*([A-Za-z][\w.-]*)\s*\)/g;
 
 /** Words that fit the paren body without naming anyone: `TODO(later)` says
  * when, `TODO(note)` says what, and none of them holds an owner. */
@@ -454,42 +459,47 @@ const TODO_NON_OWNER_WORDS: ReadonlySet<string> = new Set([
 /** True when the marker text carries a tracking reference — a named owner in
  * its parens, an `@name`, an issue reference, or a removal path. */
 function hasTrackingReference(text: string): boolean {
-  const owner = TODO_PAREN_OWNER_RE.exec(text);
-  if (owner !== null && !TODO_NON_OWNER_WORDS.has(owner[1].toLowerCase())) return true;
+  for (const owner of text.matchAll(TODO_PAREN_OWNER_RE)) {
+    if (!TODO_NON_OWNER_WORDS.has(owner[1].toLowerCase())) return true;
+  }
   return TODO_TRACKING_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 /** A TODO/FIXME comment carrying no tracking reference, at its 1-based line. */
 export type UntrackedTodo = { line: number; marker: "TODO" | "FIXME"; text: string };
 
+/** A non-C introducer standing as a token of its own before the marker opens a
+ * trailing comment for the rest of the line. Whitespace on both sides keeps
+ * `x = 1; TODO` (a statement), `#TODO` (a private field) and `--x` (a
+ * decrement) out; a line-leading introducer is already covered by
+ * `LINE_COMMENT_ONLY_RE`. */
+const STANDALONE_NON_C_INTRODUCER_RE = /(?:^|\s)(?:#|;|--)\s/;
+
 /** True when the marker token at `at` is comment content rather than code: the
- * scanner marks it, or it follows a non-C introducer (`#`, `;`, `--`) the
- * scanner reads as code. That introducer opens a comment when it starts the
- * line's content, or when it stands as a token of its own with whitespace on
- * both sides. An identifier that happens to be named after the marker — a
- * declaration, a map key, a private field (`#TODO = 1`) — is neither, and
- * `x = 1; TODO` is a statement, `--x` a decrement. A trailing non-C comment
- * written with no space after its introducer (`x = 1 #TODO`) is not detected.
- * `match` is the marker regex match on `maskedLine`. */
-function isCommentContext(scan: Uint8Array, base: number, at: number, maskedLine: string, match: RegExpExecArray): boolean {
+ * scanner marks it, or a non-C introducer (`#`, `;`, `--`) the scanner reads as
+ * code opens a comment earlier on the line — the line-leading form covers the
+ * whole line however far the marker sits from it, the standalone form covers a
+ * trailing comment. An identifier that happens to be named after the marker — a
+ * declaration, a map key, a private field (`#TODO = 1`) — is neither. A trailing
+ * non-C comment written with no space after its introducer (`x = 1 #TODO`) is
+ * not detected. */
+function isCommentContext(scan: Uint8Array, base: number, at: number, maskedLine: string): boolean {
   if (scan[base + at] === SOURCE_COMMENT) return true;
   if (scan[base + at] !== SOURCE_CODE) return false;
-  const introducer = match[0].slice(0, match[0].length - match[1].length).trimEnd();
-  if (!/^(?:#|;|--)$/.test(introducer)) return false;
-  const before = maskedLine.slice(0, match.index);
-  if (before.trim() === "") return true;
-  return /\s$/.test(before) && /\s/.test(maskedLine[match.index + introducer.length] ?? "");
+  if (LINE_COMMENT_ONLY_RE.test(maskedLine)) return true;
+  return STANDALONE_NON_C_INTRODUCER_RE.test(maskedLine.slice(0, at));
 }
 
 /**
  * Find `TODO` / `FIXME` comments with no tracking reference, so nobody is held
- * to them (comments.md § MUST NOT "an ownerless TODO"). Markers are matched
- * case-sensitively in comment context: the convention is uppercase, and
- * lowercase prose ("the todo list") is not a marker.
+ * to them (comments.md § MUST NOT "an ownerless TODO"). Every marker token on
+ * the line is matched, so the introducer distance never decides detection;
+ * markers are matched case-sensitively in comment context: the convention is
+ * uppercase, and lowercase prose ("the todo list") is not a marker.
  */
 export function findUntrackedTodos(fileText: string): UntrackedTodo[] {
   const findings: UntrackedTodo[] = [];
-  const re = new RegExp(`${COMMENT_INTRODUCER}\\s*(TODO|FIXME)\\b`);
+  const re = /\b(TODO|FIXME)\b/;
   const lines = fileText.split(/\r?\n/);
   const masked = maskLiterals(fileText).split(/\r?\n/);
   const scan = scanSource(fileText);
@@ -498,8 +508,7 @@ export function findUntrackedTodos(fileText: string): UntrackedTodo[] {
     const commentContext = masked[i];
     const match = re.exec(commentContext);
     if (match === null) continue;
-    const at = match.index + match[0].length - match[1].length;
-    if (!isCommentContext(scan, offsets[i], at, commentContext, match)) continue;
+    if (!isCommentContext(scan, offsets[i], match.index, commentContext)) continue;
     if (hasTrackingReference(commentContext)) continue;
     findings.push({ line: i + 1, marker: match[1] as UntrackedTodo["marker"], text: lines[i].trim() });
   }
