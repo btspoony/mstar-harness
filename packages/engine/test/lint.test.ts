@@ -616,6 +616,14 @@ describe("findUntrackedTodos", () => {
     expect(findUntrackedTodos("class A { #TODO = 1; }\n")).toEqual([]);
   });
 
+  test("a rejected code-context marker does not shadow a later comment marker on the line", () => {
+    const findings = findUntrackedTodos("class A { #TODO = 1; } // TODO: remove the shim\n");
+    expect(findings).toHaveLength(1);
+    expect(findings[0].line).toBe(1);
+    expect(findings[0].marker).toBe("TODO");
+    expect(findings[0].text).toContain("remove the shim");
+  });
+
   test("a named owner satisfies the rule (`TODO(alice):`)", () => {
     expect(findUntrackedTodos("// TODO(alice): rewrite the retry loop\n")).toEqual([]);
     expect(findUntrackedTodos("// FIXME(bob): drop the shim\n")).toEqual([]);
@@ -770,6 +778,14 @@ describe("findSimplifyMarkers completeness", () => {
     const markers = findSimplifyMarkers("doIt(); /* fix #12; simplify: naive scan, upgrade: v2 */\n");
     expect(markers).toHaveLength(1);
     expect(markers[0].bound).toBe("upgrade: v2");
+  });
+
+  test("a trailing non-C comment keeps its whole tail past a block-comment close", () => {
+    const markers = findSimplifyMarkers(
+      "x=1 # simplify: strip /* old */; upgrade: use a parser when nesting is needed\n",
+    );
+    expect(markers).toHaveLength(1);
+    expect(markers[0].bound).toBe("upgrade: use a parser when nesting is needed");
   });
 });
 

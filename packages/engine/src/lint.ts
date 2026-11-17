@@ -191,7 +191,8 @@ function commentRunEnd(line: string, from: number, scan: Uint8Array, base: numbe
 
 /** One line's comment text: the whole line when it is comment-only, otherwise
  * the tail from the comment introducer before `before` (or from the scanner's
- * first comment character), cut where the scanner returns to code. Code is
+ * first comment character), cut where the scanner returns to code. A non-C
+ * introducer opens a comment to end of line, so its tail is never cut. Code is
  * never a bound, so a code line without a comment contributes nothing. */
 function commentLineText(line: string, maskedLine: string, commentOnly: boolean, scan: Uint8Array, base: number, before: number): string {
   if (commentOnly) return line;
@@ -204,17 +205,16 @@ function commentLineText(line: string, maskedLine: string, commentOnly: boolean,
     }
     if (start === -1) return "";
   }
-  // A non-C introducer (`#`, `;`, `--`) is code to the scanner, so the comment
-  // run starts after the token; an absent run means the whole tail is text.
-  let runStart = start;
-  while (runStart < line.length && scan[base + runStart] !== SOURCE_COMMENT) runStart += 1;
-  if (runStart === line.length) return line.slice(start);
-  const run = line.slice(start, commentRunEnd(line, runStart, scan, base));
+  // A non-C introducer (`#`, `;`, `--`) is code to the scanner, and it opens a
+  // comment for the whole rest of the line: a `/* ... */` inside that text is
+  // content, so it neither ends the tail nor earns a close strip.
+  if (scan[base + start] !== SOURCE_COMMENT) return line.slice(start);
+  const run = line.slice(start, commentRunEnd(line, start, scan, base));
   // A block-comment close is delimiter, not text; a `//` run has no close, so
   // its `*/` is content the bound search must keep. The run's start may sit
   // inside the comment (`;` / `#` / `--` in the body), so read the opener from
   // the beginning of the comment run itself.
-  let runBegin = runStart;
+  let runBegin = start;
   while (runBegin > 0 && scan[base + runBegin - 1] === SOURCE_COMMENT) runBegin -= 1;
   return line.startsWith("/*", runBegin) ? run.replace(/\*\/\s*$/, "") : run;
 }
@@ -493,24 +493,30 @@ function isCommentContext(scan: Uint8Array, base: number, at: number, maskedLine
 /**
  * Find `TODO` / `FIXME` comments with no tracking reference, so nobody is held
  * to them (comments.md § MUST NOT "an ownerless TODO"). Every marker token on
- * the line is matched, so the introducer distance never decides detection;
- * markers are matched case-sensitively in comment context: the convention is
- * uppercase, and lowercase prose ("the todo list") is not a marker.
+ * the line is matched and judged on its own, so neither the introducer distance
+ * nor a code-context marker earlier on the line decides detection; a line is
+ * reported once. Markers are matched case-sensitively in comment context: the
+ * convention is uppercase, and lowercase prose ("the todo list") is not a
+ * marker.
  */
 export function findUntrackedTodos(fileText: string): UntrackedTodo[] {
   const findings: UntrackedTodo[] = [];
-  const re = /\b(TODO|FIXME)\b/;
+  const re = /\b(TODO|FIXME)\b/g;
   const lines = fileText.split(/\r?\n/);
   const masked = maskLiterals(fileText).split(/\r?\n/);
   const scan = scanSource(fileText);
   const offsets = lineOffsets(fileText);
   for (let i = 0; i < lines.length; i++) {
     const commentContext = masked[i];
-    const match = re.exec(commentContext);
-    if (match === null) continue;
-    if (!isCommentContext(scan, offsets[i], match.index, commentContext)) continue;
-    if (hasTrackingReference(commentContext)) continue;
-    findings.push({ line: i + 1, marker: match[1] as UntrackedTodo["marker"], text: lines[i].trim() });
+    // Each marker on the line is judged on its own: a code identifier earlier
+    // on the line (`class A { #TODO = 1; } // TODO: …`) must not hide a real
+    // comment marker after it.
+    for (const match of commentContext.matchAll(re)) {
+      if (!isCommentContext(scan, offsets[i], match.index, commentContext)) continue;
+      if (hasTrackingReference(commentContext)) break;
+      findings.push({ line: i + 1, marker: match[1] as UntrackedTodo["marker"], text: lines[i].trim() });
+      break;
+    }
   }
   return findings;
 }
