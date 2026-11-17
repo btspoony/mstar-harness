@@ -1078,29 +1078,26 @@ jobs:
       # path, are violations, so this step gates the job. An untracked TODO and
       # commented-out code are advisory markers only: this step does not
       # certify that none exist. The roots are the range comments.md
-      # § Markers states, extension-filtered rather than forced `--type code`,
-      # because forcing the type on the roots would also apply the code rules to
-      # the SKILL.md fixtures the same walk collects. One target per invocation
-      # is the CLI's `lint` contract, so the walk fans out and stops at the
-      # first refusal.
+      # § Markers states, one directory invocation each: `--type code` with the
+      # collector's extension filter reads the code face and nothing else, so
+      # the SKILL.md a whole-type walk would also collect is never handed to
+      # the code rules. `fixtures` is pruned by the walk itself (deliberately
+      # broken artifacts), so the two invocations reach the same verdict a
+      # per-file fan-out does, without 837 process spawns.
       - name: Lint code comments (bound gate, whole tree)
         run: |
           set -euo pipefail
-          files=$(git ls-files packages scripts \
-            | grep -E '\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|sh|bash|zsh|rb|java|kt|swift)$' || true)
-          if [ -z "$files" ]; then
-            echo "No code file under packages/ or scripts/ - nothing to bound-check."
-            exit 0
-          fi
-          printf '%s\n' "$files" | xargs -r -n 1 -P 8 sh -c '
-            out=$(node packages/cli/dist/mstar-harness.js lint "$1" 2>&1) || { printf "%s\n" "$out"; exit 255; }' sh
+          for root in packages scripts; do
+            node packages/cli/dist/mstar-harness.js lint "$root" --type code
+          done
 
       # STEP 2 - the RATCHET, changed lines only (comments.md § Ratchet). The
       # diff against the merge base selects the files, and `--diff-base` makes
       # an unclassified comment on an added or modified line a violation. A
-      # whole-tree walk reports ~25k unclassified comments across 837 files,
+      # whole-tree walk reports ~15k unclassified comments across 823 files,
       # which no change is expected to answer for, so that corpus stays
-      # advisory: this step lints only what the change touched.
+      # advisory: this step lints only what the change touched. The changed set
+      # is the change's own file count, so the per-file fan-out stays.
       - name: Lint code comments (ratchet, changed lines only)
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
@@ -1119,17 +1116,22 @@ jobs:
             echo "::error::no merge base resolves for the comment gate - the checkout needs fetch-depth: 0"
             exit 1
           fi
-          # NUL-delimited so a path holding a space stays one target, and
-          # core.quotePath=false so a non-ASCII path is not dropped.
+          # NUL-delimited end to end: git emits NUL-terminated paths, grep -z
+          # filters whole NUL-terminated records, and xargs -0 splits on NUL
+          # alone - so a path holding a space stays one target. A newline
+          # anywhere in this pipeline (a `tr`, or a grep without -z) hands
+          # xargs a blank-delimited token and splits that path in two.
+          # core.quotePath=false keeps a non-ASCII path unquoted so the filter
+          # still matches it.
           git -c core.quotePath=false diff --name-only -z --diff-filter=ACMR "$merge" -- packages scripts \
-            | tr '\0' '\n' | grep -E '\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|sh|bash|zsh|rb|java|kt|swift)$' > "$RUNNER_TEMP/comment-changed.txt" || true
-          if [ ! -s "$RUNNER_TEMP/comment-changed.txt" ]; then
+            | grep -zE '\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|sh|bash|zsh|rb|java|kt|swift)$' > "$RUNNER_TEMP/comment-changed.bin" || true
+          if [ ! -s "$RUNNER_TEMP/comment-changed.bin" ]; then
             echo "No changed code file under packages/ or scripts/ - nothing to ratchet."
             exit 0
           fi
           export MSTAR_COMMENT_BASE="$merge"
-          xargs -r -n 1 -P 8 sh -c '
-            node packages/cli/dist/mstar-harness.js lint "$1" --diff-base "$MSTAR_COMMENT_BASE"' sh < "$RUNNER_TEMP/comment-changed.txt"
+          xargs -0 -r -n 1 -P 8 sh -c '
+            node packages/cli/dist/mstar-harness.js lint "$1" --diff-base "$MSTAR_COMMENT_BASE"' sh < "$RUNNER_TEMP/comment-changed.bin"
 
   pack-consumers:
     runs-on: ubuntu-latest

@@ -584,9 +584,12 @@ const NON_C_COMMENT_LINE_RE = /^\s*(?:#|;)(?=\s|$)|^\s*--(?=\s|$)/;
 /** why: a block and an adjacent run of line comments are each ONE comment
  * because that is how a reader takes them; judging lines apart would report the
  * later lines of one wrapped comment as separate defects. The scanner supplies
- * the C-family spans, then a line a non-C introducer (`#`, `;`, `--`) opens. */
+ * the C-family spans, then a line a non-C introducer (`#`, `;`, `--`) opens.
+ * Only a run that starts its line merges: two comments sharing a line are one
+ * unit, but a trailing comment below a line-initial run is a different comment,
+ * and joining them would read the code between them as comment text. */
 function commentUnits(fileText: string, scan: Uint8Array, masked: readonly string[], offsets: readonly number[]): CommentUnit[] {
-  const runs: { start: number; end: number; doc: boolean; line: boolean }[] = [];
+  const runs: { start: number; end: number; doc: boolean; line: boolean; initial: boolean }[] = [];
   let i = 0;
   while (i < fileText.length) {
     if (scan[i] !== SOURCE_COMMENT) {
@@ -600,6 +603,7 @@ function commentUnits(fileText: string, scan: Uint8Array, masked: readonly strin
       end: i,
       doc: fileText.startsWith("/**", start) && !fileText.startsWith("/**/", start),
       line: fileText.startsWith("//", start),
+      initial: fileText.slice(offsets[lineAt(offsets, start) - 1]!, start).trim() === "",
     });
   }
   // why: a non-C introducer opens a comment the scanner cannot see, and only a
@@ -612,13 +616,13 @@ function commentUnits(fileText: string, scan: Uint8Array, masked: readonly strin
       if (scan[base + column] === SOURCE_COMMENT) hasComment = true;
     }
     if (hasComment || !NON_C_COMMENT_LINE_RE.test(masked[index]!)) continue;
-    runs.push({ start: base + masked[index]!.search(/\S/), end: base + masked[index]!.length, doc: false, line: true });
+    runs.push({ start: base + masked[index]!.search(/\S/), end: base + masked[index]!.length, doc: false, line: true, initial: true });
   }
   runs.sort((left, right) => left.start - right.start);
   const merged: typeof runs = [];
   for (const run of runs) {
     const last = merged[merged.length - 1];
-    const adjacent = last !== undefined && last.line && run.line
+    const adjacent = last !== undefined && last.line && run.line && last.initial && run.initial
       && lineAt(offsets, Math.max(last.start, last.end - 1)) + 1 === lineAt(offsets, run.start);
     if (adjacent) { last.end = run.end; continue; }
     merged.push({ ...run });

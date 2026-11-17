@@ -769,6 +769,12 @@ describe("findUnclassifiedComments", () => {
     expect(findUnclassifiedComments("// returns the value\n\n// and again\nconst a = 1;\n")).toHaveLength(2);
   });
 
+  test("a trailing comment on the next line does not join the run above it", () => {
+    const findings = findUnclassifiedComments('// returns the value\nconst d = load("docs/spec.md"); // and again\n');
+    expect(findings.map(({ line, endLine }) => [line, endLine])).toEqual([[1, 1], [2, 2]]);
+    expect(findings[0]?.text).toBe("// returns the value");
+  });
+
   test("reads a block comment's shapes past the continuation stars", () => {
     const block = "/*\n * returns the value\n */\nconst a = 1;\n";
     expect(findUnclassifiedComments(block)).toHaveLength(1);
