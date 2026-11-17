@@ -418,28 +418,38 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (input.controlClean) {
           // Standalone control-clean mode: it decides one question, so every
           // other selector is mutually exclusive — accepting one silently would
-          // answer the control-root question and skip the selected check. A
-          // repository with no harness (no .mstar/ and no .mstarc at its root)
-          // has no control-root contract, so the check skips instead of refusing.
+          // answer the control-root question and skip the selected check.
+          // --harness is the one combinable anchor: it names the harness the
+          // presence question is asked about.
           const conflicting = [
             input.plan === undefined ? undefined : "--plan",
             input.planId === undefined ? undefined : "the <plan-id> argument",
             input.workflow === undefined ? undefined : "--workflow",
             input.l2 === undefined ? undefined : "--l2",
             input.tracks === undefined ? undefined : "--tracks",
+            input.entry === undefined ? undefined : "--entry",
+            input.integration === undefined ? undefined : "--integration",
+            input.mainBranch === undefined ? undefined : "--main-branch",
+            input.control === undefined ? undefined : "--control",
           ].filter((option): option is string => option !== undefined);
           if (conflicting.length > 0) {
             throw new SddScriptError(`usage: worktree check --control-clean [--harness <path>] — pass --control-clean alone, not with ${conflicting.join(" / ")}; run the control-root check and ${conflicting.join(" / ")} as separate invocations`, 2);
           }
-          const main = readMainWorktree(input.harness !== undefined ? path.resolve(input.harness) : context.cwd);
+          // A relative anchor resolves against the invocation workspace, never
+          // this process's own directory.
+          const harnessAnchor = input.harness === undefined ? undefined : path.resolve(context.cwd, input.harness);
+          const main = readMainWorktree(harnessAnchor ?? context.cwd);
           if (main === null) return rejected(id, assertControlClean({ controlRoot: null }), "worktree.main.invalid");
-          if (!hasHarnessRoot(main.root)) return ok(id, gateData({ ok: true, violations: [] }));
+          // A named harness that exists is itself the harness; otherwise the
+          // control root's {HARNESS_DIR} resolution chain decides. No declaring
+          // harness means no control-root contract: the check skips.
+          if (!hasHarnessRoot(main.root) && !(harnessAnchor !== undefined && existsSync(harnessAnchor))) return ok(id, gateData({ ok: true, violations: [] }));
           const gate = assertControlClean({ controlRoot: main });
           // The literal recovery is what the refusal-quality rule can prove; each
           // violation's own fix stays in the details.
           return gate.ok
             ? ok(id, gateData(gate))
-            : refusal(id, gate.violations[0]?.code ?? "worktree.main.invalid", gate.violations[0]?.message ?? "control root tracked-change check failed", gateData(gate), "Move the edits to the checkout that carries the target branch (the integration or feature worktree) and commit there; the control root carries only gitignored process state. If Git cannot answer, restore access to the control checkout. Then rerun mstar worktree check --control-clean.");
+            : refusal(id, gate.violations[0]?.code ?? "worktree.main.invalid", gate.violations[0]?.message ?? "control root tracked-change check failed", gateData(gate), "The control root carries only gitignored process state; move the edits to the checkout that carries the target branch (the integration or feature worktree) and commit there. Run `mstar worktree check --control-clean`.");
         }
         if (input.l2) {
           // `tracks` reaches here already validated: the typed input field is

@@ -262,6 +262,19 @@ describe("composeDispatchGate — control root tracked-change leg (writable)", (
     }
   });
 
+  test("a writable control-domain dispatch is gated too — the question is domain-independent", () => {
+    const root = harnessRepo("dispatch-dirty-control-domain-");
+    try {
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      writeFileSync(join(root, "README.md"), "fixture edited\n");
+      const text = assignment({ "Write domain": "control", "Worktree path": root, "Working branch": "main", "Control write paths": ".mstar/plans/", "Task budget": "one round" });
+      const refused = composeDispatchGate(text, { cwd: root });
+      expect(refused.violations.map((v) => v.code)).toContain("worktree.main.tracked-changes");
+      expect(refused.ok).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   test("a clean harness control root passes and read-only roles are unaffected", () => {
     const root = harnessRepo("dispatch-clean-control-");
     try {

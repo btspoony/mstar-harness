@@ -45,6 +45,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
 import type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
 import { checkoutRoot, gitProbeTimeoutMs, worktreeList } from "./git-probe.js";
+import { resolveHarnessDir } from "./path.js";
 import { deliveryBranchOf, validateIntegrationMergeLease, type WorkflowBranchAnchors, type WorkflowLifecycleType } from "./workflow.js";
 
 // Git probe timeout — bounded so a hung git (dead NFS mount, pathological
@@ -125,9 +126,17 @@ export function assertMainWorktreeResidency(main: MainWorktreeInfo, expectedBran
 /** How many changed paths a tracked-changes refusal names before it summarizes. */
 const TRACKED_CHANGE_LIMIT = 20;
 
-/** True when `root` carries a Morning Star harness — the `.mstar/` process root or a tracked `.mstarc` declaration. */
+/**
+ * True when `root` declares a Morning Star harness, decided by the same
+ * `{HARNESS_DIR}` resolution chain every other reader uses (`.mstarc`
+ * `harness_dir` → `.mstar/` → `.agents/` → `.plans/` / `plans/`) rather than a
+ * hand-rolled pair of names. `localProbe` + a `root` boundary keep the question
+ * about that checkout alone (no main-worktree substitution, no upward walk past
+ * it), and `ignoreEnvOverride` keeps `MSTAR_HARNESS_DIR` from answering for a
+ * repository that declares nothing.
+ */
 export function hasHarnessRoot(root: string): boolean {
-  return existsSync(join(root, ".mstar")) || existsSync(join(root, ".mstarc"));
+  return resolveHarnessDir(root, { ignoreEnvOverride: true, localProbe: true, workspaceRoot: root }) !== null;
 }
 
 /**
@@ -158,7 +167,7 @@ export function assertControlClean(
     );
     return gate(violations);
   }
-  const probe = input.status === undefined ? probeStatus(main.root, opts) : { status: input.status };
+  const probe = input.status === undefined ? probeStatus(main.root, opts, true) : { status: input.status };
   if ("error" in probe) {
     violations.push(
       violation(
@@ -267,12 +276,19 @@ export type WorkflowEntryPreDispatchResult = GateResult & {
   scope: "engine-enforced workflow-entry facts only";
 };
 
-function probeStatus(worktreePath: string, opts: BranchProbeOptions): { status: string } | { error: string } {
+/**
+ * `explicitUntracked` asks Git for untracked files regardless of the checkout's
+ * own `status.showUntrackedFiles` setting: a repository configured `no` would
+ * otherwise report a clean tree that still holds committable new files. Opt-in
+ * so the other callers keep their configured view.
+ */
+function probeStatus(worktreePath: string, opts: BranchProbeOptions, explicitUntracked = false): { status: string } | { error: string } {
   const precomputed = opts.statusOf?.(worktreePath);
   if (precomputed !== undefined) return { status: precomputed };
   const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
+  const args = ["-C", worktreePath, "status", "--porcelain", ...(explicitUntracked ? ["--untracked-files=normal"] : [])];
   try {
-    return { status: execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "status", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout }) };
+    return { status: execFileSync(opts.gitPath ?? "git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout }) };
   } catch (error) {
     return { error: (error as { message?: string }).message ?? "git status probe failed" };
   }

@@ -43,6 +43,7 @@ import {
   assertControlVsFeaturePath,
   assertMainWorktreeResidency,
   assertQcAlignment,
+  hasHarnessRoot,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
   readMainWorktree,
@@ -1644,6 +1645,36 @@ test("workflow entry recovery identifies the owner before switching main", () =>
 });
 
 /**
+ * Harness presence is the {HARNESS_DIR} resolution chain, so a legacy `.agents/`
+ * or a declared `harness_dir` counts exactly as `.mstar/` does — the gate must not
+ * skip a repository that resolves a harness.
+ */
+describe("hasHarnessRoot — harness presence follows the {HARNESS_DIR} chain", () => {
+  test("a legacy .agents/ declares a harness, an otherwise empty checkout does not", () => {
+    const root = tmpRoot("has-harness-");
+    try {
+      const repo = gitRepo(root);
+      expect(hasHarnessRoot(repo)).toBe(false);
+      mkdirSync(join(repo, ".agents", "specs"), { recursive: true });
+      expect(hasHarnessRoot(repo)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a .mstarc harness_dir declaration declares a harness without the directory existing", () => {
+    const root = tmpRoot("has-harness-mstarc-");
+    try {
+      const repo = gitRepo(root);
+      writeFileSync(join(repo, ".mstarc"), "[config]\nharness_dir=.harness\n");
+      expect(hasHarnessRoot(repo)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
  * Control root tracked-change gate — a writable dispatch may not run while the
  * checkout that carries the process SSOT has committable changes (they belong to
  * the checkout carrying the target branch). The verdict is Git state only:
@@ -1709,6 +1740,21 @@ describe("assertControlClean — control root tracked-change gate", () => {
       const result = assertControlClean({ controlRoot: mainInfo(repo) }, { gitPath: "/nonexistent/git-binary" });
       expect(result.violations.map((entry) => entry.code)).toEqual(["worktree.main.unresolved"]);
       expect(result.violations[0]?.fix).toContain("status --porcelain");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  test("a checkout configured to hide untracked files still reports them", () => {
+    const root = tmpRoot("control-clean-untracked-hidden-");
+    try {
+      const repo = gitRepo(root);
+      // `status.showUntrackedFiles=no` would answer "clean" for a tree that
+      // still holds committable new files.
+      git(["config", "status.showUntrackedFiles", "no"], repo);
+      writeFileSync(join(repo, "untracked.ts"), "export {};\n");
+      const result = assertControlClean({ controlRoot: mainInfo(repo) });
+      expect(result.violations.map((entry) => entry.code)).toEqual(["worktree.main.tracked-changes"]);
+      expect(result.violations[0]?.message).toContain("untracked.ts");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

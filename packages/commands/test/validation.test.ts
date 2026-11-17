@@ -236,6 +236,38 @@ describe("validation command family", () => {
     const withTracks = await definition("worktree.check").execute({ controlClean: true, tracks: [{ worktreePath: cwd, workingBranch: "main" }] }, context(cwd));
     expect(withTracks).toMatchObject({ status: "usage", exitCode: 2 });
     expect(withTracks.message).toContain("--tracks");
+    const withEntry = await definition("worktree.check").execute({ controlClean: true, entry: true }, context(cwd));
+    expect(withEntry).toMatchObject({ status: "usage", exitCode: 2 });
+    expect(withEntry.message).toContain("--entry");
+    const withIntegration = await definition("worktree.check").execute({ controlClean: true, integration: cwd }, context(cwd));
+    expect(withIntegration).toMatchObject({ status: "usage", exitCode: 2 });
+    expect(withIntegration.message).toContain("--integration");
+  });
+  test("--control-clean reads the {HARNESS_DIR} chain and a named --harness anchor", async () => {
+    // Legacy `.agents/` declares a harness: the check runs instead of skipping.
+    const cwd = tempRoot();
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd });
+    writeFileSync(path.join(cwd, ".gitignore"), "state/\n");
+    mkdirSync(path.join(cwd, ".agents", "specs"), { recursive: true });
+    writeFileSync(path.join(cwd, ".agents", "specs", "spec.md"), "spec\n");
+    execFileSync("git", ["add", "-A"], { cwd });
+    execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "initial"], { cwd });
+    writeFileSync(path.join(cwd, ".agents", "specs", "spec.md"), "spec edited\n");
+    const legacy = await definition("worktree.check").execute({ controlClean: true }, context(cwd));
+    expect(legacy).toMatchObject({ status: "refused", exitCode: 1, code: "worktree.main.tracked-changes" });
+
+    // A named harness anchor asks the presence question about that directory, and
+    // a relative anchor resolves from the invocation workspace.
+    const plain = tempRoot();
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: plain });
+    writeFileSync(path.join(plain, ".gitignore"), "state/\n");
+    writeFileSync(path.join(plain, "README.md"), "fixture\n");
+    execFileSync("git", ["add", "-A"], { cwd: plain });
+    execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "initial"], { cwd: plain });
+    mkdirSync(path.join(plain, "state", ".mstar"), { recursive: true });
+    expect(await definition("worktree.check").execute({ controlClean: true, harness: "state/.mstar" }, context(plain))).toMatchObject({ status: "ok" });
+    writeFileSync(path.join(plain, "README.md"), "fixture edited\n");
+    expect(await definition("worktree.check").execute({ controlClean: true, harness: "state/.mstar" }, context(plain))).toMatchObject({ status: "refused", code: "worktree.main.tracked-changes" });
   });
   test("role conflict preserves the invalid SDD reviewer identity", async () => {
     const cwd = tempRoot();

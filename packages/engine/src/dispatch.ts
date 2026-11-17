@@ -941,11 +941,15 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
         const directOnException = parseBranchPolicyDirectOnBranch(text) === branch.trim();
         violations.push(...assertDefaultBranchProtected(branch.trim(), { directOnException }).violations);
       }
-      // (4b) Control root tracked-change gate (writable only): a repository with
-      // no harness has no control-root contract, so the leg skips rather than
-      // refuses; an unresolved control root keeps the existing behavior (no
-      // second code on top of the control-domain refusal the control domain
-      // already emits).
+    }
+
+    // (4b) Control root tracked-change gate — EVERY writable dispatch, not only
+    // the work domain: the question ("does the process-SSOT checkout hold
+    // committable changes?") is domain-independent. A repository with no harness
+    // has no control-root contract, so the leg skips rather than refuses; an
+    // unresolved control root keeps the existing behaviour (no second code on
+    // top of the control-domain refusal that domain already emits).
+    if (writable) {
       const main = readMainWorktree(opts.cwd ?? process.cwd());
       if (main !== null && hasHarnessRoot(main.root)) {
         violations.push(...assertControlClean({ controlRoot: main }).violations);
