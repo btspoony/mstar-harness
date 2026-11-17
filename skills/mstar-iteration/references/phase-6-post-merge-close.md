@@ -71,5 +71,5 @@ Phase 6 完成 = 保留 ACTIVE `mstar status workflow-close` 的实际 applied /
 ## References
 
 - Route / transition-gate SSOT → `mstar-iteration` SKILL.md「Phase route map」+「Phase transition gates」
-- 终态字段 / lease 语义 / `unregisterWorkflow` → `mstar-artifacts/references/status-and-residuals.md`
+- 写 close 收据、判 terminal `completed` + `ended_at`、或需要 lease 语义与 `unregisterWorkflow` 时打开：`mstar-artifacts/references/status-and-residuals.md`
 - cleanup ownership / guard 契约本体（两条时序车道）→ `mstar-branch-worktree`「Worktree / branch cleanup」

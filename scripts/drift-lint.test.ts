@@ -60,6 +60,8 @@ import {
   checkFiveQuestionCorpus,
   checkGateSurfaceChange,
   checkProvenanceScan,
+  checkReferenceCorpus,
+  readReferenceCorpus,
   checkSkillIndexCoverage,
   readSkillIndexCoverage,
   readSkillIndexTable,
@@ -1879,5 +1881,260 @@ describe("checkGateSurfaceChange — Guard 14 gate-surface self-approval", () =>
     });
     expect(failures.length).toBe(1);
     expect(failures[0]).toContain("raised expectedCount 1→3");
+  });
+});
+
+describe("checkReferenceCorpus — Guard 15 reference entry points", () => {
+  /** A two-skill fixture corpus: `mstar-alpha` owns a bare reference and a
+   * nested child, `mstar-beta` owns a colliding `report-template.md` plus a
+   * second-tier file reached only from another of its references. */
+  const corpus = (files: Record<string, string>) => ({
+    files: Object.entries(files).map(([rel, text]) => ({ rel, text })),
+    referenceFiles: Object.keys(files).filter((rel) => rel.includes("/references/")),
+  });
+
+  const failing = (files: Record<string, string>) =>
+    checkReferenceCorpus(corpus(files)).failures;
+
+  test("the shipped skills corpus passes", () => {
+    const { files, referenceFiles } = readReferenceCorpus(join(import.meta.dir, ".."));
+    const result = checkReferenceCorpus({ files, referenceFiles });
+    expect(result.failures).toEqual([]);
+    expect(result.referenceFiles).toBeGreaterThan(100);
+    expect(result.citationsChecked).toBeGreaterThan(500);
+  });
+
+  test("a reference file with no reference from its own skill fails, naming the file", () => {
+    const failures = failing({
+      "skills/mstar-alpha/SKILL.md": "## References\n\n- `references/used.md` - open when reading alpha.\n",
+      "skills/mstar-alpha/references/used.md": "# used\n",
+      "skills/mstar-alpha/references/orphan.md": "# orphan\n",
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/mstar-alpha/references/orphan.md");
+    expect(failures[0]).toContain("no reference from its own skill");
+  });
+
+  test("a second-tier reference reached from another reference in the same skill is legal", () => {
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md": "## References\n\n- `references/entry.md` - open when starting alpha.\n",
+        "skills/mstar-alpha/references/entry.md":
+          "# entry\n\nDeeper detail -> `references/second-tier.md`.\n",
+        "skills/mstar-alpha/references/second-tier.md": "# second tier\n",
+      }),
+    ).toEqual([]);
+  });
+
+  test("a References row carrying a path without a trigger fails, naming the file and the row", () => {
+    const failures = failing({
+      "skills/mstar-alpha/SKILL.md":
+        "## References\n\n- `references/used.md` - the alpha reference on naming.\n",
+      "skills/mstar-alpha/references/used.md": "# used\n",
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/mstar-alpha/SKILL.md:3");
+    expect(failures[0]).toContain("states no trigger");
+  });
+
+  test("table rows pass when the trigger column is non-empty and fail when it is empty", () => {
+    const table = (trigger: string) =>
+      failing({
+        "skills/mstar-alpha/SKILL.md": `## References\n\n| When | Open |\n|------|------|\n| ${trigger} | \`references/used.md\` |\n`,
+        "skills/mstar-alpha/references/used.md": "# used\n",
+      });
+    expect(table("naming a plan or a review bundle")).toEqual([]);
+    const failures = table("");
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/mstar-alpha/SKILL.md:5");
+    expect(failures[0]).toContain("trigger column is empty");
+  });
+
+  test("a Chinese trigger column is recognized", () => {
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md": "## References\n\n| 何时 | 打开 |\n|------|------|\n| 落盘产物时 | `references/used.md` |\n",
+        "skills/mstar-alpha/references/used.md": "# used\n",
+      }),
+    ).toEqual([]);
+  });
+
+  test("a bare same-skill citation is legal", () => {
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md":
+          "## References\n\n- `references/used.md` - open when reading alpha.\n\nBody -> `references/used.md`.\n",
+        "skills/mstar-alpha/references/used.md": "# used\n",
+      }),
+    ).toEqual([]);
+  });
+
+  test("a cross-skill citation without the owner in the path fails, naming both skills", () => {
+    const failures = failing({
+      "skills/mstar-alpha/SKILL.md":
+        "## References\n\n- `references/used.md` - open when reading alpha.\n\n- **`mstar-beta`** -> `references/beta.md` - open when beta applies.\n",
+      "skills/mstar-alpha/references/used.md": "# used\n",
+      "skills/mstar-beta/SKILL.md": "## References\n\n- `references/beta.md` - open when reading beta.\n",
+      "skills/mstar-beta/references/beta.md": "# beta\n",
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/mstar-alpha/SKILL.md:5");
+    expect(failures[0]).toContain('"references/beta.md"');
+    expect(failures[0]).toContain("mstar-beta/references/beta.md");
+  });
+
+  test("the owner in the path is what passes, not the owner named elsewhere on the line", () => {
+    // The 184-site shape: the skill is named before the arrow, the path is not.
+    const failures = failing({
+      "skills/mstar-alpha/SKILL.md":
+        "## References\n\n- `references/used.md` - open when reading alpha.\n\n- `references/deep.md` - open when the deep contract applies.\n",
+      "skills/mstar-alpha/references/used.md": "# used\n",
+      "skills/mstar-beta/SKILL.md": "## References\n\n- `references/beta.md` - open when reading beta.\n",
+      "skills/mstar-beta/references/beta.md": "# beta\n",
+      "skills/mstar-alpha/references/deep.md":
+        "# deep\n\nContract -> **`mstar-beta`** `references/beta.md` (open when beta applies).\n",
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("cross-skill reference");
+    expect(failures[0]).toContain("omits its owner");
+  });
+
+  test("an owner-prefixed cross-skill citation is legal", () => {
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md":
+          "## References\n\n- `references/used.md` - open when reading alpha.\n\n- `mstar-beta/references/beta.md` - open when beta applies.\n",
+        "skills/mstar-alpha/references/used.md": "# used\n",
+        "skills/mstar-beta/SKILL.md": "## References\n\n- `references/beta.md` - open when reading beta.\n",
+        "skills/mstar-beta/references/beta.md": "# beta\n",
+      }),
+    ).toEqual([]);
+  });
+
+  test("a wrong owner in the path fails, naming the declared and real owner", () => {
+    const failures = failing({
+      "skills/mstar-alpha/SKILL.md": "## References\n\n- `references/used.md` - open when reading alpha.\n",
+      "skills/mstar-alpha/references/used.md": "# used\n",
+      "skills/mstar-beta/SKILL.md": "## References\n\n- `references/beta.md` - open when reading beta.\n",
+      "skills/mstar-beta/references/beta.md": "# beta\n",
+      "skills/mstar-gamma/references/gamma.md": "# gamma\n",
+      "skills/mstar-gamma/SKILL.md":
+        "## References\n\n- `references/gamma.md` - open when reading gamma.\n\n- `mstar-beta/references/beta.md` -> `mstar-alpha/references/beta.md` - open when beta applies.\n",
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain('names owner "mstar-alpha"');
+    expect(failures[0]).toContain('belongs to "mstar-beta"');
+  });
+
+  test("colliding basenames resolve by longest suffix: the citing skill's own file wins bare", () => {
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md":
+          "## References\n\n- `references/report-template.md` - open when writing alpha's report.\n",
+        "skills/mstar-alpha/references/report-template.md": "# alpha template\n",
+        "skills/mstar-beta/SKILL.md":
+          "## References\n\n- `references/report-template.md` - open when writing beta's report.\n",
+        "skills/mstar-beta/references/report-template.md": "# beta template\n",
+      }),
+    ).toEqual([]);
+  });
+
+  test("a colliding basename cited from a third skill is ambiguous and must name the owner", () => {
+    // alpha and beta each own a `report-template.md`; inside either skill the
+    // bare citation is that skill's own file (pinned above). From gamma, which
+    // owns neither, the basename alone resolves to two files.
+    const failures = failing({
+      "skills/mstar-alpha/SKILL.md":
+        "## References\n\n- `references/report-template.md` - open when writing alpha's report.\n",
+      "skills/mstar-alpha/references/report-template.md": "# alpha template\n",
+      "skills/mstar-beta/SKILL.md":
+        "## References\n\n- `references/report-template.md` - open when writing beta's report.\n",
+      "skills/mstar-beta/references/report-template.md": "# beta template\n",
+      "skills/mstar-gamma/SKILL.md":
+        "## References\n\n- `references/gamma.md` - open when reading gamma.\n\n- `references/report-template.md` - open when writing gamma's report.\n",
+      "skills/mstar-gamma/references/gamma.md": "# gamma\n",
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/mstar-gamma/SKILL.md:5");
+    expect(failures[0]).toContain("matches more than one reference file");
+  });
+
+  test("naming the owner on a colliding basename resolves it for the third skill", () => {
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md":
+          "## References\n\n- `references/report-template.md` - open when writing alpha's report.\n",
+        "skills/mstar-alpha/references/report-template.md": "# alpha template\n",
+        "skills/mstar-beta/SKILL.md":
+          "## References\n\n- `references/report-template.md` - open when writing beta's report.\n",
+        "skills/mstar-beta/references/report-template.md": "# beta template\n",
+        "skills/mstar-gamma/SKILL.md":
+          "## References\n\n- `references/gamma.md` - open when reading gamma.\n\n- `mstar-beta/references/report-template.md` - open when writing gamma's report.\n",
+        "skills/mstar-gamma/references/gamma.md": "# gamma\n",
+      }),
+    ).toEqual([]);
+  });
+
+  test("nested references/_shared paths resolve, same-skill bare and cross-skill owner-prefixed", () => {
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md":
+          "## References\n\n- `references/_shared/core.md` - open when shared rules apply.\n\n- `references/nested.md` - open when the nested path applies.\n",
+        "skills/mstar-alpha/references/_shared/core.md": "# shared core\n",
+        "skills/mstar-alpha/references/nested.md": "# nested\n\n-> `references/_shared/core.md`\n",
+        "skills/mstar-beta/SKILL.md":
+          "## References\n\n- `mstar-alpha/references/_shared/core.md` - open when shared rules apply to beta.\n\n- `references/beta.md` - open when reading beta.\n",
+        "skills/mstar-beta/references/beta.md": "# beta\n",
+      }),
+    ).toEqual([]);
+  });
+
+  test("a nested colliding child needs the owner prefix from another skill", () => {
+    const failures = failing({
+      "skills/mstar-alpha/SKILL.md":
+        "## References\n\n- `references/qc-specialist/report-template.md` - open when writing alpha's QC report.\n",
+      "skills/mstar-alpha/references/qc-specialist/report-template.md": "# alpha qc template\n",
+      "skills/mstar-beta/SKILL.md":
+        "## References\n\n- `references/report-template.md` - open when writing beta's report.\n\n- `references/qc-specialist/report-template.md` - open when writing beta's QC report.\n",
+      "skills/mstar-beta/references/report-template.md": "# beta template\n",
+      "skills/mstar-beta/references/qc-specialist/report-template.md": "# beta qc template\n",
+      "skills/mstar-alpha/references/extra.md":
+        "# extra\n\n-> `mstar-beta/references/qc-specialist/report-template.md`\n",
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain("skills/mstar-alpha/references/extra.md");
+  });
+
+  test("a path that names no reference file fails instead of passing silently", () => {
+    const failures = failing({
+      "skills/mstar-alpha/SKILL.md":
+        "## References\n\n- `references/used.md` - open when reading alpha.\n\n-> `references/missing.md`\n",
+      "skills/mstar-alpha/references/used.md": "# used\n",
+    });
+    expect(failures.length).toBe(1);
+    expect(failures[0]).toContain('"references/missing.md"');
+    expect(failures[0]).toContain("resolves to no reference file");
+  });
+
+  test("placeholder rows are patterns, not citations", () => {
+    expect(
+      failing({
+        "skills/mstar-alpha/SKILL.md":
+          "## References\n\n- `references/used.md` - open when reading alpha.\n\n- `references/<host>.md` - open for the active host.\n",
+        "skills/mstar-alpha/references/used.md": "# used\n",
+      }),
+    ).toEqual([]);
+  });
+
+  test("an unreadable skills tree returns a failure row, never an empty passing corpus", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drift-reference-corpus-"));
+    try {
+      const read = readReferenceCorpus(dir);
+      expect(read.files).toEqual([]);
+      expect(read.failures.length).toBe(1);
+      expect(read.failures[0]).toContain("Guard 15 reference corpus read");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
