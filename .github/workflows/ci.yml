@@ -1113,18 +1113,22 @@ jobs:
               exit 1
             fi
             count="$(grep -o 'unclassified comments: [0-9]*' "$RUNNER_TEMP/comment-$root.err" | grep -o '[0-9]*$' || true)"
+            # why: a floor per ROOT, not per sum - one root's scanner can collapse
+            # while the other keeps the total above a shared threshold. The values
+            # are measured, and recorded beside their command, in comments.md
+            # § Gate steps and range; lower one only for a genuine cleanup.
+            case "$root" in
+              packages) floor=14000 ;;
+              scripts) floor=800 ;;
+            esac
+            echo "unclassified comment corpus ($root): ${count:-0} (floor $floor)"
+            if [ "${count:-0}" -lt "$floor" ]; then
+              echo "::error::the $root unclassified comment corpus collapsed to ${count:-0} (floor $floor) - a detector or collector regression in that root is likely; re-measure with: node packages/cli/dist/mstar-harness.js lint $root --type code"
+              exit 1
+            fi
             corpus=$((corpus + ${count:-0}))
           done
-          # why: the advisory corpus is the scanners' evidence, so a floor catches
-          # a detector or collector regression that silently stops finding
-          # comments; an added comment (the normal state) never trips it. Measured
-          # 14845 (packages 14024, scripts 821) on 2026-11-18 - re-measure with the
-          # two commands above and lower the floor only for a genuine cleanup.
-          echo "unclassified comment corpus: $corpus (floor 14000)"
-          if [ "$corpus" -lt 14000 ]; then
-            echo "::error::the unclassified comment corpus collapsed to $corpus (floor 14000) - a detector or collector regression is likely; re-measure with: node packages/cli/dist/mstar-harness.js lint packages --type code"
-            exit 1
-          fi
+          echo "unclassified comment corpus total: $corpus"
 
       # STEP 2 - the RATCHET, changed lines only (comments.md § Ratchet). The
       # diff against the merge base selects the files, and `--diff-base` makes
@@ -1155,15 +1159,10 @@ jobs:
             echo "::error::no merge base resolves for the comment gate - the checkout needs fetch-depth: 0"
             exit 1
           fi
-          # NUL-delimited end to end: git emits NUL-terminated paths, grep -z
-          # filters whole NUL-terminated records, and xargs -0 splits on NUL
-          # alone - so a path holding a space stays one target. A newline
-          # anywhere in this pipeline (a `tr`, or a grep without -z) hands
-          # xargs a blank-delimited token and splits that path in two. `-z`
-          # also turns off git's path munging, so a non-ASCII or quote-bearing
-          # path reaches the filter unquoted and still matches it.
-          git diff --name-only -z --diff-filter=ACMR "$merge" -- packages scripts \
-            | grep -zE '\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|sh|bash|zsh|rb|java|kt|swift)$' > "$RUNNER_TEMP/comment-changed.bin" || true
+          # why: the selection is a shipped script, so this step and the pipeline
+          # test run the same git/NUL/filter steps; the NUL contract (git -z and a
+          # NUL-record handoff) lives there, and its removal fails that test.
+          bash scripts/comment-gate-select.sh "$merge" > "$RUNNER_TEMP/comment-changed.bin"
           if [ ! -s "$RUNNER_TEMP/comment-changed.bin" ]; then
             echo "No changed code file under packages/ or scripts/ - nothing to ratchet."
             exit 0
