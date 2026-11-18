@@ -1092,9 +1092,22 @@ jobs:
       - name: Lint code comments (bound gate, whole tree)
         run: |
           set -euo pipefail
+          corpus=0
           for root in packages scripts; do
-            node packages/cli/dist/mstar-harness.js lint "$root" --type code
+            node packages/cli/dist/mstar-harness.js lint "$root" --type code 2> "$RUNNER_TEMP/comment-$root.err"
+            count="$(grep -o 'unclassified comments: [0-9]*' "$RUNNER_TEMP/comment-$root.err" | grep -o '[0-9]*$' || true)"
+            corpus=$((corpus + ${count:-0}))
           done
+          # why: the advisory corpus is the scanners' evidence, so a floor catches
+          # a detector or collector regression that silently stops finding
+          # comments; an added comment (the normal state) never trips it. Measured
+          # 14845 (packages 14024, scripts 821) on 2026-11-18 - re-measure with the
+          # two commands above and lower the floor only for a genuine cleanup.
+          echo "unclassified comment corpus: $corpus (floor 14000)"
+          if [ "$corpus" -lt 14000 ]; then
+            echo "::error::the unclassified comment corpus collapsed to $corpus (floor 14000) - a detector or collector regression is likely; re-measure with: node packages/cli/dist/mstar-harness.js lint packages --type code"
+            exit 1
+          fi
 
       # STEP 2 - the RATCHET, changed lines only (comments.md § Ratchet). The
       # diff against the merge base selects the files, and `--diff-base` makes
