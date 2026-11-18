@@ -8,9 +8,10 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { CODE_FILE_EXTENSIONS } from "../src/lint.js";
 
 /** why: `.sh` and `.ts` are both code faces; `.md` is not, so a docs edit never enters the ratchet. */
 const CODE_FILE = /[.](?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|sh|bash|zsh|rb|java|kt|swift)$/;
@@ -85,3 +86,26 @@ describe("comment gate - selection pipeline over hostile paths", () => {
     expect(CODE_FILE.test("packages/readme.md")).toBe(false);
   });
 });
+
+/**
+ * why: the CI selector and the CLI collector each decide the code face; one
+ * list owns it, and this pair breaks the moment the shell pattern and the
+ * exported list disagree.
+ */
+describe("comment gate - one extension source", () => {
+  const ciWorkflow = readFileSync(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8");
+
+  /** why: the CI selector is a shipped shell line, so the test reads the real pattern instead of restating it. */
+  function ciSelectedExtensions(): string[] {
+    const shellLine = /grep -zE '([^']+)'/.exec(ciWorkflow)?.at(1);
+    expect(shellLine).toBeDefined();
+    const group = /\\\.\(([^)]+)\)\$/.exec(shellLine as string)?.at(1);
+    expect(group).toBeDefined();
+    return (group as string).split("|").map((ext) => `.${ext}`).sort();
+  }
+
+  test("the CI selector pattern lists exactly the collector extensions", () => {
+    expect(ciSelectedExtensions()).toEqual([...CODE_FILE_EXTENSIONS].sort());
+  });
+});
+
