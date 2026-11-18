@@ -15,7 +15,7 @@ import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { join } from 'node:path'
 import { activeRowsOf, readExecutionWorkflowSource } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead, SessionHint } from './workflow-selection.ts'
-import { asRecord, STATUS_FILE } from './_shared.ts'
+import { asRecord } from './_shared.ts'
 import type { Config, SessionHintRead } from './_shared.ts'
 import type { DshHostAdapter } from './adapter.ts'
 import type { WorkflowVerdict } from './agent-flow.ts'
@@ -172,12 +172,15 @@ export async function gateWorkflow(
   // has no rows to attribute: the one-warn degrade below).
   const pb = await writableFanOutUncovered(harnessDir, hintReadOf().hint)
   if (pb.unreadable) {
-    // Fail-open + ONE warn ( Step 3 / Clarify — a broken status
-    // read must not brick fan-out): P-b is degraded for this call only;
-    // P-a/P-c (name-based, no status dependency) still run below.
-    const statusLabel = harnessDir === null ? STATUS_FILE : join(harnessDir, STATUS_FILE)
+    // Fail-open + ONE warn (Step 3 / Clarify — a broken store read must not
+    // brick fan-out): P-b is degraded for this call only; P-a/P-c (name-based,
+    // no store dependency) still run below.
+    // why: the read that degraded is the ACTIVE execution store source, not the
+    // retired `status.json` document, and `writableFanOutUncovered` returns
+    // `unreadable: false` whenever `harnessDir` is null — so this branch always
+    // carries a real root and needs no null arm.
     ctx.logger(DISPATCH_LOGGER).warn(
-      `workflow gate (${toolName}) (fail-open): cannot read ${statusLabel} — P-b lease attribution degraded; call allowed`,
+      `workflow gate (${toolName}) (fail-open): cannot read the ACTIVE execution store under ${harnessDir} — P-b lease attribution degraded; call allowed`,
     )
   }
   const verdict = workflowPolicy(config, adapter.workflowAskCache, {
