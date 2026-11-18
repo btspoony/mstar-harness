@@ -6,6 +6,19 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.7.3] - 2026-11-18
+
+### Harness
+
+- **Commented-out-code detection declares its language scope.** The check reads C-family comment runs only; a hash-dialect file (shell, Python, Ruby) returns no finding by design, and `comments.md` states the limit instead of implying coverage.
+- **A TODO/FIXME marker must open the comment content.** Prose that merely names the marker ("the TODO rule", "see TODO:") is no longer reported, so the whole-tree advisory carries real tasks and the ratchet cannot fail a rule sentence.
+- **The lint module header cites the marker authority.** `comments.md` § Markers owns the labels, the `shortcut:` spelling and the bound; `SKILL.md` keeps only the workaround sentence.
+- **Copied bounded-shortcut markers are removed.** The walk ceiling is marked where `MAX_WALK_FILES` is defined, and the shadow read points at the canonical judgment marker instead of repeating it.
+
+- Version alignment with harness **4.7.3**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.7.3**.
+
 ## [4.7.2] - 2026-11-17
 
 ### Harness
