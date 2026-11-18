@@ -93,8 +93,9 @@ function assignment(overrides: Record<string, string | undefined>): string {
 /**
  * why: the dispatch gate resolves its control root from `cwd`, so a case that
  * omits one reads whatever checkout is running the suite and flips on that
- * checkout's Git state (I-001170). `harness` adds the `.mstar/` marker the
- * control-root leg requires; `dirty` edits a tracked file so the leg refuses.
+ * checkout's Git state; a fixture keeps the verdict the case asserts. `harness`
+ * adds the `.mstar/` marker the control-root leg requires; `dirty` edits a
+ * tracked file so the leg refuses.
  */
 function gateFixture(opts: { prefix?: string; harness?: boolean; dirty?: boolean } = {}): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), opts.prefix ?? "dispatch-gate-")));
@@ -1579,8 +1580,8 @@ Example Assignment snippet: **Enforcement**: hard
 });
 
 describe("composeDispatchGate — shared host dispatch-gate composition", () => {
-  // Every shaped writable case below names this clean harness checkout: without
-  // it the control-root leg read the ambient repository (I-001170).
+  // why: every shaped writable case below names this clean harness checkout —
+  // without one, the control-root leg reads the ambient repository instead.
   const cwd = gateFixture({ prefix: "dispatch-shared-gate-", harness: true });
   afterAll(() => rmSync(cwd, { recursive: true, force: true }));
 
