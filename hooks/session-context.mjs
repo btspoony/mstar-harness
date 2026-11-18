@@ -9674,6 +9674,7 @@ var init_engine = __esm(() => {
   });
   init_worktree = __esm2(() => {
     init_git_probe();
+    init_path();
     init_workflow();
     deliveryAnchorFlags = {
       base: "--branch-base",

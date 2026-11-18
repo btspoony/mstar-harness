@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+## [4.7.3] - 2026-11-18
+
+### Harness
+
+- **注释掉的代码检测明确语言范围。** 该检查只读 C 家族注释；shell、Python、Ruby 的 `#` 注释文件按设计不产出 finding，`comments.md` 写明这一限制，而不是暗示覆盖。
+- **TODO/FIXME 标记必须开启注释内容。** 仅在句中出现该词的散文（"the TODO rule"、"see TODO:"）不再被报，全量 advisory 只留真实任务，ratchet 也不会把规则说明句判失败。
+- **lint 模块头指向标记权威。** 标签、`shortcut:` 写法与 bound 由 `comments.md` § Markers 拥有；`SKILL.md` 只保留 workaround 那一句。
+- **删除复制的有界捷径标记。** 遍历上限只在 `MAX_WALK_FILES` 定义处标记，shadow 的读取改为指向 judgment 的规范标记，不再逐字复制。
+- **注释门禁加固** —— 注释与守卫工作流现在也在合并队列（`merge_group`）上运行，其 ratchet 以该组自身的 base 比较，因此一批合并的组只按其新增的增量判定，而不是组内每个 PR。全树语料断言改为**按根**的地板（`packages/` 14,000、`scripts/` 800）：单个根的扫描器可能崩塌，而另一根仍让合计数高于单一阈值。注释分类器同时按方言限制分号引导符——分号在 C 系代码中终止语句，因此只在把分号读作引导符的方言里开启注释内容。
+- **控制根跟踪变更门禁** —— 当 Git 主工作树（控制根）存在可提交变更（含未跟踪文件）时，可写派发与 `mstar worktree check --control-clean` 现在会拒绝（`worktree.main.tracked-changes`）；跟踪语料写入属于承载目标分支的检出，`--harness` 是唯一可组合的选项且必须在 `{HARNESS_DIR}` 解析链下解析为 harness，解析不到 harness 的控制根跳过检查。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.7.3**。
+
 ## [4.7.2] - 2026-11-17
 
 ### Harness

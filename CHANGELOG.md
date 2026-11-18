@@ -8,6 +8,21 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.7.3] - 2026-11-18
+
+### Harness
+
+- **Commented-out-code detection declares its language scope.** The check reads C-family comment runs only; a hash-dialect file (shell, Python, Ruby) returns no finding by design, and `comments.md` states the limit instead of implying coverage.
+- **A TODO/FIXME marker must open the comment content.** Prose that merely names the marker ("the TODO rule", "see TODO:") is no longer reported, so the whole-tree advisory carries real tasks and the ratchet cannot fail a rule sentence.
+- **The lint module header cites the marker authority.** `comments.md` § Markers owns the labels, the `shortcut:` spelling and the bound; `SKILL.md` keeps only the workaround sentence.
+- **Copied bounded-shortcut markers are removed.** The walk ceiling is marked where `MAX_WALK_FILES` is defined, and the shadow read points at the canonical judgment marker instead of repeating it.
+- **Comment gate hardening** — the comment-and-guard workflow now also runs on a merge queue (`merge_group`), and its ratchet compares against the group's own base, so a batched group is judged by the increment it adds rather than by every pull request in it. The whole-tree corpus assertion became a floor per root (14,000 under `packages/`, 800 under `scripts/`): one root's scanner can collapse while the other keeps a summed total above a single threshold. The comment classifier also gates the semicolon introducer on the dialect — it ends a statement in C-family code, so it opens comment content only where the dialect reads it as one.
+- **Control root tracked-change gate** — writable dispatches and `mstar worktree check --control-clean` now refuse while the Git main worktree (control root) carries committable changes (`worktree.main.tracked-changes`, untracked files included); tracked corpus writes belong to the checkout that carries the target branch, `--harness` is the one combinable option and must resolve as a harness under the `{HARNESS_DIR}` chain, and a control root that resolves no harness skips it.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.7.3**.
+
 ## [4.7.2] - 2026-11-17
 
 ### Harness

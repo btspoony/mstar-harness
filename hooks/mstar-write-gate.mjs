@@ -10244,6 +10244,7 @@ var deliveryAnchorFlags;
 var QC_ALIGNMENT_FIELDS;
 var init_worktree = __esm(() => {
   init_git_probe();
+  init_path();
   init_workflow();
   deliveryAnchorFlags = {
     base: "--branch-base",
