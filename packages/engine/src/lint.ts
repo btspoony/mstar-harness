@@ -165,11 +165,18 @@ function semicolonIntroducesComment(dialect: SourceDialect): boolean {
   return dialect === "hash";
 }
 
+/** why: the dialect's variant of an introducer pattern pair that differs only by
+ * `;` - the ONE place that variant is chosen, so the predicate above governs all
+ * four `;` paths instead of four inline comparisons agreeing by luck. */
+function introducerPattern(dialect: SourceDialect, cFamily: RegExp, nonC: RegExp): RegExp {
+  return semicolonIntroducesComment(dialect) ? nonC : cFamily;
+}
+
 /** Per-line "comment-only" flag: the line carries comment content and no code.
  * A marker's comment block is the maximal run of adjacent lines that are
  * comment-only, plus the marker line itself. */
 function commentOnlyLines(lines: readonly string[], scan: Uint8Array, offsets: readonly number[], dialect: SourceDialect = "c"): boolean[] {
-  const introducer = dialect === "hash" ? LINE_COMMENT_ONLY_RE : LINE_COMMENT_ONLY_C_RE;
+  const introducer = introducerPattern(dialect, LINE_COMMENT_ONLY_C_RE, LINE_COMMENT_ONLY_RE);
   return lines.map((line, index) => {
     const base = offsets[index];
     let hasComment = false;
@@ -195,7 +202,7 @@ const TRAILING_INTRODUCER_RE = /\/\/|\/\*|#|--(?=\s|$)/g;
  * SOURCE_COMMENT span. */
 function introducerBefore(maskedLine: string, before: number, dialect: SourceDialect = "c"): number {
   let found = -1;
-  const pattern = dialect === "hash" ? TRAILING_INTRODUCER_HASH_RE : TRAILING_INTRODUCER_RE;
+  const pattern = introducerPattern(dialect, TRAILING_INTRODUCER_RE, TRAILING_INTRODUCER_HASH_RE);
   for (const match of maskedLine.matchAll(pattern)) {
     if (match.index > before) break;
     found = match.index;
@@ -521,7 +528,7 @@ const STANDALONE_NON_C_INTRODUCER_RE = /(?:^|\s)(?:#|--)\s/;
 function isCommentContext(scan: Uint8Array, base: number, at: number, maskedLine: string, dialect: SourceDialect = "c"): boolean {
   if (scan[base + at] === SOURCE_COMMENT) return true;
   if (scan[base + at] !== SOURCE_CODE) return false;
-  if ((dialect === "hash" ? LINE_COMMENT_ONLY_RE : LINE_COMMENT_ONLY_C_RE).test(maskedLine)) return true;
+  if (introducerPattern(dialect, LINE_COMMENT_ONLY_C_RE, LINE_COMMENT_ONLY_RE).test(maskedLine)) return true;
   return STANDALONE_NON_C_INTRODUCER_RE.test(maskedLine.slice(0, at));
 }
 
@@ -701,7 +708,7 @@ function commentUnits(fileText: string, scan: Uint8Array, masked: readonly strin
     for (let column = 0; column < masked[index]!.length && !hasComment; column++) {
       if (scan[base + column] === SOURCE_COMMENT) hasComment = true;
     }
-    if (hasComment || !(dialect === "hash" ? NON_C_COMMENT_LINE_RE : NON_C_COMMENT_LINE_C_RE).test(masked[index]!)) continue;
+    if (hasComment || !introducerPattern(dialect, NON_C_COMMENT_LINE_C_RE, NON_C_COMMENT_LINE_RE).test(masked[index]!)) continue;
     runs.push({ start: base + masked[index]!.search(/\S/), end: base + masked[index]!.length, doc: false, line: true, initial: true });
   }
   runs.sort((left, right) => left.start - right.start);
