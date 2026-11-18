@@ -1207,8 +1207,9 @@ function trailingCommentStart(line: string, mask: Uint8Array, base: number): num
  * line-level first-token heuristic on top of the mask; residual ceilings =
  * the unconditional `*` line (over-inclusive once its block comment has
  * closed) and commentMask's own regex-vs-division heuristic
- * (packages/engine/src/comment-scan.ts). upgrade: derive the line's real start
- * from the shared scanner when a mis-read line costs a real citation. */
+ * (packages/engine/src/comment-scan.ts). upgrade: replace the line prefilter
+ * with exact comment spans from a parser inside packages/engine/src/comment-scan.ts
+ * when a mis-read line costs a real citation. */
 function tsCommentLines(text: string): string {
   const mask = commentMask(text);
   const out: string[] = [];

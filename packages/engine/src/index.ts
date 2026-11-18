@@ -443,6 +443,7 @@ export type {
 export {
   ADR_BUCKETS,
   ADR_CLASSES,
+  CODE_FILE_EXTENSIONS,
   SPECS_REQUIRED_SECTIONS,
   assertSddTddTriple,
   findCommentedCode,
