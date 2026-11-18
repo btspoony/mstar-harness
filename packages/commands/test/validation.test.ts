@@ -256,7 +256,14 @@ describe("validation command family", () => {
     const legacy = await definition("worktree.check").execute({ controlClean: true }, context(cwd));
     expect(legacy).toMatchObject({ status: "refused", exitCode: 1, code: "worktree.main.tracked-changes" });
 
-    // invariant: a named --harness anchor is the harness asked about, and a relative one resolves from the invocation workspace.
+    // invariant: a relative anchor resolves from the invocation workspace, and the
+    // legacy `.agents/` it names is the harness the chain resolves, so a dirty
+    // checkout is refused rather than skipped.
+    expect(await definition("worktree.check").execute({ controlClean: true, harness: ".agents" }, context(cwd))).toMatchObject({ status: "refused", code: "worktree.main.tracked-changes" });
+
+    // invariant: an existing directory the {HARNESS_DIR} chain does not resolve as
+    // a harness is not one, so the check skips even on a dirty checkout - the
+    // path existing is not a control-root contract.
     const plain = tempRoot();
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: plain });
     writeFileSync(path.join(plain, ".gitignore"), "state/\n");
@@ -264,9 +271,8 @@ describe("validation command family", () => {
     execFileSync("git", ["add", "-A"], { cwd: plain });
     execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "initial"], { cwd: plain });
     mkdirSync(path.join(plain, "state", ".mstar"), { recursive: true });
-    expect(await definition("worktree.check").execute({ controlClean: true, harness: "state/.mstar" }, context(plain))).toMatchObject({ status: "ok" });
     writeFileSync(path.join(plain, "README.md"), "fixture edited\n");
-    expect(await definition("worktree.check").execute({ controlClean: true, harness: "state/.mstar" }, context(plain))).toMatchObject({ status: "refused", code: "worktree.main.tracked-changes" });
+    expect(await definition("worktree.check").execute({ controlClean: true, harness: "state/.mstar" }, context(plain))).toMatchObject({ status: "ok" });
   });
   test("role conflict preserves the invalid SDD reviewer identity", async () => {
     const cwd = tempRoot();
