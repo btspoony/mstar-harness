@@ -27,6 +27,7 @@ import {
   findProvenanceCitations,
   isReadOnlyAssignmentRole,
   assertControlClean,
+  CODE_FILE_EXTENSIONS,
   hasHarnessRoot,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
@@ -232,15 +233,14 @@ function launchDirectoryPaths(command: (typeof verbs)[number], input: Input, con
   return fields.length === 0 ? undefined : launchDirectoryRefusal(command, context, { fields });
 }
 
-const codeExtensions: Record<string, true> = Object.fromEntries([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".sh", ".bash", ".zsh", ".rb", ".java", ".kt", ".swift"].map((ext) => [ext, true]));
+/** why: one extension source — the engine list the CI selector is asserted against, never a second literal. */
+const codeExtensions: Record<string, true> = Object.fromEntries(CODE_FILE_EXTENSIONS.map((ext) => [ext, true]));
 const provenanceExtensions: Record<string, true> = { ".md": true, ".ts": true };
 /** why: a forced type selects files by extension, so a directory walk under
  * `--type code` must collect only code - a SKILL.md the same walk sees carries
  * fixtures and prose the code rules do not describe. */
 const typeExtensions: Partial<Record<LintType, Record<string, true>>> = { code: codeExtensions, provenance: provenanceExtensions };
-/** why: `fixtures` holds deliberately broken artifacts (the `broken-skill`
- * SKILL.md among them), so a tree walk would report the fixtures' own defects
- * as the tree's. Other entries are build output no walk reads. */
+/** why: `fixtures` is pruned from EVERY walk this collector feeds (comment, provenance, any `--type`), not just the comment one: those trees hold deliberately broken artifacts (a `broken-skill` SKILL.md among them), so walking them would report the fixtures' own defects as the tree's, and a narrower prune would only add that noise. Other entries are build output no walk reads. The provenance guard in `scripts/drift-lint.ts` keeps its own exempt set for its own walk. */
 const skipDirs: Record<string, true> = { node_modules: true, ".git": true, dist: true, coverage: true, ".turbo": true, fixtures: true };
 type LintType = "plan" | "skill" | "strategy" | "report" | "code" | "finding" | "provenance" | "specs" | "adr";
 function lintType(file: string): LintType | null {

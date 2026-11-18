@@ -7,6 +7,11 @@ on:
     tags-ignore:
       - "v*"
   pull_request:
+  # why: a merge queue runs the required checks on its synthetic group commit;
+  # without this trigger those checks never report there and the queue cannot
+  # land the group. The job names are unchanged, so the required-check set keeps
+  # matching on both the pull-request and the merge-group commit.
+  merge_group:
 
 permissions:
   contents: read
@@ -1084,27 +1089,61 @@ jobs:
       # the code rules. `fixtures` is pruned by the walk itself (deliberately
       # broken artifacts). This step reads every comment in the two roots, so
       # the corpus it reports is not the change's.
+      #
+      # The collected roots were verified, not assumed: `--type code` selects
+      # 766 files under packages/ and 58 under scripts/, and none of them lacks
+      # a code extension (0 Markdown, 0 other). That is why this step needs no
+      # further type restriction - the flag already is the restriction, and a
+      # wider walk would hand prose files to the code rules.
+      #
+      # Contract headroom: the reference line ceiling for
+      # skills/mstar-coding-behavior/references/comments.md is 70, the size at
+      # its introduction rounded up to a multiple of 10 (Guard 9), so the gate
+      # contract may grow only with a re-measured round-up and the file in the
+      # same change.
       - name: Lint code comments (bound gate, whole tree)
         run: |
           set -euo pipefail
+          corpus=0
           for root in packages scripts; do
-            node packages/cli/dist/mstar-harness.js lint "$root" --type code
+            # why: stderr carries the count this step sums, so it is captured -
+            # and replayed on failure, where it may also carry the diagnostic.
+            if ! node packages/cli/dist/mstar-harness.js lint "$root" --type code 2> "$RUNNER_TEMP/comment-$root.err"; then
+              cat "$RUNNER_TEMP/comment-$root.err" >&2
+              exit 1
+            fi
+            count="$(grep -o 'unclassified comments: [0-9]*' "$RUNNER_TEMP/comment-$root.err" | grep -o '[0-9]*$' || true)"
+            corpus=$((corpus + ${count:-0}))
           done
+          # why: the advisory corpus is the scanners' evidence, so a floor catches
+          # a detector or collector regression that silently stops finding
+          # comments; an added comment (the normal state) never trips it. Measured
+          # 14845 (packages 14024, scripts 821) on 2026-11-18 - re-measure with the
+          # two commands above and lower the floor only for a genuine cleanup.
+          echo "unclassified comment corpus: $corpus (floor 14000)"
+          if [ "$corpus" -lt 14000 ]; then
+            echo "::error::the unclassified comment corpus collapsed to $corpus (floor 14000) - a detector or collector regression is likely; re-measure with: node packages/cli/dist/mstar-harness.js lint packages --type code"
+            exit 1
+          fi
 
       # STEP 2 - the RATCHET, changed lines only (comments.md § Ratchet). The
       # diff against the merge base selects the files, and `--diff-base` makes
-      # an unclassified comment on an added or modified line a violation. A
-      # whole-tree walk reports ~15k unclassified comments across 823 files,
-      # which no change is expected to answer for, so that corpus stays
-      # advisory: this step lints only what the change touched. The changed set
-      # is the change's own file count, so the per-file fan-out stays.
+      # an unclassified comment on an added or modified line a violation. The
+      # whole-tree corpus is measured once, in comments.md § Gate steps and range
+      # - no second copy of that number lives here, where it would drift.
+      # This step lints only what the change touched, so the per-file fan-out
+      # stays the change's own file count.
       - name: Lint code comments (ratchet, changed lines only)
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
+          # A merge queue checks a synthetic group commit: its base is the group's
+          # own base, so the ratchet reads the group's increment rather than every
+          # PR batched into it.
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          base="${PR_BASE:-${PUSH_BEFORE:-}}"
+          base="${PR_BASE:-${MERGE_GROUP_BASE:-${PUSH_BEFORE:-}}}"
           if [ -n "$base" ] && git merge-base "$base" HEAD >/dev/null 2>&1; then
             merge="$(git merge-base "$base" HEAD)"
           else

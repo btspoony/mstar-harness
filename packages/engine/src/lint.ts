@@ -53,6 +53,17 @@ function violation(severity: Severity, code: string, message: string, fix?: stri
   return { ok: false, severity, code, message, fix };
 }
 
+/**
+ * why: the comment gate's code face is ONE list. The CLI collector builds its
+ * extension map from it and the CI selector's `grep -zE` pattern is asserted
+ * against it, so a language cannot be added to one side and silently missed by
+ * the other — the failure mode a duplicated literal produced.
+ */
+export const CODE_FILE_EXTENSIONS: readonly string[] = [
+  ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs",
+  ".py", ".go", ".rs", ".sh", ".bash", ".zsh", ".rb", ".java", ".kt", ".swift",
+];
+
 /** why: comment syntax follows the language, so the caller's file name decides
  * the dialect. Python, shell and Ruby read `#` and treat `//` as arithmetic or
  * a path; everything else keeps the C rules the lint has always applied. */

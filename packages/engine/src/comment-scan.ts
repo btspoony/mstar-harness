@@ -279,10 +279,20 @@ export function commentMask(src: string, dialect: SourceDialect = "c"): Uint8Arr
  * a marker token inside a literal is not a marker, a marker inside a comment
  * still is. */
 export function maskLiterals(src: string, dialect: SourceDialect = "c"): string {
+  // why: one file runs five comment finders (markers, temporary, TODO,
+  // commented-out code, unclassified) and each needs this same view; a
+  // single-entry cache makes it one scan per file instead of five. Measured
+  // over the 824-file corpus: 1732ms for five passes vs 428ms for one; re-run
+  // with a loop over the collected texts if the finder set changes.
+  if (maskCache !== null && maskCache.text === src && maskCache.dialect === dialect) return maskCache.masked;
   const scan = scanSource(src, dialect);
   let out = "";
   for (let i = 0; i < src.length; i++) {
     out += scan[i] === SOURCE_LITERAL && src[i] !== "\n" ? " " : src[i];
   }
+  maskCache = { text: src, dialect, masked: out };
   return out;
 }
+
+/** why: the cache holds the file being linted, never the corpus - one entry, replaced on the next text. */
+let maskCache: { text: string; dialect: SourceDialect; masked: string } | null = null;

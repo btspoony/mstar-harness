@@ -1911,3 +1911,41 @@ describe("lintAdrTree", () => {
     expect(result).toEqual({ records: 0, failures: [] });
   });
 });
+
+/**
+ * why: one file runs five finders over the same literal-masked view, and the
+ * shared view is a single-entry cache - a stale or dialect-blind hit would make
+ * a finding depend on which file the process linted before.
+ */
+describe("shared masked view - findings match an uncached pass", () => {
+  const source = [
+    "const a = 1; // simplify: one branch, upgrade: a second caller",
+    "const b = '// not a comment';",
+    "// TODO track this",
+    "// const removed = 1;",
+    "// bare prose that carries no shape",
+  ].join(String.fromCharCode(10));
+  const other = "// plain prose from another file";
+
+  test("repeated and interleaved calls return the same findings", () => {
+    const first = {
+      markers: findSimplifyMarkers(source),
+      temporary: findTemporaryMarkers(source),
+      todos: findUntrackedTodos(source),
+      commented: findCommentedCode(source),
+      unclassified: findUnclassifiedComments(source),
+    };
+    // why: a different text between the calls is the cache-invalidation case.
+    findUnclassifiedComments(other);
+    expect(findSimplifyMarkers(source)).toEqual(first.markers);
+    expect(findTemporaryMarkers(source)).toEqual(first.temporary);
+    expect(findUntrackedTodos(source)).toEqual(first.todos);
+    expect(findCommentedCode(source)).toEqual(first.commented);
+    expect(findUnclassifiedComments(source)).toEqual(first.unclassified);
+    // why: the dialect is part of the cache key, so a hash-dialect read of the
+    // same bytes must not reuse the C view - `//` opens a comment in C and is
+    // arithmetic or a path in a hash language.
+    expect(findUnclassifiedComments("// plain prose\n", "c").length).toBe(1);
+    expect(findUnclassifiedComments("// plain prose\n", "hash")).toEqual([]);
+  });
+});
