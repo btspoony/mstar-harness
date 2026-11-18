@@ -1949,3 +1949,21 @@ describe("shared masked view - findings match an uncached pass", () => {
     expect(findUnclassifiedComments("// plain prose\n", "hash")).toEqual([]);
   });
 });
+
+/**
+ * why: a C-family statement terminator is not a comment introducer, so a marker
+ * after it is a code identifier (a private field, a declaration) and never an
+ * ownerless TODO; the trailing `//` case must keep being reported.
+ */
+describe("findUntrackedTodos - a semicolon introduces no comment", () => {
+  test("a declaration line after a statement terminator yields no TODO", () => {
+    expect(findUntrackedTodos("class A { #TODO = 1; } export function TODO() {}")).toEqual([]);
+    expect(findUntrackedTodos("let a = 1 ; TODO later")).toEqual([]);
+  });
+
+  test("a real trailing line comment is still reported", () => {
+    const findings = findUntrackedTodos("let a = 1; // TODO fix later");
+    expect(findings.map((finding) => finding.marker)).toEqual(["TODO"]);
+  });
+});
+
