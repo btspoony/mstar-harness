@@ -42,7 +42,7 @@
  * `Execute as` (NEVER red line): `mstar-dispatch-gates` SKILL.md
  * § "承接方反递归红线（NEVER / DO NOT；leaf executor 必读）".
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -88,6 +88,27 @@ function assignment(overrides: Record<string, string | undefined>): string {
     lines.push(`**${field}**: ${value}`);
   }
   return lines.join("\n") + "\n";
+}
+
+/**
+ * why: the dispatch gate resolves its control root from `cwd`, so a case that
+ * omits one reads whatever checkout is running the suite and flips on that
+ * checkout's Git state (I-001170). `harness` adds the `.mstar/` marker the
+ * control-root leg requires; `dirty` edits a tracked file so the leg refuses.
+ */
+function gateFixture(opts: { prefix?: string; harness?: boolean; dirty?: boolean } = {}): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), opts.prefix ?? "dispatch-gate-")));
+  const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
+  git("init", "-q", "-b", "main");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  writeFileSync(join(root, ".gitignore"), ".mstar/\n");
+  writeFileSync(join(root, "README.md"), "fixture\n");
+  git("add", "-A");
+  git("commit", "-qm", "fixture");
+  if (opts.harness === true) mkdirSync(join(root, ".mstar"), { recursive: true });
+  if (opts.dirty === true) writeFileSync(join(root, "README.md"), "fixture edited\n");
+  return root;
 }
 
 describe("validateAssignmentFields — required field matrix", () => {
@@ -236,24 +257,9 @@ describe("control write host gate", () => {
 
 
 describe("composeDispatchGate — control root tracked-change leg (writable)", () => {
-  function harnessRepo(prefix: string): string {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
-    const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { stdio: "ignore" });
-    git("init", "-q", "-b", "main");
-    git("config", "user.name", "Fixture");
-    git("config", "user.email", "fixture@example.invalid");
-    writeFileSync(join(root, ".gitignore"), ".mstar/\n");
-    writeFileSync(join(root, "README.md"), "fixture\n");
-    git("add", "-A");
-    git("commit", "-qm", "fixture");
-    return root;
-  }
-
   test("a writable dispatch on a dirty harness control root is refused", () => {
-    const root = harnessRepo("dispatch-dirty-control-");
+    const root = gateFixture({ prefix: "dispatch-dirty-control-", harness: true, dirty: true });
     try {
-      mkdirSync(join(root, ".mstar"), { recursive: true });
-      writeFileSync(join(root, "README.md"), "fixture edited\n");
       const refused = composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root });
       expect(refused.violations.map((v) => v.code)).toContain("worktree.main.tracked-changes");
       expect(refused.ok).toBe(false);
@@ -263,10 +269,8 @@ describe("composeDispatchGate — control root tracked-change leg (writable)", (
   });
 
   test("a writable control-domain dispatch is gated too — the question is domain-independent", () => {
-    const root = harnessRepo("dispatch-dirty-control-domain-");
+    const root = gateFixture({ prefix: "dispatch-dirty-control-domain-", harness: true, dirty: true });
     try {
-      mkdirSync(join(root, ".mstar"), { recursive: true });
-      writeFileSync(join(root, "README.md"), "fixture edited\n");
       const text = assignment({ "Write domain": "control", "Worktree path": root, "Working branch": "main", "Control write paths": ".mstar/plans/", "Task budget": "one round" });
       const refused = composeDispatchGate(text, { cwd: root });
       expect(refused.violations.map((v) => v.code)).toContain("worktree.main.tracked-changes");
@@ -276,9 +280,8 @@ describe("composeDispatchGate — control root tracked-change leg (writable)", (
     }
   });
   test("a clean harness control root passes and read-only roles are unaffected", () => {
-    const root = harnessRepo("dispatch-clean-control-");
+    const root = gateFixture({ prefix: "dispatch-clean-control-", harness: true });
     try {
-      mkdirSync(join(root, ".mstar"), { recursive: true });
       expect(composeDispatchGate(assignment({ "Write domain": "work", "Task budget": "one round" }), { cwd: root }).ok).toBe(true);
       // invariant: ignored process state never dirties the gate.
       writeFileSync(join(root, ".mstar", "status.json"), "{}\n");
@@ -1576,6 +1579,11 @@ Example Assignment snippet: **Enforcement**: hard
 });
 
 describe("composeDispatchGate — shared host dispatch-gate composition", () => {
+  // Every shaped writable case below names this clean harness checkout: without
+  // it the control-root leg read the ambient repository (I-001170).
+  const cwd = gateFixture({ prefix: "dispatch-shared-gate-", harness: true });
+  afterAll(() => rmSync(cwd, { recursive: true, force: true }));
+
  /** Writable assignment with NO branch form — branch-missing + env-fallback targets. */
   const noBranchText = `## Assignment
 
@@ -1586,7 +1594,7 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
 `;
 
   test("shaped writable assignment, no caller binding (target-only host) → shaped true, ok, no violations", () => {
-    const result = composeDispatchGate(VALID_ASSIGNMENT);
+    const result = composeDispatchGate(VALID_ASSIGNMENT, { cwd });
     expect(result.shaped).toBe(true);
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
@@ -1598,27 +1606,27 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
  // The omp/opencode/cursor binding field carries the spawn TARGET, which
  // equals `Execute as` on every compliant dispatch (mstar-host omp.md C5).
  // Without a caller binding the precheck must not run at all.
-    const result = composeDispatchGate(VALID_ASSIGNMENT);
+    const result = composeDispatchGate(VALID_ASSIGNMENT, { cwd });
     expect(result.ok).toBe(true);
     expect(result.violations.some((v) => v.code.startsWith("dispatch.anti-recursion."))).toBe(false);
   });
 
   test("caller == Execute as → critical dispatch.anti-recursion.self-type", () => {
-    const result = composeDispatchGate(VALID_ASSIGNMENT, { caller: "fullstack-dev" });
+    const result = composeDispatchGate(VALID_ASSIGNMENT, { caller: "fullstack-dev", cwd });
     expect(result.ok).toBe(false);
     const anti = result.violations.find((v) => v.code === "dispatch.anti-recursion.self-type");
     expect(anti?.severity).toBe("critical");
   });
 
   test("caller != Execute as → no anti-recursion violation", () => {
-    const result = composeDispatchGate(VALID_ASSIGNMENT, { caller: "project-manager" });
+    const result = composeDispatchGate(VALID_ASSIGNMENT, { caller: "project-manager", cwd });
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
   });
 
   test("callerRequired + empty/missing caller → critical dispatch.anti-recursion.empty-binding (dsh fail-closed)", () => {
     for (const opts of [{ callerRequired: true } as const, { caller: "   ", callerRequired: true } as const]) {
-      const result = composeDispatchGate(VALID_ASSIGNMENT, opts);
+      const result = composeDispatchGate(VALID_ASSIGNMENT, { ...opts, cwd });
       expect(result.ok).toBe(false);
       const anti = result.violations.find((v) => v.code === "dispatch.anti-recursion.empty-binding");
       expect(anti?.severity).toBe("critical");
@@ -1626,7 +1634,7 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
   });
 
   test("callerRequired + set caller → normal self-type semantics (no empty-binding)", () => {
-    const result = composeDispatchGate(VALID_ASSIGNMENT, { caller: "project-manager", callerRequired: true });
+    const result = composeDispatchGate(VALID_ASSIGNMENT, { caller: "project-manager", callerRequired: true, cwd });
     expect(result.ok).toBe(true);
     expect(result.violations).toEqual([]);
   });
@@ -1642,7 +1650,7 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
   });
 
   test("writable text without a branch form → branch-missing violation", () => {
-    const result = composeDispatchGate(noBranchText);
+    const result = composeDispatchGate(noBranchText, { cwd });
     expect(result.shaped).toBe(true);
     expect(result.ok).toBe(false);
     expect(result.violations.some((v) => v.code === "assignment.field.branch-missing")).toBe(true);
@@ -1666,13 +1674,13 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
     const previous = process.env.MSTAR_WORKING_BRANCH;
     try {
       process.env.MSTAR_WORKING_BRANCH = "main";
-      const result = composeDispatchGate(noBranchText);
+      const result = composeDispatchGate(noBranchText, { cwd });
       expect(result.ok).toBe(false);
       expect(result.violations.some((v) => v.code === "dispatch.default-branch.protected")).toBe(true);
       expect(result.violations.some((v) => v.code === "assignment.field.branch-missing")).toBe(true);
 
       delete process.env.MSTAR_WORKING_BRANCH;
-      const without = composeDispatchGate(noBranchText);
+      const without = composeDispatchGate(noBranchText, { cwd });
       expect(without.violations.some((v) => v.code === "dispatch.default-branch.protected")).toBe(false);
     } finally {
       if (previous === undefined) delete process.env.MSTAR_WORKING_BRANCH;
@@ -1688,7 +1696,7 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
 **Working branch**: main
 **Enforcement**: hard
 `;
-    const result = composeDispatchGate(text);
+    const result = composeDispatchGate(text, { cwd });
     expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
     expect(result.hardBlocked).toBe(true);
     expect(result.ok).toBe(false);
@@ -1704,7 +1712,7 @@ describe("composeDispatchGate — shared host dispatch-gate composition", () => 
 
 An example Assignment template line: **Enforcement**: hard
 `;
-    const result = composeDispatchGate(text);
+    const result = composeDispatchGate(text, { cwd });
     expect(result.enforcement.hard).toBe(false);
     expect(result.hardBlocked).toBe(false);
     expect(result.ok).toBe(false); // missing Execute as still a real violation
@@ -1720,7 +1728,7 @@ An example Assignment template line: **Enforcement**: hard
 **Task budget (implement / ops rounds)**: S — one focused implementer round
 **Enforcement**: hard
 `;
-    const result = composeDispatchGate(text, { caller: "project-manager" });
+    const result = composeDispatchGate(text, { caller: "project-manager", cwd });
     expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
     expect(result.ok).toBe(true);
     expect(result.hardBlocked).toBe(false);
@@ -1738,7 +1746,7 @@ An example Assignment template line: **Enforcement**: hard
 
 Example: **Working branch**: feature/body-only
 `;
-    const result = composeDispatchGate(text, { caller: "project-manager" });
+    const result = composeDispatchGate(text, { caller: "project-manager", cwd });
     expect(result.ok).toBe(false);
     // The HEADER form (`main`) is the branch the gate checks; had the body
     // example been read, the gate would have checked `feature/body-only` and
@@ -1758,7 +1766,7 @@ Example: **Working branch**: feature/body-only
 
 Example Assignment snippet: **Execute as**: scout
 `;
-    const result = composeDispatchGate(text, { caller: "fullstack-dev" });
+    const result = composeDispatchGate(text, { caller: "fullstack-dev", cwd });
     expect(result.violations.some((v) => v.code === "dispatch.anti-recursion.self-type")).toBe(true);
   });
 });
