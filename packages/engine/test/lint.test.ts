@@ -376,7 +376,6 @@ describe("findSimplifyMarkers", () => {
     const cases = [
       "const x = 1; // simplify: naive scan; upgrade: index the map\n",
       "x = 1  # simplify: naive scan; upgrade: index the map\n",
-      "; simplify: naive scan; upgrade: index the map\n",
       "SELECT 1 -- simplify: naive scan; upgrade: index the map\n",
       "x = 1; /* simplify: naive scan; upgrade: index the map */\n",
     ];
@@ -387,12 +386,17 @@ describe("findSimplifyMarkers", () => {
     }
   });
 
-  test("a statement terminator never opens a trailing marker", () => {
-    // why: a C-family `;` ends a statement, so the marker after it is code.
+  test("a statement terminator opens no marker in either dialect", () => {
+    // why: a C-family `;` ends a statement, so nothing after it is comment content,
+    // the line-leading form included.
     expect(findSimplifyMarkers("(define x 1) ; simplify: naive scan\n")).toEqual([]);
     expect(findSimplifyMarkers("let a = 1 ; simplify: naive scan\n")).toEqual([]);
-    // why: the line-leading form still opens a Lisp/INI comment.
-    expect(findSimplifyMarkers("; simplify: naive scan\n")).toHaveLength(1);
+    expect(findSimplifyMarkers("; simplify: naive scan\n")).toEqual([]);
+    // why: the non-C dialect reads the same bytes as a Lisp/INI comment.
+    expect(findSimplifyMarkers("; simplify: naive scan\n", "hash")).toHaveLength(1);
+    // why: the same-line bound survives on the introducer forms that do open a comment.
+    const semi = findSimplifyMarkers("; simplify: naive scan; upgrade: index the map\n", "hash");
+    expect(semi[0]?.bound ?? "").toContain("upgrade: index the map");
   });
 
   test("a trailing marker whose line states no bound keeps none (the exit-1 case)", () => {
@@ -509,15 +513,17 @@ describe("findTemporaryMarkers", () => {
 
   test("a statement terminator never opens a trailing temporary marker", () => {
     expect(findTemporaryMarkers("let a = 1 ; temporary: hack\n").markers).toEqual([]);
-    // why: these are the forms that do open a comment.
+    // why: these are the forms that do open a comment in the C-family dialect.
     for (const text of [
       "x = 1  # temporary: hack\n",
       "SELECT 1 -- temporary: hack\n",
-      "; temporary: hack\n",
       "// temporary: hack\n",
     ]) {
       expect(findTemporaryMarkers(text).markers).toHaveLength(1);
     }
+    // why: `;` opens a comment only where the dialect reads it as an introducer.
+    expect(findTemporaryMarkers("; temporary: hack\n").markers).toEqual([]);
+    expect(findTemporaryMarkers("; temporary: hack\n", "hash").markers).toHaveLength(1);
   });
 
   test("a stray residual word is not a removal path", () => {
@@ -939,10 +945,14 @@ describe("findSimplifyMarkers completeness", () => {
   });
 
   test("reads the bound across a shell/YAML comment block (# and ; introducers)", () => {
-    for (const introducer of ["#", ";", "--"]) {
+    for (const introducer of ["#", "--"]) {
       const block = `${introducer} simplify: naive scan\n${introducer} upgrade: index the map\n`;
       expect(findSimplifyMarkers(block)[0].bound).toBe("upgrade: index the map");
     }
+    // why: `;` is an introducer in the non-C dialect only.
+    const semiBlock = "; simplify: naive scan\n; upgrade: index the map\n";
+    expect(findSimplifyMarkers(semiBlock, "hash")[0]?.bound).toBe("upgrade: index the map");
+    expect(findSimplifyMarkers(semiBlock)).toEqual([]);
   });
 
   test("a `--x` decrement line is code, so a bound on it is invisible", () => {
@@ -1964,6 +1974,13 @@ describe("findUntrackedTodos - a semicolon introduces no comment", () => {
   test("a real trailing line comment is still reported", () => {
     const findings = findUntrackedTodos("let a = 1; // TODO fix later");
     expect(findings.map((finding) => finding.marker)).toEqual(["TODO"]);
+  });
+
+  test("a standalone semicolon opens a TODO only in the non-C dialect", () => {
+    // why: in C-family code `;` ends a statement, so a marker after it is code;
+    // the non-C dialect reads the same line as an asm/Lisp comment.
+    expect(findUntrackedTodos("; TODO later")).toEqual([]);
+    expect(findUntrackedTodos("; TODO later", "hash").map((finding) => finding.marker)).toEqual(["TODO"]);
   });
 });
 

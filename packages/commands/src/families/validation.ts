@@ -448,7 +448,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           // check skips.
           const anchorRoot = harnessAnchor === undefined ? undefined : probeCheckoutRoot(harnessAnchor) ?? main.root;
           const anchorHarness = anchorRoot === undefined ? undefined : resolveHarnessDir(anchorRoot, { ignoreEnvOverride: true, localProbe: true, workspaceRoot: anchorRoot });
-          const namedHarness = harnessAnchor !== undefined && anchorHarness !== null && canonicalPath(anchorHarness) === canonicalPath(harnessAnchor);
+          const namedHarness = harnessAnchor !== undefined && typeof anchorHarness === "string" && canonicalPath(anchorHarness) === canonicalPath(harnessAnchor);
           if (!hasHarnessRoot(main.root) && !namedHarness) return ok(id, gateData({ ok: true, violations: [] }));
           const gate = assertControlClean({ controlRoot: main });
           // why: the literal recovery is what the refusal-quality rule can prove; each
