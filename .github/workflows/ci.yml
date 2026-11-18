@@ -1113,18 +1113,22 @@ jobs:
               exit 1
             fi
             count="$(grep -o 'unclassified comments: [0-9]*' "$RUNNER_TEMP/comment-$root.err" | grep -o '[0-9]*$' || true)"
+            # why: a floor per ROOT, not per sum - one root's scanner can collapse
+            # while the other keeps the total above a shared threshold. The values
+            # are measured, and recorded beside their command, in comments.md
+            # § Gate steps and range; lower one only for a genuine cleanup.
+            case "$root" in
+              packages) floor=14000 ;;
+              scripts) floor=800 ;;
+            esac
+            echo "unclassified comment corpus ($root): ${count:-0} (floor $floor)"
+            if [ "${count:-0}" -lt "$floor" ]; then
+              echo "::error::the $root unclassified comment corpus collapsed to ${count:-0} (floor $floor) - a detector or collector regression in that root is likely; re-measure with: node packages/cli/dist/mstar-harness.js lint $root --type code"
+              exit 1
+            fi
             corpus=$((corpus + ${count:-0}))
           done
-          # why: the advisory corpus is the scanners' evidence, so a floor catches
-          # a detector or collector regression that silently stops finding
-          # comments; an added comment (the normal state) never trips it. Measured
-          # 14845 (packages 14024, scripts 821) on 2026-11-18 - re-measure with the
-          # two commands above and lower the floor only for a genuine cleanup.
-          echo "unclassified comment corpus: $corpus (floor 14000)"
-          if [ "$corpus" -lt 14000 ]; then
-            echo "::error::the unclassified comment corpus collapsed to $corpus (floor 14000) - a detector or collector regression is likely; re-measure with: node packages/cli/dist/mstar-harness.js lint packages --type code"
-            exit 1
-          fi
+          echo "unclassified comment corpus total: $corpus"
 
       # STEP 2 - the RATCHET, changed lines only (comments.md § Ratchet). The
       # diff against the merge base selects the files, and `--diff-base` makes
