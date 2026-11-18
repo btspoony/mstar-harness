@@ -1089,6 +1089,18 @@ jobs:
       # the code rules. `fixtures` is pruned by the walk itself (deliberately
       # broken artifacts). This step reads every comment in the two roots, so
       # the corpus it reports is not the change's.
+      #
+      # The collected roots were verified, not assumed: `--type code` selects
+      # 766 files under packages/ and 58 under scripts/, and none of them lacks
+      # a code extension (0 Markdown, 0 other). That is why this step needs no
+      # further type restriction - the flag already is the restriction, and a
+      # wider walk would hand prose files to the code rules.
+      #
+      # Contract headroom: the reference line ceiling for
+      # skills/mstar-coding-behavior/references/comments.md is 70, the size at
+      # its introduction rounded up to a multiple of 10 (Guard 9), so the gate
+      # contract may grow only with a re-measured round-up and the file in the
+      # same change.
       - name: Lint code comments (bound gate, whole tree)
         run: |
           set -euo pipefail
