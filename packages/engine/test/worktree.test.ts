@@ -39,9 +39,11 @@ import { join, resolve } from "node:path";
 import type { GateResult } from "../src/core.js";
 import {
   assertBranchAlignment,
+  assertControlClean,
   assertControlVsFeaturePath,
   assertMainWorktreeResidency,
   assertQcAlignment,
+  hasHarnessRoot,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
   readMainWorktree,
@@ -1641,3 +1643,129 @@ test("workflow entry recovery identifies the owner before switching main", () =>
   expect(recovery).toContain("mstar status validate");
   expect(recovery).toContain("checkout 'main'");
 });
+
+/**
+ * invariant: harness presence is the {HARNESS_DIR} resolution chain, so a legacy `.agents/`
+ * or a declared `harness_dir` counts exactly as `.mstar/` does — the gate must not
+ * skip a repository that resolves a harness.
+ */
+describe("hasHarnessRoot — harness presence follows the {HARNESS_DIR} chain", () => {
+  test("a legacy .agents/ declares a harness, an otherwise empty checkout does not", () => {
+    const root = tmpRoot("has-harness-");
+    try {
+      const repo = gitRepo(root);
+      expect(hasHarnessRoot(repo)).toBe(false);
+      mkdirSync(join(repo, ".agents", "specs"), { recursive: true });
+      expect(hasHarnessRoot(repo)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a .mstarc harness_dir declaration declares a harness without the directory existing", () => {
+    const root = tmpRoot("has-harness-mstarc-");
+    try {
+      const repo = gitRepo(root);
+      writeFileSync(join(repo, ".mstarc"), "[config]\nharness_dir=.harness\n");
+      expect(hasHarnessRoot(repo)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * invariant: a writable dispatch may not run while the
+ * checkout that carries the process SSOT has committable changes (they belong to
+ * the checkout carrying the target branch). The verdict is Git state only:
+ * `git status --porcelain` empty means clean, and ignored paths never appear.
+ */
+describe("assertControlClean — control root tracked-change gate", () => {
+  test("a clean control root passes", () => {
+    expect(assertControlClean({ controlRoot: { root: "/repo/main", branch: "main" }, status: "" }).ok).toBe(true);
+    expect(assertControlClean({ controlRoot: { root: "/repo/main", branch: "main" } }, { statusOf: () => "" }).ok).toBe(true);
+  });
+
+  test("one modified tracked file refuses with worktree.main.tracked-changes", () => {
+    const result = assertControlClean({
+      controlRoot: { root: "/repo/main", branch: "main" },
+      status: " M packages/engine/src/worktree.ts\n",
+    });
+    expect(result.violations.map((entry) => entry.code)).toEqual(["worktree.main.tracked-changes"]);
+    const [entry] = result.violations;
+    expect(entry?.severity).toBe("high");
+    expect(entry?.message).toContain("packages/engine/src/worktree.ts");
+    expect(entry?.fix).toContain("checkout that carries the target branch");
+  });
+
+  test("an untracked non-ignored file refuses through a real git probe", () => {
+    const root = tmpRoot("control-clean-untracked-");
+    try {
+      const repo = gitRepo(root);
+      writeFileSync(join(repo, "untracked.ts"), "export {};\n");
+      const result = assertControlClean({ controlRoot: mainInfo(repo) });
+      expect(result.violations.map((entry) => entry.code)).toEqual(["worktree.main.tracked-changes"]);
+      expect(result.violations[0]?.message).toContain("untracked.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("ignored harness state is not a tracked change", () => {
+    const root = tmpRoot("control-clean-ignored-");
+    try {
+      const repo = gitRepo(root);
+      writeFileSync(join(repo, ".gitignore"), ".mstar/\n");
+      git(["add", "-A"], repo);
+      git(["commit", "-q", "-m", "ignore harness"], repo);
+      mkdirSync(join(repo, ".mstar"));
+      writeFileSync(join(repo, ".mstar", "status.json"), "{}\n");
+      expect(assertControlClean({ controlRoot: mainInfo(repo) }).ok).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an unresolved control root refuses instead of passing", () => {
+    const result = assertControlClean({ controlRoot: null });
+    expect(result.violations.map((entry) => entry.code)).toEqual(["worktree.main.unresolved"]);
+  });
+
+  test("a failed status probe refuses as worktree.main.unresolved, never as clean", () => {
+    const root = tmpRoot("control-clean-probe-");
+    try {
+      const repo = gitRepo(root);
+      // why: an unusable git executable proves the probe failed — a failure is not a
+      // clean verdict, so the gate must fail closed with its recovery.
+      const result = assertControlClean({ controlRoot: mainInfo(repo) }, { gitPath: "/nonexistent/git-binary" });
+      expect(result.violations.map((entry) => entry.code)).toEqual(["worktree.main.unresolved"]);
+      expect(result.violations[0]?.fix).toContain("status --porcelain");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  test("a checkout configured to hide untracked files still reports them", () => {
+    const root = tmpRoot("control-clean-untracked-hidden-");
+    try {
+      const repo = gitRepo(root);
+      // why: `status.showUntrackedFiles=no` would answer "clean" for a tree that
+      // still holds committable new files.
+      git(["config", "status.showUntrackedFiles", "no"], repo);
+      writeFileSync(join(repo, "untracked.ts"), "export {};\n");
+      const result = assertControlClean({ controlRoot: mainInfo(repo) });
+      expect(result.violations.map((entry) => entry.code)).toEqual(["worktree.main.tracked-changes"]);
+      expect(result.violations[0]?.message).toContain("untracked.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  test("names at most 20 changed paths, then summarizes the rest", () => {
+    const status = Array.from({ length: 25 }, (_, index) => ` M file-${index + 1}.ts`).join("\n");
+    const result = assertControlClean({ controlRoot: { root: "/repo/main", branch: "main" }, status });
+    const message = result.violations[0]?.message ?? "";
+    expect(message).toContain("file-20.ts");
+    expect(message).not.toContain("file-21.ts");
+    expect(message).toContain("\u2026and 5 more");
+  });
+});
+

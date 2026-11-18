@@ -45,6 +45,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
 import type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
 import { checkoutRoot, gitProbeTimeoutMs, worktreeList } from "./git-probe.js";
+import { resolveHarnessDir } from "./path.js";
 import { deliveryBranchOf, validateIntegrationMergeLease, type WorkflowBranchAnchors, type WorkflowLifecycleType } from "./workflow.js";
 
 // Git probe timeout — bounded so a hung git (dead NFS mount, pathological
@@ -119,6 +120,82 @@ export function assertMainWorktreeResidency(main: MainWorktreeInfo, expectedBran
       ),
     );
   }
+  return gate(violations);
+}
+
+/** invariant: a tracked-changes refusal names at most this many paths, then summarizes the rest. */
+const TRACKED_CHANGE_LIMIT = 20;
+
+/**
+ * True when `root` declares a Morning Star harness, decided by the same
+ * `{HARNESS_DIR}` resolution chain every other reader uses (`.mstarc`
+ * `harness_dir` → `.mstar/` → `.agents/` → `.plans/` / `plans/`) rather than a
+ * hand-rolled pair of names. `localProbe` + a `root` boundary keep the question
+ * about that checkout alone (no main-worktree substitution, no upward walk past
+ * it), and `ignoreEnvOverride` keeps `MSTAR_HARNESS_DIR` from answering for a
+ * repository that declares nothing.
+ */
+export function hasHarnessRoot(root: string): boolean {
+  return resolveHarnessDir(root, { ignoreEnvOverride: true, localProbe: true, workspaceRoot: root }) !== null;
+}
+
+/**
+ * Control root tracked-change gate: a writable dispatch (and the same check as a
+ * standalone verb) refuses while the Git MAIN worktree — the checkout that
+ * carries the process SSOT — has any committable change, because tracked corpus
+ * writes (ADR, knowledge, specs) belong to the checkout that carries the target
+ * branch. The verdict is Git state alone: an empty `git status --porcelain`
+ * means clean, and ignored paths never appear there, so `.mstar/**` cannot fail
+ * it. `input.status` / `opts.statusOf` precompute the probe (tests, host
+ * hooks); an unprovable control root or a failed probe fails closed with
+ * `worktree.main.unresolved` rather than passing.
+ */
+export function assertControlClean(
+  input: { controlRoot: MainWorktreeInfo | null; status?: string },
+  opts: BranchProbeOptions = {},
+): GateResult {
+  const violations: ValidationResult[] = [];
+  const main = input.controlRoot;
+  if (main === null) {
+    violations.push(
+      violation(
+        "high",
+        "worktree.main.unresolved",
+        "control root identity cannot be proved (Git main-worktree discovery failed or is unavailable) \u2014 the tracked-change check refuses instead of passing",
+        "Run `git worktree list --porcelain` from an accessible checkout of this repository, then rerun this check.",
+      ),
+    );
+    return gate(violations);
+  }
+  const probe = input.status === undefined ? probeStatus(main.root, opts, true) : { status: input.status };
+  if ("error" in probe) {
+    violations.push(
+      violation(
+        "high",
+        "worktree.main.unresolved",
+        `cannot inspect the control root "${main.root}" for tracked changes: ${probe.error}`,
+        `Inspect \`git -C ${shellQuote(main.root)} rev-parse --show-toplevel\` and \`git -C ${shellQuote(main.root)} status --porcelain\`, restore access to the control checkout, then rerun this check.`,
+      ),
+    );
+    return gate(violations);
+  }
+  // why: a porcelain line is two status columns, a space, then the path — the path is
+  // what an operator moves; the columns are not.
+  const paths = probe.status
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "")
+    .map((line) => (line.length > 3 ? line.slice(3) : line.trim()));
+  if (paths.length === 0) return gate(violations);
+  const listed = paths.slice(0, TRACKED_CHANGE_LIMIT).join(", ");
+  const more = paths.length > TRACKED_CHANGE_LIMIT ? ` \u2026and ${paths.length - TRACKED_CHANGE_LIMIT} more` : "";
+  violations.push(
+    violation(
+      "high",
+      "worktree.main.tracked-changes",
+      `control root "${main.root}" carries ${paths.length} committable change(s): ${listed}${more}`,
+      "Move these edits to the checkout that carries the target branch (the integration or feature worktree) and commit there \u2014 the control root carries only gitignored process state. Then rerun this check.",
+    ),
+  );
   return gate(violations);
 }
 
@@ -199,12 +276,19 @@ export type WorkflowEntryPreDispatchResult = GateResult & {
   scope: "engine-enforced workflow-entry facts only";
 };
 
-function probeStatus(worktreePath: string, opts: BranchProbeOptions): { status: string } | { error: string } {
+/**
+ * why: `explicitUntracked` asks Git for untracked files regardless of the checkout's
+ * own `status.showUntrackedFiles` setting: a repository configured `no` would
+ * otherwise report a clean tree that still holds committable new files. Opt-in
+ * so the other callers keep their configured view.
+ */
+function probeStatus(worktreePath: string, opts: BranchProbeOptions, explicitUntracked = false): { status: string } | { error: string } {
   const precomputed = opts.statusOf?.(worktreePath);
   if (precomputed !== undefined) return { status: precomputed };
   const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
+  const args = ["-C", worktreePath, "status", "--porcelain", ...(explicitUntracked ? ["--untracked-files=normal"] : [])];
   try {
-    return { status: execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "status", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout }) };
+    return { status: execFileSync(opts.gitPath ?? "git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout }) };
   } catch (error) {
     return { error: (error as { message?: string }).message ?? "git status probe failed" };
   }
