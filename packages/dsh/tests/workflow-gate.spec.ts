@@ -648,7 +648,13 @@ describe('workflow gate — P-b lease attribution', () => {
     const decision = await app.ctx.waterfall('tools/pre-execute', ralphExecFrom('probe the codebase', ws), defaultAllow)
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
-    expect(warns.length - warnSnapshot).toBe(1)
+    // why: the degraded read is the ACTIVE execution store; the retired
+    // status.json document is not consulted for plan rows, so a warn naming it
+    // sends the operator to a file the gate never opens.
+    const added = warns.slice(warnSnapshot)
+    expect(added).toHaveLength(1)
+    expect(added[0]).toContain('ACTIVE execution store')
+    expect(added[0]).not.toContain('status.json')
   })
 
   // Disposition: removed the v2 status/snapshot shape-invalid P-b subjects (g/h);

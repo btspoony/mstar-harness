@@ -33,6 +33,7 @@ import {
   l2PreDispatchCheck,
   readMainWorktree,
   probeCheckoutRoot,
+  resolveHarnessDir,
   lintAdrTree,
   lintFiveQuestion,
   lintFrontmatter,
@@ -440,10 +441,15 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           const harnessAnchor = input.harness === undefined ? undefined : path.resolve(context.cwd, input.harness);
           const main = readMainWorktree(harnessAnchor ?? context.cwd);
           if (main === null) return rejected(id, assertControlClean({ controlRoot: null }), "worktree.main.invalid");
-          // invariant: a named harness that exists is itself the harness; otherwise the
-          // control root's {HARNESS_DIR} resolution chain decides. No declaring
-          // harness means no control-root contract: the check skips.
-          if (!hasHarnessRoot(main.root) && !(harnessAnchor !== undefined && existsSync(harnessAnchor))) return ok(id, gateData({ ok: true, violations: [] }));
+          // invariant: a named anchor counts only when the {HARNESS_DIR} chain
+          // resolves that exact directory as its checkout's harness - existing is
+          // not the same as being a harness. Otherwise the control root's own chain
+          // decides, and no declared harness means no control-root contract: the
+          // check skips.
+          const anchorRoot = harnessAnchor === undefined ? undefined : probeCheckoutRoot(harnessAnchor) ?? main.root;
+          const anchorHarness = anchorRoot === undefined ? undefined : resolveHarnessDir(anchorRoot, { ignoreEnvOverride: true, localProbe: true, workspaceRoot: anchorRoot });
+          const namedHarness = harnessAnchor !== undefined && typeof anchorHarness === "string" && canonicalPath(anchorHarness) === canonicalPath(harnessAnchor);
+          if (!hasHarnessRoot(main.root) && !namedHarness) return ok(id, gateData({ ok: true, violations: [] }));
           const gate = assertControlClean({ controlRoot: main });
           // why: the literal recovery is what the refusal-quality rule can prove; each
           // violation's own fix stays in the details.

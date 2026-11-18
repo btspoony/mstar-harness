@@ -117,18 +117,18 @@ export function findSimplifyMarkers(fileText: string, dialect: SourceDialect = "
   const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
   const scan = scanSource(fileText, dialect);
   const offsets = lineOffsets(fileText);
-  const commentOnly = commentOnlyLines(lines, scan, offsets);
+  const commentOnly = commentOnlyLines(lines, scan, offsets, dialect);
   const markers: SimplifyMarker[] = [];
   for (let i = 0; i < lines.length; i++) {
     const match = SIMPLIFY_TOKEN_RE.exec(lines[i]);
     if (match === null) continue;
-    if (!isCommentContext(scan, offsets[i], match.index, masked[i])) continue;
+    if (!isCommentContext(scan, offsets[i], match.index, masked[i], dialect)) continue;
     if (QUOTE_CHARS[lines[i][match.index - 1]] === true) continue;
     markers.push({
       line: i + 1,
       text: lines[i].trim(),
       label: match[1]!.toLowerCase() as SimplifyMarker["label"],
-      bound: commentBlockBound(lines, masked, commentOnly, i, match.index, scan, offsets),
+      bound: commentBlockBound(lines, masked, commentOnly, i, match.index, scan, offsets, dialect),
     });
   }
   return markers;
@@ -151,40 +151,59 @@ function lineOffsets(text: string): number[] {
   return offsets;
 }
 
-/** A line-leading introducer the C-family scanner does not classify (`#`, `;`,
- * `--` open shell, YAML, TOML, Lisp and SQL comments), so such a line is
- * comment content the block search may read. `--` requires following
- * whitespace: `--x` in C-family code is a decrement, not a comment. */
+/** why: a line-leading introducer the C-family scanner does not classify, so such a
+ * line is comment content the block search may read. `--` requires following
+ * whitespace: `--x` in C-family code is a decrement, not a comment. The `;`
+ * form exists only for the non-C dialect (asm/Lisp): in C-family code it ends a
+ * statement, so `; TODO later` is code, not comment. */
 const LINE_COMMENT_ONLY_RE = /^\s*(?:#|;|--(?=\s|$))/;
+const LINE_COMMENT_ONLY_C_RE = /^\s*(?:#|--(?=\s|$))/;
+
+/** why: one gate for every `;` introducer below - the statement terminator of
+ * C-family code is a comment introducer only outside that dialect. */
+function semicolonIntroducesComment(dialect: SourceDialect): boolean {
+  return dialect === "hash";
+}
+
+/** why: the dialect's variant of an introducer pattern pair that differs only by
+ * `;` - the ONE place that variant is chosen, so the predicate above governs all
+ * four `;` paths instead of four inline comparisons agreeing by luck. */
+function introducerPattern(dialect: SourceDialect, cFamily: RegExp, nonC: RegExp): RegExp {
+  return semicolonIntroducesComment(dialect) ? nonC : cFamily;
+}
 
 /** Per-line "comment-only" flag: the line carries comment content and no code.
  * A marker's comment block is the maximal run of adjacent lines that are
  * comment-only, plus the marker line itself. */
-function commentOnlyLines(lines: readonly string[], scan: Uint8Array, offsets: readonly number[]): boolean[] {
+function commentOnlyLines(lines: readonly string[], scan: Uint8Array, offsets: readonly number[], dialect: SourceDialect = "c"): boolean[] {
+  const introducer = introducerPattern(dialect, LINE_COMMENT_ONLY_C_RE, LINE_COMMENT_ONLY_RE);
   return lines.map((line, index) => {
     const base = offsets[index];
     let hasComment = false;
     for (let i = 0; i < line.length; i++) {
       if (/\s/.test(line[i])) continue;
-      if (scan[base + i] !== SOURCE_COMMENT) return LINE_COMMENT_ONLY_RE.test(line);
+      if (scan[base + i] !== SOURCE_COMMENT) return introducer.test(line);
       hasComment = true;
     }
     return hasComment;
   });
 }
 
-/** Introducers that open a comment after code on the same line. The match is
+/** why: introducers that open a comment after code on the same line. The match is
  * read from the masked line, so a `#` or `//` inside a literal starts
- * nothing. `--` requires following whitespace: `--x` is a decrement. */
-const TRAILING_INTRODUCER_RE = /\/\/|\/\*|#|;|--(?=\s|$)/g;
+ * nothing. `--` requires following whitespace: `--x` is a decrement, and `;`
+ * opens nothing in a C-family file (it ends the statement). */
+const TRAILING_INTRODUCER_HASH_RE = /\/\/|\/\*|#|;|--(?=\s|$)/g;
+const TRAILING_INTRODUCER_RE = /\/\/|\/\*|#|--(?=\s|$)/g;
 
 /** The last introducer at or before `before` in `maskedLine`, or -1. The
  * marker line of a trailing marker carries code the scanner classifies
  * SOURCE_CODE, so its comment text starts at this introducer, not at a
  * SOURCE_COMMENT span. */
-function introducerBefore(maskedLine: string, before: number): number {
+function introducerBefore(maskedLine: string, before: number, dialect: SourceDialect = "c"): number {
   let found = -1;
-  for (const match of maskedLine.matchAll(TRAILING_INTRODUCER_RE)) {
+  const pattern = introducerPattern(dialect, TRAILING_INTRODUCER_RE, TRAILING_INTRODUCER_HASH_RE);
+  for (const match of maskedLine.matchAll(pattern)) {
     if (match.index > before) break;
     found = match.index;
   }
@@ -206,9 +225,9 @@ function commentRunEnd(line: string, from: number, scan: Uint8Array, base: numbe
  * first comment character), cut where the scanner returns to code. A non-C
  * introducer opens a comment to end of line, so its tail is never cut. Code is
  * never a bound, so a code line without a comment contributes nothing. */
-function commentLineText(line: string, maskedLine: string, commentOnly: boolean, scan: Uint8Array, base: number, before: number): string {
+function commentLineText(line: string, maskedLine: string, commentOnly: boolean, scan: Uint8Array, base: number, before: number, dialect: SourceDialect = "c"): string {
   if (commentOnly) return line;
-  let start = introducerBefore(maskedLine, before);
+  let start = introducerBefore(maskedLine, before, dialect);
   if (start === -1) {
     // No introducer on the line: start at the scanner's first comment character.
     start = -1;
@@ -235,14 +254,14 @@ function commentLineText(line: string, maskedLine: string, commentOnly: boolean,
  * adjacent comment-only lines that contains it, plus the marker line itself,
  * each reduced to its comment content. `before` is the marker's column, so a
  * trailing marker's line keeps the comment tail that holds its bound. */
-function commentBlockText(lines: readonly string[], masked: readonly string[], commentOnly: readonly boolean[], index: number, before: number, scan: Uint8Array, offsets: readonly number[]): string {
+function commentBlockText(lines: readonly string[], masked: readonly string[], commentOnly: readonly boolean[], index: number, before: number, scan: Uint8Array, offsets: readonly number[], dialect: SourceDialect = "c"): string {
   let start = index;
   while (start > 0 && commentOnly[start - 1]) start -= 1;
   let end = index;
   while (end + 1 < lines.length && commentOnly[end + 1]) end += 1;
   const parts: string[] = [];
   for (let i = start; i <= end; i++) {
-    parts.push(commentLineText(lines[i], masked[i], commentOnly[i], scan, offsets[i], i === index ? before : Infinity));
+    parts.push(commentLineText(lines[i], masked[i], commentOnly[i], scan, offsets[i], i === index ? before : Infinity, dialect));
   }
   return parts.join("\n");
 }
@@ -252,8 +271,8 @@ function commentBlockText(lines: readonly string[], masked: readonly string[], c
  * clause with nothing after its colon keeps reading on the next comment line,
  * because house style wraps a long bound; the block is already comment-only
  * text, so the continuation cannot be code. */
-function commentBlockBound(lines: readonly string[], masked: readonly string[], commentOnly: readonly boolean[], index: number, before: number, scan: Uint8Array, offsets: readonly number[]): string | null {
-  const block = commentBlockText(lines, masked, commentOnly, index, before, scan, offsets);
+function commentBlockBound(lines: readonly string[], masked: readonly string[], commentOnly: readonly boolean[], index: number, before: number, scan: Uint8Array, offsets: readonly number[], dialect: SourceDialect = "c"): string | null {
+  const block = commentBlockText(lines, masked, commentOnly, index, before, scan, offsets, dialect);
   const clause = UPGRADE_PATH_RE.exec(block);
   if (clause !== null) {
     const tail = UPGRADE_TAIL_RE.exec(clause[0].slice(clause[0].indexOf(":") + 1));
@@ -339,15 +358,15 @@ export function findTemporaryMarkers(fileText: string, dialect: SourceDialect = 
   const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
   const scan = scanSource(fileText, dialect);
   const offsets = lineOffsets(fileText);
-  const commentOnly = commentOnlyLines(lines, scan, offsets);
+  const commentOnly = commentOnlyLines(lines, scan, offsets, dialect);
   for (let i = 0; i < lines.length; i++) {
     const labelled = re.exec(masked[i]);
     if (labelled === null) continue;
     // why: the label is judged at its own token, like the simplify label - a
     // statement terminator before it ends the code, it opens no comment.
-    if (!isCommentContext(scan, offsets[i], labelled.index + labelled[0].toLowerCase().indexOf("temporary"), masked[i])) continue;
+    if (!isCommentContext(scan, offsets[i], labelled.index + labelled[0].toLowerCase().indexOf("temporary"), masked[i], dialect)) continue;
     const text = lines[i].trim();
-    const block = commentBlockText(lines, masked, commentOnly, i, labelled.index, scan, offsets);
+    const block = commentBlockText(lines, masked, commentOnly, i, labelled.index, scan, offsets, dialect);
     let removalPath: string | null = null;
     for (const pattern of REMOVAL_PATH_PATTERNS) {
       const match = pattern.exec(block);
@@ -494,15 +513,22 @@ export type UntrackedTodo = { line: number; marker: "TODO" | "FIXME"; text: stri
  * `let a = 1 ; TODO`, or any later marker on that line, as comment content. */
 const STANDALONE_NON_C_INTRODUCER_RE = /(?:^|\s)(?:#|--)\s/;
 
-/** why: the marker only counts as comment content when the scanner or an
+/**
+ * why: the marker only counts as comment content when the scanner or an
  * introducer opens a comment before it, so an identifier named after the
  * marker (a declaration, a map key, a private field `#TODO = 1`) is neither.
+ * Two fallbacks decide the scanner-missed case, and both are dialect-gated:
+ * the line-leading introducer (`#`, `;`, `--`, where only the non-C dialect
+ * may read `;` as one) and the standalone introducer before the marker
+ * (`STANDALONE_NON_C_INTRODUCER_RE`). A `;` in a C-family file therefore opens
+ * nothing, here and in `opensCommentContent`.
  * shortcut: a trailing `#TODO` with no space after its introducer is not
- * detected. upgrade: a per-extension tokenizer, when one fits the bundle. */
-function isCommentContext(scan: Uint8Array, base: number, at: number, maskedLine: string): boolean {
+ * detected. upgrade: a per-extension tokenizer, when one fits the bundle.
+ */
+function isCommentContext(scan: Uint8Array, base: number, at: number, maskedLine: string, dialect: SourceDialect = "c"): boolean {
   if (scan[base + at] === SOURCE_COMMENT) return true;
   if (scan[base + at] !== SOURCE_CODE) return false;
-  if (LINE_COMMENT_ONLY_RE.test(maskedLine)) return true;
+  if (introducerPattern(dialect, LINE_COMMENT_ONLY_C_RE, LINE_COMMENT_ONLY_RE).test(maskedLine)) return true;
   return STANDALONE_NON_C_INTRODUCER_RE.test(maskedLine.slice(0, at));
 }
 
@@ -528,10 +554,10 @@ export function findUntrackedTodos(fileText: string, dialect: SourceDialect = "c
     // on the line (`class A { #TODO = 1; } // TODO: …`) must not hide a real
     // comment marker after it.
     for (const match of commentContext.matchAll(re)) {
-      if (!isCommentContext(scan, offsets[i], match.index, commentContext)) continue;
+      if (!isCommentContext(scan, offsets[i], match.index, commentContext, dialect)) continue;
       // why: the marker must open the comment content, so prose that merely
       // names it ("the TODO rule") is not a task.
-      if (!opensCommentContent(commentContext, match.index, scan, offsets[i]!)) continue;
+      if (!opensCommentContent(commentContext, match.index, scan, offsets[i]!, dialect)) continue;
       if (hasTrackingReference(commentContext)) break;
       findings.push({ line: i + 1, marker: match[1] as UntrackedTodo["marker"], text: lines[i].trim() });
       break;
@@ -582,7 +608,7 @@ const TODO_MARKER_RE = /\b(?:TODO|FIXME)\b/;
  * and a non-C `#`/`;`/`--` all leave an empty prefix. A marker after prose is
  * a mention. A non-C introducer counts only where the scanner sees code, so a
  * `;` or `#` inside comment prose never restarts the content. */
-function opensCommentContent(maskedLine: string, at: number, scan: Uint8Array, lineBase: number): boolean {
+function opensCommentContent(maskedLine: string, at: number, scan: Uint8Array, lineBase: number, dialect: SourceDialect = "c"): boolean {
   const before = maskedLine.slice(0, at);
   if (/^\s*\*\s*$/.test(before)) return true;
   let index = -1;
@@ -604,7 +630,10 @@ function opensCommentContent(maskedLine: string, at: number, scan: Uint8Array, l
   consider("//", "start");
   consider("/*", "start");
   consider("#", "codeOrStart");
-  consider(";", "codeOrStart");
+  // why: `;` ends a C-family statement, so it opens comment content only where
+  // the dialect reads it as an introducer (asm/Lisp); `#` and `--` never mean
+  // "statement end" in any C-family syntax, so they stay unconditional.
+  if (semicolonIntroducesComment(dialect)) consider(";", "codeOrStart");
   consider("--", "codeOrStart");
   if (index === -1) return before.trim() === "";
   return before.slice(index).replace(/^(?:\/\/+|\/\*+|\*+|#|;|--)/, "").trim() === "";
@@ -640,6 +669,8 @@ function commentBody(raw: string): string {
  * field (`#count = 0`) and a shebang (`#!`) stay code, matching the
  * standalone-introducer rule the TODO detector uses. */
 const NON_C_COMMENT_LINE_RE = /^\s*(?:#|;)(?=\s|$)|^\s*--(?=\s|$)/;
+/** why: the C-family arm of the same rule - `;` is absent because it ends the statement there. */
+const NON_C_COMMENT_LINE_C_RE = /^\s*#(?=\s|$)|^\s*--(?=\s|$)/;
 
 /** why: a block and an adjacent run of line comments are each ONE comment
  * because that is how a reader takes them; judging lines apart would report the
@@ -677,7 +708,7 @@ function commentUnits(fileText: string, scan: Uint8Array, masked: readonly strin
     for (let column = 0; column < masked[index]!.length && !hasComment; column++) {
       if (scan[base + column] === SOURCE_COMMENT) hasComment = true;
     }
-    if (hasComment || !NON_C_COMMENT_LINE_RE.test(masked[index]!)) continue;
+    if (hasComment || !introducerPattern(dialect, NON_C_COMMENT_LINE_C_RE, NON_C_COMMENT_LINE_RE).test(masked[index]!)) continue;
     runs.push({ start: base + masked[index]!.search(/\S/), end: base + masked[index]!.length, doc: false, line: true, initial: true });
   }
   runs.sort((left, right) => left.start - right.start);
