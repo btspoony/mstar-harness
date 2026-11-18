@@ -7,6 +7,11 @@ on:
     tags-ignore:
       - "v*"
   pull_request:
+  # why: a merge queue runs the required checks on its synthetic group commit;
+  # without this trigger those checks never report there and the queue cannot
+  # land the group. The job names are unchanged, so the required-check set keeps
+  # matching on both the pull-request and the merge-group commit.
+  merge_group:
 
 permissions:
   contents: read
