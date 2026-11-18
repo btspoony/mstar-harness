@@ -1106,7 +1106,12 @@ jobs:
           set -euo pipefail
           corpus=0
           for root in packages scripts; do
-            node packages/cli/dist/mstar-harness.js lint "$root" --type code 2> "$RUNNER_TEMP/comment-$root.err"
+            # why: stderr carries the count this step sums, so it is captured -
+            # and replayed on failure, where it may also carry the diagnostic.
+            if ! node packages/cli/dist/mstar-harness.js lint "$root" --type code 2> "$RUNNER_TEMP/comment-$root.err"; then
+              cat "$RUNNER_TEMP/comment-$root.err" >&2
+              exit 1
+            fi
             count="$(grep -o 'unclassified comments: [0-9]*' "$RUNNER_TEMP/comment-$root.err" | grep -o '[0-9]*$' || true)"
             corpus=$((corpus + ${count:-0}))
           done
@@ -1123,18 +1128,22 @@ jobs:
 
       # STEP 2 - the RATCHET, changed lines only (comments.md § Ratchet). The
       # diff against the merge base selects the files, and `--diff-base` makes
-      # an unclassified comment on an added or modified line a violation. A
-      # whole-tree walk reports ~15k unclassified comments across 823 files,
-      # which no change is expected to answer for, so that corpus stays
-      # advisory: this step lints only what the change touched. The changed set
-      # is the change's own file count, so the per-file fan-out stays.
+      # an unclassified comment on an added or modified line a violation. The
+      # whole-tree corpus is measured once, in comments.md § Gate steps and range
+      # - no second copy of that number lives here, where it would drift.
+      # This step lints only what the change touched, so the per-file fan-out
+      # stays the change's own file count.
       - name: Lint code comments (ratchet, changed lines only)
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
+          # A merge queue checks a synthetic group commit: its base is the group's
+          # own base, so the ratchet reads the group's increment rather than every
+          # PR batched into it.
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          base="${PR_BASE:-${PUSH_BEFORE:-}}"
+          base="${PR_BASE:-${MERGE_GROUP_BASE:-${PUSH_BEFORE:-}}}"
           if [ -n "$base" ] && git merge-base "$base" HEAD >/dev/null 2>&1; then
             merge="$(git merge-base "$base" HEAD)"
           else

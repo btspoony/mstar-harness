@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CODE_FILE_EXTENSIONS } from "../src/lint.js";
 
-/** why: `.sh` and `.ts` are both code faces; `.md` is not, so a docs edit never enters the ratchet. */
-const CODE_FILE = /[.](?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|sh|bash|zsh|rb|java|kt|swift)$/;
+/** why: derived, never a second literal - a language added to the canonical list is selected here too. */
+const CODE_FILE = new RegExp(`(?:${CODE_FILE_EXTENSIONS.map((ext) => ext.replace(".", "\\.")).join("|")})$`);
 
 function git(repo: string, ...args: string[]): string {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -106,6 +106,12 @@ describe("comment gate - one extension source", () => {
 
   test("the CI selector pattern lists exactly the collector extensions", () => {
     expect(ciSelectedExtensions()).toEqual([...CODE_FILE_EXTENSIONS].sort());
+  });
+
+  test("the local selection filter is derived from that same list", () => {
+    for (const ext of CODE_FILE_EXTENSIONS) expect(CODE_FILE.test(`packages/x${ext}`)).toBe(true);
+    expect(CODE_FILE.test("packages/x.md")).toBe(false);
+    expect(CODE_FILE.test("packages/x.json")).toBe(false);
   });
 });
 

@@ -240,10 +240,7 @@ const provenanceExtensions: Record<string, true> = { ".md": true, ".ts": true };
  * `--type code` must collect only code - a SKILL.md the same walk sees carries
  * fixtures and prose the code rules do not describe. */
 const typeExtensions: Partial<Record<LintType, Record<string, true>>> = { code: codeExtensions, provenance: provenanceExtensions };
-/** why: `fixtures` holds deliberately broken artifacts (the `broken-skill`
- * SKILL.md among them), so a tree walk would report the fixtures' own defects
- * as the tree's. Other entries are build output no walk reads. */
-/** why: `fixtures` is pruned from EVERY walk this collector feeds (comment, provenance, any `--type`), not just the comment one: those trees hold deliberately broken artifacts (a `broken-skill` SKILL.md among them), so walking them would report the fixtures' own defects as the tree's. A narrower prune would only add that noise; the provenance guard in `scripts/drift-lint.ts` keeps its own exempt set for its own walk. */
+/** why: `fixtures` is pruned from EVERY walk this collector feeds (comment, provenance, any `--type`), not just the comment one: those trees hold deliberately broken artifacts (a `broken-skill` SKILL.md among them), so walking them would report the fixtures' own defects as the tree's, and a narrower prune would only add that noise. Other entries are build output no walk reads. The provenance guard in `scripts/drift-lint.ts` keeps its own exempt set for its own walk. */
 const skipDirs: Record<string, true> = { node_modules: true, ".git": true, dist: true, coverage: true, ".turbo": true, fixtures: true };
 type LintType = "plan" | "skill" | "strategy" | "report" | "code" | "finding" | "provenance" | "specs" | "adr";
 function lintType(file: string): LintType | null {
