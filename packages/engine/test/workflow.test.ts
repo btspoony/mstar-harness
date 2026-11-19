@@ -28,7 +28,6 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -837,6 +836,5 @@ test("plan registration derivation stays read-only and proves the selected docum
     rmSync(root, { recursive: true, force: true });
   }
 });
-
 
 
