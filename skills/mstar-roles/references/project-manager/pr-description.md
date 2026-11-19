@@ -31,7 +31,7 @@ List what was not verified, carrying forward PM Acceptance's unverified ACs and 
 
 ## Open findings
 
-List every open issue with its severity, tracking location and blocker-defer flag, or write `N/A — none open`. This applies to standalone and iteration PRs alike; the disclosure contract is `references/project-manager/qc-and-residuals.md`.
+List every open issue linked to the delivered plan(s) with its severity, tracking location and blocker-defer flag, or write `N/A — none open`. This applies to standalone and iteration PRs alike; the disclosure contract is `references/project-manager/qc-and-residuals.md`.
 
 ## Merge danger
 
