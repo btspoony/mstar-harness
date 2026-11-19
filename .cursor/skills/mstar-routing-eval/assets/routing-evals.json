@@ -25,13 +25,13 @@
     },
     {
       "id": "owner-feedback-standing-rule-post-close",
-      "prompt": "The human owner earlier stated 'Never pin release versions in tests' on an open delivered PR. The PM updated the existing knowledge convention doc on the delivery branch. The owner now closes the PR unmerged without new feedback; that edit never reached the target branch. The old workflow is closed and no follow-up work exists. Handle this close in the current round. Check both an active store and a staged/absent store with an authorized Devin Cloud board tracker; if tracking cannot be written, disclose that failure.",
+      "prompt": "The human owner earlier stated 'Never pin release versions in tests' on an open delivered PR. The PM updated the existing knowledge convention doc on the delivery branch. The owner now closes the PR unmerged without new feedback; that edit never reached the target branch. The old workflow is closed and no follow-up work exists. Handle this close in the current round. Check both an active store and a staged/absent store; a host tracking item is allowed only if the selected adapter documents an authorized tracking verb, otherwise report not tracked with cause and recovery.",
       "expected_route": [
         "@project-manager"
       ],
       "must_have_artifacts": [
         "Same-round owner-feedback disposition using the standing-owner-rule exception in the Capture decision matrix",
-        "Same-round durable tracking of the branch-only owner rule despite no restated feedback: active-store issue via mstar-project-governance § Issue capture, or authorized host tracker item via mstar-host when no active store exists",
+        "Same-round durable tracking of the branch-only owner rule despite no restated feedback: active-store issue via mstar-project-governance § Issue capture, or host item only if the selected mstar-host adapter documents an authorized tracking verb; otherwise not tracked with cause and recovery",
         "Coordination response returns the written tracking item link even though no follow-up work exists yet; failed/unwritten tracking is instead reported as not tracked with cause and recovery",
         "Tracking item explicitly records the existing convention doc path and owner rule for future delivery; no knowledge edit is required this round"
       ],
