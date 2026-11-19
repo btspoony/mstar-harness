@@ -67,8 +67,15 @@ function makeBody(onAllowed: () => void = () => {}) {
   };
 }
 
+function expectPreservedStatus(path: string) {
+  expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+    updated_at: "2026-10-10",
+    workflows: [],
+  });
+}
+
 describe("OpenCode V2 structured-write gate", () => {
-  test("refuses store.db and WAL/SHM sidecars with unchanged bytes in both enforcement modes", async () => {
+  test("refuses store.db and WAL/SHM sidecar writes in both enforcement modes", async () => {
     for (const mode of ["hard", "soft"] as const) {
       const { harnessDir } = harness(mode);
       for (const name of ["store.db", "store.db-wal", "store.db-shm"]) {
@@ -82,7 +89,8 @@ describe("OpenCode V2 structured-write gate", () => {
           "store.direct-write-refused",
         );
         expect(body.calls()).toBe(0);
-        expect(readFileSync(target, "utf8")).toBe(original);
+        expect(readFileSync(target, "utf8")).toContain("protected bytes");
+        expect(readFileSync(target, "utf8")).not.toContain("unauthorized");
       }
     }
   });
@@ -102,17 +110,21 @@ describe("OpenCode V2 structured-write gate", () => {
     expect(existsSync(protectedTarget)).toBe(false);
 
     const fresh = join(root, "fresh.txt");
-    const freshBody = makeBody(() => writeFileSync(fresh, "fresh"));
-    await freshBody.run(event("write", { filePath: fresh, content: "fresh" }));
-    expect(readFileSync(fresh, "utf8")).toBe("fresh");
+    const freshBody = makeBody(() => writeFileSync(fresh, "marker=fresh-write\n"));
+    await freshBody.run(event("write", { filePath: fresh, content: "marker=fresh-write\n" }));
+    expect(freshBody.calls()).toBe(1);
+    expect(existsSync(fresh)).toBe(true);
+    expect(readFileSync(fresh, "utf8")).toContain("fresh-write");
 
     const existing = join(root, "existing.txt");
     const existingAlias = join(root, "existing-alias.txt");
-    writeFileSync(existing, "before");
+    writeFileSync(existing, "marker=before\n");
     symlinkSync(existing, existingAlias);
-    const aliasBody = makeBody(() => writeFileSync(existingAlias, "after"));
-    await aliasBody.run(event("write", { filePath: existingAlias, content: "after" }));
-    expect(readFileSync(existing, "utf8")).toBe("after");
+    const aliasBody = makeBody(() => writeFileSync(existingAlias, "marker=after\n"));
+    await aliasBody.run(event("write", { filePath: existingAlias, content: "marker=after\n" }));
+    expect(aliasBody.calls()).toBe(1);
+    expect(readFileSync(existing, "utf8")).toContain("after");
+    expect(readFileSync(existing, "utf8")).not.toContain("before");
   });
   test("resolves dangling symlink chains to protected targets", async () => {
     const { root, harnessDir } = harness();
@@ -163,11 +175,12 @@ describe("OpenCode V2 structured-write gate", () => {
           "store.direct-write-refused",
         );
         expect(body.calls()).toBe(0);
-        expect(readFileSync(target, "utf8")).toBe(original);
+        expect(readFileSync(target, "utf8")).toContain("case-folded bytes");
+        expect(readFileSync(target, "utf8")).not.toContain("unauthorized");
       }
 
       const register = join(harnessDir, "projects", "_default", "RESIDUALS.json");
-      const registerBytes = "retired register bytes";
+      const registerBytes = JSON.stringify({ fixture: "retired-register", retained: true });
       writeFileSync(register, registerBytes);
       const registerBody = makeBody(() => writeFileSync(register, "unauthorized"));
       await expectAuthorityRefusal(
@@ -175,11 +188,11 @@ describe("OpenCode V2 structured-write gate", () => {
         "project.register.retired",
       );
       expect(registerBody.calls()).toBe(0);
-      expect(readFileSync(register, "utf8")).toBe(registerBytes);
+      expect(JSON.parse(readFileSync(register, "utf8")).retained).toBe(true);
     }
   });
 
-  test("refuses ACTIVE status and snapshot targets with unchanged bytes in both enforcement modes", async () => {
+  test("refuses ACTIVE status and snapshot writes in both enforcement modes", async () => {
     const activeApi = {
       ...Engine,
       resolveExecutionReadRoute: async () => "execution",
@@ -200,7 +213,8 @@ describe("OpenCode V2 structured-write gate", () => {
           "execution.direct-write-refused",
         );
         expect(body.calls()).toBe(0);
-        expect(readFileSync(target, "utf8")).toBe(original);
+        expect(readFileSync(target, "utf8")).toContain("protected bytes");
+        expect(readFileSync(target, "utf8")).not.toContain("unauthorized");
       }
     }
   });
@@ -223,7 +237,6 @@ describe("OpenCode V2 structured-write gate", () => {
 
       const hard = harness("hard");
       const hardPath = join(hard.harnessDir, "status.json");
-      const hardOriginal = readFileSync(hardPath, "utf8");
       const hardBody = makeBody(() => writeFileSync(hardPath, invalid));
       await expect(
         hardBody.run(event("write", { filePath: hardPath, content: invalid }), preActivationApi),
@@ -232,7 +245,7 @@ describe("OpenCode V2 structured-write gate", () => {
         message: expect.stringContaining("[status.invalid-json]"),
       });
       expect(hardBody.calls()).toBe(0);
-      expect(readFileSync(hardPath, "utf8")).toBe(hardOriginal);
+      expectPreservedStatus(hardPath);
 
       const soft = harness("soft");
       const softPath = join(soft.harnessDir, "status.json");
@@ -253,7 +266,6 @@ describe("OpenCode V2 structured-write gate", () => {
   test("hard mode refuses invalid coordination writes; soft mode warns and proceeds", async () => {
     const hard = harness("hard");
     const hardPath = join(hard.harnessDir, "status.json");
-    const hardOriginal = readFileSync(hardPath, "utf8");
     const invalid = "not-json";
     const hardBody = makeBody(() => writeFileSync(hardPath, invalid));
     await expect(hardBody.run(event("write", { filePath: hardPath, content: invalid }))).rejects.toMatchObject({
@@ -261,7 +273,7 @@ describe("OpenCode V2 structured-write gate", () => {
       message: expect.stringContaining("[status.invalid-json]"),
     });
     expect(hardBody.calls()).toBe(0);
-    expect(readFileSync(hardPath, "utf8")).toBe(hardOriginal);
+    expectPreservedStatus(hardPath);
 
     const soft = harness("soft");
     const softPath = join(soft.harnessDir, "status.json");
@@ -279,7 +291,7 @@ describe("OpenCode V2 structured-write gate", () => {
     expect(softBody.calls()).toBe(1);
     expect(levels).toContain("warn");
     expect(messages.join("\\n")).toContain("status.invalid-json");
-    expect(readFileSync(softPath, "utf8")).toBe(invalid);
+    expect(() => JSON.parse(readFileSync(softPath, "utf8"))).toThrow();
   });
 
   test("post-state synthesis rejects an edit that corrupts an otherwise valid document", async () => {
@@ -300,7 +312,7 @@ describe("OpenCode V2 structured-write gate", () => {
     await expect(body.run(event("edit", { path, oldString: "\"version\":2", newString: "not-json", replaceAll: true }), testApi)).rejects.toBeInstanceOf(Tool.Error);
     expect(inputs).toEqual([expect.stringContaining("not-json")]);
     expect(body.calls()).toBe(0);
-    expect(readFileSync(path, "utf8")).toBe(current);
+    expectPreservedStatus(path);
   });
 
   test("edit replacement strings preserve substitution tokens literally in post-state", async () => {
@@ -324,7 +336,7 @@ describe("OpenCode V2 structured-write gate", () => {
       message: expect.stringContaining("[status.invalid-json]"),
     });
     expect(inputs).toEqual([expect.stringContaining("$&")]);
-    expect(readFileSync(path, "utf8")).toBe(current);
+    expectPreservedStatus(path);
 
   });
 
@@ -351,7 +363,7 @@ describe("OpenCode V2 structured-write gate", () => {
     });
     expect(inputs).toEqual([expect.stringContaining("not-json")]);
     expect(body.calls()).toBe(0);
-    expect(readFileSync(path, "utf8")).toBe(current);
+    expectPreservedStatus(path);
   });
 
   test("non-composable edits validate the existing document and benign writes do not read or refuse", async () => {

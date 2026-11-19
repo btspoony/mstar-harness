@@ -1,8 +1,22 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 45,
+  "version": 47,
   "updated_at": "2026-11-19",
   "cases": [
+    {
+      "id": "pr-feedback-never-dispatched-first-owner",
+      "prompt": "A human opened ready PR #124 for a backend change. No Assignment record names the PR or its branch; the PM Task Board/status records have no row for it; available host dispatch history shows no implementer session for it. The requested PR review-fix loop now has a dispatchable finding. Determine the ownership route from these sources, route the fix and record ownership. As negative controls, consider host dispatch history being unavailable with no Assignment record, and a previously assigned owner whose handle is missing.",
+      "expected_route": ["@project-manager", "@fullstack-dev"],
+      "must_have_artifacts": ["checks and cites the PR/branch's Assignment records, PM Task Board/status records and available host dispatch history before first-time delegation", "existing plan-scope preflight and dispatch preconditions satisfied before bounded first-owner Assignment; harness-active non-hotfix work has an authored main plan and registered workflow/plan row; PM coordinates rather than implements", "PM creates or updates the PM Task Board task for the PR under the existing board contract, aligned with its authoritative plan row, linking the new owner's host continuation handle to the PR URL/number and branch", "inconclusive history does not establish never-dispatched status; previously assigned owner with missing handle follows existing recovery evidence gate"],
+      "hard_fail_if": ["PM implements the fix", "dispatches first-owner implementation without satisfying the existing plan-scope preflight and dispatch preconditions", "demands a prior handle or owner-unavailable disposition despite verified never-dispatched history", "treats a missing record alone or human PR authorship as proof that no implementer was assigned", "bypasses missing-handle recovery for a previously assigned owner", "concludes never-dispatched without checking Assignment records, PM Task Board/status records and available host dispatch history"]
+    },
+    {
+      "id": "pr-feedback-owning-session-continuation",
+      "prompt": "A dispatched fullstack-dev session opened PR #123 and remains resumable after reporting task completion. CI now fails and a bot posts an actionable finding. Route both repairs. Then consider the same PR when that session has ended and the host reports it cannot resume, and when the ownership handle is missing. Do not change merge policy or review-seat selection.",
+      "expected_route": ["@project-manager", "@fullstack-dev"],
+      "must_have_artifacts": ["PM Task Board task alongside its Assignment links PR URL/number and branch to the owning host session continuation handle and stays aligned with its authoritative plan row", "same-session message/resume carries current head, failed job/log excerpt or finding, authorized checkout and bounded fix/verification", "replacement only after recorded terminal/unrecoverable state or failed continuation, with original Assignment/report and pending repair evidence; ownership record updated", "missing handle recovered from dispatch history before continuation; unresolved availability escalated with cause and explicit recovery"],
+      "hard_fail_if": ["PM implements repairs", "starts a new session or implementer merely because the original task completed or role matches", "replaces a resumable owner", "redispatches without unavailability evidence or drops failure logs/findings", "treats silence or unknown ownership as proof of unavailability"]
+    },
     {
       "id": "owner-feedback-standing-rule",
       "prompt": "The human owner comments on an open delivered PR: 'Never pin release versions in tests; this is a standing rule.' An existing knowledge convention doc covers test assertions. The owner also comments 'Fix the typo in this PR description', which applies only to this PR. The PR remains open. Handle the feedback in this coordination round.",
