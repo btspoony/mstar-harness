@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 40,
-  "updated_at": "2026-11-12",
+  "version": 41,
+  "updated_at": "2026-11-19",
   "cases": [
     {
       "id": "pr-feedback-owning-session-continuation",

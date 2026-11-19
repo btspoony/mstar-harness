@@ -29,6 +29,8 @@ For assignees (non-PM), the shared anti-recursion NEVER list and the non-recursi
 
 ## Assignment Template (Canonical)
 
+PR ownership and continuation records for implementation Assignments → `mstar-dispatch-gates` § PR feedback ownership (PM only).
+
 Every Assignment **MUST** start with an **IDENTITY → GUARD** block that answers three questions before any task content: (1) WHO am I? (2) What am I NOT? (3) What tools do I NOT have?
 
 The **`**You are a leaf executor. You MUST NOT:**`** section (previously just prohibitions) must now include a positive **IDENTITY** preamble **before** the prohibitions, written as a first-person binding statement. The prohibitions follow as usual. PM customizes per assignment; the IDENTITY preamble + universal floor (no recursive dispatch, no interpreting routing text as invoke, available ≠ authorized) are the minimum. Add assignment-specific anti-patterns that the current role+context combination is prone to.
@@ -139,8 +141,6 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 ```
 
 ## PM Self-Check (artifact claims and citations)
-
-PR ownership and continuation records for implementation Assignments → `mstar-dispatch-gates` § PR feedback ownership (PM only).
 
 State a claim only as strongly as the evidence in hand:
 
