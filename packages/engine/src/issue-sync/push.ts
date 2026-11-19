@@ -344,7 +344,8 @@ export function planItem(db: StoreDb, context: PushContext, candidate: PushCandi
  *
  * shortcut: the payload hash is recomputed from the item's CURRENT content, so
  * an edit between plan and results records a hash for content the remote never
- * received; revisit if mid-run edits become common.
+ * received. upgrade: record the planned hash with the claim when mid-run edits
+ * become common.
  */
 export function recordResults(db: StoreDb, context: PushContext, results: readonly PushResult[]): PushOutcome[] {
   requireRunLease(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, runId: context.runId });
@@ -487,7 +488,8 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
  *
  * shortcut: evidence is time-based, so a residue of the SAME run this apply
  * continues still reads as planned, and a caller with no lease at all is taken as
- * having planned the cycle; revisit if either bound starts to matter.
+ * having planned the cycle. upgrade: stamp the claiming run on the row when either
+ * bound starts to matter.
  */
 function openedByThisRun(db: StoreDb, context: PushContext, ledger: SyncItem): boolean {
   // A caller with no lease has no "this run" to compare against: its plan/record

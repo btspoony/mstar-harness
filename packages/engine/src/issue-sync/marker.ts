@@ -27,8 +27,8 @@ const MARKER_PATTERN = /<!--\s*mstar-sync:\s*([^\n]*?)\s*-->/g;
  * `-->` truncates the marker, and a value containing `;` or `=` mis-splits
  * the key/value pairs - an identity carrying any of them decodes wrong or not
  * at all, and the record reads as unmanaged; the recovery is `issue-sync apply
- * --adopt`. No escaping: the format is frozen. Revisit if such an identity
- * ever appears in git config.
+ * --adopt`. No escaping: the format is frozen. upgrade: escape the fields when
+ * such an identity ever appears in git config.
  */
 export function encodeMarker(fields: MarkerFields): string {
   return "<!-- mstar-sync: repo=" + fields.repo + "; local=" + fields.localId + "; author=" + fields.author + " -->";

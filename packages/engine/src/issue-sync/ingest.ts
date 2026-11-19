@@ -22,7 +22,8 @@
  * shortcut: association is repo + local + git author, not a store id, so two
  * stores of the same repository used by one author can both hold `I-000123`; a
  * content difference then shows up as drift for the operator to resolve.
- * Revisit if same-author multi-clone drift becomes common.
+ * upgrade: carry a store id in the marker when same-author multi-clone drift
+ * becomes common.
  *
  * This ingest deliberately bypasses the run lease. Association is not a send
  * right: it records a FACT about the remote (this issue carries this marker),
@@ -87,7 +88,8 @@ export type IngestContext = {
  *
  * shortcut: the priority band is recovered through the severity round trip, so
  * an absent or unrecognized remote priority reads as the medium band (3) rather
- * than as "no priority"; revisit if the remote starts omitting priority.
+ * than as "no priority". upgrade: carry the priority band explicitly when the
+ * remote starts omitting it.
  */
 function remoteHash(record: ProviderItem, mapping?: LinearFacetMapping): string {
   const payload: ProviderWritePayload = {

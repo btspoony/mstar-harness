@@ -217,7 +217,8 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   // shortcut: the recovery below is chosen at runtime (the engine's own text, then
   // this family's per-code RECOVERY map); the refusal prover evaluates only literal,
   // conditional, `??`/`||` over provable arms, const bindings and declared helpers, so
-  // the exemption is refreshed under I-000872. Upgrade when it can read element access.
+  // the exemption is refreshed under I-000872. upgrade: when the prover can read element
+  // and property access, drop the exemption.
   return refusalEnvelope({
     command: id,
     status: "refused",
@@ -519,8 +520,8 @@ function parseResults(raw: unknown): { results: PushResult[]; refused: ApplyItem
  * shortcut: the check needs a create cycle to compare, so an empty `--results`
  * (or one naming only updates) has no evidence and continues the held run; and a
  * `--take-run` replacement keeps the original start by design, so a retry racing
- * a takeover is not detectable this way. Upgrade to an explicit run token on
- * `apply` if either bound starts to matter.
+ * a takeover is not detectable this way. upgrade: add an explicit run token to
+ * `apply` when either bound starts to matter.
  */
 function assertApplyOwnsHeldRun(
   db: StoreDb,
@@ -795,6 +796,7 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
         } catch (error) {
           // shortcut: the wrapper picks the recovery from its per-code RECOVERY map, so a
           // wrapper call site has no provable recovery argument; exemption under I-000872.
+          // upgrade: when the prover resolves a wrapper's own map lookup, drop the exemption.
           if (error instanceof SyncError) return refusalFor(id, error.code, stripCode(error.message));
           return failure(id, error);
         }
