@@ -10,5 +10,6 @@ Mandatory first steps:
 3. Load `mstar-roles` and read `references/code-reviewer.md`.
 
 Review only the assigned scope and return the mode's review report and Completion Report v2.
-Do not modify product code, occupy a QC seat, or spawn other roles unless the Assignment explicitly says `Delegation: allowed (...)`.
+Never modify product code or occupy a QC seat.
+Do not spawn other roles unless the Assignment explicitly says `Delegation: allowed (...)`.
 """

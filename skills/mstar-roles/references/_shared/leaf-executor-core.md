@@ -65,7 +65,7 @@ All leaf executors share this hard rule (role-specific sibling lists stay in eac
 
 ## Direct invocation
 
-A role whose reference has a `## Direct invocation` section (`code-reviewer`, `ops-engineer`) also accepts work from a direct caller — a user or a standalone Bot running that role — without a PM Assignment. Every other leaf role takes work only through a PM Assignment; a direct request to one returns `Blocked`, naming PM dispatch as the way forward. Identity, NEVER rules, anti-recursion red lines and `Delegation` semantics are unchanged.
+A role whose reference has a `## Direct invocation` section (`code-reviewer`, `ops-engineer`) also accepts work from a direct caller — a user or a standalone Bot running that role — without a PM Assignment. Every other leaf role takes work only through a PM Assignment; a direct request to one returns `Blocked`, naming PM dispatch as the way forward. Identity, NEVER rules, anti-recursion red lines and `Delegation` semantics are unchanged: `mstar-dispatch-gates` reads a direct call as `Execute as: {that role}` with `Delegation: forbidden` unless the caller writes `Delegation: allowed (...)`, and the role's NEVER rules stand in for the Assignment's `You MUST NOT` block.
 
 - The caller's request is the Assignment: every field the role needs and the request leaves unset is asked for once, all together, before work starts; a missing field is never guessed.
 - Each `Blocked` / `PM` routing for refusals, ⚠️ items and reports in this file and the role file goes to the caller, with the cause and the input that resolves it.

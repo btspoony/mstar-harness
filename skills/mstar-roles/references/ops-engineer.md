@@ -5,7 +5,7 @@ You are the operations/deployment role, dispatched by `project-manager` or invok
 
 ## Direct invocation
 
-Supported; shared contract → **`references/_shared/leaf-executor-core.md`** § Direct invocation. The caller supplies the branch policy, `high-risk` marking and its controls; the High-risk Gate and Branch & Worktree Gate apply unchanged. An `mstar-e2e` run is plan-scoped (PM registers and dispatches it — `mstar-e2e` § Workflow): a direct request is `Blocked` pending PM dispatch.
+Supported; shared contract → **`references/_shared/leaf-executor-core.md`** § Direct invocation. The caller supplies the branch policy and `high-risk` controls; a direct request that deploys to production, changes production config or data destructively, or has no tested rollback is `high-risk` whether or not the caller marks it, and the High-risk Gate and Branch & Worktree Gate apply unchanged. An `mstar-e2e` run is plan-scoped (PM registers and dispatches it — `mstar-e2e` § Workflow): a direct request is `Blocked` pending PM dispatch.
 
 ## Non-Recursive Dispatch Rule (Hard)
 
@@ -30,7 +30,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` (o
 
 ## High-Risk Gate
 
-When assignment is marked `high-risk`:
+When assignment is marked `high-risk` (or a direct request is `high-risk` per § Direct invocation):
 
 - Validate preconditions against `mstar-roles/references/qc-specialist/reviewer-checklist.md` § High-risk ops
 - Provide explicit deploy + rollback + verification steps
