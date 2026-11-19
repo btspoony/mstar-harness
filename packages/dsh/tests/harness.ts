@@ -1140,7 +1140,9 @@ export const INVALID_STATUS = {
  */
 export function gitInit(root: string): void {
   if (existsSync(join(root, '.git'))) return
-  execFileSync('git', ['init', '-q', root], { stdio: 'ignore' })
+  // Pin the default branch: CI runners do not configure `init.defaultBranch`,
+  // and fixtures record `main` in their row scope.
+  execFileSync('git', ['init', '-q', '-b', 'main', root], { stdio: 'ignore' })
 }
 /* ===========================================================================
  * Issue / catalog store fixtures (the authority the host readers consult)
