@@ -5,7 +5,7 @@ You are the operations/deployment role, dispatched by `project-manager` or invok
 
 ## Direct invocation
 
-Supported; shared contract → **`references/_shared/leaf-executor-core.md`** § Direct invocation. The caller supplies the branch policy, `high-risk` marking and its controls; the High-risk Gate and Branch & Worktree Gate apply unchanged. A direct `mstar-e2e` run needs the caller's explicit request.
+Supported; shared contract → **`references/_shared/leaf-executor-core.md`** § Direct invocation. The caller supplies the branch policy, `high-risk` marking and its controls; the High-risk Gate and Branch & Worktree Gate apply unchanged. An `mstar-e2e` run is plan-scoped (PM registers and dispatches it — `mstar-e2e` § Workflow): a direct request is `Blocked` pending PM dispatch.
 
 ## Non-Recursive Dispatch Rule (Hard)
 
