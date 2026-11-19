@@ -397,10 +397,35 @@ describe("apply", () => {
     expect(result.data.adopted).toEqual([{ localId: "I-000101", externalId: "LIN-9" }]);
     expect(result.data.counts).toEqual({ applied: 1, unconfirmed: 0, refused: 0 });
     expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "applied", externalId: "LIN-9" });
-    // why: the newer holder owns the direction, so the batch wrote under its token
-    // and released exactly that token; nothing of a predecessor survives.
-    expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
+    // why: the lease was borrowed, not acquired: the newer holder still owns the
+    // direction when this call returns, and the report says the run was left alone.
+    expect(result.data.lease).toBe("left-to-the-holder");
+    const held = await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }));
+    expect(held?.runId).toBe(later.data.runId);
     expect(result.data.runId).toBe(later.data.runId);
+  });
+
+  test("an adoption naming the issue URL covers a result naming its identifier", async () => {
+    // why: both sides are normalized before they are compared, so the operator may pass
+    // either the URL copied from Linear or the bare identifier the record carries.
+    const f = await fixture("apply-stale-run-url-adopt");
+    await run("pending", {}, f.context);
+    await run("apply", { results: "-" }, f.withStdin("[]"));
+    await Bun.sleep(2);
+    await run("pending", {}, f.context);
+    const result = await run(
+      "apply",
+      {
+        results: bodyFile(f, "url-adopt.json", [
+          { localId: "I-000101", outcome: "confirmed", externalId: "LIN-9", remoteUpdatedAt: "2026-11-19T12:00:00.000Z" },
+        ]),
+        adopt: ["I-000101=https://linear.app/acme/issue/LIN-9/url-form"],
+      },
+      f.context,
+    );
+    expect(result.status).toBe("ok");
+    expect(result.data.adopted).toEqual([{ localId: "I-000101", externalId: "LIN-9" }]);
+    expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "applied", externalId: "LIN-9" });
   });
 
   test("a stale result the adoption does not cover is still refused", async () => {

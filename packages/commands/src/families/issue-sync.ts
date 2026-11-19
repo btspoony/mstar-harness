@@ -407,6 +407,8 @@ type ApplyReport = {
   runId: string;
   adopted: Array<{ localId: string; externalId: string | null }>;
   released: string[];
+  /** note: whether this call ended the run it used, or left a borrowed lease to its holder. */
+  lease: "released" | "left-to-the-holder";
   items: ApplyItem[];
   counts: { applied: number; unconfirmed: number; refused: number };
 };
@@ -524,19 +526,33 @@ function parseResults(raw: unknown): { results: PushResult[]; refused: ApplyItem
 }
 
 /**
+ * note: the identity a caller-supplied result names, through the same normalizer `--adopt`
+ * uses, so `LIN-9` and the issue URL that resolves to it compare equal.
+ * why: a value the normalizer rejects cannot match any adoption, and the recorder reports it
+ * per item, so the preflight stays out of that decision.
+ */
+function normalizedOrNull(externalId: string): string | null {
+  try {
+    return externalIdOf(externalId);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Refuse an apply whose results were planned BEFORE the run it would continue.
  *
- * A continuation borrows the held run's token and releases it at the end, so an
- * old retry must not continue a run that a later `pending` opened: it would write
- * under that holder's token and delete the holder's lease on the way out. The
+ * A continuation borrows the held run's token, so an old retry must not continue a
+ * run that a later `pending` opened: it would write under that holder's token. The
  * evidence is the claim timestamp of every create cycle in the results — a cycle
  * claimed before the held run started cannot have been planned by it.
  *
  * why: an explicit `--adopt` in this same invocation is not that stale retry: it
  * validates and records the identity before the results are read, so a stale
- * result it covers is admitted. A stale result no adoption covers — or a
- * confirmed one naming an identity the adoption does not record — is still
- * refused, because nothing in the invocation makes that write sane.
+ * result it covers is admitted, and the return value says so - that batch runs
+ * under a lease it did NOT acquire, so its caller must leave the lease alone. A
+ * stale result no adoption covers, or a confirmed one naming an identity the
+ * adoption does not record, is still refused: nothing makes that write sane.
  *
  * shortcut: the check needs a create cycle to compare, so an empty `--results`
  * (or one naming only updates) has no evidence and continues the held run; and a
@@ -551,8 +567,9 @@ function assertApplyOwnsHeldRun(
   takeRun: boolean,
   results: readonly PushResult[],
   adoptedIdentities: ReadonlyMap<string, string>,
-): void {
-  if (takeRun || held === null) return;
+): boolean {
+  if (takeRun || held === null) return false;
+  let covered = false;
   const unadopted = results.find((result) => {
     const row = readItem(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, localId: result.localId });
     const stale =
@@ -563,25 +580,32 @@ function assertApplyOwnsHeldRun(
     // not a stale apply: the adoption, not the older run, carries the identity.
     const adopted = adoptedIdentities.get(result.localId);
     if (adopted === undefined) return true;
+    // why: both sides go through the same normalizer, so a `--adopt` that names a
+    // Linear URL covers the result that names the identifier it resolves to.
+    const named = result.externalId === null || result.externalId === undefined ? null : normalizedOrNull(result.externalId);
     // why: a confirmed result must name the identity the adoption records; a
     // different one is the identity conflict the recorder refuses per item, and
     // the batch cannot be made sane by proceeding.
-    return result.outcome === "confirmed" && result.externalId !== adopted;
+    if (result.outcome === "confirmed" && named !== adopted) return true;
+    covered = true;
+    return false;
   });
-  if (unadopted === undefined) return;
-  // why: the recovery is NOT the run-held one - `--take-run` would bypass this very
-  // guard, while the stale result is repaired by naming the identity it is about.
-  throw refused(
-    "sync.run-held",
-    "these results belong to an earlier run: " + JSON.stringify(unadopted.localId) + " was claimed before the run now holding " +
-      target.bindingId + " started (" + held.startedAt + "), so this apply cannot continue it and the lease is untouched. Name the " +
-      "remote identity the result is about with `mstar issue-sync apply --project <project-id> --adopt <localId>=<issueUrl|externalId>`, " +
-      "or associate it by its marker with `mstar issue-sync ingest --project <project-id> --records <file|->`, then re-run this apply",
-    "Record the identity this result is about, then re-run the apply. " +
-      "`mstar issue-sync apply --project <project-id> --results <file|-> --adopt <localId>=<issueUrl|externalId>` names it in the same " +
-      "invocation, and `mstar issue-sync ingest --project <project-id> --records <file|->` associates the issue by its marker first. " +
-      "`--take-run` is not the repair here: it would bypass the ownership check that refused this batch",
-  );
+  if (unadopted !== undefined) {
+    // why: the recovery is NOT the run-held one - `--take-run` would bypass this very
+    // guard, while the stale result is repaired by naming the identity it is about.
+    throw refused(
+      "sync.run-held",
+      "these results belong to an earlier run: " + JSON.stringify(unadopted.localId) + " was claimed before the run now holding " +
+        target.bindingId + " started (" + held.startedAt + "), so this apply cannot continue it and the lease is untouched. Name the " +
+        "remote identity the result is about with `mstar issue-sync apply --project <project-id> --adopt <localId>=<issueUrl|externalId>`, " +
+        "or associate it by its marker with `mstar issue-sync ingest --project <project-id> --records <file|->`, then re-run this apply",
+      "Record the identity this result is about, then re-run the apply. " +
+        "`mstar issue-sync apply --project <project-id> --results <file|-> --adopt <localId>=<issueUrl|externalId>` names it in the same " +
+        "invocation, and `mstar issue-sync ingest --project <project-id> --records <file|->` associates the issue by its marker first. " +
+        "`--take-run` is not the repair here: it would bypass the ownership check that refused this batch",
+    );
+  }
+  return covered;
 }
 
 /**
@@ -592,7 +616,10 @@ function assertApplyOwnsHeldRun(
  * operator confirmed dead; with no run row at all - the normal case when
  * `pending` ran in a session that already released - this acquires a fresh one
  * so every write still carries a token.
- * why: apply both continues the held run and ends it, so the lease survives exactly these writes.
+ * why: apply both continues the held run and ends it, so the lease survives exactly
+ * these writes - unless the batch was admitted only through adoption coverage: then
+ * it borrowed a lease it never acquired, leaves it to its holder, and says so in
+ * the report.
  */
 async function runApply(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
   const adoptions = adoptPairs(input.adopt);
@@ -605,6 +632,7 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
   const parsed = parseResults(await readJsonArgument(invocation, input.results, "--results"));
   const handle = await openStore({ harnessDir: target.harnessDir }, "write");
   let run: RunLease | null = null;
+  let borrowedLease = false;
   try {
     const db = handle.db;
     // why: the ownership preflight below must see the identities this invocation
@@ -620,7 +648,10 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
     assertReleaseTargets(db, target.bindingId, released);
 
     const held = readRun(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION });
-    assertApplyOwnsHeldRun(db, target, held, takeRun, parsed.results, adoptedIdentities);
+    // why: the preflight answers whether this batch was admitted ONLY through adoption
+    // coverage, i.e. it runs under a lease this invocation did not acquire; that lease
+    // belongs to its holder and must survive this call.
+    borrowedLease = assertApplyOwnsHeldRun(db, target, held, takeRun, parsed.results, adoptedIdentities);
     run =
       takeRun || held === null
         ? acquireRun(db, {
@@ -639,6 +670,9 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
       runId: run.runId,
       adopted: [],
       released: [],
+      // why: an operator who adopted a residue needs to know the newer holder still
+      // owns the direction, or the next `pending` refusal looks unexplained.
+      lease: borrowedLease ? "left-to-the-holder" : "released",
       items: [...parsed.refused],
       counts: { applied: 0, unconfirmed: 0, refused: parsed.refused.length },
     };
@@ -681,9 +715,10 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
     return envelope(id, report);
   } finally {
     // why: The run ends on EVERY exit, and only when this run still holds it: a run a
-    // takeover replaced names a token the successor does not carry, so its own
-    // `finally` deletes nothing.
-    if (run !== null) {
+    // takeover replaced names a token the successor does not carry, and a lease
+    // merely borrowed for adoption coverage belongs to its holder, so neither is
+    // deleted here.
+    if (run !== null && !borrowedLease) {
       try {
         releaseRun(handle.db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, runId: run.runId });
       } catch {
