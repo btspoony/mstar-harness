@@ -263,20 +263,21 @@ describe("apply", () => {
     expect(result.status).toBe("ok");
     expect(result.data.runId).toBe(pending.data.runId);
     expect(result.data.counts).toEqual({ applied: 1, unconfirmed: 1, refused: 1 });
+    // items[] echoes the CALLER'S word; the ledger state each produced is in counts.
     expect(result.data.items).toEqual([
-      expect.objectContaining({ localId: "I-000101", outcome: "applied", externalId: "LIN-11" }),
-      expect.objectContaining({
+      { localId: "I-000101", outcome: "confirmed", externalId: "LIN-11" },
+      {
         localId: "I-000102",
         outcome: "refused",
         externalId: null,
-      }),
-      expect.objectContaining({ localId: "I-000103", outcome: "unconfirmed", externalId: null }),
+        cause: expect.stringContaining("[linear.write-refused] label risk does not exist in team ENG"),
+      },
+      { localId: "I-000103", outcome: "ambiguous", externalId: null, cause: expect.stringContaining("tool call timed out") },
     ]);
+    expect(result.data.counts).toEqual({ applied: 1, unconfirmed: 1, refused: 1 });
     // The causes are the tool's own words plus the one-line recovery: a failure
     // report that names no next step leaves the operator stuck.
-    expect(result.data.items[1].cause).toContain("[linear.write-refused] label risk does not exist in team ENG");
     expect(result.data.items[1].cause).toContain("mstar issue-sync pending");
-    expect(result.data.items[2].cause).toContain("tool call timed out after send");
     expect(result.data.items[2].cause).toContain("mstar issue-sync ingest");
 
     expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "applied", externalId: "LIN-11" });
@@ -307,6 +308,26 @@ describe("apply", () => {
     expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "pending", externalId: null });
   });
 
+  test("apply with no prior pending acquires its own run and still records", async () => {
+    // The recovery branch: pending ran somewhere else and released (or crashed
+    // without claiming), so there is no held run. apply must not need one - it
+    // acquires a fresh lease so every ledger write still carries a run token.
+    const f = await fixture("apply-no-held-run");
+    expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
+    // An unclaimed pending row would be refused (round 4's guard), so this
+    // exercises the clean path: a local id with no ledger row at all is a
+    // per-item refusal, and the run itself succeeds and ends.
+    const result = await run(
+      "apply",
+      { results: bodyFile(f, "orphan.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-81" }]) },
+      f.context,
+    );
+    expect(result.status).toBe("ok");
+    expect(result.data.runId).toBeTruthy();
+    expect(result.data.counts).toEqual({ applied: 0, unconfirmed: 0, refused: 1 });
+    expect(result.data.items[0].cause).toContain("no push ledger row");
+    expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
+  });
   test("--take-run ends a dead holder's run and the next pending works", async () => {
     const f = await fixture("apply-take-run");
     await run("pending", {}, f.context);

@@ -2,9 +2,9 @@
  * marker.ts — the ONE correlation marker between a Linear issue and the local
  * issue it mirrors.
  *
- * \`\`\`
+ * ```
  * <!-- mstar-sync: repo=<owner/name>; local=<issue-id>; author=<Name <email>> -->
- * \`\`\`
+ * ```
  *
  * It carries who pushed the issue (the pushing checkout's git author) and which
  * local issue it came from, so an ingest can associate a remote record with its
@@ -15,7 +15,7 @@
  * prose must not be able to change which issue a record is associated with.
  */
 
-/** The three fields the marker carries. \`author\` is \`"Name <email>"\` as git reports it. */
+/** The three fields the marker carries. `author` is `"Name <email>"` as git reports it. */
 export type MarkerFields = { repo: string; localId: string; author: string };
 
 const MARKER_PATTERN = /<!--\s*mstar-sync:\s*([^\n]*?)\s*-->/g;
@@ -23,10 +23,12 @@ const MARKER_PATTERN = /<!--\s*mstar-sync:\s*([^\n]*?)\s*-->/g;
 /**
  * The marker a payload description ends with.
  *
- * shortcut: the fields are written verbatim, so a value containing \`-->\` would
- * truncate the marker and the record would decode as unmanaged; the recovery is
- * \`issue-sync apply --adopt\`. Revisit if such an identity ever appears in git
- * config.
+ * shortcut: the fields are written and split verbatim, so a value containing
+ * `-->` truncates the marker, and a value containing `;` or `=` mis-splits
+ * the key/value pairs - an identity carrying any of them decodes wrong or not
+ * at all, and the record reads as unmanaged; the recovery is `issue-sync apply
+ * --adopt`. No escaping: the format is frozen. Revisit if such an identity
+ * ever appears in git config.
  */
 export function encodeMarker(fields: MarkerFields): string {
   return "<!-- mstar-sync: repo=" + fields.repo + "; local=" + fields.localId + "; author=" + fields.author + " -->";
@@ -35,9 +37,9 @@ export function encodeMarker(fields: MarkerFields): string {
 /**
  * The marker one description carries, or null when it carries none.
  *
- * A marker without \`repo\` or \`local\` is not a marker of this format: the
- * deleted code's \`workspace/team/storeId/localId\` payload decodes to null, which
- * is what makes a record pushed by that code \`unmanaged\` rather than silently
+ * A marker without `repo` or `local` is not a marker of this format: the
+ * deleted code's `workspace/team/storeId/localId` payload decodes to null, which
+ * is what makes a record pushed by that code `unmanaged` rather than silently
  * associated with the wrong issue.
  */
 export function decodeMarker(description: string | null | undefined): MarkerFields | null {

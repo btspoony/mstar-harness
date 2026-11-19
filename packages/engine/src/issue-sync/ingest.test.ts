@@ -217,6 +217,27 @@ describe("ingestRecords", () => {
     }
   });
 
+  test("a rejected claim does not move the ledger watermark", async () => {
+    const { db, close } = await openedStore("conflict-no-write");
+    try {
+      addIssue(db, "I-000852");
+      const pushed = pushAndRecord(db, "I-000852", "LIN-61");
+      const before = pushRow(db, "I-000852")!;
+      expect(before).toMatchObject({ itemState: "applied", externalId: "LIN-61" });
+
+      // A second remote issue carrying the same marker is the identity conflict;
+      // it is reported, and NOTHING about it is recorded - not even a revision.
+      const second = { ...pushed, externalId: "LIN-62", updatedAt: "2026-11-20T09:00:00.000Z" };
+      const report = ingestRecords(db, ingestContext(), [second]);
+      expect(report.drift).toHaveLength(1);
+      expect(report.drift[0]!.cause).toContain("Nothing was written");
+      const after = pushRow(db, "I-000852")!;
+      expect(after).toEqual(before);
+    } finally {
+      close();
+    }
+  });
+
   test("records are independent: one unmanaged issue does not stop the association of the next", async () => {
     const { db, close } = await openedStore("mixed");
     try {

@@ -166,17 +166,20 @@ export function ingestRecords(
     }
     try {
       const ledger = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId: marker.localId });
-      associate(db, context, marker.localId, record);
+      // The identity conflict is decided BEFORE anything is written: associating
+      // first and then reporting the mismatch would still have moved the row's
+      // watermark to a revision the ledger refuses to own.
       if (ledger?.externalId != null && ledger.externalId !== record.externalId) {
         report.drift.push({
           ...entry,
           localId: marker.localId,
           cause:
             "the ledger holds " + JSON.stringify(ledger.externalId) + " for this item while this remote issue carries its marker; " +
-            "two remote issues claim one local issue - keep the right one with 'issue-sync apply --adopt <localId>=<issueUrl|externalId>'",
+            "two remote issues claim one local issue - keep the right one with 'issue-sync apply --adopt <localId>=<issueUrl|externalId>'. Nothing was written for this record",
         });
         continue;
       }
+      associate(db, context, marker.localId, record);
       if (ledger?.lastRequestHash != null && remoteHash(record, context.mapping) !== ledger.lastRequestHash) {
         report.drift.push({
           ...entry,

@@ -15,12 +15,7 @@ import {
 } from "@mstar-harness/commands";
 import {
   assertSafeSessionId,
-  beginAuthorization,
   decodeExecutionSessionRef,
-  discoverAuthorizationServer,
-  exchangeCode,
-  refreshToken,
-  registerClient,
   validateExecutionIdentity,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";

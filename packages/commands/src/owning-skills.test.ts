@@ -8,8 +8,6 @@ import { owningSkillFor } from "./owning-skills.js";
 const NO_SINGLE_OWNER_FAMILIES = [
   "dashboard",
   "doctor",
-  "issue-sync",
-  "linear",
   "migrate",
   "plugin",
   "workflow-note",
@@ -22,9 +20,6 @@ const NO_OWNER_COMMANDS: Readonly<Record<string, string>> = {
   // no documented owner
   dashboard: "read-only loopback surface; its help owns the flags",
   doctor: "host environment probe; no topical skill owns its output",
-  "issue-sync.import": "external issue sync; no documented owner",
-  "issue-sync.push": "external issue sync; no documented owner",
-  "linear.auth": "third-party connector; no documented owner",
   migrate: "standalone file-staging migrate is retired; use store upgrade",
   "plugin.validate": "packaging validation; no documented owner",
   "workflow-note.append": "note ledger write; owner spread across lifecycle skills",

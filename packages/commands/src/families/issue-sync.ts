@@ -373,8 +373,13 @@ async function runPending(id: string, input: Input, invocation: InvocationContex
   }
 }
 
-/** One entry of the `apply` report: what this run recorded for one local item. */
-type ApplyItem = { localId: string; outcome: string; externalId: string | null; cause?: string };
+/**
+ * One entry of the `apply` report. `outcome` echoes the CALLER'S word
+ * (confirmed/refused/ambiguous) exactly as it handed it in; the ledger state
+ * each word produced appears only in `counts` (applied/unconfirmed/refused), so
+ * the two vocabularies never mix inside one field.
+ */
+type ApplyItem = { localId: string; outcome: "confirmed" | "refused" | "ambiguous"; externalId: string | null; cause?: string };
 type ApplyReport = {
   projectId: string;
   bindingId: string;
@@ -448,6 +453,11 @@ function assertOperatorVerbsAgree(
  * ill-formed one does NOT abort the run - the frozen contract says a missing
  * field is that entry's refusal in the report.
  */
+/** A per-item validation refusal keeps the caller's word and carries the cause. */
+function refusedItem(localId: string, cause: string): ApplyItem {
+  return { localId, outcome: "refused", externalId: null, cause };
+}
+
 function parseResults(raw: unknown): { results: PushResult[]; refused: ApplyItem[] } {
   if (!Array.isArray(raw)) {
     throw new UsageError("--results must be a JSON array of {localId, outcome, externalId?, remoteUpdatedAt?, cause?} entries");
@@ -457,34 +467,24 @@ function parseResults(raw: unknown): { results: PushResult[]; refused: ApplyItem
   raw.forEach((entry, index) => {
     const name = "(entry " + index + ")";
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      refused.push({ localId: name, outcome: "refused", externalId: null, cause: "not a JSON object" });
+      refused.push(refusedItem(name, "not a JSON object"));
       return;
     }
     const record = entry as Record<string, unknown>;
     const localId = typeof record.localId === "string" ? record.localId.trim() : "";
     if (localId === "") {
-      refused.push({ localId: name, outcome: "refused", externalId: null, cause: "no localId" });
+      refused.push(refusedItem(name, "no localId"));
       return;
     }
     const outcome = record.outcome;
     if (outcome !== "confirmed" && outcome !== "refused" && outcome !== "ambiguous") {
-      refused.push({
-        localId,
-        outcome: "refused",
-        externalId: null,
-        cause: 'outcome must be "confirmed", "refused" or "ambiguous"',
-      });
+      refused.push(refusedItem(localId, 'outcome must be "confirmed", "refused" or "ambiguous"'));
       return;
     }
     const externalId =
       typeof record.externalId === "string" && record.externalId.trim() !== "" ? record.externalId.trim() : null;
     if (outcome === "confirmed" && externalId === null) {
-      refused.push({
-        localId,
-        outcome: "refused",
-        externalId: null,
-        cause: "a confirmed result must name the remote issue in externalId",
-      });
+      refused.push(refusedItem(localId, "a confirmed result must name the remote issue in externalId"));
       return;
     }
     results.push({
@@ -578,7 +578,10 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
     for (const outcome of recordResults(db, push, parsed.results)) {
       report.items.push({
         localId: outcome.localId,
-        outcome: outcome.outcome,
+        // The CALLER'S word, echoed: `confirmed` stays `confirmed` whether the
+        // ledger landed `applied` or refused the entry as unclaimed; the ledger
+        // state it produced shows only in `counts`.
+        outcome: outcome.outcome === "applied" ? "confirmed" : outcome.outcome === "unconfirmed" ? "ambiguous" : "refused",
         externalId: outcome.externalId,
         ...(outcome.cause === undefined ? {} : { cause: outcome.cause }),
       });
@@ -698,7 +701,7 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
     pending:
       "Plan this project's local issues for the host's Linear tools. NOTHING IS SENT: mstar makes no Linear call, holds no Linear credential and opens no socket. Run this first, then write each item with your own Linear MCP tools (discover their names at runtime) and finish with `issue-sync apply`. Each item carries localId, operation (create when the ledger holds no remote identity yet, update when it does), externalId, the payload to write, and the marker that must stay the LAST line of the description verbatim - it is how a later listing is associated with this local issue. `requestHash` is the skip key: an item whose ledger hash equals it is under `skipped` because the remote already says this, so it costs no tool call; `unresolved` names an unconfirmed earlier create that reconciliation must associate before anything creates again.",
     apply:
-      "Record what your Linear tools reported for the items `issue-sync pending` planned, one entry per item: {localId, outcome, externalId?, remoteUpdatedAt?, cause?}. outcome `confirmed` proves delivery and names the remote issue (externalId) plus its revision when the tool returns one; `refused` means provably NOT delivered (a validation or permission error), so the item stays retryable; `ambiguous` means sent but unconfirmed - a create keeps its pending residue and the next ingest associates it by marker, never by guessing a second create. An unknown localId, an entry this run never planned, or a missing field is that entry's refusal in the report, not a failed run. `--results` takes a file path or `-` for stdin, and [] records nothing. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself; --force-adopt allows replacing one the row already records; --release <localId> clears a pending create with no remote id after ingest showed no issue carrying its marker (an associated issue records an id, which makes the flag refuse). ONE run per binding, continued from pending and ended here; --take-run replaces a holder you confirmed dead.",
+      "Record what your Linear tools reported for the items `issue-sync pending` planned, one entry per item: {localId, outcome, externalId?, remoteUpdatedAt?, cause?}. outcome `confirmed` proves delivery and names the remote issue (externalId) plus its revision when the tool returns one; `refused` means provably NOT delivered (a validation or permission error), so the item stays retryable; `ambiguous` means sent but unconfirmed - a create keeps its pending residue and the next ingest associates it by marker, never by guessing a second create. An unknown localId, an entry this run never planned, or a missing field is that entry's refusal in the report, not a failed run. The report echoes your word: `items[].outcome` is the `confirmed`/`refused`/`ambiguous` you sent, while `counts` groups the LEDGER states each produced (`applied`/`unconfirmed`/`refused`) - the two vocabularies are never mixed in one field. `--results` takes a file path or `-` for stdin, and [] records nothing. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself; --force-adopt allows replacing one the row already records; --release <localId> clears a pending create with no remote id after ingest showed no issue carrying its marker (an associated issue records an id, which makes the flag refuse). ONE run per binding, continued from pending and ended here; --take-run replaces a holder you confirmed dead.",
     ingest:
       "Associate a listing your Linear tools returned with the local issues those remote issues mirror. --records takes a file path or - for stdin: [{externalId, url, title, description, state, priority, labels, updatedAt}]. The key is the marker in the description - repo=<owner/name>, local=<issue-id>, author=<Name <email>> - and repo must be this repository, local must exist here, and author must be this checkout's git author. Five buckets, one entry each (localId, externalId, url, and a cause when it is not a clean association): associated (recorded in the ledger, converged), drift (associated, but the remote content no longer matches what mstar last confirmed, or two remote issues claim one local issue - your judgement, nothing is rewritten), foreign (another operator's clone of this repository pushed it), orphan (the local issue is gone), unmanaged (no marker, a marker of the retired format, or another repository's - never adopted by title). No local issue is created, updated or closed.",
   };
