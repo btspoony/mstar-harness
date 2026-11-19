@@ -114,6 +114,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-audit` | Variant carrier：common core（hard rules、recon、vet、variant dispatch）+ SKILL.md `## Output format`（review report 运行目录 `<date>-codebase-<level>-<round>/`、findings、coverage、leads）+ `mstar-audit/references/codebase-audit.md`（full-audit 变体：9 类别 fan-out、effort、scope variants、Phase 4 excerpt/reconcile、audit index 模板）+ `mstar-audit/references/security-review.md`（security 深查：exploitability 门槛、FP 纪律、LLM/供应链面）+ `mstar-audit/references/pr-review.md`（`pr` 变体）；`audit-playbook` + `finding-format` |
 | `mstar-pr-loop` | Opt-in PR review → fix loop until the review verdict is `ship it`; also selectable at iteration Phase 1 as the local `reviewed-auto` review path, whose `ship it` row the iteration merge authorization reads. Never selected under `reviewed-bot` |
 | `mstar-e2e` | Explicit independent real-browser/device/E2E workflow; PM orchestrates and ops executes, outside development acceptance gates |
+| `mstar-issue-mirror` | Host-owned Linear issue mirror：agent 用宿主 Linear MCP 工具执行全部 Linear 调用，mstar 只跑 issue-sync pending/apply/ingest 本地半程 |
 | `mstar-roles` | 角色正文 hub |
 | `mstar-host` | 宿主适配（自动识别；`mstar-host/references/opencode.md` / `cursor.md` / `codex.md` / `kimi.md` / `parallel-dispatch.md`） |
 
