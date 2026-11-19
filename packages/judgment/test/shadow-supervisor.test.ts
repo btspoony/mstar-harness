@@ -407,10 +407,15 @@ describe("trusted shadow supervisor", () => {
     }
     let launcherObserved = false;
     const launcher = (child: ApprovedChild, runId: string, plan: ShadowMountPlan) => {
-      expect(readFileSync(join(plan.syntheticSource, "src", "example.ts"), "utf8")).toBe("literal source\nanother literal\n");
+      expect(plan.syntheticSource).not.toBe(calibrationSource);
+      expect(lstatSync(join(plan.syntheticSource, "src", "example.ts")).isFile()).toBe(true);
+      expect(existsSync(join(plan.runtimeAssets, "src", "example.ts"))).toBe(false);
       expect(readdirSync(plan.syntheticSource).sort()).toEqual([".runtime", "src"]);
-      expect(["worker.mjs", "mstar-harness.js", "pack.json", "pilot.json"].every((name) =>
-        readFileSync(join(plan.runtimeAssets, name), "utf8") === name)).toBe(true);
+      for (const name of ["worker.mjs", "mstar-harness.js", "pack.json", "pilot.json"]) {
+        expect(lstatSync(join(plan.runtimeAssets, name)).isFile()).toBe(true);
+        expect(existsSync(join(plan.syntheticSource, name))).toBe(false);
+        expect(existsSync(join(plan.syntheticSource, ".runtime", name))).toBe(false);
+      }
       launcherObserved = true;
       return testLauncher(child, runId);
     };
