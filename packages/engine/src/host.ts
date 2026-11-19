@@ -1,5 +1,5 @@
 /**
- * Engine host module — host auto-detection from tool shapes, skill-root
+ * invariant: Engine host module — host auto-detection from tool shapes, skill-root
  * resolution, and the type-only HostAdapter contract (thin; roadmap §8.2
  * `host` row, §4.2/§8.4).
  *
