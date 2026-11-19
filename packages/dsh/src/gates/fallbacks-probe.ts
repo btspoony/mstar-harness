@@ -40,7 +40,7 @@ export interface LoaderEntryView {
   /**
    * Stable id inside the containing entry tree (`EntryOptions.id`). Rows of
    * ONE plugin share `options.name`, so id is the only field that tells them
-   * apart — the Linear auth service locates its `linear-mcp` row by this.
+   * apart — a row locates a sibling row of the same plugin by this.
    */
   id?: string
   options: {

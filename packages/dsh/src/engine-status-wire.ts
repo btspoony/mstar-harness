@@ -86,20 +86,3 @@ export const MILESTONE_ADD_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR
 export const MILESTONE_UPDATE_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_MILESTONE_UPDATE_METHOD}`
 export const MILESTONE_ASSIGN_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_MILESTONE_ASSIGN_METHOD}`
 export const MILESTONE_REMOVE_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_MILESTONE_REMOVE_METHOD}`
-
-/**
- * Wire methods of the Linear credential card (root scope, no session): one
- * read of the host's file/row facts, then one host-owned authorization
- * attempt. The multi-minute consent NEVER rides one RPC — `begin` returns the
- * attempt id and the authorization URL immediately, and `status` is polled
- * under its own short deadline.
- */
-export const MSTAR_LINEAR_STATUS_METHOD = 'linearStatus'
-export const MSTAR_LINEAR_AUTHORIZE_BEGIN_METHOD = 'linearAuthorizeBegin'
-export const MSTAR_LINEAR_AUTHORIZE_STATUS_METHOD = 'linearAuthorizeStatus'
-export const MSTAR_LINEAR_AUTHORIZE_CANCEL_METHOD = 'linearAuthorizeCancel'
-/** The endpoint paths the card calls for its four operations. */
-export const LINEAR_STATUS_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_LINEAR_STATUS_METHOD}`
-export const LINEAR_AUTHORIZE_BEGIN_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_LINEAR_AUTHORIZE_BEGIN_METHOD}`
-export const LINEAR_AUTHORIZE_STATUS_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_LINEAR_AUTHORIZE_STATUS_METHOD}`
-export const LINEAR_AUTHORIZE_CANCEL_ENDPOINT = `${MSTAR_PANEL_SNAPSHOT_NAMESPACE}/${MSTAR_LINEAR_AUTHORIZE_CANCEL_METHOD}`

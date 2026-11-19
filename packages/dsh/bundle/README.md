@@ -66,8 +66,9 @@ config:
    `npx @mstar-harness/cli mcp`; requires the bridge plugin
    `@deepseek-ai/dsh-mcp-client` in the profile's dependencies — see the
    patch header), and a **disabled** `linear-mcp` row pointed at Linear's
-   hosted server (`id: linear-mcp`, `transport: streamable-http`,
-   `url: https://mcp.linear.app/mcp`).
+   hosted server, authenticated by a `${credential:MSTAR_LINEAR_TOKEN}`
+   template over dsh's own credential store (`id: linear-mcp`,
+   `transport: streamable-http`, `url: https://mcp.linear.app/mcp`).
 4. The profile's own `cordis.patch.yml`, then `$DSH_HOME/cordis.patch.yml`
    (the home-level layer outranks the per-profile layer).
 
@@ -78,18 +79,28 @@ semantics, not a merge).
 
 ## Linear MCP row (shipped disabled)
 
-`linear-mcp` is the same bridge pointed at `https://mcp.linear.app/mcp`. It ships with `disabled: true`
-because Linear needs an OAuth grant that only the operator can supply: an enabled row without credentials spends
-a startup probe on a 401 and logs a failed connection on every boot.
+`linear-mcp` is the same bridge pointed at `https://mcp.linear.app/mcp`, authenticated by a static bearer that
+dsh resolves from **its own** credential store. It ships with `disabled: true` because the token is the
+operator's: an enabled row without a credential spends a startup probe on a 401 and logs a failed connection on
+every boot.
 
-Enable it by overriding the row in the profile (or home) layer with `disabled: false`. The row carries **no token
-in its config**: its `headers` is the loader expression `!!js ctx.mstarLinearAuth.authorizationHeaders()`,
-evaluated against the row's own context on every mount, which reads the machine credential stored by the Settings
-Authorize action or `mstar linear auth login` (outside the repo, mode 0600). The `mstarLinearAuth` service
-(`src/linear-settings.ts`) also refreshes a due credential silently and re-mounts the enabled row, so no manual
-reload is needed. Never put a literal `Authorization` value in a profile patch — that copies a bearer token into
-tracked config. Tools then appear as `mcp__linear__<tool>`. This row is **not** part of the mstar channel above:
-it carries the provider's tools, never mstar's, and disabling or removing it changes nothing about the mstar
+Two operator steps:
+
+1. **Provide the credential `MSTAR_LINEAR_TOKEN`** — the Linear MCP/API key the row's
+   `Authorization: Bearer ${credential:MSTAR_LINEAR_TOKEN}` template resolves. The credential seam reads
+   `$DSH_HOME/.credentials.yaml` (`~/.dsh/.credentials.yaml` by default; the document dsh's settings pages write
+   and the provider watches), and — only while that document stores no value for the reference — the launch
+   environment, then the `.env` fallback layers (the invocation cwd's `.env`, then `$DSH_HOME/.env`). So either
+   store the reference in the credential document's `refs` map, or export `MSTAR_LINEAR_TOKEN` for the host /
+   put it in `$DSH_HOME/.env`. The key never belongs in tracked config: the shipped row carries the template,
+   never a token, and a literal `Authorization` value in a profile patch copies a bearer token into it.
+2. **Enable the row** by overriding it in the profile (or home) layer with `disabled: false`.
+
+The row sets `expandTemplates: true`, so the template is resolved on every mount and the resolved value is
+redacted from diagnostics. A credential stored in the credential document reconnects the row by itself
+(`credentials/reference-updated`); a change made through the environment or a `.env` file is ambient and needs a
+host restart. Tools appear as `mcp__linear__<tool>`. This row is **not** part of the mstar channel above: it
+carries the provider's tools, never mstar's, and disabling or removing it changes nothing about the mstar
 surface.
 
 ## MCP mount contract
