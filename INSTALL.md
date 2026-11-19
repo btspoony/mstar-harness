@@ -184,6 +184,14 @@ Native-only installation (no `init --target devin`):
 - CLI/Desktop loads shared role shells as `morning-star-harness:<role>` subagents. Cloud does not load plugin subagents: the PM dispatches role-bound board tickets to child sessions instead. Children run on separate VMs; only PM writes workflow/store state, and children return pushed refs/PRs and final reports.
 - No Devin hooks ship. Full dispatch, approval and isolation rules: **`mstar-host`** → `references/devin.md`.
 
+#### Using with a Devin Bot (cloud)
+
+1. Create a Bot in Devin as your persistent PM coordinator.
+2. In **Customize > Plugins**, add `btspoony/mstar-harness` and enable **morning-star-harness** for the Bot.
+3. Give the Bot access to your repository, open its conversation, and enter **`/morning-star-harness:pm`**, then describe the work.
+
+The PM dispatches role tickets on the Bot's tasks board to child sessions; QC tri-review uses three children. The owner approves merges through the Bot's Inbox. Child VMs do not share harness state: report files travel through never-merged handoff refs, and only PM writes workflow state. Follow the [Devin host adapter](skills/mstar-host/references/devin.md#cloud) for the isolation, artifact-import and approval contracts. CLI/Desktop instead uses the plugin's named role subagents.
+
 ### Kimi
 
 Install the plugin in Kimi TUI (user-scoped — all projects):

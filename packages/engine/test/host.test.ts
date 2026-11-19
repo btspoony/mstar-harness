@@ -185,11 +185,19 @@ describe("resolveSkillRoot", () => {
 // ---------------------------------------------------------------------------
 
 describe("HostAdapter", () => {
-  test("host ids support minimal adapters", () => {
+  test("adapter host ids resolve skill assets or explicitly defer", () => {
     const ids: HostId[] = ["opencode", "omp", "pi", "dsh", "cursor", "codex", "kimi", "zcode", "devin"];
     for (const host of ids) {
       const adapter: HostAdapter = { host, log: () => {} };
-      expect(adapter.host).toBe(host);
+      const skill = "sample-skill";
+      const rel = "references/example.md";
+      const root = resolveSkillRoot(adapter.host, { skill, rel });
+      if (host === "pi") {
+        expect(root).toContain("deferred:");
+      } else {
+        expect(root).toEndWith(`${skill}/${rel}`);
+        expect(resolveSkillRoot(adapter.host, { skill, rel: "" })).toBe(resolveSkillRoot(adapter.host, { skill }));
+      }
     }
   });
 

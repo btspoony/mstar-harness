@@ -1,10 +1,10 @@
 /**
- * invariant: Engine host module — host auto-detection from tool shapes, skill-root
+ * Engine host module — host auto-detection from tool shapes, skill-root
  * resolution, and the type-only HostAdapter contract (thin; roadmap §8.2
  * `host` row, §4.2/§8.4).
  *
- * Source skills (semantic SSOT — this module ports their deterministic
- * rules verbatim, it never redefines them; roadmap §8.5 C2):
+ * invariant: detection order and skill-root resolution mirror the source
+ * skills' deterministic rules, never redefine them (roadmap §8.5 C2):
  * - `mstar-host` SKILL.md § Detect active host — the ordered table
  *   devin → cursor → opencode → omp → dsh → kimi → zcode → codex ("Order matters").
  * - `mstar-host` SKILL.md § Resolve loaded skill root — per-host skill-root
