@@ -24,7 +24,7 @@ English / [中文](README_CN.md)
 
 </div>
 
-Morning Star brings a delivery process to the AI coding tools you already use — dsh, omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex. You describe what you want; a `project-manager` agent clarifies the request, keeps a plan, and carries the work from requirements through implementation, review, and acceptance to a pull request. Requirements, architecture, implementation, review, acceptance, and audits each go to a role that owns that part.
+Morning Star brings a delivery process to the AI coding tools you already use — dsh, omp, OpenCode, Cursor, Kimi Code, Devin, ZCode, and Codex. You describe what you want; a `project-manager` agent clarifies the request, keeps a plan, and carries the work from requirements through implementation, review, and acceptance to a pull request. Requirements, architecture, implementation, review, acceptance, and audits each go to a role that owns that part.
 
 **Why use it**
 
@@ -36,7 +36,7 @@ Morning Star brings a delivery process to the AI coding tools you already use �
 
 ## Install
 
-Every host installs two ways: this CLI's `init` flow, or the host's own plugin manager — the native command installs the plugin only. Options, path layout, and host notes: [`INSTALL.md`](INSTALL.md).
+Install through the host's native plugin manager, or this CLI's `init` flow where supported; Kimi and Devin are native-only. Native commands install the plugin only. Options, path layout, and host notes: [`INSTALL.md`](INSTALL.md).
 
 - **dsh (DeepSeek Harness)** — needs the `dsh` CLI on `PATH`
   - CLI: `npx @mstar-harness/cli init --target dsh`
@@ -52,6 +52,8 @@ Every host installs two ways: this CLI's `init` flow, or the host's own plugin m
   - Native: `git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness`, then **Developer: Reload Window**
 - **Kimi Code** — no CLI target
   - Native: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`
+- **Devin** — native-only, no CLI target
+  - Native: **Customize > Plugins**, add `btspoony/mstar-harness`, or `devin plugins install btspoony/mstar-harness`
 - **ZCode**
   - CLI: `npx @mstar-harness/cli init --target zcode`
   - Native: add `https://github.com/btspoony/mstar-harness` as a ZCode plugin marketplace, then install **morning-star-harness**
@@ -70,6 +72,7 @@ Enter the PM once per session, then describe the work in your own words; the PM 
 | OpenCode | `Project Manager` agent, or `/pm` |
 | Cursor | `/pm` |
 | Kimi Code | auto-loads in a session, or `/skill:pm` |
+| Devin | `/morning-star-harness:pm` |
 | ZCode | `/morning-star-harness:pm` |
 | Codex | `/pm` |
 

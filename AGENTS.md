@@ -1,5 +1,7 @@
 # Morning Star Harness Maintenance
 
+This policy governs maintenance of the mstar-harness repository itself and does not apply when the working repository is a different project.
+
 This repository contains the Morning Star runtime skills, workflow engine, CLI, and host plugins. This file defines repository maintenance policy; runtime behavior belongs in `skills/mstar-*`.
 
 ## Working rules

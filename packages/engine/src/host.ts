@@ -1,12 +1,12 @@
 /**
- * Engine host module — host auto-detection from tool shapes, skill-root
+ * invariant: Engine host module — host auto-detection from tool shapes, skill-root
  * resolution, and the type-only HostAdapter contract (thin; roadmap §8.2
  * `host` row, §4.2/§8.4).
  *
  * Source skills (semantic SSOT — this module ports their deterministic
  * rules verbatim, it never redefines them; roadmap §8.5 C2):
  * - `mstar-host` SKILL.md § Detect active host — the ordered table
- *   cursor → opencode → omp → kimi → zcode → codex ("Order matters").
+ *   devin → cursor → opencode → omp → dsh → kimi → zcode → codex ("Order matters").
  * - `mstar-host` SKILL.md § Resolve loaded skill root — per-host skill-root
  *   resolution.
  * - roadmap §8.4 — the
@@ -27,17 +27,21 @@ import type { IntegrationMergeLease } from "./workflow.js";
  * plugin API in v1 — it appears in the union (and in `HostAdapter.host`) but
  * is never detected and gets no adapter. `dsh` is detected and resolved
  * (roadmap §4 D5, this iteration); its adapter ships in the dsh plugin. */
-export type HostId = "opencode" | "omp" | "pi" | "dsh" | "cursor" | "codex" | "kimi" | "zcode";
+export type HostId = "opencode" | "omp" | "pi" | "dsh" | "cursor" | "codex" | "kimi" | "zcode" | "devin";
 
-/** Result of `detectHost`: one of the seven known hosts or `ambiguous`
+/** Result of `detectHost`: a detectable host or `ambiguous`
  * (prompt judgment then applies per mstar-host). */
-export type DetectResult = "opencode" | "omp" | "dsh" | "cursor" | "codex" | "kimi" | "zcode" | "ambiguous";
+export type DetectResult = Exclude<HostId, "pi"> | "ambiguous";
 
 /** Tool-shape signal tokens accepted by `detectHost`, derived from the
  * mstar-host detection table. Plan-mode extras (CreatePlan/SwitchMode) and
  * Browser-plugin tools are documented in the table but are not part of the
  * v1 signal enum. */
 export type ToolSignal =
+  | "run_subagent"
+  | "read_subagent"
+  | "message_user"
+  | "devin_*"
   | "subagent_type"
   | "question"
   | "task_subagent"
@@ -67,6 +71,7 @@ export type ToolSignal =
  *
  * | Signal | Host |
  * |--------|------|
+ * | `run_subagent`, `read_subagent`, `message_user`, `devin_*` | devin |
  * | `subagent_type` (Task param; plan mode + CreatePlan/SwitchMode) | cursor |
  * | `question`, or `task_subagent` (task tool, singular subagent, no batch) | opencode |
  * | `task_agent_batch` (task tool, agent/tasks[] batch), `ask`, `hub` | omp |
@@ -76,7 +81,7 @@ export type ToolSignal =
  * | `Agent`/`AskUserQuestion`/`EnterPlanMode`/`TodoWrite`, no `AgentSwarm` | zcode |
  * | `/plan`, `/goal`; Goal tools; `functions.*` namespaces; `tool_search` | codex |
  *
- * Order matters: cursor → opencode → omp → dsh → kimi → zcode → codex — the
+ * Order matters: devin → cursor → opencode → omp → dsh → kimi → zcode → codex — the
  * sharpest Task-based split is `subagent_type` (Cursor) vs `task_subagent`
  * (OpenCode) vs `agent`/`tasks[]` (omp); dsh's `subagent` / Agent Teams
  * tools (roadmap §4 D5) collide with no other row, so they sit with the
@@ -89,6 +94,7 @@ export type ToolSignal =
  */
 export function detectHost(signals: readonly ToolSignal[]): DetectResult {
   const s = new Set(signals);
+  if (s.has("run_subagent") || s.has("read_subagent") || s.has("message_user") || s.has("devin_*")) return "devin";
   if (s.has("subagent_type")) return "cursor";
   if (s.has("question") || s.has("task_subagent")) return "opencode";
   if (s.has("task_agent_batch") || s.has("ask") || s.has("hub")) return "omp";
@@ -115,7 +121,7 @@ export type SkillRootPaths = { skill: string; rel?: string };
  * | cursor | `~/.cursor/plugins/local/morning-star-harness/skills/<name>[/<rel>]` (global plugin fallback; prefer skill name via plugin skills) |
  * | codex | `skills/<name>[/<rel>]` (plugin-mounted; project command skills under `.agents/skills/<name>/`) |
  * | opencode | `harness-skills/<name>[/<rel>]` (package-internal via `@mstar-harness/opencode` — never `process.cwd()/skills/`) |
- * | kimi / zcode | `./skills/<name>[/<rel>]` (plugin mount from the installed plugin root) |
+ * | devin / kimi / zcode | `./skills/<name>[/<rel>]` (plugin mount from the installed plugin root) |
  * | dsh | `$DSH_BUNDLED_SKILL_DIR/<name>[/<rel>]` (skill-local bundled root — dsh-skill-local `bundledSkillDir` default; the single canonical mount per roadmap D6. Frozen this iteration; local dev mounts the mirror `skills/` via `customSkillDirs` instead, but the canonical published form stays the bundled root) |
  * | pi | deferred — no plugin API in v1 (roadmap §8.4) |
  */
@@ -132,6 +138,7 @@ export function resolveSkillRoot(host: HostId, paths: SkillRootPaths): string {
     case "opencode":
       return `harness-skills/${skill}${suffix}`;
     case "kimi":
+    case "devin":
     case "zcode":
       return `./skills/${skill}${suffix}`;
     case "dsh":
@@ -152,7 +159,7 @@ export function resolveSkillRoot(host: HostId, paths: SkillRootPaths): string {
  * iteration); pi stays deferred until its plugin API lands.
  */
 export interface HostAdapter {
-  host: "opencode" | "omp" | "pi" | "dsh" | "cursor" | "codex" | "kimi" | "zcode";
+  host: HostId;
   /** Called before a status.json write; return a validation result the host
    * surfaces (non-blocking warn in v1, opt-in block in v2). */
   beforeStatusWrite?: (path: string, doc: unknown) => Promise<ValidationResult>;

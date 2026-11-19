@@ -73,11 +73,12 @@ import { compareSemver } from "../host-health/version-compare.js";
 
 const doctorTargets = ["opencode", "cursor", "codex", "zcode", "omp", "dsh", "kimi"] as const;
 const hostSignals = [
+  "run_subagent", "read_subagent", "message_user", "devin_*",
   "subagent_type", "question", "task_subagent", "task_agent_batch", "ask", "hub", "subagent",
   "team_task_create", "Agent", "AgentSwarm", "AskUserQuestion", "EnterPlanMode", "TodoWrite", "plan_slash", "goal",
   "functions.*", "tool_search",
 ] as const;
-const hostIds = ["opencode", "omp", "pi", "dsh", "cursor", "codex", "kimi", "zcode"] as const;
+const hostIds = ["opencode", "omp", "pi", "dsh", "cursor", "codex", "kimi", "zcode", "devin"] as const;
 const harnessRepoPath = path.join(os.homedir(), ".mstar", "harness");
 const harnessMarkers = [".codex-plugin/plugin.json", ".zcode-plugin/plugin.json", ".omp-plugin/plugin.json"];
 const agentsTemplate = `# AGENTS.md — .agents/ (harness layer)

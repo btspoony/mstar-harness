@@ -490,6 +490,16 @@ describe("bumpVersion (auto-bump, prerelease graduation)", () => {
 });
 
 describe("marketplace manifest surfaces (nested version locator)", () => {
+  test("Devin native manifest participates in release version alignment", () => {
+    const root = new URL("../", import.meta.url);
+    const manifest = JSON.parse(readFileSync(new URL(".devin-plugin/plugin.json", root), "utf8"));
+    const version = JSON.parse(readFileSync(new URL("package.json", root), "utf8")).version;
+    expect(manifest.version).toBe(version);
+    expect(VERSION_SURFACES.some((surface) => surface.path === ".devin-plugin/plugin.json")).toBe(true);
+    expect(manifest.skills).toBe(JSON.parse(readFileSync(new URL(".kimi-plugin/plugin.json", root), "utf8")).skills);
+    expect(manifest.mcpServers["morning-star"].args).toContain("mcp");
+    expect(manifest.hooks).toBeUndefined();
+  });
   test("both marketplace manifests are version surfaces located at plugins.0.version", () => {
     const nested = VERSION_SURFACES.filter((s) => s.versionPath !== undefined);
     expect(nested.map((s) => s.path).sort()).toEqual([".claude-plugin/marketplace.json", "marketplace.json"]);
