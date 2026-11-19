@@ -2,7 +2,7 @@
 
 Use this body interface when opening a standalone development PR or an iteration PR. Readers should understand the change and its evidence without reading the diff. This is not a new gate: it adds no receipt, validator or hash requirement and changes no acceptance or merge authorization.
 
-When a later push (including review fixes) invalidates published Evidence or Untested, refresh those sections in the same PR body.
+When a later push (including review fixes) invalidates published Evidence, Untested or Open findings, refresh those sections in the same PR body.
 
 Write the following in order.
 
