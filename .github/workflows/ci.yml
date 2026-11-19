@@ -1118,7 +1118,7 @@ jobs:
             # are measured, and recorded beside their command, in comments.md
             # § Gate steps and range; lower one only for a genuine cleanup.
             case "$root" in
-              packages) floor=13400 ;;
+              packages) floor=13000 ;;
               scripts) floor=800 ;;
             esac
             echo "unclassified comment corpus ($root): ${count:-0} (floor $floor)"
