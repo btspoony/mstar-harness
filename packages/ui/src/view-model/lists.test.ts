@@ -268,6 +268,14 @@ describe("projects", () => {
     expect(projectRow(listItem("_default", 1, null)).openIssuesText).toBe("1 open issue");
   });
 
+  test("an issue-only project has a count but no claimed catalog lifecycle", () => {
+    const row = projectRow({ project: { id: "default", title: "default", description: null, lifecycle: null }, openIssues: 2 });
+    expect(row.projectId).toBe("default");
+    expect(row.openIssues).toBe(2);
+    expect(row.lifecycle).toBe("");
+    expect(row.lifecycleTone).toBe("neutral");
+  });
+
   test("the identity block carries the path, the revision and the catalog's two dates", () => {
     const identity = projectIdentity(catalog({ kind: "project", id: "engine", title: "Engine" }));
     expect(identity.path).toBe("plans:p.md");
