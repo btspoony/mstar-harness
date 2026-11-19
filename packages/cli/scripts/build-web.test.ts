@@ -1,5 +1,5 @@
 /**
- * The dashboard bundle's acceptance: the offline guard, the regeneration the
+ * invariant: The dashboard bundle's acceptance: the offline guard, the regeneration the
  * generator promises, the single CSS output, the production React build, a React
  * root that boots without `htm`/`preact`, and both size budgets.
  *
