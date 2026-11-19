@@ -1,6 +1,8 @@
 # ADR: Issue push to Linear is one-way, marker-identified, and never guesses
 
-Status: implemented — push writes are explicit, identity comes from an application-owned marker, and an unconfirmed result stays ambiguous.
+Status: implemented — superseded: mstar no longer owns a push transport or credential; the live decision is 2026-11-19-host-owned-linear-io.md and only its ledger, skip-rule and marker-equality rules remain in force.
+
+Superseded-by: 2026-11-19-host-owned-linear-io.md
 
 Date: 2026-11-03
 
