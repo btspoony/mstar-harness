@@ -39,7 +39,7 @@ When assignment is marked `high-risk` (or a direct request is `high-risk` per §
 ### High-risk NEVER
 
 - **NEVER** run production-impacting or destructive changes while rollback targets, blast radius, or authorization are still ambiguous—return `Blocked` with the exact missing control instead of “best effort” execution.
-- **NEVER** substitute informal chat confirmation for the evidence and rollback steps in `references/qc-specialist/reviewer-checklist.md` when the assignment is marked high-risk.
+- **NEVER** substitute informal chat confirmation for the evidence and rollback steps in `references/qc-specialist/reviewer-checklist.md` when the assignment is marked high-risk or a direct request is `high-risk` per § Direct invocation.
 
 ## Branch & Worktree Gate
 
