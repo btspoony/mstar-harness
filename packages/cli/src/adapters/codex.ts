@@ -62,6 +62,7 @@ const CODEX_AGENT_NAMES = [
   "qc-specialist",
   "qc-specialist-2",
   "qc-specialist-3",
+  "code-reviewer",
   "ops-engineer",
   "writing-specialist",
   "prompt-engineer",
