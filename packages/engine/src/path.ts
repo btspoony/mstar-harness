@@ -125,6 +125,14 @@ function nearestExistingAncestor(target: string): string {
   }
 }
 
+/** True when a legacy directory actually carries harness state (not just corpus/plugins). */
+function looksLikeLegacyHarness(dir: string): boolean {
+  for (const marker of ["status.json", "store.db", "workflows", "projects", "plans", "iterations"]) {
+    if (existsSync(join(dir, marker))) return true;
+  }
+  return false;
+}
+
 /**
  * The one harness location — `<checkout>/.mstar` — with the retired
  * layouts refused by name. A missing `.mstar` returns `null` (the
@@ -138,7 +146,8 @@ export function resolveFixedHarnessDir(checkout: string): string | null {
   const fixed = join(checkout, ".mstar");
   if (isDirectory(fixed)) return fixed;
   for (const legacy of LEGACY_HARNESS_NAMES) {
-    if (isDirectory(join(checkout, legacy))) throw retiredCandidateError(checkout, legacy);
+    const dir = join(checkout, legacy);
+    if (isDirectory(dir) && looksLikeLegacyHarness(dir)) throw retiredCandidateError(checkout, legacy);
   }
   return null;
 }
@@ -862,7 +871,7 @@ function writeBootstrapMstarc(
   // repository root), from the directories the scaffold actually creates.
   const content =
     "; Morning Star harness layout for this repository.\n" +
-    "; The harness root is fixed at .mstar/ — only the tracked corpus layout is declared.\n" +
+    "; The harness root is fixed at .mstar/ \u2014 only the tracked corpus layout is declared.\n" +
     "[config]\n" +
     `knowledge_dir=${relative(root, corpus.knowledge)}\n` +
     `specs_dir=${relative(root, corpus.specs)}\n` +

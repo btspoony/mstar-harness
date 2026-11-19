@@ -250,7 +250,7 @@ function unpinnedRootFacts(
 ): Readonly<{ message: string; recovery: string; diagnostic: RefusalDiagnostic }> {
   return {
     message: `${definition.id} needs the call's "${field}" selector: this MCP connection carries no root of its own, and the command resolves its root from that field`,
-    recovery: `pass \`${field}\` naming this call's control root — the absolute \`<main worktree>/.mstar\` path; \`mstar path resolve\` prints it as \`controlHarnessDir\``,
+    recovery: `pass \`${field}\` naming this call's control root \u2014 the absolute \`<main worktree>/.mstar\` path; \`mstar path resolve\` prints it as \`controlHarnessDir\``,
     diagnostic: {
       path: field,
       code: "required",

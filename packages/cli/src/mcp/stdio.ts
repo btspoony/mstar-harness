@@ -115,7 +115,7 @@ function unresolvedControlRootMessage(cwd: string): string {
   return (
     `[mcp.control-root-unresolved] This call named no control root. ` +
     `The MCP server is one shared service, so its launch cwd (${cwd}) and its launch configuration never choose a repository. ` +
-    "Recovery: pass the call's `harness` selector naming the control root — the absolute `<main worktree>/.mstar` path. " +
+    "Recovery: pass the call's `harness` selector naming the control root \u2014 the absolute `<main worktree>/.mstar` path. " +
     "`mstar path resolve` prints it as `controlHarnessDir`; a linked worktree resolves to the main checkout's `.mstar`, never its own."
   );
 }

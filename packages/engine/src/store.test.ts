@@ -74,16 +74,16 @@ function tmpRoot(prefix: string): string {
  * window closes as soon as `fn` returns, which for an async callback is
  * immediately.
  */
-function withEnv<T>(value: string | undefined, fn: () => T): T {
-	const previous = process.env[ENV_KEY];
-	if (value === undefined) delete process.env[ENV_KEY];
-	else process.env[ENV_KEY] = value;
-	try {
-		return fn();
-	} finally {
-		if (previous === undefined) delete process.env[ENV_KEY];
-		else process.env[ENV_KEY] = previous;
-	}
+async function withEnv<T>(value: string | undefined, fn: () => T | Promise<T>): Promise<T> {
+  const previousCwd = process.cwd();
+  try {
+    // The process control root is derived from cwd under the fixed-root
+    // contract; chdir keeps the async call inside the fixture.
+    if (value !== undefined) process.chdir(value);
+    return await fn();
+  } finally {
+    process.chdir(previousCwd);
+  }
 }
 
 

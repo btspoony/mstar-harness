@@ -286,7 +286,7 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
   if (harnessDir !== fixed) {
     throw new SddScriptError(
       `mstar sdd workspace: the harness root is fixed at ${fixed}; the supplied harness root "${harnessDir}" does not match.\n` +
-        `  The root is never relocated — drop the override.`,
+        `  The root is never relocated \u2014 drop the override.`,
       1,
     );
   }
