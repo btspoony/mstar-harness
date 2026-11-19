@@ -57,15 +57,22 @@ let js = "";
 let css = "";
 let generation = 0;
 
+type ShellElement = { tagName: string; properties: Record<string, unknown> };
+
+function elementsOf(node: { type: string; children?: unknown[] }): ShellElement[] {
+  const own = node.type === "element" ? [node as unknown as ShellElement] : [];
+  return own.concat(((node.children ?? []) as Array<{ type: string; children?: unknown[] }>).flatMap(elementsOf));
+}
+
 async function expectUsableAssets(modulePath: string) {
   const generated = await import(`${modulePath}?generation=${generation++}`);
   expect(typeof generated.dashboardHtml).toBe("string");
   expect(typeof generated.dashboardJs).toBe("string");
   expect(typeof generated.dashboardCss).toBe("string");
-  const document = fromHtml(generated.dashboardHtml);
-  expect(document.children.some((node) => node.type === "element" && node.tagName === "html")).toBe(true);
-  expect(generated.dashboardHtml).toContain('"/assets/app.js"');
-  expect(generated.dashboardHtml).toContain('"/assets/app.css"');
+  const shell = elementsOf(fromHtml(generated.dashboardHtml));
+  expect(shell.some((el) => el.tagName === "link" && el.properties.rel?.toString() === "stylesheet" && el.properties.href === "/assets/app.css")).toBe(true);
+  expect(shell.some((el) => el.tagName === "script" && el.properties.src === "/assets/app.js")).toBe(true);
+  expect(shell.some((el) => el.tagName === "div" && el.properties.id === "app")).toBe(true);
   expect(new Bun.Transpiler({ loader: "js" }).scan(generated.dashboardJs).imports).toEqual([]);
   expect(generated.dashboardJs).toContain("getElementById");
   expect(carriesDevelopmentReact(generated.dashboardJs)).toBe(false);
