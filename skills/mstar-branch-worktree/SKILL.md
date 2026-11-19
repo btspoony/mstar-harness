@@ -11,7 +11,7 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 
 ## Scope（摘要）
 
-- **仅 PM 决定分支**；其他可写角色不得自行新开分支或切回 `main`。
+- **仅 PM 决定分支**（例外：直接调用的 `ops-engineer` 由调用方按下行三式之一声明 → `mstar-roles/references/ops-engineer.md` § Direct invocation）；其他可写角色不得自行新开分支或切回 `main`。
 - **Assignment 须含其一**：`Working branch: <existing>` | `create <new> from <base>` | `Branch policy: direct on <branch> — <reason>`。
 - **L1:** Git-derived main/control root + separate recorded integration checkout + distinct row metadata.worktree_path/source branch. Atomic coordination and serial integration remain; no per-row execution lease.
 - **L2（同 plan 内 ≥2 可写并发）**：派发 **前** 完成 **`references/parallel-writable-pre-dispatch.md`**（含 `git worktree`、绝对 **`Worktree path`**；**N 次并行 invoke ≠ 已隔离**）。单 plan 多轨时 **L1 不替代 L2**。

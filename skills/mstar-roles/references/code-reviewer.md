@@ -97,7 +97,7 @@ Follow the `pr` variant output shape in **`mstar-audit/references/pr-review.md`*
 
 ## Direct invocation
 
-Supported for Mode B and Mode C; shared contract → **`references/_shared/leaf-executor-core.md`** § Direct invocation. Mode A needs a PM-dispatched SDD task brief, implementer report and task diff: a direct Mode A request is `Blocked` pending that dispatch. A direct Mode C request runs as one read-only seat and returns its findings to the caller; the multi-seat pipeline, synthesis and GitHub Review post stay with the PR-review command's main agent (`mstar-audit/references/pr-review.md`); never APPROVE / REQUEST_CHANGES or merge.
+Supported for Mode B and Mode C; shared contract → **`references/_shared/leaf-executor-core.md`** § Direct invocation. A direct Mode B audit has the caller as orchestrator/entry in place of PM: scout fan-out needs the caller's `Delegation: allowed (scout/explore only, read-only)`, else the audit runs single-seat and its Coverage section names the categories left unexamined. Mode A needs a PM-dispatched SDD task brief, implementer report and task diff: a direct Mode A request is `Blocked` pending that dispatch. A direct Mode C request runs as one read-only seat and returns its findings to the caller; the multi-seat pipeline, synthesis and GitHub Review post stay with the PR-review command's main agent (`mstar-audit/references/pr-review.md`); never APPROVE / REQUEST_CHANGES or merge.
 
 ## Non-Recursive Dispatch Rule (Hard)
 
