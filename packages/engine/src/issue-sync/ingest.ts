@@ -4,24 +4,32 @@
  *
  * It writes NOTHING outside the sync ledger: no local issue is created, updated
  * or closed, and no remote issue is touched. The association key is
- * \`(repo, local)\` read from the correlation marker (\`marker.ts\`), so the same
+ * `(repo, local)` read from the correlation marker (`marker.ts`), so the same
  * local id in two different repositories never collides:
  *
- * 1. the marker decodes, its \`repo\` is this repository's, its \`author\` is this
- *    checkout's, and \`local\` exists here → ASSOCIATE: the push row takes the
+ * 1. the marker decodes, its `repo` is this repository's, its `author` is this
+ *    checkout's, and `local` exists here → ASSOCIATE: the push row takes the
  *    remote id when it has none, takes the remote revision watermark, and the
  *    remote content is compared with the hash mstar last confirmed for it. A
  *    difference is DRIFT: reported, never repaired (mstar does not write back).
- * 2. ... its \`author\` differs from this checkout's → FOREIGN: another
+ * 2. ... its `author` differs from this checkout's → FOREIGN: another
  *    operator's clone of the same repository pushed it. Reported, no write.
- * 3. ... \`local\` is unknown in this store → ORPHAN. Reported, no write.
+ * 3. ... `local` is unknown in this store → ORPHAN. Reported, no write.
  * 4. no marker, a marker of the deleted format, or another repository's marker
  *    → UNMANAGED. Never adopted by title or description, and never written.
  *
  * shortcut: association is repo + local + git author, not a store id, so two
- * stores of the same repository used by one author can both hold \`I-000123\`; a
+ * stores of the same repository used by one author can both hold `I-000123`; a
  * content difference then shows up as drift for the operator to resolve.
  * Revisit if same-author multi-clone drift becomes common.
+ *
+ * This ingest deliberately bypasses the run lease. Association is not a send
+ * right: it records a FACT about the remote (this issue carries this marker),
+ * so two concurrent ingests associate the same fact and nothing races. What
+ * protects a residue from being claimed by a run that did not plan it is the
+ * unclaimed-row guard in `push.ts` `recordResults`, not this lease - which is
+ * also why the association must never be recorded after an identity-conflict
+ * refusal.
  */
 import type { StoreDb } from "../store-db.js";
 import type { LinearFacetMapping } from "../mstarc.js";
@@ -59,17 +67,17 @@ export type IngestReport = {
 
 /** Everything one ingest needs that is not the listing. */
 export type IngestContext = {
-  /** \`"linear:<project_id>"\`, the ledger's binding key. */
+  /** `"linear:<project_id>"`, the ledger's binding key. */
   bindingId: string;
   /** This checkout's repository identity and git author. */
   identity: { repo: string; author: string };
-  /** The \`.mstarc\` mapping the pushed payload was built with. */
+  /** The `.mstarc` mapping the pushed payload was built with. */
   mapping?: LinearFacetMapping;
 };
 
 /**
- * The payload hash a remote record describes, in the same shape \`requestHash\`
- * hashes, so it is comparable with the ledger's \`last_request_hash\`.
+ * The payload hash a remote record describes, in the same shape `requestHash`
+ * hashes, so it is comparable with the ledger's `last_request_hash`.
  *
  * shortcut: the priority band is recovered through the severity round trip, so
  * an absent or unrecognized remote priority reads as the medium band (3) rather
@@ -96,8 +104,8 @@ function localIssueExists(db: StoreDb, localId: string): boolean {
  * none, and the remote revision watermark always.
  *
  * A row that never existed is opened first, because the ledger has no way to
- * record an identity without a cycle — the row ends \`applied\`, so the next
- * \`pending\` plans an update of the existing remote issue instead of creating a
+ * record an identity without a cycle — the row ends `applied`, so the next
+ * `pending` plans an update of the existing remote issue instead of creating a
  * second one.
  */
 function associate(db: StoreDb, context: IngestContext, localId: string, record: ProviderItem): void {

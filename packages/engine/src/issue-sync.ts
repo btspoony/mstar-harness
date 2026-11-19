@@ -400,7 +400,7 @@ export function claimItem(db: StoreDb, input: PlanItemInput): { claimed: boolean
 // The run lease: ONE push run per binding, arbitrated by this store's writes
 // ---------------------------------------------------------------------------
 //
-// `mstar issue-sync push` is an operator command, not a concurrent service, so
+// `mstar issue-sync pending` is an operator command, not a concurrent service, so
 // the direction is serialized instead of being made safe under concurrency.
 // Every attempt to harden a per-item claim against a second run failed for one
 // structural reason: the claim key can only describe a candidate (content), and
@@ -513,8 +513,14 @@ export function acquireRun(db: StoreDb, input: AcquireRunInput): RunLease {
       .prepare(
         "insert into sync_runs(binding_id, direction, run_id, holder_pid, holder_host, started_at, reason) values (?, ?, ?, ?, ?, ?, ?)" +
           (input.takeRun === true
+            // The replacement keeps the ORIGINAL started_at: it is the baseline
+            // every earlier claim of this direction is judged against, so a
+            // predecessor's opened cycle stays recognisable to its successor
+            // (`push.ts` `openedByThisRun`) — which is exactly the residue a
+            // takeover exists to resolve. The new token, holder and reason are
+            // what change.
             ? " on conflict(binding_id, direction) do update set run_id = excluded.run_id, holder_pid = excluded.holder_pid," +
-              " holder_host = excluded.holder_host, started_at = excluded.started_at, reason = excluded.reason"
+              " holder_host = excluded.holder_host, reason = excluded.reason"
             : " on conflict(binding_id, direction) do nothing"),
       )
       .run(bindingId, direction, runId, input.holderPid, holderHost, now, reason) as { changes: number };
@@ -523,9 +529,9 @@ export function acquireRun(db: StoreDb, input: AcquireRunInput): RunLease {
       throw new SyncError(
         "sync.run-held",
         `another ${direction} run holds ${bindingId}: run ${held.runId} started at ${held.startedAt} as pid ` +
-          `${held.holderPid} on host ${JSON.stringify(held.holderHost)}. Nothing was written by this run. Wait for it to finish, then ` +
-          `run \`mstar issue-sync push --project <project-id>\` again; or, after confirming that holder is dead, take the run over with ` +
-          `\`mstar issue-sync push --project <project-id> --take-run\`.`,
+          `${held.holderPid} on host ${JSON.stringify(held.holderHost)}. Nothing was written by this run. Wait for that holder to ` +
+          `finish, then re-run \`mstar issue-sync pending --project <project-id>\`; or, after confirming that holder is dead, take the ` +
+          `run over with \`mstar issue-sync apply --project <project-id> --results <file|-> --take-run\`.`,
       );
     }
     return readRun(db, { bindingId, direction })!;

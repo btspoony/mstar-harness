@@ -659,16 +659,17 @@ describe("the run lease serialises one direction, with an explicit takeover", ()
 
   test("a second acquisition is refused naming the holder, its start time and both exits", async () => {
     const { db, close } = await openedStore("run-held");
-    const held = acquireRun(db, { ...RUN, reason: "issue-sync push" });
-    expect(held).toMatchObject({ holderPid: 4242, holderHost: "builder-1", reason: "issue-sync push" });
-    const error = errorOf(() => acquireRun(db, { ...RUN, holderPid: 4243, holderHost: "builder-2", reason: "issue-sync push" }));
+    const held = acquireRun(db, { ...RUN, reason: "issue-sync pending" });
+    expect(held).toMatchObject({ holderPid: 4242, holderHost: "builder-1", reason: "issue-sync pending" });
+    const error = errorOf(() => acquireRun(db, { ...RUN, holderPid: 4243, holderHost: "builder-2", reason: "issue-sync pending" }));
     // The operator judging liveness needs the holder's facts, not "already running".
     expect(error.message).toContain(held.startedAt);
     expect(error.message).toContain("4242");
     expect(error.message).toContain('"builder-1"');
     // Both exits are named, and both are executable: wait, or take it over.
     expect(error.message).toContain("--take-run");
-    expect(error.message).toContain("mstar issue-sync push --project <project-id>");
+    expect(error.message).toContain("mstar issue-sync pending --project <project-id>");
+    expect(error.message).toContain("mstar issue-sync apply --project <project-id> --results <file|-> --take-run");
     // Nothing was replaced: the first holder still owns the direction.
     expect(readRun(db, RUN)).toEqual(held);
     close();
@@ -678,10 +679,10 @@ describe("the run lease serialises one direction, with an explicit takeover", ()
     const { db, close } = await openedStore("run-crash-residue");
     // A run killed inside its provider call leaves its row behind - the exact
     // failure mode no timer is allowed to resolve on its own.
-    const dead = acquireRun(db, { ...RUN, reason: "issue-sync push" });
+    const dead = acquireRun(db, { ...RUN, reason: "issue-sync pending" });
     expect(readRun(db, RUN)).toEqual(dead);
 
-    const refused = errorOf(() => acquireRun(db, { ...RUN, holderPid: 5000, reason: "issue-sync push" }));
+    const refused = errorOf(() => acquireRun(db, { ...RUN, holderPid: 5000, reason: "issue-sync pending" }));
     expect(refused.message).toContain(dead.startedAt);
     expect(refused.message).toContain("--take-run");
 
@@ -689,6 +690,10 @@ describe("the run lease serialises one direction, with an explicit takeover", ()
     const taken = acquireRun(db, { ...RUN, holderPid: 5000, holderHost: "builder-2", reason: "operator took the run over with --take-run", takeRun: true });
     expect(taken.runId).not.toBe(dead.runId);
     expect(taken).toMatchObject({ holderPid: 5000, holderHost: "builder-2", reason: "operator took the run over with --take-run" });
+    // The ORIGINAL start survives the replacement: it is the baseline a
+    // predecessor's claim is judged against, so the successor can still close
+    // the cycle the dead holder opened.
+    expect(taken.startedAt).toBe(dead.startedAt);
     // REPLACED, never coexisting: one row, and it is the taker's.
     const rows = db.prepare("select run_id from sync_runs where binding_id = ? and direction = ?").all(RUN.bindingId, RUN.direction) as Array<{ run_id: string }>;
     expect(rows).toEqual([{ run_id: taken.runId }]);
@@ -698,7 +703,7 @@ describe("the run lease serialises one direction, with an explicit takeover", ()
 
   test("the taken-over run's own release deletes nothing, so it cannot free its successor", async () => {
     const { db, close } = await openedStore("run-release-stale");
-    const dead = acquireRun(db, { ...RUN, reason: "issue-sync push" });
+    const dead = acquireRun(db, { ...RUN, reason: "issue-sync pending" });
     const taken = acquireRun(db, { ...RUN, holderPid: 5000, reason: "operator took the run over with --take-run", takeRun: true });
     // The predecessor's `finally` runs late: its token no longer matches.
     expect(releaseRun(db, { ...RUN, runId: dead.runId })).toBe(false);
@@ -707,16 +712,16 @@ describe("the run lease serialises one direction, with an explicit takeover", ()
     // The holder's own release does free the direction, and the next run acquires it.
     expect(releaseRun(db, { ...RUN, runId: taken.runId })).toBe(true);
     expect(readRun(db, RUN)).toBeNull();
-    const next = acquireRun(db, { ...RUN, holderPid: 6000, holderHost: "builder-3", reason: "issue-sync push" });
+    const next = acquireRun(db, { ...RUN, holderPid: 6000, holderHost: "builder-3", reason: "issue-sync pending" });
     expect(next.holderPid).toBe(6000);
     close();
   });
 
   test("the lease is per binding and per direction", async () => {
     const { db, close } = await openedStore("run-scope");
-    acquireRun(db, { ...RUN, reason: "issue-sync push" });
+    acquireRun(db, { ...RUN, reason: "issue-sync pending" });
     // Another binding, and the import direction of the same binding, are free.
-    expect(acquireRun(db, { ...RUN, bindingId: "linear:p-other", reason: "issue-sync push" }).bindingId).toBe("linear:p-other");
+    expect(acquireRun(db, { ...RUN, bindingId: "linear:p-other", reason: "issue-sync pending" }).bindingId).toBe("linear:p-other");
     expect(acquireRun(db, { ...RUN, direction: "import", reason: "issue-sync import" }).direction).toBe("import");
     close();
   });
