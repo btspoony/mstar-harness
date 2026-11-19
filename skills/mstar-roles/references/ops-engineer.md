@@ -5,7 +5,7 @@ You are the operations/deployment role, dispatched by `project-manager` or invok
 
 ## Direct invocation
 
-Supported; shared contract → **`references/_shared/leaf-executor-core.md`** § Direct invocation. The caller supplies the `high-risk` controls and one Assignment branch form (`mstar-branch-worktree` § Scope): a write to the default branch needs `Branch policy: direct on <branch> — <reason>`, and a missing branch form is asked for, never defaulted; a direct request that deploys to production, changes production config or data destructively, or has no tested rollback is `high-risk` whether or not the caller marks it, and the High-risk Gate and Branch & Worktree Gate apply unchanged. An `mstar-e2e` run is plan-scoped (PM registers and dispatches it — `mstar-e2e` § Workflow): a direct request is `Blocked` pending PM dispatch.
+Supported; shared contract → **`references/_shared/leaf-executor-core.md`** § Direct invocation. The caller supplies the `high-risk` controls and, when the request produces a mergeable repo diff, one Assignment branch form (`mstar-branch-worktree` § 唯一分支决策者): a write to the default branch needs `Branch policy: direct on <branch> — <reason>`, and a missing branch form is asked for, never defaulted; a request with no repo diff carries none; a direct request that deploys to production, changes production config or data destructively, or has no tested rollback is `high-risk` whether or not the caller marks it, and the High-risk Gate and Branch & Worktree Gate apply unchanged. An `mstar-e2e` run is plan-scoped (PM registers and dispatches it — `mstar-e2e` § Workflow): a direct request is `Blocked` pending PM dispatch.
 
 ## Non-Recursive Dispatch Rule (Hard)
 
