@@ -45,6 +45,7 @@ import type { StoreDb } from "../store-db.js";
 import type { Disposition, IssueKind, Severity } from "../issue.js";
 import type { LinearFacetMapping } from "../mstarc.js";
 import {
+  isOlderInstant,
   SyncError,
   claimItem,
   markApplied,
@@ -52,6 +53,7 @@ import {
   markUnconfirmed,
   planItem as openLedgerCycle,
   readItem,
+  readRun,
   recordRefusal,
   requireRunLease,
   type SyncItem,
@@ -314,7 +316,10 @@ export function planItem(db: StoreDb, context: PushContext, candidate: PushCandi
     return {
       localId,
       outcome: "unresolved",
-      cause: "this create could not take the send right; the ledger's row decides the outcome and reconciliation resolves it",
+      cause:
+        "this create could not take the send right because the ledger's row already decides it; nothing was sent for this item. " +
+        "Run 'mstar issue-sync ingest' with a listing so an issue carrying this item's marker is associated with it, or record the identity with " +
+        "'mstar issue-sync apply --adopt <localId>=<issueUrl|externalId>'",
     };
   }
   return { outcome: "planned", plan: { localId, operation: "create", externalId: null, payload, marker, requestHash: hash } };
@@ -331,6 +336,11 @@ export function planItem(db: StoreDb, context: PushContext, candidate: PushCandi
  * out-of-contract transition is that item's refusal, so one bad entry cannot
  * abort a whole run's report. A lease refusal is the exception — the run no
  * longer owns the direction, so the whole run stops.
+ *
+ * A `confirmed` result is refused as that item's failure when the row is a
+ * `pending` create this run did not open (see `openedByThisRun`): recording an
+ * identity there would silently adopt whatever the caller named, bypassing the
+ * marker association and the operator's `--adopt`.
  *
  * shortcut: the payload hash is recomputed from the item's CURRENT content, so
  * an edit between plan and results records a hash for content the remote never
@@ -365,7 +375,12 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
     const lease = context.runId === undefined ? {} : { runId: context.runId };
 
     if (result.outcome === "refused") {
-      return failed(db, context, localId, "linear.write-refused", result.cause ?? "the remote refused the write", true, hash);
+      // The item is retryable and the report must say how: the cause alone leaves
+      // the operator with a failure and no next step.
+      const cause =
+        (result.cause ?? "the remote refused the write") +
+        " - nothing was applied; fix that cause in Linear, then run 'mstar issue-sync pending' again, which plans the same write";
+      return failed(db, context, localId, "linear.write-refused", cause, true, hash);
     }
     if (result.outcome === "ambiguous") {
       if (ledger.externalId === null) {
@@ -377,7 +392,9 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
           localId,
           outcome: "unconfirmed",
           externalId: null,
-          cause: result.cause ?? "the remote did not confirm the create; reconcile it by its correlation marker",
+          cause:
+            (result.cause ?? "the remote did not confirm the create") +
+            " - it stays unconfirmed: run 'mstar issue-sync ingest' with a listing so its marker associates the issue, or record the identity with 'mstar issue-sync apply --adopt <localId>=<issueUrl|externalId>'",
         };
       }
       // An update the remote did not confirm: the identity stands, but the
@@ -404,7 +421,21 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
     if (externalId === null) {
       throw new SyncError(
         "sync.invalid-input",
-        "a confirmed result must name the remote issue in 'externalId'; nothing was recorded for this item",
+        "a confirmed result must name the remote issue in 'externalId'; nothing was recorded for this item. Re-send the entry with the identifier the tool returned",
+      );
+    }
+    // A `pending` row with no id is an OPEN create cycle, and only the run that
+    // opened it may close it with an identity: its claim is the cycle's intent
+    // record and the reason the caller is entitled to report a delivery. For any
+    // other run this is a crashed attempt's residue, whose identity must come from
+    // the marker ('ingest') or from the operator ('--adopt') — recording the
+    // caller's id here would adopt silently and could bind a duplicate.
+    if (ledger.itemState === "pending" && ledger.externalId === null && !openedByThisRun(db, context, ledger)) {
+      throw new SyncError(
+        "sync.illegal-transition",
+        "this create cycle was opened by an earlier run and never confirmed, so this result cannot record an identity on it and nothing was written. " +
+          "Associate the remote issue by its marker with 'mstar issue-sync ingest', or record the identity you confirmed yourself with " +
+          "'mstar issue-sync apply --adopt <localId>=<issueUrl|externalId>'",
       );
     }
     markApplied(db, {
@@ -425,6 +456,28 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
     if (error instanceof SyncError && error.code === "sync.run-taken") throw error;
     return { localId, outcome: "refused", externalId: null, cause: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * Did the run `apply` is recording for OPEN this create cycle?
+ *
+ * The claim is the only ledger write a `pending` create row ever receives, so the
+ * row's `updatedAt` is the moment it was claimed. A run that started AFTER that
+ * write is a different attempt: its results cannot describe this cycle's remote
+ * issue, because the cycle belongs to the attempt that opened it.
+ *
+ * shortcut: evidence is time-based, so a residue of the SAME run this apply
+ * continues still reads as planned, and a caller with no lease at all is taken as
+ * having planned the cycle; revisit if either bound starts to matter.
+ */
+function openedByThisRun(db: StoreDb, context: PushContext, ledger: SyncItem): boolean {
+  // A caller with no lease has no "this run" to compare against: its plan/record
+  // pair is the whole evidence, so the cycle is taken as planned. The command
+  // path always carries a lease, and that is where the reviewed adoption hole was.
+  if (context.runId === undefined) return true;
+  const run = readRun(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION });
+  if (run === null || run.runId !== context.runId) return false;
+  return !isOlderInstant(ledger.updatedAt, run.startedAt);
 }
 
 /**

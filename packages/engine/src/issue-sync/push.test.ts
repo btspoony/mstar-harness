@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { initializeStore, type StoreDb } from "../store-db.js";
 import type { IssueKind, Severity } from "../issue.js";
-import { acquireRun, readItem, type SyncItem } from "../issue-sync.js";
+import { acquireRun, readItem, releaseRun, type SyncItem } from "../issue-sync.js";
 import { SyncError } from "../issue-sync.js";
 import type { ProviderItem } from "./provider.js";
 import { encodeMarker } from "./marker.js";
@@ -391,6 +391,56 @@ describe("the run lease bounds every write", () => {
       expect(recordResults(db, ctx, [{ localId: "I-000952", outcome: "confirmed", externalId: "LIN-1" }])[0]!.outcome).toBe(
         "applied",
       );
+    } finally {
+      close();
+    }
+  });
+});
+
+describe("a confirmed result never records an identity on another run's create", () => {
+  test("a create owned by an earlier run is refused, naming both supported recoveries", async () => {
+    const { db, close } = await openedStore("unclaimed-receipt");
+    try {
+      addIssue(db, "I-000955");
+      // Run 1 opens the cycle and then ends without a result: the row is the
+      // crashed attempt's residue, the only record that a remote issue may exist.
+      const first = lease(db);
+      plan(db, context({ runId: first.runId }), "I-000955");
+      expect(releaseRun(db, { bindingId: BINDING, direction: "push", runId: first.runId })).toBe(true);
+
+      // A later run reporting delivery for that residue would silently adopt
+      // whatever identity it names, so it is that item's refusal instead. The
+      // guard compares instants, so the later run must start in a later
+      // millisecond than the claim it is judged against.
+      await Bun.sleep(2);
+      const later = lease(db, { holderPid: 4343 });
+      const [outcome] = recordResults(db, context({ runId: later.runId }), [
+        { localId: "I-000955", outcome: "confirmed", externalId: "LIN-99" },
+      ]);
+      expect(outcome.outcome).toBe("refused");
+      expect(outcome.cause).toContain("mstar issue-sync ingest");
+      expect(outcome.cause).toContain("--adopt <localId>=<issueUrl|externalId>");
+      // Nothing was written: the residue stays discoverable by its marker.
+      expect(row(db, "I-000955")).toMatchObject({ itemState: "pending", externalId: null, lastError: null });
+    } finally {
+      close();
+    }
+  });
+
+  test("the run that opened the cycle records the identity exactly as before", async () => {
+    const { db, close } = await openedStore("claimed-receipt");
+    try {
+      addIssue(db, "I-000956");
+      const held = lease(db);
+      const ctx = context({ runId: held.runId });
+      const planned = plan(db, ctx, "I-000956");
+      const [outcome] = recordResults(db, ctx, [{ localId: "I-000956", outcome: "confirmed", externalId: "LIN-1" }]);
+      expect(outcome).toMatchObject({ outcome: "applied", externalId: "LIN-1" });
+      expect(row(db, "I-000956")).toMatchObject({
+        itemState: "applied",
+        externalId: "LIN-1",
+        lastRequestHash: planned.requestHash,
+      });
     } finally {
       close();
     }

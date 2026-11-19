@@ -264,15 +264,20 @@ describe("apply", () => {
     expect(result.data.runId).toBe(pending.data.runId);
     expect(result.data.counts).toEqual({ applied: 1, unconfirmed: 1, refused: 1 });
     expect(result.data.items).toEqual([
-      { localId: "I-000101", outcome: "applied", externalId: "LIN-11" },
-      {
+      expect.objectContaining({ localId: "I-000101", outcome: "applied", externalId: "LIN-11" }),
+      expect.objectContaining({
         localId: "I-000102",
         outcome: "refused",
         externalId: null,
-        cause: "[linear.write-refused] label risk does not exist in team ENG",
-      },
-      { localId: "I-000103", outcome: "unconfirmed", externalId: null, cause: "tool call timed out after send" },
+      }),
+      expect.objectContaining({ localId: "I-000103", outcome: "unconfirmed", externalId: null }),
     ]);
+    // The causes are the tool's own words plus the one-line recovery: a failure
+    // report that names no next step leaves the operator stuck.
+    expect(result.data.items[1].cause).toContain("[linear.write-refused] label risk does not exist in team ENG");
+    expect(result.data.items[1].cause).toContain("mstar issue-sync pending");
+    expect(result.data.items[2].cause).toContain("tool call timed out after send");
+    expect(result.data.items[2].cause).toContain("mstar issue-sync ingest");
 
     expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "applied", externalId: "LIN-11" });
     expect(await rowOf(f, "I-000102")).toMatchObject({ itemState: "failed", externalId: null });

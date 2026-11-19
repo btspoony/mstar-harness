@@ -22,9 +22,13 @@ export type SyncDirection = "import" | "push";
 export type SyncItemState = "unbound" | "pending" | "applied" | "failed" | "skipped";
 
 /**
- * The `sync.*` codes are this module's own; the `linear.*` entries are the
- * provider-side vocabulary the contract documents for cross-reference (§4) and
- * that the P3 adapter and ingest emit — one name per condition, no synonyms.
+ * The `sync.*` codes are this module's own and every one has a live emitter.
+ * `linear.write-refused` is the single remote-side code left: it is what a
+ * caller's refusal becomes when its result is recorded, and mstar performs no
+ * request that could fail on its own. The retired provider-transport codes
+ * (query-failed, list-unimplemented, host-unavailable, access-denied,
+ * scope-insufficient, write-ambiguous, label-unresolved, state-unresolved) went
+ * with the deleted adapter: nothing emits them any more.
  */
 export type SyncErrorCode =
   | "sync.not-found"
@@ -37,16 +41,7 @@ export type SyncErrorCode =
   | "sync.operator-conflict"
   | "sync.run-held"
   | "sync.run-taken"
-  | "linear.query-failed"
-  | "linear.identity-collision"
-  | "linear.list-unimplemented"
-  | "linear.host-unavailable"
-  | "linear.access-denied"
-  | "linear.write-refused"
-  | "linear.write-ambiguous"
-  | "linear.label-unresolved"
-  | "linear.state-unresolved"
-  | "linear.scope-insufficient";
+  | "linear.write-refused";
 
 export class SyncError extends Error {
   readonly code: SyncErrorCode;
