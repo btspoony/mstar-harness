@@ -22,9 +22,13 @@ export type SyncDirection = "import" | "push";
 export type SyncItemState = "unbound" | "pending" | "applied" | "failed" | "skipped";
 
 /**
- * The `sync.*` codes are this module's own; the `linear.*` entries are the
- * provider-side vocabulary the contract documents for cross-reference (§4) and
- * that the P3 adapter and ingest emit — one name per condition, no synonyms.
+ * The `sync.*` codes are this module's own and every one has a live emitter.
+ * `linear.write-refused` is the single remote-side code left: it is what a
+ * caller's refusal becomes when its result is recorded, and mstar performs no
+ * request that could fail on its own. The retired provider-transport codes
+ * (query-failed, list-unimplemented, host-unavailable, access-denied,
+ * scope-insufficient, write-ambiguous, label-unresolved, state-unresolved) went
+ * with the deleted adapter: nothing emits them any more.
  */
 export type SyncErrorCode =
   | "sync.not-found"
@@ -37,16 +41,7 @@ export type SyncErrorCode =
   | "sync.operator-conflict"
   | "sync.run-held"
   | "sync.run-taken"
-  | "linear.query-failed"
-  | "linear.identity-collision"
-  | "linear.list-unimplemented"
-  | "linear.host-unavailable"
-  | "linear.access-denied"
-  | "linear.write-refused"
-  | "linear.write-ambiguous"
-  | "linear.label-unresolved"
-  | "linear.state-unresolved"
-  | "linear.scope-insufficient";
+  | "linear.write-refused";
 
 export class SyncError extends Error {
   readonly code: SyncErrorCode;
@@ -753,7 +748,7 @@ export function markFailed(db: StoreDb, input: MarkFailedInput): SyncItem {
  * `markFailed` is the retry edge, and it is right for a row that owns no
  * ambiguity: a refused write was never delivered, so the next run may retry.
  * It is wrong for a `pending` row with no id, because that row IS an
- * unattributed remote issue — `reconcilePendingCreate` scans exactly that
+ * unattributed remote issue — `push.ts`'s `reconcileWith` scans exactly that
  * shape. Downgrading it to `failed` would hide it from reconciliation, let the
  * next run create a second remote issue, and leave the first one permanently
  * unadoptable once its marker matches twice.
