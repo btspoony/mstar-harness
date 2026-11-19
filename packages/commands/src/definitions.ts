@@ -15,7 +15,6 @@ import { getCatalogCommandDefinitions } from "./families/catalog.js";
 import { getRoadmapCommandDefinitions } from "./families/roadmap.js";
 import { getMilestoneCommandDefinitions } from "./families/milestone.js";
 import { getProjectCommandDefinitions } from "./families/project.js";
-import { getLinearCommandDefinitions } from "./families/linear.js";
 import { getIssueSyncCommandDefinitions } from "./families/issue-sync.js";
 import { getSddCommandDefinitions } from "./families/sdd.js";
 import { getValidationCommandDefinitions } from "./families/validation.js";
@@ -164,7 +163,6 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getDashboardCommandDefinitions(),
   ...getSchemaCommandDefinitions(),
   ...getReportCommandDefinitions(),
-  ...getLinearCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
 const commandSchemasById = new Map(getCommandSchemas(canonicalDefinitions).map((descriptor) => [descriptor.id, descriptor] as const));

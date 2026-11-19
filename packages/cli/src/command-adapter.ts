@@ -15,12 +15,7 @@ import {
 } from "@mstar-harness/commands";
 import {
   assertSafeSessionId,
-  beginAuthorization,
   decodeExecutionSessionRef,
-  discoverAuthorizationServer,
-  exchangeCode,
-  refreshToken,
-  registerClient,
   validateExecutionIdentity,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
@@ -839,29 +834,6 @@ function cliEffects(services: Array<{ close(): Promise<void> }>, signal: AbortSi
       const handle = { url: running.url, async close() { await running.close(); } };
       services.push(handle);
       return handle;
-    },
-    async linearRefresh(mcpUrl: string, clientId: string, stored: string) {
-      // The authorization server is rediscovered from the endpoint rather than
-      // remembered: its location is metadata, and a stored copy would go stale.
-      const authorizationServer = await discoverAuthorizationServer(mcpUrl);
-      const tokens = await refreshToken(authorizationServer, clientId, stored);
-      return tokens;
-    },
-    async linearAuthorize(mcpUrl: string) {
-      // The browser leg is the shared engine module; this only owns the platform
-      // interaction it needs. Nothing here sees or prints a token.
-      const authorizationServer = await discoverAuthorizationServer(mcpUrl);
-      const pending = await beginAuthorization(authorizationServer, (redirectUri) =>
-        registerClient(authorizationServer, redirectUri),
-      );
-      try {
-        await openBrowserBounded(pending.url, signal);
-        process.stderr.write(`Authorize in the browser; waiting for the callback on ${pending.redirectUri}\n`);
-        const code = await pending.wait();
-        return await exchangeCode(authorizationServer, { clientId: pending.clientId, redirectUri: pending.redirectUri }, code, pending.verifier);
-      } finally {
-        pending.close();
-      }
     },
     openBrowser(url: string) {
       return openBrowserBounded(url, signal);

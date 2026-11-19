@@ -26,23 +26,17 @@
 # agent. Everything a caller needs is on this connection.
 #
 # The `linear-mcp` row is the same bridge pointed at Linear's hosted MCP
-# server. It ships DISABLED: Linear needs an OAuth grant (or a team-scoped API
-# key) that only the operator can supply, and an enabled-but-unauthenticated
-# row would spend a startup probe on a 401 and log a connection failure every
-# boot. Enable it by overriding the row in the profile (or home) layer with
-# `disabled: false`. The row carries NO token in config: its `headers` is the
-# `!!js` expression below, evaluated by the loader against the row's own
-# context, which reads the machine credential through the `mstarLinearAuth`
-# service (`packages/dsh/src/linear-settings.ts`, fed by the Settings
-# Authorize action or `mstar linear auth login`). The bearer therefore lives
-# only in host memory — a profile patch, a config dump or a settings payload
-# keeps the expression text. `inject` is what lets the expression resolve that
-# service; the row stays disabled until a human enables it, and enabling it
-# never grants a credential by itself. With no stored credential the
-# expression yields no header and the server's own OAuth challenge applies.
-# A non-blank `serverName` is required: it namespaces the tools as
-# `mcp__linear__<tool>`. The row is not part of the mstar MCP channel above —
-# it carries the provider's tools, never mstar's.
+# server, authenticated by a static bearer taken from DSH's OWN credential
+# store: `expandTemplates: true` resolves `${credential:MSTAR_LINEAR_TOKEN}` at
+# runtime and redacts the resolved value from diagnostics, so the shipped
+# config carries a template, never a token. The row ships DISABLED: it needs a
+# Linear MCP/API key that only the operator can supply, and an
+# enabled-but-unauthenticated row would spend a startup probe on a 401 and log
+# a connection failure every boot. Enable it by overriding the row in the
+# profile (or home) layer with `disabled: false`. A non-blank `serverName` is
+# required: it namespaces the tools as `mcp__linear__<tool>`. The row is not
+# part of the mstar MCP channel above — it carries the provider's tools, never
+# mstar's. Operator steps: bundle/README.md.
 #
 # Control root: every command that needs a harness root must be TOLD one. The
 # server never infers it from the launch cwd — that directory is the HOST's,
@@ -89,10 +83,11 @@
         args: ['-y', '@mstar-harness/cli', 'mcp', '--trust-caller-session-id']
     - id: linear-mcp
       name: '@deepseek-ai/dsh-mcp-client'
-      inject: [mstarLinearAuth]
       disabled: true
       config:
         serverName: linear
         transport: streamable-http
         url: https://mcp.linear.app/mcp
-        headers: !!js ctx.mstarLinearAuth.authorizationHeaders()
+        expandTemplates: true
+        headers:
+          Authorization: 'Bearer ${credential:MSTAR_LINEAR_TOKEN}'

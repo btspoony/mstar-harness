@@ -69,6 +69,8 @@
   { "file": "skills/mstar-host/references/parallel-dispatch.md", "maxLines": 70 },
   { "file": "skills/mstar-host/references/zcode-plan-mode-bridge.md", "maxLines": 40 },
   { "file": "skills/mstar-host/references/zcode.md", "maxLines": 190 },
+  { "file": "skills/mstar-issue-mirror/SKILL.md", "maxLines": 38 },
+  { "file": "skills/mstar-issue-mirror/references/linear-mcp.md", "maxLines": 17 },
   { "file": "skills/mstar-iteration/SKILL.md", "maxLines": 140 },
   { "file": "skills/mstar-iteration/references/autonomous-direction-lock.md", "maxLines": 100 },
   { "file": "skills/mstar-iteration/references/command-shared-invariants.md", "maxLines": 70 },

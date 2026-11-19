@@ -1,5 +1,5 @@
 /**
- * field-mapping.ts — THE correspondence between local issue fields and Linear's,
+ * note: field-mapping.ts — THE correspondence between local issue fields and Linear's,
  * shared by both directions.
  *
  * Two directional function sets over one table, never an inverse: D7 collapses
@@ -15,8 +15,9 @@
  *   override reaches the captured row).
  *
  * Kind maps onto a Linear LABEL only (D7 maps severity and disposition to
- * fields); whether that label exists is resolved at push time against the
- * discovered workspace label set — this module never creates one.
+ * fields); whether that label exists is the host's Linear tool's answer and
+ * comes back as that item's refusal — this module never creates one, and mstar
+ * performs no Linear call to discover it.
  */
 import { ISSUE_KINDS, ISSUE_SEVERITIES, type Disposition, type IssueKind, type Severity } from "../issue.js";
 import type { LinearFacetMapping } from "../mstarc.js";

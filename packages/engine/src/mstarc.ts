@@ -188,6 +188,11 @@ export type LinearBinding = {
   mode: "mirror";
   workspace: string;
   team: string;
+  /**
+   * note: `owner/name` of this repository, for a checkout with no `origin` remote:
+   * the fallback the correlation marker's `repo` field reads. Empty when unset.
+   */
+  repo: string;
   /** Resolved correspondence: defaults overlaid by `[linear.mapping]`. */
   mapping: LinearFacetMapping;
 };
@@ -231,7 +236,10 @@ export function parseLinearBinding(
   mapping: Record<string, string> | undefined,
 ): { ok: true; binding: LinearBinding } | LinearBindingRefusal {
   if (linear === undefined) {
-    return { ok: true, binding: { enabled: false, mode: "mirror", workspace: "", team: "", mapping: defaultLinearMapping() } };
+    return {
+      ok: true,
+      binding: { enabled: false, mode: "mirror", workspace: "", team: "", repo: "", mapping: defaultLinearMapping() },
+    };
   }
   const mode = linear.mode ?? "mirror";
   if (mode !== "mirror") {
@@ -254,6 +262,9 @@ export function parseLinearBinding(
   const enabled = parsedEnabled;
   const workspace = linear.workspace ?? "";
   const team = linear.team ?? "";
+  // why: Optional: only a checkout without an `origin` remote needs it, and the
+  // refusal that names it (`linear.repo-unresolved`) is what tells the operator.
+  const repo = (linear.repo ?? "").trim();
   if (enabled && (workspace === "" || team === "")) {
     const missing = [workspace === "" ? "workspace" : null, team === "" ? "team" : null].filter(Boolean).join(", ");
     return {
@@ -270,7 +281,7 @@ export function parseLinearBinding(
     if (!(LINEAR_MAPPING_FACETS as readonly string[]).includes(prefix)) continue;
     resolved[prefix as keyof LinearFacetMapping][key.slice(dot + 1)] = value;
   }
-  return { ok: true, binding: { enabled, mode: "mirror", workspace, team, mapping: resolved } };
+  return { ok: true, binding: { enabled, mode: "mirror", workspace, team, repo, mapping: resolved } };
 }
 
 /** True when `file` is an existing regular file. */

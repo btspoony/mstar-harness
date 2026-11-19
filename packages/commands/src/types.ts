@@ -1,5 +1,5 @@
 import type { z, ZodType } from "zod";
-import type { ExecutionIdentity, IssueProvider, RecoveryProblem } from "@mstar-harness/engine";
+import type { ExecutionIdentity, RecoveryProblem } from "@mstar-harness/engine";
 
 export type CommandStatus = "ok" | "refused" | "usage" | "error";
 
@@ -74,38 +74,6 @@ export interface CommandEffects {
   }): Promise<{ exitCode: number | null; signal: string | null; stdout: string; stderr: string }>;
   startDashboard(request: { harnessDir: string; port: number; projectId?: string }): Promise<{ url: string; close(): Promise<void> }>;
   openBrowser(url: string): Promise<void>;
-  /**
-   * The host's read-only issue provider for one store project, or `null` when
-   * this host ships no adapter. The host owns credential custody and the MCP
-   * transport (compass D3), so the command asks for a provider and never learns
-   * a token. Absent on the CLI, which has no host transport.
-   */
-  issueProvider?(projectId: string): IssueProvider | null;
-  /**
-   * Host capability: run the browser authorization leg and return the token set,
-   * or null when the host cannot. The command decides what to store; the host
-   * only knows how to talk to the authorization server.
-   */
-  linearAuthorize?(mcpUrl: string): Promise<{
-    accessToken: string;
-    refreshToken: string | null;
-    expiresAt: number | null;
-    scope: string | null;
-    /** Needed later by a refresh, and not derivable from the token itself. */
-    clientId: string | null;
-  } | null>;
-  /**
-   * Host capability: exchange a stored refresh token for a new one. The engine
-   * cannot do this itself — the exchange needs the authorization server's
-   * metadata and the network, which are host concerns.
-   */
-  linearRefresh?(mcpUrl: string, clientId: string, refreshToken: string): Promise<{
-    accessToken: string;
-    refreshToken: string | null;
-    expiresAt: number | null;
-    scope: string | null;
-    clientId: string | null;
-  } | null>;
   writeStderr?(message: string): void;
   /**
    * The installed Morning Star plugin version for one host target, detected by
