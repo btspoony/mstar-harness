@@ -12,7 +12,7 @@ Start with one sentence stating what changed, who benefits and how.
 
 Show actual, comparable before/after observations proving this change works, not a retelling of the diff. Include the scoped command or procedure and its observed results. Publish the applicable form:
 
-- Bug: the reproduction, a regression test failing before the fix and passing afterward, and one line of root-cause evidence.
+- Bug: the reproduction, a regression test failing before the fix and passing afterward, and one line of root-cause evidence. When no test can reach the path, publish actual before/after runs of the same reproduction instead and explain under Untested why no regression test covers it.
 - Visual: before/after comparison screenshots, before on the left and after on the right.
 - Performance: a before/after table from the same machine, dataset and command, stating the conditions.
 - Documentation or agent instructions: before/after counts from scoped static checks; these do not prove runtime compliance.
