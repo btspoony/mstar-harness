@@ -29,9 +29,9 @@ One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one 
 
 When the human owner (operator/user, not the coordinator seat or a review bot) merges, closes, or comments on a submitted PR and states a preference or rule reaching beyond that PR, run an owner-feedback disposition. Examples include a reusable close reason, an "always/never", or a correction to recurring code, description, or evidence shape.
 
-Use the Capture steps below in **Lightweight** mode; report `created` / `updated` with the knowledge path, or `skipped` with a reason in the coordination response. Prefer updating the document that already covers the point (Q5 overlap); deduplicate, and rewrite a contradicted rule instead of adding a competing one. An explicitly standing owner rule counts as reusable regardless of the Q1–Q8 Yes count; feedback that only fixes that PR is `skipped`.
+Use the Capture steps below in **Lightweight** mode; report `created` / `updated` with the knowledge path, or `skipped` with a reason in the coordination response. Prefer updating the document that already covers the point (Q5 overlap); deduplicate, and rewrite a contradicted rule instead of adding a competing one. Apply the standing-owner-rule exception in `references/compound-workflow.md` § 决策矩阵; feedback that only fixes that PR is `skipped`.
 
-Write to the delivery branch while the PR is open; after merge/close, carry the knowledge edit into the next tracked change through the ordinary delivery path. This event-driven entry is separate from per-plan Capture timing: it reopens no Done row or closed workflow and amends no Review Gate Summary.
+Write to the delivery branch while the PR is open. After merge/close, the PM creates or links a durable issue in the same round through `mstar-project-governance` § Issue capture and returns its link in the coordination response, tracking the knowledge edit into the next tracked change through ordinary delivery even when no follow-up work exists yet. This event-driven entry is separate from per-plan Capture timing: it reopens no Done row or closed workflow and amends no Review Gate Summary.
 
 **Maintain — use**:
 

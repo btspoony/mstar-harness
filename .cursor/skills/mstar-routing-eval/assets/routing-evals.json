@@ -1,18 +1,18 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 40,
-  "updated_at": "2026-11-12",
+  "version": 41,
+  "updated_at": "2026-11-19",
   "cases": [
     {
       "id": "owner-feedback-standing-rule",
-      "prompt": "The human owner comments on an open delivered PR: 'Never pin release versions in tests; this is a standing rule.' An existing knowledge convention doc covers test assertions. The owner also comments 'Fix the typo in this PR description', which applies only to this PR, then merges the PR. Handle the feedback in this coordination round.",
+      "prompt": "The human owner comments on an open delivered PR: 'Never pin release versions in tests; this is a standing rule.' An existing knowledge convention doc covers test assertions. The owner also comments 'Fix the typo in this PR description', which applies only to this PR. The PR remains open. Handle the feedback in this coordination round.",
       "expected_route": [
         "@project-manager"
       ],
       "must_have_artifacts": [
         "Same-round mstar-knowledge § Owner feedback disposition for the standing rule in Lightweight mode",
         "updated disposition with the existing convention doc path after overlap checking, deduplication and rewriting any contradicted rule",
-        "Knowledge edit on the delivery branch while the PR is open; any post-merge edit follows the next tracked change through ordinary delivery",
+        "Knowledge edit on the delivery branch while the PR is open",
         "Reasoned skipped disposition for the PR-only typo fix comment"
       ],
       "hard_fail_if": [
@@ -20,6 +20,26 @@
         "Skips the standing rule because the Q1–Q8 Yes count is low",
         "Creates a duplicate convention doc or adds a competing rule instead of updating the existing doc",
         "Treats the PR-only fix comment as a reusable rule instead of skipped",
+        "Reopens a Done row or closed workflow, or amends a Review Gate Summary"
+      ]
+    },
+    {
+      "id": "owner-feedback-standing-rule-post-close",
+      "prompt": "The human owner merges or closes a delivered PR with the standing rule 'Never pin release versions in tests.' The PR is already merged/closed when this PM round begins, the old workflow is closed, and no follow-up work exists. An existing knowledge convention doc covers test assertions. Handle the feedback in this coordination round.",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Same-round owner-feedback disposition using the standing-owner-rule exception in the Capture decision matrix",
+        "Durable issue created or linked through mstar-project-governance § Issue capture in this round, tracking the knowledge edit into the next tracked change through ordinary delivery",
+        "Coordination response returns the durable issue link even though no follow-up work exists yet",
+        "Tracked edit targets the existing convention doc after overlap checking rather than a duplicate or competing rule"
+      ],
+      "hard_fail_if": [
+        "Defers tracking until follow-up work exists or another plan reaches Done",
+        "Omits the durable issue or its link from the coordination response",
+        "Skips the standing rule because the Q1–Q8 Yes count is low",
+        "Requires a write to the already merged/closed delivery branch",
         "Reopens a Done row or closed workflow, or amends a Review Gate Summary"
       ]
     },
