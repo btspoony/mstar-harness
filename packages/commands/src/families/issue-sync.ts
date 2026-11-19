@@ -191,7 +191,10 @@ function refusalFor(id: string, code: string, message: string, details?: Record<
     exitCode: 1,
     message: "[" + code + "] " + message,
     details: { operation: id, ...details },
-    recovery: RECOVERY[code] ?? "Read the cause, resolve it, and re-run `mstar issue-sync " + verbOf(id) + " --help`.",
+    // A literal, not a composed verb: the help-reachability prover must be able to read
+    // the command this refusal advertises (the per-code map above stays unprovable 
+    // behind its element access, which is the refusal-quality exemption, not this one).
+    recovery: RECOVERY[code] ?? "Read the cause, resolve it, then re-run the same issue-sync verb: `mstar issue-sync pending --project <project-id>` plans the work, `apply` records results, and `ingest` associates a listing.",
   });
 }
 
@@ -220,14 +223,10 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
     exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
     details: { operation: id, ...facts.details },
-    recovery: facts.recovery ?? RECOVERY[code] ?? "Read the cause, resolve it, and re-run `mstar issue-sync " + verbOf(id) + " --help`.",
+    recovery: facts.recovery ?? RECOVERY[code] ?? "Read the cause, resolve it, then re-run the same issue-sync verb: `mstar issue-sync pending --project <project-id>` plans the work, `apply` records results, and `ingest` associates a listing.",
   });
 }
 
-function verbOf(id: string): string {
-  const dot = id.indexOf(".");
-  return dot === -1 ? id : id.slice(dot + 1);
-}
 
 /** Everything a verb needs from the declarations, resolved once, before any write. */
 type Target = {
