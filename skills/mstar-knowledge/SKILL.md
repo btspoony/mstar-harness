@@ -27,11 +27,13 @@ One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one 
 
 ### Owner feedback
 
-When the human owner (operator/user, not the coordinator seat or a review bot) merges, closes, or comments on a submitted PR and states a preference or rule reaching beyond that PR, run an owner-feedback disposition. Examples include a reusable close reason, an "always/never", or a correction to recurring code, description, or evidence shape.
+When the human owner (operator/user, not the coordinator seat or a review bot) merges, closes, or comments on a submitted PR and states a preference or rule reaching beyond that PR, run an owner-feedback disposition. Examples include a reusable close reason, an "always/never", or a correction to recurring code, description, or evidence shape. An unmerged close also triggers durable tracking of any earlier owner-feedback knowledge edit on the delivery branch that did not reach the target branch; the owner need not restate it.
 
 Use the Capture steps below in **Lightweight** mode; report `created` / `updated` with the knowledge path, or `skipped` with a reason in the coordination response. Prefer updating the document that already covers the point (Q5 overlap); deduplicate, and rewrite a contradicted rule instead of adding a competing one. Apply the standing-owner-rule exception in `references/compound-workflow.md` § 决策矩阵; feedback that only fixes that PR is `skipped`.
 
-Write to the delivery branch while the PR is open. After merge/close, the PM creates or links a durable issue in the same round through `mstar-project-governance` § Issue capture and returns its link in the coordination response, tracking the knowledge edit into the next tracked change through ordinary delivery even when no follow-up work exists yet. This event-driven entry is separate from per-plan Capture timing: it reopens no Done row or closed workflow and amends no Review Gate Summary.
+Write to the delivery branch while the PR is open. After merge/close, the PM creates or links a durable tracking item in the same round and returns its link, recording the owner rule and intended knowledge path for the next tracked change through ordinary delivery even when no follow-up work exists yet. With an active store, use `mstar-project-governance` § Issue capture; without one (including a staged store), use an authorized host tracking item through `mstar-host`'s selected adapter (e.g. the Devin Cloud board ticket path in `mstar-host/references/devin.md` § Cloud).
+
+If no authorized tracker is available or the write fails, report **not tracked** with the actual cause and recovery: restore access to the selected host tracker and retry, or obtain authorized store initialization/cutover under `mstar-project-governance` § Issue capture before retrying there. Never report an unwritten item as successfully tracked. This event-driven entry reopens no Done row or closed workflow, amends no Review Gate Summary, and does not change per-plan Capture timing.
 
 **Maintain — use**:
 

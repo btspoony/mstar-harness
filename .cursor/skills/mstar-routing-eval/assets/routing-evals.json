@@ -1,6 +1,6 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 41,
+  "version": 42,
   "updated_at": "2026-11-19",
   "cases": [
     {
@@ -25,19 +25,23 @@
     },
     {
       "id": "owner-feedback-standing-rule-post-close",
-      "prompt": "The human owner merges or closes a delivered PR with the standing rule 'Never pin release versions in tests.' The PR is already merged/closed when this PM round begins, the old workflow is closed, and no follow-up work exists. An existing knowledge convention doc covers test assertions. Handle the feedback in this coordination round.",
+      "prompt": "The human owner earlier stated 'Never pin release versions in tests' on an open delivered PR. The PM updated the existing knowledge convention doc on the delivery branch. The owner now closes the PR unmerged without new feedback; that edit never reached the target branch. The old workflow is closed and no follow-up work exists. Handle this close in the current round. Check both an active store and a staged/absent store with an authorized Devin Cloud board tracker; if tracking cannot be written, disclose that failure.",
       "expected_route": [
         "@project-manager"
       ],
       "must_have_artifacts": [
         "Same-round owner-feedback disposition using the standing-owner-rule exception in the Capture decision matrix",
-        "Durable issue created or linked through mstar-project-governance § Issue capture in this round, tracking the knowledge edit into the next tracked change through ordinary delivery",
-        "Coordination response returns the durable issue link even though no follow-up work exists yet",
-        "Tracked edit targets the existing convention doc after overlap checking rather than a duplicate or competing rule"
+        "Same-round durable tracking of the branch-only owner rule despite no restated feedback: active-store issue via mstar-project-governance § Issue capture, or authorized host tracker item via mstar-host when no active store exists",
+        "Coordination response returns the written tracking item link even though no follow-up work exists yet; failed/unwritten tracking is instead reported as not tracked with cause and recovery",
+        "Tracking item explicitly records the existing convention doc path and owner rule for future delivery; no knowledge edit is required this round"
       ],
       "hard_fail_if": [
         "Defers tracking until follow-up work exists or another plan reaches Done",
-        "Omits the durable issue or its link from the coordination response",
+        "Requires restated feedback before preserving the branch-only rule on unmerged close",
+        "Omits a successfully written tracking item's link from the coordination response",
+        "Omits the existing convention doc path from the tracking item",
+        "Reports failed/unwritten tracking as successful or omits its cause and recovery",
+        "Requires a store write against a staged/absent store instead of the authorized host tracker or an honest not tracked result",
         "Skips the standing rule because the Q1–Q8 Yes count is low",
         "Requires a write to the already merged/closed delivery branch",
         "Reopens a Done row or closed workflow, or amends a Review Gate Summary"
