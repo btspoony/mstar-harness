@@ -1189,7 +1189,7 @@ function readProjectList(db: StoreDb): ProjectListDTO {
        left join catalog_entities catalog on catalog.kind = 'project' and catalog.id = project_ids.id
        left join issues on issues.project_id = project_ids.id and issues.disposition = 'open'
        group by project_ids.id
-       order by title asc, project_ids.id asc`,
+       order by coalesce(catalog.title, project_ids.id) asc, project_ids.id asc`,
     )
     .all() as (IdentityRow & { open_issues: number })[];
   const items = rows.map((row) => ({

@@ -1299,6 +1299,18 @@ describe("projection views", () => {
 });
 
 describe("projects view", () => {
+  test("mixed catalog and issue-only projects sort by displayed title then id", async () => {
+    const { context } = await workspace("mixed-project-order-");
+    await registerCatalogEntity(context, { kind: "project", id: "registered-first", title: "Alpha", rootKind: "projects", relativePath: "first" }, op("register-first"));
+    await registerCatalogEntity(context, { kind: "project", id: "a-tie", title: "middle", rootKind: "projects", relativePath: "tie" }, op("register-tie"));
+    await registerCatalogEntity(context, { kind: "project", id: "registered-last", title: "zulu", rootKind: "projects", relativePath: "last" }, op("register-last"));
+    await withWrite(context, (db) => {
+      seedIssue(db, { id: "middle-issue", title: "Middle", projectId: "middle" });
+    });
+    const projects = (await withStoreRead(context, queryDashboard("projects"))).data;
+    expect(projects.items.map(({ project }) => project.id)).toEqual(["registered-first", "a-tie", "middle", "registered-last"]);
+  });
+
   test("issue-only projects reconcile with Issues without inventing catalog metadata", async () => {
     const { context } = await workspace("implicit-projects-");
     await withWrite(context, (db) => {
