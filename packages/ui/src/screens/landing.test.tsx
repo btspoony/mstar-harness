@@ -144,6 +144,7 @@ const overviewCopy: OverviewCopy = {
   pageTitle: "Overview",
   screenSubtitle: (scope: string, open: number) => `${scope} \u00b7 ${open} open issues`,
   screenScopeAll: "All projects",
+  noProjectReason: "no project resolves for this read",
   identityBuilt: (at: string) => `built ${at}`,
   identityBuiltUnknown: "never built",
   identityRead: (at: string) => `read ${at}`,
@@ -652,6 +653,22 @@ describe("Overview — NEGATIVE: the surfaces D30 removed", () => {
 });
 
 describe("Overview — the four absence arms, and the short-container order", () => {
+  test("project-scoped absence details follow the locale while read errors stay verbatim", () => {
+    const reason = "no project resolves for this read";
+    for (const locale of ["en", "zh"] as const) {
+      const dictionary = copyFor(locale);
+      const copy: OverviewCopy = { ...overviewCopy, ...dictionary.overview, absence: dictionary.state };
+      const html = renderToStaticMarkup(<Overview copy={copy} model={overviewModel(overviewRead({
+        milestones: { state: "not-applicable", reason },
+        latestIteration: { state: "not-applicable", reason },
+        residuals: { state: "unavailable", reason: "store read failed" },
+      }), { projection })} />);
+      expect(html.split(copy.noProjectReason)).toHaveLength(3);
+      if (locale === "zh") expect(html).not.toContain(reason);
+      expect(html).toContain("store read failed");
+    }
+  });
+
   test("each reachable arm reaches a distinct structure and label word", () => {
     const pages = {
       "not-applicable": overview({

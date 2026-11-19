@@ -1299,6 +1299,28 @@ describe("projection views", () => {
 });
 
 describe("projects view", () => {
+  test("issue-only projects reconcile with Issues without inventing catalog metadata", async () => {
+    const { context } = await workspace("implicit-projects-");
+    await withWrite(context, (db) => {
+      seedIssue(db, { id: "implicit-one", title: "One", projectId: "default" });
+      seedIssue(db, { id: "implicit-two", title: "Two", projectId: "default" });
+      seedIssue(db, { id: "closed-only", title: "Closed", projectId: "other", disposition: "resolved" });
+    });
+    const projects = (await withStoreRead(context, queryDashboard("projects"))).data;
+    const issues = (await withStoreRead(context, queryDashboard("issues", { issue: { projectId: "default", disposition: "open" } }))).data;
+    expect(projects.total).toBe(2);
+    expect(projects.items.find(({ project }) => project.id === "default")).toEqual({
+      project: { id: "default", title: "default", description: null, lifecycle: null },
+      openIssues: issues.total,
+    });
+    expect(issues.total).toBe(2);
+    expect(projects.items.find(({ project }) => project.id === "other")?.openIssues).toBe(0);
+    await registerCatalogEntity(context, { kind: "project", id: "default", title: "Registered default", rootKind: "projects", relativePath: "default" }, op("register-default"));
+    const registered = (await withStoreRead(context, queryDashboard("projects"))).data;
+    expect(registered.total).toBe(projects.total);
+    expect(registered.items.find(({ project }) => project.id === "default")?.project.title).toBe("Registered default");
+  });
+
   test("projects returns every project in deterministic title/id order with identity and open issue counts", async () => {
     const { context } = await workspace("projects-");
     await registerCatalogEntity(context, { kind: "project", id: "z-project", title: "Same", rootKind: "projects", relativePath: "z" }, op("project-z"));
@@ -1340,4 +1362,3 @@ describe("projects view", () => {
     expect((await withStoreRead(context, queryDashboard("projects"))).data).toEqual({ items: [], total: 0 });
   });
 });
-

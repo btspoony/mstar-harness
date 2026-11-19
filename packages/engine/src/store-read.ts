@@ -288,7 +288,10 @@ export type IterationDTO = {
 export type IterationListDTO = { items: IterationDTO[]; total: number; attribution: "present" | "absent" };
 
 /** One project and its current open-issue count. */
-export type ProjectListItem = { project: CatalogIdentityDTO; openIssues: number };
+export type ProjectListItem = {
+  project: Pick<CatalogIdentityDTO, "id" | "title" | "description"> & { lifecycle: CatalogLifecycle | null };
+  openIssues: number;
+};
 
 export type ProjectListDTO = { items: ProjectListItem[]; total: number };
 
@@ -1176,14 +1179,25 @@ function catalogIdentities(db: StoreDb, keys: readonly CatalogKey[]): Map<string
 function readProjectList(db: StoreDb): ProjectListDTO {
   const rows = db
     .prepare(
-      `select catalog_entities.*, count(issues.id) as open_issues
-       from (select ${IDENTITY_COLUMNS} from catalog_entities where kind = 'project') catalog_entities
-       left join issues on issues.project_id = catalog_entities.id and issues.disposition = 'open'
-       group by catalog_entities.id
-       order by catalog_entities.title asc, catalog_entities.id asc`,
+      `with project_ids as (
+         select id from catalog_entities where kind = 'project'
+         union select project_id from issues
+       )
+       select catalog.*, project_ids.id, coalesce(catalog.title, project_ids.id) as title,
+              catalog.description, catalog.lifecycle, count(issues.id) as open_issues
+       from project_ids
+       left join catalog_entities catalog on catalog.kind = 'project' and catalog.id = project_ids.id
+       left join issues on issues.project_id = project_ids.id and issues.disposition = 'open'
+       group by project_ids.id
+       order by title asc, project_ids.id asc`,
     )
     .all() as (IdentityRow & { open_issues: number })[];
-  const items = rows.map((row) => ({ project: toIdentity(row), openIssues: row.open_issues }));
+  const items = rows.map((row) => ({
+    project: row.kind === "project" ? toIdentity(row) : {
+      id: row.id, title: row.title, description: null, lifecycle: null,
+    },
+    openIssues: row.open_issues,
+  }));
   return { items, total: items.length };
 }
 

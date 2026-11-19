@@ -52,6 +52,7 @@ export type OverviewCopy = {
   screenSubtitle: (scope: string, open: number, clock: string | null) => string;
   /** The word this screen uses when the read covers every project. */
   screenScopeAll: string;
+  noProjectReason: string;
   /** `built 13:56:02` — when the projection was built, or the word for "never". */
   identityBuilt: (at: string) => string;
   identityBuiltUnknown: string;
@@ -205,7 +206,9 @@ function Absence(props: {
       heading={props.heading}
       body={copy.absence[arm as AbsenceArm].body}
       reason={arm === "unavailable" ? props.reason : undefined}
-      detail={arm === "not-applicable" ? props.detail : undefined}
+      detail={arm === "not-applicable"
+        ? props.detail === "no project resolves for this read" ? copy.noProjectReason : props.detail
+        : undefined}
       pointer={arm === "absent" ? copy.absence.absent.pointer : undefined}
       hint={arm === "empty" ? copy.absence.empty.hint : undefined}
     />

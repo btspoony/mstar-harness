@@ -78,6 +78,7 @@ export const zh: Copy = {
     identityBuiltUnknown: "尚未构建",
     identityRead: (at) => `读取于 ${at}`,
     screenScopeAll: "全部项目",
+    noProjectReason: "这次读取无法对应到具体项目",
     screenSubtitle: (scope: string, open: number, clock: string | null) =>
       `${scope} · ${open} 项未关闭${clock === null ? "" : ` · ${clock}`}`,
     pageTitle: "总览",
