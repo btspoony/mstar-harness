@@ -753,7 +753,7 @@ export function markFailed(db: StoreDb, input: MarkFailedInput): SyncItem {
  * `markFailed` is the retry edge, and it is right for a row that owns no
  * ambiguity: a refused write was never delivered, so the next run may retry.
  * It is wrong for a `pending` row with no id, because that row IS an
- * unattributed remote issue — `reconcilePendingCreate` scans exactly that
+ * unattributed remote issue — `push.ts`'s `reconcileWith` scans exactly that
  * shape. Downgrading it to `failed` would hide it from reconciliation, let the
  * next run create a second remote issue, and leave the first one permanently
  * unadoptable once its marker matches twice.

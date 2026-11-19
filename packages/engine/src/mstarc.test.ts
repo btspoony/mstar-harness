@@ -84,6 +84,16 @@ describe("parseLinearBinding", () => {
     expect((refused as { message: string }).message).toContain('enabled="maybe"');
   });
 
+  test("the optional [linear] repo= override parses; an absent one stays empty", () => {
+    const declared = parseLinearBinding(
+      { enabled: "true", workspace: "acme", team: "eng", repo: "acme/widgets" },
+      undefined,
+    );
+    expect(declared.ok && declared.binding.repo).toBe("acme/widgets");
+    const absent = parseLinearBinding({ enabled: "true", workspace: "acme", team: "eng" }, undefined);
+    expect(absent.ok && absent.binding.repo).toBe("");
+  });
+
   test(`section constant stays "${LINEAR_SECTION}"`, () => {
     expect(LINEAR_SECTION).toBe("linear");
   });

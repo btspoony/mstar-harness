@@ -15,10 +15,10 @@ import type { IssueKind, Severity } from "../issue.js";
 import { acquireRun, readItem, type SyncItem } from "../issue-sync.js";
 import { SyncError } from "../issue-sync.js";
 import type { ProviderItem } from "./provider.js";
+import { encodeMarker } from "./marker.js";
 import {
   adoptItem,
   assertReleaseTargets,
-  correlationMarker,
   externalIdOf,
   identityConflict,
   planItem,
@@ -34,7 +34,6 @@ afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
 const PROJECT = "p-push";
 const BINDING = "linear:" + PROJECT;
-const STORE_ID = "store-alpha";
 
 async function openedStore(name: string): Promise<{ db: StoreDb; harnessDir: string; close: () => void }> {
   const harnessDir = mkdtempSync(join(ROOT, name));
@@ -65,8 +64,11 @@ function addIssue(
   );
 }
 
+const REPO = "acme/widgets";
+const AUTHOR = "Ada Lovelace <ada@example.com>";
+
 function context(overrides: Partial<PushContext> = {}): PushContext {
-  return { bindingId: BINDING, binding: { workspace: "acme", team: "ENG" }, storeId: STORE_ID, ...overrides };
+  return { bindingId: BINDING, identity: { repo: REPO, author: AUTHOR }, ...overrides };
 }
 
 function row(db: StoreDb, localId: string): SyncItem | null {
@@ -86,8 +88,8 @@ function plan(db: StoreDb, ctx: PushContext, localId: string): PushPlan {
   return outcome.plan;
 }
 
-function markerOf(localId: string, storeId: string = STORE_ID): string {
-  return correlationMarker({ workspace: "acme", team: "ENG" }, storeId, localId);
+function markerOf(localId: string, repo: string = REPO): string {
+  return encodeMarker({ repo, localId, author: AUTHOR });
 }
 
 /** What a Linear tool would return for one listed issue. */
@@ -418,9 +420,9 @@ describe("reconcileWith associates only on exact marker equality", () => {
     }
   });
 
-  test("another store's marker, no marker, several matches and an empty listing all stay unresolved", async () => {
+  test("another repository's marker, no marker, several matches and an empty listing all stay unresolved", async () => {
     const cases: Array<{ name: string; records: (marker: string) => ProviderItem[] }> = [
-      { name: "other-store", records: () => [record("LIN-88", "body\n\n" + markerOf("I-000962", "store-beta"))] },
+      { name: "other-repo", records: () => [record("LIN-88", "body\n\n" + markerOf("I-000962", "acme/other"))] },
       { name: "no-marker", records: () => [record("LIN-99", "## Impact\n\nimpact body\n\n## Acceptance\n\nacceptance body")] },
       {
         name: "several",

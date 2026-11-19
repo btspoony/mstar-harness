@@ -16,10 +16,11 @@
  * - A CONFIRMED result is the only thing that writes 'external_id'.
  *   'ambiguous' leaves a create 'pending' with no id: the caller must reconcile.
  * - AMBIGUOUS CREATE RECOVERY is marker equality, never prose. Every payload
- *   description ends with '<!-- mstar-sync: <workspace>/<team>/<storeId>/<localId> -->'; the store id is the
- *   pushing store's random 'store_meta.store_id', so two harness stores
- *   mirroring one team never adopt each other's rows. A unique
- *   title+description match proves nothing about ownership and is never adopted.
+ *   description ends with the marker 'marker.ts' encodes — this repository's
+ *   'owner/name', the local issue id, and the pushing checkout's git author — so
+ *   another clone of the same repository never adopts this store's rows by
+ *   accident, and a unique title+description match proves nothing about
+ *   ownership and is never adopted.
  *
  * THE RUN LEASE IS NOT CONCURRENCY. One lease per binding ('sync_runs') is held
  * by the pending/apply pair, and every ledger write carries the run token, so a
@@ -56,24 +57,18 @@ import {
   type SyncItem,
 } from "../issue-sync.js";
 import { providerPayloadFields } from "./field-mapping.js";
+import { decodeMarker, encodeMarker } from "./marker.js";
 import type { ProviderItem, ProviderWritePayload } from "./provider.js";
 
 /** The only direction this module drives. */
 export const PUSH_DIRECTION = "push" as const;
 
-/**
- * The '.mstarc' connection facts the marker is composed from. 'workspace' is
- * omitted from the marker when unset.
- */
-export type PushBinding = { workspace: string; team: string };
-
 /** Everything one item plan needs that is not local content. */
 export type PushContext = {
   /** '"linear:<project_id>"', the ledger's binding key. */
   bindingId: string;
-  binding: PushBinding;
-  /** The pushing store's stable identity ('store_meta.store_id'). */
-  storeId: string;
+  /** This checkout's repository identity and git author, stamped into the marker. */
+  identity: { repo: string; author: string };
   mapping?: LinearFacetMapping;
   /**
    * The run lease this run holds ('RunLease.runId'). Every ledger write this
@@ -176,28 +171,6 @@ function projectIdOf(bindingId: string): string {
 }
 
 /**
- * The mstar-owned correlation marker. Application identity only: no token, no
- * path, nothing that exists solely on this machine.
- */
-export function correlationMarker(binding: PushBinding, storeId: string, localId: string): string {
-  const parts = [binding.workspace, binding.team, storeId, localId].filter((part) => part.trim() !== "");
-  return "<!-- mstar-sync: " + parts.join("/") + " -->";
-}
-
-/**
- * The marker one description carries, or null when it carries none. The LAST
- * match wins: a description that quotes a marker in operator text must not let
- * the quoted occurrence decide the identity.
- */
-function markerIn(description: string): string | null {
-  let last: string | null = null;
-  for (const match of description.matchAll(/<!--\s*mstar-sync:\s*([^\n]*?)\s*-->/g)) {
-    last = "<!-- mstar-sync: " + match[1]!.trim() + " -->";
-  }
-  return last;
-}
-
-/**
  * The normalized payload's hash: the skip rule's storage. Content only — the
  * removal instruction is an ownership fact, not remote content, so it is not
  * part of what "the remote already says this" means.
@@ -250,7 +223,11 @@ function planOf(
   candidate: PushCandidate,
   ledger: SyncItem | null,
 ): { marker: string; payload: ProviderWritePayload; hash: string; kindLabel: string } {
-  const marker = correlationMarker(context.binding, context.storeId, candidate.localId);
+  const marker = encodeMarker({
+    repo: context.identity.repo,
+    localId: candidate.localId,
+    author: context.identity.author,
+  });
   const fields = providerPayloadFields(candidate, context.mapping);
   const payload: ProviderWritePayload = {
     title: candidate.title,
@@ -585,11 +562,15 @@ export function assertReleaseTargets(db: StoreDb, bindingId: string, release: Re
  * Adopt ambiguous creates by correlation marker, over a listing the caller
  * fetched with its own tools.
  *
- * A row is adopted ONLY when exactly one remote record carries its exact marker.
- * Zero or several matches stay 'unresolved'; this function never creates, and
- * prose equality is never evidence. The listing's completeness is the caller's
- * fact, not this function's: a listing it did not read to its end proves neither
- * absence nor uniqueness, and the caller must not present one as complete.
+ * A row is adopted ONLY when exactly one remote record carries its exact marker
+ * — the same `repo` and `local` this store would write. Zero or several matches
+ * stay 'unresolved'; this function never creates, and prose equality is never
+ * evidence. The author is not part of the match: another clone of the same
+ * repository by the same author is the ingest's `foreign` case, and a residue
+ * the operator can see the issue for is adopted explicitly with '--adopt'.
+ * The listing's completeness is the caller's fact, not this function's: a
+ * listing it did not read to its end proves neither absence nor uniqueness, and
+ * the caller must not present one as complete.
  *
  * 'options.release' names 'pending'-without-id rows the operator has released
  * after this same listing found nothing: they drop to 'failed', the retryable
@@ -616,17 +597,17 @@ export function reconcileWith(
   const report: ReconcileReport = { adopted: [], unresolved: [] };
   if (pending.length === 0) return report;
 
-  const wanted = new Map<string, string>();
-  for (const { local_id: localId } of pending) {
-    wanted.set(correlationMarker(context.binding, context.storeId, localId), localId);
-  }
+  // The association key is (repo, local): this repository's identity plus the
+  // local issue id the marker names. A record pushed from another repository,
+  // another store of a different repo, or by the deleted code's marker shape
+  // decodes to nothing and is never a candidate.
+  const wanted = new Set(pending.map(({ local_id: localId }) => localId));
   const matches = new Map<string, string[]>();
   for (const record of records) {
-    const marker = markerIn(record.description ?? "");
-    if (marker === null) continue;
-    const localId = wanted.get(marker);
-    if (localId === undefined) continue;
-    matches.set(localId, [...(matches.get(localId) ?? []), record.externalId]);
+    const marker = decodeMarker(record.description);
+    if (marker === null || marker.repo !== context.identity.repo) continue;
+    if (!wanted.has(marker.localId)) continue;
+    matches.set(marker.localId, [...(matches.get(marker.localId) ?? []), record.externalId]);
   }
 
   for (const localId of release) {

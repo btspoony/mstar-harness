@@ -782,16 +782,12 @@ export {
   resetCursor,
   writeCursor,
 } from "./issue-sync.js";
-// M0 read-only mirror ingest: one listing page → store rows through the capture
-// path and the ledger above.
-export type { ImportPageResult } from "./issue-sync/import.js";
 // One-way push (M1): candidates, the payload plan, the ledger protocol, the
 // result recorder and ambiguous-create recovery by correlation marker. mstar
 // makes no external call — the caller's own tools write, and these verbs own the
 // local half.
 export type {
   PlanOutcome,
-  PushBinding,
   PushCandidate,
   PushContext,
   PushOutcome,
@@ -803,7 +799,6 @@ export {
   PUSH_DIRECTION,
   adoptItem,
   assertReleaseTargets,
-  correlationMarker,
   externalIdOf,
   identityConflict,
   // The push planner is exported as `planPushItem`: the ledger's own cycle
@@ -814,14 +809,19 @@ export {
   requestHash,
   selectPushCandidates,
 } from "./issue-sync/push.js";
-
-export {
-  IMPORTED_ACCEPTANCE_KEY,
-  IMPORTED_ROOT_CAUSE_KEY,
-  IMPORT_DIRECTION,
-  LINEAR_PROVIDER,
-  importPage,
-} from "./issue-sync/import.js";
+// The correlation marker between a Linear issue and the local row it mirrors,
+// plus the git identity that stamps it: repo (owner/name) + local issue id +
+// pushing author. No store id and no token, so any clone of the repository can
+// decide whether a remote issue is its own.
+export type { MarkerFields } from "./issue-sync/marker.js";
+export { decodeMarker, encodeMarker } from "./issue-sync/marker.js";
+export type { RepoIdentity } from "./issue-sync/identity.js";
+export { normalizeRepoRemote, readRepoIdentity } from "./issue-sync/identity.js";
+// Ingest association: a listing the caller fetched with its own tools becomes
+// ledger associations only — associated / drift / foreign / orphan / unmanaged.
+// No local issue is created, updated or closed.
+export type { IngestContext, IngestEntry, IngestReport } from "./issue-sync/ingest.js";
+export { ingestRecords } from "./issue-sync/ingest.js";
 // Catalog authority: catalog metadata is
 // the DB authority for project/iteration/plan/document identity, locations,
 // relations and archived/superseded lifecycle. No execution status, no
