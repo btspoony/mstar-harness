@@ -1,7 +1,7 @@
 {
   "name": "morning-star-harness",
   "version": "4.7.3",
-  "description": "Morning Star — Agent Plugin for harness engineering workflows: a TS Harness Workflow Engine (@mstar-harness/engine) that enforces deterministic workflow gates, plus mstar-* judgment skills for multi-agent code delivery.",
+  "description": "Morning Star harness engineering Agent Plugin for Devin: a TS Harness Workflow Engine that enforces deterministic workflow gates, plus mstar-* judgment skills for multi-agent code delivery.",
   "author": {
     "name": "Bohao Tang",
     "email": "tech@btang.cn"
@@ -9,6 +9,7 @@
   "homepage": "https://github.com/btspoony/mstar-harness",
   "repository": "https://github.com/btspoony/mstar-harness.git",
   "license": "MIT",
+  "logo": "assets/logo.png",
   "keywords": [
     "morning-star",
     "mstar",

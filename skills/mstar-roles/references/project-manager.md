@@ -221,6 +221,7 @@ PM must:
 - Capture confirmed non-blocking leftovers as issues linked to the plan
 - Keep the plan's open-issue state coherent at closure (capture before leaving InReview; close with a disposition)
 - Sync plan/status in the same coordination round
+- On owner merge/close/review feedback on a delivered PR, run the disposition in `mstar-knowledge` § Owner feedback in the same coordination round.
 - Enforce report-to-status hard gate before next dispatch
 
 Details:

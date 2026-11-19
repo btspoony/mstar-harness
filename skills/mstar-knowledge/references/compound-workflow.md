@@ -37,6 +37,7 @@
 
 | 得分 | 行动 |
 |------|------|
+| **Explicitly standing human-owner rule** (`SKILL.md` § Owner feedback) | Treat as reusable regardless of the Q1–Q8 Yes count; use Lightweight Capture, updating the existing document when Q5 overlaps. This exception applies only to owner-feedback disposition, not per-plan scoring. |
 | **Yes ≥ 4**（含 Q5=No） | **强烈建议结晶**。执行完整 Phase 1-7。 |
 | **Yes = 3** | **建议结晶**。使用 Lightweight 模式（Phase 1 单遍）。 |
 | **Yes ≤ 2** | **跳过**。在 conversation/Completion Report 中注明"跳过结晶（<简述原因>）"。 |
