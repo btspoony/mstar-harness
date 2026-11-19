@@ -13,9 +13,7 @@
 
 ## Before the first CreatePlan
 
-1. **Read** (minimum): `mstar-conventions`, `mstar-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
-2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-conventions` (prefer `.mstar/` + `.mstar/plans/`; reuse legacy `.agents/` only when already present and `.mstar/` is absent).
-3. **Initialize** if absent — checklist in core; full PM checklist (incl. process-artifact gitignore set): `mstar-roles/references/project-manager/plan-management.md` (canonical gitignore snippet → `mstar-conventions` SKILL.md「Git 跟踪策略」).
+Complete **`references/_shared/plan-mode-bridge-core.md` § Before the first plan (bootstrap init)** before the first **CreatePlan**.
 
 ## CreatePlan specifics
 
