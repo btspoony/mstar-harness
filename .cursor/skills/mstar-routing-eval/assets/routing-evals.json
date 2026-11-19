@@ -42,7 +42,6 @@
         "Omits the existing convention doc path from the tracking item",
         "Reports failed/unwritten tracking as successful or omits its cause and recovery",
         "Requires a store write against a staged/absent store instead of the authorized host tracker or an honest not tracked result",
-        "Skips the standing rule because the Q1–Q8 Yes count is low",
         "Requires a write to the already merged/closed delivery branch",
         "Reopens a Done row or closed workflow, or amends a Review Gate Summary"
       ]
