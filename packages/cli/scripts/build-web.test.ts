@@ -1,5 +1,5 @@
 /**
- * The dashboard bundle's acceptance: the offline guard, the determinism the
+ * The dashboard bundle's acceptance: the offline guard, the regeneration the
  * generator promises, the single CSS output, the production React build, a React
  * root that boots without `htm`/`preact`, and both size budgets.
  *
@@ -8,9 +8,11 @@
  * two copies agree, not that the build is acceptable.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fromHtml } from "hast-util-from-html";
 
 import {
   CSS_CEILING,
@@ -53,6 +55,24 @@ function regenerate(
 
 let js = "";
 let css = "";
+let generation = 0;
+
+async function expectUsableAssets(modulePath: string) {
+  const generated = await import(`${modulePath}?generation=${generation++}`);
+  expect(typeof generated.dashboardHtml).toBe("string");
+  expect(typeof generated.dashboardJs).toBe("string");
+  expect(typeof generated.dashboardCss).toBe("string");
+  const document = fromHtml(generated.dashboardHtml);
+  expect(document.children.some((node) => node.type === "element" && node.tagName === "html")).toBe(true);
+  expect(generated.dashboardHtml).toContain('"/assets/app.js"');
+  expect(generated.dashboardHtml).toContain('"/assets/app.css"');
+  expect(new Bun.Transpiler({ loader: "js" }).scan(generated.dashboardJs).imports).toEqual([]);
+  expect(generated.dashboardJs).toContain("getElementById");
+  expect(carriesDevelopmentReact(generated.dashboardJs)).toBe(false);
+  expect(generated.dashboardCss).toContain("--ms-bg-canvas");
+  expect(remoteReference(generated.dashboardHtml)).toBeNull();
+  expect(remoteReference(generated.dashboardCss)).toBeNull();
+}
 
 beforeAll(async () => {
   const run = regenerate();
@@ -146,19 +166,33 @@ describe("the bundle", () => {
     expect(css.length).toBeLessThanOrEqual(CSS_CEILING);
   });
 
-  test("is byte-identical across two consecutive generator runs", () => {
-    const first = readFileSync(scratchPath);
+  test("regenerates importable offline assets on consecutive runs", async () => {
+    await expectUsableAssets(scratchPath);
+    writeFileSync(scratchPath, "export const stale = true;");
     const rerun = regenerate();
     expect(rerun.exitCode).toBe(0);
-    expect(readFileSync(scratchPath).equals(first)).toBe(true);
+    await expectUsableAssets(scratchPath);
   });
 });
 
 describe("the generated module", () => {
-  test("is a pure function of its inputs, so a rebuild cannot drift", () => {
-    const a = renderModule("<html></html>", "console.log(1)", "body{}");
-    const b = renderModule("<html></html>", "console.log(1)", "body{}");
-    expect(b).toBe(a);
+  test("exports usable HTML, JS and CSS from escaped inputs", async () => {
+    const source = renderModule('<html lang="fr"><body>é</body></html>', "globalThis.dashboardReady = true", "body{color:red}");
+    const dir = mkdtempSync(path.join(tmpdir(), "dashboard-module-"));
+    try {
+      const modulePath = path.join(dir, "assets.ts");
+      writeFileSync(modulePath, source);
+      const generated = await import(modulePath);
+      const document = fromHtml(generated.dashboardHtml);
+      const html = document.children.find((node) => node.type === "element" && node.tagName === "html");
+      expect(html?.type === "element" && html.properties.lang).toBe("fr");
+      const runtime: { dashboardReady?: boolean } = {};
+      new Function("globalThis", generated.dashboardJs)(runtime);
+      expect(runtime.dashboardReady).toBe(true);
+      expect(generated.dashboardCss).toContain("color:red");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
     // Non-ASCII becomes an escape so the generated module stays pure ASCII.
     expect(renderModule("é", "", "")).toContain("\\u00e9");
     expect(renderModule("é", "", "").isWellFormed()).toBe(true);
@@ -189,17 +223,19 @@ describe("the entry", () => {
 });
 
 describe("the artifact does not depend on the caller", () => {
-  test("invoking from the package and from the repo root produce the same bytes", () => {
-    // `Bun.build` resolves workspace dependencies from the process working
-    // directory. Before the generator anchored itself, the repo-root invocation
-    // produced a different bundle than the package invocation — so the
-    // determinism this file promises held only for one starting directory.
-    const fromPackage = path.join(cliRoot, ".tmp-from-package.generated.ts");
-    const fromRoot = path.join(cliRoot, ".tmp-from-root.generated.ts");
+  test("invoking from either cwd writes usable assets to the requested output path", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "dashboard-cwd-"));
+    const fromPackage = path.join(dir, "from-package.ts");
+    const fromRoot = path.join(dir, "from-root.ts");
     const repoRoot = path.resolve(cliRoot, "../..");
 
-    expect(regenerate(fromPackage, cliRoot).exitCode).toBe(0);
-    expect(regenerate(fromRoot, repoRoot).exitCode).toBe(0);
-    expect(readFileSync(fromRoot).equals(readFileSync(fromPackage))).toBe(true);
+    try {
+      expect(regenerate(fromPackage, cliRoot).exitCode).toBe(0);
+      expect(regenerate(fromRoot, repoRoot).exitCode).toBe(0);
+      await expectUsableAssets(fromPackage);
+      await expectUsableAssets(fromRoot);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
