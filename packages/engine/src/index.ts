@@ -740,7 +740,7 @@ export {
   TERMINAL_DISPOSITIONS,
   vocabularyMap,
 } from "./issue.js";
-// The remote record shapes the sync ledger consumes (issue-sync): what an
+// why: The remote record shapes the sync ledger consumes (issue-sync): what an
 // agent's external issue tools hand back, normalized. The engine owns no
 // transport and no credential, so no provider interface, page envelope or
 // failure list lives here — a listing is the caller's own array.
@@ -784,7 +784,7 @@ export {
   resetCursor,
   writeCursor,
 } from "./issue-sync.js";
-// One-way push (M1): candidates, the payload plan, the ledger protocol, the
+// why: One-way push (M1): candidates, the payload plan, the ledger protocol, the
 // result recorder and ambiguous-create recovery by correlation marker. mstar
 // makes no external call — the caller's own tools write, and these verbs own the
 // local half.
@@ -803,7 +803,7 @@ export {
   assertReleaseTargets,
   externalIdOf,
   identityConflict,
-  // The push planner is exported as `planPushItem`: the ledger's own cycle
+  // why: The push planner is exported as `planPushItem`: the ledger's own cycle
   // opener already owns the name `planItem` on this surface.
   planItem as planPushItem,
   reconcileWith,
@@ -811,7 +811,7 @@ export {
   requestHash,
   selectPushCandidates,
 } from "./issue-sync/push.js";
-// The correlation marker between a Linear issue and the local row it mirrors,
+// why: The correlation marker between a Linear issue and the local row it mirrors,
 // plus the git identity that stamps it: repo (owner/name) + local issue id +
 // pushing author. No store id and no token, so any clone of the repository can
 // decide whether a remote issue is its own.
@@ -819,7 +819,7 @@ export type { MarkerFields } from "./issue-sync/marker.js";
 export { decodeMarker, encodeMarker } from "./issue-sync/marker.js";
 export type { RepoIdentity } from "./issue-sync/identity.js";
 export { normalizeRepoRemote, readRepoIdentity } from "./issue-sync/identity.js";
-// Ingest association: a listing the caller fetched with its own tools becomes
+// why: Ingest association: a listing the caller fetched with its own tools becomes
 // ledger associations only — associated / drift / foreign / orphan / unmanaged.
 // No local issue is created, updated or closed.
 export type { IngestContext, IngestEntry, IngestReport } from "./issue-sync/ingest.js";
@@ -1203,6 +1203,6 @@ export {
   WORKFLOW_OPERATION_SEMANTICS,
 } from "./recovery-intent.js";
 
-// No Linear credential and no OAuth flow live in the engine: mstar performs no
+// why: No Linear credential and no OAuth flow live in the engine: mstar performs no
 // Linear request, and the bearer belongs to the host's own credential store.
 

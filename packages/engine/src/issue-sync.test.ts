@@ -690,7 +690,7 @@ describe("the run lease serialises one direction, with an explicit takeover", ()
     const taken = acquireRun(db, { ...RUN, holderPid: 5000, holderHost: "builder-2", reason: "operator took the run over with --take-run", takeRun: true });
     expect(taken.runId).not.toBe(dead.runId);
     expect(taken).toMatchObject({ holderPid: 5000, holderHost: "builder-2", reason: "operator took the run over with --take-run" });
-    // The ORIGINAL start survives the replacement: it is the baseline a
+    // why: The ORIGINAL start survives the replacement: it is the baseline a
     // predecessor's claim is judged against, so the successor can still close
     // the cycle the dead holder opened.
     expect(taken.startedAt).toBe(dead.startedAt);

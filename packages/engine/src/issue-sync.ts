@@ -396,7 +396,7 @@ export function claimItem(db: StoreDb, input: PlanItemInput): { claimed: boolean
   return writePlan(db, input, "claim");
 }
 
-// ---------------------------------------------------------------------------
+// why: ---------------------------------------------------------------------------
 // The run lease: ONE push run per binding, arbitrated by this store's writes
 // ---------------------------------------------------------------------------
 //
@@ -513,7 +513,7 @@ export function acquireRun(db: StoreDb, input: AcquireRunInput): RunLease {
       .prepare(
         "insert into sync_runs(binding_id, direction, run_id, holder_pid, holder_host, started_at, reason) values (?, ?, ?, ?, ?, ?, ?)" +
           (input.takeRun === true
-            // The replacement keeps the ORIGINAL started_at: it is the baseline
+            // why: The replacement keeps the ORIGINAL started_at: it is the baseline
             // every earlier claim of this direction is judged against, so a
             // predecessor's opened cycle stays recognisable to its successor
             // (`push.ts` `openedByThisRun`) — which is exactly the residue a

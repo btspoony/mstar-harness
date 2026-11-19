@@ -1,5 +1,5 @@
 /**
- * marker.test.ts — the one correlation marker the push writes and the ingest
+ * note: marker.test.ts — the one correlation marker the push writes and the ingest
  * decodes: git author identity plus the local issue id, nothing that exists
  * only on one machine.
  */
@@ -40,7 +40,7 @@ describe("encodeMarker / decodeMarker", () => {
     expect(decodeMarker(null)).toBeNull();
     expect(decodeMarker(undefined)).toBeNull();
     expect(decodeMarker("## Impact\n\nno marker here")).toBeNull();
-    // The deleted code's marker shape: a bare slash-joined path, no keys.
+    // why: The deleted code's marker shape: a bare slash-joined path, no keys.
     expect(decodeMarker("body\n\n<!-- mstar-sync: acme/ENG/store-alpha/I-000001 -->")).toBeNull();
     expect(decodeMarker("body\n\n<!-- mstar-sync: local=I-1; author=" + AUTHOR + " -->")).toBeNull();
     expect(decodeMarker("body\n\n<!-- mstar-sync: repo=acme/widgets; author=" + AUTHOR + " -->")).toBeNull();

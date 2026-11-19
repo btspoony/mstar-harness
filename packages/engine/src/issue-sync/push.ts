@@ -1,5 +1,5 @@
 /**
- * issue-sync/push.ts — the one-way push direction over the sync ledger.
+ * note: issue-sync/push.ts — the one-way push direction over the sync ledger.
  *
  * mstar performs no external call here. An agent holding the host's Linear tools
  * does the writing; this module owns the local half of the run:
@@ -67,13 +67,13 @@ export const PUSH_DIRECTION = "push" as const;
 
 /** Everything one item plan needs that is not local content. */
 export type PushContext = {
-  /** '"linear:<project_id>"', the ledger's binding key. */
+  /** note: '"linear:<project_id>"', the ledger's binding key. */
   bindingId: string;
-  /** This checkout's repository identity and git author, stamped into the marker. */
+  /** note: This checkout's repository identity and git author, stamped into the marker. */
   identity: { repo: string; author: string };
   mapping?: LinearFacetMapping;
   /**
-   * The run lease this run holds ('RunLease.runId'). Every ledger write this
+   * note: The run lease this run holds ('RunLease.runId'). Every ledger write this
    * run performs carries it, so a run that '--take-run' replaced mid-flight has
    * its later writes REFUSED ('sync.run-taken') instead of applied — the lease
    * check at acquisition cannot cover a write the predecessor had not made yet.
@@ -99,11 +99,11 @@ export type PushCandidate = {
  */
 export type PushPlan = {
   localId: string;
-  /** 'create' when the ledger holds no identity for this item yet. */
+  /** note: 'create' when the ledger holds no identity for this item yet. */
   operation: "create" | "update";
   externalId: string | null;
   payload: ProviderWritePayload;
-  /** The marker the description ends with, reported so a caller can check it. */
+  /** note: The marker the description ends with, reported so a caller can check it. */
   marker: string;
   requestHash: string;
 };
@@ -125,9 +125,9 @@ export type PushResult = {
   outcome: "confirmed" | "refused" | "ambiguous";
   externalId?: string | null;
   url?: string | null;
-  /** ISO-8601 instant the remote reports for the written issue. */
+  /** note: ISO-8601 instant the remote reports for the written issue. */
   remoteUpdatedAt?: string | null;
-  /** The tool's own cause text, for 'refused' and 'ambiguous'. */
+  /** note: The tool's own cause text, for 'refused' and 'ambiguous'. */
   cause?: string | null;
 };
 
@@ -154,7 +154,7 @@ export function selectPushCandidates(db: StoreDb, bindingId: string): PushCandid
     .all(projectId) as PushCandidate[];
 }
 
-/** The content of one local issue, for the ledger write that names it. */
+/** note: The content of one local issue, for the ledger write that names it. */
 function candidateOf(db: StoreDb, localId: string): PushCandidate | null {
   return (
     (db
@@ -163,7 +163,7 @@ function candidateOf(db: StoreDb, localId: string): PushCandidate | null {
   );
 }
 
-/** '"<provider>:<project_id>"' → the store project id ('sync.invalid-input' otherwise). */
+/** note: '"<provider>:<project_id>"' → the store project id ('sync.invalid-input' otherwise). */
 function projectIdOf(bindingId: string): string {
   const prefix = "linear:";
   if (typeof bindingId !== "string" || !bindingId.startsWith(prefix) || bindingId.length === prefix.length) {
@@ -192,7 +192,7 @@ export function requestHash(payload: ProviderWritePayload): string {
 }
 
 /**
- * The send-right key for one create: binding, item and content hash.
+ * note: The send-right key for one create: binding, item and content hash.
  *
  * Deliberately NOT keyed on the ledger revision, which every refusal, failure
  * and apply advances. Revision keying existed only to discriminate attempts by
@@ -213,7 +213,7 @@ function descriptionFor(candidate: PushCandidate, marker: string): string {
 }
 
 /**
- * The payload, marker, hash and kind label of one candidate.
+ * note: The payload, marker, hash and kind label of one candidate.
  *
  * An existing identity makes the update replace EXACTLY the labels this tool may
  * own: an unconfirmed earlier update can leave more than one of them on the
@@ -263,11 +263,11 @@ export function planItem(db: StoreDb, context: PushContext, candidate: PushCandi
   requireRunLease(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, runId: context.runId });
   const ledger = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
   const externalId = ledger?.externalId ?? null;
-  // A 'pending' row with no id is the residue of a create nobody confirmed. Its
+  // why: A 'pending' row with no id is the residue of a create nobody confirmed. Its
   // state is the ONLY record that a remote issue may exist, so nothing in this
   // attempt may consume it.
   if (externalId === null && ledger?.itemState === "pending") {
-    // An unresolved create. Adopting it is reconciliation's job; planning
+    // why: An unresolved create. Adopting it is reconciliation's job; planning
     // another create could duplicate the remote issue, which is the one thing
     // this direction must never do. When the operator's own reconcile finds no
     // match, '--release <localId>' clears the row to the retryable 'failed' edge,
@@ -287,7 +287,7 @@ export function planItem(db: StoreDb, context: PushContext, candidate: PushCandi
   }
   const { marker, payload, hash } = planOf(context, candidate, ledger);
 
-  // The skip rule comes FIRST. When the ledger already proves the remote says
+  // why: The skip rule comes FIRST. When the ledger already proves the remote says
   // exactly this, nothing is due.
   if (externalId !== null && ledger?.itemState === "applied" && ledger.lastRequestHash === hash) {
     return { outcome: "skipped", localId, externalId, reason: "unchanged" };
@@ -296,7 +296,7 @@ export function planItem(db: StoreDb, context: PushContext, candidate: PushCandi
     return { outcome: "planned", plan: { localId, operation: "update", externalId, payload, marker, requestHash: hash } };
   }
 
-  // This is a create. Intent is recorded BEFORE the caller issues the call, so an
+  // why: This is a create. Intent is recorded BEFORE the caller issues the call, so an
   // unconfirmed result leaves a durable residue to reconcile against.
   //
   // The claim is the intent record, not the concurrency arbiter: the run lease
@@ -375,7 +375,7 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
       "linear-push:" + context.bindingId + ":" + localId + ":" + step + ":" + hash + ":" + entryRevision;
     const lease = context.runId === undefined ? {} : { runId: context.runId };
 
-    // A create cycle this run did not open is not this run's to record — neither a
+    // why: A create cycle this run did not open is not this run's to record — neither a
     // confirmation NOR a refusal: `failed` is invisible to reconciliation, so
     // flipping the residue would hide the only record that a remote issue may
     // exist and let the next run create a duplicate. An ambiguous result writes
@@ -395,7 +395,7 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
       );
     }
     if (result.outcome === "refused") {
-      // The item is retryable and the report must say how: the cause alone leaves
+      // why: The item is retryable and the report must say how: the cause alone leaves
       // the operator with a failure and no next step.
       const cause =
         (result.cause ?? "the remote refused the write") +
@@ -404,7 +404,7 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
     }
     if (result.outcome === "ambiguous") {
       if (ledger.externalId === null) {
-        // Deliberately NO ledger write: the row keeps its (absent) identity as a
+        // why: Deliberately NO ledger write: the row keeps its (absent) identity as a
         // 'pending' residue, and the next reconcile decides by marker, never by
         // guesswork. That residue is also why the next plan cannot create at all
         // until reconciliation attributes it.
@@ -417,7 +417,7 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
             " - it stays unconfirmed: run 'mstar issue-sync ingest' with a listing so its marker associates the issue, or record the identity with 'mstar issue-sync apply --adopt <localId>=<issueUrl|externalId>'",
         };
       }
-      // An update the remote did not confirm: the identity stands, but the
+      // why: An update the remote did not confirm: the identity stands, but the
       // payload proof does not. Dropping the hash is what stops the next pass
       // from reporting 'skipped' off a fact that predates this write; the label
       // this write may have applied becomes ownership a corrective update
@@ -444,7 +444,7 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
         "a confirmed result must name the remote issue in 'externalId'; nothing was recorded for this item. Re-send the entry with the identifier the tool returned",
       );
     }
-    // A confirmed identity that differs from the row's recorded one is an
+    // why: A confirmed identity that differs from the row's recorded one is an
     // identity replacement, not a receipt: the recorded id came from an ingest
     // association or a same-run --adopt, and moving it silently would leave the
     // old remote issue behind with no trace. The operator says so explicitly.
@@ -471,7 +471,7 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
     });
     return { localId, outcome: "applied", externalId };
   } catch (error) {
-    // A lease refusal is not this item's cause: the run no longer owns the
+    // why: A lease refusal is not this item's cause: the run no longer owns the
     // direction, so the whole run must stop instead of being reported per item.
     if (error instanceof SyncError && error.code === "sync.run-taken") throw error;
     return { localId, outcome: "refused", externalId: null, cause: error instanceof Error ? error.message : String(error) };
@@ -502,7 +502,7 @@ function openedByThisRun(db: StoreDb, context: PushContext, ledger: SyncItem): b
 }
 
 /**
- * Record a refusal on the item.
+ * note: Record a refusal on the item.
  *
  * Best-effort by design: the run's report is the record of what happened, and a
  * ledger refusal here must not mask the cause that produced it. Only a genuine
@@ -531,7 +531,7 @@ function failed(
   const message = "[" + code + "] " + cause;
   try {
     const ledger = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
-    // An item that never reached the ledger still gets a row here, so the
+    // why: An item that never reached the ledger still gets a row here, so the
     // operator can SEE why it is not pushed; 'failed → pending' is a legal retry
     // edge, so the next run tries again once the cause is addressed.
     if (ledger === null && planRow) {
@@ -545,7 +545,7 @@ function failed(
     }
     const current = ledger ?? readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
     if (current !== null) {
-      // 'markFailed' is the retry edge and is legal only from 'pending'.
+      // why: 'markFailed' is the retry edge and is legal only from 'pending'.
       const retryable = current.itemState === "pending";
       const step = retryable ? "failed" : "refused";
       const operationId =
@@ -584,7 +584,7 @@ const RELEASE_REASON =
   "released by the operator after reconciliation found no remote issue carrying this item's correlation marker; the next plan may create";
 
 /**
- * A 'pending' row with no id can be released only by the operator, and only
+ * note: A 'pending' row with no id can be released only by the operator, and only
  * from the listing that proved absence: 'failed' is the ledger's retryable edge,
  * so the next plan claims the create again. The revision joins the operation id
  * so a later ambiguity for the same item is a new release, not a replay.
@@ -671,7 +671,7 @@ export function reconcileWith(
   const report: ReconcileReport = { adopted: [], unresolved: [] };
   if (pending.length === 0) return report;
 
-  // The association key is (repo, local): this repository's identity plus the
+  // why: The association key is (repo, local): this repository's identity plus the
   // local issue id the marker names. A record pushed from another repository,
   // another store of a different repo, or by the deleted code's marker shape
   // decodes to nothing and is never a candidate.
@@ -762,7 +762,7 @@ export function adoptItem(
   const existing = readItem(db, { bindingId, direction: PUSH_DIRECTION, localId });
   const conflict = identityConflict(existing, localId, externalId);
   if (conflict !== null && options.force !== true) throw conflict;
-  // The row's revision is the generation this adoption is applied OVER, and it
+  // why: The row's revision is the generation this adoption is applied OVER, and it
   // joins the operation id. Going back to an issue this row held earlier repeats
   // every other fact of the adoption that first recorded it (same binding, local
   // id, external id, 'clearProof'), so without it that receipt is replayed —
@@ -788,7 +788,7 @@ export function adoptItem(
     direction: PUSH_DIRECTION,
     localId,
     externalId,
-    // Cleared, not carried: see the docstring above. 'clearProof' is the only
+    // why: Cleared, not carried: see the docstring above. 'clearProof' is the only
     // way to say "this identity has no proof yet", because an omitted hash
     // means "keep the row's".
     ...(keepProof ? {} : { clearProof: true as const }),
@@ -842,7 +842,7 @@ export function externalIdOf(reference: string): string {
   if (url.hostname !== "linear.app" && !url.hostname.endsWith(".linear.app")) {
     throw new Error("[sync.invalid-input] " + url.hostname + " is not a Linear host; pass a linear.app issue URL or the issue identifier");
   }
-  // A Linear issue URL is '/<workspace>/issue/<identifier>/<slug…>': the
+  // why: A Linear issue URL is '/<workspace>/issue/<identifier>/<slug…>': the
   // identifier follows 'issue', and the trailing slug is not it.
   const segments = url.pathname.split("/").filter((part) => part !== "");
   const issueAt = segments.indexOf("issue");

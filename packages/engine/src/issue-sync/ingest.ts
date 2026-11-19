@@ -46,39 +46,39 @@ import { isNewerInstant, SyncError, markApplied, planItem as openLedgerCycle, re
 
 /** What one associated (or refused) record says, in one shape per bucket. */
 export type IngestEntry = {
-  /** The local issue the marker names; null when the record carries no usable marker. */
+  /** note: The local issue the marker names; null when the record carries no usable marker. */
   localId: string | null;
   externalId: string;
   url: string;
-  /** Why the record landed in this bucket; absent on a clean association. */
+  /** note: Why the record landed in this bucket; absent on a clean association. */
   cause?: string;
 };
 
 export type IngestReport = {
-  /** Associated and converged: the ledger now knows this remote issue. */
+  /** note: Associated and converged: the ledger now knows this remote issue. */
   associated: IngestEntry[];
   /**
-   * Needs the operator. Three cases, all "nothing was rewritten here": the remote
+   * note: Needs the operator. Three cases, all "nothing was rewritten here": the remote
    * content no longer matches what mstar confirmed, two remote issues claim one
    * local issue, or the ledger row cannot take an association (a released/failed
    * create). The cause names the recovery.
    */
   drift: IngestEntry[];
-  /** Another git author's push of a local id in this same repository. */
+  /** note: Another git author's push of a local id in this same repository. */
   foreign: IngestEntry[];
-  /** A marker naming a local issue this store does not have. */
+  /** note: A marker naming a local issue this store does not have. */
   orphan: IngestEntry[];
-  /** No usable marker, or one from another repository. */
+  /** note: No usable marker, or one from another repository. */
   unmanaged: IngestEntry[];
 };
 
 /** Everything one ingest needs that is not the listing. */
 export type IngestContext = {
-  /** `"linear:<project_id>"`, the ledger's binding key. */
+  /** note: `"linear:<project_id>"`, the ledger's binding key. */
   bindingId: string;
-  /** This checkout's repository identity and git author. */
+  /** note: This checkout's repository identity and git author. */
   identity: { repo: string; author: string };
-  /** The `.mstarc` mapping the pushed payload was built with. */
+  /** note: The `.mstarc` mapping the pushed payload was built with. */
   mapping?: LinearFacetMapping;
 };
 
@@ -102,7 +102,7 @@ function remoteHash(record: ProviderItem, mapping?: LinearFacetMapping): string 
   return requestHash(payload);
 }
 
-/** The store project a `"linear:<project_id>"` binding drives (`sync.invalid-input` otherwise). */
+/** note: The store project a `"linear:<project_id>"` binding drives (`sync.invalid-input` otherwise). */
 function projectIdOf(bindingId: string): string {
   const prefix = "linear:";
   if (typeof bindingId !== "string" || !bindingId.startsWith(prefix) || bindingId.length === prefix.length) {
@@ -111,13 +111,13 @@ function projectIdOf(bindingId: string): string {
   return bindingId.slice(prefix.length);
 }
 
-/** Does ANY issue in this store carry this id? Used only to word the orphan cause. */
+/** note: Does ANY issue in this store carry this id? Used only to word the orphan cause. */
 function localIssueExists(db: StoreDb, localId: string): boolean {
   return db.prepare("select id from issues where id = ?").get(localId) !== undefined;
 }
 
 /**
- * Is the local issue the marker names part of THIS binding's project?
+ * note: Is the local issue the marker names part of THIS binding's project?
  *
  * Existence alone is not enough: issue ids are store-wide, so a marker from
  * another project of the same store would otherwise be associated under the
@@ -128,7 +128,7 @@ function localIssueInProject(db: StoreDb, projectId: string, localId: string): b
 }
 
 /**
- * Record the association on the push row: the remote identity when the row has
+ * note: Record the association on the push row: the remote identity when the row has
  * none, and the remote revision watermark always.
  *
  * A row that never existed is opened first, because the ledger has no way to
@@ -158,7 +158,7 @@ function associate(db: StoreDb, context: IngestContext, localId: string, record:
   }
   markApplied(db, {
     ...key,
-    // Only a row with no identity takes this one: an identity mstar already
+    // why: Only a row with no identity takes this one: an identity mstar already
     // confirmed is a fact, and overwriting it would move the mirror silently.
     ...(ledger?.externalId == null ? { externalId: record.externalId } : {}),
     remoteUpdatedAt: record.updatedAt,
@@ -219,7 +219,7 @@ export function ingestRecords(
     }
     try {
       const ledger = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId: marker.localId });
-      // The identity conflict is decided BEFORE anything is written: associating
+      // why: The identity conflict is decided BEFORE anything is written: associating
       // first and then reporting the mismatch would still have moved the row's
       // watermark to a revision the ledger refuses to own.
       if (ledger?.externalId != null && ledger.externalId !== record.externalId) {
@@ -232,7 +232,7 @@ export function ingestRecords(
         });
         continue;
       }
-      // A row that cannot take an association is a TARGETED refusal, not a
+      // why: A row that cannot take an association is a TARGETED refusal, not a
       // whole-run abort: a `failed` row is where a released create lands, and the
       // remote request that created the issue can still arrive after the release.
       if (ledger !== null && ledger.itemState !== "applied" && ledger.itemState !== "pending") {

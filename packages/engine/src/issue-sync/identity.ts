@@ -1,5 +1,5 @@
 /**
- * identity.ts — who this checkout is, for the correlation marker.
+ * note: identity.ts — who this checkout is, for the correlation marker.
  *
  * Two facts, read from git and nowhere else:
  * - `repo` — the normalized `origin` remote (`owner/name`), or the explicit
@@ -19,7 +19,7 @@ export type RepoIdentity =
   | { ok: true; repo: string; author: string }
   | { ok: false; code: "linear.repo-unresolved" | "linear.author-unresolved"; message: string };
 
-/** One bounded git read; `null` when git cannot answer (not a repo, timeout, no key). */
+/** note: One bounded git read; `null` when git cannot answer (not a repo, timeout, no key). */
 function gitRead(repoRoot: string, args: string[]): string | null {
   try {
     const out = execFileSync("git", ["-C", repoRoot, ...args], {
@@ -50,7 +50,7 @@ export function normalizeRepoRemote(remote: string): string | null {
       return null;
     }
   } else if (value.includes(":")) {
-    // scp-like `user@host:owner/name`: everything after the last colon is the path.
+    // why: scp-like `user@host:owner/name`: everything after the last colon is the path.
     path = value.slice(value.lastIndexOf(":") + 1);
   }
   const segments = path

@@ -1,5 +1,5 @@
 /**
- * field-mapping.ts — THE correspondence between local issue fields and Linear's,
+ * note: field-mapping.ts — THE correspondence between local issue fields and Linear's,
  * shared by both directions.
  *
  * Two directional function sets over one table, never an inverse: D7 collapses

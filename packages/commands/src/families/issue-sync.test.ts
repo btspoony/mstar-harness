@@ -1,5 +1,5 @@
 /**
- * issue-sync.test.ts — the three local verbs of the Linear mirror: pending, apply,
+ * note: issue-sync.test.ts — the three local verbs of the Linear mirror: pending, apply,
  * ingest. mstar makes no Linear call, so nothing here is faked except the
  * filesystem and stdin: the fixture plays the agent that holds the host's tools,
  * and every assertion reads the store's real ledger.
@@ -27,7 +27,7 @@ const savedGlobal = process.env.GIT_CONFIG_GLOBAL;
 const savedSystem = process.env.GIT_CONFIG_NOSYSTEM;
 
 beforeAll(() => {
-  // The fixture's own git config decides; a developer's global identity must not.
+  // why: The fixture's own git config decides; a developer's global identity must not.
   process.env.GIT_CONFIG_GLOBAL = "/dev/null";
   process.env.GIT_CONFIG_NOSYSTEM = "1";
 });
@@ -65,13 +65,13 @@ type Fixture = {
   repoRoot: string;
   harnessDir: string;
   context: InvocationContext;
-  /** The same invocation with its own stdin body, for the stdin route. */
+  /** note:  The same invocation with its own stdin body, for the stdin route. */
   withStdin(payload: string): InvocationContext;
   read<T>(fn: (db: StoreDb) => T): Promise<T>;
 };
 
 /**
- * A repository with a .mstarc mirror block, a git identity and an initialized
+ * note: A repository with a .mstarc mirror block, a git identity and an initialized
  * store that binds one Linear project and holds three local issues — the state
  * an operator reaches after project bind and three captures.
  */
@@ -142,7 +142,7 @@ function markerOf(localId: string, overrides: { repo?: string; author?: string }
   );
 }
 
-/** What a Linear tool would return for one listed issue mirroring a local id. */
+/** note:  What a Linear tool would return for one listed issue mirroring a local id. */
 function record(externalId: string, localId: string, overrides: Partial<ProviderItem> = {}): ProviderItem {
   return {
     externalId,
@@ -163,7 +163,7 @@ function run(verb: string, input: Record<string, unknown>, context: InvocationCo
   return executeCommand("issue-sync." + verb, { project: PROJECT, ...input }, context) as Promise<Result>;
 }
 
-/** Write a JSON body inside the fixture, for the file-path route. */
+/** note:  Write a JSON body inside the fixture, for the file-path route. */
 function bodyFile(f: Fixture, name: string, body: unknown): string {
   const path = join(f.repoRoot, name);
   writeFileSync(path, JSON.stringify(body));
@@ -192,11 +192,11 @@ describe("pending", () => {
     expect(first.marker).toBe(markerOf("I-000101"));
     expect(first.payload).toMatchObject({ title: "Issue I-000101", priority: 2, state: "Todo", labels: ["bug"] });
     expect(typeof first.requestHash).toBe("string");
-    // The marker is the LAST line of what the tool writes: that is the key a
+    // why: The marker is the LAST line of what the tool writes: that is the key a
     // later listing is associated by.
     expect(first.payload.description.endsWith("\n\n" + first.marker)).toBe(true);
 
-    // Planning is the intent record: the ledger holds a pending create.
+    // why: Planning is the intent record: the ledger holds a pending create.
     expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "pending", externalId: null });
   });
 
@@ -263,7 +263,7 @@ describe("apply", () => {
     expect(result.status).toBe("ok");
     expect(result.data.runId).toBe(pending.data.runId);
     expect(result.data.counts).toEqual({ applied: 1, unconfirmed: 1, refused: 1 });
-    // items[] echoes the CALLER'S word; the ledger state each produced is in counts.
+    // why: items[] echoes the CALLER'S word; the ledger state each produced is in counts.
     expect(result.data.items).toEqual([
       { localId: "I-000101", outcome: "confirmed", externalId: "LIN-11" },
       {
@@ -275,7 +275,7 @@ describe("apply", () => {
       { localId: "I-000103", outcome: "ambiguous", externalId: null, cause: expect.stringContaining("tool call timed out") },
     ]);
     expect(result.data.counts).toEqual({ applied: 1, unconfirmed: 1, refused: 1 });
-    // The causes are the tool's own words plus the one-line recovery: a failure
+    // why: The causes are the tool's own words plus the one-line recovery: a failure
     // report that names no next step leaves the operator stuck.
     expect(result.data.items[1].cause).toContain("mstar issue-sync pending");
     expect(result.data.items[2].cause).toContain("mstar issue-sync ingest");
@@ -283,7 +283,7 @@ describe("apply", () => {
     expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "applied", externalId: "LIN-11" });
     expect(await rowOf(f, "I-000102")).toMatchObject({ itemState: "failed", externalId: null });
     expect(await rowOf(f, "I-000103")).toMatchObject({ itemState: "pending", externalId: null });
-    // The run ended with this verb: the next pending may claim it again.
+    // why: The run ended with this verb: the next pending may claim it again.
     expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
     expect((await run("pending", {}, f.context)).status).toBe("ok");
   });
@@ -309,12 +309,12 @@ describe("apply", () => {
   });
 
   test("apply with no prior pending acquires its own run and still records", async () => {
-    // The recovery branch: pending ran somewhere else and released (or crashed
+    // why: The recovery branch: pending ran somewhere else and released (or crashed
     // without claiming), so there is no held run. apply must not need one - it
     // acquires a fresh lease so every ledger write still carries a run token.
     const f = await fixture("apply-no-held-run");
     expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
-    // An unclaimed pending row would be refused (round 4's guard), so this
+    // why: An unclaimed pending row would be refused (round 4's guard), so this
     // exercises the clean path: a local id with no ledger row at all is a
     // per-item refusal, and the run itself succeeds and ends.
     const result = await run(
@@ -340,12 +340,12 @@ describe("apply", () => {
   });
 
   test("a stale apply cannot continue a run a later pending opened", async () => {
-    // The reported defect: apply picked whatever run was held, so an old retry
+    // why: The reported defect: apply picked whatever run was held, so an old retry
     // wrote under a newer run's token and deleted that holder's lease on the way
     // out. The evidence is the claim timestamp of the create cycle.
     const f = await fixture("apply-stale-run");
     await run("pending", {}, f.context);
-    // Ends the planning run without recording the item: its create stays a residue.
+    // why: Ends the planning run without recording the item: its create stays a residue.
     await run("apply", { results: "-" }, f.withStdin("[]"));
     expect((await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION })))).toBeNull();
     await Bun.sleep(2);
@@ -360,7 +360,7 @@ describe("apply", () => {
     expect(stale.status).toBe("refused");
     expect(stale.code).toBe("sync.run-held");
     expect(stale.message).toContain("earlier run");
-    // Nothing was recorded, and the newer holder still owns the direction.
+    // why: Nothing was recorded, and the newer holder still owns the direction.
     expect((await rowOf(f, "I-000101"))!.externalId).toBeNull();
     const held = await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }));
     expect(held?.runId).toBe(later.data.runId);
@@ -384,7 +384,7 @@ describe("apply", () => {
     expect(released.data.released).toEqual(["I-000103"]);
     expect((await rowOf(f, "I-000103"))!.itemState).toBe("failed");
 
-    // An item whose remote identity is recorded is adoption's, not release's.
+    // why: An item whose remote identity is recorded is adoption's, not release's.
     const refusedRelease = await run("apply", { results: "-", release: ["I-000101"] }, f.withStdin("[]"));
     expect(refusedRelease.code).toBe("sync.illegal-transition");
     expect(refusedRelease.message).toContain("names no unresolved create");
@@ -419,7 +419,7 @@ describe("apply", () => {
 describe("ingest", () => {
   test("one record per bucket, and no local issue is written", async () => {
     const f = await fixture("ingest-buckets");
-    // A confirmed push first, so this item has a recorded payload hash that a
+    // why: A confirmed push first, so this item has a recorded payload hash that a
     // remote edit can drift from.
     await run("pending", {}, f.context);
     await run(
@@ -448,9 +448,9 @@ describe("ingest", () => {
     expect(result.data.orphan[0].localId).toBe("I-999999");
     expect(result.data.unmanaged.map((entry: { externalId: string }) => entry.externalId)).toEqual(["LIN-35", "LIN-36"]);
 
-    // The ledger is the only effect: the association is recorded...
+    // why: The ledger is the only effect: the association is recorded...
     expect((await rowOf(f, "I-000101"))!.externalId).toBe("LIN-31");
-    // ...and no local issue was created, retitled or touched.
+    // why: ...and no local issue was created, retitled or touched.
     expect(await f.read((db) => db.prepare("select id, title, updated_at from issues order by id").all())).toEqual(before);
   });
 

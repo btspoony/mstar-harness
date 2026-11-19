@@ -1,5 +1,5 @@
 /**
- * issue-sync family — the local half of the Linear mirror. Three verbs, no
+ * note: issue-sync family — the local half of the Linear mirror. Three verbs, no
  * Linear request anywhere in mstar:
  *
  *   mstar issue-sync pending --project <project_id> [--harness <root>]
@@ -73,6 +73,7 @@ import type { CommandDefinition, CommandEnvelope, CommandRequirement, Invocation
 /**
  * One schema PER VERB: the CLI syntax keys must equal the schema keys, so a
  * shared schema would force `ingest` to accept `--adopt` and vice versa.
+ * why: one schema per verb keeps the CLI syntax and the admitted input from drifting apart.
  */
 const pendingSchema = z.object({
   project: z.string().optional(),
@@ -124,6 +125,7 @@ const required: Record<Verb, (keyof Input)[]> = {
  * `--adopt` / `--force-adopt` / `--release` name one item each. Declared
  * variadic so an operator can pass several without the CLI refusing the
  * repetition.
+ * why: these three are the only operator verbs, and each names a different ledger fact.
  */
 const variadicOptions: Partial<Record<keyof Input, true>> = { adopt: true, forceAdopt: true, release: true };
 
@@ -138,7 +140,7 @@ function envelope(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: id + ".ok", exitCode: 0, data };
 }
 
-/** A refusal that survives the trip to the envelope, with its frozen code. */
+/** note: a SyncError refusal survives as a refusal, never an internal error. */
 function refused(code: string, message: string): Error {
   return Object.assign(new Error("[" + code + "] " + message), { code });
 }
@@ -146,6 +148,7 @@ function refused(code: string, message: string): Error {
 /**
  * Recovery text per refusal: every one names a documented entry to run, and
  * none of them tells the operator to hand-edit a credential file.
+ * why: a refusal without its recovery line is a hard block, which the contract forbids.
  */
 const RECOVERY: Record<string, string> = {
   "linear.provider-disabled":
@@ -193,7 +196,7 @@ function refusalFor(id: string, code: string, message: string, details?: Record<
     exitCode: 1,
     message: "[" + code + "] " + message,
     details: { operation: id, ...details },
-    // A literal, not a composed verb: the help-reachability prover must be able to read
+    // why: A literal, not a composed verb: the help-reachability prover must be able to read
     // the command this refusal advertises (the per-code map above stays unprovable 
     // behind its element access, which is the refusal-quality exemption, not this one).
     recovery: RECOVERY[code] ?? "Read the cause, resolve it, then re-run the same issue-sync verb: `mstar issue-sync pending --project <project-id>` plans the work, `apply` records results, and `ingest` associates a listing.",
@@ -231,7 +234,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
 }
 
 
-/** Everything a verb needs from the declarations, resolved once, before any write. */
+/** note: Everything a verb needs from the declarations, resolved once, before any write. */
 type Target = {
   projectId: string;
   bindingId: string;
@@ -247,12 +250,13 @@ type Target = {
  * and for which team) and the store's project binding (which remote project).
  * The git identity comes last, because it is the fact the marker is stamped
  * with and its refusal names the config command that supplies it.
+ * why: the order matters - the cheaper refusal answers first, before any store write.
  */
 async function resolveTarget(invocation: InvocationContext, input: Input): Promise<Target> {
   const projectId = requireValue(input.project, "--project");
   const harnessDir =
     resolveProcessHarnessDir(invocation.cwd, input.harness) ?? input.harness ?? invocation.controlRoot ?? invocation.cwd;
-  // The root is resolved ONCE and passed in: the harness's own checkout wins,
+  // why: The root is resolved ONCE and passed in: the harness's own checkout wins,
   // and a harness that lives outside any checkout falls back to the invocation's.
   const repoRoot = resolveRepoRoot(harnessDir) ?? resolveRepoRoot(invocation.cwd) ?? invocation.cwd;
   const repo = readRepoLinearBinding(repoRoot);
@@ -284,12 +288,12 @@ async function resolveTarget(invocation: InvocationContext, input: Input): Promi
   };
 }
 
-/** A refusal message without its leading `[code]` - the envelope re-adds it. */
+/** note: A refusal message without its leading `[code]` - the envelope re-adds it. */
 function stripCode(message: string): string {
   return message.replace(/^\[[^\]]+\]\s*/, "");
 }
 
-/** The push context one ledger write carries: identity, mapping and the run token. */
+/** note: The push context one ledger write carries: identity, mapping and the run token. */
 function pushContextFor(target: Target, runId: string | undefined): PushContext {
   return {
     bindingId: target.bindingId,
@@ -303,6 +307,7 @@ function pushContextFor(target: Target, runId: string | undefined): PushContext 
  * Read a JSON argument: a file path, or `-` for stdin. An unreadable path or a
  * body that is not JSON is a USAGE refusal naming the flag - the caller
  * mistyped it, and no store work has happened yet.
+ * why: `-` for stdin keeps payloads out of process argument lists and shell history.
  */
 async function readJsonArgument(invocation: InvocationContext, value: string | undefined, flag: string): Promise<unknown> {
   const source = requireValue(value, flag);
@@ -326,7 +331,7 @@ async function readJsonArgument(invocation: InvocationContext, value: string | u
   }
 }
 
-/** `pending`'s item: the plan a caller's tools write, in the frozen envelope shape. */
+/** note: `pending`'s item: the plan a caller's tools write, in the frozen envelope shape. */
 type PendingReport = {
   binding: { provider: "linear"; workspace: string; team: string; remoteProject: string };
   identity: { repo: string; author: string };
@@ -337,7 +342,7 @@ type PendingReport = {
 };
 
 /**
- * Plan every pushable item and hand the caller the payloads. No Linear call is
+ * note: Plan every pushable item and hand the caller the payloads. No Linear call is
  * made here, and the run lease stays HELD: the caller's tools run between this
  * verb and `apply`, which ends the run.
  */
@@ -346,7 +351,7 @@ async function runPending(id: string, input: Input, invocation: InvocationContex
   const handle = await openStore({ harnessDir: target.harnessDir }, "write");
   try {
     const db = handle.db;
-    // One run per binding, claimed before any candidate work. `pending` does not
+    // why: One run per binding, claimed before any candidate work. `pending` does not
     // release it: the lease covers the caller's tool calls as much as this
     // process, and `apply` is what ends the run.
     const run = acquireRun(db, {
@@ -387,6 +392,7 @@ async function runPending(id: string, input: Input, invocation: InvocationContex
  * (confirmed/refused/ambiguous) exactly as it handed it in; the ledger state
  * each word produced appears only in `counts` (applied/unconfirmed/refused), so
  * the two vocabularies never mix inside one field.
+ * why: the caller's word and the ledger state are different vocabularies and must not mix.
  */
 type ApplyItem = { localId: string; outcome: "confirmed" | "refused" | "ambiguous"; externalId: string | null; cause?: string };
 type ApplyReport = {
@@ -403,6 +409,7 @@ type ApplyReport = {
  * Parse `--adopt <localId>=<issueUrl|externalId>`. The FIRST `=` splits, so an
  * identifier containing one survives; a value with no `=` is a usage error
  * rather than a silently ignored flag.
+ * why: a self-contradicting verb pair must be refused before the first write, not half-applied.
  */
 function adoptPairs(values: readonly string[] | undefined): Array<{ localId: string; reference: string }> {
   return (values ?? []).map((value) => {
@@ -415,7 +422,7 @@ function adoptPairs(values: readonly string[] | undefined): Array<{ localId: str
 }
 
 /**
- * Operator verbs are validated against each other before the first write, so a
+ * note: Operator verbs are validated against each other before the first write, so a
  * self-contradicting request cannot land half-applied behind a later refusal.
  */
 function assertOperatorVerbsAgree(
@@ -461,8 +468,10 @@ function assertOperatorVerbsAgree(
  * Validate the caller's results. A well-formed entry becomes a ledger write; an
  * ill-formed one does NOT abort the run - the frozen contract says a missing
  * field is that entry's refusal in the report.
+ * why: per-item validation keeps one malformed entry from failing the whole run.
+ * why: per-entry refusals keep the caller's word so the report reads like the input.
  */
-/** A per-item validation refusal keeps the caller's word and carries the cause. */
+/** note: A per-item validation refusal keeps the caller's word and carries the cause. */
 function refusedItem(localId: string, cause: string): ApplyItem {
   return { localId, outcome: "refused", externalId: null, cause };
 }
@@ -553,6 +562,7 @@ function assertApplyOwnsHeldRun(
  * operator confirmed dead; with no run row at all - the normal case when
  * `pending` ran in a session that already released - this acquires a fresh one
  * so every write still carries a token.
+ * why: apply both continues the held run and ends it, so the lease survives exactly these writes.
  */
 async function runApply(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
   const adoptions = adoptPairs(input.adopt);
@@ -591,7 +601,7 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
       counts: { applied: 0, unconfirmed: 0, refused: parsed.refused.length },
     };
 
-    // EVERY operator verb is validated against the ledger BEFORE the first write:
+    // why: EVERY operator verb is validated against the ledger BEFORE the first write:
     // a bad `--release` discovered after an `--adopt` had landed would leave the
     // run half-applied behind a usage refusal.
     for (const { localId, reference } of adoptions) {
@@ -602,7 +612,7 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
     }
     assertReleaseTargets(db, target.bindingId, released);
 
-    // Operator-confirmed adoptions are ordinary ledger verbs: the row takes the
+    // why: Operator-confirmed adoptions are ordinary ledger verbs: the row takes the
     // identity and forgets the previous one's proof, so the next `pending`
     // converges this item's content onto the adopted issue instead of reporting
     // it unchanged.
@@ -614,7 +624,7 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
       report.adopted.push({ localId, externalId: adopted.externalId });
     }
 
-    // A release clears a pending create with no remote id after the operator
+    // why: A release clears a pending create with no remote id after the operator
     // confirmed no issue carries its marker (`ingest` is how that is checked: an
     // associated issue records an external id, which makes this flag refuse).
     if (released.size > 0) {
@@ -625,7 +635,7 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
     for (const outcome of recordResults(db, push, parsed.results)) {
       report.items.push({
         localId: outcome.localId,
-        // The CALLER'S word, echoed: `confirmed` stays `confirmed` whether the
+        // why: The CALLER'S word, echoed: `confirmed` stays `confirmed` whether the
         // ledger landed `applied` or refused the entry as unclaimed; the ledger
         // state it produced shows only in `counts`.
         outcome: outcome.outcome === "applied" ? "confirmed" : outcome.outcome === "unconfirmed" ? "ambiguous" : "refused",
@@ -638,14 +648,14 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
     }
     return envelope(id, report);
   } finally {
-    // The run ends on EVERY exit, and only when this run still holds it: a run a
+    // why: The run ends on EVERY exit, and only when this run still holds it: a run a
     // takeover replaced names a token the successor does not carry, so its own
     // `finally` deletes nothing.
     if (run !== null) {
       try {
         releaseRun(handle.db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, runId: run.runId });
       } catch {
-        // A release that cannot land must not mask the outcome that produced it.
+        // why: A release that cannot land must not mask the outcome that produced it.
       }
     }
     handle.close();
@@ -657,6 +667,7 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
  * listing is the caller's own defect and nothing has been written yet, so it is
  * a usage refusal naming the entry - the association rule never sees a
  * half-built record.
+ * why: a malformed listing is the caller's defect and must be refused before any ledger write.
  */
 function parseRecords(raw: unknown): Array<{
   externalId: string;
@@ -685,7 +696,7 @@ function parseRecords(raw: unknown): Array<{
     if (updatedAt === "" || Number.isNaN(Date.parse(updatedAt))) {
       throw new UsageError(name + " needs an ISO-8601 updatedAt; the ledger records it as the remote revision");
     }
-    // title and state are not defaulted: a malformed record would become a fake
+    // why: title and state are not defaulted: a malformed record would become a fake
     // drift report against real ledger facts, so it is refused per item instead.
     const title = typeof record.title === "string" ? record.title.trim() : "";
     if (title === "") throw new UsageError(name + " has no title; mstar never guesses remote content");
@@ -708,7 +719,7 @@ function parseRecords(raw: unknown): Array<{
   });
 }
 
-/** `ingest`'s envelope: the five association buckets, counted and listed. */
+/** note: `ingest`'s envelope: the five association buckets, counted and listed. */
 type IngestEnvelope = IngestReport & {
   projectId: string;
   bindingId: string;
@@ -717,7 +728,7 @@ type IngestEnvelope = IngestReport & {
 };
 
 /**
- * Associate a listing with the local rows it mirrors. mstar makes no Linear call
+ * note: Associate a listing with the local rows it mirrors. mstar makes no Linear call
  * and writes no local issue: the ledger's association is the whole effect.
  */
 async function runIngest(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {

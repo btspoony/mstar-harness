@@ -1,5 +1,5 @@
 /**
- * marker.ts — the ONE correlation marker between a Linear issue and the local
+ * note: marker.ts — the ONE correlation marker between a Linear issue and the local
  * issue it mirrors.
  *
  * ```
@@ -57,7 +57,7 @@ export function decodeMarker(description: string | null | undefined): MarkerFiel
   return { repo, localId, author: fields.author ?? "" };
 }
 
-/** The payload of the LAST marker in the text, or null when it carries none. */
+/** note: The payload of the LAST marker in the text, or null when it carries none. */
 function lastMarkerPayload(description: string | null | undefined): string | null {
   if (typeof description !== "string") return null;
   let last: string | null = null;

@@ -1,5 +1,5 @@
 /**
- * identity.test.ts — the one git-identity reader: the repository identity
+ * note: identity.test.ts — the one git-identity reader: the repository identity
  * (\`owner/name\`) and the author that stamps every pushed marker.
  *
  * The fixture is a REAL temporary repository: a mock of git could not prove the
@@ -35,7 +35,7 @@ function git(repo: string, args: string[]): void {
   execFileSync("git", ["-C", repo, ...args], { stdio: ["ignore", "pipe", "pipe"] });
 }
 
-/** A real repository with the given origin remote and local identity. */
+/** note: A real repository with the given origin remote and local identity. */
 function repo(options: { remote?: string; name?: string; email?: string } = {}): string {
   const dir = mkdtempSync(join(ROOT, "repo-"));
   git(dir, ["init", "-q"]);

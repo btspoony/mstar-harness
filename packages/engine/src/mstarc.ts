@@ -189,7 +189,7 @@ export type LinearBinding = {
   workspace: string;
   team: string;
   /**
-   * `owner/name` of this repository, for a checkout with no `origin` remote:
+   * note: `owner/name` of this repository, for a checkout with no `origin` remote:
    * the fallback the correlation marker's `repo` field reads. Empty when unset.
    */
   repo: string;
@@ -262,7 +262,7 @@ export function parseLinearBinding(
   const enabled = parsedEnabled;
   const workspace = linear.workspace ?? "";
   const team = linear.team ?? "";
-  // Optional: only a checkout without an `origin` remote needs it, and the
+  // why: Optional: only a checkout without an `origin` remote needs it, and the
   // refusal that names it (`linear.repo-unresolved`) is what tells the operator.
   const repo = (linear.repo ?? "").trim();
   if (enabled && (workspace === "" || team === "")) {

@@ -1,5 +1,5 @@
 /**
- * ingest.test.ts — the association rule over a listing the caller fetched with
+ * note: ingest.test.ts — the association rule over a listing the caller fetched with
  * its own tools: repo + local + git author decide, and the ledger is the only
  * thing that is written.
  */
@@ -71,7 +71,7 @@ function pushRow(db: StoreDb, localId: string) {
 }
 
 /**
- * Push one local issue through the real planner and recorder, then hand back the
+ * note: Push one local issue through the real planner and recorder, then hand back the
  * remote record a Linear tool would report for it: the payload mstar sent.
  */
 function pushAndRecord(db: StoreDb, localId: string, externalId: string): ProviderItem {
@@ -109,7 +109,7 @@ describe("ingestRecords", () => {
         externalId: "LIN-1",
         lastRemoteUpdatedAt: UPDATED,
       });
-      // No local issue was created, updated or closed.
+      // why: No local issue was created, updated or closed.
       expect(db.prepare("select title, updated_at from issues where id = 'I-000801'").get()).toEqual(before);
       expect((db.prepare("select count(*) as n from issues").get() as { n: number }).n).toBe(1);
     } finally {
@@ -143,7 +143,7 @@ describe("ingestRecords", () => {
       expect(report.drift).toHaveLength(1);
       expect(report.drift[0]!.localId).toBe("I-000821");
       expect(report.drift[0]!.cause).toContain("no longer matches");
-      // Association is still recorded, and the local proof is not rewritten.
+      // why: Association is still recorded, and the local proof is not rewritten.
       const after = pushRow(db, "I-000821")!;
       expect(after).toMatchObject({ itemState: "applied", externalId: "LIN-21" });
       expect(after.lastRequestHash).toBe(hashBefore);
@@ -210,7 +210,7 @@ describe("ingestRecords", () => {
       expect(report.associated.map((entry) => entry.externalId)).toEqual(["LIN-61"]);
       expect(report.drift.map((entry) => entry.externalId)).toEqual(["LIN-62"]);
       expect(report.drift[0]!.cause).toContain("two remote issues claim one local issue");
-      // The recorded identity is the one mstar confirmed, not the later claim.
+      // why: The recorded identity is the one mstar confirmed, not the later claim.
       expect(pushRow(db, "I-000851")!.externalId).toBe("LIN-61");
     } finally {
       close();
@@ -225,7 +225,7 @@ describe("ingestRecords", () => {
       const before = pushRow(db, "I-000852")!;
       expect(before).toMatchObject({ itemState: "applied", externalId: "LIN-61" });
 
-      // A second remote issue carrying the same marker is the identity conflict;
+      // why: A second remote issue carrying the same marker is the identity conflict;
       // it is reported, and NOTHING about it is recorded - not even a revision.
       const second = { ...pushed, externalId: "LIN-62", updatedAt: "2026-11-20T09:00:00.000Z" };
       const report = ingestRecords(db, ingestContext(), [second]);
@@ -239,7 +239,7 @@ describe("ingestRecords", () => {
   });
 
   test("re-ingesting the same record is an idempotent no-op", async () => {
-    // The reported defect: the first ingest opens the cycle and records the
+    // why: The reported defect: the first ingest opens the cycle and records the
     // identity, and the second reused that claim receipt with a different request
     // (the identity was already on the row), so the ledger refused it as an
     // operation conflict and the whole run aborted.
@@ -275,7 +275,7 @@ describe("ingestRecords", () => {
   });
 
   test("an association the ledger row cannot take is reported, and the run continues", async () => {
-    // A released create lands in `failed`; the remote request it was released for
+    // why: A released create lands in `failed`; the remote request it was released for
     // may still arrive. That is the operator's call to make with --adopt, not a
     // whole-run abort that would also drop the next record.
     const { db, close } = await openedStore("ingest-failed-row");
@@ -296,7 +296,7 @@ describe("ingestRecords", () => {
       expect(report.drift).toHaveLength(1);
       expect(report.drift[0]!.localId).toBe("I-000873");
       expect(report.drift[0]!.cause).toContain("--adopt");
-      // The released row keeps its state, and the next record still associates.
+      // why: The released row keeps its state, and the next record still associates.
       expect(pushRow(db, "I-000873")).toMatchObject({ itemState: "failed", externalId: null });
       expect(report.associated.map((entry) => entry.localId)).toEqual(["I-000874"]);
     } finally {

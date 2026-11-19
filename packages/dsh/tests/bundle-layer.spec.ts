@@ -130,7 +130,7 @@ describe('profile bundle layer (Task 4)', () => {
     expect(linearConfig.serverName).toBe('linear')
     expect(linearConfig.transport).toBe('streamable-http')
     expect(String(linearConfig.url)).toBe('https://mcp.linear.app/mcp')
-    // The row takes a static bearer from dsh's OWN credential store: the loader
+    // why: The row takes a static bearer from dsh's OWN credential store: the loader
     // resolves the `${credential:…}` template on every mount
     // (`expandTemplates`), so the shipped config carries the template and never
     // a literal token. It injects no service — the credential seam is the

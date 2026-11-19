@@ -1,5 +1,5 @@
 /**
- * push.test.ts — the push ledger protocol without a transport: planning a
+ * note: push.test.ts — the push ledger protocol without a transport: planning a
  * payload, recording the caller's results, and reconciling ambiguous creates.
  *
  * Everything here runs against a REAL store (the ledger is SQL). No fake
@@ -81,7 +81,7 @@ function candidate(db: StoreDb, localId: string) {
   return found;
 }
 
-/** Plan one item, asserting it was plannable, and hand back the plan. */
+/** note: Plan one item, asserting it was plannable, and hand back the plan. */
 function plan(db: StoreDb, ctx: PushContext, localId: string): PushPlan {
   const outcome = planItem(db, ctx, candidate(db, localId));
   if (outcome.outcome !== "planned") throw new Error("expected a plan, got " + JSON.stringify(outcome));
@@ -92,7 +92,7 @@ function markerOf(localId: string, repo: string = REPO): string {
   return encodeMarker({ repo, localId, author: AUTHOR });
 }
 
-/** What a Linear tool would return for one listed issue. */
+/** note: What a Linear tool would return for one listed issue. */
 function record(externalId: string, description: string): ProviderItem {
   return {
     externalId,
@@ -107,7 +107,7 @@ function record(externalId: string, description: string): ProviderItem {
 }
 
 /**
- * Take the run lease, as the command does before any planning. The holder pid is
+ * note: Take the run lease, as the command does before any planning. The holder pid is
  * part of the run token, so two acquisitions in the same millisecond still name
  * different runs.
  */
@@ -149,7 +149,7 @@ describe("planItem builds the payload the caller writes", () => {
       expect(planned.payload.description).toBe(
         "## Impact\n\nimpact body\n\n## Acceptance\n\nacceptance body\n\n" + planned.marker,
       );
-      // Planning is the intent record: the claim leaves a pending row behind.
+      // why: Planning is the intent record: the claim leaves a pending row behind.
       expect(row(db, "I-000911")).toMatchObject({ itemState: "pending", externalId: null, revision: 1 });
     } finally {
       close();
@@ -223,7 +223,7 @@ describe("planItem builds the payload the caller writes", () => {
       expect(replaced.payload.labels).toEqual(["risk"]);
       expect(replaced.payload.removeLabels).toEqual(["bug"]);
 
-      // No recorded ownership (an adopted identity carries no label proof).
+      // why: No recorded ownership (an adopted identity carries no label proof).
       addIssue(db, "I-000924");
       adoptItem(db, BINDING, "I-000924", "LIN-2");
       const adopted = plan(db, ctx, "I-000924");
@@ -247,7 +247,7 @@ describe("planItem builds the payload the caller writes", () => {
       expect(again.outcome).toBe("unresolved");
       expect(again.outcome === "unresolved" ? again.cause : "").toContain("--adopt <localId>=<issueUrl|externalId>");
       expect(again.outcome === "unresolved" ? again.cause : "").toContain("--release <localId>");
-      // Still the one residue the claim opened: the unconfirmed result wrote nothing.
+      // why: Still the one residue the claim opened: the unconfirmed result wrote nothing.
       expect(row(db, "I-000931")).toMatchObject({ itemState: "pending", externalId: null, revision: 1 });
     } finally {
       close();
@@ -334,7 +334,7 @@ describe("recordResults records what the caller's tools proved", () => {
       expect(row(db, "I-000944")).toMatchObject({ itemState: "applied", externalId: "LIN-1", lastRequestHash: null });
       expect(row(db, "I-000944")!.lastKindLabels).toEqual(["bug", "risk"]);
 
-      // The corrective update removes whatever the remote may still carry.
+      // why: The corrective update removes whatever the remote may still carry.
       expect(plan(db, ctx, "I-000944").payload.removeLabels).toEqual(["bug"]);
     } finally {
       close();
@@ -354,7 +354,7 @@ describe("recordResults records what the caller's tools proved", () => {
       expect(outcomes.map((entry) => entry.outcome)).toEqual(["refused", "refused"]);
       expect(outcomes[0]!.cause).toContain("no push ledger row");
       expect(outcomes[1]!.cause).toContain("externalId");
-      // Neither wrote anything: the planned row is still the unconfirmed create.
+      // why: Neither wrote anything: the planned row is still the unconfirmed create.
       expect(row(db, "I-000945")).toMatchObject({ itemState: "pending", externalId: null });
     } finally {
       close();
@@ -402,13 +402,13 @@ describe("a confirmed result never records an identity on another run's create",
     const { db, close } = await openedStore("unclaimed-receipt");
     try {
       addIssue(db, "I-000955");
-      // Run 1 opens the cycle and then ends without a result: the row is the
+      // why: Run 1 opens the cycle and then ends without a result: the row is the
       // crashed attempt's residue, the only record that a remote issue may exist.
       const first = lease(db);
       plan(db, context({ runId: first.runId }), "I-000955");
       expect(releaseRun(db, { bindingId: BINDING, direction: "push", runId: first.runId })).toBe(true);
 
-      // A later run reporting delivery for that residue would silently adopt
+      // why: A later run reporting delivery for that residue would silently adopt
       // whatever identity it names, so it is that item's refusal instead. The
       // guard compares instants, so the later run must start in a later
       // millisecond than the claim it is judged against.
@@ -420,7 +420,7 @@ describe("a confirmed result never records an identity on another run's create",
       expect(outcome.outcome).toBe("refused");
       expect(outcome.cause).toContain("mstar issue-sync ingest");
       expect(outcome.cause).toContain("--adopt <localId>=<issueUrl|externalId>");
-      // Nothing was written: the residue stays discoverable by its marker.
+      // why: Nothing was written: the residue stays discoverable by its marker.
       expect(row(db, "I-000955")).toMatchObject({ itemState: "pending", externalId: null, lastError: null });
     } finally {
       close();
@@ -428,7 +428,7 @@ describe("a confirmed result never records an identity on another run's create",
   });
 
   test("a takeover delivers the residue the dead holder left: confirmed applies, not refuses", async () => {
-    // THE takeover story end to end: pending claims a create, the holder dies,
+    // why: THE takeover story end to end: pending claims a create, the holder dies,
     // the operator takes the run over with --take-run, and apply records that
     // exact create. The takeover keeps the original run start, so the
     // predecessor's cycle is still recognised as this run's own.
@@ -459,18 +459,18 @@ describe("a confirmed result never records an identity on another run's create",
       addIssue(db, "I-000958");
       const held = lease(db);
       const ctx = context({ runId: held.runId });
-      // The row already points at LIN-1: an ingest associated it.
+      // why: The row already points at LIN-1: an ingest associated it.
       const planned = plan(db, ctx, "I-000958");
       recordResults(db, ctx, [{ localId: "I-000958", outcome: "confirmed", externalId: "LIN-1" }]);
       const applied = row(db, "I-000958")!;
 
-      // A tool result naming LIN-2 would silently move the pointer; it is that
+      // why: A tool result naming LIN-2 would silently move the pointer; it is that
       // item's refusal naming --force-adopt instead.
       const [override] = recordResults(db, ctx, [{ localId: "I-000958", outcome: "confirmed", externalId: "LIN-2" }]);
       expect(override.outcome).toBe("refused");
       expect(override.cause).toContain("--force-adopt");
       expect(override.cause).toContain("LIN-1");
-      // Nothing moved, not even the proof the recorded identity earned.
+      // why: Nothing moved, not even the proof the recorded identity earned.
       expect(row(db, "I-000958")).toEqual(applied);
     } finally {
       close();
@@ -478,7 +478,7 @@ describe("a confirmed result never records an identity on another run's create",
   });
 
   test("a refused result for another run's create is refused too, so the residue survives", async () => {
-    // `failed` is invisible to reconciliation: flipping the residue would hide the
+    // why: `failed` is invisible to reconciliation: flipping the residue would hide the
     // only record that a remote issue may exist. The same ownership rule as a
     // confirmation therefore covers a refusal.
     const { db, close } = await openedStore("unclaimed-refusal");
@@ -655,7 +655,7 @@ describe("operator adoption", () => {
 
       const adopted = adoptItem(db, BINDING, "I-000981", "https://linear.app/acme/issue/LIN-123/some-slug", { force: true });
       expect(adopted).toMatchObject({ itemState: "applied", externalId: "LIN-123", lastRequestHash: null });
-      // Nothing local changed, so carrying the hash would report a skip for
+      // why: Nothing local changed, so carrying the hash would report a skip for
       // content LIN-123 never received.
       expect(plan(db, ctx, "I-000981")).toMatchObject({ operation: "update", externalId: "LIN-123" });
     } finally {

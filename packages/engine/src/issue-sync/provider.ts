@@ -1,5 +1,5 @@
 /**
- * The remote record shapes the sync ledger consumes: what an agent's external
+ * note: The remote record shapes the sync ledger consumes: what an agent's external
  * issue tools hand back, normalized. mstar has no provider interface and no
  * transport here — the host supplies the tool results, and this module only
  * names the fields the engine reads from them. Nothing in these types carries a
@@ -33,10 +33,10 @@ export type ProviderWritePayload = {
       redirectable through `[linear.mapping]` `disposition` for team-specific
       workflow names. */
   state: string;
-  /** Mapped kind label name (kind→label intent, preserved from r2), sent as
+  /** note: mapped kind label name (kind→label intent, preserved from r2), sent as
       `addLabels`. Absent when kind maps to no label. */
   labels?: string[];
-  /** The mstar-written labels this update REPLACES (from `last_kind_label`),
+  /** note: the mstar-written labels this update REPLACES (from `last_kind_label`),
       sent as `removeLabels`. An unconfirmed earlier update may have left more
       than one of them on the remote, and removing an absent label is a no-op,
       so every recorded label but the desired one is sent. Absent on create. */
