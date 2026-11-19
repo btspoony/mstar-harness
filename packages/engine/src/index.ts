@@ -742,8 +742,9 @@ export {
 } from "./issue.js";
 // The remote record shapes the sync ledger consumes (issue-sync): what an
 // agent's external issue tools hand back, normalized. The engine owns no
-// transport and no credential, so no provider interface lives here.
-export type { ProviderItem, ProviderItemFailure, ProviderPage, ProviderWritePayload } from "./issue-sync/provider.js";
+// transport and no credential, so no provider interface, page envelope or
+// failure list lives here — a listing is the caller's own array.
+export type { ProviderItem, ProviderWritePayload } from "./issue-sync/provider.js";
 // Sync ledger (migration 15): the per-item state machine and its read path.
 // Every mutation owns its transaction; a caller composes the verbs sequentially.
 export type {
