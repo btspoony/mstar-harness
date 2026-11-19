@@ -269,6 +269,8 @@ Minimum invariants:
   - `references/project-manager/plan-management.md`
 - PM Acceptance procedure, report and bounded execution exception:
   - `references/project-manager/acceptance.md`
+- Public PR body interface (standalone and iteration delivery):
+  - `references/project-manager/pr-description.md`
 
 Sub-references above include additional **NEVER** rules for PM plan/status sync, routing fairness, and QC/findings consolidation.
 
