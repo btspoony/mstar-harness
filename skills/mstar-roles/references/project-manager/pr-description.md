@@ -29,12 +29,16 @@ Give one command readers can run to try the change themselves, distinct from the
 
 List what was not verified, carrying forward PM Acceptance's unverified ACs and any truncated coverage. Write `None` when nothing remains untested. Disclosure does not turn an unsupported required AC into a pass.
 
+## Open findings
+
+List every open issue with its severity, tracking location and blocker-defer flag, or write `N/A — none open`. This applies to standalone and iteration PRs alike; the disclosure contract is `references/project-manager/qc-and-residuals.md`.
+
 ## Merge danger
 
 Write `Door: one-way | two-way` and one `Blast radius` line naming the affected users, systems or data. Door describes rollback cost, not severity: a change that cannot be reverted without external coordination is `one-way`; otherwise it is `two-way`.
 
-## Iteration-only additions
+## Iteration-only addition
 
-Include the residual disclosure and `pr_merge_policy` required by `mstar-iteration/references/phase-4-5-pr-delivery.md` § Phase 4, items 4–5. Their definitions stay there; standalone PRs do not invent a compass or iteration policy.
+Include the `pr_merge_policy` required by `mstar-iteration/references/phase-4-5-pr-delivery.md` § Phase 4, item 5. Its definition stays there; standalone PRs do not invent a compass or iteration policy.
 
 Follow the project's title convention when one is declared.
