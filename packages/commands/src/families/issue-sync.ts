@@ -526,6 +526,12 @@ function parseResults(raw: unknown): { results: PushResult[]; refused: ApplyItem
  * evidence is the claim timestamp of every create cycle in the results — a cycle
  * claimed before the held run started cannot have been planned by it.
  *
+ * why: an explicit `--adopt` in this same invocation is not that stale retry: it
+ * validates and records the identity before the results are read, so a stale
+ * result it covers is admitted. A stale result no adoption covers — or a
+ * confirmed one naming an identity the adoption does not record — is still
+ * refused, because nothing in the invocation makes that write sane.
+ *
  * shortcut: the check needs a create cycle to compare, so an empty `--results`
  * (or one naming only updates) has no evidence and continues the held run; and a
  * `--take-run` replacement keeps the original start by design, so a retry racing
@@ -538,16 +544,28 @@ function assertApplyOwnsHeldRun(
   held: RunLease | null,
   takeRun: boolean,
   results: readonly PushResult[],
+  adoptedIdentities: ReadonlyMap<string, string>,
 ): void {
   if (takeRun || held === null) return;
-  const stale = results.find((result) => {
+  const unadopted = results.find((result) => {
     const row = readItem(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, localId: result.localId });
-    return row !== null && row.itemState === "pending" && row.externalId === null && isOlderInstant(row.updatedAt, held.startedAt);
+    const stale =
+      row !== null && row.itemState === "pending" && row.externalId === null && isOlderInstant(row.updatedAt, held.startedAt);
+    if (!stale) return false;
+    // why: an explicit `--adopt` in the SAME invocation establishes the identity
+    // before the results are recorded, so the documented recovery composition is
+    // not a stale apply: the adoption, not the older run, carries the identity.
+    const adopted = adoptedIdentities.get(result.localId);
+    if (adopted === undefined) return true;
+    // why: a confirmed result must name the identity the adoption records; a
+    // different one is the identity conflict the recorder refuses per item, and
+    // the batch cannot be made sane by proceeding.
+    return result.outcome === "confirmed" && result.externalId !== adopted;
   });
-  if (stale === undefined) return;
+  if (unadopted === undefined) return;
   throw refused(
     "sync.run-held",
-    "these results belong to an earlier run: " + JSON.stringify(stale.localId) + " was claimed before the run now holding " +
+    "these results belong to an earlier run: " + JSON.stringify(unadopted.localId) + " was claimed before the run now holding " +
       target.bindingId + " started (" + held.startedAt + "), so this apply cannot continue it and the lease is untouched. Re-run " +
       "`mstar issue-sync pending --project <project-id>` against the current run, or take that run over with " +
       "`mstar issue-sync apply --project <project-id> --results <file|-> --take-run` if you confirmed its holder is dead",
@@ -577,8 +595,20 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
   let run: RunLease | null = null;
   try {
     const db = handle.db;
+    // why: the ownership preflight below must see the identities this invocation
+    // already validates, so every operator verb is checked before it, not after.
+    const adoptedIdentities = new Map<string, string>();
+    for (const { localId, reference } of adoptions) {
+      const externalId = externalIdOf(reference);
+      const existing = readItem(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, localId });
+      const conflict = identityConflict(existing, localId, externalId);
+      if (conflict !== null && !forcedAdopt.has(localId)) throw conflict;
+      adoptedIdentities.set(localId, externalId);
+    }
+    assertReleaseTargets(db, target.bindingId, released);
+
     const held = readRun(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION });
-    assertApplyOwnsHeldRun(db, target, held, takeRun, parsed.results);
+    assertApplyOwnsHeldRun(db, target, held, takeRun, parsed.results, adoptedIdentities);
     run =
       takeRun || held === null
         ? acquireRun(db, {
@@ -601,16 +631,6 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
       counts: { applied: 0, unconfirmed: 0, refused: parsed.refused.length },
     };
 
-    // why: EVERY operator verb is validated against the ledger BEFORE the first write:
-    // a bad `--release` discovered after an `--adopt` had landed would leave the
-    // run half-applied behind a usage refusal.
-    for (const { localId, reference } of adoptions) {
-      const externalId = externalIdOf(reference);
-      const existing = readItem(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, localId });
-      const conflict = identityConflict(existing, localId, externalId);
-      if (conflict !== null && !forcedAdopt.has(localId)) throw conflict;
-    }
-    assertReleaseTargets(db, target.bindingId, released);
 
     // why: Operator-confirmed adoptions are ordinary ledger verbs: the row takes the
     // identity and forgets the previous one's proof, so the next `pending`

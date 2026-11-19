@@ -366,6 +366,59 @@ describe("apply", () => {
     expect(held?.runId).toBe(later.data.runId);
   });
 
+  test("an explicit --adopt admits a stale result it covers, and keeps the newer lease", async () => {
+    // why: the documented recovery composition for a residue whose planning run has
+    // ended while a newer run holds the lease: adopt the identity, then record the
+    // confirmed result that names the same issue. The adoption, not the older run,
+    // carries the identity, so this is not the stale retry the preflight refuses.
+    const f = await fixture("apply-stale-run-adopted");
+    await run("pending", {}, f.context);
+    await run("apply", { results: "-" }, f.withStdin("[]"));
+    await Bun.sleep(2);
+    const later = await run("pending", {}, f.context);
+    expect(later.status).toBe("ok");
+
+    const result = await run(
+      "apply",
+      {
+        results: bodyFile(f, "adopted.json", [
+          { localId: "I-000101", outcome: "confirmed", externalId: "LIN-9", remoteUpdatedAt: "2026-11-19T12:00:00.000Z" },
+        ]),
+        adopt: ["I-000101=LIN-9"],
+      },
+      f.context,
+    );
+    expect(result.status).toBe("ok");
+    expect(result.data.adopted).toEqual([{ localId: "I-000101", externalId: "LIN-9" }]);
+    expect(result.data.counts).toEqual({ applied: 1, unconfirmed: 0, refused: 0 });
+    expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "applied", externalId: "LIN-9" });
+    // why: the newer holder owns the direction, so the batch wrote under its token
+    // and released exactly that token; nothing of a predecessor survives.
+    expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
+    expect(result.data.runId).toBe(later.data.runId);
+  });
+
+  test("a stale result the adoption does not cover is still refused", async () => {
+    // why: coverage is per item and per identity; an adoption naming another issue
+    // leaves this result exactly as stale as before.
+    const f = await fixture("apply-stale-run-uncovered");
+    await run("pending", {}, f.context);
+    await run("apply", { results: "-" }, f.withStdin("[]"));
+    await Bun.sleep(2);
+    await run("pending", {}, f.context);
+    const mismatch = await run(
+      "apply",
+      {
+        results: bodyFile(f, "mismatch.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-9" }]),
+        adopt: ["I-000101=LIN-10"],
+      },
+      f.context,
+    );
+    expect(mismatch.status).toBe("refused");
+    expect(mismatch.code).toBe("sync.run-held");
+    expect((await rowOf(f, "I-000101"))!.externalId).toBeNull();
+  });
+
   test("--release clears an unconfirmed create, and an associated item is not releasable", async () => {
     const f = await fixture("apply-release");
     await run("pending", {}, f.context);
