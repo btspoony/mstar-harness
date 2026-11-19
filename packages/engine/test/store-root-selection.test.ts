@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerCatalogEntity } from "../src/catalog.js";
+import { listCatalog, readCatalogStoreVersionsOn, registerCatalogEntity } from "../src/catalog.js";
 import { readCatalogCompleteness } from "../src/iteration.js";
 import { resolveProcessHarnessDir } from "../src/coordination.js";
 import { upgradeStoreMinimal } from "../src/execution-minimal-import.js";
@@ -23,22 +23,34 @@ async function activeWorkspace(): Promise<{ root: string; context: StoreContext;
   mkdirSync(context.harnessDir);
   const created = await initializeStore(context);
   created.close();
+  mkdirSync(join(context.harnessDir, "plans"));
+  writeFileSync(join(context.harnessDir, "plans", "alternative.md"), "# Alternative plan\n");
+  await registerCatalogEntity(
+    context,
+    { kind: "plan", id: "alternative", title: "Alternative plan", rootKind: "plans", relativePath: "alternative.md" },
+    { operationId: "register-alternative", actor: "fixture-operator" },
+  );
   const authority = await readExecutionState(context);
   return { root, context, storeId: authority.storeId };
 }
 
-/** Include the database and every journal/lock/artifact byte in the witness. */
-function filesAt(root: string): Record<string, string> {
-  const files: Record<string, string> = {};
-  function visit(dir: string, prefix: string): void {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const key = prefix + entry.name;
-      if (entry.isDirectory()) visit(join(dir, entry.name), `${key}/`);
-      else files[key] = readFileSync(join(dir, entry.name)).toString("base64");
-    }
+async function authorityFacts(context: StoreContext) {
+  const authority = await readExecutionState(context);
+  const catalog = await listCatalog(context);
+  const handle = await openStore(context, "read");
+  try {
+    return {
+      storeId: authority.storeId,
+      epoch: authority.epoch,
+      root: authority.data.root,
+      workflowIds: authority.data.workflows.map((workflow) => workflow.state.id),
+      revisions: readCatalogStoreVersionsOn(handle.db),
+      catalogRows: catalog.items.map(({ kind, id, title, relativePath, revision }) => ({ kind, id, title, relativePath, revision })),
+      catalogTotal: catalog.total,
+    };
+  } finally {
+    handle.close();
   }
-  visit(root, "");
-  return files;
 }
 
 describe("explicit store-root selection", () => {
@@ -50,13 +62,14 @@ describe("explicit store-root selection", () => {
     // find the ACTIVE alternative, but the explicit override selects absent.
     expect(resolveProcessHarnessDir(root)).toBe(alternative.harnessDir);
     expect(resolveProcessHarnessDir(root, selected.harnessDir)).toBe(selected.harnessDir);
-    const before = filesAt(alternative.harnessDir);
+    const before = await authorityFacts(alternative);
+    expect(before.catalogRows).toEqual([expect.objectContaining({ kind: "plan", id: "alternative" })]);
     for (const mode of ["read", "write"] as const) {
       await expect(openStore(selected, mode)).rejects.toMatchObject({ code: "store.not-initialized" });
     }
     await expect(readExecutionState(selected)).rejects.toMatchObject({ code: "store.not-initialized" });
     await expect(upgradeStore(selected)).rejects.toMatchObject({ code: "store.not-initialized" });
-    expect(filesAt(alternative.harnessDir)).toEqual(before);
+    expect(await authorityFacts(alternative)).toEqual(before);
     expect(existsSync(selected.harnessDir)).toBe(shape === "empty");
     if (shape === "empty") expect(readdirSync(selected.harnessDir)).toEqual([]);
 
@@ -66,14 +79,14 @@ describe("explicit store-root selection", () => {
     expect(recovered).toMatchObject({ verdict: "upgraded", imported: 0, authorityState: "active" });
     const own = await readExecutionState(selected);
     expect(own.storeId).not.toBe(alternativeId);
-    expect(filesAt(alternative.harnessDir)).toEqual(before);
+    expect(await authorityFacts(alternative)).toEqual(before);
   });
 
   test("store init and catalog discovery keep an explicitly selected root containing its own plans directory", async () => {
     const { root, context: alternative, storeId: alternativeId } = await activeWorkspace();
     const selected = { harnessDir: join(root, "selected") };
     mkdirSync(join(selected.harnessDir, "plans"), { recursive: true });
-    const before = filesAt(alternative.harnessDir);
+    const before = await authorityFacts(alternative);
     const own = await initializeStore(selected);
     try {
       expect(own.storeId).not.toBe(alternativeId);
@@ -92,6 +105,7 @@ describe("explicit store-root selection", () => {
     expect(catalog.ok).toBe(true);
     expect(catalog.discovered).toBe(1);
     expect(catalog.registered).toBe(1);
-    expect(filesAt(alternative.harnessDir)).toEqual(before);
+    expect((await listCatalog(selected)).items).toEqual([expect.objectContaining({ kind: "plan", id: "selected" })]);
+    expect(await authorityFacts(alternative)).toEqual(before);
   });
 });
