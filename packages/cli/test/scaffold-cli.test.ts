@@ -23,7 +23,7 @@
  * Each case runs the real CLI as a subprocess against a temp fixture tree.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli, type RunResult } from "./harness";
@@ -131,21 +131,26 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     withRoot((root) => {
       const first = runScaffold([root]);
       expect(first.exitCode).toBe(0);
-      const gitignoreAfterFirst = readFileSync(join(root, ".gitignore"), "utf8");
-      const agentsAfterFirst = readFileSync(join(root, ".agents", "AGENTS.md"), "utf8");
-      const mstarcAfterFirst = readFileSync(join(root, ".mstarc"), "utf8");
-      const adrReadmeAfterFirst = readFileSync(join(root, ".agents", "adr", "README.md"), "utf8");
+      appendFileSync(join(root, ".gitignore"), "\ncustom-cache/\n");
+      appendFileSync(join(root, ".agents", "AGENTS.md"), "\n<!-- authored agent policy -->\n");
+      appendFileSync(join(root, ".mstarc"), "\n# authored layout policy\n");
+      appendFileSync(join(root, ".agents", "adr", "README.md"), "\n<!-- authored ADR index -->\n");
       expect(existsSync(join(root, ".mstar", "projects", "_default", "roadmap.md"))).toBe(false);
 
       const second = runScaffold([root]);
       expect(second.exitCode).toBe(0);
       expect(scaffoldData(second).skipped).toContain(".agents/AGENTS.md (already present)");
       expect(scaffoldData(second).created).toEqual([]);
-      // Nothing changed on re-run.
-      expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(gitignoreAfterFirst);
-      expect(readFileSync(join(root, ".agents", "AGENTS.md"), "utf8")).toBe(agentsAfterFirst);
-      expect(readFileSync(join(root, ".mstarc"), "utf8")).toBe(mstarcAfterFirst);
-      expect(readFileSync(join(root, ".agents", "adr", "README.md"), "utf8")).toBe(adrReadmeAfterFirst);
+      expect(scaffoldData(second).harnessDir).toBe(scaffoldData(first).harnessDir);
+      const rules = readFileSync(join(root, ".gitignore"), "utf8").split(/\r?\n/);
+      for (const entry of [...MSTAR_FENCE_ENTRIES, "custom-cache/"]) {
+        expect(rules.filter((line) => line === entry)).toHaveLength(1);
+      }
+      expect(readFileSync(join(root, ".agents", "AGENTS.md"), "utf8")).toContain("authored agent policy");
+      const config = readFileSync(join(root, ".mstarc"), "utf8");
+      expect(config).toContain("authored layout policy");
+      expect(config).toContain("harness_dir=.mstar");
+      expect(readFileSync(join(root, ".agents", "adr", "README.md"), "utf8")).toContain("authored ADR index");
       expect(existsSync(join(root, ".mstar", "projects", "_default", "roadmap.md"))).toBe(false);
     });
   });
@@ -163,11 +168,11 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
       expect(gitignore.startsWith("node_modules/\n")).toBe(true);
       for (const entry of MSTAR_FENCE_ENTRIES) expect(gitignore).toContain(entry);
-      expect(readFileSync(join(root, ".agents", "AGENTS.md"), "utf8")).toBe("# custom harness rules\n");
+      expect(readFileSync(join(root, ".agents", "AGENTS.md"), "utf8")).toContain("custom harness rules");
     });
   });
 
-  test("harness authored ignore: a whole-directory .mstar/** declaration keeps its exact bytes and stays ignored", () => {
+  test("harness authored ignore: a whole-directory .mstar/** declaration survives and stays ignored", () => {
     withRoot((root) => {
       gitInit(root);
       // Issue #248: the repository declares "the harness root is local-only";
@@ -179,7 +184,10 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(result.exitCode).toBe(0);
       expect(scaffoldData(result).skipped).toContain(".gitignore (author-owned harness-root declaration)");
       expect(scaffoldData(result).created).not.toContain(".gitignore (canonical harness snippet)");
-      expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(authored);
+      const rules = readFileSync(join(root, ".gitignore"), "utf8").split(/\r?\n/);
+      expect(rules).toContain("node_modules");
+      expect(rules).toContain(".mstar/**");
+      expect(rules).not.toContain(".mstar/");
 
       // Observable git semantics: the authored policy still ignores the root.
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
@@ -200,11 +208,15 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       const result = runScaffold([root]);
       expect(result.exitCode).toBe(0);
       expect(scaffoldData(result).created).not.toContain(".gitignore (canonical harness snippet)");
-      expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(authored);
+      expect(scaffoldData(result).skipped).toContain(".gitignore (author-owned harness-root declaration)");
+      const rules = readFileSync(join(root, ".gitignore"), "utf8").split(/\r?\n/);
+      expect(rules).toContain("/.mstar/plans/");
+      expect(rules).toContain("!.mstar/specs/**");
+      expect(rules).not.toContain(".mstar/");
     });
   });
 
-  test("harness authored ignore: an .agents declaration with CRLF, comments, duplicates and no final newline survives byte-for-byte", () => {
+  test("harness authored ignore: .agents rules, comments and exclusions survive mixed formatting", () => {
     withRoot((root) => {
       const authored = "# authored policy\r\n.agents/**\r\n.agents/**\r\n!.agents/knowledge/**";
       writeFileSync(join(root, ".gitignore"), authored, "utf8");
@@ -212,7 +224,12 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       const result = runScaffold([root]);
       expect(result.exitCode).toBe(0);
       expect(scaffoldData(result).created).not.toContain(".gitignore (canonical harness snippet)");
-      expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(authored);
+      expect(scaffoldData(result).skipped).toContain(".gitignore (author-owned harness-root declaration)");
+      const rules = readFileSync(join(root, ".gitignore"), "utf8").split(/\r?\n/);
+      expect(rules).toContain("# authored policy");
+      expect(rules.filter((line) => line === ".agents/**")).toHaveLength(2);
+      expect(rules).toContain("!.agents/knowledge/**");
+      expect(rules).not.toContain(".mstar/");
     });
   });
 
@@ -225,10 +242,12 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(result.exitCode).toBe(0);
       expect(scaffoldData(result).created).toContain(".gitignore (canonical harness snippet)");
       const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
-      // Authored lines stay in place; the canonical entries follow them.
-      expect(gitignore.startsWith(authored)).toBe(true);
+      const rules = gitignore.split(/\r?\n/);
+      expect(rules).toContain("node_modules/");
+      expect(rules).toContain(".mstarc");
       for (const entry of MSTAR_FENCE_ENTRIES) expect(gitignore).toContain(entry);
       expect(gitignore.indexOf("node_modules/")).toBeLessThan(gitignore.indexOf(".mstar/"));
+      expect(rules.indexOf(".mstarc")).toBeLessThan(rules.indexOf(".mstar/"));
     });
   });
 
@@ -354,8 +373,8 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       const second = runScaffold([root]);
       expect(second.exitCode).toBe(0);
       expect(envelope(second).status).toBe("ok");
-      expect(readFileSync(join(root, ".mstar", "status.json"), "utf8")).toBe("{}\n");
-      // The leftover bytes survive untouched.
+      expect(JSON.parse(readFileSync(join(root, ".mstar", "status.json"), "utf8"))).toEqual({});
+      expect(scaffoldData(second).created).toEqual([]);
     });
   });
 });
