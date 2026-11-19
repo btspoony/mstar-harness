@@ -209,6 +209,10 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   }
   const facts = engineErrorFacts(error);
   const code = facts.code ?? id + ".internal-error";
+  // shortcut: the recovery below is chosen at runtime (the engine's own text, then
+  // this family's per-code RECOVERY map); the refusal prover evaluates only literal,
+  // conditional, `??`/`||` over provable arms, const bindings and declared helpers, so
+  // the exemption is refreshed under I-000872. Upgrade when it can read element access.
   return refusalEnvelope({
     command: id,
     status: "refused",
@@ -750,6 +754,8 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
           if (verb === "apply") return await runApply(id, value, invocation);
           return await runIngest(id, value, invocation);
         } catch (error) {
+          // shortcut: the wrapper picks the recovery from its per-code RECOVERY map, so a
+          // wrapper call site has no provable recovery argument; exemption under I-000872.
           if (error instanceof SyncError) return refusalFor(id, error.code, stripCode(error.message));
           return failure(id, error);
         }
