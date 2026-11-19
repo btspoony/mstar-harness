@@ -4,8 +4,8 @@ Open when the host's Linear tool set must be configured, or a mirror run reports
 
 ## The standard server
 
-- Endpoint: `https://mcp.linear.app/mcp` over streamable HTTP. Bearer auth: the `Authorization: Bearer <token>` header, where the token is either a Linear API key or an OAuth token the host obtained — both are accepted by the server; which one you supply is the host's credential concern, not mstar's.
-- A read-only variant (`/mcp/readonly`) exists for read-only work; the mirror's create/update steps need the read-write endpoint.
+- Endpoint: `https://mcp.linear.app/mcp` over streamable HTTP. Bearer auth: the `Authorization: Bearer <token>` header; which token kind you supply is the host's credential concern, not mstar's.
+- The hosted server's read-only variant (`/mcp/readonly`) exists for read-only work; the mirror's create/update steps need the read-write endpoint.
 - The tool list is NOT versioned upstream: discover tool names and arguments at runtime from the live tool list; never hardcode them. Tools appear as `mcp__linear__<tool>` on MCP hosts.
 
 ## DSH specifics
