@@ -10,6 +10,7 @@
   - [Cursor](https://cursor.com)
   - [Codex](https://github.com/openai/codex) (with `codex` CLI for marketplace install)
   - [Kimi Code CLI](https://www.kimi.com/code/docs/kimi-code-cli/) (for `/plugins install`)
+  - [Devin](https://docs.devin.ai/cli/extensibility/plugins/overview) (web Customize > Plugins, or `devin plugins install`)
   - [ZCode](https://zcode.z.ai) (for Plugin Management install)
   - [omp (Oh My Pi)](https://omp.sh) (for `omp plugin install` / `omp plugin link`)
   - [dsh (DeepSeek Harness)](https://www.npmjs.com/package/@deepseek-ai/dsh) (for the `dsh` plugin manager; e.g. `npm install -g @deepseek-ai/dsh`)
@@ -173,6 +174,16 @@ The marketplace entry carries `icon` + `displayName`, so the plugin card shows t
 
 These are process hooks, so ZCode desktop sessions — which do not launch plugin process hooks — run none of the three gates; use a CLI session where they must apply.
 
+### Devin
+
+Native-only installation (no `init --target devin`):
+
+- Web: **Customize > Plugins**, add `btspoony/mstar-harness`.
+- CLI: `devin plugins install btspoony/mstar-harness`.
+- Enter PM with **`/morning-star-harness:pm`**; no automatic session-start entry is declared.
+- CLI/Desktop loads shared role shells as `morning-star-harness:<role>` subagents. Cloud does not load plugin subagents: the PM dispatches role-bound board tickets to child sessions instead. Children run on separate VMs; only PM writes workflow/store state, and children return pushed refs/PRs and final reports.
+- No Devin hooks ship. Full dispatch, approval and isolation rules: **`mstar-host`** → `references/devin.md`.
+
 ### Kimi
 
 Install the plugin in Kimi TUI (user-scoped — all projects):
@@ -269,7 +280,7 @@ Or re-run `npx @mstar-harness/cli init --target cursor --scope global`.
 
 ## Installing the MCP tools
 
-All seven hosts launch the CLI with `npx @mstar-harness/cli mcp`: six JSON-backed host configs (OpenCode's is injected through its plugin `config` hook rather than read as a static file) plus DSH's shipped Cordis profile row (see the dsh row below). The published bin is a Node-shebang entry, so the runner executes it on the Node already on PATH and needs **Node >=24.18.0** ([Prerequisites](#prerequisites)).
+All supported hosts launch the CLI with `npx @mstar-harness/cli mcp`: host-native configs (Devin declares its map inline in the plugin manifest; OpenCode injects it through the plugin `config` hook) or DSH's shipped Cordis profile row (see the dsh row below). The published bin is a Node-shebang entry, so the runner executes it on the Node already on PATH and needs **Node >=24.18.0** ([Prerequisites](#prerequisites)).
 
 | Host | Native install | MCP configuration |
 |------|----------------|-------------------|
@@ -279,6 +290,7 @@ All seven hosts launch the CLI with `npx @mstar-harness/cli mcp`: six JSON-backe
 | Cursor | Install the Morning Star plugin (see [Cursor](#cursor)). | `.cursor-plugin/mcp.json` runs `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`. |
 | Codex | `codex plugin marketplace add btspoony/mstar-harness --ref main`, then `codex plugin add morning-star-harness@mstar-repo` (or use `init --target codex`). | `.codex-plugin/mcp.json` runs `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`. |
 | Kimi | Kimi TUI: `/plugins install https://github.com/btspoony/mstar-harness`, then `/plugins reload`. | `.kimi-plugin/mcp.json` runs `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`. |
+| Devin | Web Customize > Plugins: add `btspoony/mstar-harness`, or `devin plugins install btspoony/mstar-harness`. | `.devin-plugin/plugin.json` inline `mcpServers` runs `npx @mstar-harness/cli mcp`. |
 | ZCode | Install **morning-star-harness** from the `mstar-local` marketplace (see [ZCode](#zcode)). | `.zcode-plugin/mcp.json` runs `command: "npx"` with args `["@mstar-harness/cli", "mcp"]`. |
 
 There is no separate MCP package, committed per-host stdio bundle, or native bridge.
@@ -286,7 +298,7 @@ There is no separate MCP package, committed per-host stdio bundle, or native bri
 The MCP context contract is host-neutral: optional `host` selects context validated against existing supported-host definitions; it is not a role or authority grant. `sessionId` denotes the main conversation session. The interface neither requires nor provides per-call child-agent attribution; existing shared-handler workflow ownership, path, state-transition, and CAS checks remain authoritative.
 
 Use `npx @mstar-harness/cli doctor --target <opencode|cursor|codex|zcode|omp|dsh|kimi>` to inspect the selected target (Codex also supports `--scope <global|project>`). **Aligned** means the host's MCP config launches the CLI subcommand with the expected arguments; **mismatch** means those launch settings or the detected runtime (Node.js floor) differ; **unavailable** means the MCP config is missing or unreadable. Doctor does not spawn the MCP server, open `store.db`, refresh an installed plugin, or prove that the host loaded it.
-OpenCode's package plugin injects the server definition at runtime; DSH's row ships in its bundle patch and loads through the `@deepseek-ai/dsh-mcp-client` bridge plugin. The six JSON-backed configs and the OpenCode dynamic hook use host-native shapes.
+OpenCode's package plugin injects the server definition at runtime; DSH's row ships in its bundle patch and loads through the `@deepseek-ai/dsh-mcp-client` bridge plugin. JSON-backed configs and the OpenCode dynamic hook use host-native shapes.
 
 Development evidence is the targeted unit/component/integration evidence for the CLI server and host config. Installed-host, browser, device, and live-service verification is a separate authorized activity, not a development acceptance gate; these instructions do not claim such a run.
 
@@ -294,7 +306,7 @@ Development evidence is the targeted unit/component/integration evidence for the
 
 Use when you cannot run the CLI or need to mirror the same layout by hand.
 
-Supported targets: `opencode`, `cursor`, `codex`, `zcode`, `omp`, `dsh` (via the two `dsh plugin --profile web add` commands — see [dsh](#dsh) above). Kimi uses Kimi TUI `/plugins install` (see [Kimi](#kimi) above).
+Supported targets: `opencode`, `cursor`, `codex`, `zcode`, `omp`, `dsh` (via the two `dsh plugin --profile web add` commands — see [dsh](#dsh) above). Kimi uses Kimi TUI `/plugins install` (see [Kimi](#kimi) above). Devin uses native plugin installation only (see [Devin](#devin)); this CLI has no Devin init or doctor target.
 
 ### OpenCode
 
@@ -383,6 +395,16 @@ Kimi plugin source in this repository:
 - Runtime skills: `skills/`
 - Plugin commands: `commands/`
 - Host adapter: **`mstar-host`** → `references/kimi.md`
+
+### Devin plugin assets
+
+Install through [Devin native installation](#devin). Devin plugin source in this repository:
+
+- Manifest: `.devin-plugin/plugin.json` (plugin root is repo root; skills `./skills/`, inline MCP launch)
+- Skills: `skills/` → `/morning-star-harness:<skill>`; PM entry `/morning-star-harness:pm`
+- CLI/Desktop agents: shared `agents/*.md`; cloud uses separate child sessions
+- Host adapter: **`mstar-host`** → `references/devin.md`
+- No root `hooks.json` is shipped; `hooks/hooks.json` is not loaded by Devin.
 
 ### ZCode
 
@@ -487,6 +509,7 @@ npx @mstar-harness/cli plugin validate --root ~/.mstar/harness
    - OpenCode: start with the `Project Manager` role (`packages/opencode/agents/project-manager.md`, typically `agent.project-manager` in `opencode.json`; OpenCode-only — other hosts use the `pm` skill).
    - Cursor / Codex: use `/pm`.
    - Kimi: use `/skill:pm`.
+   - Devin: use `/morning-star-harness:pm`.
    - ZCode: use `/morning-star-harness:pm` or `/skill:pm` (no session auto-load).
    - omp: use `/skill:pm` (no session auto-load).
 

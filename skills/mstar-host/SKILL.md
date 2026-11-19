@@ -1,6 +1,6 @@
 ---
 name: mstar-host
-description: "Host adapter for OpenCode, Cursor, Codex, Kimi, ZCode, omp, dsh: entry, dispatch, plan mode, parallel dispatch, skill/command loading. Detect from session tools, then read `references/<host>.md`."
+description: "Host adapter for Devin, OpenCode, Cursor, Codex, Kimi, ZCode, omp, dsh: entry, dispatch, plan mode, parallel dispatch, skill/command loading. Detect from session tools, then read `references/<host>.md`."
 ---
 
 # Morning Star Host Adapter
@@ -31,6 +31,7 @@ Detect from **session tool shapes and available commands** — not from plugin m
 
 | Signal | Host | Next read |
 |--------|------|-----------|
+| **`run_subagent`** / **`read_subagent`**, **`message_user`**, or **`devin_*`** tools | `devin` | `references/devin.md` |
 | **`subagent_type`** param on the Task tool (plus **CreatePlan**/**SwitchMode** when Plan mode is active) | `cursor` | `references/cursor.md`; Plan mode also `references/cursor-plan-mode-bridge.md` |
 | **`question`** tool, or **`task`** tool with **`subagent`** (singular) — no `tasks[]` batch | `opencode` | `references/opencode.md` |
 | **`task`** tool with **`agent`** / **`tasks[]`** batch, **`ask`**, **`hub`** (omp also exposes `/goal`; goal rule is host-agnostic per below) | `omp` | `references/omp.md`; Plan mode also `references/omp-plan-mode-bridge.md` |
@@ -38,9 +39,9 @@ Detect from **session tool shapes and available commands** — not from plugin m
 | **`Agent`** / **`AskUserQuestion`** / **`EnterPlanMode`** + **`AgentSwarm`** (Kimi-only) | `kimi` | `references/kimi.md`; Plan mode also `references/kimi-plan-mode-bridge.md` |
 | **`Agent`** / **`AskUserQuestion`** / **`EnterPlanMode`** / **`TodoWrite`**, **no `AgentSwarm`** | `zcode` | `references/zcode.md`; Plan mode also `references/zcode-plan-mode-bridge.md` |
 | `/plan`, `/goal` slash commands; **Goal tools**; `functions.*` / `codex_app.*` tool namespaces; `tool_search`; Browser plugin tools | `codex` | `references/codex.md`; Plan mode also `references/_shared/plan-mode-bridge-core.md` |
-| Still ambiguous | - | Read sections in **`cursor.md`**, **`opencode.md`**, **`codex.md`**, **`kimi.md`**, **`zcode.md`**, **`omp.md`**, and **`dsh.md`** that match tools you have; **`mstar-harness-core` wins** on conflict |
+| Still ambiguous | - | Read sections in **`devin.md`**, **`cursor.md`**, **`opencode.md`**, **`codex.md`**, **`kimi.md`**, **`zcode.md`**, **`omp.md`**, and **`dsh.md`** that match tools you have; **`mstar-harness-core` wins** on conflict |
 
-Order matters: check `cursor` → `opencode` → `omp` → `dsh` → `kimi` → `zcode` → `codex`. The four Task-shaped tokens are distinct: `subagent_type` (Cursor), `task_subagent` (OpenCode's `subagent` parameter on the `task` tool), `agent`/`tasks[]` (omp), and `subagent` (dsh's own delegation tool). No row shares another's token, so the dsh row collides with none and sits with the agent-tool hosts.
+Order matters: check `devin` → `cursor` → `opencode` → `omp` → `dsh` → `kimi` → `zcode` → `codex`. Devin's specific signals precede generic namespace signals. The four Task-shaped tokens remain distinct: `subagent_type` (Cursor), `task_subagent` (OpenCode), `agent`/`tasks[]` (omp), and `subagent` (dsh).
 
 > **Engine check:** run `mstar host detect --signals <comma-list>` (engine `detectHost`) to resolve the detection table above from session tool shapes (prints the host id, or `ambiguous` to fall back on the table + judgment). On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
@@ -112,6 +113,7 @@ Docs name assets as skill **`<name>`** → `scripts/…` / `references/…`. **R
 | **OpenCode** | Skill **name** via `@mstar-harness/opencode` | Package-internal `harness-skills/<name>/` — never `process.cwd()/skills/` |
 | **dsh** | Skill **name** via the mstar skill-local provider (`providerName: mstar`) | `$DSH_BUNDLED_SKILL_DIR/<name>[/<rel>]` — the packaged `harness-skills/` mirror mounted package-relative by `@mstar-harness/dsh`; never app cwd |
 | **Kimi / ZCode** | Skill **name** / `/skill:<name>` | Plugin mount `./skills/<name>/` from the installed plugin root |
+| **Devin** | Skill **name** / `/morning-star-harness:<name>` | Plugin mount `./skills/<name>/` from the installed plugin root — never app cwd |
 
 Authoring convention: **`mstar-skill-authoring`** § Skill-relative script and asset paths. Per-host URI / mount detail: `references/<host>.md`.
 
@@ -126,7 +128,7 @@ Authoring convention: **`mstar-skill-authoring`** § Skill-relative script and a
 
 ## Workflow
 
-按 `## Default path` 执行：Read `mstar-harness-core` → 读本 skill 并按 `## Detect active host` 检测宿主（`cursor` → `opencode` → `omp` → `dsh` → `kimi` → `zcode` → `codex`）→ 读 `references/<host>.md`（计划模式另读对应 plan-mode bridge）→ 经 `mstar-roles` 加载角色 → 执行并以证据收尾。topic skill 按需加载，不默认通读。
+按 `## Default path` 执行：Read `mstar-harness-core` → 读本 skill 并按 `## Detect active host` 检测宿主（`devin` → `cursor` → `opencode` → `omp` → `dsh` → `kimi` → `zcode` → `codex`）→ 读 `references/<host>.md`（计划模式另读对应 plan-mode bridge）→ 经 `mstar-roles` 加载角色 → 执行并以证据收尾。topic skill 按需加载，不默认通读。
 
 ## Evidence
 
@@ -136,6 +138,6 @@ For iteration Phase 1, use the shared bridge's prototype-first exception to earl
 
 ## References
 
-- 各宿主适配细则 → `references/<host>.md`：确认当前宿主、按宿主解析工具形状与入口时打开（cursor / opencode / omp / dsh / kimi / zcode / codex；计划模式另见 plan-mode bridge references）
+- 各宿主适配细则 → `references/<host>.md`：确认当前宿主、按宿主解析工具形状与入口时打开（devin / cursor / opencode / omp / dsh / kimi / zcode / codex；计划模式另见 plan-mode bridge references）
 - invoke-capable 宿主并行派发 → `references/parallel-dispatch.md`：在可 invoke 宿主派发并行 subagent 时打开
 - 角色加载与参数 → **`mstar-roles`**

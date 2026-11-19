@@ -1058,4 +1058,31 @@ describe("trusted root, author.declared ignore, and host capability", () => {
   test("host capability signals are explicit and resolve correctly", () => {
     expect(detectHost(["task_agent_batch"])).toBe("omp");
   });
+
+  test("host commands accept Devin signals and plugin roots, rejecting unknown inputs", async () => {
+    const root = fixture();
+    const context = {
+      cwd: root, controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    };
+    const detect = getLocalCommandDefinitions().find(({ id }) => id === "host.detect")!;
+    const skillRoot = getLocalCommandDefinitions().find(({ id }) => id === "host.skill-root")!;
+    for (const signals of ["run_subagent", "read_subagent", "message_user", "devin_*"]) {
+      expect(await detect.execute({ signals }, context)).toMatchObject({ status: "ok", data: { host: "devin" } });
+    }
+    expect(await skillRoot.execute({ host: "devin", skill: "sample" }, context)).toMatchObject({
+      status: "ok", data: { root: "./skills/sample" },
+    });
+    for (const signals of ["", "unknown"]) {
+      expect(await detect.execute({ signals }, context)).toMatchObject({ status: "usage" });
+    }
+    expect(await skillRoot.execute({ host: "unknown", skill: "sample" }, context)).toMatchObject({ status: "usage" });
+  });
 });

@@ -185,9 +185,12 @@ describe("resolveSkillRoot", () => {
 // ---------------------------------------------------------------------------
 
 describe("HostAdapter", () => {
-  test("all eight host ids satisfy the union", () => {
-    const ids: HostId[] = ["opencode", "omp", "pi", "dsh", "cursor", "codex", "kimi", "zcode"];
-    expect(ids).toHaveLength(8);
+  test("host ids support minimal adapters", () => {
+    const ids: HostId[] = ["opencode", "omp", "pi", "dsh", "cursor", "codex", "kimi", "zcode", "devin"];
+    for (const host of ids) {
+      const adapter: HostAdapter = { host, log: () => {} };
+      expect(adapter.host).toBe(host);
+    }
   });
 
   test("minimal adapter (log only) satisfies the interface — hooks are optional", () => {

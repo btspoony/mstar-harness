@@ -219,6 +219,7 @@ export const VERSION_SURFACES: readonly VersionSurface[] = [
   { label: "Cursor plugin", path: ".cursor-plugin/plugin.json" },
   { label: "Codex plugin", path: ".codex-plugin/plugin.json" },
   { label: "Kimi plugin", path: ".kimi-plugin/plugin.json" },
+  { label: "Devin plugin", path: ".devin-plugin/plugin.json" },
   { label: "ZCode plugin", path: ".zcode-plugin/plugin.json" },
   { label: "omp plugin", path: ".omp-plugin/plugin.json" },
   { label: "Claude plugin", path: ".claude-plugin/plugin.json" },

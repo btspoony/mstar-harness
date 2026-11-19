@@ -25,7 +25,7 @@ Harness Workflow Engine · Agent Plugin
 
 </div>
 
-Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支持 dsh、omp、OpenCode、Cursor、Kimi Code、ZCode 与 Codex。你描述需求，`project-manager` 负责澄清、维护计划，并把工作从需求推进到实现、审查、验收，直到 PR。需求、架构、实现、审查、验收、审计各自有专属角色负责。
+Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支持 dsh、omp、OpenCode、Cursor、Kimi Code、Devin、ZCode 与 Codex。你描述需求，`project-manager` 负责澄清、维护计划，并把工作从需求推进到实现、审查、验收，直到 PR。需求、架构、实现、审查、验收、审计各自有专属角色负责。
 
 **为什么用它**
 
@@ -37,7 +37,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 
 ## 安装
 
-每个宿主都有两条安装路径：本 CLI 的 `init` 流程，或宿主自带的插件管理器 —— 原生命令只装插件本身。完整选项、路径布局与各宿主说明见 [`INSTALL.md`](INSTALL.md)。
+可通过宿主自带的插件管理器安装，或在支持时使用本 CLI 的 `init` 流程；Kimi 与 Devin 仅支持原生安装。原生命令只装插件本身。完整选项、路径布局与各宿主说明见 [`INSTALL.md`](INSTALL.md)。
 
 - **dsh（DeepSeek Harness）** —— 需要 PATH 上有 `dsh` CLI
   - CLI：`npx @mstar-harness/cli init --target dsh`
@@ -53,6 +53,8 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
   - 原生：`git clone https://github.com/btspoony/mstar-harness.git ~/.cursor/plugins/local/morning-star-harness`，然后 **Developer: Reload Window**
 - **Kimi Code** —— 无 CLI target
   - 原生：`/plugins install https://github.com/btspoony/mstar-harness`，然后 `/plugins reload`
+- **Devin** —— 仅原生安装，无 CLI target
+  - 原生：在 **Customize > Plugins** 添加 `btspoony/mstar-harness`，或执行 `devin plugins install btspoony/mstar-harness`
 - **ZCode**
   - CLI：`npx @mstar-harness/cli init --target zcode`
   - 原生：ZCode **插件市场 → 添加插件市场**，输入 `https://github.com/btspoony/mstar-harness`，再安装 **morning-star-harness**
@@ -71,6 +73,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 | OpenCode | `Project Manager` agent，或 `/pm` |
 | Cursor | `/pm` |
 | Kimi Code | 会话自动加载，或 `/skill:pm` |
+| Devin | `/morning-star-harness:pm` |
 | ZCode | `/morning-star-harness:pm` |
 | Codex | `/pm` |
 
