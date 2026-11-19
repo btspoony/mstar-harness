@@ -184,7 +184,7 @@ describe("the bundle", () => {
 
 describe("the generated module", () => {
   test("exports usable HTML, JS and CSS from escaped inputs", async () => {
-    const source = renderModule('<html lang="fr"><body>é</body></html>', "globalThis.dashboardReady = true", "body{color:red}");
+    const source = renderModule('<html lang="fr"><body>é</body></html>', "export const dashboardReady = true;", "body{color:red}");
     const dir = mkdtempSync(path.join(tmpdir(), "dashboard-module-"));
     try {
       const modulePath = path.join(dir, "assets.ts");
@@ -193,8 +193,9 @@ describe("the generated module", () => {
       const document = fromHtml(generated.dashboardHtml);
       const html = document.children.find((node) => node.type === "element" && node.tagName === "html");
       expect(html?.type === "element" && html.properties.lang).toBe("fr");
-      const runtime: { dashboardReady?: boolean } = {};
-      new Function("globalThis", generated.dashboardJs)(runtime);
+      const scriptPath = path.join(dir, "dashboard.mjs");
+      writeFileSync(scriptPath, generated.dashboardJs);
+      const runtime = await import(scriptPath);
       expect(runtime.dashboardReady).toBe(true);
       expect(generated.dashboardCss).toContain("color:red");
     } finally {
