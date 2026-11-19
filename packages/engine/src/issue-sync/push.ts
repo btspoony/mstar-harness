@@ -374,6 +374,25 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
       "linear-push:" + context.bindingId + ":" + localId + ":" + step + ":" + hash + ":" + entryRevision;
     const lease = context.runId === undefined ? {} : { runId: context.runId };
 
+    // A create cycle this run did not open is not this run's to record — neither a
+    // confirmation NOR a refusal: `failed` is invisible to reconciliation, so
+    // flipping the residue would hide the only record that a remote issue may
+    // exist and let the next run create a duplicate. An ambiguous result writes
+    // nothing, so it keeps its own answer below.
+    if (
+      (result.outcome === "confirmed" || result.outcome === "refused") &&
+      ledger.itemState === "pending" &&
+      ledger.externalId === null &&
+      !openedByThisRun(db, context, ledger)
+    ) {
+      throw new SyncError(
+        "sync.illegal-transition",
+        "this create cycle was opened by an earlier run and never confirmed, so no result of this run can record it and nothing was written. " +
+          "Associate the remote issue by its marker with 'mstar issue-sync ingest', record the identity you confirmed with " +
+          "'mstar issue-sync apply --adopt <localId>=<issueUrl|externalId>', or - when the create never reached Linear - release the residue with " +
+          "'mstar issue-sync apply --release <localId>'",
+      );
+    }
     if (result.outcome === "refused") {
       // The item is retryable and the report must say how: the cause alone leaves
       // the operator with a failure and no next step.
@@ -437,20 +456,7 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
           " --force-adopt <localId>'",
       );
     }
-    // A `pending` row with no id is an OPEN create cycle, and only the run that
-    // opened it may close it with an identity: its claim is the cycle's intent
-    // record and the reason the caller is entitled to report a delivery. For any
-    // other run this is a crashed attempt's residue, whose identity must come from
-    // the marker ('ingest') or from the operator ('--adopt') — recording the
-    // caller's id here would adopt silently and could bind a duplicate.
-    if (ledger.itemState === "pending" && ledger.externalId === null && !openedByThisRun(db, context, ledger)) {
-      throw new SyncError(
-        "sync.illegal-transition",
-        "this create cycle was opened by an earlier run and never confirmed, so this result cannot record an identity on it and nothing was written. " +
-          "Associate the remote issue by its marker with 'mstar issue-sync ingest', or record the identity you confirmed yourself with " +
-          "'mstar issue-sync apply --adopt <localId>=<issueUrl|externalId>'",
-      );
-    }
+
     markApplied(db, {
       bindingId: context.bindingId,
       direction: PUSH_DIRECTION,

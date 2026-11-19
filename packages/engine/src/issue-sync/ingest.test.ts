@@ -12,7 +12,7 @@ import { readItem } from "../issue-sync.js";
 import { ingestRecords, type IngestContext } from "./ingest.js";
 import { encodeMarker } from "./marker.js";
 import type { ProviderItem } from "./provider.js";
-import { planItem, recordResults, selectPushCandidates, type PushContext } from "./push.js";
+import { planItem, reconcileWith, recordResults, selectPushCandidates, type PushContext } from "./push.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-ingest-test-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -33,11 +33,11 @@ async function openedStore(name: string): Promise<{ db: StoreDb; close: () => vo
   return { db, close: () => handle.close() };
 }
 
-function addIssue(db: StoreDb, id: string): void {
+function addIssue(db: StoreDb, id: string, projectId: string = PROJECT): void {
   db.prepare(
     "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)" +
       " values (?, ?, ?, 'bug', 'high', 'open', 'impact body', 'acceptance body', 'now', 'now', ?)",
-  ).run(id, PROJECT, "Issue " + id, "sync-issue-" + id);
+  ).run(id, projectId, "Issue " + id, "sync-issue-" + id);
 }
 
 function ingestContext(overrides: Partial<IngestContext> = {}): IngestContext {
@@ -233,6 +233,72 @@ describe("ingestRecords", () => {
       expect(report.drift[0]!.cause).toContain("Nothing was written");
       const after = pushRow(db, "I-000852")!;
       expect(after).toEqual(before);
+    } finally {
+      close();
+    }
+  });
+
+  test("re-ingesting the same record is an idempotent no-op", async () => {
+    // The reported defect: the first ingest opens the cycle and records the
+    // identity, and the second reused that claim receipt with a different request
+    // (the identity was already on the row), so the ledger refused it as an
+    // operation conflict and the whole run aborted.
+    const { db, close } = await openedStore("ingest-repeat");
+    try {
+      addIssue(db, "I-000871");
+      const first = record("LIN-81", "body\n\n" + marker("I-000871"));
+      const opening = ingestRecords(db, ingestContext(), [first]);
+      expect(opening.associated).toHaveLength(1);
+      expect(opening.drift).toEqual([]);
+      const settled = pushRow(db, "I-000871")!;
+      const second = ingestRecords(db, ingestContext(), [first]);
+      expect(second.associated).toHaveLength(1);
+      expect(second.drift).toEqual([]);
+      expect(pushRow(db, "I-000871")).toEqual(settled);
+    } finally {
+      close();
+    }
+  });
+
+  test("a marker naming an issue of ANOTHER project is an orphan, never associated here", async () => {
+    const { db, close } = await openedStore("ingest-other-project");
+    try {
+      addIssue(db, "I-000872", "p-other");
+      const report = ingestRecords(db, ingestContext(), [record("LIN-82", "body\n\n" + marker("I-000872"))]);
+      expect(report.associated).toEqual([]);
+      expect(report.orphan).toHaveLength(1);
+      expect(report.orphan[0]!.cause).toContain("DIFFERENT project");
+      expect(pushRow(db, "I-000872")).toBeNull();
+    } finally {
+      close();
+    }
+  });
+
+  test("an association the ledger row cannot take is reported, and the run continues", async () => {
+    // A released create lands in `failed`; the remote request it was released for
+    // may still arrive. That is the operator's call to make with --adopt, not a
+    // whole-run abort that would also drop the next record.
+    const { db, close } = await openedStore("ingest-failed-row");
+    try {
+      addIssue(db, "I-000873");
+      addIssue(db, "I-000874");
+      const push = pushContext();
+      const candidate = selectPushCandidates(db, BINDING).find((entry) => entry.localId === "I-000873")!;
+      planItem(db, push, candidate);
+      recordResults(db, push, [{ localId: "I-000873", outcome: "ambiguous", cause: "connection closed" }]);
+      reconcileWith(db, push, [], { release: new Set(["I-000873"]) });
+      expect(pushRow(db, "I-000873")!.itemState).toBe("failed");
+
+      const report = ingestRecords(db, ingestContext(), [
+        record("LIN-83", "body\n\n" + marker("I-000873")),
+        record("LIN-84", "body\n\n" + marker("I-000874")),
+      ]);
+      expect(report.drift).toHaveLength(1);
+      expect(report.drift[0]!.localId).toBe("I-000873");
+      expect(report.drift[0]!.cause).toContain("--adopt");
+      // The released row keeps its state, and the next record still associates.
+      expect(pushRow(db, "I-000873")).toMatchObject({ itemState: "failed", externalId: null });
+      expect(report.associated.map((entry) => entry.localId)).toEqual(["I-000874"]);
     } finally {
       close();
     }

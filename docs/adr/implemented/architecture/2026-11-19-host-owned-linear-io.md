@@ -26,10 +26,12 @@ The host owns all Linear I/O through its standard Linear MCP server. mstar keeps
 ## Consequences
 
 - Association is repo+local+author identity recorded in the ledger only; ingest never creates, updates or closes a local issue, and unmarked or foreign remote issues are reported, never adopted.
+- The sync ledger keeps its transaction boundary: every public verb owns exactly one `begin immediate … commit`, so the row and its operation receipt commit together or not at all, and a caller needing a wider unit calls the verbs in sequence on their per-verb receipts (`external-issue-system-binding.md` § One transaction per ledger verb points here for it).
 - Accepted limits, each also a `shortcut:` in the code that owns it:
   - (a) marker values containing `-->` truncate and values containing `;` or `=` mis-split; the record reads as unmanaged and the recovery is `issue-sync apply --adopt`.
   - (b) `recordResults` recomputes `requestHash` from current local content, so a local edit between `pending` and `apply` records a hash the remote never received.
   - (c) `remoteHash` derives priority through severity, so a remote issue with no priority reads back as medium.
   - (d) `openedByThisRun` is time evidence (claim timestamp versus run start), not ownership proof.
   - (e) association is repo+local+author, so two same-author stores of one repo can collide and surface as drift.
+  - (f) `apply` continues a held run only when no create cycle in its results predates that run; an empty `--results` carries no evidence, and a `--take-run` replacement keeps the original start by design, so neither case can prove ownership — an explicit run token on `apply` would close both.
 - Issues pushed by the deleted code carry the old marker shape and are reported as unmanaged; the recovery is `issue-sync apply --adopt`.

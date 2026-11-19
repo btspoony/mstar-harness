@@ -14,7 +14,8 @@
  *    difference is DRIFT: reported, never repaired (mstar does not write back).
  * 2. ... its `author` differs from this checkout's → FOREIGN: another
  *    operator's clone of the same repository pushed it. Reported, no write.
- * 3. ... `local` is unknown in this store → ORPHAN. Reported, no write.
+ * 3. ... `local` is unknown in this store, or belongs to another project → ORPHAN.
+ *    Reported, no write.
  * 4. no marker, a marker of the deleted format, or another repository's marker
  *    → UNMANAGED. Never adopted by title or description, and never written.
  *
@@ -40,7 +41,7 @@ import {
 import { priorityOfSeverity, severityOfPriority } from "./field-mapping.js";
 import { decodeMarker } from "./marker.js";
 import type { ProviderItem, ProviderWritePayload } from "./provider.js";
-import { SyncError, markApplied, planItem as openLedgerCycle, readItem } from "../issue-sync.js";
+import { isNewerInstant, SyncError, markApplied, planItem as openLedgerCycle, readItem } from "../issue-sync.js";
 
 /** What one associated (or refused) record says, in one shape per bucket. */
 export type IngestEntry = {
@@ -55,7 +56,12 @@ export type IngestEntry = {
 export type IngestReport = {
   /** Associated and converged: the ledger now knows this remote issue. */
   associated: IngestEntry[];
-  /** Associated, but the remote content no longer matches what mstar confirmed. */
+  /**
+   * Needs the operator. Three cases, all "nothing was rewritten here": the remote
+   * content no longer matches what mstar confirmed, two remote issues claim one
+   * local issue, or the ledger row cannot take an association (a released/failed
+   * create). The cause names the recovery.
+   */
   drift: IngestEntry[];
   /** Another git author's push of a local id in this same repository. */
   foreign: IngestEntry[];
@@ -94,9 +100,29 @@ function remoteHash(record: ProviderItem, mapping?: LinearFacetMapping): string 
   return requestHash(payload);
 }
 
-/** Does this store hold the local issue the marker names? */
+/** The store project a `"linear:<project_id>"` binding drives (`sync.invalid-input` otherwise). */
+function projectIdOf(bindingId: string): string {
+  const prefix = "linear:";
+  if (typeof bindingId !== "string" || !bindingId.startsWith(prefix) || bindingId.length === prefix.length) {
+    throw new SyncError("sync.invalid-input", `bindingId must be "${prefix}<project_id>"; ingest drives one Linear binding`);
+  }
+  return bindingId.slice(prefix.length);
+}
+
+/** Does ANY issue in this store carry this id? Used only to word the orphan cause. */
 function localIssueExists(db: StoreDb, localId: string): boolean {
   return db.prepare("select id from issues where id = ?").get(localId) !== undefined;
+}
+
+/**
+ * Is the local issue the marker names part of THIS binding's project?
+ *
+ * Existence alone is not enough: issue ids are store-wide, so a marker from
+ * another project of the same store would otherwise be associated under the
+ * project this run was asked to mirror.
+ */
+function localIssueInProject(db: StoreDb, projectId: string, localId: string): boolean {
+  return db.prepare("select id from issues where id = ? and project_id = ?").get(localId, projectId) !== undefined;
 }
 
 /**
@@ -107,10 +133,23 @@ function localIssueExists(db: StoreDb, localId: string): boolean {
  * record an identity without a cycle — the row ends `applied`, so the next
  * `pending` plans an update of the existing remote issue instead of creating a
  * second one.
+ *
+ * Re-ingesting the same record is a NO-OP, not a rewrite: the row already says
+ * exactly this, and writing again would reuse a claim receipt with a different
+ * request (the ledger refuses that as an operation conflict). The caller owns
+ * the state check (a row that cannot take an association never reaches here).
  */
 function associate(db: StoreDb, context: IngestContext, localId: string, record: ProviderItem): void {
   const key = { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId };
   const ledger = readItem(db, key);
+  if (
+    ledger !== null &&
+    ledger.itemState === "applied" &&
+    ledger.externalId === record.externalId &&
+    !isNewerInstant(record.updatedAt, ledger.lastRemoteUpdatedAt)
+  ) {
+    return;
+  }
   const step = "linear-ingest:" + context.bindingId + ":" + record.externalId + ":" + record.updatedAt;
   if (ledger === null) {
     openLedgerCycle(db, { ...key, externalId: record.externalId, operationId: step + ":plan" });
@@ -163,12 +202,16 @@ export function ingestRecords(
       });
       continue;
     }
-    if (!localIssueExists(db, marker.localId)) {
+    const projectId = projectIdOf(context.bindingId);
+    if (!localIssueInProject(db, projectId, marker.localId)) {
+      const elsewhere = localIssueExists(db, marker.localId);
       report.orphan.push({
         ...entry,
         localId: marker.localId,
-        cause:
-          "names local issue " + JSON.stringify(marker.localId) + ", which this store does not hold; nothing was written. Capture that issue here, or close the remote one yourself if it is obsolete",
+        cause: elsewhere
+          ? "names local issue " + JSON.stringify(marker.localId) + ", which belongs to a DIFFERENT project than the one this run mirrors (" +
+            JSON.stringify(projectId) + "); nothing was written. Run ingest for the project that owns it, or capture the issue here first"
+          : "names local issue " + JSON.stringify(marker.localId) + ", which this store does not hold; nothing was written. Capture that issue here, or close the remote one yourself if it is obsolete",
       });
       continue;
     }
@@ -184,6 +227,20 @@ export function ingestRecords(
           cause:
             "the ledger holds " + JSON.stringify(ledger.externalId) + " for this item while this remote issue carries its marker; " +
             "two remote issues claim one local issue - keep the right one with 'issue-sync apply --adopt <localId>=<issueUrl|externalId>'. Nothing was written for this record",
+        });
+        continue;
+      }
+      // A row that cannot take an association is a TARGETED refusal, not a
+      // whole-run abort: a `failed` row is where a released create lands, and the
+      // remote request that created the issue can still arrive after the release.
+      if (ledger !== null && ledger.itemState !== "applied" && ledger.itemState !== "pending") {
+        report.drift.push({
+          ...entry,
+          localId: marker.localId,
+          cause:
+            "the push ledger row for this item is " + JSON.stringify(ledger.itemState) +
+            ", so this association cannot be recorded and nothing was written. When the remote issue is the right one, record it with " +
+            "'issue-sync apply --adopt <localId>=<issueUrl|externalId>'; if the create never reached Linear, the next 'issue-sync pending' already plans it again",
         });
         continue;
       }

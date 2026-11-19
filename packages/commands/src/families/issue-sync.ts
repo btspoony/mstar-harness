@@ -39,6 +39,7 @@ import {
   externalIdOf,
   identityConflict,
   ingestRecords,
+  isOlderInstant,
   openStore,
   PUSH_DIRECTION,
   planPushItem,
@@ -61,6 +62,7 @@ import {
   type PlanOutcome,
   type PushContext,
   type PushPlan,
+  type StoreDb,
   type PushResult,
   type RunLease,
 } from "@mstar-harness/engine";
@@ -506,6 +508,43 @@ function parseResults(raw: unknown): { results: PushResult[]; refused: ApplyItem
 }
 
 /**
+ * Refuse an apply whose results were planned BEFORE the run it would continue.
+ *
+ * A continuation borrows the held run's token and releases it at the end, so an
+ * old retry must not continue a run that a later `pending` opened: it would write
+ * under that holder's token and delete the holder's lease on the way out. The
+ * evidence is the claim timestamp of every create cycle in the results — a cycle
+ * claimed before the held run started cannot have been planned by it.
+ *
+ * shortcut: the check needs a create cycle to compare, so an empty `--results`
+ * (or one naming only updates) has no evidence and continues the held run; and a
+ * `--take-run` replacement keeps the original start by design, so a retry racing
+ * a takeover is not detectable this way. Upgrade to an explicit run token on
+ * `apply` if either bound starts to matter.
+ */
+function assertApplyOwnsHeldRun(
+  db: StoreDb,
+  target: Target,
+  held: RunLease | null,
+  takeRun: boolean,
+  results: readonly PushResult[],
+): void {
+  if (takeRun || held === null) return;
+  const stale = results.find((result) => {
+    const row = readItem(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, localId: result.localId });
+    return row !== null && row.itemState === "pending" && row.externalId === null && isOlderInstant(row.updatedAt, held.startedAt);
+  });
+  if (stale === undefined) return;
+  throw refused(
+    "sync.run-held",
+    "these results belong to an earlier run: " + JSON.stringify(stale.localId) + " was claimed before the run now holding " +
+      target.bindingId + " started (" + held.startedAt + "), so this apply cannot continue it and the lease is untouched. Re-run " +
+      "`mstar issue-sync pending --project <project-id>` against the current run, or take that run over with " +
+      "`mstar issue-sync apply --project <project-id> --results <file|-> --take-run` if you confirmed its holder is dead",
+  );
+}
+
+/**
  * Record the caller's results, then END the run.
  *
  * The run is CONTINUED (same token), not re-acquired: `pending` claimed it and
@@ -528,6 +567,7 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
   try {
     const db = handle.db;
     const held = readRun(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION });
+    assertApplyOwnsHeldRun(db, target, held, takeRun, parsed.results);
     run =
       takeRun || held === null
         ? acquireRun(db, {
@@ -715,7 +755,7 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
     apply:
       "Record what your Linear tools reported for the items `issue-sync pending` planned, one entry per item: {localId, outcome, externalId?, remoteUpdatedAt?, cause?}. outcome `confirmed` proves delivery and names the remote issue (externalId) plus its revision when the tool returns one; `refused` means provably NOT delivered (a validation or permission error), so the item stays retryable; `ambiguous` means sent but unconfirmed - a create keeps its pending residue and the next ingest associates it by marker, never by guessing a second create. An unknown localId, an entry this run never planned, or a missing field is that entry's refusal in the report, not a failed run. The report echoes your word: `items[].outcome` is the `confirmed`/`refused`/`ambiguous` you sent, while `counts` groups the LEDGER states each produced (`applied`/`unconfirmed`/`refused`) - the two vocabularies are never mixed in one field. `--results` takes a file path or `-` for stdin, and [] records nothing. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself, BEFORE your results are recorded - so for an item named in both, the adopt wins and the entry's `confirmed` must repeat the adopted id or it is refused as a conflict; --force-adopt allows replacing one the row already records; --release <localId> clears a pending create with no remote id after ingest showed no issue carrying its marker (an associated issue records an id, which makes the flag refuse). ONE run per binding, continued from pending and ended here; --take-run replaces a holder you confirmed dead.",
     ingest:
-      "Associate a listing your Linear tools returned with the local issues those remote issues mirror. --records takes a file path or - for stdin: [{externalId, url, title, description, state, priority, labels, updatedAt}]. The key is the marker in the description - repo=<owner/name>, local=<issue-id>, author=<Name <email>> - and repo must be this repository, local must exist here, and author must be this checkout's git author. Five buckets, one entry each (localId, externalId, url, and a cause when it is not a clean association): associated (recorded in the ledger, converged), drift (associated, but the remote content no longer matches what mstar last confirmed, or two remote issues claim one local issue - your judgement, nothing is rewritten), foreign (another operator's clone of this repository pushed it), orphan (the local issue is gone), unmanaged (no marker, a marker of the retired format, or another repository's - never adopted by title). No local issue is created, updated or closed.",
+      "Associate a listing your Linear tools returned with the local issues those remote issues mirror. --records takes a file path or - for stdin: [{externalId, url, title, description, state, priority, labels, updatedAt}]. The key is the marker in the description - repo=<owner/name>, local=<issue-id>, author=<Name <email>> - and repo must be this repository, local must exist here, and author must be this checkout's git author. Five buckets, one entry each (localId, externalId, url, and a cause when it is not a clean association): associated (recorded in the ledger, converged), drift (needs your judgement, nothing rewritten: the remote content no longer matches what mstar last confirmed, two remote issues claim one local issue, or the ledger row cannot take the association because a released create left it failed - the cause names the recovery), foreign (another operator's clone of this repository pushed it), orphan (the local issue is gone), unmanaged (no marker, a marker of the retired format, or another repository's - never adopted by title). No local issue is created, updated or closed.",
   };
   return verbs.map((verb) => {
     const id = "issue-sync." + verb;

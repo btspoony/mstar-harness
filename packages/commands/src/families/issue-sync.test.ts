@@ -339,6 +339,33 @@ describe("apply", () => {
     expect((await run("pending", {}, f.context)).status).toBe("ok");
   });
 
+  test("a stale apply cannot continue a run a later pending opened", async () => {
+    // The reported defect: apply picked whatever run was held, so an old retry
+    // wrote under a newer run's token and deleted that holder's lease on the way
+    // out. The evidence is the claim timestamp of the create cycle.
+    const f = await fixture("apply-stale-run");
+    await run("pending", {}, f.context);
+    // Ends the planning run without recording the item: its create stays a residue.
+    await run("apply", { results: "-" }, f.withStdin("[]"));
+    expect((await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION })))).toBeNull();
+    await Bun.sleep(2);
+    const later = await run("pending", {}, f.context);
+    expect(later.status).toBe("ok");
+
+    const stale = await run(
+      "apply",
+      { results: bodyFile(f, "stale.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-9" }]) },
+      f.context,
+    );
+    expect(stale.status).toBe("refused");
+    expect(stale.code).toBe("sync.run-held");
+    expect(stale.message).toContain("earlier run");
+    // Nothing was recorded, and the newer holder still owns the direction.
+    expect((await rowOf(f, "I-000101"))!.externalId).toBeNull();
+    const held = await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }));
+    expect(held?.runId).toBe(later.data.runId);
+  });
+
   test("--release clears an unconfirmed create, and an associated item is not releasable", async () => {
     const f = await fixture("apply-release");
     await run("pending", {}, f.context);

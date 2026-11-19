@@ -768,6 +768,7 @@ export {
   SyncError,
   acquireRun,
   claimItem,
+  isOlderInstant,
   markApplied,
   markFailed,
   markSkipped,

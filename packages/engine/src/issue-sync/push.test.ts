@@ -477,6 +477,29 @@ describe("a confirmed result never records an identity on another run's create",
     }
   });
 
+  test("a refused result for another run's create is refused too, so the residue survives", async () => {
+    // `failed` is invisible to reconciliation: flipping the residue would hide the
+    // only record that a remote issue may exist. The same ownership rule as a
+    // confirmation therefore covers a refusal.
+    const { db, close } = await openedStore("unclaimed-refusal");
+    try {
+      addIssue(db, "I-000959");
+      const first = lease(db);
+      plan(db, context({ runId: first.runId }), "I-000959");
+      expect(releaseRun(db, { bindingId: BINDING, direction: "push", runId: first.runId })).toBe(true);
+      await Bun.sleep(2);
+      const later = lease(db, { holderPid: 4545 });
+      const [outcome] = recordResults(db, context({ runId: later.runId }), [
+        { localId: "I-000959", outcome: "refused", cause: "label does not exist" },
+      ]);
+      expect(outcome.outcome).toBe("refused");
+      expect(outcome.cause).toContain("--release");
+      expect(row(db, "I-000959")).toMatchObject({ itemState: "pending", externalId: null, lastError: null });
+    } finally {
+      close();
+    }
+  });
+
   test("the run that opened the cycle records the identity exactly as before", async () => {
     const { db, close } = await openedStore("claimed-receipt");
     try {
