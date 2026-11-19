@@ -71,12 +71,6 @@ import {
   mstarMilestoneUpdateInvocation,
   mstarPanelSnapshotInvocation,
 } from './panel/panel-snapshot-endpoint.ts'
-import {
-  mstarLinearAuthorizeBeginInvocation,
-  mstarLinearAuthorizeCancelInvocation,
-  mstarLinearAuthorizeStatusInvocation,
-  mstarLinearStatusInvocation,
-} from './linear-settings.ts'
 
 /** Logger label for the endpoint's own degradation lines. */
 const ENDPOINT_LOGGER = 'mstar-engine-status-endpoint'
@@ -342,13 +336,6 @@ export function mstarEngineStatusContribution(): TypertContribution {
       mstarMilestoneUpdateInvocation(),
       mstarMilestoneAssignInvocation(),
       mstarMilestoneRemoveInvocation(),
-      // The Linear Settings card: the same one contribution carries its four
-      // root-scope operations — one status read plus the host-owned
-      // authorization attempt.
-      mstarLinearStatusInvocation(),
-      mstarLinearAuthorizeBeginInvocation(),
-      mstarLinearAuthorizeStatusInvocation(),
-      mstarLinearAuthorizeCancelInvocation(),
     ],
   }
 }

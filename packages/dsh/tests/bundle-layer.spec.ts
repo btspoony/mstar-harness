@@ -130,11 +130,14 @@ describe('profile bundle layer (Task 4)', () => {
     expect(linearConfig.serverName).toBe('linear')
     expect(linearConfig.transport).toBe('streamable-http')
     expect(String(linearConfig.url)).toBe('https://mcp.linear.app/mcp')
-    // The row consumes the machine credential through the mstar service: the
-    // row injects it, and `headers` stays the loader expression — never a
-    // literal bearer in the shipped config.
-    expect(linear?.inject).toEqual(['mstarLinearAuth'])
-    expect(linearConfig.headers).toEqual({ __jsExpr: 'ctx.mstarLinearAuth.authorizationHeaders()' })
+    // The row takes a static bearer from dsh's OWN credential store: the loader
+    // resolves the `${credential:…}` template on every mount
+    // (`expandTemplates`), so the shipped config carries the template and never
+    // a literal token. It injects no service — the credential seam is the
+    // host's, and the row holds no plugin of its own.
+    expect(linear?.inject).toBeUndefined()
+    expect(linearConfig.expandTemplates).toBe(true)
+    expect(linearConfig.headers).toEqual({ Authorization: 'Bearer ${credential:MSTAR_LINEAR_TOKEN}' })
     // The plugin never declares the client as its own dependency: it mounts no
     // MCP instance, the Loader mounts the row.
     expect(pkg.dependencies?.['@deepseek-ai/dsh-mcp-client']).toBeUndefined()
