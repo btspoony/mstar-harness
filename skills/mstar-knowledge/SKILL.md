@@ -1,6 +1,6 @@
 ---
 name: mstar-knowledge
-description: "Load for `{KNOWLEDGE_DIR}` capture at each development plan's `Done`, or maintain/refresh/bootstrap（每 development plan 结晶/清理/bootstrap）；skip with reasoned skipped when nothing to crystallize. Not for ordinary feature coding."
+description: "Load for `{KNOWLEDGE_DIR}` capture at each development plan's `Done` or on reusable human-owner feedback on a submitted PR, or maintain/refresh/bootstrap（每 development plan 结晶/清理/bootstrap）；skip with reasoned skipped when nothing to crystallize. Not for ordinary feature coding."
 ---
 
 # mstar-knowledge（知识结晶与维护）
@@ -13,7 +13,7 @@ Standalone, this skill needs nothing beyond itself and **`mstar-doc-corpus`** fo
 
 One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one document shape (**`mstar-doc-corpus`** → `mstar-doc-corpus/references/knowledge-format.md`、`mstar-doc-corpus/references/schema.yaml`、`mstar-doc-corpus/assets/knowledge-skeleton.md`；本 skill 不维护第二份字段表或骨架), two workflows: **Capture** 把已解决的问题沉淀为结构化知识文档，供未来的 plan 研究、debug 与实现检索复用；**Maintain** 让既有文档对抗代码漂移重新可信。Knowledge that isn't captured evaporates when the session ends; knowledge that is captured but not discoverable is equally lost; documents that are captured also age — code changes, conventions evolve, patterns become obsolete — so capture and maintenance are one skill over one artifact.
 
-**In the mstar lifecycle**, Capture runs after every development plan's `Done` — an iteration row or a standalone development plan — sharing one step sequence (see「Integration with mstar lifecycle」). It is not a mid-plan activity, and report-only plans carry no compound duty; ad-hoc captures stay invocable standalone. Maintain runs only from its own entries (`## When to use / Skip`), which include the Capture Phase 7 flag and the on-demand project-knowledge bootstrap.
+**In the mstar lifecycle**, per-plan Capture runs after every development plan's `Done` — an iteration row or a standalone development plan — sharing one step sequence (see「Integration with mstar lifecycle」). It is not a mid-plan activity, and report-only plans carry no compound duty; ad-hoc captures and the separate Owner feedback entry remain invocable. Maintain runs only from its own entries (`## When to use / Skip`), which include the Capture Phase 7 flag and the on-demand project-knowledge bootstrap.
 
 **Storage**: `{KNOWLEDGE_DIR}` defaults to `.agents/knowledge/` — one default whether or not the harness runs; a `.mstarc` `knowledge_dir` is authoritative over it, resolved relative to the `.mstarc`, and a writing step must resolve the symbol (`.mstarc`, then `mstar path resolve`) instead of composing the default path (**`mstar-doc-corpus`** § Layout defaults)。知识文档 → `{KNOWLEDGE_DIR}/<category>/<slug>.md`（`<category>` 取值见 **`mstar-doc-corpus`** `mstar-doc-corpus/references/category-mapping.md`）；CONCEPTS.md → `<repo-root>/CONCEPTS.md`；Maintain 另可操作 `{KNOWLEDGE_DIR}/README.md`（**散文**，见 Maintain Phase 4）。当 harness 运行时，完整的发现链与其余路径符号 → **`mstar-conventions`**。
 
@@ -25,6 +25,16 @@ One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one 
 
 **Capture — skip**: 自检 ≤2 Yes；Q5 高重叠（更新已有而非新建）；纯机械工作（格式化、依赖升级、typo）；问题未经验证。每个 development plan 的 disposition 义务不因跳过结晶而消失——结晶跳过时以 reasoned `skipped` 记录在该 plan 的 `## Review Gate Summary`（独立 plan 另记 `delivery.compound`，见「Integration with mstar lifecycle」）。
 
+### Owner feedback
+
+When the human owner (operator/user, not the coordinator seat or a review bot) merges, closes, or comments on a submitted PR and states a preference or rule reaching beyond that PR, run an owner-feedback disposition. Examples include a reusable close reason, an "always/never", or a correction to recurring code, description, or evidence shape. An unmerged close also triggers durable tracking of any earlier owner-feedback knowledge edit on the delivery branch that did not reach the target branch; the owner need not restate it.
+
+Use the Capture steps below in **Lightweight** mode; report `created` / `updated` with the knowledge path, or `skipped` with a reason in the coordination response. Prefer updating the document that already covers the point (Q5 overlap); deduplicate, and rewrite a contradicted rule instead of adding a competing one. Apply the standing-owner-rule exception in `references/compound-workflow.md` § 决策矩阵; feedback that only fixes that PR is `skipped`.
+
+Write to the delivery branch while the PR is open. After merge/close, the PM creates or links a durable tracking item in the same round and returns its link, recording the owner rule and intended knowledge path for the next tracked change through ordinary delivery even when no follow-up work exists yet. With an active store, use `mstar-project-governance` § Issue capture; without one (including a staged store), use a host tracking item only if the selected `mstar-host` adapter documents an authorized tracking verb. Otherwise report **not tracked** with cause and recovery below; do not invent a host write or attempt a store write.
+
+If no authorized tracker is available or the write fails, report **not tracked** with the actual cause and recovery: restore access to a documented host tracking verb and retry; for a fresh workspace, bootstrap via `mstar harness scaffold` + `mstar store init` (`mstar-artifacts/templates/README.md`); for legacy execution sources, use `mstar store upgrade` (`mstar-artifacts/references/plan-workflow-lifecycle-contract.md` § Migration and history); for a staged store, the authorized cutover ops task activates the reviewed final apply receipt via `mstar store activate --manifest <path> --operator <name>`, satisfying the verified-backup and consumer-attestation prerequisites in `mstar-use-cli/references/status-and-registers.md` § Store lifecycle: migration, activation, retirement. Retry store capture only after activation succeeds. Never report an unwritten item as successfully tracked. This event-driven entry reopens no Done row or closed workflow, amends no Review Gate Summary, and does not change per-plan Capture timing.
+
 **Maintain — use**:
 
 | Trigger | Example |
@@ -35,7 +45,7 @@ One artifact family (`{KNOWLEDGE_DIR}` 文档 + `<repo-root>/CONCEPTS.md`), one 
 | Explicit user request | `/pm` + "audit the knowledge docs" — Maintain runs as this skill `## Workflow — Maintain` |
 | **Project knowledge bootstrap** | No/stale/partial `STRATEGY.md`, `CONCEPTS.md`, or `{KNOWLEDGE_DIR}` — see 「Bootstrap vs refresh」 |
 
-**Landing here mid-plan**: before a plan's `Done`, capture is not due — continue the assigned work. One bounded exception: when current work hits the Capture Phase 2 overlap condition (an existing doc already covers the ground), **update that doc** (add `last_updated`) rather than deferring to a Maintain audit; that single-doc update is Capture-phase behaviour, not a licence to start a Maintain library sweep. A full Maintain audit (inventory → five outcomes → catalog reconcile) runs only from its own entries above.
+**Landing here mid-plan**: before a plan's `Done`, per-plan capture is not due — continue the assigned work; Owner feedback above is a separate event-driven entry. One bounded exception: when current work hits the Capture Phase 2 overlap condition (an existing doc already covers the ground), **update that doc** (add `last_updated`) rather than deferring to a Maintain audit; that single-doc update is Capture-phase behaviour, not a licence to start a Maintain library sweep. A full Maintain audit (inventory → five outcomes → catalog reconcile) runs only from its own entries above.
 
 ## Workflow — Capture
 
