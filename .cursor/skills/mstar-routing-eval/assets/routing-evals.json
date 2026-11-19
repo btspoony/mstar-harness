@@ -4,6 +4,26 @@
   "updated_at": "2026-11-12",
   "cases": [
     {
+      "id": "owner-feedback-standing-rule",
+      "prompt": "The human owner comments on an open delivered PR: 'Never pin release versions in tests; this is a standing rule.' An existing knowledge convention doc covers test assertions. The owner also comments 'Fix the typo in this PR description', which applies only to this PR, then merges the PR. Handle the feedback in this coordination round.",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Same-round mstar-knowledge § Owner feedback disposition for the standing rule in Lightweight mode",
+        "updated disposition with the existing convention doc path after overlap checking, deduplication and rewriting any contradicted rule",
+        "Knowledge edit on the delivery branch while the PR is open; any post-merge edit follows the next tracked change through ordinary delivery",
+        "Reasoned skipped disposition for the PR-only typo fix comment"
+      ],
+      "hard_fail_if": [
+        "Defers owner-feedback disposition until another plan reaches Done",
+        "Skips the standing rule because the Q1–Q8 Yes count is low",
+        "Creates a duplicate convention doc or adds a competing rule instead of updating the existing doc",
+        "Treats the PR-only fix comment as a reusable rule instead of skipped",
+        "Reopens a Done row or closed workflow, or amends a Review Gate Summary"
+      ]
+    },
+    {
       "id": "small-ui-tweak",
       "prompt": "把设置页的按钮间距调一下并修复 hover 色值不一致问题",
       "expected_route": [

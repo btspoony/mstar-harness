@@ -1,6 +1,6 @@
 ---
 name: mstar-knowledge
-description: "Load for `{KNOWLEDGE_DIR}` capture at each development plan's `Done`, reusable human-owner feedback on a submitted PR, or knowledge maintain/refresh/bootstrap. Not for ordinary feature coding."
+description: "Load for `{KNOWLEDGE_DIR}` capture at each development plan's `Done` or on reusable human-owner feedback on a submitted PR, or maintain/refresh/bootstrap（每 development plan 结晶/清理/bootstrap）；skip with reasoned skipped when nothing to crystallize. Not for ordinary feature coding."
 ---
 
 # mstar-knowledge（知识结晶与维护）
