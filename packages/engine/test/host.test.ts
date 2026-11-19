@@ -163,6 +163,14 @@ describe("resolveSkillRoot", () => {
     );
   });
 
+  test("devin resolves via the plugin mount ./skills/<name>/ root", () => {
+    expect(resolveSkillRoot("devin", { skill: "sample-skill" })).toBe("./skills/sample-skill");
+    expect(resolveSkillRoot("devin", { skill: "sample-skill", rel: "references/example.md" })).toBe(
+      "./skills/sample-skill/references/example.md",
+    );
+    expect(resolveSkillRoot("devin", { skill: "sample-skill", rel: "" })).toBe("./skills/sample-skill");
+  });
+
   test("dsh resolves via the skill-local bundled root $DSH_BUNDLED_SKILL_DIR (roadmap D5/D6)", () => {
     expect(resolveSkillRoot("dsh", { skill: "mstar-conventions" })).toBe(
       "$DSH_BUNDLED_SKILL_DIR/mstar-conventions",
@@ -185,11 +193,19 @@ describe("resolveSkillRoot", () => {
 // ---------------------------------------------------------------------------
 
 describe("HostAdapter", () => {
-  test("host ids support minimal adapters", () => {
+  test("adapter host ids resolve skill assets or explicitly defer", () => {
     const ids: HostId[] = ["opencode", "omp", "pi", "dsh", "cursor", "codex", "kimi", "zcode", "devin"];
     for (const host of ids) {
       const adapter: HostAdapter = { host, log: () => {} };
-      expect(adapter.host).toBe(host);
+      const skill = "sample-skill";
+      const rel = "references/example.md";
+      const root = resolveSkillRoot(adapter.host, { skill, rel });
+      if (host === "pi") {
+        expect(root).toContain("deferred:");
+      } else {
+        expect(root).toEndWith(`${skill}/${rel}`);
+        expect(resolveSkillRoot(adapter.host, { skill, rel: "" })).toBe(resolveSkillRoot(adapter.host, { skill }));
+      }
     }
   });
 
