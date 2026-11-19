@@ -140,6 +140,8 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 
 ## PM Self-Check (artifact claims and citations)
 
+PR ownership and continuation records for implementation Assignments → `mstar-dispatch-gates` § PR feedback ownership (PM only).
+
 State a claim only as strongly as the evidence in hand:
 
 - An artifact claim — `declared` / `recorded` / `written` — is stated only together with the command and the observed output that shows it; without both, describe the artifact as pending rather than done.

@@ -4,6 +4,13 @@
   "updated_at": "2026-11-12",
   "cases": [
     {
+      "id": "pr-feedback-owning-session-continuation",
+      "prompt": "A dispatched fullstack-dev session opened PR #123 and remains resumable after reporting task completion. CI now fails and a bot posts an actionable finding. Route both repairs. Then consider the same PR when that session has ended and the host reports it cannot resume, and when the ownership handle is missing. Do not change merge policy or review-seat selection.",
+      "expected_route": ["@project-manager", "@fullstack-dev"],
+      "must_have_artifacts": ["Assignment/PM Task Board or status record links PR URL/number and branch to the owning host session continuation handle", "same-session message/resume carries current head, failed job/log excerpt or finding, authorized checkout and bounded fix/verification", "replacement only after recorded terminal/unrecoverable state or failed continuation, with original Assignment/report and pending repair evidence; ownership record updated", "missing handle recovered from dispatch history before continuation; unresolved availability escalated with cause and explicit recovery"],
+      "hard_fail_if": ["PM implements repairs", "starts a new session or implementer merely because the original task completed or role matches", "replaces a resumable owner", "redispatches without unavailability evidence or drops failure logs/findings", "treats silence or unknown ownership as proof of unavailability"]
+    },
+    {
       "id": "small-ui-tweak",
       "prompt": "把设置页的按钮间距调一下并修复 hover 色值不一致问题",
       "expected_route": [
