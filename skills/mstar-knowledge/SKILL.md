@@ -33,7 +33,7 @@ Use the Capture steps below in **Lightweight** mode; report `created` / `updated
 
 Write to the delivery branch while the PR is open. After merge/close, the PM creates or links a durable tracking item in the same round and returns its link, recording the owner rule and intended knowledge path for the next tracked change through ordinary delivery even when no follow-up work exists yet. With an active store, use `mstar-project-governance` § Issue capture; without one (including a staged store), use an authorized host tracking item documented by the selected `mstar-host` adapter.
 
-If no authorized tracker is available or the write fails, report **not tracked** with the actual cause and recovery: restore access to the selected host tracker and retry, or obtain authorized store initialization/cutover under `mstar-project-governance` § Issue capture before retrying there. Never report an unwritten item as successfully tracked. This event-driven entry reopens no Done row or closed workflow, amends no Review Gate Summary, and does not change per-plan Capture timing.
+If no authorized tracker is available or the write fails, report **not tracked** with the actual cause and recovery: restore access to the selected host tracker and retry, or bootstrap via `mstar harness scaffold` + `mstar store init` (`mstar-artifacts/SKILL.md` § Templates), or import legacy execution sources via `mstar store upgrade` (`mstar-artifacts/references/plan-workflow-lifecycle-contract.md` § Cutover boundary), before retrying store capture. Never report an unwritten item as successfully tracked. This event-driven entry reopens no Done row or closed workflow, amends no Review Gate Summary, and does not change per-plan Capture timing.
 
 **Maintain — use**:
 
