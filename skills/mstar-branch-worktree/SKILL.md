@@ -11,7 +11,7 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 
 ## Scope（摘要）
 
-- **仅 PM 决定分支**；其他可写角色不得自行新开分支或切回 `main`。
+- **仅 PM 决定分支**（唯一例外见 § 唯一分支决策者）；其他可写角色不得自行新开分支或切回 `main`。
 - **Assignment 须含其一**：`Working branch: <existing>` | `create <new> from <base>` | `Branch policy: direct on <branch> — <reason>`。
 - **L1:** Git-derived main/control root + separate recorded integration checkout + distinct row metadata.worktree_path/source branch. Atomic coordination and serial integration remain; no per-row execution lease.
 - **L2（同 plan 内 ≥2 可写并发）**：派发 **前** 完成 **`references/parallel-writable-pre-dispatch.md`**（含 `git worktree`、绝对 **`Worktree path`**；**N 次并行 invoke ≠ 已隔离**）。单 plan 多轨时 **L1 不替代 L2**。
@@ -44,7 +44,7 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 
 ### 角色职责
 
-- **Primary PM alone selects branches:** before dispatching any repo-writing product/architecture/dev/ops/prompt role, record `Working branch` (existing or `create <new> from <base>`) and preserve explicit user branch/base instructions.
+- **Primary PM alone selects branches:** before dispatching any repo-writing product/architecture/dev/ops/prompt role, record `Working branch` (existing or `create <new> from <base>`) and preserve explicit user branch/base instructions (direct `ops-engineer` exception → § 唯一分支决策者).
 - **Repo-writing leaves:** verify the actual checkout/branch before the first edit or commit; report the used branch. Never invent a new branch or restart on `main` / `master`; unresolved Assignment mismatch returns to PM.
 
 ## 分支协作契约（Branch Collaboration Contract）
@@ -60,7 +60,7 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
   - 继续在现有分支开发，或
   - 使用 `create <new-branch> from <base>` 新开分支，或
   - 使用 `Branch policy: direct on <branch> — <reason>`。
-- 其他可写角色不得自行决定开分支。
+- 其他可写角色不得自行决定开分支。唯一例外：直接调用（无 PM Assignment）且会产生可合并 diff 的 `ops-engineer`，由调用方声明上述三式之一 → `mstar-roles/references/ops-engineer.md` § Direct invocation。
 
 ### PM 必须先与用户确认
 

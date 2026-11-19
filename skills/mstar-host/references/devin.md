@@ -19,7 +19,7 @@ Parallel **N** seats = **N background subagents**; collect each with **read_suba
 
 ### Cloud
 
-Plugin subagents do **not** load in cloud sessions. The PM seat is the session the user talks to, preferably a **Devin Bot** for persistent identity, a tasks board and Inbox owner approvals. Inbox approval requests map to **owner-gated** merge authorization: only the owner's explicit approval authorizes the merge, not ticket status or a child report. Per-role Bots are optional for long-lived seats.
+Plugin subagents do **not** load in cloud sessions. The PM seat is the session the user talks to, preferably a **Devin Bot** for persistent identity, a tasks board and Inbox owner approvals. Inbox approval requests map to **owner-gated** merge authorization: only the owner's explicit approval authorizes the merge, not ticket status or a child report. Per-role Bots are optional for long-lived seats; a standalone `code-reviewer` or `ops-engineer` Bot is a direct invocation (`mstar-roles/references/_shared/leaf-executor-core.md` § Direct invocation).
 
 Each role dispatch is a **board ticket dispatched to a child Devin session** through the available `devin_ticket_manage` / `devin_session_create` capabilities. Inspect the available tool schema rather than inventing arguments. Its brief names **role_id**, carries the full Assignment, and directs loading **mstar-harness-core** → **mstar-roles** → the role reference. QC tri-review = **three parallel child sessions**, not three passes in one session.
 

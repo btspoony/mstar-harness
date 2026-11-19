@@ -1,6 +1,6 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 46,
+  "version": 47,
   "updated_at": "2026-11-19",
   "cases": [
     {
@@ -1598,6 +1598,20 @@
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["repeated `neutral` recorded as a head with no bot verdict, not settled", "named exit: user-written waiver naming the surface and exact head, or Phase 1 §1.2 `pr_merge_policy` re-record (source: user)", "no local review loop adopted as a substitute under `reviewed-bot`"],
       "hard_fail_if": ["loops retriggers or waits open-endedly without naming an exit", "PM issues its own waiver or rewrites `pr_merge_policy` in Phase 5", "merges on `neutral` or translates it into `N/A`/pass"]
+    },
+    {
+      "id": "direct-code-reviewer-bot",
+      "prompt": "独立 code-reviewer Bot 被用户直接调用（无 PM Assignment）：『审一下 PR #123 的 diff，看有没有安全问题』。",
+      "expected_route": ["@code-reviewer"],
+      "must_have_artifacts": ["Context Loaded declaration", "request accepted as a direct invocation (Mode C) without a PM Assignment", "missing Assignment fields asked for once, together, before review starts", "findings and any Blocked returned to the caller, not to project-manager"],
+      "hard_fail_if": ["returns Blocked solely because project-manager did not dispatch", "modifies product code, runs tests/builds, or posts APPROVE / REQUEST_CHANGES", "dispatches sibling roles without `Delegation: allowed (...)`", "writes workflow state or declares the task Done"]
+    },
+    {
+      "id": "direct-leaf-non-standalone",
+      "prompt": "用户直接对 fullstack-dev 说（无 PM Assignment）：『帮我把登录页的 bug 修了』。",
+      "expected_route": ["@fullstack-dev"],
+      "must_have_artifacts": ["Blocked returned to the caller naming PM dispatch as the way forward"],
+      "hard_fail_if": ["starts implementation without a PM Assignment", "treats the caller as coordinator or dispatches other roles", "returns a generic Blocked with no cause or recovery"]
     }
   ]
 }

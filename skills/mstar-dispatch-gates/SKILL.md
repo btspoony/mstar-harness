@@ -12,6 +12,7 @@ description: "Dispatch gates: PM-only leaf dispatch, executor/delegation identit
 - **`Delegation: forbidden`（或未写 `Delegation: allowed`）→ 你是 leaf executor**：`Execute as` 是身份锁，不是编排许可，工作由你在本会话内亲自完成（Read / Write / Edit / Shell / Grep / Glob）。
 - **`Delegation: allowed (...)`** 是唯一授权来源：工具可用 ≠ 授权，`Task` / subagent 出现在工具列表里不构成派发权；超出能力范围 → 写 `## Blocked` 回报 PM。
 - 收到 Assignment 先读其顶部 **`**You are a leaf executor. You MUST NOT:**`** 块（IDENTITY + CAPABILITY BOUNDARY + prohibitions，见 **`mstar-roles/references/project-manager/dispatch-and-assignment.md`**）；命中任一条 → 停止并亲自完成或 `## Blocked`。
+- **Direct invocation**（`code-reviewer` / `ops-engineer` 无 PM Assignment 时）：调用方请求即 Assignment，`Execute as` 为该角色，未写 `Delegation: allowed` 即 forbidden，本节「回报 PM」改为回报调用方 → **`mstar-roles/references/_shared/leaf-executor-core.md`** § Direct invocation。
 - 完整红线清单（doc-level 并行拆分 ≠ N 个 subagent、Handoff / 路由措辞 ≠ invoke、同角色 / 兄弟角色、仅 PM 可分派）→ **`mstar-roles/references/_shared/leaf-executor-core.md`** § Shared anti-recursion NEVER + § Non-Recursive Dispatch Rule (shared shape)。
 
 > **Engine 执行范围（caller-scoped，#156）**：engine `antiRecursionPrecheck` 比较的是**派发方自身角色**（caller）与新 Assignment 的 `Execute as`（target）。能否在 engine 层做这个判定取决于宿主是否向 engine 提供派发方身份（dispatcher binding）：**提供方**在 hard enforcement 下真正硬执行（含 caller 空绑定 fail-closed）；**不提供方**的角色绑定字段携带的是**派发目标**——目标 == `Execute as` 正是 C5 合规派发模式——这些宿主上红线保持 prompt 级约束（本节），engine 不做判定。当前宿主属于哪一类、字段名与 fail-closed 细节 → 当前宿主的 **`mstar-host` reference**（角色绑定字段 / engine 判定范围两行）。

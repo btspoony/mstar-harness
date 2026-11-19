@@ -254,4 +254,4 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 
 ## Assets
 
-- `assets/routing-evals.json` — canonical corpus v46. Use the named direct-plan and observer/native-task controls above; preserve unchanged Phase-1 prototype and hash-record-only controls. Compare baseline/candidate via the existing session-completion route with actual model/host/source refs, traces and judgments; no full corpus or replacement runner. Static links are not model compliance evidence.
+- `assets/routing-evals.json` — canonical corpus v47. Use the named direct-plan and observer/native-task controls above; preserve unchanged Phase-1 prototype and hash-record-only controls. Compare baseline/candidate via the existing session-completion route with actual model/host/source refs, traces and judgments; no full corpus or replacement runner. Static links are not model compliance evidence.

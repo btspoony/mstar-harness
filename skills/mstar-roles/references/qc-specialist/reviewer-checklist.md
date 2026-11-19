@@ -39,7 +39,7 @@ Apply only affected items by **reading the assigned changed diff and directly re
 - [ ] Apply the `mstar-coding-behavior` § Evidence keep/delete rule: product-behaviour assertions and fails-first regression defences stay; an incidental / source-shape / wiring / environment-constant assertion is flagged for deletion, never renamed or re-pinned. Report the non-product-assertion class and conclude "delete, or replace with a product-behaviour assertion". Docs/policy changes use scoped static or before/after evidence, not prose tests.
 - [ ] For touched delivery compass, plan, spec, or knowledge documents, verify local edit attribution includes seat, model, ISO-8601 timestamp, and iteration; `unknown` is valid for an unavailable model ID, not a reason to infer it from this reviewer session.
 
-## High-risk ops (when Assignment marks high-risk)
+## High-risk ops (when Assignment marks high-risk, or a direct ops request is high-risk per `mstar-roles/references/ops-engineer.md` § Direct invocation)
 
 Applies to migrations, prod config, destructive data ops, cert rotation, shared-env scripts, etc.
 
