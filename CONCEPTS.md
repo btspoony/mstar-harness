@@ -64,6 +64,14 @@ The classification every host write gate runs **before** document judgment: a wr
 
 **Read side.** Once the authority serves **reads** too, the same rule applies with two additions: the route decision must precede every file read (a path that will refuse opens no file), and a target is classified by its **landed** identity (`realpath`), not only by the caller's textual path. A synchronous surface reuses the engine's synchronous guard instead of reimplementing one, and the discrimination "no store file ⇒ file route stays lawful / unreadable store ⇒ fail closed" is explicit — both halves were Critical findings during the execution-authority cutover. Related: Authority route, Staged store.
 
+## External system mirroring
+
+### Host-owned provider I/O
+The ownership split for mirroring a local authority into an external system the agent's host already reaches through its MCP tools: the local side keeps only the ledger, field mapping, and payload verbs (plan out, results in), while transport, auth, and tool discovery belong entirely to the host — no request, token, or socket lives in the local code. Not applicable when the host has no MCP tool for the system, when local write-back is required, or when a true bidirectional merge is needed.
+
+### Correlation marker
+The identity a pushed record carries back to its local row: repository identity (`repo`), local issue id (`local`), and the pushing checkout's git author. Decoded last-match-wins; association is recorded in the ledger only, and an unmarked or foreign record is reported, never adopted by title or description. Prose is never identity.
+
 ## Agent list (dsh panel)
 
 ### Emphasis
