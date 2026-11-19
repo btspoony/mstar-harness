@@ -225,7 +225,11 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(result.exitCode).toBe(0);
       expect(scaffoldData(result).created).not.toContain(".gitignore (canonical harness snippet)");
       expect(scaffoldData(result).skipped).toContain(".gitignore (author-owned harness-root declaration)");
-      const rules = readFileSync(join(root, ".gitignore"), "utf8").split(/\r?\n/);
+      const preserved = readFileSync(join(root, ".gitignore"), "utf8");
+      expect(preserved).toContain("\r\n");
+      expect(preserved).not.toMatch(/(?<!\r)\n/);
+      expect(preserved.endsWith("\n")).toBe(false);
+      const rules = preserved.split(/\r?\n/);
       expect(rules).toContain("# authored policy");
       expect(rules.filter((line) => line === ".agents/**")).toHaveLength(2);
       expect(rules).toContain("!.agents/knowledge/**");
