@@ -96,6 +96,11 @@ function trustingContext(base: InvocationContext): ResolveContext {
 function fixtureRoot(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), "mcp-identity-"));
   roots.push(root);
+  // The per-call `harness` selector must be the fixed `.mstar` under a Git
+  // main worktree: a bare directory is refused before identity is checked.
+  mkdirSync(path.join(root, ".mstar"), { recursive: true });
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", "commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: root });
   return root;
 }
 
@@ -249,17 +254,15 @@ describe("MCP session identity", () => {
   });
 
   test("absent identity preserves active recovery usage and help", async () => {
-    // The connection DECLARES a root, so this call cannot be refused for a
-    // missing `harness`: the refusal asserted below is the identity one, not the
+    // The call NAMES its root, so this call cannot be refused for a missing
+    // `harness`: the refusal asserted below is the identity one, not the
     // unpinned-connection requirement wearing the same usage code.
-    const root = fixtureRoot();
-    const harness = path.join(root, ".mstar");
-    mkdirSync(harness, { recursive: true });
+    const fixture = await initializedHarness();
     const result = await registeredMcpCall(
       "session.recover",
-      recoveryInput(writeAttestation(root)),
-      context(root),
-      createContextResolver({ harnessRoot: harness }),
+      { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness },
+      context(fixture.root),
+      createContextResolver(),
     );
     expect(result).toMatchObject({ status: "usage", code: "command.invalid-input" });
     expect(result.details?.helpRoute).toBe("mstar session recover --help");
@@ -315,7 +318,7 @@ describe("MCP session identity", () => {
     process.env.MSTAR_HOST_SESSION_ID = "ambient-session";
     try {
       const fixture = await initializedHarness();
-      const resolver = createContextResolver({ harnessRoot: fixture.harness });
+      const resolver = createContextResolver();
       // The shipped connection has no identity channel: the per-call selector is
       // not published and no requirement advertises it. Neither ambient variable
       // supplies an identity, and no retired launcher property is left behind.
@@ -331,7 +334,7 @@ describe("MCP session identity", () => {
       const claimed = "ambient-session";
       const refused = await registeredMcpCall(
         "session.recover",
-        { ...recoveryInput(writeAttestation(fixture.root)), sessionId: claimed },
+        { ...recoveryInput(writeAttestation(fixture.root)), harness: fixture.harness, sessionId: claimed },
         context(fixture.root),
         resolver,
       );
@@ -345,7 +348,7 @@ describe("MCP session identity", () => {
       // source a caller can rely on.
       const bindRefused = await registeredMcpCall(
         "plan.bind",
-        { workflow: "wf-claimed", sessionId: claimed },
+        { workflow: "wf-claimed", harness: fixture.harness, sessionId: claimed },
         context(fixture.root),
         resolver,
       );
@@ -370,9 +373,9 @@ describe("MCP session identity", () => {
       // cannot admit, a key no action accepts, and the action's own missing
       // required inputs. The caller must see all of them at once instead of
       // spending an attempt per problem.
-      { sessionId: claimed, unknownKey: "typo" },
+      { harness: fixture.harness, sessionId: claimed, unknownKey: "typo" },
       context(fixture.root),
-      createContextResolver({ harnessRoot: fixture.harness }),
+      createContextResolver(),
     );
     // The identity frame is kept: the security fact is why the call cannot run.
     expect(refused).toMatchObject({ status: "refused", code: "mcp.caller-identity-unavailable" });
@@ -399,9 +402,9 @@ describe("MCP session identity", () => {
     const claimed = "live-coordinator-session";
     const refused = await registeredMcpCall(
       "plan.progress",
-      { workflow: "wf-claimed", plan: "plan-claimed", progress: { status: "InProgress", summary: "claimed write" }, sessionId: claimed },
+      { workflow: "wf-claimed", plan: "plan-claimed", progress: { status: "InProgress", summary: "claimed write" }, harness: fixture.harness, sessionId: claimed },
       context(fixture.root),
-      createContextResolver({ harnessRoot: fixture.harness }),
+      createContextResolver(),
     );
     expect(refused).toMatchObject({ status: "refused", code: "mcp.caller-identity-unavailable" });
     // The refusal names the CLI route and the known native gap honestly.
@@ -415,7 +418,7 @@ describe("MCP session identity", () => {
 
   test("the explicit opt-in is the only connection that publishes the selector", async () => {
     const fixture = await initializedHarness();
-    const trusted = await publishedMcpTool("session.recover", createContextResolver({ harnessRoot: fixture.harness, trustCallerSessionId: true }));
+    const trusted = await publishedMcpTool("session.recover", createContextResolver({ trustCallerSessionId: true }));
     expect(trusted.inputSchema.properties).toMatchObject({ sessionId: { type: "string" } });
     expect((trusted.inputSchema["x-mstar-requirements"] ?? []).map((entry) => entry.name)).toContain("sessionId");
     // The wire carries the per-action fact a host-side injector needs: this
@@ -423,9 +426,9 @@ describe("MCP session identity", () => {
     expect(trusted.inputSchema["x-mstar-selectors"]).toEqual([{ key: "sessionId", actions: ["recover"] }]);
     // The same launch without the opt-in publishes nothing, and the flag maps
     // to the resolver fact registration reads.
-    const shipped = createContextResolver({ harnessRoot: fixture.harness });
+    const shipped = createContextResolver();
     expect(shipped.callerIdentity).toBe(false);
-    expect(createContextResolver({ harnessRoot: fixture.harness, trustCallerSessionId: true }).callerIdentity).toBe(true);
+    expect(createContextResolver({ trustCallerSessionId: true }).callerIdentity).toBe(true);
   });
 
   test("invalid identity formats fail specifically at the shared safe-id guard", async () => {

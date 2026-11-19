@@ -1284,6 +1284,7 @@ test("a discovered workspace store stays reachable: upgrade imports into the sam
   // never a second, empty store at the workspace root.
   const repoRoot = join(ROOT, "git-root-reachable");
   mkdirSync(join(repoRoot, ".mstar"), { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: repoRoot });
   const discovered = resolveProcessHarnessDir(repoRoot);
   expect(discovered).toBe(join(repoRoot, ".mstar"));
   if (discovered === null) throw new Error("the workspace harness must be discoverable");

@@ -1338,9 +1338,17 @@ describe("mstar status validate — disclosed authority state", () => {
     expect(details.state).toBe("unreadable");
     expect(details.selfCheck?.couldNotRead).toContain("not a readable regular store file");
     // The self-check names supported verb families the operator can actually run,
-    // not an online restore of a store no reader can inventory.
-    expect(details.selfCheck?.recovery).toContain("mstar store init --harness");
-    expect(details.selfCheck?.recovery).toContain("mstar catalog discover --harness");
+    // not an online restore of a store no reader can inventory. It also states
+    // the fixed root: one checkout holds one process root, so a rebuild happens
+    // in a fresh clone, never beside `.mstarc`.
+    const recovery = details.selfCheck?.recovery ?? "";
+    expect(recovery).toContain("clone the repository into a fresh directory");
+    expect(recovery).toContain("mstar harness scaffold");
+    expect(recovery).toContain("mstar store init");
+    expect(recovery).toContain("mstar catalog discover");
+    expect(recovery).toContain("the harness root is fixed at <main worktree>/.mstar");
+    // The retired `--harness <root>` pinning is NOT the recovery any more.
+    expect(recovery).not.toContain("--harness");
   });
 });
 

@@ -96,11 +96,13 @@ function registerArgs(harness: string, extra: string[] = [], compassRef = COMPAS
   ];
 }
 
-/** Temp fixture harness; returns paths plus a byte-snapshot helper. */
+/** Temp fixture: a real Git main worktree whose fixed `<root>/.mstar` is the
+ * harness; returns the harness path plus a byte-snapshot helper. */
 async function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void | Promise<void>): Promise<void> {
-  const harness = mkdtempSync(join(tmpdir(), "mstar-iteration-register-"));
-  execFileSync("git", ["init", "-b", "main"], { cwd: harness, stdio: "ignore" });
-  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture source"], { cwd: harness, stdio: "ignore" });
+  const repo = mkdtempSync(join(tmpdir(), "mstar-iteration-register-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture source"], { cwd: repo, stdio: "ignore" });
+  const harness = join(repo, ".mstar");
   // Contract §4: the row pointers are resolved against `{PLAN_DIR}` and the
   // declaration is read, so the fixture owns the registered plan markdown.
   mkdirSync(join(harness, "plans"), { recursive: true });
@@ -128,7 +130,7 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
       snapshot: join(harness, "workflows", WORKFLOW_ID, "snapshot.json"),
     });
   } finally {
-    rmSync(harness, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
   }
 }
 

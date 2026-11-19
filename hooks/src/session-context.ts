@@ -38,40 +38,19 @@ function workspaceRoot(cwd: string): string {
   return cwd;
 }
 
-function parseMstarcHarnessDir(root: string): string | null {
+// The engine may be absent in a host that mounts only the hook; the dynamic
+// import keeps the hook inert instead of failing session start (same seam as
+// `summarizeExecutionAuthority` below).
+async function resolveHarnessDir(root: string): Promise<string | null> {
   try {
-    const text = fs.readFileSync(path.join(root, ".mstarc"), "utf8");
-    let inConfig = false;
-    for (const line of text.split(/\r?\n/)) {
-      const t = line.trim();
-      if (!t || t.startsWith("#") || t.startsWith(";")) continue;
-      const section = t.match(/^\[([^\]]+)\]$/);
-      if (section) {
-        inConfig = section[1].trim() === "config";
-        continue;
-      }
-      if (!inConfig) continue;
-      const kv = t.match(/^harness_dir\s*=\s*(.+)$/);
-      if (kv) return kv[1].trim().replace(/^["']|["']$/g, "");
-    }
+    const { readMainWorktree } = await import("@mstar-harness/engine");
+    const main = readMainWorktree(root);
+    if (main === null) return null;
+    const fixed = path.join(main.root, ".mstar");
+    return fs.statSync(fixed).isDirectory() ? fixed : null;
   } catch {
-    // no .mstarc at the workspace root — fall through to the default chain
+    return null;
   }
-  return null;
-}
-
-function resolveHarnessDir(root: string): string | null {
-  const declared = parseMstarcHarnessDir(root);
-  if (declared) return path.isAbsolute(declared) ? declared : path.join(root, declared);
-  for (const candidate of [".mstar", ".agents", ".plans", "plans"]) {
-    const dir = path.join(root, candidate);
-    try {
-      if (fs.statSync(dir).isDirectory()) return dir;
-    } catch {
-      // keep probing
-    }
-  }
-  return null;
 }
 
 async function summarizeExecutionAuthority(harnessDir: string): Promise<string> {
@@ -112,7 +91,7 @@ const input = readStdinJson();
 try {
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   const root = workspaceRoot(cwd);
-  const harnessDir = resolveHarnessDir(root);
+  const harnessDir = await resolveHarnessDir(root);
   if (!harnessDir) process.exit(0);
 
   const context = [

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import cliManifest from "../package.json" with { type: "json" };
 import engineManifest from "../../engine/package.json" with { type: "json" };
 import { getCommandDefinitions } from "@mstar-harness/commands";
-import { resolveProcessHarnessDir } from "@mstar-harness/engine";
+import { HarnessRootRetiredError, resolveProcessHarnessDir } from "@mstar-harness/engine";
 import { Command, CommanderError, Option } from "commander";
 import path from "node:path";
 import pc from "picocolors";
@@ -275,9 +275,29 @@ const invocationCwd = process.env.MSTAR_CLI_PROJECT_ROOT === undefined || proces
   ? process.cwd()
   : path.resolve(process.env.MSTAR_CLI_PROJECT_ROOT);
 
+// A retired selector is a configuration refusal, not a module-load crash:
+// emit the typed envelope so a caller (and the MCP transport) sees the cause
+// and its recovery instead of a stack trace with empty stdout.
+let controlRoot: string | null = null;
+try {
+  controlRoot = resolveProcessHarnessDir(invocationCwd);
+} catch (error) {
+  if (!(error instanceof HarnessRootRetiredError)) throw error;
+  console.log(JSON.stringify({
+    version: 1,
+    command: "cli",
+    status: "refused",
+    code: error.code,
+    exitCode: 1,
+    message: error.message,
+    details: error.details,
+  }));
+  process.exit(1);
+}
+
 registerCliCommands(program, getCommandDefinitions(), {
   cwd: invocationCwd,
-  controlRoot: resolveProcessHarnessDir(invocationCwd),
+  controlRoot,
   versions: reportSurfaceVersions,
 });
 registerMcpCommand(program);

@@ -24,11 +24,12 @@
  * | `project_dir`  | `{PROJECT_DIR}`   | `resolveProjectDir`             |
  * | `enforcement`  | hard-gate policy  | `resolveRepoEnforcement`        |
  *
- * Resolution precedence (plan-conventions § {HARNESS_DIR} 解析顺序):
- * explicit `opts.harnessDir` / `MSTAR_HARNESS_DIR` wins, then `.mstarc`,
- * then the probe. Sub-directory keys are honored by the engine resolvers
- * when the nearest `.mstarc` sits at the harness dir or its parent (the
- * repo root — the documented `.mstarc` home). `enforcement` follows the
+ * Resolution: the harness root is fixed at `<git main worktree root>/.mstar`;
+ * `.mstarc` no longer declares it (`harness_dir` is refused), and
+ * `MSTAR_HARNESS_DIR` is retired. The sub-directory keys below still resolve
+ * from the nearest `.mstarc`. Sub-directory keys are honored by the engine
+ * resolvers when the nearest `.mstarc` sits at the harness dir or its parent
+ * (the repo root — the documented `.mstarc` home). `enforcement` follows the
  * same discovery: `hard` / `soft` (anything else is ignored) — the
  * repo-declared hard-gate policy, composed below the explicit Config /
  * Assignment flag and above the iteration compass.

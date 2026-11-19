@@ -57,6 +57,8 @@ const STRIPPED_ENV = [
   "MSTAR_HOST_SESSION_ID",
   "MSTAR_EXECUTION_IDENTITY",
   "MSTAR_WRITE_GATE",
+  "MSTAR_LEAF_SEAT",
+  "DSH_MSTAR_LEAF_SEAT",
 ];
 
 const roots = [];
@@ -104,7 +106,9 @@ function startMcpServer(fixture, { trustCallerSessionId = true } = {}) {
     if (STRIPPED_ENV.includes(key)) continue;
     env[key] = value;
   }
-  env.MSTAR_HARNESS_DIR = fixture.harness;
+  // The server carries no connection root, and the engine derives the fixed
+  // `<git main worktree>/.mstar` from the child's cwd (fixture.root), so no
+  // root pin is set or honored here.
   const child = spawn(process.execPath, [CLI_ENTRY, "mcp", ...(trustCallerSessionId ? ["--trust-caller-session-id"] : [])], { cwd: fixture.root, env, stdio: ["pipe", "pipe", "pipe"] });
   const pending = [];
   let buffer = "";
@@ -301,7 +305,7 @@ test("T4: stdio MCP chain - identity-free shared connection, per-call injected i
     // Integration lease facts are part of the surviving worktree check surface.
 
     // --- the authority's own coordinator truth -------------------------------
-    const db = new DatabaseSync(join(fixture.harness, "store.db"), { readOnly: true });
+    const db = new DatabaseSync(join(fixture.harness, "store.db"), { readOnly: false });
     try {
       const coordinatorRow = db
         .prepare("select session_id, role, state from execution_sessions where workflow_id = ?")
@@ -373,7 +377,7 @@ test("default connection: a real child publishes no identity and refuses a calle
 
 /** The workflow header's creator attribution, read straight from the store. */
 function creatorOf(harness, workflowId) {
-  const db = new DatabaseSync(join(harness, "store.db"), { readOnly: true });
+  const db = new DatabaseSync(join(harness, "store.db"), { readOnly: false });
   try {
     return db.prepare("select creator_session_id from execution_workflows where workflow_id = ?").get(workflowId)?.creator_session_id;
   } finally {

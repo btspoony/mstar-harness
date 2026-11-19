@@ -123,7 +123,7 @@ Minor findings → `## Minor (for plan QC)` section in same file.
 
 ## CLI
 
-The SDD helpers are engine-backed commands under **`mstar sdd`**（引擎 CLI；原 bash 脚本已移除，行为语义不变）。Run the `mstar` binary from any checkout; env vars `MSTAR_CONTROL_ROOT` / `MSTAR_HARNESS_DIR` / `SDD_DIR` are honored exactly as before.
+The SDD helpers are engine-backed commands under **`mstar sdd`**（引擎 CLI；原 bash 脚本已移除，行为语义不变）。Run the `mstar` binary from any checkout; `MSTAR_CONTROL_ROOT` / `SDD_DIR` remain honored, while `MSTAR_HARNESS_DIR` is retired (setting it is refused).
 
 | Command | Usage |
 |--------|--------|

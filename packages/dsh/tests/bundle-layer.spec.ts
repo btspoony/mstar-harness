@@ -311,7 +311,8 @@ describe('the shipped mstar-mcp row, launched', () => {
       expect(refused.result?.isError).toBe(true)
       const text = (refused.result?.content ?? []).map((block) => block.text ?? '').join('\n')
       expect(text).toContain('mcp.control-root-unresolved')
-      expect(text).toContain('--harness')
+      // The fixed-root recovery names the `harness` selector + controlHarnessDir.
+      expect(text).toContain('`harness` selector')
     } finally {
       server.stop()
       rmSync(cwd, { recursive: true, force: true })

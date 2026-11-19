@@ -5,7 +5,7 @@
  * never disables enforcement.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveHarnessDir } from "../src/path.js";
@@ -13,7 +13,7 @@ import { resolveHarnessDir } from "../src/path.js";
 const roots: string[] = [];
 
 function dir(): string {
-  const root = mkdtempSync(join(tmpdir(), "probe-failure-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "probe-failure-")));
   roots.push(root);
   mkdirSync(join(root, ".mstar"), { recursive: true });
   return root;

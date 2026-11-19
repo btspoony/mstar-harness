@@ -20,9 +20,10 @@
  * micro-batch ≤ 3, fresh fallback, reviewers never sticky):
  * `skills/mstar-sdd/references/sticky-implementer-session.md` +
  * SKILL.md red flag "Resume implementer without host_agent_id".
- * - Harness-root override (`MSTAR_HARNESS_DIR` env / option) in addition
- * to CONTROL_ROOT, because the status.json probe only knows `.mstar`/`.agents`
- * and misses repos with another root.
+ * - Harness root: fixed at `<main worktree>/.mstar` (ADR
+ * `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`);
+ * `MSTAR_HARNESS_DIR` is ignored by the engine and `opts.harnessDir`
+ * must equal the fixed root.
  */
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -49,6 +50,7 @@ import {
   type ImplementerSessionLedger,
   type SddExecutionContext,
 } from "../src/sdd.js";
+import { HarnessRootRetiredError } from "../src/index.js";
 
 const MSTAR_CONTROL_ROOT = "MSTAR_CONTROL_ROOT";
 const MSTAR_HARNESS_DIR = "MSTAR_HARNESS_DIR";
@@ -311,9 +313,9 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
 
   test("resolves a harness dir without status.json (the retired file probe no longer gates resolution)", () => {
  // issue #428 retires the `status.json`/`workflows/<id>/snapshot.json`
- // harness probe: a harness dir is resolved by location (`.mstar` first,
- // then `.agents`); its authority is the store inside it, not a file
- // marker. An existing `.mstar` dir resolves without any retired file.
+ // harness probe: a harness dir is resolved by fixed location
+ // (`<main worktree>/.mstar`); its authority is the store inside it, not
+ // a file marker. An existing `.mstar` dir resolves without any file.
     const root = tmpRoot("sdd-ws-snapshot-");
     try {
       git(["init", "-q"], root);
@@ -324,13 +326,10 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
       rmSync(root, { recursive: true, force: true });
     }
   });
-
 // The `.mstarc` `[config] workflow_dir` snapshot probe retired with the
-// file route (issue #428): harness resolution is location-based
-// (`.mstarc harness_dir` → existing `.mstar` → `.agents`), and no probe
-// reads `workflows/<id>/snapshot.json` for authority anymore. The
-// dir-existence order (`.mstar` before `.agents`) is asserted by the
-// status.json-less case above.
+// file route (issue #428): the harness root is the fixed `<main
+// worktree>/.mstar`, and no probe reads `workflows/<id>/snapshot.json`
+// for authority anymore.
 
   test("honors the CONTROL_ROOT option (CLI 2nd arg) and MSTAR_CONTROL_ROOT env", () => {
     const control = tmpRoot("sdd-ws-control-");
@@ -376,7 +375,7 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
     }
   });
 
-  test("harness override from a linked checkout resolves against the main root, never the feature checkout", () => {
+  test("a matching opts.harnessDir assertion resolves inside the main root, never the feature checkout", () => {
     const main = tmpRoot("sdd-ws-guard-");
     const parent = tmpRoot("sdd-ws-guard-parent-");
     try {
@@ -384,19 +383,16 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
       const linked = join(parent, "linked");
       mkdirSync(dirname(linked), { recursive: true });
       git(["worktree", "add", "-q", linked, "-b", "feature/guarded"], main);
-      withEnv(MSTAR_HARNESS_DIR, ".custom-root", () => {
-        const dir = sddWorkspace("plan-1", { cwd: linked });
-        expect(dir).toBe(realpathSync(join(main, ".custom-root", "sdd", "plan-1")));
-        expect(existsSync(join(linked, ".custom-root"))).toBe(false);
-        expect(existsSync(join(linked, ".mstar"))).toBe(false);
-      });
+      const dir = sddWorkspace("plan-1", { cwd: linked, harnessDir: join(main, ".mstar") });
+      expect(dir).toBe(realpathSync(join(main, ".mstar", "sdd", "plan-1")));
+      expect(existsSync(join(linked, ".mstar"))).toBe(false);
     } finally {
       rmSync(main, { recursive: true, force: true });
       rmSync(parent, { recursive: true, force: true });
     }
   });
 
-  test("an override redirecting the process SSOT into the linked checkout is refused and writes nowhere", () => {
+  test("an assertion pointing at the linked checkout is refused and writes nowhere", () => {
     const main = tmpRoot("sdd-ws-redirect-");
     const parent = tmpRoot("sdd-ws-redirect-parent-");
     try {
@@ -404,13 +400,12 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
       const linked = join(parent, "linked");
       mkdirSync(dirname(linked), { recursive: true });
       git(["worktree", "add", "-q", linked, "-b", "feature/redirect"], main);
-      withEnv(MSTAR_HARNESS_DIR, join(linked, "harness-redirect"), () => {
-        const err = errOf(() => sddWorkspace("plan-1", { cwd: main }));
-        expect(err.exitCode).toBe(1);
-        expect(err.message).toContain("linked");
-        expect(existsSync(join(linked, "harness-redirect"))).toBe(false);
-        expect(existsSync(join(linked, ".mstar"))).toBe(false);
-      });
+      const err = errOf(() => sddWorkspace("plan-1", { cwd: main, harnessDir: join(linked, "harness-redirect") }));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain(".mstar");
+      expect(existsSync(join(linked, "harness-redirect"))).toBe(false);
+      expect(existsSync(join(linked, ".mstar"))).toBe(false);
+      expect(existsSync(join(main, ".mstar"))).toBe(false);
     } finally {
       rmSync(main, { recursive: true, force: true });
       rmSync(parent, { recursive: true, force: true });
@@ -485,17 +480,12 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
     }
   });
 
-  test("harness-root override: MSTAR_HARNESS_DIR picks a non-probed root (plan finding 2026-08-08)", () => {
+  test("MSTAR_HARNESS_DIR is ignored: the workspace resolves the fixed .mstar root", () => {
     const root = tmpRoot("sdd-ws-harness-");
     try {
       git(["init", "-q"], root);
       mkdirSync(join(root, ".custom-root"), { recursive: true });
       withEnv(MSTAR_HARNESS_DIR, ".custom-root", () => {
-        const dir = sddWorkspace("plan-1", { cwd: root });
-        expect(dir).toBe(realpathSync(join(root, ".custom-root", "sdd", "plan-1")));
-      });
-      withEnv(MSTAR_HARNESS_DIR, undefined, () => {
- // no probed harness and not a linked worktree → default .mstar
         const dir = sddWorkspace("plan-1", { cwd: root });
         expect(dir).toBe(realpathSync(join(root, ".mstar", "sdd", "plan-1")));
       });
@@ -504,29 +494,61 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
     }
   });
 
-  test("override wins over CONTROL_ROOT probing (non-probed control repo root)", () => {
+  test("an opts.harnessDir assertion must equal the fixed root; a mismatch refuses", () => {
     const control = tmpRoot("sdd-ws-override-");
     try {
       git(["init", "-q"], control);
-      mkdirSync(join(control, ".custom-root"), { recursive: true });
-      withEnv(MSTAR_HARNESS_DIR, ".custom-root", () => {
-        const dir = sddWorkspace("plan-1", { cwd: control, controlRoot: control });
-        expect(dir).toBe(realpathSync(join(control, ".custom-root", "sdd", "plan-1")));
-      });
+      const dir = sddWorkspace("plan-1", { cwd: control, controlRoot: control, harnessDir: join(control, ".mstar") });
+      expect(dir).toBe(realpathSync(join(control, ".mstar", "sdd", "plan-1")));
+      const err = errOf(() =>
+        sddWorkspace("plan-2", { cwd: control, controlRoot: control, harnessDir: join(control, ".custom-root") }),
+      );
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain(".mstar");
     } finally {
       rmSync(control, { recursive: true, force: true });
     }
   });
 
-  test("`.mstarc` [config] harness_dir picks the declared root (no override needed)", () => {
+  test("`.mstarc` [config] harness_dir refuses, naming the line and recovery", () => {
     const control = tmpRoot("sdd-ws-rc-");
     try {
       git(["init", "-q"], control);
       writeFileSync(join(control, ".mstarc"), "[config]\nharness_dir=.custom-root\n");
-      withEnv(MSTAR_HARNESS_DIR, undefined, () => {
-        const dir = sddWorkspace("plan-1", { cwd: control, controlRoot: control });
-        expect(dir).toBe(realpathSync(join(control, ".custom-root", "sdd", "plan-1")));
-      });
+      let err: unknown;
+      try {
+        sddWorkspace("plan-1", { cwd: control, controlRoot: control });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(HarnessRootRetiredError);
+      const message = (err as HarnessRootRetiredError).message;
+      expect(message).toContain("harness_dir");
+      expect(message).toContain(join(control, ".mstarc"));
+      expect(existsSync(join(control, ".custom-root"))).toBe(false);
+      expect(existsSync(join(control, ".mstar"))).toBe(false);
+    } finally {
+      rmSync(control, { recursive: true, force: true });
+    }
+  });
+
+  test("a legacy-only control checkout refuses, naming scaffold and upgrade", () => {
+    const control = tmpRoot("sdd-ws-legacy-");
+    try {
+      git(["init", "-q"], control);
+      mkdirSync(join(control, ".agents"));
+      let err: unknown;
+      try {
+        sddWorkspace("plan-1", { cwd: control, controlRoot: control });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(HarnessRootRetiredError);
+      const message = (err as HarnessRootRetiredError).message;
+      expect(message).toContain(".agents");
+      expect(message).toContain("mstar harness scaffold");
+      expect(message).toContain("mstar store upgrade");
+      expect(existsSync(join(control, ".mstar"))).toBe(false);
     } finally {
       rmSync(control, { recursive: true, force: true });
     }
@@ -712,22 +734,19 @@ describe("engine helper contracts (bash originals removed in slice 5 — behavio
     }
   });
 
-  test("sddWorkspace harness override lands on the real harness root (plan finding)", () => {
+  test("sddWorkspace lands on the fixed root regardless of a stale env pin (plan finding)", () => {
     const control = tmpRoot("sdd-override-control-");
     try {
       git(["init", "-q"], control);
       mkdirSync(join(control, ".custom-root"), { recursive: true });
- // The status.json probe misses non-probed roots → the explicit override
- // (MSTAR_HARNESS_DIR) is required to land on the real harness root.
       withEnv(MSTAR_HARNESS_DIR, ".custom-root", () => {
         const tsDir = sddWorkspace("parity-plan", { cwd: control, controlRoot: control });
-        expect(tsDir).toBe(realpathSync(join(control, ".custom-root", "sdd", "parity-plan")));
+        expect(tsDir).toBe(realpathSync(join(control, ".mstar", "sdd", "parity-plan")));
       });
     } finally {
       rmSync(control, { recursive: true, force: true });
     }
   });
-
 
   test("reviewPackage includes the selected commit range, file summary and diff", () => {
     const root = tmpRoot("sdd-rp-contract-");

@@ -321,7 +321,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
   // Disposition: only legacy status.json/snapshot.json transport assertions were removed; the ACTIVE graph's consumer rendering rules remain tested below.
   async function activeDigest(plans: Array<{ id: string; title: string; status: string }>): Promise<string> {
     const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-active-'))
-    await seedActiveWorkflow(join(root, 'harness'), 'prompt-digest', plans, {}, 'seed-prompt-digest', root)
+    await seedActiveWorkflow(join(root, '.mstar'), 'prompt-digest', plans, {}, 'seed-prompt-digest', root)
     booted = await bootApp({ root })
     const assembly = await assembleWithEngineStatus(booted.ctx)
     return assembly.contexts.find((context) => context.name === ENGINE_STATUS_CONTEXT_NAME)!.text
@@ -383,7 +383,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     // so after host-side context compaction this digest is the only always-on
     // channel for the two facts a phase-transition / PR-base decision needs.
     const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-gate-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     const COMPASS_REL = 'iterations/iter-digest/delivery-compass.md'
     await seedActiveWorkflow(harnessDir, 'iter-digest', [
       { id: 'plan-todo', title: 'Todo plan', file: 'plans/plan-todo.md', status: 'Todo' },
@@ -492,7 +492,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
 
   it('(h) enforcement word is live — a hard steering compass renders `enforcement: hard` in the section text (soft covered by (a))', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-enforcement-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'iterations/v2.2.0/delivery-compass.md': RICH_COMPASS,
@@ -608,7 +608,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     // Boot workspace, store-backed: the outer `await refresh(bootHarnessDir)`
     // primes exactly this key, so its FIRST assembly is already store-backed.
     const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-first-render-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'boot-workflow', [
       { id: 'boot-plan', title: 'Boot plan', status: 'Todo' },
     ], {}, 'seed-boot-workflow', root)
@@ -622,7 +622,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     // composition mounts the service directly with a PROBING resolver (the (f)
     // pattern): its boot value is `null`, so the per-agent key is a memo miss.
     const otherRoot = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-first-render-ws-'))
-    const otherHarnessDir = join(otherRoot, 'harness')
+    const otherHarnessDir = join(otherRoot, '.mstar')
     await seedActiveWorkflow(otherHarnessDir, 'other-workflow', [
       { id: 'other-plan', title: 'Other plan', status: 'Todo' },
     ], {}, 'seed-other-workflow', otherRoot)

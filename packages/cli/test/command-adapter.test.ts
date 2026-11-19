@@ -1,10 +1,11 @@
 // Build prerequisite: run `bun run --cwd packages/commands build` before this package test.
 // These adapter tests load @mstar-harness/commands through its generated package entry.
 
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import {
@@ -14,7 +15,14 @@ import {
 } from "@mstar-harness/engine";
 import { registerMcpCommand } from "../src/mcp/command";
 import { decodePayloadInputs, mapParserError, registerCliCommands, renderCommandContract, resolveCliSessionIdentity } from "../src/command-adapter";
+import { clearIdentityChannels, IDENTITY_CHANNELS, restoreIdentityChannels } from "./harness";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
+
+// Every case here runs in-process, so an ambient leaf-seat or session marker
+// exported by the invoking shell would authorize/refuse the call instead of the
+// state the case sets. Clear them per case and restore the shell's after.
+beforeEach(clearIdentityChannels);
+afterEach(restoreIdentityChannels);
 
 
 function context(): InvocationContext {
@@ -36,14 +44,18 @@ function context(): InvocationContext {
  * One isolated issue harness with an initialized store whose writer is sealed
  * (the sibling fixture pattern): the registered CLI opens the store read-only,
  * and a just-closed writer's deferred cleanup can otherwise race that open.
+ * The checkout is a real Git main worktree: the fixed harness root is derived
+ * from it, never from an env pin.
  */
 async function cliHarness(): Promise<{ root: string; harness: string; invocation: InvocationContext }> {
   const root = mkdtempSync(path.join(os.tmpdir(), "cli-adapter-issue-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
   const harness = path.join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   (await initializeStore({ harnessDir: harness })).close();
   (await openStore({ harnessDir: harness }, "read")).close();
-  return { root, harness, invocation: { ...context(), cwd: root, controlRoot: harness } };
+  return { root, harness, invocation: { ...context(), cwd: root, controlRoot: root } };
 }
 
 async function run(
@@ -91,12 +103,14 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("Usage: mstar mcp");
   expect(result.stdout).toContain("Run the Morning Star MCP server over stdio");
-  expect(result.stdout).toContain("--harness <path>");
+  // The connection carries no harness root: the root is fixed at
+  // `<git main worktree>/.mstar` and each relevant call passes `harness`.
+  expect(result.stdout).not.toContain("--harness <path>");
+  expect(result.stdout).not.toContain("MSTAR_HARNESS_DIR");
+  expect(result.stdout).toContain("--workspace <path>");
   // The shared connection has no identity channel: the retired flag must not
   // be advertised anywhere.
   expect(result.stdout).not.toContain("--identity-env");
-  expect(result.stdout).toContain("PINS this connection");
-  expect(result.stdout).toContain("MSTAR_HARNESS_DIR");
 });
 
 /**
@@ -106,7 +120,7 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
  * restores every source it touched, matching the suite's isolation pattern.
  */
 describe("CLI session identity — native DSH source", () => {
-  const sources = ["MSTAR_EXECUTION_IDENTITY", "DSH_SESSION_ID", "MSTAR_HOST_SESSION_ID"] as const;
+  const sources = ["MSTAR_EXECUTION_IDENTITY", "DSH_SESSION_ID", "MSTAR_HOST_SESSION_ID", ...IDENTITY_CHANNELS] as const;
   function scrubbed(): () => void {
     const saved = sources.map((key) => [key, process.env[key]] as const);
     for (const key of sources) delete process.env[key];
@@ -1000,7 +1014,7 @@ import { once } from "node:events";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { spyOn } from "bun:test";
 import { opencodeAdapter } from "../src/adapters/opencode";
 import { HOST_PRESENCE_BINARIES, ensureHostPresent, HostPresenceRefusal } from "../src/adapters/host-presence";
 import { OpencodeVersionProbeRefusal, probeOpencodeGeneration } from "../src/adapters/opencode-version-probe";

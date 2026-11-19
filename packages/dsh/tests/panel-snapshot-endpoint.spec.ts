@@ -21,7 +21,9 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 // The `agent/pre-step` event declaration (the emission site's own typing).
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
-import { bootApp, seedActiveWorkflow, seedStore, type BootResult } from './harness.ts'
+import { bootApp, seedActiveWorkflow, seedStore, usePlainCwd, type BootResult } from './harness.ts'
+
+usePlainCwd()
 import {
   PANEL_SNAPSHOT_SERVICE,
   installPanelSnapshotEndpoint,

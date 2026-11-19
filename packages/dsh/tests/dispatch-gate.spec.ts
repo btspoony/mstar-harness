@@ -25,7 +25,9 @@ import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { assignmentHeaderRegion } from '@mstar-harness/engine'
 import { foldedFamilyToolName, getCommandDefinitions, isCoordinatorSeatCommand } from '@mstar-harness/commands'
-import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+import { useCleanControlRoot, bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+
+useCleanControlRoot()
 import * as entry from '../src/index.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'

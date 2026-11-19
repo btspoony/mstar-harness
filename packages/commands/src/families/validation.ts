@@ -659,7 +659,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
               severity: "high",
               code: "compound.catalog.unresolved-harness",
               message: `no {HARNESS_DIR} resolves for this invocation, so the knowledge catalog completeness of ${knowledgeDir} cannot be asserted`,
-              fix: "run this command from a workspace that declares a harness root (.mstar / .agents, MSTAR_HARNESS_DIR), or mount the MCP server with --harness <harness-dir>; catalog completeness is a store.db query",
+              fix: "run this command from the repository that owns the fixed harness root (<main worktree>/.mstar); catalog completeness is a store.db query",
             });
           } else {
             // The completeness query discovers bodies and matches catalog rows

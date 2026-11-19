@@ -11,6 +11,7 @@
  * asserts the exit code + printed output.
  */
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -553,8 +554,11 @@ describe("mstar pr-review tally", () => {
 describe("mstar pr-review report-path", () => {
   test("--reviews-dir defaults to {REVIEW_DIR} under the discovered harness dir", () => {
     withTempDir((dir) => {
+      // cwd = a real Git main worktree whose fixed root is <cwd>/.mstar, so
+      // {REVIEW_DIR} = <cwd>/.mstar/reviews.
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+      execFileSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
       mkdirSync(join(dir, ".mstar"), { recursive: true });
-      // cwd = a harness root → {REVIEW_DIR} = <cwd>/.mstar/reviews
       const result = runCli(["pr-review", "report-path", "--target", "pr:134", "--date", "2026-08-24"], { cwd: dir });
       expect(result.exitCode).toBe(0);
       // macOS resolves /var to /private/var: the CLI path derives from the realpath'd cwd.

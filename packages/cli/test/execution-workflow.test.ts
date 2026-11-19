@@ -79,12 +79,12 @@ function writeJson(path: string, value: unknown): void {
   writeText(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-/** Run the shared runner against this fixture's root, harness and identity. */
+/** Run the shared runner against this fixture's root and identity. The root is
+ * the fixture checkout the child runs in, never an env pin. */
 function runCli(args: string[], fixture: Fixture, identity?: ExecutionIdentity): RunResult {
   return spawnCli(args, {
     cwd: fixture.root,
     env: {
-      MSTAR_HARNESS_DIR: fixture.harnessDir,
       ...(identity === undefined ? {} : { MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(identity) }),
     },
   });

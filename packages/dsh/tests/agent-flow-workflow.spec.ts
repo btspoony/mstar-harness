@@ -28,7 +28,7 @@ afterEach(async () => {
 async function activeFixture() {
   const root = await mkdtemp(join(tmpdir(), 'dsh-workflow-events-native-'))
   roots.push(root)
-  const harnessDir = join(root, '.agents')
+  const harnessDir = join(root, '.mstar')
   await seedActiveWorkflow(harnessDir, 'wf-1', [], {}, 'session-1', root)
   return { root, harnessDir, workflowDir: join(harnessDir, 'workflows', 'wf-1'), selectedGeneration: selectedGenerationFor(harnessDir) }
 }
@@ -656,7 +656,7 @@ describe('workflow event native acceptance and scan bound', () => {
   it('attributes native workflow evidence to the selected id, not a nested directory basename', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-workflow-selected-id-'))
     roots.push(root)
-    const harnessDir = join(root, '.agents')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-a', [], {}, 'session-a', root)
     await seedActiveWorkflow(harnessDir, 'current', [], {}, 'session-current', root)
     const selectedGeneration = selectedGenerationFor(harnessDir)
@@ -698,6 +698,6 @@ describe('workflow event native acceptance and scan bound', () => {
   it('does not fabricate an event projection when native authority is unavailable', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-workflow-events-unavailable-'))
     roots.push(root)
-    expect(readAgentFlow(join(root, '.agents', 'workflows', 'wf-1'), 'wf-1')).toBeNull()
+    expect(readAgentFlow(join(root, '.mstar', 'workflows', 'wf-1'), 'wf-1')).toBeNull()
   })
 })

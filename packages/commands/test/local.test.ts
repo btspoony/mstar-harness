@@ -40,9 +40,9 @@ import { linkedWorktreeOf } from "../src/families/local.js";
 
 const previousProjectRoot = process.env.MSTAR_CLI_PROJECT_ROOT;
 const fixtures: string[] = [];
-// Every path.resolve case here probes from a start directory, so an exported
-// harness override would short-circuit the probe and make the result depend on
-// the caller's shell. Clear it per test and restore it afterwards.
+// Every path.resolve case here probes from a start directory. The retired
+// MSTAR_HARNESS_DIR is ignored by the engine, but clearing it keeps the
+// fixture independent of a caller shell that still exports it.
 let previousHarnessDir: string | undefined;
 
 beforeEach(() => {
@@ -97,8 +97,12 @@ describe("shared host-health helpers", () => {
   });
 
   test("path resolve reports reviewDir, honoring a .mstarc review_dir override outside the harness", async () => {
-    const root = fixture();
-    writeText(root, ".mstarc", "[config]\nharness_dir=.mstar\nreview_dir=process/reviews\n");
+    // The harness root is fixed at the Git main worktree's `.mstar`, so the
+    // fixture is a real repo; `.mstarc` keeps only the review_dir override
+    // (`harness_dir` is retired) and realpath keeps the /private/var spelling.
+    const root = realpathSync(fixture());
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    writeText(root, ".mstarc", "[config]\nreview_dir=process/reviews\n");
     mkdirSync(path.join(root, ".mstar"), { recursive: true });
     const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
     expect(definition).toBeDefined();
@@ -195,7 +199,9 @@ describe("shared host-health helpers", () => {
         workflowDir: path.join(controlHarness, "workflows"),
         projectDir: path.join(controlHarness, "projects"),
         reviewDir: path.join(controlHarness, "reviews"),
-        local: { harnessDir: path.join(realpathSync(linked), ".agents") },
+        // The linked checkout carries `.agents/plugins/` only: `.agents/` is a
+        // retired harness candidate, so its own probe resolves no harness.
+        local: { harnessDir: null },
       },
     });
 
@@ -439,8 +445,8 @@ describe("shared host-health helpers", () => {
     const orphan = path.join(realpathSync(fixture()), "orphan");
     mkdirSync(orphan, { recursive: true });
     // A `.git` FILE is the linked-checkout marker; its gitdir points nowhere,
-    // so no main worktree can be read from it. The file-level beforeEach has
-    // already cleared MSTAR_HARNESS_DIR, which would short-circuit the walk.
+    // so no main worktree can be read from it. MSTAR_HARNESS_DIR is retired
+    // and ignored, so nothing short-circuits the walk.
     writeText(orphan, ".git", "gitdir: /nonexistent/mstar-fixture.git\n");
     const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
     expect(definition).toBeDefined();
@@ -1023,13 +1029,15 @@ describe("zcode host health", () => {
 });
 describe("trusted root, author.declared ignore, and host capability", () => {
   test("trusted root path reads resolve without Git root discovery", () => {
-    const root = fixture();
+    // localProbe is the caller's own checkout probe: it reads only the fixed
+    // `.mstar` candidate inside the supplied boundary and never calls Git.
+    const root = realpathSync(fixture());
     const nested = path.join(root, "nested");
     const harness = path.join(root, ".mstar");
     mkdirSync(nested, { recursive: true });
     mkdirSync(harness);
-    expect(resolveHarnessDir(nested, { workspaceRoot: root })).toBe(harness);
-    expect(resolveWorkflowDir(nested, { workspaceRoot: root })).toBe(path.join(harness, "workflows"));
+    expect(resolveHarnessDir(nested, { localProbe: true, workspaceRoot: root })).toBe(harness);
+    expect(resolveWorkflowDir(nested, { localProbe: true, workspaceRoot: root })).toBe(path.join(harness, "workflows"));
   });
 
   test("author.declared ignore policy is retained during scaffold", async () => {

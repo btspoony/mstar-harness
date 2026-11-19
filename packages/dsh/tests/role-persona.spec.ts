@@ -54,8 +54,11 @@ import {
   FakeSubagentService,
   bootApp,
   startActivationViaNativeChannel,
+  usePlainCwd,
   type BootResult,
 } from './harness.ts'
+
+usePlainCwd()
 import {
   ROLE_PERSONA_LOGGER,
   ROLE_PERSONA_WRAPPER_BRAND,
@@ -381,7 +384,7 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     let handed: unknown
     try {
       await ctx.plugin(MinimalSubagents as Parameters<Context['plugin']>[0])
-      const fiber = await ctx.plugin(plugin, { harnessDir: join(root, 'harness'), rolePresets: { [EXECUTE_AS]: PRESET_ID } })
+      const fiber = await ctx.plugin(plugin, { harnessDir: join(root, '.mstar'), rolePresets: { [EXECUTE_AS]: PRESET_ID } })
       // Registered AFTER the channel (which prepends), so this composes INSIDE
       // the channel's `next()` and hands it a value whose `startActivation`
       // property access throws.
@@ -622,7 +625,7 @@ async function bootWithRecording(rolePresets: Record<string, string>): Promise<{
   new FakeLoaderRegistry(ctx)
   new FakeAgentPresetRegistry(ctx, { declared: [PRESET_ID, PRESET_ID_ALT] })
   const service = new RecordingSubagents(ctx)
-  await ctx.plugin(plugin, { harnessDir: join(root, 'harness'), rolePresets })
+  await ctx.plugin(plugin, { harnessDir: join(root, '.mstar'), rolePresets })
   return {
     ctx,
     service,

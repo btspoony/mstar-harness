@@ -44,7 +44,9 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { DispatchGateAdvisory, SeamLintAdvisory, SkillLintAdvisory } from '../src/index.ts'
 import { DshHostAdapter, readAgentFlow } from '../src/index.ts'
-import { bootApp, executeToolCall, isCiEnvironment, LOCAL_SKILL_MOUNT_SKIP_REASON, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, executeToolCall, isCiEnvironment, LOCAL_SKILL_MOUNT_SKIP_REASON, seedActiveWorkflow, seedHarness, usePlainCwd, type BootResult } from './harness.ts'
+
+usePlainCwd()
 import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
@@ -377,7 +379,7 @@ describe('seam gates — broken DESIGN.md flagged on write', () => {
 describe('agent/pre-step — one unified engine-status row (iteration gate + state)', () => {
   it('boot with status + steering compass → pre-step composes ONE unified row (iteration-gate + state sections)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-e2e-prestep-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     // The ACTIVE workflow snapshot carries the sole compass link.
     await seedActiveWorkflow(harnessDir, 'e2e-iter', [
       { id: 'fixture-plan-1', title: 'Fixture plan', status: 'Todo', file: 'plans/fixture.md' },

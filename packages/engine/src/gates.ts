@@ -23,10 +23,10 @@
  */
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { readJson, type ValidationResult } from "./core.js";
-import { resolveProcessHarnessDir } from "./coordination.js";
-import { resolveHarnessDir, resolveProjectDir, resolveWorkflowDir } from "./path.js";
+import { realpathNearest } from "./git-probe.js";
+import { canonicalizeNearestExisting, resolveHarnessDir, resolveProjectDir, resolveWorkflowDir } from "./path.js";
 import { validateStatus, type StatusV2Doc } from "./status.js";
+import { readJson, type ValidationResult } from "./core.js";
 import { validateWorkflowSnapshot } from "./workflow.js";
 import { validateProjectRegister } from "./project.js";
 
@@ -93,10 +93,11 @@ function hasHarnessRootMarkers(dir: string): boolean {
 /**
  * True when `dir` ITSELF is a harness root: the v2 coordination-document
  * markers above, or the root `resolveHarnessDir` answers from the
- * directory's PARENT (a declared `.mstarc harness_dir` / `MSTAR_HARNESS_DIR`
- * root is never answered by a probe INSIDE the root). The authority gates
- * ask this of a candidate's parent directory — "does this file sit directly
- * at a harness root?" — which the doc-kind probe above cannot answer.
+ * directory's PARENT (the fixed `<main worktree>/.mstar` root — the
+ * marker probe alone never answers an unpopulated root). The authority
+ * gates ask this of a candidate's parent directory — "does this file sit
+ * directly at a harness root?" — which the doc-kind probe above cannot
+ * answer.
  */
 export function isHarnessRootDir(dir: string): boolean {
   if (hasHarnessRootMarkers(dir)) return true;
@@ -105,15 +106,14 @@ export function isHarnessRootDir(dir: string): boolean {
 }
 
 /**
- * Resolve the harness root containing `startDir` by marker probe: the nearest ancestor holding the v2 coordination-document
+ * Resolve the harness root containing `target` by marker probe: the nearest ancestor holding the v2 coordination-document
  * markers — a `status.json` root file plus the layout directories — IS the
- * harness root. Unlike `resolveHarnessDir`'s rung-3 `plans/` probe, this
- * never mistakes the NESTED `{HARNESS_DIR}/plans` subdir of the default
- * `.mstar` layout for the root, so coordination docs inside a
- * default-layout root stay gated. Returns `null` when no ancestor carries
- * the markers — callers fall back to `resolveHarnessDir` for declared
- * roots (`.mstarc` `harness_dir` / `MSTAR_HARNESS_DIR`) that are not yet
- * populated with all three markers.
+ * harness root. This never mistakes the NESTED `{HARNESS_DIR}/plans`
+ * subdir of the default `.mstar` layout for the root, so coordination
+ * docs inside a default-layout root stay gated. Returns `null` when no
+ * ancestor carries the markers — callers fall back to
+ * `resolveHarnessDir` for the fixed root that is not yet populated with
+ * all three markers.
  */
 function resolveHarnessRootOf(target: string): string | null {
   let dir = resolve(target);
@@ -131,25 +131,17 @@ function resolveHarnessRootOf(target: string): string | null {
  * under `{WORKFLOW_DIR}/<id>/`, or `residuals.json` under
  * `{PROJECT_DIR}/<id>/` (harness-relative, one path component each), AND
  * the harness root resolves — marker probe first (custom-layout-aware
- * Phase-5 F1), `resolveHarnessDir` as the declared-root fallback. The
+ * Phase-5 F1), `resolveHarnessDir` as the fixed-root fallback. The
  * snapshot/register rel is computed against the RESOLVED layout dirs
  * (`.mstarc` `workflow_dir`/`project_dir` honored, defaults
  * `workflows`/`projects`), so a custom layout classifies at the same
  * location the runtime writes. Everything else is not a gated write.
  * Returns the harness dir + doc kind when gated.
  */
-/** Process harness root, or `null` when Git cannot name one (never throws). */
-function processHarnessFallback(startDir: string): string | null {
-  try {
-    return resolveProcessHarnessDir(startDir);
-  } catch {
-    return null;
-  }
-}
 
 export function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind: HarnessDocKind } | null {
   if (typeof targetPath !== "string" || targetPath.trim() === "") return null;
-  const resolved = resolve(targetPath);
+  const resolved = realpathNearest(targetPath);
   const name = basename(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE && name !== REGISTER_FILE) return null;
   const classify = (harnessDir: string): { harnessDir: string; kind: HarnessDocKind } | null => {
@@ -173,10 +165,9 @@ export function harnessDocKindOfTarget(targetPath: string): { harnessDir: string
     return null;
   };
   const probeRoot = resolveHarnessRootOf(dirname(resolved));
-  // A failed resolver probe must not leave the write gate without a root:
-  // fall back to the process harness (control root / pinned env), which is
-  // exactly the root the gate exists to protect.
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname(resolved)) ?? processHarnessFallback(dirname(resolved));
+  // A marker miss falls back to the fixed root resolution — an unpopulated
+  // `.mstar` carries no markers yet but is still the root to protect.
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname(resolved));
   if (harnessDir === null) return null;
   const classified = classify(harnessDir);
   if (classified !== null) return classified;

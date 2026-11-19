@@ -51,6 +51,7 @@ import {
   workflowEntryPreDispatchCheck,
   type MainWorktreeInfo,
 } from "../src/worktree.js";
+import { HarnessRootRetiredError } from "../src/index.js";
 
 function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -1645,29 +1646,42 @@ test("workflow entry recovery identifies the owner before switching main", () =>
 });
 
 /**
- * invariant: harness presence is the {HARNESS_DIR} resolution chain, so a legacy `.agents/`
- * or a declared `harness_dir` counts exactly as `.mstar/` does — the gate must not
- * skip a repository that resolves a harness.
+ * invariant: harness presence is the fixed `<main worktree>/.mstar` root —
+ * a `.mstarc` `harness_dir` declaration refuses instead of declaring, a
+ * legacy `.agents/` layout no longer counts, and a real `.mstar` counts
+ * without `status.json` or Git worktree-list facts beyond the checkout.
  */
 describe("hasHarnessRoot — harness presence follows the {HARNESS_DIR} chain", () => {
-  test("a legacy .agents/ declares a harness, an otherwise empty checkout does not", () => {
+  test("a fixed .mstar declares a harness; a legacy .agents/ or an empty checkout does not", () => {
     const root = tmpRoot("has-harness-");
     try {
       const repo = gitRepo(root);
       expect(hasHarnessRoot(repo)).toBe(false);
       mkdirSync(join(repo, ".agents", "specs"), { recursive: true });
+      expect(hasHarnessRoot(repo)).toBe(false);
+      mkdirSync(join(repo, ".mstar"), { recursive: true });
       expect(hasHarnessRoot(repo)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("a .mstarc harness_dir declaration declares a harness without the directory existing", () => {
+  test("a .mstarc harness_dir declaration refuses instead of declaring a harness", () => {
     const root = tmpRoot("has-harness-mstarc-");
     try {
       const repo = gitRepo(root);
       writeFileSync(join(repo, ".mstarc"), "[config]\nharness_dir=.harness\n");
-      expect(hasHarnessRoot(repo)).toBe(true);
+      const err = (() => {
+        try {
+          hasHarnessRoot(repo);
+        } catch (e) {
+          return e as HarnessRootRetiredError;
+        }
+        throw new Error("expected HarnessRootRetiredError");
+      })();
+      expect(err).toBeInstanceOf(HarnessRootRetiredError);
+      expect(err.code).toBe("harness.root-retired");
+      expect(err.message).toContain("harness_dir");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

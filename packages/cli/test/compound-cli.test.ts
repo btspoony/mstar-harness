@@ -1,5 +1,6 @@
 /** Command-owned CLI subprocess coverage; fixture and assertion contracts are preserved. */
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertKnowledgeCatalogCompleteness, initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
@@ -7,14 +8,23 @@ import { runCli, withTempDir } from "./harness";
 import { cliEnvelope, violationCodes } from "./support/cli-assertions";
 import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
 
+/** Make `dir` a real Git main worktree (the spawned CLI's fixed root is
+ * `<main worktree>/.mstar`, never a bare temp directory). */
+function gitMainWorktree(dir: string): void {
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  execFileSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
+}
+
 /**
  * One workspace whose configured knowledge root is COMPLETE (its only body has
  * a catalog row), so any later verdict is about the directory the caller named.
  * Returns the physical root: the engine realpaths its roots and macOS tmpdirs
- * are symlinked.
+ * are symlinked. The root is a real Git main worktree, because a spawned CLI
+ * derives the fixed `<main worktree>/.mstar` root from it.
  */
 async function completeKnowledgeRoot(dir: string): Promise<{ root: string; harness: string; configured: string }> {
   const root = realpathSync(dir);
+  gitMainWorktree(root);
   const harness = join(root, ".mstar");
   const configured = join(harness, "knowledge");
   mkdirSync(configured, { recursive: true });
@@ -70,18 +80,18 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
 
   test("--knowledge-dir with a harness whose store is missing → store.not-initialized, exit 1", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
+      gitMainWorktree(dir);
       const doc = join(dir, "doc.md");
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const harness = join(dir, ".mstar");
       mkdirSync(harness);
-      // A non-empty legacy rung is what resolves here (no `.mstarc` declaration
-      // and no `.agents/knowledge`), so the configured root IS this directory.
+      // The configured root is the fixed `<dir>/.mstar`, so the missing store
+      // is the one the completeness query refuses over.
       const knowledgeDir = join(harness, "knowledge");
       mkdirSync(knowledgeDir);
       writeFileSync(join(knowledgeDir, "existing.md"), KNOWLEDGE_GOOD);
       const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir], {
         cwd: dir,
-        env: { MSTAR_HARNESS_DIR: harness },
       });
       // Unavailable catalog data is never read as a complete catalog.
       expect(result.exitCode).toBe(1);
@@ -100,7 +110,6 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
 
       const result = runCli(["compound", "validate", unregistered, "--knowledge-dir", alternate], {
         cwd: root,
-        env: { MSTAR_HARNESS_DIR: harness },
       });
       // Inverted assertion (PR #558 review must-fix 2): before the fix this case
       // was ok / exit 0 — the complete configured catalog vouched for a
@@ -121,7 +130,6 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
 
       const result = runCli(["compound", "validate", unregistered, "--knowledge-dir", sub], {
         cwd: root,
-        env: { MSTAR_HARNESS_DIR: harness },
       });
       // Inverted assertion (PR #558 review must-fix 2, round 2): the previous
       // rule accepted any directory at or inside the configured root and
@@ -152,7 +160,6 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       ] as const) {
         const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir], {
           cwd: root,
-          env: { MSTAR_HARNESS_DIR: harness },
         });
         expect(result.exitCode).toBe(0);
         expect(cliEnvelope(result, "ok", "compound.validate.ok").data).toMatchObject({ ok: true, violations: [] });

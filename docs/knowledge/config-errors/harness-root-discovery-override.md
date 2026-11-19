@@ -1,7 +1,7 @@
 ---
 module: sdd-workspace
 date: 2026-08-08
-last_updated: 2026-11-09
+last_updated: 2026-11-20
 problem_type: config_error
 category: config-errors
 severity: high
@@ -16,6 +16,8 @@ tags: [harness-root, path-resolution, sdd-workspace, worktree, fail-closed, over
 ---
 
 # Harness-root discovery override
+
+> **Superseded (2026-11-20):** the explicit override this record introduced is retired. The harness root is fixed at `<git main worktree root>/.mstar/`; see `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`. The fail-closed linked-worktree ordering below remains in force.
 
 ## Problem
 
@@ -35,19 +37,18 @@ The bash `sdd-workspace` script discovered the harness root by probing `.mstar` 
 
 ## Solution
 
-1. **Explicit override wins over probing.** `resolveHarnessDir` (and `sddWorkspace`) accept `opts.harnessDir` / the `MSTAR_HARNESS_DIR` env var, resolved against the start dir; the explicit root is authoritative even when it does not exist yet (caller may scaffold it). Default discovery is the dir-existence fallback (`{HARNESS_DIR}/` → `.agents/`), not a `status.json` probe.
-2. **Fail-closed FIRST.** In `sddWorkspace`, the linked-worktree guard runs before the override and the probe: a linked worktree without a control root (CLI 2nd arg / `MSTAR_CONTROL_ROOT`) refuses with a usage message (`Refusing to create a second SDD tree … or: mstar sdd workspace <plan> <control_worktree_path>`). No override or probe may bypass this guard.
-3. **Ordering contract (current, verified 2026-11-09):** ① Git-main-worktree discovery / fail-closed guard → ② an explicit `controlRoot` must BE that main worktree (a linked checkout is refused) → ③ explicit harness-root override (`opts.harnessDir` / `MSTAR_HARNESS_DIR`) → ④ `.mstarc` `[config] harness_dir` → ⑤ directory-existence fallback (`.mstar` → `.agents` → `.mstar`). The `status.json` probe is retired (issue #428): a harness dir resolves by location, its authority is the store.
-4. **Intentional divergence pinned.** The fail-closed-before-probe behavior intentionally diverges from bash (which probed status.json first); pinned by the test "stray status.json in a linked worktree" and documented in the port (qc2 F-004).
+The explicit override this record introduced is retired. The harness root is now one fixed location.
+
+1. **Fixed root.** `resolveHarnessDir` derives `<git main worktree root>/.mstar/` from Git; `harness_dir`, `MSTAR_HARNESS_DIR` and the legacy candidates are refused rather than honored. A CLI outside Git names the root with `--harness`.
+2. **Fail-closed FIRST (retained).** In `sddWorkspace`, the linked-worktree guard runs before any resolution: a linked worktree without an established main root refuses instead of creating a second SDD tree.
+3. **Refusals name recovery.** A `harness_dir` declaration names the line to delete; a legacy-only checkout names `mstar harness scaffold` / `mstar store upgrade`; `MSTAR_HARNESS_DIR` names `unset`.
+4. **Historical ordering.** The old rung chain (override → `.mstarc` → `.mstar` → `.agents`) is gone; only the fail-closed guard ordering survives.
 
 ```ts
-// sddWorkspace resolution order (paraphrased; packages/engine/src/sdd.ts)
-const main = readMainWorktree(cwd);              // 1. fail-closed FIRST
-if (main === null) throw failClosed(/* exit 1, usage hint */);
-const harnessDir = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR   // 3. explicit wins
-                   ?? findMstarc(root)?.harnessDir                    // 4. repo-declared
-                   ?? (isDirectory(join(root, ".mstar")) ? join(root, ".mstar")
-                                                        : join(root, ".agents")); // 5. location
+// current sddWorkspace resolution
+const main = readMainWorktree(cwd);   // fail-closed FIRST
+if (main === null) throw failClosed(/* usage hint */);
+const harnessDir = join(main.root, ".mstar"); // fixed; retired selectors refuse
 ```
 
 ## Why This Works
@@ -58,7 +59,7 @@ const harnessDir = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR   // 3. expl
 
 ## Prevention
 
-- Any tool that resolves `{HARNESS_DIR}` must accept an explicit override and document override precedence over probing.
-- Linked-worktree guards must run before any path probe that reads `status.json` — never probe-first in a worktree context.
+- Any tool that resolves `{HARNESS_DIR}` must derive it from Git and refuse the retired selectors; no config or environment override is accepted.
+- Linked-worktree guards must run before any resolution — never probe-first in a worktree context.
 - When a port intentionally hardens behavior vs its shell original, add a dedicated test + comment; do not leave silent divergences.
 - The control-path SSOT invariant this bug protects is restated in `mstar-branch-worktree` 「Harness path SSOT under default gitignore」; the old `{HARNESS_DIR}/docs/` ADR tree no longer exists.

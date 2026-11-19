@@ -452,13 +452,16 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
   })
 
   it('(o5) a WHITESPACE-only cwd is a relative segment, not "omitted" (judged where it resolves)', async () => {
-    const { app, provider, workspace } = await bootWithProvider()
-    // `resolve(workspace, '   ')` is a subdirectory the harness probe does not
-    // resolve from, so the start is NOT the harness parent itself — reading
-    // the value as "omitted" would have refused it against the parent.
+    const { app, provider } = await bootWithProvider()
+    // `resolve(parent, '   ')` lexically resolves INTO the parent, which is
+    // where the start is judged: with a NON-harness parent the resolved
+    // location governs nothing, so the start proceeds — reading the value as
+    // "omitted" would instead have judged it against the harness workspace.
+    const plain = await mkdtemp(join(tmpdir(), 'dsh-role-gate-ws-cwd-'))
+    scratchDirs.push(plain)
     await startActivationViaNativeChannel(
       app,
-      specFor({ ...textPrompt(NO_DECLARATION_PROMPT), cwd: '   ', parent: parentAgent(workspace) }),
+      specFor({ ...textPrompt(NO_DECLARATION_PROMPT), cwd: '   ', parent: parentAgent(plain) }),
     )
 
     expect(provider.starts).toHaveLength(1)

@@ -11,7 +11,7 @@
  * Host imports resolve to the running optional peer.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -677,6 +677,11 @@ describe("@mstar-harness/omp packed artifact", () => {
       const packageVersion = stringField(pkg, "version");
       const peer = (pkg.peerDependencies ?? {}) as Record<string, unknown>;
       mkdirSync(join(project, ".mstar"), { recursive: true });
+      // The harness root is fixed at the Git main worktree's `.mstar`: the
+      // disposable project must be a real Git worktree, or nothing resolves
+      // and the phase2 bind refuses with `phase2.harness-not-found` before
+      // ever reaching the authority's own `store.not-initialized`.
+      execFileSync("git", ["init", "-q"], { cwd: project, stdio: "ignore" });
       mkdirSync(pluginsRoot, { recursive: true });
       // Seed the disposable host root: the packaged plugin row the native plugin
       // enumeration reads, plus a sentinel the child refuses to run without.

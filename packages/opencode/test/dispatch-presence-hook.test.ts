@@ -26,8 +26,9 @@
  * plugin wiring (`tool.execute.before` on the opencode `task` tool) is
  * exercised end-to-end at the bottom.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -38,24 +39,33 @@ import {
 import type { GateResult } from "@mstar-harness/engine";
 
 /**
- * Ambient harness pinning (repo-hard composition, issue #156 follow-up):
+ * Ambient harness isolation (repo-hard composition, issue #156 follow-up):
  * `validateDispatchAssignment` composes the repo-level `.mstarc`/compass
- * `enforcement` below the Assignment header flag, so an ambient HARD repo
- * (e.g. this repository's own `.mstar/` compass when tests run in the main
- * checkout) would flip warn-mode expectations. `MSTAR_HARNESS_DIR` — which
- * `resolveHarnessDir` honors ahead of probing — is pinned to an EMPTY dir
- * for the whole file; the repo-hard composition test overrides it per-test.
+ * `enforcement` below the Assignment header flag AND reads the control-root
+ * cleanliness of the Git main worktree of the process cwd, so running in
+ * this repository's own checkout would flip the expectations. The process
+ * is pinned into a committed fixture repo (clean status, soft enforcement)
+ * for the whole file; the repo-hard composition test swaps the fixture's
+ * `.mstarc` per-test.
  */
-const ENV_KEY = "MSTAR_HARNESS_DIR";
-const emptyHarnessDir = mkdtempSync(join(tmpdir(), "mstar-dispatch-soft-"));
-let previousEnv: string | undefined;
-beforeEach(() => {
-  previousEnv = process.env[ENV_KEY];
-  process.env[ENV_KEY] = emptyHarnessDir;
+const fixtureRepo = mkdtempSync(join(tmpdir(), "mstar-dispatch-soft-"));
+execFileSync("git", ["init", "-q"], { cwd: fixtureRepo, stdio: "ignore" });
+mkdirSync(join(fixtureRepo, ".mstar"), { recursive: true });
+writeFileSync(join(fixtureRepo, ".mstar", ".gitkeep"), "");
+for (const args of [
+  ["config", "user.email", "fixture@example.invalid"],
+  ["config", "user.name", "fixture"],
+  ["add", ".mstar"],
+]) execFileSync("git", args, { cwd: fixtureRepo, stdio: "ignore" });
+execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-qm", "init"], { cwd: fixtureRepo, stdio: "ignore" });
+let previousCwd: string | undefined;
+beforeAll(() => {
+  previousCwd = process.cwd();
+  process.chdir(fixtureRepo);
 });
-afterEach(() => {
-  if (previousEnv === undefined) delete process.env[ENV_KEY];
-  else process.env[ENV_KEY] = previousEnv;
+afterAll(() => {
+  if (previousCwd !== undefined) process.chdir(previousCwd);
+  rmSync(fixtureRepo, { recursive: true, force: true });
 });
 
 const completeAssignment = `## Assignment
@@ -468,9 +478,12 @@ describe("anti-recursion in validateDispatchAssignment (caller-scoped, issue #15
   });
 
   test("repo-level hard (`.mstarc`) hardens a flag-less Assignment (dsh resolveDispatchHard parity)", () => {
-    const repoHarness = mkdtempSync(join(tmpdir(), "mstar-dispatch-hard-"));
-    writeFileSync(join(repoHarness, ".mstarc"), "[config]\nenforcement=hard\n");
-    process.env[ENV_KEY] = repoHarness;
+    // The fixed root is the Git main worktree's `.mstar`: declare hard in the
+    // chdir'd fixture repo's `.mstarc`, and commit it so the control-root
+    // cleanliness gate keeps answering clean.
+    writeFileSync(join(fixtureRepo, ".mstarc"), "[config]\nenforcement=hard\n");
+    execFileSync("git", ["add", ".mstarc"], { cwd: fixtureRepo, stdio: "ignore" });
+    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-qm", "hard"], { cwd: fixtureRepo, stdio: "ignore" });
     const entries: Array<[string, string]> = [];
     const log: StatusLogger = (level, message) => {
       entries.push([level, message]);
@@ -484,7 +497,8 @@ describe("anti-recursion in validateDispatchAssignment (caller-scoped, issue #15
       expect(entries.some(([level]) => level === "error")).toBe(true);
       expect(entries.some(([level]) => level === "warn")).toBe(false);
     } finally {
-      process.env[ENV_KEY] = emptyHarnessDir;
+      rmSync(join(fixtureRepo, ".mstarc"));
+      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-aqm", "soft again"], { cwd: fixtureRepo, stdio: "ignore" });
     }
   });
 });

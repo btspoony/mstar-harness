@@ -15,13 +15,10 @@ import { validateCommandOutcome } from "./outcome.js";
  * `sessionId` on the wire is the caller's per-call selector and nothing here
  * supplies a connection-wide default.
  *
- * `defaultHarness` is the root a launcher declared for every call (the stdio
- * server's `--harness` pin, or a non-blank `MSTAR_HARNESS_DIR`). Commands that
- * resolve their own root from an `input.harness` field never read
- * `controlRoot`, so admission fills that field from this default when the call
- * left it unset or blank; an explicit non-blank per-call value still wins. When
- * it is undefined the connection declared no root, and registration publishes
- * `harness` as REQUIRED on every tool that names such a field.
+ * `defaultHarness` is always undefined on this connection: the MCP server is
+ * one shared service and carries no root. Commands that resolve their own root
+ * from an `input.harness` field are therefore published with `harness`
+ * REQUIRED, and the call names the fixed `<main worktree>/.mstar`.
  */
 export type ResolveContext = {
   (
@@ -252,12 +249,12 @@ function unpinnedRootFacts(
   field: string,
 ): Readonly<{ message: string; recovery: string; diagnostic: RefusalDiagnostic }> {
   return {
-    message: `${definition.id} needs the call's "${field}" selector: this MCP connection declared no control root, and the command resolves its root from that field`,
-    recovery: `pass \`${field}\` naming this call's root directory (an absolute path), or declare the root for the whole connection \u2014 \`mstar mcp --harness <absolute path>\`, or a non-blank, absolute MSTAR_HARNESS_DIR in the server environment \u2014 and no call needs the selector`,
+    message: `${definition.id} needs the call's "${field}" selector: this MCP connection carries no root of its own, and the command resolves its root from that field`,
+    recovery: `pass \`${field}\` naming this call's control root — the absolute \`<main worktree>/.mstar\` path; \`mstar path resolve\` prints it as \`controlHarnessDir\``,
     diagnostic: {
       path: field,
       code: "required",
-      message: `${field} is required: this connection declared no control root`,
+      message: `${field} is required: this MCP connection carries no root`,
       expected: "present",
       received: "undefined",
     },

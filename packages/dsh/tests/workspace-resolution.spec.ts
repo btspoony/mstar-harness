@@ -8,12 +8,11 @@
  *  1. HarnessResolver unit semantics — explicit config wins outright; a
  *     missing workspace resolves to null (no process-cwd probe); the probe
  *     starts from the given workspace root; results are memoized per root.
- *  1b. Workspace-root boundary (roadmap §7c) — the probe stops AT the session
- *     workspace (`workspaceRoot = cwd`): a harness dir anywhere above it is
- *     never returned (the `~/.mstar` global-collision fixture), even inside a
- *     git repo where the engine's default boundary would have walked up; a
- *     workspace-local harness still resolves; explicit `config.harnessDir`
- *     stays authoritative outside the boundary.
+ *  1b. Fixed-root resolution (ADR 2026-11-20) — the workspace names its Git
+ *     main worktree: `.mstar` at that root resolves for a deep session
+ *     workspace; a `.mstar` OUTSIDE the repo (the `~/.mstar`
+ *     global-collision fixture) is never returned; a harness-less repo
+ *     resolves null; explicit `config.harnessDir` stays authoritative.
  *  2. Pre-step catalog — no-config boot: an agent carrying a session cwd
  *     resolves the WORKSPACE's harness dir (and renders its state row); an
  *     agent-less event resolves no harness dir, so no row is composed even
@@ -28,14 +27,15 @@
  *     digest key).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
+import { mkdir, mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import { HarnessResolver } from '../src/index.ts'
-import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+import { bootApp, gitInit, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { buildCatalogPayload } from '../src/gates/catalog.ts'
 
 let booted: BootResult | undefined
@@ -49,20 +49,9 @@ afterEach(async () => {
 
 /** A fresh workspace root directory. */
 async function makeWorkspace(prefix: string): Promise<string> {
-  return await mkdtemp(join(tmpdir(), prefix))
-}
-
-/**
- * Minimal valid git work tree (no `git init` subprocess) — mirrors the
- * engine/cli `gitInit` fixture: the engine's default boundary runs
- * `git rev-parse --show-cdup`, which only needs a valid `.git` layout
- * (HEAD + config + objects/ + refs/) — no commits.
- */
-async function gitInit(root: string): Promise<void> {
-  await mkdir(join(root, '.git', 'objects'), { recursive: true })
-  await mkdir(join(root, '.git', 'refs'), { recursive: true })
-  await writeFile(join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n')
-  await writeFile(join(root, '.git', 'config'), '[core]\n\trepositoryformatversion = 0\n')
+  // The Git-reported main worktree is realpath'd (/var → /private/var on
+  // macOS); fixtures compare against the canonical form.
+  return realpathSync(await mkdtemp(join(tmpdir(), prefix)))
 }
 
 /** A pre-step payload whose agent carries a session cwd (the workspace). */
@@ -116,21 +105,23 @@ describe('HarnessResolver — explicit config wins; the probe starts from the wo
     expect(resolver.forAgent({ session: { header: {} } })).toBeNull()
   })
 
-  it('probes from the WORKSPACE root (`.agents` found under the workspace, not the cwd)', async () => {
+  it('probes from the WORKSPACE root (`.mstar` at the git main worktree, never the cwd)', async () => {
     const ws = await makeWorkspace('dsh-ws-probe-')
-    await mkdir(join(ws, '.agents'), { recursive: true })
+    gitInit(ws)
+    await mkdir(join(ws, '.mstar'), { recursive: true })
     const resolver = new HarnessResolver(undefined)
-    expect(resolver.forAgent({ session: { header: { cwd: ws } } })).toBe(join(ws, '.agents'))
+    expect(resolver.forAgent({ session: { header: { cwd: ws } } })).toBe(join(ws, '.mstar'))
     // The workspace is derived from the agent's session cwd.
-    expect(resolver.forWorkspace(ws)).toBe(join(ws, '.agents'))
+    expect(resolver.forWorkspace(ws)).toBe(join(ws, '.mstar'))
   })
 
   it('memoizes per workspace root', async () => {
     const ws = await makeWorkspace('dsh-ws-memo-')
-    await mkdir(join(ws, '.agents'), { recursive: true })
+    gitInit(ws)
+    await mkdir(join(ws, '.mstar'), { recursive: true })
     const resolver = new HarnessResolver(undefined)
     const first = resolver.forWorkspace(ws)
-    expect(first).toBe(join(ws, '.agents'))
+    expect(first).toBe(join(ws, '.mstar'))
     expect(resolver.forWorkspace(ws)).toBe(first) // same value; cache path hit
     // A different workspace probes independently.
     const other = await makeWorkspace('dsh-ws-memo-other-')
@@ -145,26 +136,27 @@ describe('HarnessResolver — explicit config wins; the probe starts from the wo
  * is the probe start itself (`workspaceRoot = cwd`), NOT the git top-level.
  * ========================================================================== */
 
-describe('HarnessResolver — workspace-root boundary: probe stops at the session workspace (roadmap §7c)', () => {
-  it('a `.mstar` above the session workspace but INSIDE the git top-level is never returned — the dsh boundary is the probe start, not git', async () => {
+describe('HarnessResolver — fixed-root resolution: the session workspace names its Git main worktree', () => {
+  it('a `.mstar` above the session workspace at the git main worktree resolves — the harness root is fixed, not a workspace-local probe', async () => {
     const home = await makeWorkspace('dsh-ws-boundary-')
     const repo = join(home, 'proj')
-    await gitInit(repo) // the engine DEFAULT boundary would be this repo root
+    gitInit(repo) // the Git main worktree
     await mkdir(join(repo, '.mstar'), { recursive: true }) // harness ABOVE the session workspace
     const ws = join(repo, 'packages', 'app') // the session workspace (deep)
     await mkdir(ws, { recursive: true })
     const resolver = new HarnessResolver(undefined)
-    // dsh boundary = the probe start (session cwd): no walk-up beyond it,
-    // so the repo-root `.mstar` must NOT resolve for a deeper workspace.
-    expect(resolver.forWorkspace(ws)).toBeNull()
-    expect(resolver.forAgent({ session: { header: { cwd: ws } } })).toBeNull()
+    // The fixed root is the Git main worktree's `.mstar`: a deeper session
+    // workspace in the same repo resolves it (the retired walk-up boundary
+    // no longer applies — resolution is a Git question, not a probe).
+    expect(resolver.forWorkspace(ws)).toBe(join(repo, '.mstar'))
+    expect(resolver.forAgent({ session: { header: { cwd: ws } } })).toBe(join(repo, '.mstar'))
   })
 
   it('a `~/.mstar`-style fixture in the parent chain above the workspace is never returned (the global-collision regression)', async () => {
     const home = await makeWorkspace('dsh-ws-collision-')
-    await mkdir(join(home, '.mstar'), { recursive: true }) // the "global" ~/.mstar fixture
+    await mkdir(join(home, '.mstar'), { recursive: true }) // the "global" ~/.mstar fixture — outside the repo
     const repo = join(home, 'proj')
-    await gitInit(repo)
+    gitInit(repo) // has NO .mstar: the workspace resolves no harness
     const ws = join(repo, 'nested', 'deep') // the session workspace, deep under the fixture home
     await mkdir(ws, { recursive: true })
     const resolver = new HarnessResolver(undefined)
@@ -172,27 +164,26 @@ describe('HarnessResolver — workspace-root boundary: probe stops at the sessio
     expect(resolver.forAgent({ session: { header: { cwd: ws } } })).toBeNull()
   })
 
-  it('a workspace-LOCAL harness still resolves — the boundary keeps the probe at the start itself, and the start is probed', async () => {
+  it('a workspace harness at its own `.mstar` resolves — the workspace is its own main worktree', async () => {
     const home = await makeWorkspace('dsh-ws-local-')
-    await mkdir(join(home, '.mstar'), { recursive: true }) // parent-chain fixture (must NOT win)
     const ws = join(home, 'proj')
-    await gitInit(ws) // the engine default boundary = the workspace itself here
-    await mkdir(join(ws, '.agents'), { recursive: true }) // workspace-local harness
+    gitInit(ws) // the workspace is the Git main worktree
+    await mkdir(join(ws, '.mstar'), { recursive: true }) // the fixed root
     const resolver = new HarnessResolver(undefined)
-    expect(resolver.forWorkspace(ws)).toBe(join(ws, '.agents'))
+    expect(resolver.forWorkspace(ws)).toBe(join(ws, '.mstar'))
   })
 
-  it('a RELATIVE session cwd still resolves a workspace-local harness (regression: a relative cwd pushed the boundary BELOW the probe start → null)', async () => {
+  it('a RELATIVE session cwd still resolves the workspace harness (regression: a relative cwd must be canonicalized before the Git probe)', async () => {
     // Real-world geometry: the dsh process cwd sits ABOVE the session
     // workspace, so the session carries a relative cwd like `packages/app`
-    // (no leading `..`). Under the buggy code `resolve(start, workspaceRoot)`
-    // anchored the relative boundary to the START, landing BELOW the probe
-    // start and nulling out even a workspace-local harness. Reproduce it by
-    // chdir'ing to a synthetic process cwd for this test only (restored
-    // after — this file's other tests use absolute paths).
+    // (no leading `..`). The resolver canonicalizes it to an absolute path
+    // before the Git probe. Reproduce it by chdir'ing to a synthetic
+    // process cwd for this test only (restored after — this file's other
+    // tests use absolute paths).
     const base = await makeWorkspace('dsh-ws-relbase-')
     const ws = join(base, 'packages', 'app')
-    await mkdir(join(ws, '.agents'), { recursive: true })
+    gitInit(ws)
+    await mkdir(join(ws, '.mstar'), { recursive: true })
     const rel = relative(base, ws) // e.g. `packages/app` — the relative session cwd
     const prev = process.cwd()
     process.chdir(base)
@@ -201,16 +192,16 @@ describe('HarnessResolver — workspace-root boundary: probe stops at the sessio
       // on macOS), so compare against the resolver's own canonical form.
       const abs = resolve(rel)
       const resolver = new HarnessResolver(undefined)
-      expect(resolver.forWorkspace(rel)).toBe(join(abs, '.agents'))
-      expect(resolver.forAgent({ session: { header: { cwd: rel } } })).toBe(join(abs, '.agents'))
+      expect(resolver.forWorkspace(rel)).toBe(join(abs, '.mstar'))
+      expect(resolver.forAgent({ session: { header: { cwd: rel } } })).toBe(join(abs, '.mstar'))
     } finally {
       process.chdir(prev)
     }
   })
 
-  it('explicit config.harnessDir stays authoritative even OUTSIDE the workspace boundary', async () => {
+  it('explicit config.harnessDir stays authoritative outside the workspace repo', async () => {
     const home = await makeWorkspace('dsh-ws-explicit-outside-')
-    await mkdir(join(home, '.mstar'), { recursive: true }) // above the workspace (outside the boundary)
+    await mkdir(join(home, '.mstar'), { recursive: true }) // outside the workspace repo
     const ws = join(home, 'proj', 'src')
     await mkdir(ws, { recursive: true })
     const resolver = new HarnessResolver(join(home, '.mstar'))
@@ -230,10 +221,10 @@ describe('agent/pre-step — the harness dir resolves from the session workspace
     // THIS workspace's lifecycle, so a pre-step that resolves the other
     // (equally initialized) harness dir cannot pass.
     const other = await makeWorkspace('dsh-ws-prestep-other-')
-    await seedActiveWorkflow(join(ws, '.agents'), 'ws-target', [
+    await seedActiveWorkflow(join(ws, '.mstar'), 'ws-target', [
       { id: 'ws-target-plan', title: 'Target plan', file: 'plans/ws-target-plan.md', status: 'Todo' },
     ], {}, 'sess-target', ws)
-    await seedActiveWorkflow(join(other, '.agents'), 'ws-other', [
+    await seedActiveWorkflow(join(other, '.mstar'), 'ws-other', [
       { id: 'ws-other-plan', title: 'Other plan', file: 'plans/ws-other-plan.md', status: 'Todo' },
     ], {}, 'sess-other', other)
     booted = await bootApp({ harnessDir: null })
@@ -286,13 +277,13 @@ describe('fs/write-intent — the status gate follows the session workspace (no 
 
   it('agent-less actor → inert (no workspace, no harness dir — nothing to gate)', async () => {
     const ws = await makeWorkspace('dsh-ws-gate-inert-')
-    await seedHarness(join(ws, '.agents'), { 'status.json': '{ "version": 2, "updated_at": "2026-08-19", "workflows": "not-an-array" }' })
+    await seedHarness(join(ws, '.mstar'), { 'status.json': '{ "version": 2, "updated_at": "2026-08-19", "workflows": "not-an-array" }' })
     booted = await bootApp({ harnessDir: null })
     const advisories = captureStatusAdvisories(booted.ctx)
 
     await booted.ctx.waterfall(
       'fs/write-intent',
-      target(join(ws, '.agents', 'status.json')),
+      target(join(ws, '.mstar', 'status.json')),
       {},
       () => undefined,
     )
@@ -308,10 +299,10 @@ describe('fs/write-intent — the status gate follows the session workspace (no 
 describe('agent/pre-step — per-workspace source staleness (no config)', () => {
   it('an unchanged workspace does not re-inject; a NEW workspace resolves fresh', async () => {
     const ws = await makeWorkspace('dsh-ws-stale-')
-    await mkdir(join(ws, '.agents'), { recursive: true })
+    await mkdir(join(ws, '.mstar'), { recursive: true })
     // An ACTIVE workflow in this workspace: the catalog row is injected only
     // for one, and this suite is about per-workspace resolution of that row.
-    await seedActiveWorkflow(join(ws, '.agents'), 'wf-ws-stale', [], {}, 'seed-ws-stale', ws)
+    await seedActiveWorkflow(join(ws, '.mstar'), 'wf-ws-stale', [], {}, 'seed-ws-stale', ws)
     booted = await bootApp({ harnessDir: null })
 
     // First pre-step of ws: no compass yet → soft (cache built on first use).
@@ -319,7 +310,7 @@ describe('agent/pre-step — per-workspace source staleness (no config)', () => 
     expect(first.kind).toBe('enter')
     if (first.kind !== 'enter') return
     expect(lastMessage(first)?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
-    expect(buildCatalogPayload(booted.ctx, join(ws, '.agents')).enforcement).toEqual({ hard: false, source: 'none' })
+    expect(buildCatalogPayload(booted.ctx, join(ws, '.mstar')).enforcement).toEqual({ hard: false, source: 'none' })
 
     // Same turn + unchanged → the change gate suppresses the identical row
     // (the row is simply not re-injected until its text or the panel
@@ -332,14 +323,14 @@ describe('agent/pre-step — per-workspace source staleness (no config)', () => 
     // A NEW workspace with the hard compass seeded BEFORE its first use
     // resolves fresh (per-workspace first-use build + independent digest).
     const ws2 = await makeWorkspace('dsh-ws-stale-2-')
-    await seedActiveWorkflow(join(ws2, '.agents'), 'wf-ws-stale-2', [], {}, 'seed-ws-stale-2', ws2)
-    await seedHarness(join(ws2, '.agents'), {
+    await seedActiveWorkflow(join(ws2, '.mstar'), 'wf-ws-stale-2', [], {}, 'seed-ws-stale-2', ws2)
+    await seedHarness(join(ws2, '.mstar'), {
       'iterations/ws-stale-2/delivery-compass.md': '---\nstatus: active\nenforcement: hard\n---\n',
     })
     const third = await booted.ctx.waterfall('agent/pre-step', stepPayload([], ws2), defaultEnter([]))
     expect(third.kind).toBe('enter')
     if (third.kind !== 'enter') return
     expect(lastMessage(third)?.source).toEqual({ kind: 'mstar-engine', form: 'catalog' })
-    expect(buildCatalogPayload(booted.ctx, join(ws2, '.agents')).enforcement).toEqual({ hard: true, source: 'compass' })
+    expect(buildCatalogPayload(booted.ctx, join(ws2, '.mstar')).enforcement).toEqual({ hard: true, source: 'compass' })
   })
 })

@@ -41,7 +41,7 @@ export type LaunchDirectoryTarget =
  * half of the recovery is the emitted diagnostic, so this literal stays one
  * statically provable statement.
  */
-const LAUNCH_DIRECTORY_RECOVERY = "Declare the connection's workspace with `mstar mcp --workspace <absolute path>`; or pin the harness root with `mstar mcp --harness <absolute path>` (or a non-blank MSTAR_HARNESS_DIR in the server environment), which anchors the workspace at the root's parent.";
+const LAUNCH_DIRECTORY_RECOVERY = "Declare the connection's workspace with `mstar mcp --workspace <absolute path>`; the harness root itself is fixed at `<main worktree>/.mstar` and is named per call through `harness`.";
 
 /**
  * Refuse when this invocation runs from a connection's launch directory and

@@ -9,7 +9,7 @@ Before any non-trivial PM action, read in order:
 5. Plan lifecycle authority — `references/project-manager/plan-management.md` + **`mstar-artifacts`** `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`: primary coordinator row operations, declared completion route and evidence — read before first implement dispatch
 6. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
 7. **`mstar-sdd`** when implement uses **`Execution mode: sdd`**
-8. **On demand:** `mstar-branch-worktree` (parallel implement, QC/PM Acceptance checkout); `mstar-artifacts` (store.db execution/root register and workflow/plan rows, issue capture pointers); `mstar-artifacts` (InReview waves, review bundle naming)
+8. **On demand:** `mstar-branch-worktree` (parallel implement, QC/PM Acceptance checkout); `mstar-artifacts` (store.db execution/root register and workflow/plan rows, issue capture pointers); `mstar-artifacts` (InReview waves, review bundle naming); `mstar-use-cli` (harness-root preconditions: control root vs linked worktree)
 
 **Not required:** `mstar-coding-behavior` (orchestration-only PM work).
 
@@ -139,6 +139,7 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** run or dispatch parallel integration merges into `spec_integration_branch`; the workflow's `integration_merge_lease` serializes the recorded integration checkout, and direct complete verifies the actual result (`mstar-iteration` §2.6 · `mstar-branch-worktree` L1).
 - **NEVER** bypass atomic coordination safety for cross-plan writes. ACTIVE requires shared control-store transaction and execution-token CAS arbitration; when that arbitration is unavailable, use **`Plan parallelism: serial`** or **Blocked** if Assignment still claims parallel. **`Worktree mode: waived`** changes neither gate → **`mstar-branch-worktree`** § Worktree mode: waived.
 - **NEVER** set `Worktree mode: waived` because default-gitignored `plans/` are missing under a feature worktree → **`mstar-branch-worktree`** § Worktree mode: waived; missing shared coordination authority defaults to serial scheduling, not waiver.
+- **NEVER** read or write process state (`store.db`, `{PLAN_DIR}`, workflows, SDD) through a path composed from the current cwd: in a linked worktree that is the worktree's `.mstar/`, which does not exist, and its tracked `.mstarc` declares a layout, not the root. Resolve `controlHarnessDir` with `mstar path resolve` first, and pass that absolute path where a command takes a control root → `mstar-use-cli/references/preconditions.md` §1–2.
 
 ---
 

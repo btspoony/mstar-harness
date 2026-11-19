@@ -101,27 +101,8 @@ the one connection. A per-agent instance could not be given per-call arguments
 (`PreToolDecision` has no argument-rewrite arm), so it would buy no capability,
 only one Node process per agent.
 
-**Control root.** A deployment that needs a pinned root overrides the row's
-`args` to launch `mstar mcp --harness <absolute path>`; a non-blank
-`MSTAR_HARNESS_DIR` in the server environment is the same declaration. Either
-one pins every call on the connection, and a pin beats the `harness` a call
-names, so a caller can never relocate a call the launcher rooted. Whichever
-root a call actually uses also anchors the **invocation workspace** at that
-root's parent directory, so a command that derives paths from its working
-directory (`audit.scaffold` deriving `{REVIEW_DIR}` without `--reviews-dir`, a
-relative `--dir` or findings path) lands under the harness the call uses rather
-than the launch cwd. Without a pin each call must name its own root through the
-root selector the command publishes (`harness`, or `controlRoot` for
-`sdd.workspace`), which is then REQUIRED on every tool whose root is
-not otherwise fixed — and a family that takes no per-call `harness` at all
-(`persist`) has no other way to name one, so it needs the pin. With neither,
-the call is refused with `[mcp.control-root-unresolved]`, naming the cause and
-the recoveries. Two classes run with a NULL root instead: `harness.scaffold`,
-because establishing a root is its own operation, and the root-free commands
-(`schema`, `path.resolve`, `host.*`, `doctor`, the read-only validators), whose
-contract answers from explicit inputs and never resolves an implicit harness
-path. The launch cwd is **never** a root candidate: it is the HOST's directory
-and says nothing about which workspace a caller belongs to.
+**Control root.** The row carries no root: the MCP server is one shared service, so a launch pin or environment value would root unrelated calls at the same harness. `harness_dir`, `MSTAR_HARNESS_DIR` and `mstar mcp --harness` are retired; every call that touches process state passes `harness` naming the fixed `<main worktree>/.mstar`, and the server refuses any other value. The root a call actually uses also anchors the **invocation workspace** at that root's parent directory, so a command that derives paths from its working directory (`audit.scaffold` deriving `{REVIEW_DIR}` without `--reviews-dir`, a relative `--dir` or findings path) lands under the harness the call uses rather
+than the launch cwd. Every call must name its own root through the root selector the command publishes (`harness`, or `controlRoot` for `sdd.workspace`), which is REQUIRED on every tool whose root is not otherwise fixed. With none, the call is refused with `[mcp.control-root-unresolved]`, naming the cause and the recovery. Two classes run with a NULL root instead: `harness.scaffold`, because establishing a root is its own operation, and the root-free commands (`schema`, `path.resolve`, `host.*`, `doctor`, the read-only validators), whose contract answers from explicit inputs and never resolves an implicit harness path. The launch cwd is **never** a root candidate: it is the HOST's directory and says nothing about which workspace a caller belongs to.
 
 **Identity.** The shipped row passes `--trust-caller-session-id` and declares
 no path: there is no `--identity-env`, no declared-identity lock, no selector
@@ -144,7 +125,7 @@ The `mstar` row accepts the plugin `Config` (see `src/index.ts`):
 
 | Field | Shipped default | Meaning |
 |---|---|---|
-| `harnessDir` | unset (resolved per session workspace) | explicit `{HARNESS_DIR}` root — **required for repos whose harness root is not a probed name** (`.mstar/` → `.agents/` → `.plans/` → `plans/`); set it to the absolute root in the profile layer (or declare `[config] harness_dir` in a repo `.mstarc` — gitignored local config, honored above probing). Without either, the probe starts from the SESSION workspace root (the session cwd — **never the process/launch cwd**) and **stops there** — it never walks above the session workspace, so a global `~/.mstar` is never adopted |
+| `harnessDir` | unset — matching assertion only | must equal the engine's fixed `<main worktree>/.mstar`; a different value is refused. `harness_dir` in `.mstarc` and `MSTAR_HARNESS_DIR` are retired, and legacy `.agents/` / `.plans/` / `plans/` candidates are never adopted |
 | `enforcement` | **unset — default OFF** | `hard` / `soft` override; absent → the repo `.mstarc` `[config] enforcement`, else the iteration compass decides, warn-only when no compass hardens (never a global always-on hard gate) |
 | `dispatchTools` | unset (plugin default `['subagent', 'subagent_fork']`) | delegation tool names the dispatch gate matches — the dsh preset's TWO delegation tools (`subagent` + its fork sibling `subagent_fork`, both Assignment-shaped); a custom list overrides the default wholesale, so it must include `subagent_fork` to keep fork dispatches gated |
 | `dispatchBinding` | unset — the caller is derived from the CALLING session (live-editable in the plugin settings form) | the dispatching agent's own role (the anti-recursion CALLER) for the precheck — a ROOT-session identity, read only for the ROOT calling session: there an explicit value wins verbatim, an explicitly blank value fails closed, and no explicit value reads as `project-manager`. A CHILD session — or a session the gate cannot read — never inherits it and stays EMPTY whatever the field says, failing closed (`empty-binding`, a leaf must not dispatch). A coordinator that is not the root session cannot be served by this field. |

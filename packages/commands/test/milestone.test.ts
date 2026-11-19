@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +12,11 @@ const root = mkdtempSync(join(tmpdir(), "commands-milestone-"));
 afterAll(() => rmSync(root,{recursive:true,force:true}));
 function invocation(cwd:string): InvocationContext { return { cwd,controlRoot:null,versions:{engine:null,cli:null,plugin:null,host:null,platform:null},signal:new AbortController().signal,effects:{spawnProcess:async()=>({exitCode:0,stdout:"",stderr:""})} } as InvocationContext; }
 test("milestone commands use store revision CAS with replay", async () => {
- const cwd=join(root,"fixture"), harness=join(cwd,".mstar"); mkdirSync(harness,{recursive:true});
+ const cwd=join(root,"fixture"), harness=join(cwd,".mstar");
+ // The harness root is fixed at the Git main worktree's `.mstar`, so cwd-based
+ // store discovery needs a real repo even for an unborn branch.
+ mkdirSync(cwd,{recursive:true}); execFileSync("git",["init","-q","-b","main"],{cwd});
+ mkdirSync(harness,{recursive:true});
  const store=await initializeStore({harnessDir:harness}); store.close();
  await registerCatalogEntity({harnessDir:harness},{kind:"project",id:"proj",title:"Project",rootKind:"projects",relativePath:"proj"},{operationId:"project",actor:"test"});
  const call=(id:string,input:unknown)=>executeCommand(id,input,invocation(cwd));
@@ -26,6 +31,8 @@ test("milestone commands use store revision CAS with replay", async () => {
 test("name-only update leaves target optional and false clearTarget does not select a patch", async () => {
  const cwd = join(root, "update-patch");
  const harness = join(cwd, ".mstar");
+ mkdirSync(cwd, { recursive: true });
+ execFileSync("git", ["init", "-q", "-b", "main"], { cwd });
  mkdirSync(harness, { recursive: true });
  (await initializeStore({ harnessDir: harness })).close();
  await registerCatalogEntity(

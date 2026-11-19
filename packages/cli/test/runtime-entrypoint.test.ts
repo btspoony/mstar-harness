@@ -40,20 +40,40 @@ test("a below-floor Node runtime refuses store and status commands with their ow
     // so the refusal is the one a below-floor Node user receives.
     const preload = join(root, "spoof-node-version.mjs");
     writeFileSync(preload, 'Object.defineProperty(process.versions, "node", { value: "22.5.0", configurable: true });\n');
-    // `status validate` reads an existing store and discovers the control root
-    // by name from cwd, so seed a `.mstar` root with the real Node.
-    const statusRoot = join(root, "status-root");
+    // `status validate` reads an existing store and discovers the control root.
+    // The harness root is fixed at `<git main worktree>/.mstar`, so every
+    // fixture root is a real Git main worktree whose `.mstar` is the root the
+    // resolver derives from the cwd probe.
+    const gitMainWorktree = (name: string): string => {
+      const repo = join(root, name);
+      mkdirSync(repo, { recursive: true });
+      spawnSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+      spawnSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
+      return repo;
+    };
+    // `status validate` reads an existing store, so seed `.mstar` under a
+    // real main worktree with the real Node.
+    const statusRoot = gitMainWorktree("status-root");
     const statusHarness = join(statusRoot, ".mstar");
     mkdirSync(statusHarness, { recursive: true });
     const seeded = spawnSync(NODE_BIN, [DIST, "store", "init", "--harness", statusHarness], { encoding: "utf8" });
     expect(seeded.status).toBe(0);
+    // `store upgrade` needs an existing store too; `store init` needs the
+    // `.mstar` directory present so admission can validate the fixed root.
+    const upgradeRoot = gitMainWorktree("upgrade-root");
+    const upgradeHarness = join(upgradeRoot, ".mstar");
+    mkdirSync(upgradeHarness, { recursive: true });
+    const upgradeSeeded = spawnSync(NODE_BIN, [DIST, "store", "init", "--harness", upgradeHarness], { encoding: "utf8" });
+    expect(upgradeSeeded.status).toBe(0);
+    const initRoot = gitMainWorktree("init-root");
+    mkdirSync(join(initRoot, ".mstar"), { recursive: true });
     const cases: readonly { argv: string[]; cwd?: string; recovery: RegExp }[] = [
       {
-        argv: ["store", "upgrade", "--operator", "fixture-operator", "--harness", join(root, ".mstar")],
+        argv: ["store", "upgrade", "--operator", "fixture-operator", "--harness", upgradeHarness],
         recovery: /mstar store upgrade --operator <name> --harness <control-root>/,
       },
       // A non-upgrade verb must see its own command, never a redirect.
-      { argv: ["store", "init", "--harness", join(root, ".mstar")], recovery: /mstar store init/ },
+      { argv: ["store", "init", "--harness", join(initRoot, ".mstar")], recovery: /mstar store init/ },
       // `status validate` names the entrypoint's Node floor and says an
       // unchanged retry reproduces the refusal (the executing runtime is the cause).
       {

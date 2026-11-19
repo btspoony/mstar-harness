@@ -23,6 +23,7 @@
  *    case pins the actionable Node floor of the same code path.
  */
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -76,6 +77,9 @@ interface Fixture {
  * the repo `.mstarc` the gates resolve through `resolveRepoEnforcement`. */
 function makeHarness(id: string, enforcement?: "hard" | "soft"): Fixture {
   const root = mkdtempSync(join(tmpdir(), `omp-g4b-${id}-`));
+  // A real git worktree — the fixed harness root resolves from the Git
+  // main worktree; without `git init` no root is answered.
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: "ignore" });
   roots.push(root);
   const harness = join(root, ".mstar");
   mkdirSync(join(harness, "workflows"), { recursive: true });
@@ -449,9 +453,10 @@ describe("omp write gate — authority paths refuse, documents keep their valida
 
     const vetoed = await runWrite(handler, source.register, VALID_REGISTER);
     expect(vetoed?.block).toBe(true);
-    // The source harness has no store, so the write is refused by the
-    // unreadable authority — never applied against a source-only probe.
-    expect(vetoed?.reason).toContain("store.authority-unavailable");
+    // The symlink's landed destination (the ACTIVE harness's register) is
+    // the authority candidate: the destination's ACTIVE store retires the
+    // register route outright — stricter-wins, never the source-only probe.
+    expect(vetoed?.reason).toContain("project.register.retired");
 
     // Both contexts pre-activation (T7a/T21): the retired JSON register route
     // is gone, so the landed register's write fails closed by authority too —

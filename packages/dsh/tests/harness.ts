@@ -14,8 +14,11 @@
  * dispatch the real `@deepseek-ai/dsh-tool-fs` write/edit tools perform
  * (`ctx.waterfall('fs/write-intent', target, exec, () => undefined)`).
  */
+import { afterAll, beforeAll } from 'bun:test'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -1019,7 +1022,7 @@ const activeExecutionTokens = new Map<string, ExecutionToken>()
 const activeExecutionGenerations = new Map<string, { storeId: string; epoch: number }>()
 
 export function selectedGenerationFor(harnessDir: string): { storeId: string; epoch: number } {
-  const generation = activeExecutionGenerations.get(harnessDir)
+  const generation = activeExecutionGenerations.get(realpathSync(harnessDir))
   if (generation === undefined) throw new Error(`No selected execution generation for ${harnessDir}`)
   return generation
 }
@@ -1032,7 +1035,14 @@ export async function seedActiveWorkflow(
   cwd = dirname(harnessDir),
   selectedWorkflowId: string | null = workflowId,
 ): Promise<void> {
+  // Canonicalize the harness root once: Git-reported paths are realpath'd
+  // (/var → /private/var on macOS), and the durable session binding records
+  // `harnessRoot` — the resolver's `executionBinding.harnessRoot !==
+  // harnessDir` guard compares it against the Git-canonicalized root.
   await mkdir(harnessDir, { recursive: true })
+  harnessDir = realpathSync(harnessDir)
+  // `cwd` stays caller-given: the session's binding is keyed by the exact
+  // cwd string the carrying session advertises.
   let expected: ExecutionToken | undefined = activeExecutionTokens.get(harnessDir)
   if (expected === undefined) {
     if (!existsSync(join(harnessDir, 'store.db'))) {
@@ -1100,7 +1110,7 @@ export async function seedActiveWorkflow(
     expected: workflow.workflowToken,
     operationId: `bind-${workflowId}-${sessionId}`,
   })
-  await writeFile(join(cwd, '.mstarc'), `[config]\nharness_dir=${harnessDir}\n`)
+  gitInit(cwd)
   updateWorkflowSessionBinding(harnessDir, sessionId, cwd, {
     ...(selectedWorkflowId === null ? {} : { selectedWorkflowId }),
     executionBinding: {
@@ -1121,6 +1131,17 @@ export const INVALID_STATUS = {
   metadata: {},
 }
 
+
+/**
+ * `git init` a fixture workspace (idempotent): the harness root is fixed at
+ * `<git main worktree>/.mstar`, so every fixture workspace that carries a
+ * harness must be a real Git worktree — without `.git`, engine-side
+ * resolution from the workspace answers null.
+ */
+export function gitInit(root: string): void {
+  if (existsSync(join(root, '.git'))) return
+  execFileSync('git', ['init', '-q', root], { stdio: 'ignore' })
+}
 /* ===========================================================================
  * Issue / catalog store fixtures (the authority the host readers consult)
  *
@@ -1222,20 +1243,18 @@ export async function seedHarness(harnessDir: string, files: Record<string, stri
  */
 export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-mstar-boot-'))
-  const harnessDir = join(root, 'harness')
+  const harnessDir = join(root, '.mstar')
   await mkdir(harnessDir, { recursive: true })
-  // The workspace DECLARES its harness layout: this fixture's dir is
-  // `harness/`, which is not one of the engine's probe names (`.mstar` /
-  // `.agents` / `.plans` / `plans`), so engine-side resolution from this
-  // workspace finds it only through the highest-authority `.mstarc`
-  // declaration (`packages/engine/src/path.ts`: `.mstarc` `[config]
-  // harness_dir` → `.mstar/` → `.agents/` → …). Without it the plugin's own
-  // CONFIGURED harness dir and the engine's filesystem resolution disagree,
-  // and every engine-side lookup from this workspace answers null (e.g. the
-  // workflow-ledger target resolver in `workflow-selection.ts`, which only
-  // receives the session workspace). Same idiom as the engine's own fixtures
-  // (`packages/engine/src/gates.test.ts`: `[config]\nharness_dir=…`).
-  await writeFile(join(root, '.mstarc'), '[config]\nharness_dir=harness\n')
+  // Canonical spelling: the resolver answers the Git-reported (realpath'd)
+  // root, and the boot config must name the SAME path the D4 resolution and
+  // every binding comparison use.
+  const bootHarnessDir = realpathSync(harnessDir)
+  // The fixture is a real Git worktree whose harness is the fixed
+  // `<main worktree>/.mstar`: engine-side resolution from this workspace
+  // and the plugin's configured harness dir agree by construction (the
+  // workflow-ledger target resolver in `workflow-selection.ts` only
+  // receives the session workspace).
+  gitInit(root)
   // Active workflow state is created through the engine store fixture; the
   // helper creates no legacy status.json or workflow snapshot documents.
   if (options.seedV2 === true) await seedActiveWorkflow(harnessDir)
@@ -1352,7 +1371,7 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   }
 
   const config: Record<string, unknown> = {}
-  if (options.harnessDir !== null) config.harnessDir = options.harnessDir ?? harnessDir
+  if (options.harnessDir !== null) config.harnessDir = options.harnessDir ?? bootHarnessDir
   if (options.enforcement !== undefined) config.enforcement = options.enforcement
   if (options.dispatchTools !== undefined) config.dispatchTools = options.dispatchTools
   if (options.dispatchBinding !== undefined) config.dispatchBinding = options.dispatchBinding
@@ -1468,7 +1487,7 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   return {
     ctx,
     root,
-    harnessDir,
+    harnessDir: bootHarnessDir,
     fallbacksFiber,
     pluginFiber,
     async dispose() {
@@ -1589,3 +1608,63 @@ export function isCiEnvironment(): boolean {
  * so the CI report gate can read it without loading this harness.
  */
 export { LOCAL_SKILL_MOUNT_SKIP_REASON } from './skip-reasons.ts'
+
+/**
+ * Pin the process to a CLEAN fixture repo for the whole file: the dispatch
+ * gate's control-root cleanliness check reads the Git main worktree of
+ * `process.cwd()`, and this repository itself is the ambient checkout the
+ * suite runs in (its own committable state is irrelevant to these specs).
+ * The fixture repo is committed (`git status` clean), so the gate answers
+ * "clean" and only the spec's own violations remain.
+ */
+export function useCleanControlRoot(): void {
+  let dir: string | undefined
+  let prev: string | undefined
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'dsh-clean-control-'))
+    gitInit(dir)
+    mkdirSync(join(dir, '.mstar'), { recursive: true })
+    writeFileSync(join(dir, '.mstar', '.gitkeep'), '')
+    for (const args of [
+      ['config', 'user.email', 'fixture@example.invalid'],
+      ['config', 'user.name', 'fixture'],
+      ['add', '.mstar'],
+    ]) execFileSync('git', args, { cwd: dir, stdio: 'ignore' })
+    execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'init'], { cwd: dir, stdio: 'ignore' })
+    prev = process.cwd()
+    process.chdir(dir)
+  })
+  afterAll(async () => {
+    if (prev !== undefined) process.chdir(prev)
+    if (dir !== undefined) await rm(dir, { recursive: true, force: true })
+  })
+}
+
+/**
+ * Pin the process into a committed, harness-LESS Git repo for the whole
+ * file: specs that assert the inert/identity behaviour when no harness
+ * resolves must not accidentally resolve THIS repository's harness (the
+ * fixed root is the Git main worktree's `.mstar`, and the suite runs inside
+ * a checkout of it).
+ */
+export function usePlainCwd(): void {
+  let dir: string | undefined
+  let prev: string | undefined
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'dsh-plain-cwd-'))
+    gitInit(dir)
+    writeFileSync(join(dir, '.gitkeep'), '')
+    for (const args of [
+      ['config', 'user.email', 'fixture@example.invalid'],
+      ['config', 'user.name', 'fixture'],
+      ['add', '.gitkeep'],
+    ]) execFileSync('git', args, { cwd: dir, stdio: 'ignore' })
+    execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'init'], { cwd: dir, stdio: 'ignore' })
+    prev = process.cwd()
+    process.chdir(dir)
+  })
+  afterAll(async () => {
+    if (prev !== undefined) process.chdir(prev)
+    if (dir !== undefined) await rm(dir, { recursive: true, force: true })
+  })
+}

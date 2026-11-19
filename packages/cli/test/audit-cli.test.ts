@@ -16,6 +16,14 @@ import { join } from "node:path";
 import { runCli, withTempDir } from "./harness";
 import { cliEnvelope } from "./support/cli-assertions";
 
+/** Make `dir` a real Git main worktree: the CLI derives its fixed
+ * `<main worktree>/.mstar` root from the cwd, so a bare temp dir resolves no
+ * harness at all. */
+function gitMainWorktree(dir: string): void {
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  execFileSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
+}
+
 // ---------------------------------------------------------------------------
 // mstar audit scaffold
 // ---------------------------------------------------------------------------
@@ -46,7 +54,8 @@ describe("mstar audit scaffold — review run dir from findings JSON", () => {
 
   test("run dir defaults to {REVIEW_DIR}/<date>-codebase-<level>-<round>", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
-      // cwd = the repo root of a harness → {REVIEW_DIR} = <cwd>/.mstar/reviews
+      // cwd = a real Git main worktree → {REVIEW_DIR} = <cwd>/.mstar/reviews
+      gitMainWorktree(dir);
       mkdirSync(join(dir, ".mstar"), { recursive: true });
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
@@ -92,7 +101,7 @@ describe("mstar audit scaffold — review run dir from findings JSON", () => {
     });
   });
 
-  test("--sha override wins over git resolution; outside a repo the fallback is 'unknown'", () => {
+  test("--sha override wins over git resolution; the run dir defaults under the fixed reviews root", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
@@ -102,15 +111,29 @@ describe("mstar audit scaffold — review run dir from findings JSON", () => {
       expect(readFileSync(join(outDir, "README.md"), "utf8")).toContain("@ deadbee (2026-08-08)");
     });
     withTempDir("mstar-slice4-cli-", (dir) => {
+      const findingsFile = join(dir, "findings.json");
+      writeFileSync(findingsFile, JSON.stringify(FINDINGS));
+      // A cwd outside any checkout resolves no fixed harness root, so the
+      // reviews dir is named explicitly; with no Git there is no SHA to read.
+      const reviewsDir = join(dir, "reviews");
+      const result = runCli(["audit", "scaffold", findingsFile, "--reviews-dir", reviewsDir, "--date", "2026-08-08"], { cwd: dir });
+      expect(result.exitCode).toBe(0);
+      const report = join(reviewsDir, "2026-08-08-codebase-standard-1", "README.md");
+      expect(existsSync(report)).toBe(true);
+      expect(readFileSync(report, "utf8")).toContain("@ unknown (2026-08-08)");
+    });
+    withTempDir("mstar-slice4-cli-", (dir) => {
+      gitMainWorktree(dir);
       mkdirSync(join(dir, ".mstar"), { recursive: true });
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
-      // cwd = a temp dir outside any git repo; --date pinned so the run dir is not a calendar flake
-      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-08-08"], { cwd: dir });
+      // cwd = a fixture checkout: the run dir defaults under its fixed root.
+      // --date pinned so the run dir is not a calendar flake.
+      const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-08-08", "--sha", "deadbee"], { cwd: dir });
       expect(result.exitCode).toBe(0);
       const report = join(dir, ".mstar", "reviews", "2026-08-08-codebase-standard-1", "README.md");
       expect(existsSync(report)).toBe(true);
-      expect(readFileSync(report, "utf8")).toContain("@ unknown (2026-08-08)");
+      expect(readFileSync(report, "utf8")).toContain("@ deadbee (2026-08-08)");
     });
   });
 

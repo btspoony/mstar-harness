@@ -11328,35 +11328,54 @@ var init_project = __esm(() => {
   };
 });
 function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
-  const start = resolve10(startDir);
-  const explicit = opts.harnessDir ?? (opts.ignoreEnvOverride ? undefined : process.env.MSTAR_HARNESS_DIR);
-  if (explicit)
-    return resolve10(start, explicit);
-  let base = start;
-  if (opts.workspaceRoot === undefined && opts.localProbe !== true) {
-    const probe = checkoutRootOrFailure(start);
-    if (probe.failed)
-      return null;
-    if (probe.root !== null) {
-      const main = mainWorktreeRoot(start);
-      if (main === null)
-        return null;
-      if (probe.root !== main)
-        base = main;
-    }
+  const start = canonicalizeNearestExisting(resolve10(startDir));
+  if (opts.harnessDir !== undefined)
+    return resolve10(start, opts.harnessDir);
+  if (opts.localProbe === true)
+    return localHarnessProbe(start, opts.workspaceRoot);
+  const gitStart = nearestExistingAncestor(start);
+  const probe = checkoutRootOrFailure(gitStart);
+  if (probe.failed)
+    return null;
+  if (probe.root === null)
+    return null;
+  const main = mainWorktreeRoot(gitStart);
+  if (main === null)
+    return null;
+  return resolveFixedHarnessDir(main);
+}
+function nearestExistingAncestor(target) {
+  let dir = resolve10(target);
+  for (;; ) {
+    if (existsSync8(dir))
+      return dir;
+    const parent = dirname8(dir);
+    if (parent === dir)
+      return dir;
+    dir = parent;
   }
-  const boundary = resolve10(base, opts.workspaceRoot ?? defaultWorkspaceRoot(base));
-  const rc = loadMstarc(base, boundary);
-  if (rc !== null && rc.config.harnessDir)
-    return resolve10(rc.dir, rc.config.harnessDir);
-  let dir = base;
+}
+function resolveFixedHarnessDir(checkout) {
+  refuseRetiredConfiguration(checkout, defaultWorkspaceRoot(checkout));
+  const fixed = join11(checkout, ".mstar");
+  if (isDirectory2(fixed))
+    return fixed;
+  for (const legacy of LEGACY_HARNESS_NAMES) {
+    if (isDirectory2(join11(checkout, legacy)))
+      throw retiredCandidateError(checkout, legacy);
+  }
+  return null;
+}
+function localHarnessProbe(start, workspaceRoot) {
+  const boundary = canonicalizeNearestExisting(resolve10(start, workspaceRoot ?? defaultWorkspaceRoot(start)));
+  let dir = start;
   for (;; ) {
     if (!isAtOrBelow3(dir, boundary))
       return null;
-    for (const candidate of [join11(dir, ".mstar"), join11(dir, ".agents"), join11(dir, ".plans"), join11(dir, "plans")]) {
-      if (isDirectory2(candidate))
-        return candidate;
-    }
+    refuseRetiredConfiguration(dir, boundary);
+    const fixed = join11(dir, ".mstar");
+    if (isDirectory2(fixed))
+      return fixed;
     if (dir === boundary)
       return null;
     const parent = dirname8(dir);
@@ -11364,6 +11383,16 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
       return null;
     dir = parent;
   }
+}
+function refuseRetiredConfiguration(startDir, boundary) {
+  const rc = loadMstarc(startDir, boundary);
+  if (rc !== null && rc.config.harnessDir !== undefined) {
+    throw new HarnessRootRetiredError(`The .mstarc at ${join11(rc.dir, MSTARC_FILE)} declares \`harness_dir\`, which is retired: the harness root is fixed at \`<main worktree>/.mstar\`. ` + `Recovery: delete the \`harness_dir\` line from ${join11(rc.dir, MSTARC_FILE)}, then run \`mstar path resolve\`.`, { code: "harness_dir", config: join11(rc.dir, MSTARC_FILE) });
+  }
+}
+function retiredCandidateError(checkout, candidate) {
+  const fixed = join11(checkout, ".mstar");
+  return new HarnessRootRetiredError(`No harness root at ${fixed}; the legacy \`${candidate}/\` candidate is retired and is never adopted. ` + `Recovery: run \`mstar harness scaffold ${checkout}\` (then \`mstar store upgrade\` if this repository has an existing store).`, { code: "legacy-candidate", candidate, checkout });
 }
 function defaultWorkspaceRoot(startDir) {
   try {
@@ -11436,6 +11465,25 @@ function resolvePlanDir(harnessDir) {
     return dir;
   return join11(dir, "plans");
 }
+function canonicalizeNearestExisting(path) {
+  const abs = resolve10(path);
+  let dir = abs;
+  const tail = [];
+  for (;; ) {
+    if (existsSync8(dir)) {
+      try {
+        return join11(realpathSync6(dir), ...tail);
+      } catch {
+        return abs;
+      }
+    }
+    const parent = dirname8(dir);
+    if (parent === dir)
+      return abs;
+    tail.unshift(basename5(dir));
+    dir = parent;
+  }
+}
 function resolveIterationDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "iterationDir");
   if (declared !== null)
@@ -11485,7 +11533,7 @@ function resolveTrackedDir(harnessDir, opts, key, name, ...extra) {
 function resolveHarnessSubdir(startDir, opts, key, fallback) {
   const harness = resolveHarnessDir(startDir, opts);
   if (harness === null) {
-    throw new Error(`harness dir not found from ${resolve10(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
+    throw new Error(`harness dir not found from ${resolve10(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\` from the repository's main worktree)`);
   }
   const declared = mstarcDirOverride(harness, key);
   return declared !== null ? declared : join11(resolve10(harness), fallback);
@@ -11518,6 +11566,8 @@ function hasFiles(dir) {
     return false;
   }
 }
+var LEGACY_HARNESS_NAMES;
+var HarnessRootRetiredError;
 var REVIEW_RUN_LEVELS;
 var REVIEW_DATE_RE;
 var SCAFFOLD_DIRS;
@@ -11546,6 +11596,16 @@ var init_path = __esm(() => {
   init_mstarc();
   init_project();
   init_store_db();
+  LEGACY_HARNESS_NAMES = [".agents", ".plans", "plans"];
+  HarnessRootRetiredError = class HarnessRootRetiredError extends Error {
+    details;
+    code = "harness.root-retired";
+    constructor(message, details) {
+      super(message);
+      this.details = details;
+      this.name = "HarnessRootRetiredError";
+    }
+  };
   REVIEW_RUN_LEVELS = ["quick", "standard", "deep"];
   REVIEW_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   SCAFFOLD_DIRS = ["plans", "iterations", "sdd", "reviews"];
@@ -12549,7 +12609,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
     try {
       const marker = statSync7(join18(dir, ".git"));
       if (marker.isDirectory())
-        return resolveHarnessDir(start, { workspaceRoot: dir });
+        return resolveHarnessDir(start, { localProbe: true, workspaceRoot: dir });
       linked = marker.isFile();
     } catch (error) {
       const code = errorCode(error);
@@ -12557,10 +12617,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
         throw error;
     }
     if (linked) {
-      const envRoot = process.env.MSTAR_HARNESS_DIR;
-      if (typeof envRoot === "string" && envRoot.trim() !== "")
-        return resolveHarnessDir(start);
-      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.", { cwd: start, marker: join18(dir, ".git") });
+      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Recovery: run this command from the repository's main worktree, or run `mstar path resolve` there and pass its `controlHarnessDir` where the command takes a control root.", { cwd: start, marker: join18(dir, ".git") });
     }
     const parent = dirname11(dir);
     if (parent === dir)
@@ -14054,7 +14111,6 @@ init_workflow();
 init_dispatch();
 init_worktree();
 init_path();
-init_mstarc();
 init_workflow();
 init_execution_store();
 init_worktree();
@@ -14070,10 +14126,10 @@ class SddScriptError extends Error {
 var GIT_CAPTURE_MAX_BYTES = 64 * 1024 * 1024;
 init_iteration();
 init_project();
-init_core();
-init_coordination();
+init_git_probe();
 init_path();
 init_status();
+init_core();
 init_workflow();
 init_project();
 var STATUS_FILE = "status.json";
@@ -14115,17 +14171,10 @@ function resolveHarnessRootOf(target) {
     dir = parent;
   }
 }
-function processHarnessFallback(startDir) {
-  try {
-    return resolveProcessHarnessDir(startDir);
-  } catch {
-    return null;
-  }
-}
 function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
-  const resolved = resolve18(targetPath);
+  const resolved = realpathNearest(targetPath);
   const name = basename12(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
@@ -14151,7 +14200,7 @@ function harnessDocKindOfTarget(targetPath) {
     return null;
   };
   const probeRoot = resolveHarnessRootOf(dirname14(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved)) ?? processHarnessFallback(dirname14(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -16537,7 +16586,13 @@ try {
 `);
     process.exit(2);
   }
-} catch {}
+} catch (error) {
+  if (error instanceof HarnessRootRetiredError) {
+    writeSync(2, `[Morning Star write gate] blocked: ${error.message}
+`);
+    process.exit(2);
+  }
+}
 process.exit(0);
 export {
   storeRuntimeProbe

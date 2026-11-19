@@ -30,7 +30,7 @@ async function fixture(): Promise<Fixture> {
   return { root, harness, context, worktree };
 }
 function cli(args: string[], f: Fixture, caller?: ExecutionIdentity): Result {
-  const env: Record<string, string | undefined> = { MSTAR_HARNESS_DIR: f.harness };
+  const env: Record<string, string | undefined> = {};
   if (caller) env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(caller);
   const { exitCode, stdout, stderr } = runCli(args, { cwd: f.root, env });
   let json: Record<string, any> = {};

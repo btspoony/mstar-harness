@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { setArtifactStore } from "@mstar-harness/engine";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -82,7 +82,10 @@ describe("audit command family", () => {
   });
 
   test("scaffold defaults the run dir to {REVIEW_DIR}/<date>-codebase-<level>-<round>", async () => {
-    const root = tempRoot();
+    const root = realpathSync(tempRoot());
+    // The harness root is fixed at the Git main worktree's `.mstar`, so the
+    // review-dir derivation resolves only inside a real repo.
+    gitInit(root);
     mkdirSync(path.join(root, ".mstar"), { recursive: true });
     const findings = path.join(root, "findings.json");
     writeFileSync(findings, JSON.stringify([{ title: "Bounded finding", description: "A fixture finding", priority: "P2", effort: "S", risk: "LOW", category: "bug" }]));

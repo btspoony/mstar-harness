@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Tool } from "@opencode/schema/tool";
 import { Effect } from "effect";
 import * as Engine from "@mstar-harness/engine";
@@ -7,6 +11,26 @@ import type { ToolHooks } from "@opencode/plugin/effect/tool";
 
 import { registerDispatchGate } from "../hooks/mod";
 import { dispatchBefore } from "./dispatch";
+
+// The dispatch gate reads the process control root. Keep it on a clean temp
+// Git worktree so the developer's checkout state cannot decide the test.
+let previousCwd: string;
+let controlRoot: string;
+beforeAll(() => {
+  previousCwd = process.cwd();
+  controlRoot = mkdtempSync(join(tmpdir(), "opencode-v2-gate-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: controlRoot });
+  mkdirSync(join(controlRoot, ".mstar"), { recursive: true });
+  writeFileSync(join(controlRoot, ".gitignore"), ".mstar/\n");
+  writeFileSync(join(controlRoot, ".mstarc"), "[config]\n");
+  execFileSync("git", ["add", ".gitignore", ".mstarc"], { cwd: controlRoot });
+  execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "init"], { cwd: controlRoot });
+  process.chdir(controlRoot);
+});
+afterAll(() => {
+  process.chdir(previousCwd);
+  rmSync(controlRoot, { recursive: true, force: true });
+});
 
 type ExecuteBeforeEvent = ToolHooks["execute.before"];
 type GateCallback = (event: ExecuteBeforeEvent) => Effect.Effect<void, Tool.Error>;
