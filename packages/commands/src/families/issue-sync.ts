@@ -18,11 +18,14 @@
  * an unconfirmed create stays `pending` and the next `ingest`/`pending`
  * reconciles it by correlation marker instead of creating again.
  *
- * Refusal vocabulary: the `sync.*` ledger codes are unchanged, and the
- * `.mstarc`/`git` identity refusals are `linear.binding-absent`,
+ * Refusal vocabulary: the `sync.*` ledger codes are unchanged (including
+ * `sync.identity-conflict` for a recorded-identity conflict); the
+ * `.mstarc`/`git` refusals are `linear.binding-absent`,
  * `linear.binding-invalid`, `linear.binding-incomplete`,
- * `linear.repo-unresolved` and `linear.author-unresolved`. Every refusal names
- * its recovery; none tells the operator to hand-edit a credential file, because
+ * `linear.repo-unresolved`, `linear.author-unresolved`, plus the binding
+ * state `linear.provider-disabled` and `linear.mode-refused`; and a refused
+ * tool result is recorded as `linear.write-refused`. Every refusal names its
+ * recovery; none tells the operator to hand-edit a credential file, because
  * no credential lives in mstar.
  */
 import { readFileSync } from "node:fs";
@@ -638,6 +641,12 @@ function parseRecords(raw: unknown): Array<{
     if (updatedAt === "" || Number.isNaN(Date.parse(updatedAt))) {
       throw new UsageError(name + " needs an ISO-8601 updatedAt; the ledger records it as the remote revision");
     }
+    // title and state are not defaulted: a malformed record would become a fake
+    // drift report against real ledger facts, so it is refused per item instead.
+    const title = typeof record.title === "string" ? record.title.trim() : "";
+    if (title === "") throw new UsageError(name + " has no title; mstar never guesses remote content");
+    const state = typeof record.state === "string" ? record.state.trim() : "";
+    if (state === "") throw new UsageError(name + " has no state; the drift check compares it with the pushed payload");
     const text = (value: unknown): string => (typeof value === "string" ? value : "");
     const labels = Array.isArray(record.labels)
       ? record.labels.filter((label): label is string => typeof label === "string")
@@ -645,9 +654,9 @@ function parseRecords(raw: unknown): Array<{
     return {
       externalId,
       url: text(record.url),
-      title: text(record.title),
+      title,
       description: text(record.description),
-      state: text(record.state),
+      state,
       priority: typeof record.priority === "string" ? record.priority : null,
       labels,
       updatedAt,
@@ -701,7 +710,7 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
     pending:
       "Plan this project's local issues for the host's Linear tools. NOTHING IS SENT: mstar makes no Linear call, holds no Linear credential and opens no socket. Run this first, then write each item with your own Linear MCP tools (discover their names at runtime) and finish with `issue-sync apply`. Each item carries localId, operation (create when the ledger holds no remote identity yet, update when it does), externalId, the payload to write, and the marker that must stay the LAST line of the description verbatim - it is how a later listing is associated with this local issue. `requestHash` is the skip key: an item whose ledger hash equals it is under `skipped` because the remote already says this, so it costs no tool call; `unresolved` names an unconfirmed earlier create that reconciliation must associate before anything creates again.",
     apply:
-      "Record what your Linear tools reported for the items `issue-sync pending` planned, one entry per item: {localId, outcome, externalId?, remoteUpdatedAt?, cause?}. outcome `confirmed` proves delivery and names the remote issue (externalId) plus its revision when the tool returns one; `refused` means provably NOT delivered (a validation or permission error), so the item stays retryable; `ambiguous` means sent but unconfirmed - a create keeps its pending residue and the next ingest associates it by marker, never by guessing a second create. An unknown localId, an entry this run never planned, or a missing field is that entry's refusal in the report, not a failed run. The report echoes your word: `items[].outcome` is the `confirmed`/`refused`/`ambiguous` you sent, while `counts` groups the LEDGER states each produced (`applied`/`unconfirmed`/`refused`) - the two vocabularies are never mixed in one field. `--results` takes a file path or `-` for stdin, and [] records nothing. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself; --force-adopt allows replacing one the row already records; --release <localId> clears a pending create with no remote id after ingest showed no issue carrying its marker (an associated issue records an id, which makes the flag refuse). ONE run per binding, continued from pending and ended here; --take-run replaces a holder you confirmed dead.",
+      "Record what your Linear tools reported for the items `issue-sync pending` planned, one entry per item: {localId, outcome, externalId?, remoteUpdatedAt?, cause?}. outcome `confirmed` proves delivery and names the remote issue (externalId) plus its revision when the tool returns one; `refused` means provably NOT delivered (a validation or permission error), so the item stays retryable; `ambiguous` means sent but unconfirmed - a create keeps its pending residue and the next ingest associates it by marker, never by guessing a second create. An unknown localId, an entry this run never planned, or a missing field is that entry's refusal in the report, not a failed run. The report echoes your word: `items[].outcome` is the `confirmed`/`refused`/`ambiguous` you sent, while `counts` groups the LEDGER states each produced (`applied`/`unconfirmed`/`refused`) - the two vocabularies are never mixed in one field. `--results` takes a file path or `-` for stdin, and [] records nothing. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself, BEFORE your results are recorded - so for an item named in both, the adopt wins and the entry's `confirmed` must repeat the adopted id or it is refused as a conflict; --force-adopt allows replacing one the row already records; --release <localId> clears a pending create with no remote id after ingest showed no issue carrying its marker (an associated issue records an id, which makes the flag refuse). ONE run per binding, continued from pending and ended here; --take-run replaces a holder you confirmed dead.",
     ingest:
       "Associate a listing your Linear tools returned with the local issues those remote issues mirror. --records takes a file path or - for stdin: [{externalId, url, title, description, state, priority, labels, updatedAt}]. The key is the marker in the description - repo=<owner/name>, local=<issue-id>, author=<Name <email>> - and repo must be this repository, local must exist here, and author must be this checkout's git author. Five buckets, one entry each (localId, externalId, url, and a cause when it is not a clean association): associated (recorded in the ledger, converged), drift (associated, but the remote content no longer matches what mstar last confirmed, or two remote issues claim one local issue - your judgement, nothing is rewritten), foreign (another operator's clone of this repository pushed it), orphan (the local issue is gone), unmanaged (no marker, a marker of the retired format, or another repository's - never adopted by title). No local issue is created, updated or closed.",
   };

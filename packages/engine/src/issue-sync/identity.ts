@@ -2,14 +2,14 @@
  * identity.ts — who this checkout is, for the correlation marker.
  *
  * Two facts, read from git and nowhere else:
- * - \`repo\` — the normalized \`origin\` remote (\`owner/name\`), or the explicit
- *   \`[linear] repo=\` override for a checkout that has no origin;
- * - \`author\` — \`user.name\` + \`user.email\` as \`"Name <email>"\`.
+ * - `repo` — the normalized `origin` remote (`owner/name`), or the explicit
+ *   `[linear] repo=` override for a checkout that has no origin;
+ * - `author` — `user.name` + `user.email` as `"Name <email>"`.
  *
  * A refusal here is a real answer, not a block: the marker cannot be written
  * without both, and each refusal names the command or the key that fixes it.
  *
- * The git invocation mirrors \`git-probe.ts\` (locale pinned, one shared timeout)
+ * The git invocation mirrors `git-probe.ts` (locale pinned, one shared timeout)
  * so a probe never hangs and never classifies by localized text.
  */
 import { execFileSync } from "node:child_process";
@@ -19,7 +19,7 @@ export type RepoIdentity =
   | { ok: true; repo: string; author: string }
   | { ok: false; code: "linear.repo-unresolved" | "linear.author-unresolved"; message: string };
 
-/** One bounded git read; \`null\` when git cannot answer (not a repo, timeout, no key). */
+/** One bounded git read; `null` when git cannot answer (not a repo, timeout, no key). */
 function gitRead(repoRoot: string, args: string[]): string | null {
   try {
     const out = execFileSync("git", ["-C", repoRoot, ...args], {
@@ -35,8 +35,8 @@ function gitRead(repoRoot: string, args: string[]): string | null {
 }
 
 /**
- * \`owner/name\` from any remote spelling: \`git@host:owner/name.git\`,
- * \`https://host/owner/name.git\`, \`ssh://host/owner/name\`, or a local path. The
+ * `owner/name` from any remote spelling: `git@host:owner/name.git`,
+ * `https://host/owner/name.git`, `ssh://host/owner/name`, or a local path. The
  * last two path segments are the identity; a remote with fewer is not one.
  */
 export function normalizeRepoRemote(remote: string): string | null {
@@ -50,7 +50,7 @@ export function normalizeRepoRemote(remote: string): string | null {
       return null;
     }
   } else if (value.includes(":")) {
-    // scp-like \`user@host:owner/name\`: everything after the last colon is the path.
+    // scp-like `user@host:owner/name`: everything after the last colon is the path.
     path = value.slice(value.lastIndexOf(":") + 1);
   }
   const segments = path
@@ -67,8 +67,8 @@ export function normalizeRepoRemote(remote: string): string | null {
 /**
  * This checkout's repository identity and git author.
  *
- * \`override\` is the \`[linear] repo=\` value, used only when the checkout has no
- * usable \`origin\`: an existing remote is the fact, and the key is the fallback
+ * `override` is the `[linear] repo=` value, used only when the checkout has no
+ * usable `origin`: an existing remote is the fact, and the key is the fallback
  * the refusal names.
  */
 export function readRepoIdentity(repoRoot: string, override?: string): RepoIdentity {

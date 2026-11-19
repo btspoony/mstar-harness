@@ -424,6 +424,19 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
         "a confirmed result must name the remote issue in 'externalId'; nothing was recorded for this item. Re-send the entry with the identifier the tool returned",
       );
     }
+    // A confirmed identity that differs from the row's recorded one is an
+    // identity replacement, not a receipt: the recorded id came from an ingest
+    // association or a same-run --adopt, and moving it silently would leave the
+    // old remote issue behind with no trace. The operator says so explicitly.
+    if (ledger.externalId !== null && ledger.externalId !== externalId) {
+      throw new SyncError(
+        "sync.identity-conflict",
+        "this item already points at " + JSON.stringify(ledger.externalId) + ", so " + JSON.stringify(externalId) +
+          " cannot be recorded from a tool result and nothing was written. If " + JSON.stringify(externalId) +
+          " really is the right issue, record it with 'mstar issue-sync apply --adopt <localId>=" + externalId +
+          " --force-adopt <localId>'",
+      );
+    }
     // A `pending` row with no id is an OPEN create cycle, and only the run that
     // opened it may close it with an identity: its claim is the cycle's intent
     // record and the reason the caller is entitled to report a delivery. For any

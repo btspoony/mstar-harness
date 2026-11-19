@@ -427,6 +427,56 @@ describe("a confirmed result never records an identity on another run's create",
     }
   });
 
+  test("a takeover delivers the residue the dead holder left: confirmed applies, not refuses", async () => {
+    // THE takeover story end to end: pending claims a create, the holder dies,
+    // the operator takes the run over with --take-run, and apply records that
+    // exact create. The takeover keeps the original run start, so the
+    // predecessor's cycle is still recognised as this run's own.
+    const { db, close } = await openedStore("takeover-delivers");
+    try {
+      addIssue(db, "I-000957");
+      const dead = lease(db);
+      const planned = plan(db, context({ runId: dead.runId }), "I-000957");
+
+      const taken = lease(db, { holderPid: 4343, takeRun: true });
+      const [outcome] = recordResults(db, context({ runId: taken.runId }), [
+        { localId: "I-000957", outcome: "confirmed", externalId: "LIN-88" },
+      ]);
+      expect(outcome).toMatchObject({ outcome: "applied", externalId: "LIN-88" });
+      expect(row(db, "I-000957")).toMatchObject({
+        itemState: "applied",
+        externalId: "LIN-88",
+        lastRequestHash: planned.requestHash,
+      });
+    } finally {
+      close();
+    }
+  });
+
+  test("a confirmed result naming a DIFFERENT recorded identity is refused, not applied over it", async () => {
+    const { db, close } = await openedStore("identity-override");
+    try {
+      addIssue(db, "I-000958");
+      const held = lease(db);
+      const ctx = context({ runId: held.runId });
+      // The row already points at LIN-1: an ingest associated it.
+      const planned = plan(db, ctx, "I-000958");
+      recordResults(db, ctx, [{ localId: "I-000958", outcome: "confirmed", externalId: "LIN-1" }]);
+      const applied = row(db, "I-000958")!;
+
+      // A tool result naming LIN-2 would silently move the pointer; it is that
+      // item's refusal naming --force-adopt instead.
+      const [override] = recordResults(db, ctx, [{ localId: "I-000958", outcome: "confirmed", externalId: "LIN-2" }]);
+      expect(override.outcome).toBe("refused");
+      expect(override.cause).toContain("--force-adopt");
+      expect(override.cause).toContain("LIN-1");
+      // Nothing moved, not even the proof the recorded identity earned.
+      expect(row(db, "I-000958")).toEqual(applied);
+    } finally {
+      close();
+    }
+  });
+
   test("the run that opened the cycle records the identity exactly as before", async () => {
     const { db, close } = await openedStore("claimed-receipt");
     try {
