@@ -396,11 +396,11 @@ export function claimItem(db: StoreDb, input: PlanItemInput): { claimed: boolean
   return writePlan(db, input, "claim");
 }
 
-// why: ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // The run lease: ONE push run per binding, arbitrated by this store's writes
 // ---------------------------------------------------------------------------
 //
-// `mstar issue-sync pending` is an operator command, not a concurrent service, so
+// why: `mstar issue-sync pending` is an operator command, not a concurrent service, so
 // the direction is serialized instead of being made safe under concurrency.
 // Every attempt to harden a per-item claim against a second run failed for one
 // structural reason: the claim key can only describe a candidate (content), and

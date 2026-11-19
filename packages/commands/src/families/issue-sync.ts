@@ -140,9 +140,15 @@ function envelope(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: id + ".ok", exitCode: 0, data };
 }
 
-/** note: a SyncError refusal survives as a refusal, never an internal error. */
-function refused(code: string, message: string): Error {
-  return Object.assign(new Error("[" + code + "] " + message), { code });
+/**
+ * note: a SyncError refusal survives as a refusal, never an internal error.
+ * why: one code can cover conditions whose repairs differ, so the thrown error may
+ * carry its own recovery line and `engineErrorFacts` preserves it into the envelope;
+ * a caller that supplies none keeps the shared per-code text.
+ */
+function refused(code: string, message: string, recovery?: string): Error {
+  const error = Object.assign(new Error("[" + code + "] " + message), { code });
+  return recovery === undefined ? error : Object.assign(error, { recovery });
 }
 
 /**
@@ -409,7 +415,7 @@ type ApplyReport = {
  * Parse `--adopt <localId>=<issueUrl|externalId>`. The FIRST `=` splits, so an
  * identifier containing one survives; a value with no `=` is a usage error
  * rather than a silently ignored flag.
- * why: a self-contradicting verb pair must be refused before the first write, not half-applied.
+ * why: an unparseable pair must be refused loudly, never silently dropped or half-read.
  */
 function adoptPairs(values: readonly string[] | undefined): Array<{ localId: string; reference: string }> {
   return (values ?? []).map((value) => {
@@ -563,12 +569,18 @@ function assertApplyOwnsHeldRun(
     return result.outcome === "confirmed" && result.externalId !== adopted;
   });
   if (unadopted === undefined) return;
+  // why: the recovery is NOT the run-held one - `--take-run` would bypass this very
+  // guard, while the stale result is repaired by naming the identity it is about.
   throw refused(
     "sync.run-held",
     "these results belong to an earlier run: " + JSON.stringify(unadopted.localId) + " was claimed before the run now holding " +
-      target.bindingId + " started (" + held.startedAt + "), so this apply cannot continue it and the lease is untouched. Re-run " +
-      "`mstar issue-sync pending --project <project-id>` against the current run, or take that run over with " +
-      "`mstar issue-sync apply --project <project-id> --results <file|-> --take-run` if you confirmed its holder is dead",
+      target.bindingId + " started (" + held.startedAt + "), so this apply cannot continue it and the lease is untouched. Name the " +
+      "remote identity the result is about with `mstar issue-sync apply --project <project-id> --adopt <localId>=<issueUrl|externalId>`, " +
+      "or associate it by its marker with `mstar issue-sync ingest --project <project-id> --records <file|->`, then re-run this apply",
+    "Record the identity this result is about, then re-run the apply. " +
+      "`mstar issue-sync apply --project <project-id> --results <file|-> --adopt <localId>=<issueUrl|externalId>` names it in the same " +
+      "invocation, and `mstar issue-sync ingest --project <project-id> --records <file|->` associates the issue by its marker first. " +
+      "`--take-run` is not the repair here: it would bypass the ownership check that refused this batch",
   );
 }
 

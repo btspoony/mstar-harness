@@ -360,6 +360,11 @@ describe("apply", () => {
     expect(stale.status).toBe("refused");
     expect(stale.code).toBe("sync.run-held");
     expect(stale.message).toContain("earlier run");
+    // why: the recovery for a stale result is the identity it is about, not `--take-run`;
+    // that flag would bypass the ownership check this refusal exists for.
+    expect(String(stale.details?.recovery)).toContain("--adopt");
+    expect(String(stale.details?.recovery)).toContain("mstar issue-sync ingest");
+    expect(String(stale.details?.recovery)).toContain("not the repair here");
     // why: Nothing was recorded, and the newer holder still owns the direction.
     expect((await rowOf(f, "I-000101"))!.externalId).toBeNull();
     const held = await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }));
