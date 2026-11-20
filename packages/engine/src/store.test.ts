@@ -1094,6 +1094,9 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
     const root = mkdtempSync(join(tmpdir(), "store-cross-root-"));
     try {
       const selected = join(root, "checkout-a", ".mstar");
+      mkdirSync(join(root, "checkout-a"), { recursive: true });
+      gitInit(join(root, "checkout-a"));
+      execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: join(root, "checkout-a") });
       const foreign = join(root, "checkout-b", ".mstar", "sdd", "_reviews", "x.json");
       const nested = join(root, "checkout-a", "vendor", "sub", ".mstar", "status.json");
       const ownCorpus = join(root, "checkout-a", ".agents", "specs", "x.json");
@@ -1106,7 +1109,6 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
       expect(() => resolveArtifactPath(join(root, "checkout-a", ".agents"), { kind: "json", key: join(root, "checkout-a", ".plans", "x.json") })).not.toThrow();
       // why: an ordinary `plans` directory is not a harness marker, even with a status.json.
       mkdirSync(join(root, "checkout-a", "docs", "plans"), { recursive: true });
-      gitInit(join(root, "checkout-a"));
       writeFileSync(join(root, "checkout-a", "docs", "plans", "status.json"), "{}");
       expect(() => resolveArtifactPath(selected, { kind: "json", key: join(root, "checkout-a", "docs", "plans", "x.json") })).not.toThrow();
       // why: a legacy plans-rooted corpus at another checkout's root is still foreign.
@@ -1114,6 +1116,12 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
       gitInit(join(root, "checkout-b"));
       writeFileSync(join(root, "checkout-b", "plans", "status.json"), "{}");
       expect(() => resolveArtifactPath(selected, { kind: "json", key: join(root, "checkout-b", "plans", "x.json") })).toThrow(/another checkout's harness state/);
+      // why: a linked worktree of the selected repository shares its main root.
+      const linked = join(root, "linked");
+      execFileSync("git", ["worktree", "add", "-q", linked, "-b", "feature/linked-plans"], { cwd: join(root, "checkout-a") });
+      mkdirSync(join(linked, "plans"), { recursive: true });
+      writeFileSync(join(linked, "plans", "status.json"), "{}");
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: join(linked, "plans", "x.json") })).not.toThrow();
       // why: a root-level `.mstar` still belongs to a foreign owner.
       expect(() => resolveArtifactPath(selected, { kind: "json", key: join(sep, ".mstar", "status.json") })).toThrow(/another checkout's harness state/);
     } finally {

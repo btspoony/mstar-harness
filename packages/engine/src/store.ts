@@ -17,7 +17,7 @@ import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { readJson, writeJson } from "./core.js";
-import { realpathNearest } from "./git-probe.js";
+import { mainWorktreeRoot, realpathNearest } from "./git-probe.js";
 import { CoordinationError, assertProtectedWriteAuthorized, canonicalTarget, type ProtectedWriteKind } from "./coordination-write.js";
 import { resolveProcessHarnessDir } from "./coordination.js";
 import {
@@ -143,7 +143,13 @@ export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): stri
     const selectedOwner = harnessOwnerOf(rootReal) ?? dirname(rootReal);
     const keyOwner = harnessOwnerOf(keyReal);
     if (keyOwner !== null && keyOwner !== selectedOwner) {
-      throw new CrossRootRefusedError(`${key} belongs to another checkout's harness state; select that checkout's root instead of routing around it`);
+      // why: a linked worktree shares the selected repository's main root, so
+      // its tracked plans are the same checkout; a different repo stays foreign.
+      const selectedMain = mainWorktreeRoot(selectedOwner);
+      const keyMain = mainWorktreeRoot(keyOwner);
+      if (selectedMain === null || keyMain === null || selectedMain !== keyMain) {
+        throw new CrossRootRefusedError(`${key} belongs to another checkout's harness state; select that checkout's root instead of routing around it`);
+      }
     }
     return key;
   }
