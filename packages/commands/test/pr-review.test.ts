@@ -114,6 +114,37 @@ describe("pr-review command family", () => {
     expect(JSON.parse(calls[1]!.stdin ?? "")).toMatchObject({ event: "COMMENT", body: "Review summary", commit_id: "abcdef0123456" });
   });
 
+  test("422 retry folds the body without its suggestion fence and drops inline comments", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([
+      { path: "src/a.ts", line: 3, body: "Unhandled null deref\n\nEvidence: `foo()` returns null before the deref.\n\nFix sketch: guard it.\n\n```suggestion\nconst v = fallback;\n```" },
+      { path: "src/b.ts", line: 9, body: "```suggestion\nconst x = 1;\n```" },
+    ]));
+    let apiCalls = 0;
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+      apiCalls += 1;
+      if (apiCalls === 1) return { exitCode: 1, signal: null, stdout: "", stderr: 'HTTP 422: "line" must be part of the diff' };
+      return { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-2" }), stderr: "" };
+    };
+    const result = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(result.status).toBe("ok");
+    expect(calls).toHaveLength(3);
+    const retried = JSON.parse(calls[2]!.stdin ?? "") as { body: string; comments?: unknown };
+    expect(retried.comments).toBeUndefined();
+    expect(retried.body).toContain("## Inline comments folded into this summary");
+    expect(retried.body).toContain("Unhandled null deref");
+    expect(retried.body).toContain("Fix sketch: guard it.");
+    expect(retried.body).toContain("(inline suggestion omitted: no anchor after 422)");
+    expect(retried.body).not.toContain("```suggestion");
+    expect(retried.body).not.toContain("const v = fallback;");
+    expect(retried.body).not.toContain("const x = 1;");
+  });
+
   test("refuses cleanup when a recorded review has no saved report", async () => {
     const { cwd, context, calls } = fixture();
     const worktreePath = path.join(cwd, "review-worktree");

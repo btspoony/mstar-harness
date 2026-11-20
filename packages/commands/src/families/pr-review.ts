@@ -99,13 +99,30 @@ function parseFinding(entry: unknown, index: number): ReviewPostPlan["inlineComm
   if (typeof row.path !== "string" || !row.path.trim() || typeof row.body !== "string" || !row.body.trim() || typeof row.line !== "number" || !Number.isInteger(row.line) || row.line < 1) throw new UsageError(`findings[${index}] must be {path: string, line: number >= 1, body: string}`);
   return { path: row.path, line: row.line, side: "RIGHT", body: row.body };
 }
+/** A folded inline body loses its suggestion fence: the summary carries no
+ * line anchor, so a suggestion block there would neither apply nor read as an
+ * inline fix. Keep the rest of the body (title / evidence / impact / fix
+ * sketch). */
+function withoutSuggestion(body: string): string {
+  const kept: string[] = [];
+  let inSuggestion = false;
+  for (const line of body.split(/\r?\n/)) {
+    if (!inSuggestion && /^\s*```suggestion\s*$/.test(line)) { inSuggestion = true; continue; }
+    if (inSuggestion) { if (/^\s*```\s*$/.test(line)) inSuggestion = false; continue; }
+    kept.push(line);
+  }
+  return kept.join("\n").trim();
+}
 function foldComments(body: string, dropped: ReviewPostPlan["inlineComments"]): string {
   return [
     ...body.split(/\r?\n/),
     "",
     "## Inline comments folded into this summary",
     "",
-    ...dropped.map((entry) => `- \`${entry.path}:${entry.line}\` — ${entry.body}`),
+    ...dropped.map((entry) => {
+      const comment = withoutSuggestion(entry.body);
+      return `- \`${entry.path}:${entry.line}\` — ${comment === "" ? "(inline suggestion omitted: no anchor after 422)" : comment}`;
+    }),
   ].join("\n");
 }
 async function execute(verb: Verb, input: Input, context: InvocationContext): Promise<CommandEnvelope> {
