@@ -7,8 +7,10 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  CATEGORY_ORDER,
   LOCKFILE_SYNC_TIMEOUT_MS,
   type RegistryFetch,
+  buildSectionBody,
   bumpJsonVersion,
   bumpVersion,
   checkVersionCollision,
@@ -16,6 +18,7 @@ import {
   publishedPackageNames,
   syncLockfile,
   syncRootDependencySpecs,
+  validateFragmentCategory,
   validateFragmentPackages,
 } from "./prepare-release.ts";
 import {
@@ -730,5 +733,33 @@ packages: engine, cli
       problems.push(...validateFragmentPackages(frag.packages, file));
     }
     expect(problems).toEqual([]);
+  });
+});
+
+describe("changelog category sections", () => {
+  const rootEn = CHANGELOGS.find((target) => target.pkg === "root" && target.lang === "en")!;
+  const frag = (category: string | undefined, bullet: string) => ({
+    file: `${bullet}.md`,
+    category,
+    packages: ["root"],
+    en: `- ${bullet}`,
+    cn: "",
+  });
+
+  test("an omitted category renders under Changed, never Harness", () => {
+    const body = buildSectionBody(rootEn, [frag(undefined, "unlabelled")], "9.9.9");
+    expect(body).toContain("### Changed");
+    expect(body).not.toContain("### Harness");
+  });
+
+  test("Breaking renders before Added and the other kinds", () => {
+    const body = buildSectionBody(rootEn, [frag("Added", "added"), frag("Breaking", "breaking")], "9.9.9");
+    expect(body.indexOf("### Breaking")).toBeLessThan(body.indexOf("### Added"));
+  });
+
+  test("an unknown explicit category is refused; every kind and omission is accepted", () => {
+    expect(validateFragmentCategory("Harness", "f.md")).toHaveLength(1);
+    expect(validateFragmentCategory(undefined, "f.md")).toEqual([]);
+    for (const category of CATEGORY_ORDER) expect(validateFragmentCategory(category, "f.md")).toEqual([]);
   });
 });
