@@ -137,43 +137,50 @@ function isBelow(root: string, dir: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
-/** The canonical collaboration namespace in both spellings: the configured home
- * (`homedir()`, or the fixture seam) and its physical twin, because callers
- * classify both requested and landed (realpath'd) targets. */
-function collaborationNamespaceRoots(userHome: string): string[] {
-  const configured = resolve(userHome, ".mstar", "repos");
-  const roots = [configured];
+/** The landed location of `candidate`, or `null` when its symlink chain refuses;
+ * that target already earns a fail-closed refusal from the host's own landed
+ * resolution, so classification only drops the unusable spelling here. */
+function landedOrNull(candidate: string): string | null {
   try {
-    const physical = resolve(realpathSync(userHome), ".mstar", "repos");
-    if (physical !== configured) roots.push(physical);
+    return landedPathOf(candidate);
   } catch {
-    // A home that cannot be canonicalized has no second spelling; the configured
-    // one still answers for requested targets.
+    return null;
   }
-  return roots;
+}
+
+/** True when `dir` names a location inside the canonical collaboration
+ * namespace. The namespace itself is reachable through symlinks — a user home,
+ * `~/.mstar` or `repos` moved elsewhere — so the configured
+ * `<home>/.mstar/repos` spelling and its landed twin both count, and the target
+ * is judged in both spellings too (callers pass requested and landed paths
+ * alike). A same-named file outside every spelling — a checkout's own `.mstar`,
+ * or `repos-archive/` beside the namespace — is not authority bytes. */
+function isInCollaborationNamespace(dir: string, userHome: string): boolean {
+  const configured = resolve(userHome, ".mstar", "repos");
+  const landedNamespace = landedOrNull(configured);
+  const landedDir = landedOrNull(dir);
+  const roots =
+    landedNamespace === null || landedNamespace === configured ? [configured] : [configured, landedNamespace];
+  const targets = landedDir === null || landedDir === dir ? [dir] : [dir, landedDir];
+  return roots.some((root) => targets.some((target) => isBelow(root, target)));
 }
 
 /** True when `target` is the collaboration database (or one of its sidecars)
- * inside the canonical user-level namespace. A same-named file anywhere else —
- * a checkout's own `.mstar`, or `repos-archive/` beside the namespace — is not
- * authority bytes and is judged by the ordinary document rules. */
+ * inside the canonical user-level namespace. */
 function isCollaborationAuthorityTarget(target: string, userHome: string): boolean {
   if (!COLLABORATION_AUTHORITY_NAMES.includes(basename(target).toLowerCase())) return false;
-  const dir = resolve(dirname(target));
-  return collaborationNamespaceRoots(userHome).some((root) => isBelow(root, dir));
+  return isInCollaborationNamespace(resolve(dirname(target)), userHome);
 }
 
 /** True when `target` (absolute) IS runtime-owned database bytes: the execution
  * authority database (or a SQLite sidecar) sitting directly at a harness root —
  * the runtime's own store location for a harness root is `<harness root>/store.db`
  * — or the user-level collaboration database inside the canonical
- * `<home>/.mstar/repos` namespace. Hand-writing either is never a supported
- * operation — hard vs soft, staged vs active, alias or not, all the same.
- *
- * `userHome` is the same direct-engine fixture seam the collaboration resolver
- * exposes, not a host selector. */
-export function isStoreAuthorityTarget(target: string, options: { userHome?: string } = {}): boolean {
-  if (isCollaborationAuthorityTarget(target, options.userHome ?? homedir())) return true;
+ * `<home>/.mstar/repos` namespace, however that namespace is symlinked. Hand-
+ * writing either is never a supported operation — hard vs soft, staged vs
+ * active, alias or not, all the same. */
+export function isStoreAuthorityTarget(target: string): boolean {
+  if (isCollaborationAuthorityTarget(target, homedir())) return true;
   if (!isStoreAuthorityName(basename(target))) return false;
   return isHarnessRootDir(dirname(target));
 }

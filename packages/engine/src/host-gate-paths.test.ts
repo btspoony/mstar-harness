@@ -4,14 +4,14 @@
  * strongest shipped semantics, #438); the naming/classification cases pin the
  * FW-3 case-folded contract the four host copies must now share.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import * as nodeOs from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   MAX_SYMLINK_HOPS,
-  STORE_AUTHORITY_NAMES,
   SYMLINK_RESOLUTION_REFUSED_CODE,
   SymlinkResolutionError,
   caseFoldedDocKind,
@@ -96,7 +96,6 @@ describe("host-gate-paths.landedPathOf", () => {
 
 describe("host-gate-paths authority naming", () => {
   test("matches the authority names case-insensitively (FW-3)", () => {
-    expect(STORE_AUTHORITY_NAMES).toEqual(["store.db", "store.db-wal", "store.db-shm", "store.db-journal"]);
     for (const name of ["store.db", "store.db-wal", "store.db-shm", "store.db-journal", "Store.db", "STORE.DB-WAL"]) {
       expect(isStoreAuthorityName(name)).toBe(true);
     }
@@ -115,14 +114,18 @@ describe("host-gate-paths authority naming", () => {
 
 describe("host-gate-paths collaboration authority target", () => {
   let home: string;
+  let homeSpy: { mockRestore(): void };
 
   beforeAll(() => {
-    // why: The namespace is anchored on the user home; the resolver's fixture
-    // seam is the only way a test names one without touching a real home.
+    // why: The namespace is anchored on the process home and the exported guard
+    // has no selector, so the isolated home is installed at the runtime
+    // boundary the guard reads (the same seam the store suite uses).
     home = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-home-")));
+    homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => home);
   });
 
   afterAll(() => {
+    homeSpy.mockRestore();
     rmSync(home, { recursive: true, force: true });
   });
 
@@ -131,38 +134,60 @@ describe("host-gate-paths collaboration authority target", () => {
   test("protects the collaboration database and every SQLite sidecar", () => {
     const db = collaborationDb();
     for (const target of [db, `${db}-wal`, `${db}-shm`, `${db}-journal`]) {
-      expect(isStoreAuthorityTarget(target, { userHome: home })).toBe(true);
+      expect(isStoreAuthorityTarget(target)).toBe(true);
     }
   });
 
   test("follows a dangling alias and a chain that lands in the namespace", () => {
     const link = join(root, "collaboration-alias");
     symlinkSync(collaborationDb(), link);
-    expect(isStoreAuthorityTarget(landedPathOf(link), { userHome: home })).toBe(true);
+    expect(isStoreAuthorityTarget(landedPathOf(link))).toBe(true);
     const chain = join(root, "collaboration-chain");
     symlinkSync("collaboration-alias", chain);
-    expect(isStoreAuthorityTarget(landedPathOf(chain), { userHome: home })).toBe(true);
+    expect(isStoreAuthorityTarget(landedPathOf(chain))).toBe(true);
   });
 
-  test("matches a case variant of the namespace and the name", () => {
-    const variant = join(home, ".mstar", "repos", "GitHub.com", "Acme", "Repo", "Collaboration.DB-WAL");
-    expect(isStoreAuthorityTarget(variant, { userHome: home })).toBe(true);
+  test("matches a case variant of the location and the name", () => {
+    expect(isStoreAuthorityTarget(join(home, ".mstar", "repos", "GitHub.com", "Acme", "Repo", "Collaboration.DB-WAL"))).toBe(
+      true,
+    );
   });
 
-  test("anchors on the ambient home when no fixture seam is passed", () => {
-    expect(isStoreAuthorityTarget(join(homedir(), ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db"))).toBe(true);
+  test("protects the physical location when the namespace itself is symlinked", () => {
+    // why: `~/.mstar/repos` may be a symlink (a large or relocated user store).
+    // The canonical selection then lives at the link target, and a host write to
+    // that physical path must be refused exactly like the lexical spelling.
+    const physical = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-repos-")));
+    const reposLink = join(home, ".mstar", "repos");
+    mkdirSync(join(home, ".mstar"), { recursive: true });
+    symlinkSync(physical, reposLink);
+    try {
+      const db = join(physical, "github.com", "acme", "repo", "collaboration.db");
+      expect(isStoreAuthorityTarget(db)).toBe(true);
+      expect(isStoreAuthorityTarget(`${db}-journal`)).toBe(true);
+      // The lexical selection stays protected, and an unrelated physical tree
+      // with the same basename is not claimed.
+      expect(isStoreAuthorityTarget(collaborationDb())).toBe(true);
+      expect(isStoreAuthorityTarget(join(physical, "..", "unrelated", "collaboration.db"))).toBe(false);
+    } finally {
+      rmSync(reposLink, { force: true });
+      rmSync(physical, { recursive: true, force: true });
+    }
+  });
+
+  test("anchors on the process home, never a caller-selected one", () => {
+    const otherHome = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-other-home-")));
+    expect(isStoreAuthorityTarget(join(otherHome, ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db"))).toBe(
+      false,
+    );
+    rmSync(otherHome, { recursive: true, force: true });
   });
 
   test("does not deny a similarly named database outside the user-level namespace", () => {
-    const options = { userHome: home };
-    expect(isStoreAuthorityTarget(join(root, ".mstar", "collaboration.db"), options)).toBe(false);
-    expect(isStoreAuthorityTarget(join(home, ".mstar", "collaboration.db"), options)).toBe(false);
-    expect(isStoreAuthorityTarget(join(home, ".mstar", "repos-archive", "acme", "repo", "collaboration.db"), options)).toBe(
-      false,
-    );
-    expect(isStoreAuthorityTarget(join(home, ".mstar", "repos", "github.com", "acme", "repo", "store.db"), options)).toBe(
-      false,
-    );
+    expect(isStoreAuthorityTarget(join(root, ".mstar", "collaboration.db"))).toBe(false);
+    expect(isStoreAuthorityTarget(join(home, ".mstar", "collaboration.db"))).toBe(false);
+    expect(isStoreAuthorityTarget(join(home, ".mstar", "repos-archive", "acme", "repo", "collaboration.db"))).toBe(false);
+    expect(isStoreAuthorityTarget(join(home, ".mstar", "repos", "github.com", "acme", "repo", "store.db"))).toBe(false);
   });
 });
 
