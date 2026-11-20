@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -50,20 +51,36 @@ function definition(id: string): CommandDefinition {
 const REVIEW = { schema: "mstar.review/v1", verdict: "ship it", summary_md: "Review summary.", findings: [] };
 
 describe("persist command family", () => {
+  test("a selector inside a linked checkout is refused instead of creating orphan state", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "commands-persist-linked-"));
+    roots.push(repo);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
+    const linked = join(repo, "task");
+    execFileSync("git", ["worktree", "add", "-q", linked, "-b", "feature/linked-selector"], { cwd: repo });
+    mkdirSync(join(repo, ".mstar"), { recursive: true });
+    mkdirSync(join(linked, ".mstar"), { recursive: true });
+    const { context } = setup();
+    const result = await definition("persist.write").execute({ kind: "review", key: "orphan", input: JSON.stringify(REVIEW), harness: join(linked, ".mstar") }, context);
+    expect(result).toMatchObject({ status: "refused" });
+    expect(result.message).toContain("harness.root-not-main");
+    expect(existsSync(join(linked, ".mstar", "sdd", "_reviews", "orphan.json"))).toBe(false);
+  });
+
   test("a blank harness selector is absent and a relative one resolves against the invocation cwd", async () => {
     const { harness, context } = setup();
-    const blankDoc = join(harness, "blank-selector.json");
-    await definition("persist.write").execute({ kind: "json", key: blankDoc, input: "{}", harness: "   " }, context);
-    expect(existsSync(blankDoc)).toBe(true);
+    const blankKey = "blank-selector";
+    await definition("persist.write").execute({ kind: "review", key: blankKey, input: JSON.stringify(REVIEW), harness: "   " }, context);
+    expect(existsSync(join(harness, "sdd", "_reviews", `${blankKey}.json`))).toBe(true);
 
-    const relativeDoc = join(harness, "relative-selector.json");
-    await definition("persist.write").execute({ kind: "json", key: relativeDoc, input: "{}", harness: ".mstar" }, context);
-    expect(existsSync(relativeDoc)).toBe(true);
+    const relativeKey = "relative-selector";
+    await definition("persist.write").execute({ kind: "review", key: relativeKey, input: JSON.stringify(REVIEW), harness: ".mstar" }, context);
+    expect(existsSync(join(harness, "sdd", "_reviews", `${relativeKey}.json`))).toBe(true);
 
     // why: a blank selector must not root the store at the process cwd and
     // silently split state; delete reads the invocation root.
-    await definition("persist.delete").execute({ kind: "json", key: blankDoc, harness: "" }, context);
-    expect(existsSync(blankDoc)).toBe(false);
+    await definition("persist.delete").execute({ kind: "review", key: blankKey, harness: "" }, context);
+    expect(existsSync(join(harness, "sdd", "_reviews", `${blankKey}.json`))).toBe(false);
   });
 
   test("registers default write under the stable persist.write tool identity", () => {

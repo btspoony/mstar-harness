@@ -1089,4 +1089,16 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("a json key never routes around the selected root", () => {
+    const root = mkdtempSync(join(tmpdir(), "store-cross-root-"));
+    try {
+      const selected = join(root, "control-a", ".mstar");
+      const foreign = join(root, "control-b", ".mstar", "sdd", "_reviews", "x.json");
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: foreign })).toThrow(/store\.cross-root-refused/);
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: join(selected, "sdd", "_reviews", "x.json") })).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

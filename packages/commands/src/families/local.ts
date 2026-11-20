@@ -420,7 +420,10 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         const projectDir = resolveProjectDir(root, { harnessDir });
         const created: string[] = [];
         const skipped: string[] = [];
-        const workspaceRoot = gitWorkspaceRoot(root);
+        // why: the engine targets the main worktree, so the ignore rule and
+        // generated guidance must land there too — a linked checkout's own
+        // files would leave the main harness unignored and unguided.
+        const workspaceRoot = path.dirname(harnessDir);
         const defaultHarness = path.join(workspaceRoot, ".mstar");
         const sameDir = (a: string, b: string): boolean => {
           try {

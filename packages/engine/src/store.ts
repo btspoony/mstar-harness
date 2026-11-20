@@ -17,6 +17,7 @@ import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { readJson, writeJson } from "./core.js";
+import { realpathNearest } from "./git-probe.js";
 import { CoordinationError, assertProtectedWriteAuthorized, canonicalTarget, type ProtectedWriteKind } from "./coordination-write.js";
 import { resolveProcessHarnessDir } from "./coordination.js";
 import {
@@ -100,12 +101,21 @@ export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): stri
   const { kind, key } = ref;
   assertKindAdmitted(kind as string);
   if (kind === "json") {
- // Escape hatch: caller-supplied absolute path. Not a user-facing AC.
+    // Escape hatch: caller-supplied absolute path. Not a user-facing AC.
     if (!isAbsolute(key)) {
       throw new Error(`ArtifactStore json key must be an absolute path \u2014 got ${JSON.stringify(key)}`);
     }
     if (key.split(/[\\/]+/).includes("..")) {
       throw new Error(`ArtifactStore json key must not contain ".." segments \u2014 got ${JSON.stringify(key)}`);
+    }
+    // why: a json key is an absolute escape hatch, but never a cross-root one —
+    // routing another harness's protected documents around the selected root
+    // would bypass that root's authorization.
+    const keyReal = realpathNearest(resolve(key));
+    const rootReal = realpathNearest(resolve(harnessRoot));
+    const foreign = [`.mstar${sep}`, `.agents${sep}`, `.plans${sep}`].some((marker) => keyReal.includes(marker));
+    if (foreign && keyReal !== rootReal && !keyReal.startsWith(rootReal + sep)) {
+      throw new Error(`store.cross-root-refused: ${key} belongs to another harness root; select that root instead of routing around it`);
     }
     return key;
   }
