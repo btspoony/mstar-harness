@@ -4,13 +4,11 @@
  * strongest shipped semantics, #438); the naming/classification cases pin the
  * FW-3 case-folded contract the four host copies must now share.
  */
-import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { COLLABORATION_MARKER_FILE } from "./collaboration-store.js";
 import {
   MAX_SYMLINK_HOPS,
   SYMLINK_RESOLUTION_REFUSED_CODE,
@@ -114,137 +112,41 @@ describe("host-gate-paths authority naming", () => {
 });
 
 describe("host-gate-paths collaboration authority target", () => {
-  let home: string;
-  let homeSpy: { mockRestore(): void };
+  const reserved = (name: string): string => join(tmpdir(), "anywhere", "store", name);
 
-  beforeAll(() => {
-    // why: The namespace is anchored on the process home and the exported guard
-    // has no selector, so the isolated home is installed at the runtime
-    // boundary the guard reads (the same seam the store suite uses).
-    home = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-home-")));
-    homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => home);
+  test("reserves the collaboration database name and every sidecar everywhere", () => {
+    for (const name of ["collaboration.db", "collaboration.db-wal", "collaboration.db-shm", "collaboration.db-journal"]) {
+      expect(isStoreAuthorityTarget(reserved(name))).toBe(true);
+    }
+    // The name is the authority, not the location: a checkout root, a tree
+    // outside any namespace, or the harness itself all deny it.
+    expect(isStoreAuthorityTarget(join(root, "collaboration.db"))).toBe(true);
+    expect(isStoreAuthorityTarget(join(harness, "collaboration.db"))).toBe(true);
   });
 
-  afterAll(() => {
-    homeSpy.mockRestore();
-    rmSync(home, { recursive: true, force: true });
-  });
-
-  const collaborationDb = (): string => join(home, ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db");
-
-  /** The marker the store publishes beside its database. */
-  const writeMarker = (dir: string, body: string = JSON.stringify({ version: 1, repositoryKey: "github.com/acme/repo" })): void =>
-    writeFileSync(join(dir, COLLABORATION_MARKER_FILE), body);
-
-  test("protects the collaboration database and every SQLite sidecar", () => {
-    const db = collaborationDb();
-    for (const target of [db, `${db}-wal`, `${db}-shm`, `${db}-journal`]) {
-      expect(isStoreAuthorityTarget(target)).toBe(true);
+  test("matches the reserved names case-insensitively", () => {
+    for (const name of ["Collaboration.db", "COLLABORATION.DB-WAL", "Collaboration.Db-Shm", "collaboration.DB-Journal"]) {
+      expect(isStoreAuthorityTarget(reserved(name))).toBe(true);
     }
   });
 
-  test("follows a dangling alias and a chain that lands in the namespace", () => {
+  test("follows aliases that land on the reserved name", () => {
     const link = join(root, "collaboration-alias");
-    symlinkSync(collaborationDb(), link);
+    symlinkSync(reserved("collaboration.db"), link);
     expect(isStoreAuthorityTarget(landedPathOf(link))).toBe(true);
     const chain = join(root, "collaboration-chain");
     symlinkSync("collaboration-alias", chain);
     expect(isStoreAuthorityTarget(landedPathOf(chain))).toBe(true);
+    // A differently named alias is refused by what it lands on, not its own name.
+    expect(isStoreAuthorityTarget(link)).toBe(false);
   });
 
-  test("matches a case variant of the location and the name", () => {
-    expect(isStoreAuthorityTarget(join(home, ".mstar", "repos", "GitHub.com", "Acme", "Repo", "Collaboration.DB-WAL"))).toBe(
-      true,
-    );
-  });
-
-  test("protects the physical location when the namespace itself is symlinked", () => {
-    // why: `~/.mstar/repos` may be a symlink (a large or relocated user store).
-    // The canonical selection then lives at the link target, and a host write to
-    // that physical path must be refused exactly like the lexical spelling.
-    const physical = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-repos-")));
-    const reposLink = join(home, ".mstar", "repos");
-    mkdirSync(join(home, ".mstar"), { recursive: true });
-    symlinkSync(physical, reposLink);
-    try {
-      const db = join(physical, "github.com", "acme", "repo", "collaboration.db");
-      expect(isStoreAuthorityTarget(db)).toBe(true);
-      expect(isStoreAuthorityTarget(`${db}-journal`)).toBe(true);
-      expect(isStoreAuthorityTarget(collaborationDb())).toBe(true);
-      expect(isStoreAuthorityTarget(join(physical, "..", "unrelated", "collaboration.db"))).toBe(false);
-    } finally {
-      rmSync(reposLink, { force: true });
-      rmSync(physical, { recursive: true, force: true });
-    }
-  });
-
-  test("protects a repository directory that carries the authority marker", () => {
-    // why: a repository directory below the namespace can be a symlink to
-    // external storage. The store's own marker beside the database is the
-    // evidence that the physical location holds authority bytes, so the
-    // physical-only spelling is denied without scanning the namespace.
-    const physical = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-repo-")));
-    writeMarker(physical);
-    const lexicalRepo = join(home, ".mstar", "repos", "github.com", "acme", "repo");
-    mkdirSync(join(home, ".mstar", "repos", "github.com", "acme"), { recursive: true });
-    symlinkSync(physical, lexicalRepo);
-    try {
-      const db = join(physical, "collaboration.db");
-      expect(isStoreAuthorityTarget(db)).toBe(true);
-      expect(isStoreAuthorityTarget(`${db}-shm`)).toBe(true);
-      expect(isStoreAuthorityTarget(join(lexicalRepo, "collaboration.db"))).toBe(true);
-      expect(isStoreAuthorityTarget(landedPathOf(join(lexicalRepo, "collaboration.db")))).toBe(true);
-      // A file alias into the marked directory lands on authority bytes too.
-      const alias = join(root, "collaboration-file-alias");
-      symlinkSync(db, alias);
-      expect(isStoreAuthorityTarget(landedPathOf(alias))).toBe(true);
-      // A neighbouring tree without the marker is not claimed.
-      expect(isStoreAuthorityTarget(join(physical, "..", "unrelated", "collaboration.db"))).toBe(false);
-    } finally {
-      rmSync(lexicalRepo, { force: true });
-      rmSync(join(home, ".mstar", "repos", "github.com"), { recursive: true, force: true });
-      rmSync(physical, { recursive: true, force: true });
-    }
-  });
-
-  test("allows a same-named database outside the namespace without a valid marker", () => {
-    const plain = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-plain-")));
-    try {
-      // No marker: an ordinary file, however it is named.
-      writeFileSync(join(plain, "collaboration.db"), "not authority bytes");
-      expect(isStoreAuthorityTarget(join(plain, "collaboration.db"))).toBe(false);
-      expect(isStoreAuthorityTarget(join(plain, "collaboration.db-wal"))).toBe(false);
-      // A malformed or unsupported marker is not evidence either.
-      writeMarker(plain, "{not json");
-      expect(isStoreAuthorityTarget(join(plain, "collaboration.db"))).toBe(false);
-      writeMarker(plain, JSON.stringify({ version: 2, repositoryKey: "github.com/acme/repo" }));
-      expect(isStoreAuthorityTarget(join(plain, "collaboration.db"))).toBe(false);
-      writeMarker(plain, JSON.stringify({ version: 1, repositoryKey: "" }));
-      expect(isStoreAuthorityTarget(join(plain, "collaboration.db"))).toBe(false);
-      // The valid marker beside the name is what makes it authority bytes.
-      writeMarker(plain);
-      expect(isStoreAuthorityTarget(join(plain, "collaboration.db"))).toBe(true);
-    } finally {
-      rmSync(plain, { recursive: true, force: true });
-    }
-  });
-
-  test("anchors on the process home, never a caller-selected one", () => {
-    const otherHome = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-other-home-")));
-    try {
-      expect(
-        isStoreAuthorityTarget(join(otherHome, ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db")),
-      ).toBe(false);
-    } finally {
-      rmSync(otherHome, { recursive: true, force: true });
-    }
-  });
-
-  test("does not deny a similarly named database outside the user-level namespace", () => {
-    expect(isStoreAuthorityTarget(join(root, ".mstar", "collaboration.db"))).toBe(false);
-    expect(isStoreAuthorityTarget(join(home, ".mstar", "collaboration.db"))).toBe(false);
-    expect(isStoreAuthorityTarget(join(home, ".mstar", "repos-archive", "acme", "repo", "collaboration.db"))).toBe(false);
-    expect(isStoreAuthorityTarget(join(home, ".mstar", "repos", "github.com", "acme", "repo", "store.db"))).toBe(false);
+  test("leaves other basenames and the execution lane unchanged", () => {
+    expect(isStoreAuthorityTarget(reserved("notes.md"))).toBe(false);
+    expect(isStoreAuthorityTarget(reserved("collaboration.dbx"))).toBe(false);
+    expect(isStoreAuthorityTarget(join(harness, "store.db"))).toBe(true);
+    expect(isStoreAuthorityTarget(join(harness, "store.db-journal"))).toBe(true);
+    expect(isStoreAuthorityTarget(join(root, "store.db"))).toBe(false);
   });
 });
 

@@ -29,7 +29,6 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
 import {
-  COLLABORATION_MARKER_FILE,
   initializeCollaborationStore,
   openCollaborationStore,
   readCollaborationAuthority,
@@ -254,136 +253,9 @@ describe("collaboration store", () => {
     expect(tableNames(location.dbPath).length).toBe(COLLABORATION_TABLES.length);
     expect(receipts(location.dbPath)).toEqual([]);
 
-    // A private store file and its private authority marker in a private dir.
+    // A private store file inside a private directory.
     expect(statSync(location.dbPath).mode & 0o777).toBe(0o600);
     expect(statSync(dirname(location.dbPath)).mode & 0o777).toBe(0o700);
-    const markerPath = join(dirname(location.dbPath), COLLABORATION_MARKER_FILE);
-    expect(statSync(markerPath).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(readFileSync(markerPath, "utf8"))).toEqual({
-      version: 1,
-      repositoryKey: "github.com/acme/staged",
-    });
-  });
-
-  test("an incomplete or foreign authority marker refuses as unreadable", async () => {
-    const repo = makeRepo("https://github.com/acme/marker.git");
-    const context = contextAt(repo);
-    const location = locationAt(repo);
-    const authority = await initializeCollaborationStore(location);
-    activate(location.dbPath);
-    const markerPath = join(dirname(location.dbPath), COLLABORATION_MARKER_FILE);
-
-    // A marker naming another repository cannot belong to this record.
-    writeFileSync(markerPath, JSON.stringify({ version: 1, repositoryKey: "github.com/acme/other" }));
-    await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
-      code: "collaboration.unreadable",
-    });
-    await expect(openCollaborationStore(context, "read")).rejects.toThrow(COLLABORATION_MARKER_FILE);
-    await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
-      code: "collaboration.unreadable",
-    });
-
-    // An unsupported marker version is not evidence either.
-    writeFileSync(markerPath, JSON.stringify({ version: 2, repositoryKey: authority.repoKey }));
-    await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
-
-    // Missing: the database file alone never authorizes the store.
-    rmSync(markerPath);
-    await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({ code: "collaboration.unreadable" });
-    await expect(openCollaborationStore(context, "read")).rejects.toThrow(COLLABORATION_MARKER_FILE);
-
-    // The initializer is the store's own recovery path: it republishes the
-    // marker from the authoritative record.
-    expect(await initializeCollaborationStore(location)).toMatchObject({
-      repoKey: authority.repoKey,
-      state: "active",
-    });
-    expect(JSON.parse(readFileSync(markerPath, "utf8"))).toEqual({ version: 1, repositoryKey: authority.repoKey });
-    const reopened = await openCollaborationStore(context, "read");
-    try {
-      expect(reopened.authority).toMatchObject({
-        repoKey: authority.repoKey,
-        storeId: authority.storeId,
-        state: "active",
-      });
-    } finally {
-      reopened.close();
-    }
-  });
-
-  test("the authority marker exists before the database is published", async () => {
-    const location = locationAt(makeRepo("https://github.com/acme/ordering.git"));
-    const dir = dirname(location.dbPath);
-    const markerPath = join(dir, COLLABORATION_MARKER_FILE);
-    const realLink = nodeFs.linkSync;
-    let markerAtLink: boolean | undefined;
-    const spy = spyOn(nodeFs, "linkSync").mockImplementation(((from: string, to: string) => {
-      // why: the database must never be visible without the evidence that makes
-      // its location authority bytes, so the marker is already on disk here.
-      markerAtLink = existsSync(join(dirname(to), COLLABORATION_MARKER_FILE));
-      return realLink(from, to);
-    }) as typeof realLink);
-    try {
-      await initializeCollaborationStore(location);
-    } finally {
-      spy.mockRestore();
-    }
-    expect(markerAtLink).toBe(true);
-    expect(existsSync(markerPath)).toBe(true);
-    expect(existsSync(location.dbPath)).toBe(true);
-  });
-
-  test("a failed publication removes the marker and the empty repository directory", async () => {
-    const location = locationAt(makeRepo("https://github.com/acme/failed-link.git"));
-    const dir = dirname(location.dbPath);
-    const spy = spyOn(nodeFs, "linkSync").mockImplementation((() => {
-      const error = new Error("synthetic link failure") as NodeJS.ErrnoException;
-      error.code = "EACCES";
-      throw error;
-    }) as typeof nodeFs.linkSync);
-    try {
-      await expect(initializeCollaborationStore(location)).rejects.toMatchObject({
-        code: "collaboration.unreadable",
-      });
-    } finally {
-      spy.mockRestore();
-    }
-    // No database, no marker, no leftover empty repository directory.
-    expect(existsSync(location.dbPath)).toBe(false);
-    expect(existsSync(join(dir, COLLABORATION_MARKER_FILE))).toBe(false);
-    expect(existsSync(dir)).toBe(false);
-    // A retry after the transient failure publishes both parts.
-    const authority = await initializeCollaborationStore(location);
-    expect(JSON.parse(readFileSync(join(dir, COLLABORATION_MARKER_FILE), "utf8"))).toEqual({
-      version: 1,
-      repositoryKey: authority.repoKey,
-    });
-    expect(existsSync(location.dbPath)).toBe(true);
-  });
-
-  test("an initialize recovers from a marker-only interruption", async () => {
-    const repo = makeRepo("https://github.com/acme/marker-only.git");
-    const context = contextAt(repo);
-    const location = locationAt(repo);
-    const dir = dirname(location.dbPath);
-    // A crash between marker publication and database publication leaves this
-    // fail-closed state: the location is protected, but no store is readable.
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, COLLABORATION_MARKER_FILE),
-      JSON.stringify({ version: 1, repositoryKey: "github.com/acme/stale-key" }),
-    );
-    await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
-      code: "collaboration.not-initialized",
-    });
-    // The next initializer publishes the database and rewrites the orphan
-    // marker from its own record.
-    const authority = await initializeCollaborationStore(location);
-    expect(JSON.parse(readFileSync(join(dir, COLLABORATION_MARKER_FILE), "utf8"))).toEqual({
-      version: 1,
-      repositoryKey: authority.repoKey,
-    });
-    expect(authority.repoKey).toBe("github.com/acme/marker-only");
   });
 
   test("the staged schema is the closed collaboration inventory with no execution table", async () => {

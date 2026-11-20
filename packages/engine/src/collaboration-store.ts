@@ -15,20 +15,7 @@
  * state or epoch changes.
  */
 import { randomUUID } from "node:crypto";
-import {
-  accessSync,
-  closeSync,
-  constants,
-  existsSync,
-  linkSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmdirSync,
-  unlinkSync,
-  writeSync,
-} from "node:fs";
+import { accessSync, closeSync, constants, existsSync, linkSync, mkdirSync, openSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
@@ -512,107 +499,6 @@ function unreadable(dbPath: string, detail: string, cause?: string): StoreError 
   );
 }
 
-/** The private marker published beside the canonical database. It names the
- * repository the store belongs to, so the host classifier can recognize the
- * store's physical location (a symlinked repository directory) without scanning
- * the namespace, and open can prove the marker still matches the record. */
-export const COLLABORATION_MARKER_FILE = ".mstar-collaboration";
-
-const COLLABORATION_MARKER_VERSION = 1;
-
-/** Parse the marker in `dir`; `null` when it is absent, malformed or from an
- * unsupported marker version. Never throws: the classifier calls it on every
- * candidate path. */
-function parseAuthorityMarker(dir: string): { version: number; repositoryKey: string } | null {
-  let text: string;
-  try {
-    text = readFileSync(join(dir, COLLABORATION_MARKER_FILE), "utf8");
-  } catch {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (parsed === null || typeof parsed !== "object") return null;
-  const record = parsed as { version?: unknown; repositoryKey?: unknown };
-  if (record.version !== COLLABORATION_MARKER_VERSION) return null;
-  if (typeof record.repositoryKey !== "string" || record.repositoryKey === "") return null;
-  return { version: record.version, repositoryKey: record.repositoryKey };
-}
-
-/** True when `dir` holds a valid authority marker. This is the classifier's only
- * evidence that a same-named database outside the lexical namespace is authority
- * bytes; unrelated directories never carry one. Never throws. */
-export function hasCollaborationAuthorityMarker(dir: string): boolean {
-  return parseAuthorityMarker(dir) !== null;
-}
-
-/** Refuse when the marker beside `dbPath` does not name the record's repository:
- * the store's identity is the pair, never the database file alone. */
-function assertAuthorityMarker(dir: string, repositoryKey: string): void {
-  const dbPath = join(dir, "collaboration.db");
-  const marker = parseAuthorityMarker(dir);
-  if (marker === null) {
-    throw unreadable(
-      dbPath,
-      `its authority marker ${COLLABORATION_MARKER_FILE} is missing, malformed or from an unsupported version; ` +
-        `rerun the collaboration initializer for this repository to publish it, or recover a verified backup pair`,
-    );
-  }
-  if (marker.repositoryKey !== repositoryKey) {
-    throw unreadable(
-      dbPath,
-      `its authority marker ${COLLABORATION_MARKER_FILE} names a different repository (${marker.repositoryKey}); ` +
-        `rerun the collaboration initializer for this repository to restore the marker`,
-    );
-  }
-}
-
-/** Publish the marker atomically: private temp file, then one rename over the
- * canonical name, so a reader never sees a half-written marker. */
-function writeAuthorityMarker(dir: string, repositoryKey: string): void {
-  const dbPath = join(dir, "collaboration.db");
-  const temp = join(dir, `.${COLLABORATION_MARKER_FILE}.${process.pid}-${randomUUID()}.tmp`);
-  const body = JSON.stringify({ version: COLLABORATION_MARKER_VERSION, repositoryKey }) + "\n";
-  try {
-    const fd = openSync(temp, "wx", 0o600);
-    try {
-      writeSync(fd, body);
-    } finally {
-      closeSync(fd);
-    }
-    renameSync(temp, join(dir, COLLABORATION_MARKER_FILE));
-  } catch (error) {
-    removeStagingFiles(temp);
-    throw new StoreError(
-      "collaboration.unreadable",
-      `The collaboration store at ${dbPath} is published, but its authority marker could not be written ` +
-        `(${publicationCause(error)}); the store stays unusable until the marker exists. Rerun the same ` +
-        `initializer to retry; no data was changed.`,
-    );
-  }
-}
-
-/** Best-effort rollback of a marker published for a database that never
- * appeared: remove the marker, then the repository directory only when this
- * attempt left it empty. A marker-only directory is otherwise a safe state the
- * next initializer recovers. */
-function discardAuthorityMarker(dir: string): void {
-  try {
-    unlinkSync(join(dir, COLLABORATION_MARKER_FILE));
-  } catch {
-    // already gone: nothing to roll back
-  }
-  try {
-    rmdirSync(dir);
-  } catch {
-    // not empty or already gone: keep whatever else lives there
-  }
-}
-
 /** A published store whose directory entry is not confirmed durable. */
 function barrierRefusal(dbPath: string, error: unknown): StoreError {
   const cause = publicationCause(error);
@@ -894,10 +780,6 @@ async function continueExisting(location: CollaborationLocation, timeout: number
   const handle = await openAdmission(location, "any", undefined, timeout);
   const authority = handle.authority;
   handle.close();
-  // The record is authoritative for this location, so its marker is refreshed
-  // here: a store published before the marker existed (or a competing
-  // initializer that linked first) becomes complete on the retry.
-  writeAuthorityMarker(dirname(location.dbPath), authority.repoKey);
   confirmDirectoryEntry(location.dbPath);
   return authority;
 }
@@ -905,10 +787,8 @@ async function continueExisting(location: CollaborationLocation, timeout: number
 /**
  * Create-only staged initialization for one canonical scope. A missing
  * database is built complete in a private staging file and published with one
- * create-only hard link; the private authority marker is then published beside
- * it, so the location is recognizable as authority bytes and open can prove the
- * pair still agrees. A matching record already on disk (staged or active) is
- * reused without clearing it, and a record for another repository, mode,
+ * create-only hard link; a matching record already on disk (staged or active)
+ * is reused without clearing it, and a record for another repository, mode,
  * state, store id or schema refuses.
  */
 export async function initializeCollaborationStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
@@ -987,9 +867,6 @@ export async function initializeCollaborationStore(location: CollaborationLocati
     throw asRefusal(dbPath, error);
   }
 
-  // The marker is published BEFORE the database: there is no moment where a
-  // visible store lacks the evidence that makes its location authority bytes.
-  writeAuthorityMarker(dir, location.repoKey);
   try {
     linkSync(stagingPath, dbPath);
   } catch (error) {
@@ -999,10 +876,6 @@ export async function initializeCollaborationStore(location: CollaborationLocati
       // only after it is verified and its directory entry is confirmed.
       return continueExisting(location, timeout);
     }
-    // No database appeared, so the marker must not outlive this attempt; a
-    // crash here instead leaves a marker-only directory, which the next
-    // initialize recovers and open reports as not-initialized.
-    discardAuthorityMarker(dir);
     throw unreadable(dbPath, `the staged store could not be linked into place (${publicationCause(error)})`);
   }
   // A failed barrier keeps the staging name (the only other reference to those
@@ -1016,8 +889,7 @@ export async function initializeCollaborationStore(location: CollaborationLocati
 /**
  * Open the scope's active collaboration authority. Never creates a database:
  * a missing one is `collaboration.not-initialized`, an inert staged one is
- * `collaboration.not-active`, and an invalid/corrupt/inaccessible one — or one
- * whose `COLLABORATION_MARKER_FILE` is missing or names another repository — is
+ * `collaboration.not-active`, and an invalid/corrupt/inaccessible one is
  * `collaboration.unreadable`. An expected stamp that no longer matches refuses
  * `collaboration.stale-binding` before the handle is returned.
  *
@@ -1041,14 +913,7 @@ export async function openCollaborationStore(
       throw unreadable(location.dbPath, `the store file is not writable (${publicationCause(error)})`);
     }
   }
-  const handle = await openAdmission(location, "active", expected, busyTimeoutMs());
-  try {
-    assertAuthorityMarker(dirname(location.dbPath), handle.authority.repoKey);
-  } catch (error) {
-    handle.close();
-    throw error;
-  }
-  return handle;
+  return openAdmission(location, "active", expected, busyTimeoutMs());
 }
 
 /** The active authority record alone; no handle escapes and nothing is created. */
@@ -1081,8 +946,7 @@ export async function withCollaborationWrite<T>(
 
   const probe = await connectAt(dbPath, "read", timeout);
   try {
-    const admitted = admit(probe, location, expected, "active");
-    assertAuthorityMarker(dirname(dbPath), admitted.repoKey);
+    admit(probe, location, expected, "active");
   } finally {
     probe.close();
   }

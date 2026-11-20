@@ -2,7 +2,7 @@
  * `host-gate-paths` — the single-sourced gate path glue every host write gate
  * used to hand-copy (issue #442): the landing-path resolver and the
  * authority-naming sets for the two runtime-owned databases (the execution
- * store at a harness root and the user-level collaboration store).
+ * store at a harness root and the reserved collaboration filename).
  *
  * The copies had drifted. opencode-v1, omp, dsh and the ZCode hook resolved
  * ONE symlink hop (realpath, else a single `readlinkSync`), while opencode-v2
@@ -22,9 +22,7 @@
  * host; this module only resolves paths and classifies names.
  */
 import { readlinkSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
-import { hasCollaborationAuthorityMarker } from "./collaboration-store.js";
+import { basename, dirname, relative, resolve } from "node:path";
 import { isHarnessRootDir, type HarnessDocKind } from "./gates.js";
 import { resolveProjectDir, resolveWorkflowDir } from "./path.js";
 
@@ -123,8 +121,11 @@ export function landedPathOf(filePath: string): string {
   }
 }
 
-/** The user-level collaboration database and its SQLite sidecars. They are
- * authority bytes only inside the canonical `<home>/.mstar/repos` namespace. */
+/** The user-level collaboration database and its SQLite sidecars. The name is a
+ * RESERVED authority filename everywhere — not only inside the user-level
+ * namespace — so a copy can never be hand-written under any path, alias or
+ * checkout. An unrelated same-named file is denied as the accepted fail-closed
+ * trade-off. */
 const COLLABORATION_AUTHORITY_NAMES: readonly string[] = [
   "collaboration.db",
   "collaboration.db-wal",
@@ -132,65 +133,18 @@ const COLLABORATION_AUTHORITY_NAMES: readonly string[] = [
   "collaboration.db-journal",
 ];
 
-/** True when `dir` is strictly below `root` (both absolute). */
-function isBelow(root: string, dir: string): boolean {
-  const rel = relative(root, dir);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-}
-
-/** The landed location of `candidate`, or `null` when its symlink chain refuses;
- * that target already earns a fail-closed refusal from the host's own landed
- * resolution, so classification only drops the unusable spelling here. */
-function landedOrNull(candidate: string): string | null {
-  try {
-    return landedPathOf(candidate);
-  } catch {
-    return null;
-  }
-}
-
-/** True when `dir` names a location inside the canonical collaboration
- * namespace. The namespace itself is reachable through symlinks — a user home,
- * `~/.mstar` or `repos` moved elsewhere — so the configured
- * `<home>/.mstar/repos` spelling and its landed twin both count, and the target
- * is judged in both spellings too (callers pass requested and landed paths
- * alike). */
-function isInCollaborationNamespace(dir: string, userHome: string): boolean {
-  const configured = resolve(userHome, ".mstar", "repos");
-  const landedNamespace = landedOrNull(configured);
-  const landedDir = landedOrNull(dir);
-  const roots =
-    landedNamespace === null || landedNamespace === configured ? [configured] : [configured, landedNamespace];
-  const targets = landedDir === null || landedDir === dir ? [dir] : [dir, landedDir];
-  return roots.some((root) => targets.some((target) => isBelow(root, target)));
-}
-
-/** True when `target` is the collaboration database (or one of its sidecars) and
- * belongs to the collaboration authority: it is inside the canonical user-level
- * namespace in either spelling, or it sits beside a valid
- * `COLLABORATION_MARKER_FILE`. The marker is the evidence that a location
- * outside the namespace (a repository directory symlinked elsewhere, so only the
- * physical path is presented) still holds authority bytes; a same-named file
- * without one is an ordinary file and stays allowed. */
-function isCollaborationAuthorityTarget(target: string, userHome: string): boolean {
-  if (!COLLABORATION_AUTHORITY_NAMES.includes(basename(target).toLowerCase())) return false;
-  const dir = resolve(dirname(target));
-  if (isInCollaborationNamespace(dir, userHome)) return true;
-  if (hasCollaborationAuthorityMarker(dir)) return true;
-  const landedDir = landedOrNull(dir);
-  return landedDir !== null && landedDir !== dir && hasCollaborationAuthorityMarker(landedDir);
-}
-
 /** True when `target` (absolute) IS runtime-owned database bytes: the execution
  * authority database (or a SQLite sidecar) sitting directly at a harness root —
  * the runtime's own store location for a harness root is `<harness root>/store.db`
- * — or the user-level collaboration database inside the canonical
- * `<home>/.mstar/repos` namespace, however that namespace is symlinked. Hand-
- * writing either is never a supported operation — hard vs soft, staged vs
- * active, alias or not, all the same. */
+ * — or a file carrying the reserved collaboration authority name anywhere.
+ * Hand-writing either is never a supported operation — hard vs soft, staged vs
+ * active, alias or not, all the same.
+ *
+ * Path classification only: no database is opened or probed. */
 export function isStoreAuthorityTarget(target: string): boolean {
-  if (isCollaborationAuthorityTarget(target, homedir())) return true;
-  if (!isStoreAuthorityName(basename(target))) return false;
+  const name = basename(target).toLowerCase();
+  if (COLLABORATION_AUTHORITY_NAMES.includes(name)) return true;
+  if (!isStoreAuthorityName(name)) return false;
   return isHarnessRootDir(dirname(target));
 }
 
