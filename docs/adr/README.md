@@ -19,7 +19,7 @@ docs/adr/{bucket}/{class}/yyyy-mm-dd-topic.md
 The contract's required/optional test is the only admission test. The runtime surfaces that point at it, so a decision is recorded in the change that makes it rather than at a later cleanup:
 
 - `mstar-phase-gates` § Prepare (`clarify`) — the closing summary decides admission and marks each qualifying settled decision as an `ADR-candidate`, without writing a file: whether this round implements it is not known until scope is cut.
-- `mstar-phase-gates` § plan — the candidates are landed before plan lock: one deferred past this round becomes a `proposed/` record, one implemented this round is named for its `Done`-time `implemented/` record.
+- `mstar-phase-gates` § plan — a candidate deferred past this round is landed as a `proposed/` record before plan lock; a candidate implemented this round writes nothing at lock and is carried by the `Done`-time `## Review Gate Summary` pointer.
 - `mstar-iteration` Phase 1 — a selected direction that is not started this iteration is written back as a `proposed/` record for the next iteration, and the change that implements one promotes it to `implemented/`.
 - `mstar-artifacts/references/plan-files-and-reports.md` — a plan's `## Review Gate Summary` carries `ADR: <path>` or `ADR: none` before `Done`, for iteration and standalone plans alike; PM Acceptance checks the line and that a named record exists in the delivery branch.
 - `mstar-iteration/references/phase-3-iteration-close.md` §3.2 — iteration close writes anything the plans left unrecorded, then checks freshness and supersession.
