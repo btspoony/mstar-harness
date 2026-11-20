@@ -11,10 +11,9 @@
  * `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`. The
  * harness root is one fixed location; `harness_dir` declarations,
  * `MSTAR_HARNESS_DIR` and the legacy `.agents/` / `.plans/` / `plans/`
- * candidates are retired in the same release: a declaration is refused
- * naming the line to delete, a legacy-only checkout is refused naming
- * `mstar harness scaffold` / `mstar store upgrade`, and
- * `opts.harnessDir` remains only as a caller-held assertion surface
+ * candidates are retired in the same release and silently ignored — no
+ * declaration or legacy layout is refused or adopted. `opts.harnessDir`
+ * remains only as a caller-held assertion surface
  * validated by the transport layers. `localProbe` keeps the bounded
  * walk-up for diagnostics (`mstar path resolve`'s `local` answer); it
  * probes the fixed `.mstar` name only.
@@ -51,8 +50,6 @@ export type ResolveHarnessDirOptions = {
    * the Git-derived root before reaching the engine.
    */
   harnessDir?: string;
-  /** why: Retired knob: `MSTAR_HARNESS_DIR` is ignored by the engine since the fixed-root cutover; kept so callers compile while their own slice removes it. */
-  ignoreEnvOverride?: boolean;
   /** why: `localProbe` boundary: stops the upward diagnostics walk. Resolved
    * against `startDir` when relative; the default is the git top-level of
    * `startDir` (sync `git rev-parse --show-cdup`; on failure / non-git
@@ -79,10 +76,10 @@ export type ResolveHarnessDirOptions = {
  * `opts.harnessDir` is returned verbatim (a caller-held assertion), the
  * `localProbe` diagnostic probes only `.mstar` upward within the
  * boundary, and every other call derives the Git main worktree of
- * `startDir`. A `.mstarc` declaring `harness_dir` or a legacy
- * `.agents/` / `.plans/` / `plans/` layout refuses with a named
- * recovery (`HarnessRootRetiredError`); a probe failure or a missing
- * `.mstar` returns `null` (fail-closed — never a substituted root).
+ * `startDir`. A `.mstarc` declaring `harness_dir`, `MSTAR_HARNESS_DIR`
+ * and a legacy `.agents/` / `.plans/` / `plans/` layout are ignored; a
+ * probe failure or a missing `.mstar` returns `null` (fail-closed — never
+ * a substituted root).
  */
 export function resolveHarnessDir(
   startDir: string = process.cwd(),
@@ -281,12 +278,6 @@ export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions
     join(repoRoot, ".agents", "specs"),
     join(repoRoot, "docs", "specs"),
     join(repoRoot, "specs"),
-// Legacy 兼容读 (plan-conventions § {SPECS_DIR} 解析 Legacy): read-only —
-// init must NOT create designs/; same empty-dir-as-absent rule applies.
-    join(harness, "designs"),
-    join(repoRoot, "designs"),
-// Legacy read-only tail: pre-move specs under the harness root.
-    join(harness, "specs"),
   ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory(candidate) && hasFiles(candidate)) return candidate;
@@ -306,10 +297,7 @@ export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions
 export function resolvePlanDir(harnessDir: string): string {
   const declared = mstarcDirOverride(harnessDir, "planDir");
   if (declared !== null) return declared;
-  const dir = resolve(harnessDir);
-  const name = basename(dir);
-  if (name === ".plans" || name === "plans") return dir;
-  return join(dir, "plans");
+  return join(resolve(harnessDir), "plans");
 }
 
 /**
@@ -486,8 +474,6 @@ function resolveTrackedDir(
   const candidates = [
     preferred,
     ...extra.map((segments) => join(repoRoot, ...segments)),
-    // Legacy read-only tail: pre-move documents under the harness root.
-    join(harness, name),
   ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory(candidate) && hasFiles(candidate)) return candidate;

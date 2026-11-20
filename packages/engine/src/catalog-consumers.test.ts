@@ -264,12 +264,12 @@ describe("catalog discovery \u2014 the completeness query over store.db", () => 
     const plan = "plan-one.md";
     const knowledge = "engineering/knowledge-one.md";
     mkdirSync(join(harness, "iterations", "20260101-iteration-one"), { recursive: true });
-    mkdirSync(join(harness, "knowledge", "engineering"), { recursive: true });
+    mkdirSync(join(root, ".agents", "knowledge", "engineering"), { recursive: true });
     mkdirSync(join(harness, "plans"), { recursive: true });
     mkdirSync(join(harness, "projects", "_default"), { recursive: true });
     writeFileSync(join(harness, "iterations", iteration), "# compass\n");
     writeFileSync(join(harness, "plans", plan), "# plan\n");
-    writeFileSync(join(harness, "knowledge", knowledge), "# knowledge\n");
+    writeFileSync(join(root, ".agents", "knowledge", knowledge), "# knowledge\n");
     writeFileSync(join(harness, "projects", "_default", "roadmap.md"), "---\nproject_id: _default\n---\n");
     return { iteration, plan, knowledge };
   }

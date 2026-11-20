@@ -455,9 +455,9 @@ describe("resolvePlanDir / resolveSddDir / resolveIterationDir (plan-conventions
     expect(resolvePlanDir(join("/r", ".agents"))).toBe(join("/r", ".agents", "plans"));
   });
 
-  test("resolvePlanDir returns the legacy plans dir itself when the harness root is `.plans` or `plans` (rung 3: {HARNESS_DIR}={PLAN_DIR})", () => {
-    expect(resolvePlanDir(join("/r", ".plans"))).toBe(join("/r", ".plans"));
-    expect(resolvePlanDir(join("/r", "plans"))).toBe(join("/r", "plans"));
+  test("resolvePlanDir always composes <harness>/plans", () => {
+    expect(resolvePlanDir(join("/r", ".plans"))).toBe(join("/r", ".plans", "plans"));
+    expect(resolvePlanDir(join("/r", ".mstar"))).toBe(join("/r", ".mstar", "plans"));
   });
 
   test("resolveSddDir composes {HARNESS_DIR}/sdd/<plan-id>", () => {
@@ -780,13 +780,14 @@ describe("resolveReviewDir / review-run dir names ({REVIEW_DIR}, review-report c
 });
 
 describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
-  test("candidate order: .agents/specs → docs/specs → repo-root specs → legacy {HARNESS_DIR}/specs", () => {
+  test("candidate order: .agents/specs → docs/specs → repo-root specs; legacy {HARNESS_DIR}/specs is ignored", () => {
     const root = tmpRoot("path-specs-order-");
     try {
       const harness = join(root, ".mstar");
       mkdirSync(join(harness, "specs"), { recursive: true });
       writeFileSync(join(harness, "specs", "spec.md"), "# spec\n");
-      expect(resolveSpecsDir(harness, { create: false })).toBe(join(harness, "specs"));
+      // why: the pre-move harness-local specs dir is no longer a read source.
+      expect(resolveSpecsDir(harness, { create: false })).toBe(join(root, ".agents", "specs"));
 
       mkdirSync(join(root, "specs"), { recursive: true });
       writeFileSync(join(root, "specs", "spec.md"), "# spec\n");
@@ -864,27 +865,26 @@ describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
     }
   });
 
-  test("legacy {HARNESS_DIR}/designs is picked when the primary candidates miss (compat read)", () => {
+  test("legacy designs dirs are never adopted", () => {
     const root = tmpRoot("path-specs-designs-harness-");
     try {
-      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       mkdirSync(join(root, ".mstar", "designs"), { recursive: true });
       mkdirSync(join(root, "designs"), { recursive: true });
       writeFileSync(join(root, ".mstar", "designs", "arch.md"), "# arch\n");
       writeFileSync(join(root, "designs", "other.md"), "# other\n");
-      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "designs"));
+      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, ".agents", "specs"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("empty legacy {HARNESS_DIR}/designs is skipped → repo-root designs/", () => {
+  test("an empty legacy {HARNESS_DIR}/designs no longer changes the target", () => {
     const root = tmpRoot("path-specs-designs-skip-");
     try {
       mkdirSync(join(root, ".mstar", "designs"), { recursive: true });
       mkdirSync(join(root, "designs"), { recursive: true });
       writeFileSync(join(root, "designs", "arch.md"), "# arch\n");
-      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, "designs"));
+      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, ".agents", "specs"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -983,16 +983,14 @@ describe("resolveKnowledgeDir (plan-conventions § 路径符号 / tracked-result
     }
   });
 
-  test("legacy {HARNESS_DIR}/knowledge is still read when nothing preferred exists, and never created", () => {
+  test("legacy {HARNESS_DIR}/knowledge is never adopted", () => {
     const root = tmpRoot("path-knowledge-legacy-");
     try {
       const legacy = join(root, ".mstar", "knowledge");
-      expect(resolveKnowledgeDir(join(root, ".mstar"), { create: false })).toBe(join(root, ".agents", "knowledge"));
-      expect(existsSync(join(root, ".agents"))).toBe(false);
-
       mkdirSync(legacy, { recursive: true });
       writeFileSync(join(legacy, "kb.md"), "# kb\n");
-      expect(resolveKnowledgeDir(join(root, ".mstar"), { create: false })).toBe(legacy);
+      expect(resolveKnowledgeDir(join(root, ".mstar"), { create: false })).toBe(join(root, ".agents", "knowledge"));
+      expect(existsSync(join(root, ".agents"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1041,7 +1039,8 @@ describe("resolveAdrDir (tracked-results chain)", () => {
       rmSync(join(root, "docs", "adr"), { recursive: true, force: true });
       mkdirSync(join(harness, "adr"), { recursive: true });
       writeFileSync(join(harness, "adr", "0003.md"), "# adr\n");
-      expect(resolveAdrDir(harness, { create: false })).toBe(join(harness, "adr"));
+      // why: the harness-local adr dir is no longer a read source.
+      expect(resolveAdrDir(harness, { create: false })).toBe(join(root, ".agents", "adr"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1676,9 +1675,9 @@ describe("assertPlanWritingPath (plan-conventions § Plan-Writing Path Gate)", (
     expect(result.code).toBe("plan-path.ok");
   });
 
-  test("accepts plans in the legacy same-dir layout ({HARNESS_DIR}={PLAN_DIR})", () => {
+  test("rejects plans in the legacy same-dir layout", () => {
     const result = assertPlanWritingPath(join("/r", ".plans", "20260808-x.md"), join("/r", ".plans"));
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
   });
 
   test("rejects external default plan dirs (repo-root plans/) when .mstar is the harness", () => {

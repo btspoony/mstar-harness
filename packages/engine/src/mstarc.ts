@@ -3,7 +3,6 @@
  * section declares the harness directory symbols:
  *
  *   [config]
- *   harness_dir=.custom_dir
  *   plan_dir=planning
  *   specs_dir=specs/custom
  *
@@ -12,7 +11,6 @@
  *
  * | key            | symbol            | engine reader                    |
  * |----------------|-------------------|----------------------------------|
- * | `harness_dir`  | `{HARNESS_DIR}`   | `resolveHarnessDir`              |
  * | `plan_dir`     | `{PLAN_DIR}`      | `resolvePlanDir`                 |
  * | `sdd_dir`      | `{SDD_DIR}` base  | `resolveSddDir` (per-plan join)  |
  * | `iteration_dir`| `{ITERATION_DIR}` | `resolveIterationDir`            |
@@ -24,7 +22,7 @@
  * | `enforcement`  | hard-gate policy  | `resolveRepoEnforcement`        |
  *
  * Resolution: the harness root is fixed at `<git main worktree root>/.mstar`;
- * `.mstarc` no longer declares it (`harness_dir` is refused), and
+ * `.mstarc` cannot declare it (`harness_dir` is an ignored unknown key), and
  * `MSTAR_HARNESS_DIR` is retired. The sub-directory keys below still resolve
  * from the nearest `.mstarc`. Sub-directory keys are honored by the engine
  * resolvers when the nearest `.mstarc` sits at the harness dir or its parent
@@ -44,8 +42,6 @@ export const MSTARC_SECTION = "config";
 export const LINEAR_SECTION = "linear";
 /** `[linear.mapping]` — optional per-value correspondence override. */
 export const LINEAR_MAPPING_SECTION = "linear.mapping";
-/** `[config]` key declaring the harness root. */
-export const MSTARC_HARNESS_DIR_KEY = "harness_dir";
 /** `[config]` key declaring `{PLAN_DIR}`. */
 export const MSTARC_PLAN_DIR_KEY = "plan_dir";
 /** `[config]` key declaring the `{SDD_DIR}` per-plan base. */
@@ -69,8 +65,6 @@ export const MSTARC_ENFORCEMENT_KEY = "enforcement";
 
 /** Parsed `.mstarc` harness config (unknown sections/keys are ignored). */
 export type MstarcConfig = {
-  /** Declared harness root, relative to the `.mstarc` directory or absolute. */
-  harnessDir?: string;
   /** Declared `{PLAN_DIR}`. */
   planDir?: string;
   /** Declared `{SDD_DIR}` base (the per-plan dir joins `<plan-id>`). */
@@ -109,7 +103,6 @@ export type MstarcStringKey = {
 
 /** `[config]` key → config field mapping (unknown keys ignored). */
 const CONFIG_KEYS: Record<string, keyof MstarcConfig> = {
-  [MSTARC_HARNESS_DIR_KEY]: "harnessDir",
   [MSTARC_PLAN_DIR_KEY]: "planDir",
   [MSTARC_SDD_DIR_KEY]: "sddDir",
   [MSTARC_ITERATION_DIR_KEY]: "iterationDir",

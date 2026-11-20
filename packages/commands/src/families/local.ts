@@ -354,7 +354,7 @@ function controlFacts(startDir: string): ControlFacts {
  */
 function trackedHarnessOf(checkoutRoot: string | null): string | null {
   if (checkoutRoot === null) return null;
-  return resolveHarnessDir(checkoutRoot, { ignoreEnvOverride: true, localProbe: true }) ?? path.join(checkoutRoot, ".mstar");
+  return resolveHarnessDir(checkoutRoot, { localProbe: true }) ?? path.join(checkoutRoot, ".mstar");
 }
 
 /**

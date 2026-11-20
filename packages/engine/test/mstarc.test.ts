@@ -28,7 +28,6 @@ describe("parseMstarc — minimal INI subset ([config] harness_dir)", () => {
       "project_dir=projects/archive",
     ].join("\n");
     expect(parseMstarc(text)).toEqual({
-      harnessDir: ".custom_dir",
       planDir: "planning",
       sddDir: "process/sdd",
       iterationDir: "process/iterations",
@@ -65,30 +64,30 @@ describe("parseMstarc — minimal INI subset ([config] harness_dir)", () => {
       parseMstarc(
         "[config]\nharness_dir=.custom\njev_mode=shadow\njev_transport=typesafe\njev_mode=\njev_transport=\n",
       ),
-    ).toEqual({ harnessDir: ".custom" });
+    ).toEqual({});
     expect(parseMstarc("[config]\njev_mode=\njev_transport=\n")).toEqual({});
   });
 
   test("parses the canonical [config] harness_dir form", () => {
-    expect(parseMstarc("[config]\nharness_dir=.custom_dir\n")).toEqual({ harnessDir: ".custom_dir" });
+    expect(parseMstarc("[config]\nharness_dir=.custom_dir\n")).toEqual({});
   });
 
   test("trims whitespace around keys and values", () => {
-    expect(parseMstarc("[config]\n  harness_dir =  .custom_dir  \n")).toEqual({ harnessDir: ".custom_dir" });
+    expect(parseMstarc("[config]\n  harness_dir =  .custom_dir  \n")).toEqual({});
   });
 
   test("ignores # and ; comments and blank lines", () => {
     const text = "# comment\n\n; another\n[config]\nharness_dir=.a\n";
-    expect(parseMstarc(text)).toEqual({ harnessDir: ".a" });
+    expect(parseMstarc(text)).toEqual({});
   });
 
   test("ignores other sections and unknown keys (forward compatibility)", () => {
     const text = "[other]\nharness_dir=.wrong\n[config]\nsome_key=1\nharness_dir=.right\n";
-    expect(parseMstarc(text)).toEqual({ harnessDir: ".right" });
+    expect(parseMstarc(text)).toEqual({});
   });
 
-  test("the last harness_dir wins; an empty value is treated as unset", () => {
-    expect(parseMstarc("[config]\nharness_dir=.a\nharness_dir=.b\n")).toEqual({ harnessDir: ".b" });
+  test("the last unknown harness_dir is still ignored", () => {
+    expect(parseMstarc("[config]\nharness_dir=.a\nharness_dir=.b\n")).toEqual({});
     expect(parseMstarc("[config]\nharness_dir=\n")).toEqual({});
   });
 
@@ -98,7 +97,7 @@ describe("parseMstarc — minimal INI subset ([config] harness_dir)", () => {
   });
 
   test("CRLF line endings are tolerated", () => {
-    expect(parseMstarc("[config]\r\nharness_dir=.custom_dir\r\n")).toEqual({ harnessDir: ".custom_dir" });
+    expect(parseMstarc("[config]\r\nharness_dir=.custom_dir\r\n")).toEqual({});
   });
 });
 
