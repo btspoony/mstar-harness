@@ -226,6 +226,10 @@ describe("collaboration identity", () => {
       "https://git.example.com/a/%2e%2e/team/repo.git",
       "https://git.example.com/%2E/team/repo.git",
       "git@git.example.com:a/../team/repo.git",
+      // A backslash is a URL path separator, so it must not hide `..` from the
+      // raw check; this one used to resolve to git.example.com/team/repo.
+      "https://git.example.com/a\\..\\team/repo.git",
+      "https://git.example.com\\..\\team/repo.git",
     ]) {
       const result = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=local\n")));
       expect(result.code).toBe("collaboration.repo-identity-unresolved");

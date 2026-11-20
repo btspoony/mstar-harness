@@ -82,6 +82,9 @@ function canonicalHost(raw: string): string {
 function splitOrigin(raw: string): { host: string; path: string } {
   const value = raw.trim();
   if (value === "") unresolved("The origin remote is empty");
+  // why: WHATWG URL treats a backslash as a path separator for http(s), so a
+  // raw backslash can hide `..` from the slash-only raw-path check below.
+  if (value.includes("\\")) unresolved("The origin contains a backslash path separator");
   const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(value);
   if (scheme !== null) {
     const protocol = `${scheme[1]!.toLowerCase()}:`;
