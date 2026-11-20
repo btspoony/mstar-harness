@@ -165,10 +165,35 @@ export type StoppedSessionAttestation = {
   state: "stopped" | "reloaded";
 };
 
+/** One handle an operator explicitly asserts must be gone before a fence. */
+export type CutoverStoppedHandle = {
+  kind: "process" | "session" | "host" | "consumer";
+  id: string;
+};
+
+/**
+ * The cutover-scope block of an attestation: the exact control root, the exact
+ * source generation and the operator's own stopped-handle assertion. A
+ * queryable session table cannot prove that an old process holds no open
+ * database handle, so the collaboration fence requires this independent
+ * statement instead of inferring the absence of handles from empty rows.
+ */
+export type CutoverAttestation = {
+  repoKey: string;
+  mode: "local" | "mirror";
+  controlRoot: string;
+  sourceStoreId: string;
+  sourceEpoch: number;
+  schemaVersion: number;
+  stoppedHandles: CutoverStoppedHandle[];
+};
+
 /**
  * The operator attestation of the barrier. Only these fields are ever
  * recorded: an undeclared field (a token, a credential, a session secret)
- * refuses the attestation instead of travelling into the receipt.
+ * refuses the attestation instead of travelling into the receipt. `cutover` is
+ * an optional, separately validated block that only a collaboration cutover
+ * requires; every existing activation path keeps the document it already sends.
  */
 export type ActivationAttestation = {
   version: number;
@@ -176,6 +201,7 @@ export type ActivationAttestation = {
   operator: { actor: string; authorizationRef: string };
   consumers: InstalledConsumerAttestation[];
   stoppedSessions: StoppedSessionAttestation[];
+  cutover?: CutoverAttestation;
 };
 
 // ---------------------------------------------------------------------------
@@ -949,6 +975,12 @@ export const DISPOSITIONS: Record<AttestationDisposition, true> = {
   "excluded:superseded-binary": true,
 };
 export const SESSION_STATES: Record<"stopped" | "reloaded", true> = { stopped: true, reloaded: true };
+export const CUTOVER_HANDLE_KINDS: Record<CutoverStoppedHandle["kind"], true> = {
+  process: true,
+  session: true,
+  host: true,
+  consumer: true,
+};
 
 /**
  * Two refusal families, as contract §7 distinguishes them.
@@ -989,7 +1021,8 @@ function attestationKeys(object: Record<string, unknown>, allowed: readonly stri
     if (!allowed.includes(key)) {
       attestationRefusal(
         `${what} declares an undeclared field "${key}"; the attestation records only installed entrypoints/versions, ` +
-          `quiesced sessions and the approving operator \u2014 never session credentials or other data.`,
+          `quiesced sessions, the approving operator and (for a collaboration cutover) the cutover scope \u2014 never ` +
+          `session credentials or other data.`,
       );
     }
   }
@@ -999,6 +1032,52 @@ function attestationString(object: Record<string, unknown>, key: string, what: s
   const value = object[key];
   if (typeof value !== "string" || value.trim() === "") attestationRefusal(`${what}.${key} must be a nonblank string`);
   return value;
+}
+
+/**
+ * The optional cutover block, validated with the same strictness as the rest of
+ * the document. It is never inferred: an operator that omits it, names another
+ * root or source generation, or claims no stopped handle at all gets a refusal
+ * rather than a fence.
+ */
+function cutoverAttestation(raw: unknown): CutoverAttestation {
+  const what = "the attestation.cutover";
+  const block = attestationObject(raw, what);
+  attestationKeys(block, ["repoKey", "mode", "controlRoot", "sourceStoreId", "sourceEpoch", "schemaVersion", "stoppedHandles"], what);
+  const mode = block.mode;
+  if (mode !== "local" && mode !== "mirror") attestationRefusal(`${what}.mode must be "local" or "mirror"`);
+  const positive = (key: "sourceEpoch" | "schemaVersion"): number => {
+    const value = block[key];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+      attestationRefusal(`${what}.${key} must be a positive integer`);
+    }
+    return value;
+  };
+  if (!Array.isArray(block.stoppedHandles) || block.stoppedHandles.length === 0) {
+    attestationRefusal(
+      `${what}.stoppedHandles must name at least one stopped handle; an empty list is not evidence that no old process ` +
+        `holds the store`,
+    );
+  }
+  const stoppedHandles = block.stoppedHandles.map((entry: unknown, index: number): CutoverStoppedHandle => {
+    const handleWhat = `${what}.stoppedHandles[${index}]`;
+    const handle = attestationObject(entry, handleWhat);
+    attestationKeys(handle, ["kind", "id"], handleWhat);
+    const kind = handle.kind;
+    if (typeof kind !== "string" || !Object.hasOwn(CUTOVER_HANDLE_KINDS, kind)) {
+      attestationRefusal(`${handleWhat}.kind must be one of ${Object.keys(CUTOVER_HANDLE_KINDS).join(", ")}`);
+    }
+    return { kind: kind as CutoverStoppedHandle["kind"], id: attestationString(handle, "id", handleWhat) };
+  });
+  return {
+    repoKey: attestationString(block, "repoKey", what),
+    mode,
+    controlRoot: attestationString(block, "controlRoot", what),
+    sourceStoreId: attestationString(block, "sourceStoreId", what),
+    sourceEpoch: positive("sourceEpoch"),
+    schemaVersion: positive("schemaVersion"),
+    stoppedHandles,
+  };
 }
 
 /** The fields every attestation declares: the protocol version, its instant and the approving operator. */
@@ -1050,7 +1129,7 @@ function stoppedSessionsOf(raw: Record<string, unknown>): StoppedSessionAttestat
  */
 export function validateActivationAttestation(value: unknown): ActivationAttestation {
   const raw = attestationObject(value, "the attestation");
-  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
+  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions", "cutover"], "the attestation");
   const { attestedAt, operator } = attestationHeader(raw);
 
   if (!Array.isArray(raw.consumers)) attestationRefusal("the attestation.consumers must be an array");
@@ -1134,8 +1213,16 @@ export function validateActivationAttestation(value: unknown): ActivationAttesta
 
   if (!Array.isArray(raw.stoppedSessions)) attestationRefusal("the attestation.stoppedSessions must be an array (possibly empty)");
   const stoppedSessions = stoppedSessionsOf(raw);
+  const cutover = raw.cutover === undefined ? undefined : cutoverAttestation(raw.cutover);
 
-  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator, consumers, stoppedSessions };
+  return {
+    version: ACTIVATION_PROTOCOL_VERSION,
+    attestedAt,
+    operator,
+    consumers,
+    stoppedSessions,
+    ...(cutover === undefined ? {} : { cutover }),
+  };
 }
 
 /**
@@ -1147,9 +1234,17 @@ export function validateActivationAttestation(value: unknown): ActivationAttesta
  */
 export function validateRecoveryAttestation(value: unknown): ActivationAttestation {
   const raw = attestationObject(value, "the attestation");
-  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
+  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions", "cutover"], "the attestation");
   const { attestedAt, operator } = attestationHeader(raw);
-  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator, consumers: [], stoppedSessions: stoppedSessionsOf(raw) };
+  const cutover = raw.cutover === undefined ? undefined : cutoverAttestation(raw.cutover);
+  return {
+    version: ACTIVATION_PROTOCOL_VERSION,
+    attestedAt,
+    operator,
+    consumers: [],
+    stoppedSessions: stoppedSessionsOf(raw),
+    ...(cutover === undefined ? {} : { cutover }),
+  };
 }
 
 // ---------------------------------------------------------------------------

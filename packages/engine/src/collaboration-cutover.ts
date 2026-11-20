@@ -24,7 +24,7 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   resolveCollaborationLocation,
   type CollaborationLocation,
@@ -277,19 +277,17 @@ function digestOfSource(source: CutoverSource, rows: Record<string, unknown[][]>
 }
 
 /**
- * Classify one combined-store receipt. The execution lane's own records share
- * this table today - recovery attempts, the legacy execution importer and the
- * host-state importer - and they stay with the execution store. The
- * classification uses each execution writer's own discriminant: the
- * `restore-attempt:` id prefix, the `#dsh-host-state` id suffix, and the
- * execution importer's documented receipt shape (`verdict` + `sourceDigest` +
- * `importedIds`, the same fields its own replay lookup validates). Everything
- * else is an issue/catalog/sync receipt the collaboration authority must keep
- * replaying.
+ * Classify one combined-store receipt as execution-owned by its PAYLOAD, never
+ * by its id: the legacy issue API accepts any non-empty operation id, so a
+ * receipt whose id happens to read `restore-attempt:...` can be a perfectly
+ * valid issue operation. Each execution-lane writer records a shape nothing in
+ * this table produces otherwise - the recovery replacement record
+ * (`recoveryVersion` + terminal `phase`), the execution importer report
+ * (`importedIds`) and the host-state importer report (`merged`) - so exactly
+ * those are excluded. Everything else, including anything unreadable or
+ * ambiguous, is preserved: replay history is never silently dropped.
  */
 function isExecutionReceipt(row: unknown[]): boolean {
-  const operationId = typeof row[0] === "string" ? row[0] : "";
-  if (operationId.startsWith("restore-attempt:") || operationId.endsWith("#dsh-host-state")) return true;
   if (typeof row[2] !== "string" || row[2] === "") return false;
   let parsed: unknown;
   try {
@@ -297,14 +295,24 @@ function isExecutionReceipt(row: unknown[]): boolean {
   } catch {
     return false;
   }
-  const record = parsed as Record<string, unknown> | null;
-  return (
-    record !== null &&
-    typeof record === "object" &&
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const record = parsed as Record<string, unknown>;
+  const replaced =
+    typeof record.recoveryVersion === "number" &&
+    record.phase === "replaced" &&
+    typeof record.storeId === "string" &&
+    record.verified !== null &&
+    typeof record.verified === "object";
+  const executionImport =
+    typeof record.verdict === "string" && typeof record.sourceDigest === "string" && Array.isArray(record.importedIds);
+  const hostStateImport =
     typeof record.verdict === "string" &&
     typeof record.sourceDigest === "string" &&
-    Array.isArray(record.importedIds)
-  );
+    record.imported !== null &&
+    typeof record.imported === "object" &&
+    record.merged !== null &&
+    typeof record.merged === "object";
+  return replaced || executionImport || hostStateImport;
 }
 
 /** The combined store's collaboration receipts, in their recorded order. */
@@ -743,23 +751,25 @@ function replaceStagedRows(db: StoreDb, rows: Record<string, unknown[][]>, ledge
 }
 
 /**
- * Scope the operator attestation to THIS source's stop facts and build. The
- * existing consumer/session shape has no root field, so the binding is derived:
- * the running build must be the attested build, every attested session must be
- * one this source records (a foreign or fabricated stop claim refuses), and
- * every session still live in the source must be attested stopped/reloaded. An
- * empty stop list is only the proved absence of booked sessions - never a
- * substitute for stopping the handles a stored source still records.
+ * Bind the operator attestation to THIS activation: the exact control root, the
+ * exact repository/mode and source generation, the build performing the fence,
+ * and the operator's own stopped-handle assertion. A session table alone cannot
+ * prove that an old process has no open handle, so the cutover block's
+ * `stoppedHandles` is required; recorded sessions are then cross-checked against
+ * the operator's statement in both directions.
  */
-function assertStopEvidence(
+function assertCutoverAttestation(
+  context: StoreContext,
+  location: CollaborationLocation,
+  manifest: CutoverManifest,
   attestation: ActivationAttestation,
   sessions: readonly { sessionId: string; state: string }[],
 ): void {
-  const invalid = (detail: string): never => {
+  const invalid: (detail: string) => never = (detail) => {
     throw new StoreError(
       "store.attestation-invalid",
-      `${detail} Attest this exact combined source: its recorded sessions, the build performing the fence and the ` +
-        `operator who approved it. Nothing was fenced or activated.`,
+      `${detail} Attest this exact control root, source generation, build and stopped handles; nothing was fenced or ` +
+        `activated.`,
     );
   };
   const build = readHarnessVersionOrNull();
@@ -773,22 +783,57 @@ function assertStopEvidence(
         `build ${String(build)}.`,
     );
   }
+  const block = attestation.cutover;
+  if (block === undefined) {
+    invalid(
+      "The attestation carries no `cutover` block, so its control root, source generation and stopped handles are unproven.",
+    );
+  }
+  if (block.repoKey !== location.repoKey || block.mode !== location.mode) {
+    invalid(
+      `The cutover block names repository ${block.repoKey} (${block.mode}), while this activation resolves ` +
+        `${location.repoKey} (${location.mode}).`,
+    );
+  }
+  const controlRoot = resolve(context.harnessDir);
+  if (resolve(block.controlRoot) !== controlRoot) {
+    invalid(
+      `The cutover block names control root ${block.controlRoot}, while this activation runs in ${controlRoot}.`,
+    );
+  }
+  if (
+    block.sourceStoreId !== manifest.source.storeId ||
+    block.sourceEpoch !== manifest.source.epoch ||
+    block.schemaVersion !== manifest.source.schemaVersion
+  ) {
+    invalid(
+      `The cutover block names source ${block.sourceStoreId} epoch ${block.sourceEpoch} schema ${block.schemaVersion}, ` +
+        `while the reviewed manifest extracts ${manifest.source.storeId} epoch ${manifest.source.epoch} schema ` +
+        `${manifest.source.schemaVersion}.`,
+    );
+  }
   const known = new Set(sessions.map((session) => session.sessionId));
   for (const stopped of attestation.stoppedSessions) {
     if (!known.has(stopped.sessionId)) {
       invalid(`The attestation stops session ${stopped.sessionId}, which this combined store does not record.`);
     }
   }
-  const attested = new Set(attestation.stoppedSessions.map((stopped) => stopped.sessionId));
-  const surviving = sessions.filter((session) => LIVE_SESSION_STATES[session.state] === true && !attested.has(session.sessionId));
+  const attestedSessions = new Set(attestation.stoppedSessions.map((stopped) => stopped.sessionId));
+  for (const handle of block.stoppedHandles) {
+    if (handle.kind !== "session") continue;
+    if (!known.has(handle.id)) {
+      invalid(`The cutover block stops session ${handle.id}, which this combined store does not record.`);
+    }
+    attestedSessions.add(handle.id);
+  }
+  const surviving = sessions.filter(
+    (session) => LIVE_SESSION_STATES[session.state] === true && !attestedSessions.has(session.sessionId),
+  );
   if (surviving.length > 0) {
     invalid(
       `This combined store still records ${surviving.length} live session(s) that the attestation does not stop ` +
         `(${surviving.map((session) => `${session.sessionId} is ${session.state}`).join("; ")}).`,
     );
-  }
-  if (sessions.length > 0 && attested.size === 0) {
-    invalid(`This combined store records ${sessions.length} session(s) and the attestation stops none of them.`);
   }
 }
 
@@ -816,6 +861,50 @@ async function releaseOwnClaim(
     db.prepare("delete from collaboration_operations where key_space = 'standalone' and operation_id = ?").run(CLAIM_KEY);
     return true;
   });
+}
+
+type StaleClaimOutcome = Readonly<{ kind: "released" | "unowned" | "aligned" }> | Readonly<{
+  kind: "fenced";
+  fence: CollaborationFence;
+}>;
+
+/**
+ * Resolve a pre-fence drift while holding the SOURCE WRITE LOCK: no fence
+ * transaction can commit between proving the source unfenced and deleting this
+ * activation's claim (SQLite serializes writers on the source file), so a
+ * release can never overtake a committed or in-progress fence. The target
+ * deletion commits before the source lock is released, in that order.
+ */
+async function releaseStaleClaim(
+  context: StoreContext,
+  location: CollaborationLocation,
+  manifest: CutoverManifest,
+  digest: string,
+): Promise<StaleClaimOutcome> {
+  const source = await openStore(context, "write");
+  try {
+    source.db.exec("begin immediate");
+    try {
+      const fence = readCollaborationFence(source.db);
+      if (fence !== null) return { kind: "fenced", fence };
+      const snapshot = readSourceSnapshot(source.db);
+      const aligned =
+        sameSource(snapshot.source, manifest.source) &&
+        snapshot.digest === manifest.sourceDigest &&
+        sameCounts(snapshot.counts, manifest.counts);
+      if (aligned) return { kind: "aligned" };
+      const released = await releaseOwnClaim(location, manifest, digest);
+      return { kind: released ? "released" : "unowned" };
+    } finally {
+      try {
+        source.db.exec("rollback");
+      } catch {
+        // nothing was written on the source
+      }
+    }
+  } finally {
+    source.close();
+  }
 }
 
 function ensureFenceSchema(db: StoreDb): number {
@@ -865,6 +954,27 @@ export async function planCollaborationCutover(context: StoreContext): Promise<C
   return { ...base, manifestId: digest.slice(0, 32) };
 }
 
+/**
+ * A fenced source is never restaged: its activation replays or refuses. Both
+ * the manifest and the persisted fence's target stamp must match the target.
+ */
+async function receiptFromFencedSource(
+  location: CollaborationLocation,
+  manifest: CutoverManifest,
+  digest: string,
+  fence: CollaborationFence,
+): Promise<CutoverReceipt> {
+  const target = await readTargetStateFor(location, manifest.manifestId);
+  if (target === null || target.publication === null) {
+    throw conflict(
+      `The source is fenced for manifest ${manifest.manifestId}, but the target holds no publication record for it. ` +
+        `Preserve both sides and complete the activation from the original session; nothing was written.`,
+    );
+  }
+  assertFenceMatches(fence, manifest, digest, target.authority);
+  return receiptOf(target.publication, location, true);
+}
+
 export async function applyCollaborationCutover(
   context: StoreContext,
   manifest: CutoverManifest,
@@ -875,114 +985,119 @@ export async function applyCollaborationCutover(
   if (manifest.blockers.length > 0) {
     throw notQuiescent(manifest.blockers, "The reviewed manifest still reports pending work.");
   }
-  const state = await readSourceState(context);
-  if (state.fence !== null) {
-    assertFenceMatches(state.fence, manifest, digest);
-    const target = await readTargetStateFor(location, manifest.manifestId);
-    if (target === null) {
-      throw conflict(
-        `The source is fenced for this manifest, but no staged target exists at ${location.dbPath}. Restore the ` +
-          `verified pre-fence image and complete the activation in the session that fenced it; nothing was written.`,
-      );
-    }
-    if (target.publication === null) {
-      throw conflict(
-        `The source is fenced for manifest ${manifest.manifestId}, but the target holds no publication record for it. ` +
-          `Preserve both sides and complete the activation from the original session; nothing was written.`,
-      );
-    }
-    return receiptOf(target.publication, location, true);
-  }
-  assertSnapshotMatches(state.snapshot!, manifest, "The source changed since the manifest was reviewed.");
-  const collision = state.snapshot!.ledger.find((row) => row[0] === CLAIM_KEY);
-  if (collision !== undefined) {
-    throw conflict(
-      `The source holds a legacy operation whose id is the cutover claim slot (${CLAIM_KEY}); promoting it would let the ` +
-        `claim delete a reviewed receipt. Rename that legacy operation first, then re-plan; nothing was staged.`,
-    );
-  }
-
-  await initializeCollaborationStore(location);
-  return writeCollaborationStage(location, ({ db, authority }) => {
-    const publication = readPublication(db, manifest.manifestId);
-    const claim = readClaim(db);
-    if (claim !== null) {
-      throw conflict(
-        `An activation (manifest ${claim.manifestId}, claimed at ${claim.claimedAt}) already holds the canonical ` +
-          `target, so no other manifest may stage over it. Complete or abandon that activation in its own session; ` +
-          `nothing was staged.`,
-      );
-    }
-    if (authority.state === "active") {
-      if (publication !== null && publication.phase === "active" && publication.manifestDigest === digest) {
-        return receiptOf(publication, location, true);
+  // The stage runs under the SOURCE WRITE LOCK: no fence can commit between the
+  // evidence read and the target write, so a fenced source is never restaged,
+  // and a claim released by a stale activation cannot expose the target to a
+  // restage that removes the publication its fence needs.
+  const source = await openStore(context, "write");
+  try {
+    source.db.exec("begin immediate");
+    try {
+      const fence = readCollaborationFence(source.db);
+      if (fence !== null) return await receiptFromFencedSource(location, manifest, digest, fence);
+      const snapshot = readSourceSnapshot(source.db);
+      assertSnapshotMatches(snapshot, manifest, "The source changed since the manifest was reviewed.");
+      const blockers = readCutoverBlockers(source.db);
+      if (blockers.length > 0) {
+        throw notQuiescent(blockers, "The source reported pending work when staging started.");
       }
-      throw conflict(
-        `The collaboration store at ${location.dbPath} is already active as ${authority.storeId}, so it is not a ` +
-          `staging target. Read it through the runtime verbs; a different source needs an already active repository ` +
-          `authority, not a forced publication. Nothing was written.`,
-      );
-    }
-    // One staged slot per canonical target: another manifest may only restage
-    // over the SAME source, and only while that source is still unfenced.
-    for (const other of readPublications(db)) {
-      if (other.manifestId === manifest.manifestId) continue;
-      if (other.phase !== "verified") {
+      const collision = snapshot.ledger.find((row) => row[0] === CLAIM_KEY);
+      if (collision !== undefined) {
         throw conflict(
-          `The canonical target already progressed past verification for manifest ${other.manifestId} ` +
-            `(phase ${other.phase}); it can no longer be restaged. Complete that activation or recover it from its ` +
-            `verified pre-fence image. Nothing was written.`,
+          `The source holds a legacy operation whose id is the cutover claim slot (${CLAIM_KEY}); promoting it would let ` +
+            `the claim delete a reviewed receipt. Rename that legacy operation first, then re-plan; nothing was staged.`,
         );
       }
-      if (other.source.storeId !== manifest.source.storeId || other.source.epoch !== manifest.source.epoch) {
-        throw conflict(
-          `The staged target was verified for source ${other.source.storeId} epoch ${other.source.epoch}, not ` +
-            `${manifest.source.storeId} epoch ${manifest.source.epoch}. Two sources cannot stage on one canonical ` +
-            `target; keep both and select the already active repository authority for this clone. Nothing was written.`,
+
+      await initializeCollaborationStore(location);
+      return await writeCollaborationStage(location, ({ db, authority }) => {
+        const publication = readPublication(db, manifest.manifestId);
+        const claim = readClaim(db);
+        if (claim !== null) {
+          throw conflict(
+            `An activation (manifest ${claim.manifestId}, claimed at ${claim.claimedAt}) already holds the canonical ` +
+              `target, so no other manifest may stage over it. Complete or abandon that activation in its own session; ` +
+              `nothing was staged.`,
+          );
+        }
+        if (authority.state === "active") {
+          throw conflict(
+            `The collaboration store at ${location.dbPath} is already active. "apply" never republishes or restages an ` +
+              `active authority: read it through the runtime verbs, or resume its own activation with the fenced ` +
+              `manifest. Nothing was written.`,
+          );
+        }
+        // One staged slot per canonical target: another manifest may only restage
+        // over the SAME source, and only while that source is still unfenced.
+        for (const other of readPublications(db)) {
+          if (other.manifestId === manifest.manifestId) continue;
+          if (other.phase !== "verified") {
+            throw conflict(
+              `The canonical target already progressed past verification for manifest ${other.manifestId} ` +
+                `(phase ${other.phase}); it can no longer be restaged. Complete that activation or recover it from its ` +
+                `verified pre-fence image. Nothing was written.`,
+            );
+          }
+          if (other.source.storeId !== manifest.source.storeId || other.source.epoch !== manifest.source.epoch) {
+            throw conflict(
+              `The staged target was verified for source ${other.source.storeId} epoch ${other.source.epoch}, not ` +
+                `${manifest.source.storeId} epoch ${manifest.source.epoch}. Two sources cannot stage on one canonical ` +
+                `target; keep both and select the already active repository authority for this clone. Nothing was written.`,
+            );
+          }
+        }
+        if (publication !== null && publication.phase !== "verified") {
+          throw conflict(
+            `The target holds a ${publication.phase} publication for this manifest, not a restageable verification. ` +
+              `Complete it with "store collaboration activate" instead. Nothing was written.`,
+          );
+        }
+
+        replaceStagedRows(db, snapshot.rows, snapshot.ledger);
+        db.prepare("update collaboration_meta set revision = ?, catalog_revision = ? where id = 1").run(
+          manifest.source.revision,
+          manifest.source.catalogRevision,
         );
+        verifyStagedEvidence(db, manifest);
+        const replayed = publication !== null && publication.manifestDigest === digest;
+        const verifiedAt = replayed ? publication!.verifiedAt : nowRfc3339();
+        db.prepare(
+          "insert into cutover_publications(manifest_id, phase, source_store_id, source_epoch, source_schema_version, " +
+            "source_revision, source_catalog_revision, manifest_digest, target_store_id, target_epoch, verified_at, " +
+            "fenced_at, activated_at) values (?, 'verified', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL) " +
+            "on conflict(manifest_id) do update set phase = 'verified', source_store_id = excluded.source_store_id, " +
+            "source_epoch = excluded.source_epoch, source_schema_version = excluded.source_schema_version, " +
+            "source_revision = excluded.source_revision, source_catalog_revision = excluded.source_catalog_revision, " +
+            "manifest_digest = excluded.manifest_digest, target_store_id = excluded.target_store_id, " +
+            "target_epoch = excluded.target_epoch, verified_at = excluded.verified_at, fenced_at = NULL, activated_at = NULL",
+        ).run(
+          manifest.manifestId,
+          manifest.source.storeId,
+          manifest.source.epoch,
+          manifest.source.schemaVersion,
+          manifest.source.revision,
+          manifest.source.catalogRevision,
+          digest,
+          authority.storeId,
+          authority.epoch,
+          verifiedAt,
+        );
+        // A restage replaces the evidence for the target: the previous manifest no longer describes the staged rows.
+        db.prepare("delete from cutover_publications where manifest_id <> ?").run(manifest.manifestId);
+        const stored = readPublication(db, manifest.manifestId)!;
+        return receiptOf(stored, location, replayed);
+      });
+    } finally {
+      try {
+        // Nothing was written on the source: the lock is released, not committed.
+        source.db.exec("rollback");
+      } catch {
+        // the transaction may already be closed by a refusing driver call
       }
     }
-    if (publication !== null && publication.phase !== "verified") {
-      throw conflict(
-        `The target holds a ${publication.phase} publication for this manifest, not a restageable verification. ` +
-          `Complete it with "store collaboration activate" instead. Nothing was written.`,
-      );
-    }
-
-    replaceStagedRows(db, state.snapshot!.rows, state.snapshot!.ledger);
-    db.prepare("update collaboration_meta set revision = ?, catalog_revision = ? where id = 1").run(
-      manifest.source.revision,
-      manifest.source.catalogRevision,
-    );
-    verifyStagedEvidence(db, manifest);
-    const replayed = publication !== null && publication.manifestDigest === digest;
-    const verifiedAt = replayed ? publication!.verifiedAt : nowRfc3339();
-    db.prepare(
-      "insert into cutover_publications(manifest_id, phase, source_store_id, source_epoch, source_schema_version, " +
-        "source_revision, source_catalog_revision, manifest_digest, target_store_id, target_epoch, verified_at, " +
-        "fenced_at, activated_at) values (?, 'verified', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL) " +
-        "on conflict(manifest_id) do update set phase = 'verified', source_store_id = excluded.source_store_id, " +
-        "source_epoch = excluded.source_epoch, source_schema_version = excluded.source_schema_version, " +
-        "source_revision = excluded.source_revision, source_catalog_revision = excluded.source_catalog_revision, " +
-        "manifest_digest = excluded.manifest_digest, target_store_id = excluded.target_store_id, " +
-        "target_epoch = excluded.target_epoch, verified_at = excluded.verified_at, fenced_at = NULL, activated_at = NULL",
-    ).run(
-      manifest.manifestId,
-      manifest.source.storeId,
-      manifest.source.epoch,
-      manifest.source.schemaVersion,
-      manifest.source.revision,
-      manifest.source.catalogRevision,
-      digest,
-      authority.storeId,
-      authority.epoch,
-      verifiedAt,
-    );
-    // A restage replaces the evidence for the target: the previous manifest no longer describes the staged rows.
-    db.prepare("delete from cutover_publications where manifest_id <> ?").run(manifest.manifestId);
-    const stored = readPublication(db, manifest.manifestId)!;
-    return receiptOf(stored, location, replayed);
-  });
+  } finally {
+    source.close();
+  }
 }
 
 async function prepareActivation(
@@ -1022,86 +1137,86 @@ async function prepareActivation(
         `manifest first; nothing was staged, fenced or activated.`,
     );
   }
-  const source = await readSourceState(context);
 
-  if (source.fence === null) {
-    if (
-      !sameSource(source.snapshot!.source, manifest.source) ||
-      source.snapshot!.digest !== manifest.sourceDigest ||
-      !sameCounts(source.snapshot!.counts, manifest.counts)
-    ) {
-      // Pre-fence drift is a supported recovery: this activation's own claim is
-      // released (committed), and only when the source is still provably
-      // unfenced. A concurrent fence wins: it is re-read after the release.
-      const released = await releaseOwnClaim(location, manifest, digest);
-      const afterFence = await readSourceFence(context);
-      if (afterFence !== null) {
+  for (let attempt = 0; ; attempt++) {
+    const source = await readSourceState(context);
+    if (source.fence === null) {
+      const aligned =
+        sameSource(source.snapshot!.source, manifest.source) &&
+        source.snapshot!.digest === manifest.sourceDigest &&
+        sameCounts(source.snapshot!.counts, manifest.counts);
+      if (!aligned) {
+        if (attempt > 0) {
+          throw conflict(
+            `The source keeps changing while this activation runs. Stop the remaining writers, re-plan, and retry with ` +
+              `the new reviewed manifest; nothing was fenced or activated.`,
+          );
+        }
+        // Pre-fence drift: the release is atomic with the fence because the
+        // source write lock is held across the target deletion.
+        const outcome = await releaseStaleClaim(context, location, manifest, digest);
+        if (outcome.kind === "aligned" || outcome.kind === "fenced") continue;
         throw conflict(
-          `The source was fenced while this activation re-read it (manifest ${afterFence.manifestId}, fenced at ` +
-            `${afterFence.fencedAt}). Resume that fenced activation with its own manifest; this stale attempt ` +
-            `${released ? "released its claim" : "released nothing"}. Nothing else was written.`,
+          `The source changed since manifest ${manifest.manifestId} was reviewed. ` +
+            `${outcome.kind === "released" ? "This activation's claim was released (with the source still unfenced), so the source can be re-planned and staged again." : "No claim was released because it is not held by this manifest and source."} ` +
+            `Re-run "store collaboration plan", review the new manifest, then apply and activate it. Nothing was fenced.`,
         );
       }
-      throw conflict(
-        `The source changed since manifest ${manifest.manifestId} was reviewed. ` +
-          `${released ? "This activation's claim was released, so the source can be re-planned and staged again." : "No claim was released because it is not held by this manifest and source."} ` +
-          `Re-run "store collaboration plan", review the new manifest, then apply and activate it. Nothing was fenced.`,
-      );
+      assertCutoverAttestation(context, location, manifest, attestation, source.sessions);
+      if (source.blockers.length > 0) {
+        throw notQuiescent(source.blockers, "The source reported pending work when activation started.");
+      }
+    } else {
+      assertFenceMatches(source.fence, manifest, digest, target.authority);
     }
-    assertStopEvidence(attestation, source.sessions);
-    if (source.blockers.length > 0) {
-      throw notQuiescent(source.blockers, "The source reported pending work when activation started.");
-    }
-  } else {
-    assertFenceMatches(source.fence, manifest, digest, target.authority);
-  }
 
-  if (target.authority.state === "active") {
-    const published = target.publication;
-    if (published === null || published.phase !== "active" || published.manifestDigest !== digest) {
+    if (target.authority.state === "active") {
+      const published = target.publication;
+      if (published === null || published.phase !== "active" || published.manifestDigest !== digest) {
+        throw conflict(
+          `The collaboration store at ${location.dbPath} is active, but not for manifest ${manifest.manifestId}. Read it ` +
+            `through the runtime verbs; an active authority is never republished or replaced. Nothing was written.`,
+        );
+      }
+      if (published.targetStoreId !== target.authority.storeId || published.targetEpoch !== target.authority.epoch) {
+        throw conflict(
+          `The active publication belongs to target ${published.targetStoreId} epoch ${published.targetEpoch}, while the ` +
+            `canonical path holds ${target.authority.storeId} epoch ${target.authority.epoch}. A foreign target never ` +
+            `wins by force; nothing was replayed.`,
+        );
+      }
+      // Replay is only success when the source is durably fenced: an active
+      // target beside a restored/unfenced source would be two authorities.
+      if (source.fence === null) {
+        throw conflict(
+          `The collaboration target at ${location.dbPath} is active, but this combined source is not fenced (it still ` +
+            `holds the collaboration tables). Replaying would report one authority while the source can still admit ` +
+            `writes. Complete the fence for this source with its own activation, or read collaboration through the active ` +
+            `repository authority. Nothing was replayed.`,
+        );
+      }
+      return {
+        context, location, manifest, digest, operator, attestation, source, target,
+        replay: receiptOf(published, location, true),
+      };
+    }
+    const publication = target.publication;
+    if (publication === null || publication.manifestDigest !== digest) {
       throw conflict(
-        `The collaboration store at ${location.dbPath} is active, but not for manifest ${manifest.manifestId}. Read it ` +
-          `through the runtime verbs; an active authority is never republished or replaced. Nothing was written.`,
+        `The staged target holds no verified publication for manifest ${manifest.manifestId}. Run ` +
+          `"store collaboration apply" with this reviewed manifest first; nothing was fenced or activated.`,
       );
     }
-    if (published.targetStoreId !== target.authority.storeId || published.targetEpoch !== target.authority.epoch) {
+    if (publication.targetStoreId !== target.authority.storeId || publication.targetEpoch !== target.authority.epoch) {
       throw conflict(
-        `The active publication belongs to target ${published.targetStoreId} epoch ${published.targetEpoch}, while the ` +
-          `canonical path holds ${target.authority.storeId} epoch ${target.authority.epoch}. A foreign target never ` +
-          `wins by force; nothing was replayed.`,
+        `The verified publication belongs to target ${publication.targetStoreId} epoch ${publication.targetEpoch}, while ` +
+          `the canonical path now holds ${target.authority.storeId} epoch ${target.authority.epoch}. A foreign target ` +
+          `never wins by force: restore the verified target and resume, or recover from the verified pre-fence image. ` +
+          `Nothing was fenced.`,
       );
     }
-    // Replay is only success when the source is durably fenced: an active
-    // target beside a restored/unfenced source would be two authorities.
-    if (source.fence === null) {
-      throw conflict(
-        `The collaboration target at ${location.dbPath} is active, but this combined source is not fenced (it still ` +
-          `holds the collaboration tables). Replaying would report one authority while the source can still admit ` +
-          `writes. Complete the fence for this source with its own activation, or read collaboration through the active ` +
-          `repository authority. Nothing was replayed.`,
-      );
-    }
-    return {
-      context, location, manifest, digest, operator, attestation, source, target,
-      replay: receiptOf(published, location, true),
-    };
+    return { context, location, manifest, digest, operator, attestation, source, target, replay: null };
   }
-  const publication = target.publication;
-  if (publication === null || publication.manifestDigest !== digest) {
-    throw conflict(
-      `The staged target holds no verified publication for manifest ${manifest.manifestId}. Run ` +
-        `"store collaboration apply" with this reviewed manifest first; nothing was fenced or activated.`,
-    );
-  }
-  if (publication.targetStoreId !== target.authority.storeId || publication.targetEpoch !== target.authority.epoch) {
-    throw conflict(
-      `The verified publication belongs to target ${publication.targetStoreId} epoch ${publication.targetEpoch}, while ` +
-        `the canonical path now holds ${target.authority.storeId} epoch ${target.authority.epoch}. A foreign target ` +
-        `never wins by force: restore the verified target and resume, or recover from the verified pre-fence image. ` +
-        `Nothing was fenced.`,
-    );
-  }
-  return { context, location, manifest, digest, operator, attestation, source, target, replay: null };
 }
 
 async function claimActivation(prepared: Prepared): Promise<void> {
@@ -1268,7 +1383,13 @@ async function fenceSource(prepared: Prepared, backupPath: string): Promise<Coll
       }
       const snapshot = readSourceSnapshot(handle.db);
       assertSnapshotMatches(snapshot, manifest, "The source changed after staging and before fencing.");
-      assertStopEvidence(prepared.attestation, readSourceSessions(handle.db));
+      assertCutoverAttestation(
+        prepared.context,
+        prepared.location,
+        manifest,
+        prepared.attestation,
+        readSourceSessions(handle.db),
+      );
       const blockers = readCutoverBlockers(handle.db);
       if (blockers.length > 0) throw notQuiescent(blockers, "The source reported pending work at the fence.");
       ensureFenceSchema(handle.db);

@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
@@ -89,8 +89,34 @@ function locationAt(root: string): CollaborationLocation {
   return resolveCollaborationLocation(contextAt(root));
 }
 
-function attestation(stopped: readonly string[] = ["session-one"]): ActivationAttestation {
-  return {
+type StoppedHandle = { kind: "process" | "session" | "host" | "consumer"; id: string };
+
+/**
+ * A cutover-scope attestation. The block names the exact control root, source
+ * generation and stopped handles; a case overrides only the field it attacks.
+ */
+function cutoverOptions(
+  context: StoreContext,
+  source: { storeId: string; epoch: number; schemaVersion: number },
+  variant: {
+    stopped?: readonly string[];
+    handles?: readonly StoppedHandle[];
+    build?: string;
+    repoKey?: string;
+    mode?: "local" | "mirror";
+    controlRoot?: string;
+    sourceStoreId?: string;
+    sourceEpoch?: number;
+    omitCutover?: boolean;
+  } = {},
+): { operator: string; attestation: ActivationAttestation } {
+  const location = resolveCollaborationLocation(context);
+  const stopped = variant.stopped ?? ["session-one"];
+  const handles: readonly StoppedHandle[] = variant.handles ?? [
+    { kind: "session", id: "session-one" },
+    { kind: "process", id: "mstar-cli" },
+  ];
+  const attestation: ActivationAttestation = {
     version: ACTIVATION_PROTOCOL_VERSION,
     attestedAt: "2026-11-21T00:00:00.000Z",
     operator: { actor: "ops-engineer", authorizationRef: "iteration compass / cutover decision" },
@@ -101,17 +127,26 @@ function attestation(stopped: readonly string[] = ["session-one"]): ActivationAt
         entrypoint: "/opt/mstar/omp/dist/index.js",
         runtime: "node",
         runtimeVersion: process.versions.node,
-        // The fence verifies the attested build against the running build.
-        version: readHarnessVersion(),
+        version: variant.build ?? readHarnessVersion(),
         current: true,
         disposition: "reloaded",
       },
     ],
     stoppedSessions: stopped.map((sessionId) => ({ sessionId, host: "omp", state: "stopped" as const })),
   };
+  if (variant.omitCutover !== true) {
+    attestation.cutover = {
+      repoKey: variant.repoKey ?? location.repoKey,
+      mode: variant.mode ?? location.mode,
+      controlRoot: variant.controlRoot ?? resolve(context.harnessDir),
+      sourceStoreId: variant.sourceStoreId ?? source.storeId,
+      sourceEpoch: variant.sourceEpoch ?? source.epoch,
+      schemaVersion: source.schemaVersion,
+      stoppedHandles: [...handles],
+    };
+  }
+  return { operator: "ops-engineer", attestation };
 }
-
-const ACTIVATION_OPTIONS = { operator: "ops-engineer", attestation: attestation() };
 
 /**
  * One populated combined source: a project, a plan, a document and their link,
@@ -161,9 +196,13 @@ values ('wf-live', 1, 'session-one', '{}', '2026-11-21T00:00:00.000Z', '2026-11-
 insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at)
 values ('wf-live', 'coordinator', 'session-one', 1, 1, 'active', '2026-11-21T00:00:00.000Z');
 insert into store_operations(operation_id, request_hash, result_json, committed_at)
-values ('issue-op-legacy', 'legacy-request-hash', '{"issueId":"I-000001"}', '2026-11-21T00:00:00.000Z');
+values ('issue-op-legacy', 'legacy-request-hash', '{"issueId":"I-000001","revision":1,"storeRevision":7,"created":true}', '2026-11-21T00:00:00.000Z');
 insert into store_operations(operation_id, request_hash, result_json, committed_at)
-values ('restore-attempt:abc', 'restore-hash', '{"phase":"replaced"}', '2026-11-21T00:00:00.000Z');
+values ('restore-attempt:customer-request', 'customer-hash', '{"issueId":"I-000002","revision":2,"storeRevision":7,"created":false}', '2026-11-21T00:00:01.000Z');
+insert into store_operations(operation_id, request_hash, result_json, committed_at)
+values ('restore-attempt:abc', 'restore-hash', '{"recoveryVersion":1,"phase":"replaced","storeId":"restored-store","verified":{"integrity":"ok","foreignKeys":"ok","schemaVersion":20}}', '2026-11-21T00:00:02.000Z');
+insert into store_operations(operation_id, request_hash, result_json, committed_at)
+values ('upgrade-op', 'upgrade-hash', '{"verdict":"upgraded","imported":1,"importedIds":["wf-imported"],"sourceDigest":"source-digest","inputDigest":"input-digest"}', '2026-11-21T00:00:03.000Z');
 update issue_counter set next_value = 3 where id = 1;
 update store_meta set revision = 7, catalog_revision = 3 where id = 1;
 `);
@@ -351,7 +390,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     writeFileSync(blocker, "not a directory");
     try {
       await expect(
-        activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS),
+        activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source)),
       ).rejects.toMatchObject({ code: "collaboration.backup-incomplete" });
     } finally {
       rmSync(blocker, { force: true });
@@ -362,7 +401,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     expect(await planCollaborationCutover(source.context)).toEqual(manifest);
     expect((await stagedRows(locationAt(repo))).authority.state).toBe("staged");
 
-    const receipt = await activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS);
+    const receipt = await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source));
     expect(receipt.phase).toBe("active");
     expect(receipt.replayed).toBe(false);
   });
@@ -373,7 +412,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
 
-    const fenced = await fenceCollaborationCutoverSource(source.context, manifest, ACTIVATION_OPTIONS);
+    const fenced = await fenceCollaborationCutoverSource(source.context, manifest, cutoverOptions(source.context, manifest.source));
     expect(fenced.phase).toBe("source-fenced");
     expect(fenced.fencedAt).toBeDefined();
     expect(fenced.activatedAt).toBeUndefined();
@@ -402,7 +441,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     }
     expect((await stagedRows(locationAt(repo))).authority.state).toBe("staged");
 
-    const receipt = await activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS);
+    const receipt = await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source));
     expect(receipt.phase).toBe("active");
     expect(receipt.fencedAt).toBe(fenced.fencedAt);
     expect(receipt.activatedAt).toBeDefined();
@@ -416,7 +455,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     const source = await seedSource(repo);
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
-    const options = ACTIVATION_OPTIONS;
+    const options = cutoverOptions(source.context, manifest.source);
 
     const first = await activateCollaborationCutover(source.context, manifest, options);
     const second = await activateCollaborationCutover(source.context, manifest, options);
@@ -444,7 +483,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     const metaBefore = before.db.prepare("select * from store_meta").all();
     before.close();
 
-    await activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS);
+    await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source));
 
     const after = await openStore(source.context, "read");
     try {
@@ -476,7 +515,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     expect(await planCollaborationCutover(sourceA.context)).toEqual(manifestA);
     expect(await planCollaborationCutover(sourceB.context)).toEqual(manifestB);
 
-    const receipt = await activateCollaborationCutover(sourceA.context, manifestA, ACTIVATION_OPTIONS);
+    const receipt = await activateCollaborationCutover(sourceA.context, manifestA, cutoverOptions(sourceA.context, manifestA.source));
     expect(receipt.phase).toBe("active");
   });
 
@@ -498,7 +537,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     execFileSync("cp", [locationAt(foreign).dbPath, locationAt(repo).dbPath]);
 
     await expect(
-      activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS),
+      activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source)),
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
     expect(await planCollaborationCutover(source.context)).toEqual(manifest);
   });
@@ -508,7 +547,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     const source = await seedSource(repo);
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
-    await activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS);
+    await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source));
 
     const mirror = makeRepo("https://github.com/acme/cutover-binding.git", "mirror");
     await expect(readCollaborationAuthority(contextAt(mirror))).rejects.toMatchObject({
@@ -524,7 +563,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     const source = await seedSource(repo);
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
-    const activated = await activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS);
+    const activated = await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source));
 
     const clone = makeRepo("https://github.com/acme/cutover-clone.git");
     const cloneContext = contextAt(clone);
@@ -553,7 +592,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
     const blocker = join(source.context.harnessDir, "archived");
     writeFileSync(blocker, "not a directory");
     try {
-      await expect(activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS)).rejects.toMatchObject({
+      await expect(activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).rejects.toMatchObject({
         code: "collaboration.backup-incomplete",
       });
     } finally {
@@ -573,7 +612,7 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
 
     // The exact retry releases its own claim (committed) and refuses; the
     // source stays unfenced and the staged target is untouched.
-    await expect(activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS)).rejects.toMatchObject({
+    await expect(activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).rejects.toMatchObject({
       code: "collaboration.cutover-conflict",
     });
     expect((await cutoverState(location)).claims).toEqual([]);
@@ -586,26 +625,38 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
       code: "collaboration.cutover-conflict",
     });
     expect((await applyCollaborationCutover(source.context, replanned)).phase).toBe("verified");
-    expect((await activateCollaborationCutover(source.context, replanned, ACTIVATION_OPTIONS)).phase).toBe("active");
+    expect((await activateCollaborationCutover(source.context, replanned, cutoverOptions(source.context, replanned.source))).phase).toBe("active");
 
     const state = await cutoverState(location);
     expect(state.publications).toEqual([{ manifest_id: replanned.manifestId, phase: "active" }]);
     expect(state.claims).toEqual([]);
   });
 
-  test("an empty, foreign or wrong-build stop attestation refuses before fencing", async () => {
+  test("the cutover attestation must name this exact root, source and stopped handles", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-attestation.git");
     const source = await seedSource(repo);
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
 
-    const foreignBuild = attestation();
-    foreignBuild.consumers = foreignBuild.consumers.map((consumer) => ({ ...consumer, version: "0.0.0-foreign" }));
     const refusals = [
-      { operator: "ops-engineer", attestation: attestation([]) },
-      { operator: "ops-engineer", attestation: attestation(["session-elsewhere"]) },
-      { operator: "ops-engineer", attestation: foreignBuild },
+      cutoverOptions(source.context, manifest.source, { omitCutover: true }),
+      cutoverOptions(source.context, manifest.source, { stopped: [], handles: [] }),
+      cutoverOptions(source.context, manifest.source, { controlRoot: join(source.context.harnessDir, "elsewhere") }),
+      cutoverOptions(source.context, manifest.source, { sourceStoreId: "another-store" }),
+      cutoverOptions(source.context, manifest.source, { sourceEpoch: 9 }),
+      cutoverOptions(source.context, manifest.source, { repoKey: "github.com/acme/other" }),
+      cutoverOptions(source.context, manifest.source, { mode: "mirror" }),
+      cutoverOptions(source.context, manifest.source, { build: "0.0.0-foreign" }),
+      cutoverOptions(source.context, manifest.source, {
+        stopped: ["session-elsewhere"],
+        handles: [{ kind: "process", id: "mstar-cli" }],
+      }),
+      cutoverOptions(source.context, manifest.source, {
+        stopped: [],
+        handles: [{ kind: "session", id: "session-elsewhere" }],
+      }),
+      cutoverOptions(source.context, manifest.source, { stopped: [], handles: [{ kind: "process", id: "mstar-cli" }] }),
     ];
     for (const options of refusals) {
       await expect(activateCollaborationCutover(source.context, manifest, options)).rejects.toMatchObject({
@@ -613,13 +664,44 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
       });
     }
 
-    // Nothing was fenced, claimed or published: the source still plans.
+    // Nothing was fenced, claimed or published.
     expect(await planCollaborationCutover(source.context)).toEqual(manifest);
     expect((await stagedRows(location)).authority.state).toBe("staged");
     expect((await cutoverState(location)).claims).toEqual([]);
 
-    // The source-scoped attestation still activates.
-    expect((await activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS)).phase).toBe("active");
+    // A source that records NO sessions is still bound by the operator's own
+    // stopped-handle assertion: an empty session table alone is not proof.
+    const quiet = makeRepo("https://github.com/acme/cutover-attestation-quiet.git");
+    const quietSource = await seedSource(quiet);
+    const quietDb = await openStore(quietSource.context, "write");
+    try {
+      quietDb.db.exec("delete from execution_sessions");
+    } finally {
+      quietDb.close();
+    }
+    const quietManifest = await planCollaborationCutover(quietSource.context);
+    await applyCollaborationCutover(quietSource.context, quietManifest);
+    await expect(
+      activateCollaborationCutover(
+        quietSource.context,
+        quietManifest,
+        cutoverOptions(quietSource.context, quietManifest.source, { stopped: [], handles: [] }),
+      ),
+    ).rejects.toMatchObject({ code: "store.attestation-invalid" });
+    const quietReceipt = await activateCollaborationCutover(
+      quietSource.context,
+      quietManifest,
+      cutoverOptions(quietSource.context, quietManifest.source, {
+        stopped: [],
+        handles: [{ kind: "process", id: "mstar-cli" }],
+      }),
+    );
+    expect(quietReceipt.phase).toBe("active");
+
+    // The source-scoped attestation still activates the first source.
+    expect(
+      (await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).phase,
+    ).toBe("active");
   });
 
   test("a recovery point that does not preserve the reviewed rows blocks the fence", async () => {
@@ -657,7 +739,7 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
       restored.close();
     }
 
-    await expect(activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS)).rejects.toMatchObject({
+    await expect(activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).rejects.toMatchObject({
       code: "collaboration.backup-incomplete",
     });
     // The source is still unfenced and the target still staged.
@@ -670,7 +752,7 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
     const source = await seedSource(repo);
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
-    await activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS);
+    await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source));
 
     const fenced = await openStore(source.context, "read");
     const fence = readCollaborationFence(fenced.db);
@@ -689,7 +771,12 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
     const restored = await openStore(source.context, "read");
     expect(readCollaborationFence(restored.db)).toBeNull();
     restored.close();
-    await expect(activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS)).rejects.toMatchObject({
+    await expect(activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).rejects.toMatchObject({
+      code: "collaboration.cutover-conflict",
+    });
+    // The stage route must not report the active cutover either: apply never
+    // replays beside an unfenced source.
+    await expect(applyCollaborationCutover(source.context, manifest)).rejects.toMatchObject({
       code: "collaboration.cutover-conflict",
     });
   });
@@ -700,7 +787,7 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
     await applyCollaborationCutover(source.context, manifest);
-    expect((await fenceCollaborationCutoverSource(source.context, manifest, ACTIVATION_OPTIONS)).phase).toBe(
+    expect((await fenceCollaborationCutoverSource(source.context, manifest, cutoverOptions(source.context, manifest.source))).phase).toBe(
       "source-fenced",
     );
 
@@ -714,7 +801,7 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
       target.close();
     }
 
-    await expect(activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS)).rejects.toMatchObject({
+    await expect(activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).rejects.toMatchObject({
       code: "collaboration.cutover-conflict",
     });
     const state = await cutoverState(location);
@@ -722,30 +809,121 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
     expect(state.publications).toEqual([{ manifest_id: manifest.manifestId, phase: "source-fenced" }]);
   });
 
+  test("a stage cannot run while a source writer holds the fence slot", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-stage-barrier.git");
+    const source = await seedSource(repo);
+    const manifest = await planCollaborationCutover(source.context);
+
+    // A source write transaction is exactly what a fence holds. A competing stage
+    // must not slip past it: staging takes the same source writer slot, so the
+    // evidence it read can never be older than the fence that follows.
+    const holder = new DatabaseSync(join(source.context.harnessDir, "store.db"));
+    try {
+      holder.exec("begin immediate");
+      await expect(applyCollaborationCutover(source.context, manifest)).rejects.toMatchObject({ code: "store.busy" });
+    } finally {
+      holder.exec("rollback");
+      holder.close();
+    }
+    expect((await applyCollaborationCutover(source.context, manifest)).phase).toBe("verified");
+  }, 20000);
+
+  test("a competing restage cannot remove the publication a fence needs", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-restage-fence.git");
+    const source = await seedSource(repo);
+    const location = locationAt(repo);
+    const manifest = await planCollaborationCutover(source.context);
+    await applyCollaborationCutover(source.context, manifest);
+
+    // Claim, fail before the fence, then drift: the stale activation must release
+    // its claim while a competing restage and activation race it.
+    const blocker = join(source.context.harnessDir, "archived");
+    writeFileSync(blocker, "not a directory");
+    try {
+      await expect(
+        activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source)),
+      ).rejects.toMatchObject({ code: "collaboration.backup-incomplete" });
+    } finally {
+      rmSync(blocker, { force: true });
+    }
+    const drifted = await openStore(source.context, "write");
+    try {
+      drifted.db.exec(`
+insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)
+values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'stays fixed', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'identity-four');
+`);
+    } finally {
+      drifted.close();
+    }
+    const replanned = await planCollaborationCutover(source.context);
+
+    await Promise.allSettled([
+      activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source)),
+      applyCollaborationCutover(source.context, replanned),
+      activateCollaborationCutover(source.context, replanned, cutoverOptions(source.context, replanned.source)),
+    ]);
+
+    // Invariant: a fence always keeps its own publication, and an active target
+    // always has a fence. A restage never removed the row a fence depends on.
+    const fencedSource = await openStore(source.context, "read");
+    const fence = readCollaborationFence(fencedSource.db);
+    fencedSource.close();
+    const state = await cutoverState(location);
+    if (fence !== null) {
+      expect(state.publications.some((row) => row.manifest_id === fence.manifestId)).toBe(true);
+    }
+    if (state.authority.state === "active") {
+      expect(fence).not.toBeNull();
+      const published = state.publications.find((row) => row.phase === "active");
+      expect(published?.manifest_id).toBe(fence?.manifestId);
+    }
+  }, 30000);
+
   test("legacy issue receipts move with the domain and replay exactly", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-receipts.git");
     const source = await seedSource(repo);
     const location = locationAt(repo);
     const manifest = await planCollaborationCutover(source.context);
-    expect(manifest.counts.store_operations).toBe(1);
+    // Payload classification, not id shape: an issue operation that happens to
+    // be called `restore-attempt:...` is preserved, while the execution lane's
+    // own records (recovery replacement, execution import) are not moved.
+    expect(manifest.counts.store_operations).toBe(2);
 
     await applyCollaborationCutover(source.context, manifest);
-    const receipt = {
+    const legacyIssue = {
       key_space: "standalone",
       operation_id: "issue-op-legacy",
       request_hash: "legacy-request-hash",
-      result_json: '{"issueId":"I-000001"}',
+      result_json: '{"issueId":"I-000001","revision":1,"storeRevision":7,"created":true}',
       committed_at: "2026-11-21T00:00:00.000Z",
     };
-    // Only the collaboration receipt moved: the execution lane's own record
-    // stays with the execution store.
-    expect((await cutoverState(location)).receipts).toEqual([receipt]);
+    const collision = {
+      key_space: "standalone",
+      operation_id: "restore-attempt:customer-request",
+      request_hash: "customer-hash",
+      result_json: '{"issueId":"I-000002","revision":2,"storeRevision":7,"created":false}',
+      committed_at: "2026-11-21T00:00:01.000Z",
+    };
+    expect((await cutoverState(location)).receipts).toEqual([legacyIssue, collision]);
 
-    // An exact re-stage keeps one receipt, and activation preserves it.
+    // The preserved rows answer the replay lookup and expose a conflicting reuse:
+    // the same operation id with another request hash can never replay.
+    const replay = await readCollaborationStage(location, ({ db }) =>
+      db
+        .prepare(
+          "select request_hash, result_json from collaboration_operations " +
+            "where key_space = 'standalone' and operation_id = ?",
+        )
+        .get("restore-attempt:customer-request"),
+    );
+    expect(replay).toEqual({ request_hash: "customer-hash", result_json: collision.result_json });
+    expect((replay as { request_hash: string }).request_hash).not.toBe("another-request-hash");
+
+    // An exact re-stage keeps the population, and activation preserves it.
     expect((await applyCollaborationCutover(source.context, manifest)).replayed).toBe(true);
-    expect((await cutoverState(location)).receipts).toEqual([receipt]);
-    await activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS);
-    expect((await cutoverState(location)).receipts).toEqual([receipt]);
+    expect((await cutoverState(location)).receipts).toEqual([legacyIssue, collision]);
+    await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source));
+    expect((await cutoverState(location)).receipts).toEqual([legacyIssue, collision]);
   });
 
   test("two concurrent activations leave exactly one fence and one active authority", async () => {
@@ -756,8 +934,8 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
     await applyCollaborationCutover(source.context, manifest);
 
     const results = await Promise.allSettled([
-      activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS),
-      activateCollaborationCutover(source.context, manifest, ACTIVATION_OPTIONS),
+      activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source)),
+      activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source)),
     ]);
     expect(results.filter((result) => result.status === "fulfilled").length).toBeGreaterThanOrEqual(1);
     for (const result of results) {
@@ -778,7 +956,7 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
     } finally {
       fenced.close();
     }
-  });
+  }, 20000);
 
   test("concurrent identical applies copy the rows once", async () => {
     const repo = makeRepo("https://github.com/acme/cutover-concurrent-apply.git");
@@ -796,5 +974,5 @@ values ('I-000009', 'p-one', 'Unannounced finding', 'bug', 'low', 'open', 'late'
     const staged = await stagedRows(locationAt(repo));
     expect(staged.rows.issues).toHaveLength(2);
     expect(staged.authority.state).toBe("staged");
-  });
+  }, 20000);
 });
