@@ -1,5 +1,5 @@
 ---
-category: Harness
+category: Added
 packages: root, engine, commands, opencode
 ---
 
