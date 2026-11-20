@@ -33,5 +33,5 @@ Any change to harness-root discovery (engine/CLI/dsh/other hosts); any new probe
 
 ## Examples
 
-- Engine: probe from a workspace whose parent chain contains a `~/.mstar`-like fixture → `null`; override outside the boundary still resolves.
+- Engine: probe from a workspace whose parent chain contains a `~/.mstar`-like fixture → `null`; an override outside the boundary is refused — the fixed root is Git-derived.
 - dsh: session workspace parent has `.mstar` → the probe stops at the session workspace (null or workspace-local harness only).

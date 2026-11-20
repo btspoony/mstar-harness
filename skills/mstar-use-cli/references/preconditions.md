@@ -9,7 +9,7 @@ This is a diagnostic map, not a mandatory setup ladder. Invoke the intended publ
 Commands that touch harness state resolve a harness directory first. The root is fixed: **`<git main worktree root>/.mstar/`**. It is derived from Git only; no `.mstarc` key, environment variable or candidate chain moves it.
 
 - `harness_dir` is retired: a `.mstarc` that declares it is refused, and the recovery is deleting that line.
-- `MSTAR_HARNESS_DIR` is retired: setting it is refused; `unset` it.
+- `MSTAR_HARNESS_DIR` is retired: the value is ignored and never selects a root; `unset` it.
 - `.agents/`, `.plans/` and `plans/` are never adopted as harness roots; a repository whose only harness is one of them is refused with `mstar harness scaffold` (then `mstar store upgrade` for an existing store).
 - A CLI process outside any Git work tree names the root with `--harness <absolute .mstar>`; without it the command refuses and names both recoveries.
 

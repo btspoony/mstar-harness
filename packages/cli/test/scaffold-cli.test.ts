@@ -52,7 +52,7 @@ function runScaffold(args: string[]): RunResult {
 
 /** Empty temp root; `.mstar/` and specs content added per test. */
 function withRoot(fn: (root: string) => void): void {
-  const root = mkdtempSync(join(tmpdir(), "mstar-scaffold-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-scaffold-")));
   try {
     fn(root);
   } finally {
@@ -77,6 +77,25 @@ function gitInit(root: string): void {
 const MSTAR_FENCE_ENTRIES = [".mstar/"];
 
 describe("mstar harness scaffold — one-shot harness bootstrap", () => {
+  test("a legacy-only checkout does not block help or the scaffold recovery", () => {
+    withRoot((root) => {
+      gitInit(root);
+      mkdirSync(join(root, ".agents"), { recursive: true });
+      writeFileSync(join(root, ".agents", "status.json"), "{}");
+      // why: the retired layout must not kill the CLI before dispatch.
+      const help = runCli(["--help"], { cwd: root });
+      expect(help.exitCode, help.stdout + help.stderr).toBe(0);
+      const outside = mkdtempSync(join(tmpdir(), "mstar-scaffold-outside-"));
+      try {
+        const result = runCli(["harness", "scaffold", root], { cwd: outside });
+        expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+        expect(existsSync(join(root, ".mstar"))).toBe(true);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+  });
+
   test("fresh bootstrap: creates .mstar/ process dirs, .agents/ tracked corpora, .mstarc, .gitignore snippet and .agents/AGENTS.md but no roadmap authority", () => {
     withRoot((root) => {
       const result = runScaffold([root]);

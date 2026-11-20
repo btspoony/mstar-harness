@@ -10672,7 +10672,7 @@ var init_engine = __esm(() => {
   init_status();
   init_issue();
   init_issue();
-  init_issue();
+  init_git_probe();
   init_catalog();
   init_catalog_import();
   init_catalog_registration();

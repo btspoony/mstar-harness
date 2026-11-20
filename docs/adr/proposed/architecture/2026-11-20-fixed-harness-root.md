@@ -45,9 +45,9 @@ The harness root becomes one fixed location, derived from Git only:
   the same release. The resolver no longer probes them; a repository that only
   has one is refused with `mstar harness scaffold` and `mstar store upgrade`
   (for an existing store) named as the recovery.
-- `MSTAR_HARNESS_DIR` is retired in the same release. Setting it is refused,
-  so an inherited shell value cannot silently disagree with Git. Recovery is
-  `unset MSTAR_HARNESS_DIR`, or `--harness` for a CLI launch outside Git.
+- `MSTAR_HARNESS_DIR` is retired in the same release. Setting it no longer
+  selects a root: the value is ignored, and `unset MSTAR_HARNESS_DIR` is the
+  recovery that keeps an inherited shell honest.
 - `opts.harnessDir` and the CLI `--harness` flag keep only a transport role:
   they must resolve to the same path as `<main>/.mstar`, and any other value is
   refused with the actual and expected paths. They can no longer choose a
@@ -121,12 +121,12 @@ moved by a path resolver. Every refusal names `mstar store upgrade` and
   the exact line to delete.
 - A repository whose only harness is `.agents/` is refused, with
   `mstar harness scaffold` / `mstar store upgrade` named in the message.
-- `MSTAR_HARNESS_DIR` is refused whenever it is set, and the message states
-  `unset MSTAR_HARNESS_DIR` and `--harness <absolute .mstar>` as the two
-  recoveries.
+- `MSTAR_HARNESS_DIR` never selects a root: setting it to a worktree or an
+  out-of-repo directory leaves the Git-derived `<main>/.mstar` in force, and
+  `unset MSTAR_HARNESS_DIR` is the documented recovery.
 - A command launched outside any Git work tree runs when `--harness` names an
   existing `.mstar`, and refuses with both recoveries when it does not; the
-  same launch with `MSTAR_HARNESS_DIR` set is refused by the variable's own rule.
+  same launch with `MSTAR_HARNESS_DIR` set is unaffected (the value is ignored).
 - An MCP call that omits `harness` is refused, and an MCP call naming a linked
   worktree's `.mstar` is refused with the Git-derived control root in the
   message. No MCP launch form (`--harness`, environment) changes either

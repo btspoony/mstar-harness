@@ -777,6 +777,11 @@ export function resolveScaffoldDirs(
 ): { harnessDir: string; projectDir: string } {
   const start = resolve(root);
   const checkout = checkoutRootOrFailure(start);
+  // why: a failed probe is not "not a checkout" — creating a second root under
+  // the caller's directory would be invisible to every fixed-root reader.
+  if (checkout.failed) {
+    throw new Error(`harness.root-unresolved: Git could not answer from ${start}; refusing to scaffold a root the resolver would not adopt. Run it from the repository root after the checkout is readable.`);
+  }
   const base = checkout.root ?? start;
   refuseRetiredConfiguration(base, defaultWorkspaceRoot(base));
   const harnessDir = join(base, ".mstar");
@@ -835,6 +840,9 @@ export async function scaffoldHarness(root: string, options: ScaffoldOptions = {
   // `.mstar`, so a subdirectory argument never creates a second root the
   // resolver would not adopt.
   const checkout = checkoutRootOrFailure(resolve(root));
+  if (checkout.failed) {
+    throw new Error(`harness.root-unresolved: Git could not answer from ${resolve(root)}; refusing to scaffold a root the resolver would not adopt.`);
+  }
   const repoRoot = checkout.root ?? resolve(root);
   const knowledgeDir = mstarcDirOverride(harness, "knowledgeDir") ?? join(repoRoot, ".agents", "knowledge");
   const specsDir = mstarcDirOverride(harness, "specsDir") ?? join(repoRoot, ".agents", "specs");

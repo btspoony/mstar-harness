@@ -275,24 +275,15 @@ const invocationCwd = process.env.MSTAR_CLI_PROJECT_ROOT === undefined || proces
   ? process.cwd()
   : path.resolve(process.env.MSTAR_CLI_PROJECT_ROOT);
 
-// why: A retired selector is a configuration refusal, not a module-load crash:
-// emit the typed envelope so a caller (and the MCP transport) sees the cause
-// and its recovery instead of a stack trace with empty stdout.
+// why: a retired layout must not kill the CLI before dispatch — the recovery
+// command (`harness scaffold`) and every root-free command stay reachable; a
+// command that needs the root fails through the dispatcher with the same
+// typed refusal.
 let controlRoot: string | null = null;
 try {
   controlRoot = resolveProcessHarnessDir(invocationCwd);
 } catch (error) {
   if (!(error instanceof HarnessRootRetiredError)) throw error;
-  console.log(JSON.stringify({
-    version: 1,
-    command: "cli",
-    status: "refused",
-    code: error.code,
-    exitCode: 1,
-    message: error.message,
-    details: error.details,
-  }));
-  process.exit(1);
 }
 
 registerCliCommands(program, getCommandDefinitions(), {
@@ -303,6 +294,19 @@ registerCliCommands(program, getCommandDefinitions(), {
 registerMcpCommand(program);
 
 program.parseAsync(process.argv).catch((error: unknown) => {
+  if (error instanceof HarnessRootRetiredError) {
+    console.log(JSON.stringify({
+      version: 1,
+      command: "cli",
+      status: "refused",
+      code: error.code,
+      exitCode: 1,
+      message: error.message,
+      details: error.details,
+    }));
+    process.exitCode = 1;
+    return;
+  }
   const usage = mapParserError(error, process.argv);
   if (usage !== null) {
     console.log(JSON.stringify(usage));

@@ -15865,12 +15865,26 @@ function catalogIdentities(db, keys) {
   return found;
 }
 function readProjectList(db) {
-  const rows = db.prepare(`select catalog_entities.*, count(issues.id) as open_issues
-       from (select ${IDENTITY_COLUMNS} from catalog_entities where kind = 'project') catalog_entities
-       left join issues on issues.project_id = catalog_entities.id and issues.disposition = 'open'
-       group by catalog_entities.id
-       order by catalog_entities.title asc, catalog_entities.id asc`).all();
-  const items = rows.map((row) => ({ project: toIdentity(row), openIssues: row.open_issues }));
+  const rows = db.prepare(`with project_ids as (
+         select id from catalog_entities where kind = 'project'
+         union select project_id from issues
+       )
+       select catalog.*, project_ids.id, coalesce(catalog.title, project_ids.id) as title,
+              catalog.description, catalog.lifecycle, count(issues.id) as open_issues
+       from project_ids
+       left join catalog_entities catalog on catalog.kind = 'project' and catalog.id = project_ids.id
+       left join issues on issues.project_id = project_ids.id and issues.disposition = 'open'
+       group by project_ids.id
+       order by coalesce(catalog.title, project_ids.id) asc, project_ids.id asc`).all();
+  const items = rows.map((row) => ({
+    project: row.kind === "project" ? toIdentity(row) : {
+      id: row.id,
+      title: row.title,
+      description: null,
+      lifecycle: null
+    },
+    openIssues: row.open_issues
+  }));
   return { items, total: items.length };
 }
 function projectMembership(db) {
@@ -16304,7 +16318,7 @@ init_worktree();
 init_status();
 init_issue();
 init_issue();
-init_issue();
+init_git_probe();
 init_catalog();
 init_catalog_import();
 init_catalog_registration();

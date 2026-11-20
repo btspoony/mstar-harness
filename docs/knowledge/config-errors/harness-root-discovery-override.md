@@ -51,11 +51,11 @@ if (main === null) throw failClosed(/* usage hint */);
 const harnessDir = join(main.root, ".mstar"); // fixed; retired selectors refuse
 ```
 
-## Why This Works
+## Why This Works (retained ordering)
 
-- The override breaks the false dichotomy of "probe names or fail": any repo with a documented non-default harness root gets deterministic resolution instead of silently picking the wrong candidate.
-- The guard-first order makes the safety property unconditional — the probe can never resurrect the second-SDD-tree hazard, regardless of stray files in feature checkouts.
-- Pinning the divergence in a test means a future maintainer "fixing" the port back toward bash behavior trips the test and re-reads the rationale.
+- The guard-first order makes the safety property unconditional — a probe can never resurrect the second-SDD-tree hazard, regardless of stray files in feature checkouts.
+- The override this record introduced is retired (2026-11-20); the historical bullets above describe the old mechanism, not a supported route.
+- Pinning the fail-closed ordering in a test means a future maintainer "fixing" the port back toward probe-first behavior trips the test and re-reads the rationale.
 
 ## Prevention
 

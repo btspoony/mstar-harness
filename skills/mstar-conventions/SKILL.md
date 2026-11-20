@@ -44,7 +44,7 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 `{HARNESS_DIR}` 固定为 **`<git main worktree root>/.mstar/`**：只由 Git 派生（`git worktree list --porcelain` 的首条记录 = 主 worktree），`.mstarc`、环境变量与候选链都不能移动它。linked worktree 携带 tracked `.mstarc`，但它声明的布局不改变根。
 
 - **`harness_dir` 已退役**：`.mstarc` 声明该键即拒绝，恢复 = 删除该行后运行 `mstar path resolve`。
-- **`MSTAR_HARNESS_DIR` 已退役**：设置即拒绝，恢复 = `unset MSTAR_HARNESS_DIR`；Git 之外启动的 CLI 用 `--harness <absolute .mstar>`。
+- **`MSTAR_HARNESS_DIR` 已退役**：设置后不再选择根（值被忽略）；清理由 `unset MSTAR_HARNESS_DIR`；Git 之外启动的 CLI 用 `--harness <absolute .mstar>`。
 - **legacy 候选已退役**：`.agents/`、`.plans/`、`plans/` 永不被采纳；仓库只有这些目录时拒绝，恢复 = `mstar harness scaffold`（已有 store 时再 `mstar store upgrade`）。
 - 无 harness 根 → 未启用 plan；进度走对话与 Completion Report。
 
