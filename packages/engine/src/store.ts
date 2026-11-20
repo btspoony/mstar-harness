@@ -17,7 +17,7 @@ import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import type { Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { readJson, writeJson } from "./core.js";
-import { mainWorktreeRoot, realpathNearest } from "./git-probe.js";
+import { realpathNearest } from "./git-probe.js";
 import { CoordinationError, assertProtectedWriteAuthorized, canonicalTarget, type ProtectedWriteKind } from "./coordination-write.js";
 import { resolveProcessHarnessDir } from "./coordination.js";
 import {
@@ -105,9 +105,8 @@ function harnessOwnerOf(target: string): string | null {
     const dir = segments.slice(0, position + 1).join(sep) || sep;
     if (!existsSync(join(dir, "status.json"))) return false;
     // why: a legacy plans-rooted harness is the checkout root's direct child;
-    // a nested `docs/plans` with a status.json is an ordinary document tree.
-    const main = mainWorktreeRoot(dir);
-    return main !== null && main === realpathNearest(dirname(dir));
+    // every checkout (plain or linked) carries `.git`, while `docs/plans` does not.
+    return existsSync(join(dirname(dir), ".git"));
   });
   if (index <= 0) return null;
   return segments.slice(0, index).join(sep) || sep;

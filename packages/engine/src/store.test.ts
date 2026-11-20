@@ -1106,6 +1106,7 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
       expect(() => resolveArtifactPath(join(root, "checkout-a", ".agents"), { kind: "json", key: join(root, "checkout-a", ".plans", "x.json") })).not.toThrow();
       // why: an ordinary `plans` directory is not a harness marker, even with a status.json.
       mkdirSync(join(root, "checkout-a", "docs", "plans"), { recursive: true });
+      gitInit(join(root, "checkout-a"));
       writeFileSync(join(root, "checkout-a", "docs", "plans", "status.json"), "{}");
       expect(() => resolveArtifactPath(selected, { kind: "json", key: join(root, "checkout-a", "docs", "plans", "x.json") })).not.toThrow();
       // why: a legacy plans-rooted corpus at another checkout's root is still foreign.
