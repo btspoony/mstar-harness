@@ -225,6 +225,71 @@ describe("shared host-health helpers", () => {
     expect(data.local).toBeUndefined();
   });
 
+  test("path resolve discloses collaboration selection for main and linked checkouts", async () => {
+    const root = realpathSync(fixture());
+    const main = path.join(root, "main");
+    const linked = path.join(root, "linked");
+    mkdirSync(main, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", main, "-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    git("init", "--quiet");
+    writeText(main, "README.md", "fixture\n");
+    git("add", "README.md");
+    git("commit", "--quiet", "-m", "fixture");
+    git("remote", "add", "origin", "https://github.com/Acme/Repo.git");
+    mkdirSync(path.join(main, ".mstar"), { recursive: true });
+    writeText(main, ".mstarc", "[collaboration]\nmode=local\n");
+    git("worktree", "add", "--quiet", "-b", "linked-fixture", linked);
+    const definition = getLocalCommandDefinitions().find(({ id }) => id === "path.resolve");
+    expect(definition).toBeDefined();
+    if (!definition) return;
+    const context = {
+      cwd: main,
+      controlRoot: null,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => ({ url: "", close: async () => {} }),
+        openBrowser: async () => {},
+      },
+    };
+    // why: The home is process-wide and Bun caches `homedir()`, so the engine's
+    // `userHome` seam cannot pass through a command; the expectation is derived
+    // from the same ambient home the command reads.
+    const expected = {
+      repoKey: "github.com/acme/repo",
+      mode: "local",
+      dbPath: path.join(os.homedir(), ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db"),
+    };
+
+    const fromMain = await definition.execute({ path: main }, context);
+    expect(fromMain).toMatchObject({
+      status: "ok",
+      data: { harnessDir: path.join(main, ".mstar"), collaboration: expected },
+    });
+
+    const fromLinked = await definition.execute({ path: linked }, context);
+    expect(fromLinked).toMatchObject({
+      status: "ok",
+      data: { linkedWorktree: true, harnessDir: path.join(main, ".mstar"), collaboration: expected },
+    });
+
+    // An unconfigured mode is disclosed as the engine's named diagnostic: the
+    // command still resolves every existing field instead of failing.
+    writeText(main, ".mstarc", "[config]\nreview_dir=process/reviews\n");
+    const withoutMode = await definition.execute({ path: main }, context);
+    expect(withoutMode.status).toBe("ok");
+    if (withoutMode.status !== "ok") return;
+    const diagnostic = (withoutMode.data as Record<string, unknown>).collaboration as { code: string; message: string };
+    expect(diagnostic.code).toBe("collaboration.mode-required");
+    expect(diagnostic.message).toContain("mode=local");
+  });
+
   test("path resolve treats a nested worktree as a linked checkout", async () => {
     // `git worktree add` is legal inside the main checkout's directory tree;
     // its path prefix must not make it look like part of the main worktree.

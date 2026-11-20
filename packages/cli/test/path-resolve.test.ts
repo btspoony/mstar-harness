@@ -35,6 +35,7 @@ interface PathEnvelope {
     projectDir: string;
     knowledgeDir?: string | null;
     adrDir?: string | null;
+    collaboration?: { repoKey: string; mode: string; dbPath: string } | { code: string; message: string };
     trackedHarness?: string | null;
     processHarness?: string | null;
     callerCheckoutRoot?: string | null;
@@ -55,8 +56,8 @@ function data(result: RunResult): NonNullable<PathEnvelope["data"]> {
   return value;
 }
 
-function runResolve(args: string[]): RunResult {
-  return runCli(["path", "resolve", ...args]);
+function runResolve(args: string[], env?: Record<string, string | undefined>): RunResult {
+  return runCli(["path", "resolve", ...args], env === undefined ? {} : { env });
 }
 
 /** why: Empty temp root (realpath'd: the CLI reports physical paths on macOS, where
@@ -237,6 +238,50 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       expect(existsSync(join(root, ".agents", "knowledge"))).toBe(false);
       expect(existsSync(join(root, ".agents", "adr"))).toBe(false);
     });
+  });
+});
+
+describe("mstar path resolve — collaboration diagnostic", () => {
+  test("path resolve discloses collaboration selection (main and linked) without creating a database", () => {
+    // why: The user home is the namespace anchor; the child process reads it at
+    // startup, so a fixture home is the only seam that keeps the diagnostic off
+    // the developer's real ~/.mstar.
+    const home = mkdtempSync(join(tmpdir(), "mstar-collab-home-"));
+    try {
+      withRoot((root) => {
+        gitInit(root);
+        execFileSync("git", ["-C", root, "remote", "add", "origin", "https://github.com/Acme/Repo.git"], {
+          stdio: "ignore",
+        });
+        mkdirSync(join(root, ".mstar"), { recursive: true });
+        writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=mirror\n");
+        const expected = {
+          repoKey: "github.com/acme/repo",
+          mode: "mirror",
+          dbPath: join(home, ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db"),
+        };
+
+        const fromMain = runResolve([root], { HOME: home });
+        expect(fromMain.exitCode).toBe(0);
+        expect(data(fromMain).collaboration).toEqual(expected);
+        expect(existsSync(join(home, ".mstar"))).toBe(false);
+
+        const worktree = addWorktree(root, root);
+        const fromLinked = runResolve([worktree], { HOME: home });
+        expect(fromLinked.exitCode).toBe(0);
+        expect(data(fromLinked).linkedWorktree).toBe(true);
+        expect(data(fromLinked).collaboration).toEqual(expected);
+        expect(existsSync(join(home, ".mstar"))).toBe(false);
+
+        // No mode: the same envelope carries the engine's named diagnostic.
+        writeFileSync(join(root, ".mstarc"), "[config]\nreview_dir=process/reviews\n");
+        const withoutMode = runResolve([root], { HOME: home });
+        expect(withoutMode.exitCode).toBe(0);
+        expect(data(withoutMode).collaboration).toMatchObject({ code: "collaboration.mode-required" });
+      });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

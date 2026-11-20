@@ -1,7 +1,8 @@
 /**
  * `host-gate-paths` — the single-sourced gate path glue every host write gate
  * used to hand-copy (issue #442): the landing-path resolver and the
- * case-folded issue/catalog authority naming sets.
+ * authority-naming sets for the two runtime-owned databases (the execution
+ * store at a harness root and the user-level collaboration store).
  *
  * The copies had drifted. opencode-v1, omp, dsh and the ZCode hook resolved
  * ONE symlink hop (realpath, else a single `readlinkSync`), while opencode-v2
@@ -21,13 +22,20 @@
  * host; this module only resolves paths and classifies names.
  */
 import { readlinkSync, realpathSync } from "node:fs";
-import { basename, dirname, relative, resolve } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { isHarnessRootDir, type HarnessDocKind } from "./gates.js";
 import { resolveProjectDir, resolveWorkflowDir } from "./path.js";
 
-/** The issue/catalog authority database and its WAL sidecars, directly at a
- * harness root. */
-export const STORE_AUTHORITY_FILES: readonly string[] = ["store.db", "store.db-wal", "store.db-shm"];
+/** The issue/catalog authority database and its SQLite sidecars, directly at a
+ * harness root. The rollback journal is included: it is the same bytes under
+ * the same names. */
+export const STORE_AUTHORITY_FILES: readonly string[] = [
+  "store.db",
+  "store.db-wal",
+  "store.db-shm",
+  "store.db-journal",
+];
 
 /** The same authority names case-folded — the match never hinges on byte case
  * (FW-3). */
@@ -114,12 +122,58 @@ export function landedPathOf(filePath: string): string {
   }
 }
 
-/** True when `target` (absolute) IS the authority database (or a WAL sidecar)
- * sitting directly at a harness root: the runtime's own store location for a
- * harness root is `<harness root>/store.db`, and hand-writing those bytes is
- * never a supported operation — hard vs soft, staged vs active, alias or not,
- * all the same. */
-export function isStoreAuthorityTarget(target: string): boolean {
+/** The user-level collaboration database and its SQLite sidecars. They are
+ * authority bytes only inside the canonical `<home>/.mstar/repos` namespace. */
+const COLLABORATION_AUTHORITY_NAMES: readonly string[] = [
+  "collaboration.db",
+  "collaboration.db-wal",
+  "collaboration.db-shm",
+  "collaboration.db-journal",
+];
+
+/** True when `dir` is strictly below `root` (both absolute). */
+function isBelow(root: string, dir: string): boolean {
+  const rel = relative(root, dir);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/** The canonical collaboration namespace in both spellings: the configured home
+ * (`homedir()`, or the fixture seam) and its physical twin, because callers
+ * classify both requested and landed (realpath'd) targets. */
+function collaborationNamespaceRoots(userHome: string): string[] {
+  const configured = resolve(userHome, ".mstar", "repos");
+  const roots = [configured];
+  try {
+    const physical = resolve(realpathSync(userHome), ".mstar", "repos");
+    if (physical !== configured) roots.push(physical);
+  } catch {
+    // A home that cannot be canonicalized has no second spelling; the configured
+    // one still answers for requested targets.
+  }
+  return roots;
+}
+
+/** True when `target` is the collaboration database (or one of its sidecars)
+ * inside the canonical user-level namespace. A same-named file anywhere else —
+ * a checkout's own `.mstar`, or `repos-archive/` beside the namespace — is not
+ * authority bytes and is judged by the ordinary document rules. */
+function isCollaborationAuthorityTarget(target: string, userHome: string): boolean {
+  if (!COLLABORATION_AUTHORITY_NAMES.includes(basename(target).toLowerCase())) return false;
+  const dir = resolve(dirname(target));
+  return collaborationNamespaceRoots(userHome).some((root) => isBelow(root, dir));
+}
+
+/** True when `target` (absolute) IS runtime-owned database bytes: the execution
+ * authority database (or a SQLite sidecar) sitting directly at a harness root —
+ * the runtime's own store location for a harness root is `<harness root>/store.db`
+ * — or the user-level collaboration database inside the canonical
+ * `<home>/.mstar/repos` namespace. Hand-writing either is never a supported
+ * operation — hard vs soft, staged vs active, alias or not, all the same.
+ *
+ * `userHome` is the same direct-engine fixture seam the collaboration resolver
+ * exposes, not a host selector. */
+export function isStoreAuthorityTarget(target: string, options: { userHome?: string } = {}): boolean {
+  if (isCollaborationAuthorityTarget(target, options.userHome ?? homedir())) return true;
   if (!isStoreAuthorityName(basename(target))) return false;
   return isHarnessRootDir(dirname(target));
 }

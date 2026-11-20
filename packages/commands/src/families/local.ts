@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  CollaborationIdentityError,
   CoordinationError,
   checkPathOwnership,
   detectHarnessKind,
@@ -16,6 +17,7 @@ import {
   probePathOwnership,
   readMainWorktree,
   resolveAdrDir,
+  resolveCollaborationLocation,
   resolveHarnessDir,
   resolveIterationDir,
   resolveKnowledgeDir,
@@ -33,10 +35,12 @@ import {
   scaffoldHarness,
   setArtifactStore,
   createFsStore,
+  type CollaborationLocation,
   type HostId,
   type PathOwnershipFinding,
   type PathOwnershipTarget,
   type PathOwnershipWarning,
+  type StoreContext,
   type ToolSignal,
 } from "@mstar-harness/engine";
 import { z } from "zod";
@@ -347,6 +351,24 @@ function controlFacts(startDir: string): ControlFacts {
 }
 
 /**
+ * The collaboration selection this control harness resolves to, or the engine's
+ * named code and reason. The resolution reads `.mstarc` and Git only: it opens,
+ * probes and creates no database, so an uninitialized store is still disclosed.
+ */
+function collaborationDiagnostic(
+  context: StoreContext,
+): CollaborationLocation | { code: string; message: string } {
+  try {
+    return resolveCollaborationLocation(context);
+  } catch (error) {
+    if (error instanceof CollaborationIdentityError) {
+      return { code: error.code, message: error.message.replace(`[${error.code}] `, "") };
+    }
+    throw error;
+  }
+}
+
+/**
  * The harness that owns tracked results (`specs` / `knowledge` / `adr`) for a
  * checkout. Tracked results follow the branch the caller has checked out, so
  * this is the caller's own checkout — never the control harness, which owns
@@ -641,6 +663,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             workflowDir: resolveWorkflowDir(controlRoot),
             projectDir: resolveProjectDir(controlRoot),
             reviewDir: resolveReviewDir(controlRoot),
+            collaboration: collaborationDiagnostic({ harnessDir: controlHarnessDir, checkoutRoot: controlRoot }),
             ...control,
             local: {
               harnessDir,
@@ -667,6 +690,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           workflowDir: resolveWorkflowDir(startDir),
           projectDir: resolveProjectDir(startDir),
           reviewDir: resolveReviewDir(startDir),
+          collaboration: collaborationDiagnostic({ harnessDir, checkoutRoot: controlRoot ?? startDir }),
           ...control,
         });
       },

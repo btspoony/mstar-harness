@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   MAX_SYMLINK_HOPS,
@@ -96,8 +96,8 @@ describe("host-gate-paths.landedPathOf", () => {
 
 describe("host-gate-paths authority naming", () => {
   test("matches the authority names case-insensitively (FW-3)", () => {
-    expect(STORE_AUTHORITY_NAMES).toEqual(["store.db", "store.db-wal", "store.db-shm"]);
-    for (const name of ["store.db", "store.db-wal", "store.db-shm", "Store.db", "STORE.DB-WAL"]) {
+    expect(STORE_AUTHORITY_NAMES).toEqual(["store.db", "store.db-wal", "store.db-shm", "store.db-journal"]);
+    for (const name of ["store.db", "store.db-wal", "store.db-shm", "store.db-journal", "Store.db", "STORE.DB-WAL"]) {
       expect(isStoreAuthorityName(name)).toBe(true);
     }
     expect(isStoreAuthorityName("notes.md")).toBe(false);
@@ -106,8 +106,63 @@ describe("host-gate-paths authority naming", () => {
   test("classifies the authority database only directly at a harness root", () => {
     expect(isStoreAuthorityTarget(join(harness, "store.db"))).toBe(true);
     expect(isStoreAuthorityTarget(join(harness, "Store.db"))).toBe(true);
+    expect(isStoreAuthorityTarget(join(harness, "store.db-journal"))).toBe(true);
     expect(isStoreAuthorityTarget(join(harness, "nested", "store.db"))).toBe(false);
+    expect(isStoreAuthorityTarget(join(harness, "nested", "store.db-journal"))).toBe(false);
     expect(isStoreAuthorityTarget(join(root, "store.db"))).toBe(false);
+  });
+});
+
+describe("host-gate-paths collaboration authority target", () => {
+  let home: string;
+
+  beforeAll(() => {
+    // why: The namespace is anchored on the user home; the resolver's fixture
+    // seam is the only way a test names one without touching a real home.
+    home = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-home-")));
+  });
+
+  afterAll(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const collaborationDb = (): string => join(home, ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db");
+
+  test("protects the collaboration database and every SQLite sidecar", () => {
+    const db = collaborationDb();
+    for (const target of [db, `${db}-wal`, `${db}-shm`, `${db}-journal`]) {
+      expect(isStoreAuthorityTarget(target, { userHome: home })).toBe(true);
+    }
+  });
+
+  test("follows a dangling alias and a chain that lands in the namespace", () => {
+    const link = join(root, "collaboration-alias");
+    symlinkSync(collaborationDb(), link);
+    expect(isStoreAuthorityTarget(landedPathOf(link), { userHome: home })).toBe(true);
+    const chain = join(root, "collaboration-chain");
+    symlinkSync("collaboration-alias", chain);
+    expect(isStoreAuthorityTarget(landedPathOf(chain), { userHome: home })).toBe(true);
+  });
+
+  test("matches a case variant of the namespace and the name", () => {
+    const variant = join(home, ".mstar", "repos", "GitHub.com", "Acme", "Repo", "Collaboration.DB-WAL");
+    expect(isStoreAuthorityTarget(variant, { userHome: home })).toBe(true);
+  });
+
+  test("anchors on the ambient home when no fixture seam is passed", () => {
+    expect(isStoreAuthorityTarget(join(homedir(), ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db"))).toBe(true);
+  });
+
+  test("does not deny a similarly named database outside the user-level namespace", () => {
+    const options = { userHome: home };
+    expect(isStoreAuthorityTarget(join(root, ".mstar", "collaboration.db"), options)).toBe(false);
+    expect(isStoreAuthorityTarget(join(home, ".mstar", "collaboration.db"), options)).toBe(false);
+    expect(isStoreAuthorityTarget(join(home, ".mstar", "repos-archive", "acme", "repo", "collaboration.db"), options)).toBe(
+      false,
+    );
+    expect(isStoreAuthorityTarget(join(home, ".mstar", "repos", "github.com", "acme", "repo", "store.db"), options)).toBe(
+      false,
+    );
   });
 });
 
