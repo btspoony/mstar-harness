@@ -738,10 +738,10 @@ packages: engine, cli
 
 describe("changelog category sections", () => {
   const rootEn = CHANGELOGS.find((target) => target.pkg === "root" && target.lang === "en")!;
-  const frag = (category: string | undefined, bullet: string) => ({
+  const frag = (category: string | undefined, bullet: string, packages = ["root"]) => ({
     file: `${bullet}.md`,
     category,
-    packages: ["root"],
+    packages,
     en: `- ${bullet}`,
     cn: "",
   });
@@ -754,7 +754,21 @@ describe("changelog category sections", () => {
 
   test("Breaking renders before Added and the other kinds", () => {
     const body = buildSectionBody(rootEn, [frag("Added", "added"), frag("Breaking", "breaking")], "9.9.9");
+    expect(body).toContain("### Breaking");
+    expect(body).toContain("### Added");
     expect(body.indexOf("### Breaking")).toBeLessThan(body.indexOf("### Added"));
+  });
+
+  test("package changelogs also render one section per kind", () => {
+    const cliEn = CHANGELOGS.find((target) => target.pkg === "cli" && target.lang === "en")!;
+    const body = buildSectionBody(
+      cliEn,
+      [frag("Added", "added", ["cli"]), frag("Fixed", "fixed", ["cli"])],
+      "9.9.9",
+    );
+    expect(body).toContain("### Added");
+    expect(body).toContain("### Fixed");
+    expect(body.indexOf("### Added")).toBeLessThan(body.indexOf("### Fixed"));
   });
 
   test("an unknown explicit category is refused; every kind and omission is accepted", () => {

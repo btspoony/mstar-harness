@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * prepare-release.ts — assemble changelog fragments + bump every surface.
+ * why: assemble changelog fragments and bump every release surface.
  *
  * Usage:
  *   bun run release:prepare                 # auto patch bump (1.8.6 -> 1.8.7)
@@ -76,7 +76,6 @@ const FRAGMENT_PACKAGES = [
 
 /** Changelog kind sections, in render order. A fragment may name one of these. */
 export const CATEGORY_ORDER = ["Breaking", "Added", "Changed", "Fixed", "Removed", "Security"] as const;
-export type FragmentCategory = (typeof CATEGORY_ORDER)[number];
 const DEFAULT_CATEGORY = "Changed";
 
 const REGISTRY_URL = "https://registry.npmjs.org";
@@ -288,7 +287,7 @@ async function readFragments(): Promise<Fragment[]> {
 export function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fragment[], version: string): string {
   const relevant = frags.filter((f) => f.packages.includes(target.pkg));
 
-  // group by category (default Changed), then render in kind order
+  // invariant: groups render in CATEGORY_ORDER rank, Breaking first.
   const groups: { category: string; bullets: string[] }[] = [];
   for (const f of relevant) {
     const cat = f.category ?? DEFAULT_CATEGORY;
@@ -327,11 +326,9 @@ export function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fra
       );
     }
   } else {
-    const cat = groups[0]?.category ?? DEFAULT_CATEGORY;
-    const bullets: string[] = [];
-    for (const g of groups) for (const b of g.bullets) bullets.push(b);
-    lines.push(`### ${cat}`, "");
-    if (bullets.length) lines.push(...bullets, "");
+    for (const g of groups) {
+      lines.push(`### ${g.category}`, "", ...g.bullets, "");
+    }
     const note =
       target.pkg === "opencode"
         ? `- Version alignment with harness **${version}** (no OpenCode package API change).`
