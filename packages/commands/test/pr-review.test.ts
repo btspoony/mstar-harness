@@ -122,6 +122,7 @@ describe("pr-review command family", () => {
     writeFileSync(findings, JSON.stringify([
       { path: "src/a.ts", line: 3, body: "Unhandled null deref\n\nEvidence: `foo()` returns null before the deref.\n\nFix sketch: guard it.\n\n```suggestion\nconst v = fallback;\n```" },
       { path: "src/b.ts", line: 9, body: "```suggestion\nconst x = 1;\n```" },
+      { path: "src/c.ts", line: 4, body: "Tainted query\n\nEvidence: the docs quote this shape:\n\n```suggestion\n// example only\n```\n\nImpact: injection.\n\nFix sketch: parameterize it.\n\n```suggestion\nconst q = query(text, params);\n```" },
     ]));
     let apiCalls = 0;
     context.effects.spawn = async (request) => {
@@ -140,7 +141,10 @@ describe("pr-review command family", () => {
     expect(retried.body).toContain("Unhandled null deref");
     expect(retried.body).toContain("Fix sketch: guard it.");
     expect(retried.body).toContain("(inline suggestion omitted: no anchor after 422)");
-    expect(retried.body).not.toContain("```suggestion");
+    expect(retried.body).toContain("// example only");
+    expect(retried.body).toContain("Fix sketch: parameterize it.");
+    expect(retried.body).not.toContain("const q = query(text, params);");
+    expect(retried.body.split("```suggestion")).toHaveLength(2); // the quoted example stays, the trailing block is gone
     expect(retried.body).not.toContain("const v = fallback;");
     expect(retried.body).not.toContain("const x = 1;");
   });
