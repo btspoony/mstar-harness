@@ -12,6 +12,10 @@ All three hold:
 
 Exempt: mechanical edits (formatting, renames, dependency bumps, regenerated output), local edits whose rationale is visible in the code, tests or a change description, and decisions already recorded — update or supersede the existing record instead of writing a second one.
 
+## Proposed or implemented
+
+Fate is the state of one record, not a choice of genre. A decision not yet implemented that must outlive the current plan or iteration — a direction candidate, a design awaiting approval, work deferred to a later plan — is written to `proposed/` **before** implementation starts. A decision implemented in the same change that records it goes to `implemented/`. `proposed/` is not a mandatory stage: an implemented record needs no proposed ancestor, and a proposal implemented in the same change leaves no proposed copy behind. The change that implements a `proposed/` record promotes it by the lifecycle rule below, and the implementing plan's `ADR:` pointer follows the new path.
+
 ## Directory shape
 
 ```

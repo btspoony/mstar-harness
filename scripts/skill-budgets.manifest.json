@@ -42,7 +42,7 @@
   { "file": "skills/mstar-dispatch-gates/SKILL.md", "maxLines": 150 },
   { "file": "skills/mstar-doc-corpus/SKILL.md", "maxLines": 70 },
   { "file": "skills/mstar-doc-corpus/assets/knowledge-skeleton.md", "maxLines": 80 },
-  { "file": "skills/mstar-doc-corpus/references/adr.md", "maxLines": 80 },
+  { "file": "skills/mstar-doc-corpus/references/adr.md", "maxLines": 85 },
   { "file": "skills/mstar-doc-corpus/references/category-mapping.md", "maxLines": 40 },
   { "file": "skills/mstar-doc-corpus/references/knowledge-format.md", "maxLines": 40 },
   { "file": "skills/mstar-doc-corpus/references/specs.md", "maxLines": 50 },
