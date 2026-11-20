@@ -10,10 +10,12 @@
  * The store belongs to one canonical repository (collaboration-identity.ts):
  * its path, repository key and mode were resolved before this module is
  * reached, and a record that disagrees with the trusted selection refuses
- * rather than re-binding.
+ * rather than re-binding. Every mutation goes through `withCollaborationWrite`:
+ * no public entry hands out a connection that can write after the selection,
+ * state or epoch changes.
  */
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, linkSync, mkdirSync, openSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, linkSync, mkdirSync, openSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
@@ -30,6 +32,7 @@ import {
   assertStoreRuntimeSupported,
   busyTimeoutMs,
   connect,
+  isBusyError,
   isTransientReadOpenFailure,
   migrationChecksum,
   nowRfc3339,
@@ -346,6 +349,35 @@ create table cutover_publications(
 
 const COLLABORATION_SCHEMA: Migration = { version: 1, name: "collaboration-core", sql: COLLABORATION_SCHEMA_SQL };
 
+/**
+ * The closed collaboration table inventory this build requires. A store that
+ * is missing one of these - or carries a table outside it - is not the current
+ * collaboration schema, and a damaged one must refuse instead of admitting a
+ * handle whose domain queries would fail later.
+ */
+const COLLABORATION_TABLES: readonly string[] = [
+  "catalog_entities",
+  "catalog_links",
+  "catalog_operations",
+  "collaboration_meta",
+  "collaboration_operations",
+  "cutover_publications",
+  "issue_counter",
+  "issue_project_moves",
+  "issue_sync_state",
+  "issue_transitions",
+  "issues",
+  "occurrences",
+  "project_bindings",
+  "project_milestones",
+  "project_roadmaps",
+  "provenance",
+  "relations",
+  "schema_version",
+  "sync_cursor",
+  "sync_runs",
+];
+
 /** The exact trusted generation a caller may act on. */
 export type CollaborationStamp = Readonly<{
   repoKey: string;
@@ -362,6 +394,13 @@ export type CollaborationAuthority = CollaborationStamp &
     catalogRevision: number;
   }>;
 
+/**
+ * One admitted store handle. For every public entry (`openCollaborationStore`
+ * in either mode) `db` is a read-only inspection connection: it cannot mutate,
+ * so a retained handle never authorizes a write after the selection, state or
+ * epoch changes. A writable `db` exists only inside `withCollaborationWrite`'s
+ * callback and is closed when that call returns. `close` is idempotent.
+ */
 export type CollaborationStoreHandle = Readonly<{
   db: StoreDb;
   authority: CollaborationAuthority;
@@ -392,8 +431,35 @@ function unreadable(dbPath: string, detail: string, cause?: string): StoreError 
   );
 }
 
-function causeCode(error: unknown): string | undefined {
-  return error instanceof StoreError ? error.code : undefined;
+/** A published store whose directory entry is not confirmed durable. */
+function barrierRefusal(dbPath: string, error: unknown): StoreError {
+  const cause = publicationCause(error);
+  return new StoreError(
+    "collaboration.unreadable",
+    `The collaboration store at ${dbPath} is published, but its directory entry could not be synchronized ` +
+      `(${cause}); the name is not confirmed durable. Rerun the same initializer to retry the barrier; no data ` +
+      `was changed.`,
+    { path: dbPath, published: true, barrier: "initialization", cause },
+  );
+}
+
+/** The bounded-contention verdict stays the shared, actionable `store.busy`. */
+function busyRefusal(dbPath: string): StoreError {
+  return new StoreError(
+    "store.busy",
+    `Another writer held the collaboration store at ${dbPath} past the bounded wait (${busyTimeoutMs()}ms). ` +
+      `Retry when the competing writer is done; no write was accepted.`,
+  );
+}
+
+/** Preserve a real cause: collaboration codes pass, contention stays busy, the rest is unreadable. */
+function asRefusal(dbPath: string, error: unknown): StoreError {
+  if (error instanceof StoreError) {
+    if (error.code === "store.busy" || error.code.startsWith("collaboration.")) return error;
+    return unreadable(dbPath, error.message, error.code);
+  }
+  if (isBusyError(error)) return busyRefusal(dbPath);
+  return unreadable(dbPath, messageOf(error));
 }
 
 function notInitialized(dbPath: string): StoreError {
@@ -413,7 +479,11 @@ function notActive(dbPath: string, state: "staged" | "active"): StoreError {
   );
 }
 
-function staleBinding(dbPath: string, recorded: { repoKey: string; mode: string; storeId?: string; epoch?: number }, expected: string): StoreError {
+function staleBinding(
+  dbPath: string,
+  recorded: { repoKey: string; mode: string; storeId?: string; epoch?: number },
+  expected: string,
+): StoreError {
   return new StoreError(
     "collaboration.stale-binding",
     `The collaboration store at ${dbPath} records repository ${recorded.repoKey} mode ${recorded.mode}` +
@@ -428,32 +498,39 @@ function assertRegularTarget(dbPath: string): void {
   try {
     assertAbsentOrRegularStoreFile(dbPath);
   } catch (error) {
-    throw unreadable(dbPath, messageOf(error), causeCode(error));
+    throw asRefusal(dbPath, error);
   }
 }
 
-/** Read the collaboration schema ledger; any verdict outside v1 is unreadable. */
-function readSchemaVersion(db: StoreDb, dbPath: string): number {
-  try {
-    return validateAppliedMigrations(readAppliedMigrations(db, false), [COLLABORATION_SCHEMA]);
-  } catch (error) {
-    throw unreadable(dbPath, messageOf(error), causeCode(error));
+/**
+ * The closed table inventory, and nothing outside it. A dropped domain table or
+ * a foreign/combined database copied onto this path refuses before admission.
+ */
+function assertCurrentSchema(db: StoreDb, dbPath: string): void {
+  const rows = db.prepare("select name from sqlite_master where type = 'table'").all();
+  const present = new Set<string>();
+  for (const row of rows) {
+    const name = (row as { name?: unknown }).name;
+    if (typeof name === "string" && !name.startsWith("sqlite_")) present.add(name);
+  }
+  const missing = COLLABORATION_TABLES.filter((name) => !present.has(name));
+  const unexpected = [...present].filter((name) => !COLLABORATION_TABLES.includes(name));
+  if (missing.length > 0 || unexpected.length > 0) {
+    throw unreadable(
+      dbPath,
+      `its schema is not the current collaboration inventory (missing: ${missing.join(", ") || "none"}; ` +
+        `unexpected: ${unexpected.join(", ") || "none"})`,
+    );
   }
 }
 
-function readMeta(db: StoreDb, dbPath: string): CollaborationMeta {
-  let row: unknown;
-  try {
-    row = db
-      .prepare(
-        "select repository_key, mode, store_id, authority_state, authority_epoch, revision, catalog_revision " +
-          "from collaboration_meta where id = 1",
-      )
-      .get();
-  } catch (error) {
-    throw unreadable(dbPath, messageOf(error), causeCode(error));
-  }
-  const record = row as
+function readMeta(db: StoreDb): CollaborationMeta {
+  const record = db
+    .prepare(
+      "select repository_key, mode, store_id, authority_state, authority_epoch, revision, catalog_revision " +
+        "from collaboration_meta where id = 1",
+    )
+    .get() as
     | {
         repository_key?: unknown;
         mode?: unknown;
@@ -476,8 +553,7 @@ function readMeta(db: StoreDb, dbPath: string): CollaborationMeta {
   ) {
     throw new StoreError(
       "collaboration.unreadable",
-      `collaboration_meta is missing or malformed at ${dbPath}; the repository binding cannot be verified. ` +
-        `Nothing was modified.`,
+      "collaboration_meta is missing or malformed; the repository binding cannot be verified. Nothing was modified.",
     );
   }
   return {
@@ -491,41 +567,52 @@ function readMeta(db: StoreDb, dbPath: string): CollaborationMeta {
   };
 }
 
-/** Ledger, metadata and trusted selection must all agree before any handle exists. */
-function verifyBinding(
+/**
+ * Ledger, current domain schema, metadata, trusted selection, required state and
+ * (when given) the exact stamp must all agree before any handle or effect is
+ * admitted. Every failure keeps its own distinguishable refusal.
+ */
+function admit(
   db: StoreDb,
   location: CollaborationLocation,
-  expected?: CollaborationStamp,
+  expected: CollaborationStamp | undefined,
+  requirement: "active" | "any",
 ): CollaborationAuthority {
-  const schemaVersion = readSchemaVersion(db, location.dbPath);
-  const meta = readMeta(db, location.dbPath);
-  if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
-    throw staleBinding(location.dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
+  try {
+    assertCurrentSchema(db, location.dbPath);
+    const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false), [COLLABORATION_SCHEMA]);
+    const meta = readMeta(db);
+    if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
+      throw staleBinding(location.dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
+    }
+    const authority: CollaborationAuthority = {
+      repoKey: meta.repoKey,
+      mode: meta.mode,
+      storeId: meta.storeId,
+      epoch: meta.epoch,
+      state: meta.state,
+      schemaVersion,
+      revision: meta.revision,
+      catalogRevision: meta.catalogRevision,
+    };
+    if (requirement === "active" && authority.state !== "active") throw notActive(location.dbPath, authority.state);
+    const matches =
+      expected !== undefined &&
+      expected.repoKey === location.repoKey &&
+      expected.mode === location.mode &&
+      expected.storeId === authority.storeId &&
+      expected.epoch === authority.epoch;
+    if (expected !== undefined && !matches) {
+      throw staleBinding(
+        location.dbPath,
+        authority,
+        `${expected.repoKey} (${expected.mode}) store ${expected.storeId} epoch ${String(expected.epoch)}`,
+      );
+    }
+    return authority;
+  } catch (error) {
+    throw asRefusal(location.dbPath, error);
   }
-  const authority: CollaborationAuthority = {
-    repoKey: meta.repoKey,
-    mode: meta.mode,
-    storeId: meta.storeId,
-    epoch: meta.epoch,
-    state: meta.state,
-    schemaVersion,
-    revision: meta.revision,
-    catalogRevision: meta.catalogRevision,
-  };
-  const matches =
-    expected !== undefined &&
-    expected.repoKey === location.repoKey &&
-    expected.mode === location.mode &&
-    expected.storeId === authority.storeId &&
-    expected.epoch === authority.epoch;
-  if (expected !== undefined && !matches) {
-    throw staleBinding(
-      location.dbPath,
-      authority,
-      `${expected.repoKey} (${expected.mode}) store ${expected.storeId} epoch ${String(expected.epoch)}`,
-    );
-  }
-  return authority;
 }
 
 /** One handle owner: `close` is idempotent so the entry points can share it. */
@@ -553,35 +640,55 @@ async function connectAt(dbPath: string, mode: "read" | "write", timeout: number
         await sleep(READ_OPEN_BACKOFF_MS);
         continue;
       }
-      throw unreadable(dbPath, publicationCause(error), causeCode(error));
+      throw asRefusal(dbPath, error);
     }
   }
 }
 
 /**
- * Open an existing collaboration store. `admit` names the only state that may
- * be returned: public handles admit `active`; initialization continues a
- * matching record in either state without clearing it.
+ * Admit one existing store on a READ-ONLY connection. `admit` names the only
+ * state that may be returned: public handles admit `active`; initialization
+ * continues a matching record in either state without clearing it.
  */
-async function openExisting(
+async function openAdmission(
   location: CollaborationLocation,
-  mode: "read" | "write",
+  requirement: "active" | "any",
+  expected: CollaborationStamp | undefined,
   timeout: number,
-  admit: "active" | "any",
-  expected?: CollaborationStamp,
 ): Promise<CollaborationStoreHandle> {
   const dbPath = location.dbPath;
   assertRegularTarget(dbPath);
   if (!existsSync(dbPath)) throw notInitialized(dbPath);
-  const db = await connectAt(dbPath, mode, timeout);
+  const db = await connectAt(dbPath, "read", timeout);
   try {
-    const authority = verifyBinding(db, location, expected);
-    if (admit === "active" && authority.state !== "active") throw notActive(dbPath, authority.state);
-    return handleFor(db, authority);
+    return handleFor(db, admit(db, location, expected, requirement));
   } catch (error) {
     db.close();
     throw error;
   }
+}
+
+/** Confirm the canonical directory entry before any successful continuation. */
+function confirmDirectoryEntry(dbPath: string): void {
+  try {
+    syncDirectoryEntry(dirname(dbPath));
+  } catch (error) {
+    throw barrierRefusal(dbPath, error);
+  }
+}
+
+/**
+ * Continue an already published record without clearing it. Reused by the
+ * existing-path and competing-publication branches: both re-attempt the
+ * directory barrier, so a retry after a failed barrier never reports success
+ * for a name that is still not durable.
+ */
+async function continueExisting(location: CollaborationLocation, timeout: number): Promise<CollaborationAuthority> {
+  const handle = await openAdmission(location, "any", undefined, timeout);
+  const authority = handle.authority;
+  handle.close();
+  confirmDirectoryEntry(location.dbPath);
+  return authority;
 }
 
 /**
@@ -589,18 +696,14 @@ async function openExisting(
  * database is built complete in a private staging file and published with one
  * create-only hard link; a matching record already on disk (staged or active)
  * is reused without clearing it, and a record for another repository, mode,
- * store id or an unreadable schema refuses.
+ * state, store id or schema refuses.
  */
 export async function initializeCollaborationStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
   assertStoreRuntimeSupported();
   const dbPath = location.dbPath;
   const timeout = busyTimeoutMs();
   assertRegularTarget(dbPath);
-  if (existsSync(dbPath)) {
-    const handle = await openExisting(location, "read", timeout, "any");
-    handle.close();
-    return handle.authority;
-  }
+  if (existsSync(dbPath)) return continueExisting(location, timeout);
 
   const dir = dirname(dbPath);
   try {
@@ -647,12 +750,15 @@ export async function initializeCollaborationStore(location: CollaborationLocati
     }
     // The staged bytes are verified as this build's own complete store before
     // they can be named.
-    authority = verifyBinding(db, location);
+    authority = admit(db, location, undefined, "any");
     // A hard link names one inode, not a journal: fold the staged journal into
     // the database file so the published name is self-contained.
     const folded = db.prepare("pragma journal_mode=delete").get() as { journal_mode?: string } | undefined;
     if (folded?.journal_mode !== "delete") {
-      throw unreadable(dbPath, `the staged store could not be folded into one database file (journal mode ${String(folded?.journal_mode ?? "unknown")})`);
+      throw unreadable(
+        dbPath,
+        `the staged store could not be folded into one database file (journal mode ${String(folded?.journal_mode ?? "unknown")})`,
+      );
     }
     db.close();
     db = undefined;
@@ -665,7 +771,7 @@ export async function initializeCollaborationStore(location: CollaborationLocati
       }
     }
     removeStagingFiles(stagingPath);
-    throw error instanceof StoreError ? error : unreadable(dbPath, publicationCause(error));
+    throw asRefusal(dbPath, error);
   }
 
   try {
@@ -673,26 +779,16 @@ export async function initializeCollaborationStore(location: CollaborationLocati
   } catch (error) {
     removeStagingFiles(stagingPath);
     if (error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-      // A competing initializer published this scope first: continue its record
-      // only when it is the trusted one.
-      const handle = await openExisting(location, "read", timeout, "any");
-      handle.close();
-      return handle.authority;
+      // A competing initializer published this scope first: continue that record
+      // only after it is verified and its directory entry is confirmed.
+      return continueExisting(location, timeout);
     }
     throw unreadable(dbPath, `the staged store could not be linked into place (${publicationCause(error)})`);
   }
-  try {
-    syncDirectoryEntry(dir);
-  } catch (error) {
-    throw Object.assign(
-      unreadable(
-        dbPath,
-        `the published store's directory entry could not be synchronized (${publicationCause(error)}); the store is ` +
-          `published here but its name is not confirmed durable. Rerun the same initializer to retry the barrier`,
-      ),
-      { details: { path: dbPath, published: true, cause: publicationCause(error) } },
-    );
-  }
+  // A failed barrier keeps the staging name (the only other reference to those
+  // bytes) and reports the published-but-unconfirmed outcome; the same
+  // initializer retries it through the continuation above.
+  confirmDirectoryEntry(dbPath);
   removeStagingFiles(stagingPath);
   return authority;
 }
@@ -704,58 +800,78 @@ export async function initializeCollaborationStore(location: CollaborationLocati
  * `collaboration.unreadable`. An expected stamp that no longer matches refuses
  * `collaboration.stale-binding` before the handle is returned.
  *
- * `options.userHome` is the direct-engine fixture seam the resolver already
- * exposes; it is not a CLI/MCP selector.
+ * Both modes return the same non-mutating inspection handle: the lane's writer
+ * exists only inside `withCollaborationWrite`, so no retained handle can write
+ * after the selection, state or epoch changes. `mode: "write"` additionally
+ * proves the store file is writable now, so a mutation-intent caller learns a
+ * read-only filesystem before attempting the guarded write.
  */
 export async function openCollaborationStore(
   context: StoreContext,
   mode: "read" | "write",
   expected?: CollaborationStamp,
-  options: { userHome?: string } = {},
 ): Promise<CollaborationStoreHandle> {
   assertStoreRuntimeSupported();
-  const location = resolveCollaborationLocation(context, options);
-  return openExisting(location, mode, busyTimeoutMs(), "active", expected);
+  const location = resolveCollaborationLocation(context);
+  if (mode === "write" && existsSync(location.dbPath)) {
+    try {
+      accessSync(location.dbPath, constants.W_OK);
+    } catch (error) {
+      throw unreadable(location.dbPath, `the store file is not writable (${publicationCause(error)})`);
+    }
+  }
+  return openAdmission(location, "active", expected, busyTimeoutMs());
 }
 
 /** The active authority record alone; no handle escapes and nothing is created. */
-export async function readCollaborationAuthority(
-  context: StoreContext,
-  options: { userHome?: string } = {},
-): Promise<CollaborationAuthority> {
-  const handle = await openCollaborationStore(context, "read", undefined, options);
+export async function readCollaborationAuthority(context: StoreContext): Promise<CollaborationAuthority> {
+  const handle = await openCollaborationStore(context, "read");
   handle.close();
   return handle.authority;
 }
 
 /**
- * Run one collaboration effect inside a write transaction. The binding, active
- * state and expected stamp are re-verified under `BEGIN IMMEDIATE`, so a
- * payload or earlier handle is never authority; a thrown effect rolls the
- * whole transaction back, and the wrapper never performs I/O of its own inside
- * the transaction.
+ * Run one collaboration effect inside a write transaction. Admission is proved
+ * on a read-only probe FIRST, so a refused scope never opens a writer and never
+ * changes a staged or foreign database's journal state. The writer then takes
+ * `BEGIN IMMEDIATE` and re-verifies the binding, active state and expected stamp
+ * under the writer lock, so neither a payload nor an earlier handle authorizes
+ * a write. The effect must be synchronous: a returned thenable is rejected
+ * before commit, and a thrown effect rolls the whole transaction back.
  */
 export async function withCollaborationWrite<T>(
   context: StoreContext,
   apply: (handle: CollaborationStoreHandle) => T,
   expected?: CollaborationStamp,
-  options: { userHome?: string } = {},
 ): Promise<T> {
   assertStoreRuntimeSupported();
-  const location = resolveCollaborationLocation(context, options);
+  const location = resolveCollaborationLocation(context);
   const dbPath = location.dbPath;
   const timeout = busyTimeoutMs();
   assertRegularTarget(dbPath);
   if (!existsSync(dbPath)) throw notInitialized(dbPath);
+
+  const probe = await connectAt(dbPath, "read", timeout);
+  try {
+    admit(probe, location, expected, "active");
+  } finally {
+    probe.close();
+  }
+
   const db = await connectAt(dbPath, "write", timeout);
   let handle: CollaborationStoreHandle | undefined;
   try {
     db.exec("begin immediate");
     try {
-      const authority = verifyBinding(db, location, expected);
-      if (authority.state !== "active") throw notActive(dbPath, authority.state);
-      handle = handleFor(db, authority);
+      handle = handleFor(db, admit(db, location, expected, "active"));
       const result = apply(handle);
+      if (result !== null && typeof result === "object" && typeof (result as { then?: unknown }).then === "function") {
+        throw new StoreError(
+          "store.corrupt",
+          "A collaboration write effect must be synchronous. The returned thenable was rejected before commit and " +
+            "nothing was written.",
+        );
+      }
       db.exec("commit");
       return result;
     } catch (error) {

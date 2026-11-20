@@ -2,15 +2,30 @@
  * collaboration store -- independent staged schema, create-only publication and
  * active-only admission for the user-level collaboration database.
  *
- * Every case builds a synthetic checkout and user home under the temp root; no
- * case reads the real user home or the control harness store.
+ * Every case builds a synthetic checkout and user home under the temp root; the
+ * user home is isolated by a `node:os` test spy, so no case reads the real home
+ * or the control harness store, and no product API gained a home selector.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import * as nodeFs from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
 import {
   initializeCollaborationStore,
@@ -18,16 +33,25 @@ import {
   readCollaborationAuthority,
   withCollaborationWrite,
   type CollaborationStamp,
+  type CollaborationStoreHandle,
 } from "./collaboration-store.js";
 import { MIGRATIONS, initializeStore, openStore, type StoreContext } from "./store-db.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-collab-store-")));
 const HOME = join(ROOT, "home");
 mkdirSync(HOME);
-/** The direct-engine fixture seam the resolver exposes for the user home. */
-const HOME_OPTION = { userHome: HOME };
+
+let homeSpy: { mockRestore(): void } | undefined;
+
+beforeAll(() => {
+  // The resolver's fixture seam is its explicit `userHome` option; the store
+  // entry points keep the locked signatures without one, so the isolated home
+  // is installed at the runtime boundary the resolver calls.
+  homeSpy = spyOn(nodeOs, "homedir").mockReturnValue(HOME);
+});
 
 afterAll(() => {
+  homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 
@@ -60,6 +84,14 @@ const COLLABORATION_TABLES = [
   "sync_runs",
 ];
 
+/** One standalone receipt insert, for the transaction-boundary cases. */
+function receiptInsert(operationId: string): string {
+  return (
+    "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
+    `values ('standalone', '${operationId}', 'hash', '{}', '2026-11-21T00:00:00.000Z')`
+  );
+}
+
 let sequence = 0;
 
 function git(cwd: string, ...args: string[]): string {
@@ -85,7 +117,7 @@ function contextAt(root: string): StoreContext {
 }
 
 function locationAt(root: string): CollaborationLocation {
-  return resolveCollaborationLocation(contextAt(root), { userHome: HOME });
+  return resolveCollaborationLocation(contextAt(root));
 }
 
 /** Flip the staged record to active: this plan ships no public activator. */
@@ -111,13 +143,36 @@ function tableNames(dbPath: string): string[] {
   }
 }
 
-function metaRow(dbPath: string): { repository_key: string; mode: string } {
+function metaRecord(dbPath: string): {
+  repository_key: string;
+  mode: string;
+  store_id: string;
+  authority_state: string;
+  authority_epoch: number;
+} {
   const db = new DatabaseSync(dbPath);
   try {
-    return db.prepare("select repository_key, mode from collaboration_meta where id = 1").get() as {
+    return db
+      .prepare(
+        "select repository_key, mode, store_id, authority_state, authority_epoch from collaboration_meta where id = 1",
+      )
+      .get() as {
       repository_key: string;
       mode: string;
+      store_id: string;
+      authority_state: string;
+      authority_epoch: number;
     };
+  } finally {
+    db.close();
+  }
+}
+
+/** The journal mode actually persisted in the file (a plain open never changes it). */
+function journalMode(dbPath: string): string {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return (db.prepare("pragma journal_mode").get() as { journal_mode: string }).journal_mode;
   } finally {
     db.close();
   }
@@ -132,6 +187,36 @@ function receipts(dbPath: string): string[] {
   } finally {
     db.close();
   }
+}
+
+const REAL_FSYNC = nodeFs.fsyncSync;
+
+/** Whether this descriptor currently names a directory - the barrier's target. */
+function namesDirectory(fd: number): boolean {
+  try {
+    return fstatSync(fd).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Fail every directory barrier this process attempts, with an errno. */
+function failDirectoryBarriers(): { restore: () => void } {
+  const spy = spyOn(nodeFs, "fsyncSync").mockImplementation(((fd: number) => {
+    if (namesDirectory(fd)) throw Object.assign(new Error("simulated directory fsync failure"), { code: "EIO" });
+    return REAL_FSYNC(fd);
+  }) as never);
+  return { restore: () => spy.mockRestore() };
+}
+
+/** Count the directory barriers that actually run. */
+function observeDirectoryBarriers(): { restore: () => void; synced: () => number } {
+  let synced = 0;
+  const spy = spyOn(nodeFs, "fsyncSync").mockImplementation(((fd: number) => {
+    if (namesDirectory(fd)) synced += 1;
+    return REAL_FSYNC(fd);
+  }) as never);
+  return { restore: () => spy.mockRestore(), synced: () => synced };
 }
 
 describe("collaboration store", () => {
@@ -198,21 +283,21 @@ describe("collaboration store", () => {
     const context = contextAt(repo);
     const location = locationAt(repo);
 
-    await expect(openCollaborationStore(context, "read", undefined, HOME_OPTION)).rejects.toMatchObject({
+    await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
       code: "collaboration.not-initialized",
     });
-    await expect(openCollaborationStore(context, "write", undefined, HOME_OPTION)).rejects.toMatchObject({
+    await expect(openCollaborationStore(context, "write")).rejects.toMatchObject({
       code: "collaboration.not-initialized",
     });
-    await expect(readCollaborationAuthority(context, HOME_OPTION)).rejects.toMatchObject({
+    await expect(readCollaborationAuthority(context)).rejects.toMatchObject({
       code: "collaboration.not-initialized",
     });
     expect(existsSync(dirname(location.dbPath))).toBe(false);
 
     const staged = await initializeCollaborationStore(location);
-    await expect(openCollaborationStore(context, "read", undefined, HOME_OPTION)).rejects.toMatchObject({ code: "collaboration.not-active" });
-    await expect(readCollaborationAuthority(context, HOME_OPTION)).rejects.toMatchObject({ code: "collaboration.not-active" });
-    await expect(withCollaborationWrite(context, () => "unused", undefined, HOME_OPTION)).rejects.toMatchObject({
+    await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({ code: "collaboration.not-active" });
+    await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.not-active" });
+    await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
       code: "collaboration.not-active",
     });
     // A refused admission neither activates nor rewrites the staged record.
@@ -234,7 +319,7 @@ describe("collaboration store", () => {
 
     for (let index = 0; index < locations.length; index++) {
       expect(authorities[index].repoKey).toBe(locations[index].repoKey);
-      expect(metaRow(locations[index].dbPath).repository_key).toBe(locations[index].repoKey);
+      expect(metaRecord(locations[index].dbPath).repository_key).toBe(locations[index].repoKey);
     }
   });
 
@@ -276,7 +361,30 @@ describe("collaboration store", () => {
     });
     // The link target was neither followed nor modified.
     expect(await initializeCollaborationStore(target)).toEqual(authority);
-    expect(metaRow(target.dbPath).repository_key).toBe("github.com/acme/link-target");
+    expect(metaRecord(target.dbPath).repository_key).toBe("github.com/acme/link-target");
+  });
+
+  test("an active store missing a required table refuses as unreadable", async () => {
+    const repo = makeRepo("https://github.com/acme/damaged.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    await initializeCollaborationStore(location);
+    activate(location.dbPath);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.exec("drop table issues");
+    } finally {
+      db.close();
+    }
+
+    await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+      message: expect.stringContaining("issues"),
+    });
+    await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
+    await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+    });
   });
 
   test("write admission enforces the active stamp and rolls a refused effect back", async () => {
@@ -286,7 +394,7 @@ describe("collaboration store", () => {
     const staged = await initializeCollaborationStore(location);
     activate(location.dbPath);
 
-    const authority = await readCollaborationAuthority(context, HOME_OPTION);
+    const authority = await readCollaborationAuthority(context);
     expect(authority).toMatchObject({
       state: "active",
       repoKey: staged.repoKey,
@@ -301,7 +409,7 @@ describe("collaboration store", () => {
       epoch: authority.epoch,
     };
 
-    const handle = await openCollaborationStore(context, "read", stamp, HOME_OPTION);
+    const handle = await openCollaborationStore(context, "read", stamp);
     expect(handle.authority).toEqual(authority);
     handle.close();
 
@@ -316,25 +424,20 @@ describe("collaboration store", () => {
           return "unreachable";
         },
         stale,
-        HOME_OPTION,
       ),
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
     expect(applied).toBe(false);
-    await expect(openCollaborationStore(context, "read", stale, HOME_OPTION)).rejects.toMatchObject({
+    await expect(openCollaborationStore(context, "read", stale)).rejects.toMatchObject({
       code: "collaboration.stale-binding",
     });
 
     const committed = await withCollaborationWrite(
       context,
       (write) => {
-        write.db.exec(
-          "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
-            "values ('standalone', 'op-committed', 'hash', '{}', '2026-11-21T00:00:00.000Z')",
-        );
+        write.db.exec(receiptInsert("op-committed"));
         return write.authority.revision;
       },
       stamp,
-      HOME_OPTION,
     );
     expect(committed).toBe(authority.revision);
 
@@ -343,18 +446,241 @@ describe("collaboration store", () => {
       withCollaborationWrite(
         context,
         (write) => {
-          write.db.exec(
-            "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
-              "values ('standalone', 'op-rolled-back', 'hash', '{}', '2026-11-21T00:00:00.000Z')",
-          );
+          write.db.exec(receiptInsert("op-rolled-back"));
           throw new Error("domain refusal");
         },
         stamp,
-        HOME_OPTION,
       ),
     ).rejects.toThrow("domain refusal");
     expect(receipts(location.dbPath)).toEqual(["op-committed"]);
   });
+
+  test("a public handle can never mutate outside the guarded transaction", async () => {
+    const repo = makeRepo("https://github.com/acme/handle.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    await initializeCollaborationStore(location);
+    activate(location.dbPath);
+
+    const authority = await readCollaborationAuthority(context);
+    const stamp: CollaborationStamp = {
+      repoKey: authority.repoKey,
+      mode: authority.mode,
+      storeId: authority.storeId,
+      epoch: authority.epoch,
+    };
+
+    for (const mode of ["read", "write"] as const) {
+      const handle = await openCollaborationStore(context, mode, stamp);
+      expect(() => handle.db.prepare(receiptInsert(`op-${mode}-prepared`)).run()).toThrow();
+      expect(() => handle.db.exec(receiptInsert(`op-${mode}-exec`))).toThrow();
+      handle.close();
+    }
+    expect(receipts(location.dbPath)).toEqual([]);
+
+    // A retained handle stays non-mutating when the recorded generation changes.
+    const retained = await openCollaborationStore(context, "write", stamp);
+    const selection = new DatabaseSync(location.dbPath);
+    try {
+      selection.prepare("update collaboration_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+    } finally {
+      selection.close();
+    }
+    expect(() => retained.db.exec(receiptInsert("op-after-epoch-change"))).toThrow();
+    retained.close();
+    expect(receipts(location.dbPath)).toEqual([]);
+
+    // The guarded transaction's writer is closed when the call returns.
+    let escaped: CollaborationStoreHandle | undefined;
+    await withCollaborationWrite(
+      context,
+      (write) => {
+        escaped = write;
+        return "ok";
+      },
+      { ...stamp, epoch: stamp.epoch + 1 },
+    );
+    expect(() => escaped?.db.exec("select 1")).toThrow();
+  });
+
+  test("an asynchronous effect is rejected before commit", async () => {
+    const repo = makeRepo("https://github.com/acme/async.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    const staged = await initializeCollaborationStore(location);
+    activate(location.dbPath);
+    const stamp: CollaborationStamp = {
+      repoKey: staged.repoKey,
+      mode: staged.mode,
+      storeId: staged.storeId,
+      epoch: staged.epoch,
+    };
+
+    await expect(
+      withCollaborationWrite(
+        context,
+        (write) => {
+          const pending = (async () => {
+            write.db.exec(receiptInsert("op-async"));
+            await Promise.resolve();
+            throw new Error("async effect");
+          })();
+          pending.catch(() => undefined);
+          return pending;
+        },
+        stamp,
+      ),
+    ).rejects.toMatchObject({ code: "store.corrupt", message: expect.stringContaining("synchronous") });
+    expect(receipts(location.dbPath)).toEqual([]);
+  });
+
+  test("an unconfirmed directory entry refuses on continuation and the same initializer confirms it", async () => {
+    const location = locationAt(makeRepo("https://github.com/acme/barrier.git"));
+    const failing = failDirectoryBarriers();
+    const refusal = await initializeCollaborationStore(location).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    failing.restore();
+
+    expect(refusal).toMatchObject({ code: "collaboration.unreadable", details: { published: true } });
+    expect(refusal instanceof Error ? refusal.message : "").toMatch(/EIO|simulated directory fsync failure/);
+    const published = metaRecord(location.dbPath);
+    expect(published.authority_state).toBe("staged");
+
+    // The retry continues the SAME record and really re-runs the barrier.
+    const observer = observeDirectoryBarriers();
+    let authority;
+    try {
+      authority = await initializeCollaborationStore(location);
+    } finally {
+      const synced = observer.synced();
+      observer.restore();
+      expect(synced).toBeGreaterThan(0);
+    }
+    expect(authority.storeId).toBe(published.store_id);
+    expect(authority.state).toBe("staged");
+  });
+
+  test("a competing publication continues the published record only after confirming its directory entry", async () => {
+    const location = locationAt(makeRepo("https://github.com/acme/competitor.git"));
+    const competitor = spyOn(nodeFs, "linkSync").mockImplementation(((from: string, to: string) => {
+      // A competing initializer published the same complete bytes first.
+      copyFileSync(from, to);
+      throw Object.assign(new Error("EEXIST: file already exists"), { code: "EEXIST" });
+    }) as never);
+    try {
+      const failing = failDirectoryBarriers();
+      const refusal = await initializeCollaborationStore(location).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      failing.restore();
+      expect(refusal).toMatchObject({ code: "collaboration.unreadable", details: { published: true } });
+
+      // The next attempt stages again, meets the competitor again, and only
+      // reports success after the continuation confirms the directory entry.
+      rmSync(location.dbPath);
+      const observer = observeDirectoryBarriers();
+      let authority;
+      try {
+        authority = await initializeCollaborationStore(location);
+      } finally {
+        const synced = observer.synced();
+        observer.restore();
+        expect(synced).toBeGreaterThan(0);
+      }
+      expect(authority.state).toBe("staged");
+      expect(authority.repoKey).toBe(location.repoKey);
+      expect(metaRecord(location.dbPath).store_id).toBe(authority.storeId);
+    } finally {
+      competitor.mockRestore();
+    }
+  });
+
+  test("a refused write leaves the staged or stale database unchanged", async () => {
+    const repo = makeRepo("https://github.com/acme/no-mutation.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    await initializeCollaborationStore(location);
+    const stagedBytes = readFileSync(location.dbPath);
+    expect(journalMode(location.dbPath)).toBe("delete");
+
+    await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
+      code: "collaboration.not-active",
+    });
+    expect(readFileSync(location.dbPath).equals(stagedBytes)).toBe(true);
+    expect(journalMode(location.dbPath)).toBe("delete");
+    expect(existsSync(`${location.dbPath}-wal`)).toBe(false);
+    expect(existsSync(`${location.dbPath}-shm`)).toBe(false);
+
+    activate(location.dbPath);
+    const activeBytes = readFileSync(location.dbPath);
+    const authority = await readCollaborationAuthority(context);
+    const stale: CollaborationStamp = {
+      repoKey: authority.repoKey,
+      mode: authority.mode,
+      storeId: authority.storeId,
+      epoch: authority.epoch + 1,
+    };
+    await expect(withCollaborationWrite(context, () => "unused", stale)).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+    expect(readFileSync(location.dbPath).equals(activeBytes)).toBe(true);
+    expect(journalMode(location.dbPath)).toBe("delete");
+    expect(existsSync(`${location.dbPath}-wal`)).toBe(false);
+  });
+
+  test("open contention keeps the bounded busy refusal", async () => {
+    const repo = makeRepo("https://github.com/acme/open-busy.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    await initializeCollaborationStore(location);
+    activate(location.dbPath);
+
+    const holder = new DatabaseSync(location.dbPath);
+    holder.exec("begin exclusive");
+    try {
+      await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({ code: "store.busy" });
+    } finally {
+      try {
+        holder.exec("rollback");
+      } finally {
+        holder.close();
+      }
+    }
+  }, 20_000);
+
+  test("transaction contention keeps the bounded busy refusal", async () => {
+    const repo = makeRepo("https://github.com/acme/tx-busy.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    await initializeCollaborationStore(location);
+    activate(location.dbPath);
+    // Already in WAL mode, so the writer's connect step is a no-op and the
+    // contention is met at BEGIN IMMEDIATE itself.
+    const convert = new DatabaseSync(location.dbPath);
+    try {
+      convert.exec("pragma journal_mode=wal");
+    } finally {
+      convert.close();
+    }
+
+    const holder = new DatabaseSync(location.dbPath);
+    holder.exec("begin immediate");
+    const started = Date.now();
+    try {
+      await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({ code: "store.busy" });
+      // The bounded wait ran out at the transaction boundary, not at connect.
+      expect(Date.now() - started).toBeGreaterThanOrEqual(4_000);
+    } finally {
+      try {
+        holder.exec("rollback");
+      } finally {
+        holder.close();
+      }
+    }
+  }, 20_000);
 
   test("collaboration initialization leaves the execution store and its lazy open unchanged", async () => {
     const repo = makeRepo("https://github.com/acme/legacy.git");
@@ -367,13 +693,13 @@ describe("collaboration store", () => {
     const handle = await initializeStore(context);
     try {
       expect(handle.schemaVersion).toBe(MIGRATIONS.length);
-      const executionTables = (
-        handle.db
-          .prepare("select name from sqlite_master where type = 'table' and name like 'execution!_%' escape '!' order by name")
-          .all() as Array<{ name: string }>
+      const tables = (
+        handle.db.prepare("select name from sqlite_master where type = 'table' order by name").all() as Array<{ name: string }>
       ).map((row) => row.name);
-      expect(executionTables.length).toBeGreaterThan(0);
-      expect(executionTables).not.toContain("collaboration_meta");
+      // The execution store carries its own authority and no collaboration
+      // metadata: the two lanes never share a file or a table.
+      expect(tables).toEqual(expect.arrayContaining(["execution_meta", "store_meta"]));
+      expect(tables).not.toContain("collaboration_meta");
     } finally {
       handle.close();
     }

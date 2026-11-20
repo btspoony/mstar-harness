@@ -283,7 +283,7 @@ function refuseOpenFailure(error: unknown, dbPath: string, timeout = DEFAULT_BUS
 }
 
 /** Map a bounded-wait BUSY failure to the stable visible refusal. */
-function isBusyError(error: unknown): boolean {
+export function isBusyError(error: unknown): boolean {
   const err = error as { code?: string; errcode?: string | number; message?: string };
   return (
     err?.errcode === 5 ||
