@@ -719,7 +719,7 @@ packages: engine, cli
     expect(frag.en).not.toMatch(/[\u4e00-\u9fff]/);
   });
 
-  test("every unreleased fragment declares frontmatter with known packages tokens", async () => {
+  test("every unreleased fragment declares frontmatter with known packages and category tokens", async () => {
     // A successful release archives every fragment and legitimately empties this
     // queue, so the invariant is asserted per fragment and holds vacuously then.
     const dir = join(import.meta.dir, "..", ".changes", "unreleased");
@@ -731,6 +731,9 @@ packages: engine, cli
       // engine change silently lands in the root changelogs.
       if (!text.startsWith("---")) problems.push(`${file}: no frontmatter (routed to ${frag.packages.join(", ")})`);
       problems.push(...validateFragmentPackages(frag.packages, file));
+      // why: an unknown category is refused only at release time, so the PR that adds
+      // the fragment must fail here instead of poisoning the next release.
+      problems.push(...validateFragmentCategory(frag.category, file));
     }
     expect(problems).toEqual([]);
   });
