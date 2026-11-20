@@ -6,6 +6,51 @@
 
 ## [Unreleased]
 
+## [4.8.0] - 2026-11-20
+
+### Harness
+
+- 仪表盘项目页现在包含仅被问题引用的项目，未关闭问题计数与问题页一致，按显示标题排序，且不虚构目录元数据。
+- 总览中的里程碑和交付区域现以中文显示无法对应项目的说明，同时保留原始诊断错误。
+- Cursor 桥接文档改为引用共享的计划模式初始化清单，并保留首次 CreatePlan 前完成的时序要求。
+- 新增简明的 **Devin Bot 配置**说明，明确云端报告路径映射、独立交接尝试、导入校验与证据保留规则。
+- 以 skill 路径解析行为检查替换 HostAdapter 测试中的恒真断言，并标注宿主模块的实际不变量。
+- 新增从仓库根目录安装的 **Devin 原生插件支持**、PM skill 入口、基于工具能力的宿主检测和插件相对路径解析。
+- 说明 CLI/Desktop 角色子代理与云端工单/子会话派发；隔离虚拟机之间仅由 PM 维护工作流状态。
+- 修复 **Devin 插件卡片**：manifest 新增 `logo` 指向 Morning Star 图标，不再回退为仓库所有者头像；描述改为更简短的 Devin 专用文案。
+- **固定 harness 根**：`{HARNESS_DIR}` 现为 `<git main worktree root>/.mstar`，只由 Git 派生。`.mstarc` 的 `harness_dir`、`MSTAR_HARNESS_DIR` 与 legacy `.agents/` / `.plans/` / `plans/` 候选全部退役——退役的是选择能力而非报错：声明的键与环境变量照样解析/读取后被忽略，没有 `.mstar` 的仓库只是解析不到 harness（需要时用 `mstar harness scaffold`，已有 store 再加 `mstar store upgrade` 建出固定根），Git 之外的 CLI 启动用 `--harness` 指定。
+- **MCP 连接不再携带根**：`mstar mcp --harness` 与环境变量都不再指定仓库。每次触碰进程状态的调用都传 `harness` 指向固定的 `<main worktree>/.mstar`；服务端拒绝缺失选择器、相对路径或 linked worktree 的 `.mstar`。
+- **scaffold** 不再写 `harness_dir`；它创建的 `.mstarc` 只写与默认不同的 corpus / 子目录键。
+- **PM 根解析**：project-manager 提示词在读写进程状态前先解析 `controlHarnessDir`，在 linked worktree 中启动的会话不再去自己的目录找 `store.db`。
+- 决策记录：`docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`。
+- **linked worktree scaffold**：`harness scaffold` 现在写入 Git 主 worktree，linked checkout 不再创建解析器永远不会读取的本地 `.mstar`。
+- **状态类命令的按调用根**：`persist.write/get/list/delete` 与 `dashboard` 发布经校验的 `harness` 选择器，共享 MCP 服务不再对每次调用都以无可执行恢复拒绝。
+- 这是 `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md` 的后续修复。
+- **按调用根校验**：`persist` / `dashboard` 的 `harness` 若指向 linked checkout 会被拒绝（`harness.root-not-main`），不再写入固定根解析器永远读不到的进程状态；空白值仍视为未提供，相对值按调用 cwd 解析。
+- **跨根 json 防护**：指向另一个 harness 的 `.mstar` / `.agents` / `.plans` 文档的绝对 `json` key 会被拒绝（`store.cross-root-refused`），不能绕过所选根的授权。
+- **linked scaffold 指引**：从 linked checkout 运行 `harness scaffold` 时，`.gitignore` 片段与 `.agents/AGENTS.md` 现在写到主 worktree，与 engine 的目标一致。
+- 校验只作用于显式选择器：退役的 `.mstarc` `harness_dir` 与 `MSTAR_HARNESS_DIR` 仍只被解析/读取后忽略，不会报错。
+- 这是 #780 上 Devin / inspector 发现的后续修复。
+- 新增按需加载的 **`mstar-issue-mirror`** skill：驱动 host 拥有的 Linear 镜像循环——`issue-sync pending` → 用宿主 Linear MCP 工具按 payload + marker 原样创建/更新 → `issue-sync apply --results -` → `issue-sync ingest --records -`——并写明 lease、bucket、恢复与拒绝规则。它要求宿主暴露 Linear MCP 工具（`mcp__linear__*`，运行时发现）；mstar 自身不发起任何 Linear 调用。Linear MCP 服务器与 dsh `linear-mcp` 行的细节见其 `references/linear-mcp.md`。
+- 新增**所有者反馈处置**入口，使 PM 在同一协调轮次沉淀可复用的人类所有者 PR 反馈，同时保持逐 plan 知识结晶时机不变。
+- PR 打开后的 CI 失败与评审意见回给原持有 PR 的已派发实现会话；记录 PR/会话关联，仅在有证据表明原会话无法恢复时重新委派。
+- 仅在检查 PR/分支的 Assignment 记录、PM Task Board/status 记录及可用宿主派发历史，确认从未分配实现者后，才允许首次派发持有会话。历史不完整、人工创建 PR 或单条记录缺失均不构成证明；无法确认时沿用既有持有者恢复流程。首次派发前须满足现有 plan 作用域与派发前置条件；创建或更新与权威 plan 行对齐的 PM Task Board task，记录 PR/会话归属。验收修复与补证据派发沿用同一持有会话路由，仅在允许时首次派发专项补证据任务。
+- 独立计划与迭代交付共用一份**公开 PR 正文契约**：首行总结、按改动类型呈现的证据、试用命令、未测范围及合并风险，不新增门禁。
+- 删除恢复测试中未使用的摘要辅助函数及多余的 crypto 导入，保留现有测试覆盖。
+- 删除未使用的旧版汇总测试夹具。
+- 将代理覆盖层的整文件比较替换为条目来源及过期条目清理断言。
+- 通过作者标记、忽略规则、解析后的遗留状态与脚手架回执验证内容保留，不再比较整文件文本。
+- 将影子监督器的整文件断言替换为启动器实际观察到的引用文件与运行时挂载隔离检查。
+- 将存储根目录的字节快照替换为权威身份、修订及目录记录断言，保留拒绝和恢复路径覆盖。
+- 将仪表盘资源字节一致性检查替换为模块可导入、离线资源及调用目录无关的输出检查。
+- 通过保留标记、解析后的文档状态与回调观察验证写入门禁的拒绝及成功写入，不再比较整文件内容。
+- **`code-reviewer` 与 `ops-engineer` 支持直接调用**：用户或独立 Bot 可不经 PM Assignment 直接调用（`leaf-executor-core.md` § Direct invocation）；拒绝回报给调用方并写明可解决的输入，直接调用的生产部署或破坏性变更即使未标记也按 `high-risk` 处理，直接调用的 ops 写入须声明分支形式（写默认分支须 `Branch policy: direct on …`），直接调用的审计仅在调用方写明 `Delegation: allowed` 时扇出，协调权仍归 PM，其余 leaf 角色仍只接受 PM 派发。
+- **Codex `code-reviewer` agent**：新增 `codex/agents/code-reviewer.toml`，由 `mstar-harness init --target codex` 安装。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.8.0**。
+
 ## [4.7.3] - 2026-11-18
 
 ### Harness

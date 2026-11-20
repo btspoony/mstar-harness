@@ -6,6 +6,39 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.8.0] - 2026-11-20
+
+### Changed
+
+- Dashboard Projects now includes projects referenced only by issues, with matching open-issue counts, displayed-title ordering, and no invented catalog metadata.
+- Localized the Overview's missing-project explanation in Chinese for both milestones and delivery, while preserving diagnostic errors.
+- **Breaking:** removed `mstar linear auth` and the mstar-owned Linear transport entirely — no OAuth flow, no credential file, no REST/GraphQL client remains in the engine, commands or CLI.
+- **Breaking:** replaced `issue-sync push` and `issue-sync import` with three local verbs: `issue-sync pending` (plan payloads + correlation marker, no network), `issue-sync apply --results` (record the agent's Linear tool results), `issue-sync ingest --records` (associate a listing by the `repo/local/author` marker; five buckets, never creates/updates/closes a local issue).
+- Correlation is now a git-identity marker (`repo` from the origin remote or the `[linear] repo=` override, `local` issue id, `author` from git config); the ledger keeps the same run-lease protocol, and `--adopt` / `--force-adopt` / `--release` / `--take-run` stay on `apply`.
+- Migration: delete the old mstar Linear credential file (`$XDG_CONFIG_HOME/mstar/linear/credential.json`, or `~/.config/mstar/linear/credential.json` when `XDG_CONFIG_HOME` is unset — the old reader honoured `XDG_CONFIG_HOME`) — nothing reads it; Linear issues pushed by the previous code carry the retired marker and read as `unmanaged` — run `issue-sync ingest` to see them, then record identities with `issue-sync apply --adopt <localId>=<issueUrl|externalId>`.
+- Added **Devin native plugin support** from the repository root, PM skill entry, capability-based host detection and plugin-relative skill resolution.
+- Documented CLI/Desktop role subagents and cloud ticket/child-session dispatch, with PM-only workflow state across isolated VMs.
+- **Fixed harness root:** `{HARNESS_DIR}` is now `<git main worktree root>/.mstar`, derived from Git only. `harness_dir` in `.mstarc`, `MSTAR_HARNESS_DIR`, and the legacy `.agents/` / `.plans/` / `plans/` candidates are retired as selectors, not as errors: the declared key and the environment variable are parsed or read and then ignored, a checkout without `.mstar` simply resolves no harness (`mstar harness scaffold`, then `mstar store upgrade` for an existing store, is how one comes into existence), and a CLI launch outside Git names the root with `--harness`.
+- **MCP carries no connection root:** `mstar mcp --harness` and the environment no longer pin a repository. Every call that touches process state passes `harness` naming the fixed `<main worktree>/.mstar`; the server refuses a missing selector, a relative path, or a linked worktree's `.mstar`.
+- **Scaffold** no longer writes `harness_dir`; a `.mstarc` it creates carries only the corpus and sub-directory keys that differ from the defaults.
+- **PM root resolution:** the project-manager prompt resolves `controlHarnessDir` before reading or writing process state, so a session started in a linked worktree no longer looks for `store.db` under its own checkout.
+- Decision record: `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`.
+- **Linked-worktree scaffold:** `harness scaffold` now targets the Git main worktree, so a linked checkout no longer creates a `.mstar` the resolver never reads.
+- **Per-call roots for state families:** `persist.write/get/list/delete` and `dashboard` publish a validated `harness` selector, so a shared MCP server can reach their stores instead of refusing every call with no usable recovery.
+- Decision follow-up to `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`.
+- **Per-call root validation:** a `persist` / `dashboard` `harness` selector inside a linked checkout is refused (`harness.root-not-main`) instead of writing process state the fixed-root resolver never reads; blank values stay absent and relative values resolve against the invocation cwd.
+- **Cross-root json guard:** an absolute `json` key that targets another harness's `.mstar` / `.agents` / `.plans` documents is refused (`store.cross-root-refused`) rather than bypassing the selected root's authorization.
+- **Linked scaffold guidance:** `harness scaffold` from a linked checkout now writes the main worktree's `.gitignore` snippet and `.agents/AGENTS.md`, matching the engine's main-worktree target.
+- The validation applies to explicit selectors only: a retired `.mstarc` `harness_dir` and `MSTAR_HARNESS_DIR` are still parsed or read and ignored, never refused.
+- Follow-up to the Devin / inspector findings on #780.
+- Removed unused recovery-test digest helpers and unused crypto imports without changing test coverage.
+- Removed unused legacy rollup test fixtures.
+- Replaced store-root directory byte snapshots with authority identity, revision and catalog assertions while retaining refusal and recovery coverage.
+
+- Version alignment with harness **4.8.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.0**.
+
 ## [4.7.3] - 2026-11-18
 
 ### Harness

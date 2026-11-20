@@ -8,6 +8,51 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.8.0] - 2026-11-20
+
+### Harness
+
+- Dashboard Projects now includes projects referenced only by issues, with matching open-issue counts, displayed-title ordering, and no invented catalog metadata.
+- Localized the Overview's missing-project explanation in Chinese for both milestones and delivery, while preserving diagnostic errors.
+- Reused the shared plan-mode bootstrap checklist in the Cursor bridge while retaining its before-CreatePlan timing.
+- Added concise **Devin Bot setup** instructions and clarified cloud report path mapping, unique handoff attempts, verified imports and evidence retention.
+- Replaced a HostAdapter test tautology with skill-resolution behavior checks and marked the host module's actual invariant.
+- Added **Devin native plugin support** from the repository root, PM skill entry, capability-based host detection and plugin-relative skill resolution.
+- Documented CLI/Desktop role subagents and cloud ticket/child-session dispatch, with PM-only workflow state across isolated VMs.
+- Fixed the **Devin plugin card**: the manifest now sets `logo` to the Morning Star logo instead of falling back to the repository owner's avatar, and uses a shorter Devin-specific description.
+- **Fixed harness root:** `{HARNESS_DIR}` is now `<git main worktree root>/.mstar`, derived from Git only. `harness_dir` in `.mstarc`, `MSTAR_HARNESS_DIR`, and the legacy `.agents/` / `.plans/` / `plans/` candidates are retired as selectors, not as errors: the declared key and the environment variable are parsed or read and then ignored, a checkout without `.mstar` simply resolves no harness (`mstar harness scaffold`, then `mstar store upgrade` for an existing store, is how one comes into existence), and a CLI launch outside Git names the root with `--harness`.
+- **MCP carries no connection root:** `mstar mcp --harness` and the environment no longer pin a repository. Every call that touches process state passes `harness` naming the fixed `<main worktree>/.mstar`; the server refuses a missing selector, a relative path, or a linked worktree's `.mstar`.
+- **Scaffold** no longer writes `harness_dir`; a `.mstarc` it creates carries only the corpus and sub-directory keys that differ from the defaults.
+- **PM root resolution:** the project-manager prompt resolves `controlHarnessDir` before reading or writing process state, so a session started in a linked worktree no longer looks for `store.db` under its own checkout.
+- Decision record: `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`.
+- **Linked-worktree scaffold:** `harness scaffold` now targets the Git main worktree, so a linked checkout no longer creates a `.mstar` the resolver never reads.
+- **Per-call roots for state families:** `persist.write/get/list/delete` and `dashboard` publish a validated `harness` selector, so a shared MCP server can reach their stores instead of refusing every call with no usable recovery.
+- Decision follow-up to `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`.
+- **Per-call root validation:** a `persist` / `dashboard` `harness` selector inside a linked checkout is refused (`harness.root-not-main`) instead of writing process state the fixed-root resolver never reads; blank values stay absent and relative values resolve against the invocation cwd.
+- **Cross-root json guard:** an absolute `json` key that targets another harness's `.mstar` / `.agents` / `.plans` documents is refused (`store.cross-root-refused`) rather than bypassing the selected root's authorization.
+- **Linked scaffold guidance:** `harness scaffold` from a linked checkout now writes the main worktree's `.gitignore` snippet and `.agents/AGENTS.md`, matching the engine's main-worktree target.
+- The validation applies to explicit selectors only: a retired `.mstarc` `harness_dir` and `MSTAR_HARNESS_DIR` are still parsed or read and ignored, never refused.
+- Follow-up to the Devin / inspector findings on #780.
+- Added the on-demand **`mstar-issue-mirror`** skill: it drives the host-owned Linear mirror loop — `issue-sync pending` → create/update through the host's Linear MCP tools (payload + marker verbatim) → `issue-sync apply --results -` → `issue-sync ingest --records -` — and states the lease, bucket, recovery and refusal rules. It asks the host to expose Linear MCP tools (`mcp__linear__*`, discovered at runtime); mstar itself makes no Linear call. Details of the Linear MCP server and the dsh `linear-mcp` row live in its `references/linear-mcp.md`.
+- Added an **owner-feedback disposition** entry so PMs capture reusable human-owner PR feedback in the same coordination round without changing per-plan capture timing.
+- Route post-open PR CI failures and review findings back to the owning dispatched implementer session; record the PR/session association and replace an owner only with evidence that it cannot resume.
+- Allow a first owner assignment only after checking the PR/branch's Assignment records, PM Task Board/status records and any available host dispatch history verifies that no implementer was ever assigned. Incomplete history, human PR authorship or a single missing record is not proof; when unconfirmed, follow existing owner recovery. Satisfy existing plan-scope and dispatch prerequisites before first assignment; create or update the PM Task Board task aligned with its authoritative plan row to hold PR/session ownership. Acceptance repair/evidence delegation follows the same owner route, with first-time specialist evidence assignments only where allowed.
+- Share one **public PR description contract** across standalone and iteration delivery: a first-line summary, change-specific evidence, a try command, untested scope and merge danger, without adding a gate.
+- Removed unused recovery-test digest helpers and unused crypto imports without changing test coverage.
+- Removed unused legacy rollup test fixtures.
+- Replaced agent overlay full-file comparisons with entry provenance and stale-entry removal assertions.
+- Assert scaffold preservation through authored markers, ignore rules, parsed leftover state and scaffold receipts instead of whole-file text equality.
+- Replace shadow supervisor full-file assertions with launcher-observed citation/runtime mount separation checks.
+- Replaced store-root directory byte snapshots with authority identity, revision and catalog assertions while retaining refusal and recovery coverage.
+- Replaced dashboard asset byte-identity checks with importable module, offline asset and caller-independent output checks.
+- Assert write-gate refusal and successful writes through retained markers, parsed document state and callback observations instead of full-file equality.
+- **`code-reviewer` and `ops-engineer` accept direct invocation**: a user or standalone Bot can call them without a PM Assignment (`leaf-executor-core.md` § Direct invocation); refusals route to the caller with the resolving input, a direct production deploy or destructive change is `high-risk` even when unmarked, a direct ops write needs a declared branch form (default-branch writes need `Branch policy: direct on …`), a direct audit fans out only under the caller's `Delegation: allowed`, coordinator authority stays with PM, and other leaf roles still take work only through PM dispatch.
+- **Codex `code-reviewer` agent**: added `codex/agents/code-reviewer.toml`, installed by `mstar-harness init --target codex`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.8.0**.
+
 ## [4.7.3] - 2026-11-18
 
 ### Harness
