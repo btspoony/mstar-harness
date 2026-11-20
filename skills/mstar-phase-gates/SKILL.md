@@ -18,14 +18,14 @@ description: Spec-Driven 双阶段门禁：Prepare（specify→clarify→plan）
   - **`clarify` 核心纪律（Prepare）**：对 plan/方案的**每个方面**持续核对，直到与用户达成**共享理解**；沿**设计决策树**下行，**每轮问满当前 frontier**——前置条件已定且彼此无依赖的问题 **本轮**一并提出（逐条编号，每条带推荐答案），答案依赖本轮尚未收敛问题的则顺延到 **下一轮**（即依赖链上仍**一次只收敛一个决策点**及其依赖）；无依赖批量问、有依赖串行问，避免每多一问就多一个往返。
     1. **能查库则查库**：若问题可通过探索代码库（实现、配置、`{SPECS_DIR}`、`{KNOWLEDGE_DIR}`、`{ITERATION_DIR}` 等）得到答案，**先探索、不向用户提问**。
     2. **每问带推荐**：每个仍需用户确认的问题，须给出**推荐答案**（及简短理由），便于快速对齐。
-    3. **收口摘要**：`clarify` 结束前列出：已决事项、仍 open 的假设、对 `plan` 的约束；已决事项中满足 ADR 记录契约（`mstar-doc-corpus/references/adr.md` § When a record is required）的逐条标 `ADR:`，无则写 `ADR: none`——决策在拍板这一刻记录，不等收尾回忆。
+    3. **收口摘要 + ADR 候选**：`clarify` 结束前列出：已决事项、仍 open 的假设、对 `plan` 的约束；对每个已决事项判定是否满足 ADR 准入（`mstar-doc-corpus/references/adr.md` § When a record is required），满足的标 `ADR-candidate: <topic>`（多条逐条列），都不满足写 `ADR: none`。**此处只判定、不落盘**：本轮是否实施要等 `plan` 裁剪范围才确定，`proposed/` 与 `implemented/` 的分野依赖那个结果。
   - **批量边界（风格/惯例分叉）**：**风格或惯例分叉**——现有实践中接近对半的分歧，或核心维度上的语义分叉——**不是** frontier 问题：单独提问并等答复，期间不与其后任何问题合并成批；批量只用于前置条件已定的设计树问题，从不用于裁决惯例冲突。
 - **`plan`** — 技术方案、长期目标状态、模块边界/接口契约、风险与回滚点、验证计划。
   - **意图门禁**：锁 plan 前须能书面写清**真实目标 / 成功判据 / 非目标**三项；否则 Prepare 未通过。
   - **长期方案优先**：默认先设计目标状态，再裁剪本轮可交付切片；不得以“临时方案 / 混合方案 / 以后再说”替代目标设计。
   - **Durable Roadmap Gate**：若本轮只做部分范围，plan 必须写明 roadmap（批次、依赖、暂缓项、owner/触发条件、最终完成定义）。只有一句“后续再做 / next plan”视为未通过 plan gate。
   - **Recall receipt（锁 plan 前）**：记录相关 knowledge/research 输入——复用与被否决策一并注明；无适用输入时**如实记空**。不做全库扫描、不发明知识；收据缺失不进入 plan lock。语义 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
-  - **ADR 提案分流（锁 plan 前）**：决策不在本轮实施、须跨本轮存活（方向候选、待批设计、留给后续 plan 的选项）→ 写 `{ADR_DIR}/proposed/<class>/` 并在 plan 引用；本轮实施 → 走 `Done` 前的 `ADR:` 行（`implemented/`）；实施既有 `proposed/` 记录 → 同一变更内按 lifecycle 提升为 `implemented/`，`ADR:` 指向新路径。判据 → `mstar-doc-corpus/references/adr.md` § Proposed or implemented。
+  - **ADR 落地（锁 plan 前）**：裁决 `clarify` 的每个 `ADR-candidate`——本轮不实施、须跨本轮存活 → 按 `proposed/TEMPLATE.md` 创建 `{ADR_DIR}/proposed/<class>/` 记录（写入承载本次交付的检出，`mstar path check` 语义），plan 引用路径；本轮实施 → plan 头记 `ADR: <topic>（Done 前落地 implemented/）`，实现既有 `proposed/` 记录的变更在同一变更内按 lifecycle 提升为 `implemented/` 并改指路径；被裁掉的候选不再记录。判据 → `mstar-doc-corpus/references/adr.md` § Proposed or implemented。
 - **开发 AC 审查**：锁 plan 前逐项退回把 live API/provider receipt、具名或已认证 host/account、安装后的 plugin/artifact、真实 browser/device、deployed environment 作为开发任务/验收门禁的条目；同轮改写为隔离 fixtures、单元/组件/集成测试或本地构建 CLI/MCP 的对应证明。另行显式授权的独立 operational/E2E workflow 可有自身真实场景，不倒灌开发 plan。此项为语义审查，不用关键词扫描充当机器 gate。
 
 ### B. Execute：`plan(locked) → tasks → implement`
