@@ -15,8 +15,9 @@
  * state or epoch changes.
  */
 import { randomUUID } from "node:crypto";
-import { accessSync, closeSync, constants, existsSync, linkSync, mkdirSync, openSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { accessSync, closeSync, constants, existsSync, linkSync, lstatSync, mkdirSync, openSync, rmdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   resolveCollaborationLocation,
@@ -42,6 +43,7 @@ import {
   syncDirectoryEntry,
   validateAppliedMigrations,
   type Migration,
+  type StoreConnectOptions,
   type StoreContext,
   type StoreDb,
 } from "./store-db.js";
@@ -520,10 +522,21 @@ function busyRefusal(dbPath: string): StoreError {
   );
 }
 
-/** Preserve a real cause: collaboration codes pass, contention stays busy, the rest is unreadable. */
+/** Verdicts that stay their own top-level refusal instead of the lane's generic code. */
+const PASS_THROUGH_STORE_CODES: Readonly<Record<string, true>> = {
+  "store.busy": true,
+  "store.schema-unsupported": true,
+  "store.runtime-unsupported": true,
+};
+
+/**
+ * Preserve a real cause: collaboration codes and the shared verdicts that name
+ * their own recovery pass through, contention stays busy, and the rest becomes
+ * the lane's unreadable refusal.
+ */
 function asRefusal(dbPath: string, error: unknown): StoreError {
   if (error instanceof StoreError) {
-    if (error.code === "store.busy" || error.code.startsWith("collaboration.")) return error;
+    if (error.code.startsWith("collaboration.") || PASS_THROUGH_STORE_CODES[error.code] === true) return error;
     return unreadable(dbPath, error.message, error.code);
   }
   if (isBusyError(error)) return busyRefusal(dbPath);
@@ -568,6 +581,73 @@ function assertRegularTarget(dbPath: string): void {
   } catch (error) {
     throw asRefusal(dbPath, error);
   }
+}
+
+/** The one user-level storage tree: every canonical store lives beneath it. */
+function privateStoreAnchor(): string {
+  return join(homedir(), ".mstar", "repos");
+}
+
+/**
+ * The addressable store path must live in the private user storage tree and be
+ * reached without following a link: every EXISTING component between the user
+ * home and the store's directory is inspected with `lstat` (a symlink is never
+ * traversed), and each storage component from the anchor down carries no
+ * group/other permission bits. Missing components are left to creation, which
+ * makes them private.
+ */
+function assertPrivateStorePath(dbPath: string): void {
+  const target = resolve(dbPath);
+  const home = resolve(homedir());
+  const anchor = privateStoreAnchor();
+  if (target !== anchor && !target.startsWith(`${anchor}${sep}`)) {
+    throw unreadable(target, `it is not inside the private user storage root ${anchor}`);
+  }
+  const segments = relative(home, dirname(target)).split(sep).filter((segment) => segment.length > 0);
+  let current = home;
+  for (let index = 0; index < segments.length; index++) {
+    current = join(current, segments[index]!);
+    let stats;
+    try {
+      stats = lstatSync(current);
+    } catch (error) {
+      if ((error as { code?: string }).code === "ENOENT") return; // creation makes the rest private
+      throw unreadable(current, `a storage component could not be examined (${publicationCause(error)})`);
+    }
+    // `.mstar` may predate this lane and belong to other tooling; the storage
+    // tree at and below the anchor is this lane's and must be private.
+    const storageComponent = index >= 1;
+    if (stats.isSymbolicLink()) throw unreadable(current, "a storage component is a symbolic link");
+    if (!stats.isDirectory()) throw unreadable(current, "a storage component is not a directory");
+    if (storageComponent && (stats.mode & 0o077) !== 0) {
+      throw unreadable(current, `a storage directory is not private (mode ${(stats.mode & 0o777).toString(8)})`);
+    }
+  }
+}
+
+/** An existing store's bytes must be private too. */
+function assertPrivateStoreFile(dbPath: string): void {
+  let stats;
+  try {
+    stats = lstatSync(dbPath);
+  } catch (error) {
+    throw unreadable(dbPath, `the store file could not be examined (${publicationCause(error)})`);
+  }
+  if (!stats.isFile()) throw unreadable(dbPath, "the store path is not a regular file");
+  if ((stats.mode & 0o077) !== 0) {
+    throw unreadable(dbPath, `the store file is not private (mode ${(stats.mode & 0o777).toString(8)})`);
+  }
+}
+
+/**
+ * Every entry's admission checks, in one place: the private, link-free
+ * namespace, the final target type, and - when the store exists - its private
+ * bytes. Refuses before creating directories or opening SQLite.
+ */
+function assertAdmittedTarget(dbPath: string): void {
+  assertPrivateStorePath(dbPath);
+  assertRegularTarget(dbPath);
+  if (existsSync(dbPath)) assertPrivateStoreFile(dbPath);
 }
 
 /**
@@ -658,8 +738,11 @@ function admit(
   requirement: "active" | "any",
 ): CollaborationAuthority {
   try {
-    assertCurrentSchema(db, location.dbPath);
+    // The ledger's version verdict comes FIRST: a store written by a newer
+    // build is an upgrade requirement, not a damaged current schema, even when
+    // that build's layout no longer matches this one's inventory.
     const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false), [COLLABORATION_SCHEMA]);
+    assertCurrentSchema(db, location.dbPath);
     const meta = readMeta(db);
     if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
       throw staleBinding(location.dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
@@ -717,17 +800,80 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   return typeof (value as { then?: unknown }).then === "function";
 }
 
+/** Statements that would end or re-take the transaction the wrapper owns. */
+const TRANSACTION_CONTROL_KEYWORDS: Readonly<Record<string, true>> = {
+  BEGIN: true,
+  COMMIT: true,
+  END: true,
+  ROLLBACK: true,
+  SAVEPOINT: true,
+  RELEASE: true,
+};
+
+/** The first SQL keyword, ignoring leading whitespace and comments. */
+function leadingKeyword(sql: string): string {
+  let rest = sql;
+  for (;;) {
+    const trimmed = rest.replace(/^\s+/, "");
+    if (trimmed.startsWith("--")) {
+      const lineEnd = trimmed.indexOf("\n");
+      rest = lineEnd === -1 ? "" : trimmed.slice(lineEnd + 1);
+      continue;
+    }
+    if (trimmed.startsWith("/*")) {
+      const commentEnd = trimmed.indexOf("*/");
+      rest = commentEnd === -1 ? "" : trimmed.slice(commentEnd + 2);
+      continue;
+    }
+    const word = /^[A-Za-z]+/.exec(trimmed);
+    return word === null ? "" : word[0].toUpperCase();
+  }
+}
+
+function transactionOwnershipRefusal(): StoreError {
+  return new StoreError(
+    "store.corrupt",
+    "The collaboration write transaction is owned by withCollaborationWrite; the effect cannot begin, commit, " +
+      "roll back, release or close it, and nothing was written.",
+  );
+}
+
+/**
+ * The effect's connection keeps transaction ownership with the wrapper: every
+ * transaction-control statement and every close is refused, while ordinary
+ * reads and DML through `exec`/`prepare` pass through to the wrapper's
+ * connection.
+ */
+function guardedWriteDb(db: StoreDb): StoreDb {
+  const guard = (sql: string): void => {
+    if (TRANSACTION_CONTROL_KEYWORDS[leadingKeyword(sql)] === true) throw transactionOwnershipRefusal();
+  };
+  return {
+    exec(sql: string): void {
+      guard(sql);
+      db.exec(sql);
+    },
+    prepare(sql: string) {
+      guard(sql);
+      return db.prepare(sql);
+    },
+    close(): never {
+      throw transactionOwnershipRefusal();
+    },
+  };
+}
+
 /** Connect with the same bounded transient read-open retry the execution lane uses. */
 async function connectAt(
   dbPath: string,
   mode: "read" | "write",
   timeout: number,
-  noCreate = false,
+  options: StoreConnectOptions = {},
 ): Promise<StoreDb> {
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
   for (let attempt = 1; ; attempt++) {
     try {
-      return await connect(dbPath, mode, timeout, noCreate);
+      return await connect(dbPath, mode, timeout, options);
     } catch (error) {
       if (attempt < attempts && isTransientReadOpenFailure(error, dbPath)) {
         await sleep(READ_OPEN_BACKOFF_MS);
@@ -750,9 +896,11 @@ async function openAdmission(
   timeout: number,
 ): Promise<CollaborationStoreHandle> {
   const dbPath = location.dbPath;
-  assertRegularTarget(dbPath);
+  assertAdmittedTarget(dbPath);
   if (!existsSync(dbPath)) throw notInitialized(dbPath);
-  const db = await connectAt(dbPath, "read", timeout);
+  // Admission never repairs an unadmitted store: the probe creates no WAL
+  // sidecar, and a quiesced WAL database is read from its checkpointed file.
+  const db = await connectAt(dbPath, "read", timeout, { noRepair: true });
   try {
     return handleFor(db, admit(db, location, expected, requirement));
   } catch (error) {
@@ -785,30 +933,105 @@ async function continueExisting(location: CollaborationLocation, timeout: number
 }
 
 /**
+ * Directories that do not exist yet below the store's directory, returned
+ * shallowest first. Every existing component must already be a real directory;
+ * creation then makes the missing chain private.
+ */
+function createStoreDirectories(dir: string): string[] {
+  const created: string[] = [];
+  let current = dir;
+  for (;;) {
+    try {
+      const stats = lstatSync(current);
+      if (!stats.isDirectory()) throw unreadable(current, "a storage component is not a directory");
+      break;
+    } catch (error) {
+      if (error instanceof StoreError) throw error;
+      if ((error as { code?: string }).code !== "ENOENT") {
+        throw unreadable(current, `a storage component could not be examined (${publicationCause(error)})`);
+      }
+      created.unshift(current);
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  } catch (error) {
+    throw unreadable(dir, `its directory could not be created (${publicationCause(error)})`);
+  }
+  return created;
+}
+
+/**
+ * Make a newly created subtree reachable across a crash: each new directory's
+ * own entry AND the parent entry that names it are synchronized, shallowest
+ * first, before publication reports success.
+ */
+function confirmCreatedDirectories(dbPath: string, created: readonly string[]): void {
+  const synced: Record<string, true> = {};
+  const sync = (dir: string): void => {
+    if (synced[dir] === true) return;
+    synced[dir] = true;
+    try {
+      syncDirectoryEntry(dir);
+    } catch (error) {
+      throw barrierRefusal(dbPath, error);
+    }
+  };
+  for (const dir of created) {
+    sync(dirname(dir));
+    sync(dir);
+  }
+}
+
+/** Retire this attempt's private staging alias and its directory. */
+function discardStaging(stagingDir: string, stagingPath: string): void {
+  removeStagingFiles(stagingPath);
+  try {
+    rmdirSync(stagingDir);
+  } catch {
+    // The staging directory is private, engine-owned scratch: a failure leaves
+    // at most an empty directory that no code reads.
+  }
+}
+
+/**
  * Create-only staged initialization for one canonical scope. A missing
- * database is built complete in a private staging file and published with one
- * create-only hard link; a matching record already on disk (staged or active)
- * is reused without clearing it, and a record for another repository, mode,
- * state, store id or schema refuses.
+ * database is built complete in a private staging directory whose file carries
+ * the RESERVED `collaboration.db` basename, published with one create-only hard
+ * link; a matching record already on disk (staged or active) is reused without
+ * clearing it, and a record for another repository, mode, state, store id or
+ * schema refuses.
+ *
+ * Publication retires its own staging alias on every outcome - success and a
+ * failed directory barrier alike - so no engine-created second name for runtime
+ * bytes survives. A crash after the link but before the canonical name is
+ * durable can therefore lose only this still-empty staged database, which the
+ * next initializer recreates; it can never leave writable aliased bytes behind.
  */
 export async function initializeCollaborationStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
   assertStoreRuntimeSupported();
   const dbPath = location.dbPath;
   const timeout = busyTimeoutMs();
-  assertRegularTarget(dbPath);
+  assertAdmittedTarget(dbPath);
   if (existsSync(dbPath)) return continueExisting(location, timeout);
 
   const dir = dirname(dbPath);
+  const createdDirectories = createStoreDirectories(dir);
+  const stagingDir = join(dir, `.staging-${process.pid}-${randomUUID()}`);
+  const stagingPath = join(stagingDir, basename(dbPath)); // reserved authority basename, protected by every host gate
   try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    mkdirSync(stagingDir, { mode: 0o700 });
   } catch (error) {
-    throw unreadable(dbPath, `its directory could not be created (${publicationCause(error)})`);
+    throw unreadable(dbPath, `a private staging directory could not be created (${publicationCause(error)})`);
   }
-  const stagingPath = join(dir, `.${basename(dbPath)}.init-${process.pid}-${randomUUID()}.tmp`);
   let claim: number;
   try {
     claim = openSync(stagingPath, "wx", 0o600);
   } catch (error) {
+    discardStaging(stagingDir, stagingPath);
     throw unreadable(dbPath, `a private staging file could not be created (${publicationCause(error)})`);
   }
   closeSync(claim);
@@ -863,14 +1086,14 @@ export async function initializeCollaborationStore(location: CollaborationLocati
         // connection-level failure; the staging name is unlinked below
       }
     }
-    removeStagingFiles(stagingPath);
+    discardStaging(stagingDir, stagingPath);
     throw asRefusal(dbPath, error);
   }
 
   try {
     linkSync(stagingPath, dbPath);
   } catch (error) {
-    removeStagingFiles(stagingPath);
+    discardStaging(stagingDir, stagingPath);
     if (error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST") {
       // A competing initializer published this scope first: continue that record
       // only after it is verified and its directory entry is confirmed.
@@ -878,11 +1101,13 @@ export async function initializeCollaborationStore(location: CollaborationLocati
     }
     throw unreadable(dbPath, `the staged store could not be linked into place (${publicationCause(error)})`);
   }
-  // A failed barrier keeps the staging name (the only other reference to those
-  // bytes) and reports the published-but-unconfirmed outcome; the same
-  // initializer retries it through the continuation above.
-  confirmDirectoryEntry(dbPath);
-  removeStagingFiles(stagingPath);
+  try {
+    // The published subtree and its own name become durable before success.
+    confirmCreatedDirectories(dbPath, createdDirectories);
+    confirmDirectoryEntry(dbPath);
+  } finally {
+    discardStaging(stagingDir, stagingPath);
+  }
   return authority;
 }
 
@@ -941,28 +1166,40 @@ export async function withCollaborationWrite<T>(
   const location = resolveCollaborationLocation(context);
   const dbPath = location.dbPath;
   const timeout = busyTimeoutMs();
-  assertRegularTarget(dbPath);
+  assertAdmittedTarget(dbPath);
   if (!existsSync(dbPath)) throw notInitialized(dbPath);
 
-  const probe = await connectAt(dbPath, "read", timeout);
+  // Admission on a non-repairing probe: a refused scope creates no sidecar and
+  // changes no journal mode.
+  const probe = await connectAt(dbPath, "read", timeout, { noRepair: true });
   try {
     admit(probe, location, expected, "active");
   } finally {
     probe.close();
   }
 
-  const db = await connectAt(dbPath, "write", timeout, true).catch((error: unknown) => {
-    // The canonical database is gone: refuse without leaving a new (empty)
-    // database at the authority path.
-    if (!existsSync(dbPath)) throw notInitialized(dbPath);
-    throw error;
-  });
-  let handle: CollaborationStoreHandle | undefined;
+  // The writer never creates the database and never changes its journal mode:
+  // a replacement that appears between the probe and here is refused without
+  // being converted, and a vanished one cannot be recreated.
+  const db = await connectAt(dbPath, "write", timeout, { noCreate: true, keepJournalMode: true }).catch(
+    (error: unknown) => {
+      if (!existsSync(dbPath)) throw notInitialized(dbPath);
+      throw error;
+    },
+  );
   try {
     db.exec("begin immediate");
     try {
-      handle = handleFor(db, admit(db, location, expected, "active"));
-      const result = apply(handle);
+      const authority = admit(db, location, expected, "active");
+      // The transaction stays with this wrapper: the effect sees only a
+      // connection that refuses its own commit/rollback/close.
+      const result = apply({
+        db: guardedWriteDb(db),
+        authority,
+        close(): never {
+          throw transactionOwnershipRefusal();
+        },
+      });
       if (isThenable(result)) {
         // Consume the abandoned result before refusing: an async effect's
         // rejection must not surface as an unhandled rejection after this call
@@ -985,13 +1222,10 @@ export async function withCollaborationWrite<T>(
       throw error;
     }
   } finally {
-    if (handle !== undefined) handle.close();
-    else {
-      try {
-        db.close();
-      } catch {
-        // connection-level failure; the transaction above already rolled back
-      }
+    try {
+      db.close();
+    } catch {
+      // connection-level failure; the transaction above already rolled back
     }
   }
 }

@@ -338,6 +338,20 @@ function busyAware(db: StoreDb, path: string, timeout: number): StoreDb {
 }
 
 /**
+ * Per-owner connection policy. Each member is opt-in and defaults to the
+ * execution lane's established behavior, so uncustomized callers keep the
+ * exact pragma order and side effects they had before.
+ */
+export type StoreConnectOptions = Readonly<{
+  /** Open a writer only when the database exists (`mode=rw`); never create it. */
+  noCreate?: boolean;
+  /** Never create a missing WAL sidecar before a read. */
+  noRepair?: boolean;
+  /** Keep the database's current journal mode instead of switching a writer to WAL. */
+  keepJournalMode?: boolean;
+}>;
+
+/**
  * Open a connection with the contract §2 pragma order: busy_timeout first,
  * then WAL (verified), then synchronous=FULL on writers, query_only=ON on
  * readers, and foreign_keys=ON (verified) on both.
@@ -346,20 +360,33 @@ export async function connect(
   dbPath: string,
   mode: "read" | "write",
   timeout = DEFAULT_BUSY_TIMEOUT_MS,
-  noCreate = false,
+  options: StoreConnectOptions = {},
 ): Promise<StoreDb> {
   const { DatabaseSync } = await loadSqliteDriver();
-  return openConnection(dbPath, mode, DatabaseSync, timeout, noCreate);
+  return openConnection(dbPath, mode, DatabaseSync, timeout, options);
+}
+
+/** `dbPath` as a SQLite URI path: every segment percent-encoded, so `%`, `?`
+ * and `#` in a store path are addressed literally. */
+function sqliteUriPath(dbPath: string): string {
+  return resolve(dbPath).split(sep).map(encodeURIComponent).join("/");
 }
 
 /**
  * A SQLite `mode=rw` URI addressing `dbPath`: an existing database opens, a
- * missing one refuses instead of being created. Every path segment is
- * percent-encoded, so a store path carrying `%`, `?` or `#` is addressed
- * literally rather than reinterpreted by the URI parser.
+ * missing one refuses instead of being created.
  */
 function existingOnlyUri(dbPath: string): string {
-  return `file:${resolve(dbPath).split(sep).map(encodeURIComponent).join("/")}?mode=rw`;
+  return `file:${sqliteUriPath(dbPath)}?mode=rw`;
+}
+
+/**
+ * A read-only, immutable SQLite URI. Used only for a quiesced WAL store whose
+ * journal is absent: every committed frame is already in the database file, so
+ * reading it needs no journal and must not create one.
+ */
+function immutableReadUri(dbPath: string): string {
+  return `file:${sqliteUriPath(dbPath)}?mode=ro&immutable=1`;
 }
 
 /** SQLite's own file header is 100 bytes: bytes 0–15 are its format magic and
@@ -455,22 +482,7 @@ function isWalFormatDatabase(header: Buffer, bytes: number): boolean {
  */
 function ensureJournalForRead(dbPath: string): void {
   if (existsSync(`${dbPath}-wal`)) return;
-  const header = Buffer.alloc(DATABASE_HEADER_BYTES);
-  let bytes: number;
-  try {
-    const source = openSync(dbPath, "r");
-    try {
-      bytes = fstatSync(source).size;
-      if (readSync(source, header, 0, header.length, 0) < header.length) return;
-    } finally {
-      closeSync(source);
-    }
-  } catch {
-    // Not a readable store file: the open below reports its own failure, exactly
-    // as it did before this shape check existed.
-    return;
-  }
-  if (!isWalFormatDatabase(header, bytes)) return;
+  if (!walShapedStoreFile(dbPath)) return;
   let journal: number;
   try {
     journal = openSync(`${dbPath}-wal`, "wx");
@@ -480,6 +492,24 @@ function ensureJournalForRead(dbPath: string): void {
     return;
   }
   closeSync(journal);
+}
+
+/** Whether the file's own header says WAL, read WITHOUT creating anything. */
+function walShapedStoreFile(dbPath: string): boolean {
+  const header = Buffer.alloc(DATABASE_HEADER_BYTES);
+  try {
+    const source = openSync(dbPath, "r");
+    try {
+      const bytes = fstatSync(source).size;
+      if (readSync(source, header, 0, header.length, 0) < header.length) return false;
+      return isWalFormatDatabase(header, bytes);
+    } finally {
+      closeSync(source);
+    }
+  } catch {
+    // Not a readable store file: the open reports its own failure.
+    return false;
+  }
 }
 
 /**
@@ -492,7 +522,7 @@ function openConnection(
   mode: "read" | "write",
   DatabaseSync: SqliteModule["DatabaseSync"],
   timeout = DEFAULT_BUSY_TIMEOUT_MS,
-  noCreate = false,
+  options: StoreConnectOptions = {},
 ): StoreDb {
   // node:sqlite rejects an explicit `undefined` options argument - open
   // writers without a second argument, readers with the read-only option.
@@ -501,13 +531,17 @@ function openConnection(
     // The final path must be a regular file inside the control root: neither
     // intent follows a symlink out of it. A read-only connection can also never
     // create the `-wal` a quiesced WAL store needs, so that empty journal is put
-    // back before the read open (see the helpers).
+    // back before the read open (see the helpers) unless the caller forbids the
+    // repair: then the checkpointed file itself is read immutably.
     assertAbsentOrRegularStoreFile(dbPath);
-    if (mode === "read") ensureJournalForRead(dbPath);
-    db =
-      mode === "read"
-        ? new DatabaseSync(dbPath, { readOnly: true })
-        : new DatabaseSync(noCreate ? existingOnlyUri(dbPath) : dbPath);
+    if (mode === "read") {
+      if (options.noRepair !== true) ensureJournalForRead(dbPath);
+      const immutable =
+        options.noRepair === true && !existsSync(`${dbPath}-wal`) && walShapedStoreFile(dbPath);
+      db = immutable ? new DatabaseSync(immutableReadUri(dbPath)) : new DatabaseSync(dbPath, { readOnly: true });
+    } else {
+      db = new DatabaseSync(options.noCreate === true ? existingOnlyUri(dbPath) : dbPath);
+    }
   } catch (error) {
     if (mode === "read" && isRawCantOpen(error)) throw error;
     refuseOpenFailure(error, dbPath, timeout);
@@ -524,8 +558,10 @@ function openConnection(
         fail("query_only pragma did not hold");
       }
     } else {
-      const wal = db.prepare("pragma journal_mode=wal").get() as { journal_mode?: string } | undefined;
-      if (wal?.journal_mode !== "wal") fail("WAL journal mode was not applied");
+      if (options.keepJournalMode !== true) {
+        const wal = db.prepare("pragma journal_mode=wal").get() as { journal_mode?: string } | undefined;
+        if (wal?.journal_mode !== "wal") fail("WAL journal mode was not applied");
+      }
       db.exec("pragma synchronous=FULL");
       if ((db.prepare("pragma synchronous").get() as { synchronous?: number } | undefined)?.synchronous !== 2) {
         fail("synchronous=FULL was not applied");
