@@ -10,6 +10,7 @@ const inputSchema = z.object({
   port: z.coerce.number().int().min(0).max(65535).default(0),
   open: z.boolean().default(false),
   project: z.string().optional(),
+  harness: z.string().optional(),
 });
 type Input = z.infer<typeof inputSchema>;
 
@@ -85,7 +86,7 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
       diagnostics: decodeInputDiagnostics(parsed.error, input),
     });
   }
-  const harnessDir = context.controlRoot;
+  const harnessDir = parsed.data.harness ?? context.controlRoot;
   if (harnessDir === null) {
     return failure("dashboard.harness-unavailable", new Error("no {HARNESS_DIR} found from the working directory"));
   }
@@ -156,6 +157,7 @@ export function getDashboardCommandDefinitions(): readonly CommandDefinition[] {
         { key: "port", flags: "--port <port>", required: false, defaultValue: 0, help: "Bind port 0 to request an available local port; values 0–65535 are accepted." },
         { key: "open", flags: "--open", required: false, defaultValue: false, help: "Open the local dashboard in a browser; defaults to false." },
         { key: "project", flags: "--project <projectId>", required: false },
+        { key: "harness", flags: "--harness <path>", required: false },
       ],
     },
     input: inputSchema,

@@ -782,7 +782,7 @@ export function resolveScaffoldDirs(
   if (checkout.failed) {
     throw new Error(`harness.root-unresolved: Git could not answer from ${start}; refusing to scaffold a root the resolver would not adopt. Run it from the repository root after the checkout is readable.`);
   }
-  const base = checkout.root ?? start;
+  const base = mainWorktreeRoot(start) ?? checkout.root ?? start;
   refuseRetiredConfiguration(base, defaultWorkspaceRoot(base));
   const harnessDir = join(base, ".mstar");
   const supplied = options.harnessDir === undefined ? undefined : canonicalizeNearestExisting(resolve(start, options.harnessDir));
@@ -843,7 +843,7 @@ export async function scaffoldHarness(root: string, options: ScaffoldOptions = {
   if (checkout.failed) {
     throw new Error(`harness.root-unresolved: Git could not answer from ${resolve(root)}; refusing to scaffold a root the resolver would not adopt.`);
   }
-  const repoRoot = checkout.root ?? resolve(root);
+  const repoRoot = mainWorktreeRoot(resolve(root)) ?? checkout.root ?? resolve(root);
   const knowledgeDir = mstarcDirOverride(harness, "knowledgeDir") ?? join(repoRoot, ".agents", "knowledge");
   const specsDir = mstarcDirOverride(harness, "specsDir") ?? join(repoRoot, ".agents", "specs");
   const adrDir = mstarcDirOverride(harness, "adrDir") ?? join(repoRoot, ".agents", "adr");

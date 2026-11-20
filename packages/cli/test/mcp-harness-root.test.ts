@@ -85,6 +85,14 @@ async function competingCwdHarness(): Promise<{ harness: string; cwd: string }> 
  */
 const PERSIST_PROBE_KEY = "root-probe";
 
+function originOf(envelope: { data?: Record<string, unknown> }): string {
+  const payload = envelope.data?.payload;
+  if (typeof payload !== "object" || payload === null || !("origin" in payload) || typeof payload.origin !== "string") {
+    throw new Error("expected a persisted document with a string origin");
+  }
+  return payload.origin;
+}
+
 async function competingPersistRoots(): Promise<{ harnessA: string; harnessB: string }> {
   const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
   roots.push(root);
@@ -432,7 +440,7 @@ describe("MCP harness root", () => {
     }
   });
 
-  test("a command that publishes no root selector cannot be re-rooted per call, and is refused rootless", async () => {
+  test("a state-dependent command takes a validated per-call root and still refuses rootless", async () => {
     const fixture = await competingPersistRoots();
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
     const previousStore = process.env.MSTAR_STORE_MODULE;
@@ -450,34 +458,30 @@ describe("MCP harness root", () => {
       await server.connect(serverEnd);
       await client.connect(clientEnd);
 
-      // why: The persist store is server-owned state, not a client-selectable
-      // capability: the family publishes no `harness` field at all. A tool
-      // field that could relocate the store would let a client point the
-      // write/delete at another harness's protected documents.
+      // why: persist publishes `harness` so a shared server can reach the
+      // store; the selector is validated against the fixed root.
       const { tools } = await client.listTools();
       const persist = tools.find((entry) => entry.name === "mstar_persist")!;
-      expect(persist.inputSchema.properties).not.toHaveProperty("harness");
-      expect(persist.inputSchema.required ?? []).not.toContain("harness");
+      expect(persist.inputSchema.properties).toHaveProperty("harness");
 
-      // why: With no selector to declare the root through, a call naming none is
-      // refused by the resolver — the store is never reached, and neither
-      // root's document is read or deleted.
+      // why: a shared connection carries no root, so the published selector is
+      // required and admission refuses the call before the store is reached.
       const rootless = await callRawTool(createContextResolver(), "persist.get", { kind: "review", key: PERSIST_PROBE_KEY });
       expect(rootless.isError).toBe(true);
-      expect(rawText(rootless)).toContain("mcp.control-root-unresolved");
+      expect(rawText(rootless)).toContain("Rejected --harness");
 
-      // why: A client-supplied root is not a capability either: `harness` is not
-      // part of this family's contract, so the transport REFUSES the extra
-      // field before admission rather than stripping it.
+      // why: each validated selector reads its own harness; the store follows
+      // the call, so a delete through B never touches A's document.
       const documentA = path.join(fixture.harnessA, "sdd", "_reviews", `${PERSIST_PROBE_KEY}.json`);
       const documentB = path.join(fixture.harnessB, "sdd", "_reviews", `${PERSIST_PROBE_KEY}.json`);
-      const refused = await toolEnvelope(client, "mstar_persist", withAction("persist.delete", { kind: "review", key: PERSIST_PROBE_KEY, harness: fixture.harnessB }));
-      expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input" });
-      // The aggregated contract: `details.fields` is an array of every rejected
-      // key, in the order the caller supplied them.
-      expect(refused.details?.fields).toEqual(["harness"]);
+      const readA = await toolEnvelope(client, "mstar_persist", withAction("persist.get", { kind: "review", key: PERSIST_PROBE_KEY, harness: fixture.harnessA }));
+      expect(originOf(readA)).toBe("a");
+      const readB = await callRawTool(createContextResolver(), "persist.get", { kind: "review", key: PERSIST_PROBE_KEY, harness: fixture.harnessB });
+      expect(originOf(JSON.parse(rawText(readB)))).toBe("b");
+      const deletedB = await callRawTool(createContextResolver(), "persist.delete", { kind: "review", key: PERSIST_PROBE_KEY, harness: fixture.harnessB });
+      expect(JSON.parse(rawText(deletedB))).toMatchObject({ status: "ok" });
       expect(existsSync(documentA)).toBe(true);
-      expect(existsSync(documentB)).toBe(true);
+      expect(existsSync(documentB)).toBe(false);
     } finally {
       await client.close();
       await server.close();
