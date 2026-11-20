@@ -510,46 +510,28 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
     }
   });
 
-  test("`.mstarc` [config] harness_dir refuses, naming the line and recovery", () => {
+  test("`.mstarc` harness_dir is ignored", () => {
     const control = tmpRoot("sdd-ws-rc-");
     try {
       git(["init", "-q"], control);
       writeFileSync(join(control, ".mstarc"), "[config]\nharness_dir=.custom-root\n");
-      let err: unknown;
-      try {
-        sddWorkspace("plan-1", { cwd: control, controlRoot: control });
-      } catch (e) {
-        err = e;
-      }
-      expect(err).toBeInstanceOf(HarnessRootRetiredError);
-      const message = (err as HarnessRootRetiredError).message;
-      expect(message).toContain("harness_dir");
-      expect(message).toContain(join(control, ".mstarc"));
+      const dir = sddWorkspace("plan-1", { cwd: control, controlRoot: control });
+      expect(dir).toBe(realpathSync(join(control, ".mstar", "sdd", "plan-1")));
       expect(existsSync(join(control, ".custom-root"))).toBe(false);
-      expect(existsSync(join(control, ".mstar"))).toBe(false);
     } finally {
       rmSync(control, { recursive: true, force: true });
     }
   });
 
-  test("a legacy-only control checkout refuses, naming scaffold and upgrade", () => {
+  test("a legacy-only control checkout still uses the fixed .mstar", () => {
     const control = tmpRoot("sdd-ws-legacy-");
     try {
       git(["init", "-q"], control);
       mkdirSync(join(control, ".agents"));
       writeFileSync(join(control, ".agents", "status.json"), "{}");
-      let err: unknown;
-      try {
-        sddWorkspace("plan-1", { cwd: control, controlRoot: control });
-      } catch (e) {
-        err = e;
-      }
-      expect(err).toBeInstanceOf(HarnessRootRetiredError);
-      const message = (err as HarnessRootRetiredError).message;
-      expect(message).toContain(".agents");
-      expect(message).toContain("mstar harness scaffold");
-      expect(message).toContain("mstar store upgrade");
-      expect(existsSync(join(control, ".mstar"))).toBe(false);
+      const dir = sddWorkspace("plan-1", { cwd: control, controlRoot: control });
+      expect(dir).toBe(realpathSync(join(control, ".mstar", "sdd", "plan-1")));
+      expect(existsSync(join(control, ".mstar"))).toBe(true);
     } finally {
       rmSync(control, { recursive: true, force: true });
     }

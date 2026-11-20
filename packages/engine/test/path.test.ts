@@ -218,47 +218,28 @@ describe("resolveHarnessDir — fixed root (ADR 2026-11-20)", () => {
     }
   });
 
-  test("a legacy-only layout refuses, naming scaffold and upgrade as the recovery", () => {
+  test("a legacy-only layout resolves no harness and is never adopted", () => {
     for (const legacy of [".agents", ".plans", "plans"]) {
       const root = tmpRoot(`path-fixed-legacy-${legacy.replace(/\W/g, "")}-`);
       try {
         gitInit(root);
         mkdirSync(join(root, legacy));
         writeFileSync(join(root, legacy, "status.json"), "{}");
-        let err: unknown;
-        try {
-          resolveHarnessDir(root);
-        } catch (e) {
-          err = e;
-        }
-        expect(err).toBeInstanceOf(HarnessRootRetiredError);
-        const message = (err as HarnessRootRetiredError).message;
-        expect(message).toContain(legacy);
-        expect(message).toContain("mstar harness scaffold");
-        expect(message).toContain("mstar store upgrade");
+        expect(resolveHarnessDir(root)).toBeNull();
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
     }
   });
 
-  test("a .mstarc harness_dir declaration refuses, naming the line and recovery", () => {
+  test("a .mstarc harness_dir declaration is ignored", () => {
     const root = tmpRoot("path-fixed-rc-");
     try {
       gitInit(root);
       mkdirSync(join(root, ".mstar"));
-      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.mstar\n");
-      let err: unknown;
-      try {
-        resolveHarnessDir(root);
-      } catch (e) {
-        err = e;
-      }
-      expect(err).toBeInstanceOf(HarnessRootRetiredError);
-      const message = (err as HarnessRootRetiredError).message;
-      expect(message).toContain("harness_dir");
-      expect(message).toContain(join(root, ".mstarc"));
-      expect(message).toContain("mstar path resolve");
+      mkdirSync(join(root, ".custom"));
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n");
+      expect(resolveHarnessDir(root)).toBe(join(root, ".mstar"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -276,18 +257,20 @@ describe("resolveHarnessDir — fixed root (ADR 2026-11-20)", () => {
     }
   });
 
-  test("a retired declaration committed at main refuses from the linked worktree too", () => {
+  test("a retired declaration committed at main is ignored from the linked worktree too", () => {
     const main = tmpRoot("path-fixed-mainrc-");
     const parent = tmpRoot("path-fixed-parenrc-");
     try {
       gitRepo(main);
+      mkdirSync(join(main, ".mstar"));
       writeFileSync(join(main, ".mstarc"), "[config]\nharness_dir=.custom\n");
       git(["add", ".mstarc"], main);
       git(["commit", "-q", "-m", "declare"], main);
       const linked = join(parent, "linked");
       git(["worktree", "add", "-q", linked, "-b", "feature/linked-rc"], main);
-      expect(() => resolveHarnessDir(linked)).toThrow(HarnessRootRetiredError);
-      expect(() => resolveHarnessDir(main)).toThrow(HarnessRootRetiredError);
+      const expected = join(realpathSync(main), ".mstar");
+      expect(resolveHarnessDir(linked)).toBe(expected);
+      expect(resolveHarnessDir(main)).toBe(expected);
     } finally {
       rmSync(main, { recursive: true, force: true });
       rmSync(parent, { recursive: true, force: true });
@@ -1301,16 +1284,16 @@ describe("scaffoldHarness", () => {
     }
   });
 
-  test("a .mstarc declaring harness_dir refuses the scaffold and names the line", async () => {
+  test("a .mstarc declaring harness_dir does not block the scaffold", async () => {
     const root = tmpRoot("path-scaffold-mstarc-retired-");
     try {
       writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");
-      setArtifactStore(createFsStore(resolve(root, ".custom")));
-      await expect(scaffoldHarness(root)).rejects.toThrow(HarnessRootRetiredError);
-      await expect(scaffoldHarness(root)).rejects.toThrow(/harness_dir/);
-      // why: Nothing was created at the retired location or at the fixed root.
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      const harnessDir = await scaffoldHarness(root);
+      expect(harnessDir).toBe(resolve(root, ".mstar"));
+      // why: The retired key is ignored; only the fixed root is created.
+      expect(existsSync(join(root, ".mstar"))).toBe(true);
       expect(existsSync(join(root, ".custom"))).toBe(false);
-      expect(existsSync(join(root, ".mstar"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1498,14 +1481,11 @@ describe("scaffoldHarness", () => {
     }
   });
 
-  test("refuses a .mstarc harness_dir when resolving the scaffold target", async () => {
+  test("a .mstarc harness_dir is ignored when resolving the scaffold target", async () => {
     const root = tmpRoot("path-scaffold-mstarc-harness-");
     try {
       writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");
-      setArtifactStore(createFsStore(resolve(root, ".custom")));
-      await expect(scaffoldHarness(root)).rejects.toThrow(HarnessRootRetiredError);
-      expect(existsSync(join(root, ".custom"))).toBe(false);
-      expect(existsSync(join(root, ".mstar"))).toBe(false);
+      expect(resolveScaffoldDirs(root).harnessDir).toBe(join(root, ".mstar"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

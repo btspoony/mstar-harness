@@ -124,31 +124,10 @@ function nearestExistingAncestor(target: string): string {
   }
 }
 
-/** why: True when a legacy directory actually carries harness state (not just corpus/plugins). */
-function looksLikeLegacyHarness(dir: string): boolean {
-  for (const marker of ["status.json", "store.db", "workflows", "projects", "plans", "iterations"]) {
-    if (existsSync(join(dir, marker))) return true;
-  }
-  return false;
-}
-
-/**
- * The one harness location — `<checkout>/.mstar` — with the retired
- * layouts refused by name. A missing `.mstar` returns `null` (the
- * repository is not initialized); a `.mstarc` that still declares
- * `harness_dir`, or a legacy `.agents/` / `.plans/` / `plans/` harness,
- * refuses with its recovery. Exported for consumers that already hold
- * the verified checkout root (the sdd workspace control root).
- */
+/** why: The one harness location — `<checkout>/.mstar`. A missing `.mstar` returns `null`; a retired `.mstarc` key or a legacy directory is ignored, never a refusal. */
 export function resolveFixedHarnessDir(checkout: string): string | null {
-  refuseRetiredConfiguration(checkout, defaultWorkspaceRoot(checkout));
   const fixed = join(checkout, ".mstar");
-  if (isDirectory(fixed)) return fixed;
-  for (const legacy of LEGACY_HARNESS_NAMES) {
-    const dir = join(checkout, legacy);
-    if (isDirectory(dir) && looksLikeLegacyHarness(dir)) throw retiredCandidateError(checkout, legacy);
-  }
-  return null;
+  return isDirectory(fixed) ? fixed : null;
 }
 
 /** why: Local checkout only (diagnostics): the same fixed name, no main-worktree substitution. */
@@ -157,7 +136,6 @@ function localHarnessProbe(start: string, workspaceRoot?: string): string | null
   let dir = start;
   for (;;) {
     if (!isAtOrBelow(dir, boundary)) return null;
-    refuseRetiredConfiguration(dir, boundary);
     const fixed = join(dir, ".mstar");
     if (isDirectory(fixed)) return fixed;
     if (dir === boundary) return null;
@@ -167,32 +145,7 @@ function localHarnessProbe(start: string, workspaceRoot?: string): string | null
   }
 }
 
-/** why: Retired harness layout names; probed only to name the refusal/ */
-const LEGACY_HARNESS_NAMES = [".agents", ".plans", "plans"] as const;
-
-/** why: A retired `harness_dir` declaration refuses instead of being silently ignored. */
-function refuseRetiredConfiguration(startDir: string, boundary: string): void {
-  const rc = loadMstarc(startDir, boundary);
-  if (rc !== null && rc.config.harnessDir !== undefined) {
-    throw new HarnessRootRetiredError(
-      `The .mstarc at ${join(rc.dir, MSTARC_FILE)} declares \`harness_dir\`, which is retired: the harness root is fixed at \`<main worktree>/.mstar\`. ` +
-        `Recovery: delete the \`harness_dir\` line from ${join(rc.dir, MSTARC_FILE)}, then run \`mstar path resolve\`.`,
-      { code: "harness_dir", config: join(rc.dir, MSTARC_FILE) },
-    );
-  }
-}
-
-/** why: A legacy layout is refused rather than adopted as a harness root. */
-function retiredCandidateError(checkout: string, candidate: string): HarnessRootRetiredError {
-  const fixed = join(checkout, ".mstar");
-  return new HarnessRootRetiredError(
-    `No harness root at ${fixed}; the legacy \`${candidate}/\` candidate is retired and is never adopted. ` +
-      `Recovery: run \`mstar harness scaffold ${checkout}\` (then \`mstar store upgrade\` if this repository has an existing store).`,
-    { code: "legacy-candidate", candidate, checkout },
-  );
-}
-
-/** Raised when a retired selector or layout would otherwise move the harness root. */
+/** Raised when a supplied scaffold root does not match the fixed location. */
 export class HarnessRootRetiredError extends Error {
   readonly code = "harness.root-retired";
   constructor(
@@ -783,7 +736,6 @@ export function resolveScaffoldDirs(
     throw new Error(`harness.root-unresolved: Git could not answer from ${start}; refusing to scaffold a root the resolver would not adopt. Run it from the repository root after the checkout is readable.`);
   }
   const base = mainWorktreeRoot(start) ?? checkout.root ?? start;
-  refuseRetiredConfiguration(base, defaultWorkspaceRoot(base));
   const harnessDir = join(base, ".mstar");
   const supplied = options.harnessDir === undefined ? undefined : canonicalizeNearestExisting(resolve(start, options.harnessDir));
   if (supplied !== undefined && supplied !== harnessDir) {

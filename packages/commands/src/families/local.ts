@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   CoordinationError,
-  HarnessRootRetiredError,
   checkPathOwnership,
   detectHarnessKind,
   detectHost,
@@ -302,7 +301,7 @@ type ControlFacts = {
   /** Envelope fields describing the control root. */
   control: Record<string, unknown>;
   /** A named cause when the control root cannot be read at all. */
-  unavailable?: { code: "coordination.not-in-git" | "path.control-root-unreadable" | "harness.root-retired"; message: string };
+  unavailable?: { code: "coordination.not-in-git" | "path.control-root-unreadable"; message: string };
 };
 
 /**
@@ -315,19 +314,9 @@ type ControlFacts = {
  * not "not in git", so they carry their own code.
  */
 function controlFacts(startDir: string): ControlFacts {
-  let harnessDir: string | null = null;
+  const harnessDir = resolveHarnessDir(startDir, { localProbe: true });
   let controlHarnessDir: string | null = null;
   let unavailable: ControlFacts["unavailable"];
-  const retired = (error: unknown): boolean => {
-    if (!(error instanceof HarnessRootRetiredError)) return false;
-    unavailable = { code: "harness.root-retired", message: error.message };
-    return true;
-  };
-  try {
-    harnessDir = resolveHarnessDir(startDir, { localProbe: true });
-  } catch (error) {
-    if (!retired(error)) throw error;
-  }
   // why: The process root comes from Git only: the first `worktree list` record is
   // the main checkout, whatever the start path looks like.
   const controlRoot = readMainWorktree(startDir)?.root ?? null;
@@ -335,14 +324,12 @@ function controlFacts(startDir: string): ControlFacts {
     try {
       controlHarnessDir = resolveProcessHarnessDir(startDir);
     } catch (error) {
-      if (!retired(error)) {
-        const code = error instanceof CoordinationError ? error.code : (error as NodeJS.ErrnoException).code;
-        if (code !== "coordination.not-in-git" && code !== "EACCES" && code !== "EPERM") throw error;
-        unavailable = {
-          code: code === "coordination.not-in-git" ? "coordination.not-in-git" : "path.control-root-unreadable",
-          message: error instanceof Error ? error.message : String(error),
-        };
-      }
+      const code = error instanceof CoordinationError ? error.code : (error as NodeJS.ErrnoException).code;
+      if (code !== "coordination.not-in-git" && code !== "EACCES" && code !== "EPERM") throw error;
+      unavailable = {
+        code: code === "coordination.not-in-git" ? "coordination.not-in-git" : "path.control-root-unreadable",
+        message: error instanceof Error ? error.message : String(error),
+      };
     }
   }
   // A plain subdirectory of the main checkout belongs to that worktree; a
@@ -623,7 +610,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         // back to local artifacts — misreporting the worktree's own directory
         // as the process root is the confusion this command exists to remove.
         if (unavailable !== undefined) {
-          return refusalEnvelope({ command: "path.resolve", status: "refused", code: unavailable.code, exitCode: 1, message: unavailable.code === "harness.root-retired" ? unavailable.message : `the checkout ${startDir} cannot read its control root`, details: {
+          return refusalEnvelope({ command: "path.resolve", status: "refused", code: unavailable.code, exitCode: 1, message: `the checkout  cannot read its control root`, details: {
             startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control, local: { harnessDir },
           } , recovery: "From the main worktree: run mstar status validate; or run mstar path resolve and use its controlHarnessDir."});
         }
@@ -735,7 +722,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         }
         const { harnessDir, controlRoot, controlHarnessDir, linkedWorktree, control, unavailable } = controlFacts(startDir);
         if (unavailable !== undefined) {
-          return refusalEnvelope({ command: "path.check", status: "refused", code: unavailable.code, exitCode: 1, message: unavailable.code === "harness.root-retired" ? unavailable.message : `the checkout ${startDir} cannot read its control root`, details: {
+          return refusalEnvelope({ command: "path.check", status: "refused", code: unavailable.code, exitCode: 1, message: `the checkout  cannot read its control root`, details: {
             startDir, ...control, checked: [],
           } , recovery: "From the main worktree: run mstar status validate; or run mstar path resolve and use its controlHarnessDir."});
         }

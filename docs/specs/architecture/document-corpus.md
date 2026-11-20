@@ -37,7 +37,7 @@ Resolved by engine functions; each chain stops at the first non-empty candidate 
 - `{SPECS_DIR}` (`resolveSpecsDir`): `.mstarc` `specs_dir` (authoritative, skips the chain) → `<repo-root>/.agents/specs/` → `docs/specs/` → repo-root `specs/` → legacy `designs/` directories (read-only) → legacy `{HARNESS_DIR}/specs/` (read-only, never created).
 - `{KNOWLEDGE_DIR}` (`resolveKnowledgeDir`): `.mstarc` `knowledge_dir` → `<repo-root>/.agents/knowledge/` → legacy `{HARNESS_DIR}/knowledge/` (read-only) → fallback create `<repo-root>/.agents/knowledge/`.
 - `{ADR_DIR}` (`resolveAdrDir`): `.mstarc` `adr_dir` → `<repo-root>/.agents/adr/` → `docs/adr/` → legacy `{HARNESS_DIR}/adr/` (read-only).
-- `{HARNESS_DIR}` itself: fixed `<git main worktree root>/.mstar`; `harness_dir`, `MSTAR_HARNESS_DIR` and the legacy `.agents/` / `plans/` candidates are retired and refused.
+- `{HARNESS_DIR}` itself: fixed `<git main worktree root>/.mstar`; `harness_dir` and `MSTAR_HARNESS_DIR` are retired and ignored, and the legacy `.agents/` / `plans/` candidates are never probed — a checkout without `.mstar` resolves no harness root rather than an error.
 
 Without a `.mstarc`, all three corpora therefore prefer `.agents/<kind>/`, outside the harness root: the tracked corpus survives a fully gitignored `.mstar/`. The `{HARNESS_DIR}/<kind>/` rung is read only and last — never created, never the fallback, and never presented as a corpus home; it can be deleted once no repository is expected to carry pre-move content there. `<repo-root>` in those chains is the checkout the `.agents/` default belongs to: callers that know it pass `opts.repoRoot` (the CLI uses the start directory's Git top level, the scaffold uses its scaffold root, the catalog uses the main worktree that owns the harness); only when it is unknown does the harness directory's parent stand in. The harness root is fixed at `<repo-root>/.mstar`, so the two answers coincide; a harness outside the checkout is no longer supported. This repository's `.mstarc` declares all three keys — `specs_dir=docs/specs`, `knowledge_dir=docs/knowledge`, `adr_dir=docs/adr` — so each resolution takes the declared value and skips its chain. `mstar path resolve` prints the resolved directories for all three corpora.
 
@@ -66,7 +66,7 @@ The registry for documents is the store's catalog domain (`catalog_entities`, `c
 ## Where it lives
 
 - Resolvers: `resolveSpecsDir`, `resolveKnowledgeDir`, `resolveAdrDir`, and `resolveHarnessDir` in `packages/engine/src/path.ts`; path symbols are summarized in `skills/mstar-conventions/SKILL.md`.
-- Declared overrides: `.mstarc` `[config]` (`specs_dir`, `knowledge_dir`, `adr_dir`, plus the process-directory keys); `harness_dir` is retired.
+- Declared overrides: `.mstarc` `[config]` (`specs_dir`, `knowledge_dir`, `adr_dir`, plus the process-directory keys); `harness_dir` is parsed and ignored.
 - Git reality check: `mstar path check`; the harness root is gitignored in this repository's `.gitignore`.
 - Registration: catalog tables in `{HARNESS_DIR}/store.db` and the `mstar catalog` verb family.
 - ADR contract: `mstar-doc-corpus/references/adr.md`; this repository's tree and gate: `docs/adr/README.md`, with records filed under `docs/adr/{bucket}/{class}/`.

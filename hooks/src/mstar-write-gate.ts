@@ -68,7 +68,6 @@ import { readFileSync, statSync, writeSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   MAX_STATUS_CONTENT_LENGTH,
-  HarnessRootRetiredError,
   assertStoreRuntimeSupported,
   caseFoldedRegisterRoot,
   detectStoreRuntime,
@@ -562,14 +561,7 @@ try {
     writeSync(2, `${ENFORCEMENT_LINE}\n`);
     process.exit(2);
   }
-} catch (error) {
-  if (error instanceof HarnessRootRetiredError) {
-    // A retired selector is a configuration fact, not unreadable data: the
-    // gate refuses rather than silently protecting nothing, and the error
-    // carries the recovery.
-    writeSync(2, `[Morning Star write gate] blocked: ${error.message}\n`);
-    process.exit(2);
-  }
+} catch {
   // internal error — pass silently; the gate never manufactures a block
   // from data it could not read, and never wedges the session
 }

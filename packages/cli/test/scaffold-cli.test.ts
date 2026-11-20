@@ -294,23 +294,20 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test(".mstarc harness_dir=.custom is refused as retired: nothing is scaffolded and .gitignore is untouched", () => {
+  test(".mstarc harness_dir=.custom is ignored: the fixed .mstar is scaffolded", () => {
     withRoot((root) => {
       writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");
 
       const result = runScaffold([root]);
-      // why: The harness root is fixed at `<checkout>/.mstar`; a `.mstarc` that
-      // still declares `harness_dir` refuses by name instead of scaffolding a
-      // second layout.
-      expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain("harness_dir");
-      expect(result.stdout).toContain("retired");
-      expect(result.stdout).toContain("mstar path resolve");
-      // why: Nothing is created for the retired declaration.
+      // why: The harness root is fixed at `<checkout>/.mstar`; a retired key is
+      // ignored rather than refusing the scaffold.
+      expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+      expect(existsSync(join(root, ".mstar"))).toBe(true);
       expect(existsSync(join(root, ".custom"))).toBe(false);
-      expect(existsSync(join(root, ".mstar"))).toBe(false);
-      expect(existsSync(join(root, ".gitignore"))).toBe(false);
-      expect(existsSync(join(root, ".agents"))).toBe(false);
+      expect(existsSync(join(root, ".gitignore"))).toBe(true);
+      expect(existsSync(join(root, ".agents"))).toBe(true);
+      // The retired line is left untouched (the file is author-owned).
+      expect(readFileSync(join(root, ".mstarc"), "utf8")).toContain("harness_dir=.custom");
     });
   });
 

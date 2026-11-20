@@ -18,8 +18,6 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { realpathSync as realpathSync2 } from "node:fs";
 import { basename as basename2, dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
-import { readFileSync as readFileSync2, statSync } from "node:fs";
-import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
 import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename as basename3, dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -388,89 +386,6 @@ function checkoutRootOrFailure(startDir, opts = {}) {
     const notARepository = exitStatusOf(error) === 128 && /not a git repository/i.test(stderrOf(error));
     return { root: null, failed: !notARepository };
   }
-}
-function parseMstarc(text) {
-  let section = null;
-  const out = {};
-  const linear = {};
-  const linearMapping = {};
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (line === "" || line.startsWith("#") || line.startsWith(";"))
-      continue;
-    const header = /^\[([^\]]+)\]$/.exec(line);
-    if (header !== null) {
-      section = header[1].trim();
-      continue;
-    }
-    if (section === LINEAR_SECTION || section === LINEAR_MAPPING_SECTION) {
-      const eq = line.indexOf("=");
-      if (eq === -1)
-        continue;
-      const key = line.slice(0, eq).trim();
-      const value = line.slice(eq + 1).trim();
-      if (key === "" || value === "")
-        continue;
-      (section === LINEAR_SECTION ? linear : linearMapping)[key] = value;
-      continue;
-    }
-    if (section !== MSTARC_SECTION)
-      continue;
-    const eq = line.indexOf("=");
-    if (eq === -1)
-      continue;
-    const field = CONFIG_KEYS[line.slice(0, eq).trim()];
-    if (field === undefined)
-      continue;
-    const value = line.slice(eq + 1).trim();
-    if (value === "") {
-      if (field === "jevMode" || field === "jevTransport")
-        delete out[field];
-      continue;
-    }
-    if (field === "enforcement" && value !== "hard" && value !== "soft")
-      continue;
-    out[field] = value;
-  }
-  if (Object.keys(linear).length > 0)
-    out.linear = linear;
-  if (Object.keys(linearMapping).length > 0)
-    out.linearMapping = linearMapping;
-  return out;
-}
-function isFile(file) {
-  try {
-    return statSync(file).isFile();
-  } catch {
-    return false;
-  }
-}
-function findMstarc(startDir, boundary) {
-  let dir = resolve3(startDir);
-  const bound = resolve3(boundary);
-  for (;; ) {
-    if (!isAtOrBelow(dir, bound))
-      return null;
-    const candidate = join4(dir, MSTARC_FILE);
-    if (isFile(candidate))
-      return candidate;
-    if (dir === bound)
-      return null;
-    const parent = dirname4(dir);
-    if (parent === dir)
-      return null;
-    dir = parent;
-  }
-}
-function loadMstarc(startDir, boundary) {
-  const file = findMstarc(startDir, boundary);
-  if (file === null)
-    return null;
-  return { file, dir: dirname4(file), config: parseMstarc(readFileSync2(file, "utf8")) };
-}
-function isAtOrBelow(dir, root) {
-  const rel = relative(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute2(rel);
 }
 function ok(value, message) {
   assert(Boolean(value), false, true, "ok", "Expected value to be truthy", message);
@@ -4262,24 +4177,9 @@ function nearestExistingAncestor(target) {
     dir = parent;
   }
 }
-function looksLikeLegacyHarness(dir) {
-  for (const marker of ["status.json", "store.db", "workflows", "projects", "plans", "iterations"]) {
-    if (existsSync8(join11(dir, marker)))
-      return true;
-  }
-  return false;
-}
 function resolveFixedHarnessDir(checkout) {
-  refuseRetiredConfiguration(checkout, defaultWorkspaceRoot(checkout));
   const fixed = join11(checkout, ".mstar");
-  if (isDirectory2(fixed))
-    return fixed;
-  for (const legacy of LEGACY_HARNESS_NAMES) {
-    const dir = join11(checkout, legacy);
-    if (isDirectory2(dir) && looksLikeLegacyHarness(dir))
-      throw retiredCandidateError(checkout, legacy);
-  }
-  return null;
+  return isDirectory2(fixed) ? fixed : null;
 }
 function localHarnessProbe(start, workspaceRoot) {
   const boundary = canonicalizeNearestExisting(resolve10(start, workspaceRoot ?? defaultWorkspaceRoot(start)));
@@ -4287,7 +4187,6 @@ function localHarnessProbe(start, workspaceRoot) {
   for (;; ) {
     if (!isAtOrBelow3(dir, boundary))
       return null;
-    refuseRetiredConfiguration(dir, boundary);
     const fixed = join11(dir, ".mstar");
     if (isDirectory2(fixed))
       return fixed;
@@ -4298,16 +4197,6 @@ function localHarnessProbe(start, workspaceRoot) {
       return null;
     dir = parent;
   }
-}
-function refuseRetiredConfiguration(startDir, boundary) {
-  const rc = loadMstarc(startDir, boundary);
-  if (rc !== null && rc.config.harnessDir !== undefined) {
-    throw new HarnessRootRetiredError(`The .mstarc at ${join11(rc.dir, MSTARC_FILE)} declares \`harness_dir\`, which is retired: the harness root is fixed at \`<main worktree>/.mstar\`. ` + `Recovery: delete the \`harness_dir\` line from ${join11(rc.dir, MSTARC_FILE)}, then run \`mstar path resolve\`.`, { code: "harness_dir", config: join11(rc.dir, MSTARC_FILE) });
-  }
-}
-function retiredCandidateError(checkout, candidate) {
-  const fixed = join11(checkout, ".mstar");
-  return new HarnessRootRetiredError(`No harness root at ${fixed}; the legacy \`${candidate}/\` candidate is retired and is never adopted. ` + `Recovery: run \`mstar harness scaffold ${checkout}\` (then \`mstar store upgrade\` if this repository has an existing store).`, { code: "legacy-candidate", candidate, checkout });
 }
 function defaultWorkspaceRoot(startDir) {
   try {
@@ -5644,7 +5533,7 @@ var __defProp, __returnValue = (v) => v, __export = (target, all) => {
   if (err)
     throw err[0];
   return res;
-}, CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, init_catalog, MSTARC_FILE = ".mstarc", MSTARC_SECTION = "config", LINEAR_SECTION = "linear", LINEAR_MAPPING_SECTION = "linear.mapping", MSTARC_HARNESS_DIR_KEY = "harness_dir", MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, init_unist_util_is = () => {}, empty, init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, init_core, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, init_audit, ISSUE_KINDS, ISSUE_SEVERITIES, TERMINAL_DISPOSITIONS, ISSUE_DISPOSITIONS, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS, ISSUE_KIND_MAP, ISSUE_SEVERITY_MAP, RELATIONS2, PROVENANCE_KINDS, TERMINAL, init_issue, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, DATE_RE4, BindingError, init_project, LEGACY_HARNESS_NAMES, HarnessRootRetiredError, REVIEW_RUN_LEVELS, REVIEW_DATE_RE, SCAFFOLD_DIRS, ADR_BUCKETS, GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
+}, CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, CatalogError, init_catalog, MSTARC_HARNESS_DIR_KEY = "harness_dir", MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text2, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, init_unist_util_is = () => {}, empty, init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text3, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, SEVERITY_ORDER, init_core, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, init_audit, ISSUE_KINDS, ISSUE_SEVERITIES, TERMINAL_DISPOSITIONS, ISSUE_DISPOSITIONS, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS, ISSUE_KIND_MAP, ISSUE_SEVERITY_MAP, RELATIONS2, PROVENANCE_KINDS, TERMINAL, init_issue, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, DATE_RE4, BindingError, init_project, HarnessRootRetiredError, REVIEW_RUN_LEVELS, REVIEW_DATE_RE, SCAFFOLD_DIRS, ADR_BUCKETS, GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
 # Tracked results live under .agents/ and .mstarc declares the layout.
 .mstar/
 `, GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
@@ -10077,7 +9966,6 @@ var init_engine = __esm(() => {
     init_mstarc();
     init_project();
     init_store_db();
-    LEGACY_HARNESS_NAMES = [".agents", ".plans", "plans"];
     HarnessRootRetiredError = class HarnessRootRetiredError extends Error {
       details;
       code = "harness.root-retired";
@@ -10586,6 +10474,7 @@ var init_engine = __esm(() => {
   init_qcreview_schema();
   init_coordination();
   init_core();
+  init_git_probe();
   init_coordination_write();
   init_coordination();
   init_path();

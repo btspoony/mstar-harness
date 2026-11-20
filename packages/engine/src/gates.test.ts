@@ -199,7 +199,7 @@ describe("gates.harnessDocKindOfTarget", () => {
     expect(harnessDocKindOfTarget(tree.register)).toEqual({ harnessDir: tree.harness, kind: "register" });
   });
 
-  test("a .mstarc harness_dir declaration refuses instead of classifying", () => {
+  test("a .mstarc harness_dir declaration does not block classification", () => {
     const root = mkdtempSync(join(tmpdir(), "gates-retired-"));
     try {
       mkdirSync(join(root, ".mstar"), { recursive: true });
@@ -207,7 +207,7 @@ describe("gates.harnessDocKindOfTarget", () => {
       gitInit(root);
       const target = join(root, ".mstar", "status.json");
       writeFileSync(target, VALID_STATUS);
-      expect(() => harnessDocKindOfTarget(target)).toThrow("harness_dir");
+      expect(harnessDocKindOfTarget(target)).toEqual({ harnessDir: join(realpathSync(root), ".mstar"), kind: "status" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

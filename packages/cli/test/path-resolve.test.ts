@@ -132,22 +132,18 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
     });
   });
 
-  test("legacy .agents/ candidate is refused, never adopted as the harness root", () => {
+  test("legacy .agents/ candidate is never adopted as the harness root", () => {
     withRoot((root) => {
       gitInit(root);
       mkdirSync(join(root, ".agents", "specs"), { recursive: true });
       writeFileSync(join(root, ".agents", "specs", "adr.md"), "# ADR\n");
       writeFileSync(join(root, ".agents", "status.json"), "{}");
       const result = runResolve([root]);
-      // why: The fixed root is `<checkout>/.mstar`; a legacy layout is refused by
-      // name with its scaffold recovery instead of being adopted. The command
-      // layer currently reports the engine's typed `harness.root-retired`
-      // throw as `command.internal` (production gap, reported separately), so
-      // this pins the observable refusal, not that envelope code.
+      // why: A legacy layout is ignored, not refused — the checkout simply has
+      // no initialized fixed root.
       expect(result.exitCode).toBe(1);
-      expect(envelope(result).message).toContain(".agents");
-      expect(envelope(result).message).toContain("retired");
-      expect(envelope(result).message).toContain("mstar harness scaffold");
+      expect(envelope(result).code).toBe("path.harness-not-found");
+      expect(envelope(result).message).not.toContain("retired");
     });
   });
 

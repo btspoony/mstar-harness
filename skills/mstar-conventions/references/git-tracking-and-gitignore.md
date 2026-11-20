@@ -6,13 +6,13 @@
 
 **默认 tracked（bootstrap 布局）**：
 
-- `.mstarc`（仓库根；布局声明——`knowledge_dir` / `specs_dir` / `adr_dir` 与子目录键，随分支共享；`harness_dir` 已退役，声明即拒绝）
+- `.mstarc`（仓库根；布局声明——`knowledge_dir` / `specs_dir` / `adr_dir` 与子目录键，随分支共享；`harness_dir` 已退役，声明后值被忽略；gitignore 的 harness 根声明仍以 `.mstar` / `.agents` 规则判定）
 - `.agents/AGENTS.md`（harness 规则文件；scaffold 写在仓库根下）
 - `{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`、`{ADR_DIR}/**` — 默认即 `.agents/knowledge|specs|adr`（`.mstarc` 声明时以声明为准；这三层不位于 `{HARNESS_DIR}` 下，`{HARNESS_DIR}/<kind>/` 仅是 legacy 只读位置，不建、不声称）；`{ADR_DIR}` 另含 `README.md`、`proposed/TEMPLATE.md`、`implemented/TEMPLATE.md`
 
 **默认 gitignored**：`{HARNESS_DIR}` **整体**（默认 `.mstar/`）——`archived/`、`iterations/`、`plans/`、`sdd/`、`reviews/`（review 运行目录树：codebase audit / PR / branch / diff review 的 report 与 evidence）、`projects/`（roadmap transport 规则 → `mstar-project-governance`）、`workflows/`（retained ordinary bodies/notes）、`store.db`（issue/catalog/roadmap/milestone 与 execution_* 权威）、`status.json`（仅历史输入，无 live writer）。
 
-Legacy `.agents/` harness 不再被采纳为 `{HARNESS_DIR}`：它只作为 tracked 语料的默认位置存在；仓库若只有 `.agents/` 而没有 `.mstar/`，解析拒绝并给 scaffold/upgrade 恢复。`mstar path check` 按 Git 实况判定、**目录名不作准**：被忽略的文件只能留在 **control checkout**，可提交的文件属于**调用方自己的 checkout**（work / integration worktree）；结果目录被忽略只是 warning（`path.result-ignored`，exit `0`，指向 `.agents/` 或 `.mstarc`），位置越界才是 finding（exit `1`）。
+Legacy `.agents/` harness 不再被采纳为 `{HARNESS_DIR}`：它只作为 tracked 语料的默认位置存在；仓库若只有 `.agents/` 而没有 `.mstar/`，解析不到 harness 根（不报错、不采纳），需要时用 scaffold/upgrade 建出固定根。`mstar path check` 按 Git 实况判定、**目录名不作准**：被忽略的文件只能留在 **control checkout**，可提交的文件属于**调用方自己的 checkout**（work / integration worktree）；结果目录被忽略只是 warning（`path.result-ignored`，exit `0`，指向 `.agents/` 或 `.mstarc`），位置越界才是 finding（exit `1`）。
 
 **`mstar harness scaffold` 产物**：`.mstarc` 仅在仓库内找不到可解析的 `.mstarc`、且 harness 目录的父目录位于 scaffold 根之内时写入该父目录——**不再写 `harness_dir`**（根固定为 `<repo-root>/.mstar/`），只写与默认不同的 corpus / 子目录键；已有 `.mstarc` 永不改写，也不会在子目录再生一份。`{HARNESS_DIR}` 下建 `plans/`、`iterations/`、`sdd/`、`reviews/` 与 `projects/_default/`（`workflows/` 不预建）；tracked 语料按解析后的 `{KNOWLEDGE_DIR}` / `{SPECS_DIR}` / `{ADR_DIR}` 建目录，`{ADR_DIR}` 种子为 `README.md`、两个模板与四个桶目录（class 目录由首条记录创建）；`.agents/AGENTS.md` 写在工作区根。重跑幂等：既有文件与目录一律跳过。
 
