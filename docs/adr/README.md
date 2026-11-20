@@ -19,9 +19,10 @@ docs/adr/{bucket}/{class}/yyyy-mm-dd-topic.md
 The contract's required/optional test is the only admission test. The runtime surfaces that point at it, so a decision is recorded in the change that makes it rather than at a later cleanup:
 
 - `mstar-phase-gates` § Prepare — the `clarify` closing summary marks each settled decision that meets the test, or states `ADR: none`.
-- `mstar-artifacts/references/plan-files-and-reports.md` — a plan's `## Review Gate Summary` carries `ADR: <path>` or `ADR: none`; PM Acceptance checks the line.
-- `mstar-knowledge/references/compound-workflow.md` — a standalone development plan writes its record before the PR; iteration plans leave cross-iteration promotion to Phase 3.
+- `mstar-artifacts/references/plan-files-and-reports.md` — a plan's `## Review Gate Summary` carries `ADR: <path>` or `ADR: none` before `Done`, for iteration and standalone plans alike; PM Acceptance checks the line and that a named record exists in the delivery branch.
 - `mstar-iteration/references/phase-3-iteration-close.md` §3.2 — iteration close writes anything the plans left unrecorded, then checks freshness and supersession.
+
+`compound` is knowledge capture and never hosts the judgement: its scoring could skip the step entirely.
 
 Mechanical edits, local edits whose rationale is visible in code or the change description, and decisions already recorded stay exempt.
 

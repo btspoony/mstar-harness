@@ -60,7 +60,7 @@ Q8: No  — 只涉及一个 model
 
 ## Phase 1: Gather context
 
-Read the conversation history and the plan's own artifacts. Iteration plans leave cross-iteration specs/ADR promotion to Phase 3 (`mstar-doc-corpus`). A standalone development plan makes its own ADR judgement here: a decision meeting the record contract (`mstar-doc-corpus/references/adr.md` § When a record is required) is written to `{ADR_DIR}/implemented/<class>/` before the PR, and the plan's summary records `ADR: <path>` or `ADR: none`.
+Read the conversation history and the plan's own artifacts. ADR judgement is not part of this step: a decision meeting the record contract (`mstar-doc-corpus/references/adr.md` § When a record is required) is recorded before `Done` and named by the plan's `ADR:` line (`mstar-artifacts/references/plan-files-and-reports.md`), so this capture's scoring never gates a required ADR. Iteration plans leave cross-iteration specs/ADR promotion to Phase 3 (`mstar-doc-corpus`).
 
 Understand:
 - What problem was solved (the concrete issue)
