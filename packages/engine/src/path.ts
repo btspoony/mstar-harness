@@ -782,7 +782,7 @@ export function resolveScaffoldDirs(
   if (checkout.failed) {
     throw new Error(`harness.root-unresolved: Git could not answer from ${start}; refusing to scaffold a root the resolver would not adopt. Run it from the repository root after the checkout is readable.`);
   }
-  const base = checkout.root ?? start;
+  const base = mainWorktreeRoot(start) ?? checkout.root ?? start;
   refuseRetiredConfiguration(base, defaultWorkspaceRoot(base));
   const harnessDir = join(base, ".mstar");
   const supplied = options.harnessDir === undefined ? undefined : canonicalizeNearestExisting(resolve(start, options.harnessDir));
@@ -821,7 +821,8 @@ export function resolveScaffoldDirs(
  * Existing content is read by the resolvers, not re-homed by the scaffold.
  *
  * Idempotent: an existing `.mstarc`, directory, template or README is never
- * rewritten. Returns the fixed `<root>/.mstar` harness dir; a
+ * rewritten. Returns the fixed `<main worktree>/.mstar` harness dir — a linked
+ * checkout targets its main worktree, never its own tree — and a
  * `options.harnessDir` must equal it (see `resolveScaffoldDirs`).
  * The scaffold does NOT create a legacy `residuals.json` register: the issue
  * store (`store.db`) is the findings authority and the register is migration
@@ -843,7 +844,7 @@ export async function scaffoldHarness(root: string, options: ScaffoldOptions = {
   if (checkout.failed) {
     throw new Error(`harness.root-unresolved: Git could not answer from ${resolve(root)}; refusing to scaffold a root the resolver would not adopt.`);
   }
-  const repoRoot = checkout.root ?? resolve(root);
+  const repoRoot = mainWorktreeRoot(resolve(root)) ?? checkout.root ?? resolve(root);
   const knowledgeDir = mstarcDirOverride(harness, "knowledgeDir") ?? join(repoRoot, ".agents", "knowledge");
   const specsDir = mstarcDirOverride(harness, "specsDir") ?? join(repoRoot, ".agents", "specs");
   const adrDir = mstarcDirOverride(harness, "adrDir") ?? join(repoRoot, ".agents", "adr");

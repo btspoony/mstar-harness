@@ -5,11 +5,13 @@ import { engineErrorFacts } from "./family-refusal.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEffects, CommandEnvelope, InvocationContext } from "../types.js";
 import type { RunningDashboard } from "../dashboard/server.js";
+import { callHarness } from "./root-selector.js";
 const id = "dashboard";
 const inputSchema = z.object({
   port: z.coerce.number().int().min(0).max(65535).default(0),
   open: z.boolean().default(false),
   project: z.string().optional(),
+  harness: z.string().optional(),
 });
 type Input = z.infer<typeof inputSchema>;
 
@@ -85,7 +87,7 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
       diagnostics: decodeInputDiagnostics(parsed.error, input),
     });
   }
-  const harnessDir = context.controlRoot;
+  const harnessDir = callHarness(parsed.data.harness, context);
   if (harnessDir === null) {
     return failure("dashboard.harness-unavailable", new Error("no {HARNESS_DIR} found from the working directory"));
   }
@@ -156,6 +158,7 @@ export function getDashboardCommandDefinitions(): readonly CommandDefinition[] {
         { key: "port", flags: "--port <port>", required: false, defaultValue: 0, help: "Bind port 0 to request an available local port; values 0–65535 are accepted." },
         { key: "open", flags: "--open", required: false, defaultValue: false, help: "Open the local dashboard in a browser; defaults to false." },
         { key: "project", flags: "--project <projectId>", required: false },
+        { key: "harness", flags: "--harness <path>", required: false },
       ],
     },
     input: inputSchema,

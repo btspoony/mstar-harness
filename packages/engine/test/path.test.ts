@@ -1186,6 +1186,22 @@ describe("resolvers — `repoRoot` anchors the `.agents/` default to a checkout"
 });
 
 describe("scaffoldHarness", () => {
+  test("a linked checkout scaffolds the main worktree, never its own tree", async () => {
+    const root = tmpRoot("path-scaffold-linked-");
+    try {
+      gitInit(root);
+      git(["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
+      const linked = join(root, ".worktree-task");
+      git(["worktree", "add", "-q", linked, "-b", "feature/linked-scaffold"], root);
+      expect(resolveScaffoldDirs(linked).harnessDir).toBe(join(realpathSync(root), ".mstar"));
+      await scaffoldHarness(linked);
+      expect(existsSync(join(root, ".mstar"))).toBe(true);
+      expect(existsSync(join(linked, ".mstar"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("creates the process dirs, the tracked corpora and the .mstarc declaration without writing status.json", async () => {
     const root = tmpRoot("path-scaffold-");
     try {
