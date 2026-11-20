@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Client, InMemoryTransport, type CallToolResult } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
 import { commandEnvelopeSchema, getCommandDefinitions, type CommandDefinition, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
@@ -424,8 +424,10 @@ generated_at: 2026-01-02
    * store that cannot answer refuses instead of reading as complete.
    */
   test("compound validate --knowledge-dir asserts catalog completeness through the surviving action", async () => {
-    const harness = mkdtempSync(join(tmpdir(), "mstar-mcp-catalog-"));
-    const knowledgeDir = join(dirname(harness), ".agents", "knowledge");
+    const root = mkdtempSync(join(tmpdir(), "mstar-mcp-catalog-"));
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const knowledgeDir = join(root, ".agents", "knowledge");
     mkdirSync(knowledgeDir, { recursive: true });
     writeFileSync(join(knowledgeDir, "good.md"), KNOWLEDGE_GOOD);
     const validate = async (client: Client) => envelope(await client.callTool({
@@ -462,7 +464,7 @@ generated_at: 2026-01-02
         expect(JSON.stringify(gap.details?.violations ?? [])).toContain("knowledge/unregistered.md");
       }, { controlRoot: harness });
     } finally {
-      rmSync(harness, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
