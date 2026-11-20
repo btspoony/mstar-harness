@@ -150,17 +150,54 @@ function foldComments(body: string, dropped: ReviewPostPlan["inlineComments"]): 
     }),
   ].join("\n");
 }
+/** why: git C-quotes a path that needs escaping (space, quote, non-ASCII), so
+ * the new-side token is either bare `b/<path>` or `"b/<escaped>"`; the decoded
+ * path is what a findings entry spells, never the quoted form. */
+function gitHeaderPath(line: string): string | undefined {
+  const quoted = /^diff --git "(?:[^"\\]|\\.)*" "b\/((?:[^"\\]|\\.)*)"$/.exec(line);
+  if (quoted !== null) return decodeGitQuotedPath(quoted[1]!);
+  const bare = /^diff --git \S+ b\/(\S+)$/.exec(line);
+  return bare === null ? undefined : bare[1];
+}
+
+/** why: git escapes non-ASCII paths as octal bytes, so the decode buffers the
+ * bytes first and reads the path back as UTF-8; an unknown escape is unparsable. */
+function decodeGitQuotedPath(quoted: string): string | undefined {
+  const simple: Record<string, number> = { '"': 0x22, "\\": 0x5c, t: 0x09, n: 0x0a, r: 0x0d, b: 0x08, f: 0x0c };
+  const bytes: number[] = [];
+  for (let i = 0; i < quoted.length; i += 1) {
+    const char = quoted[i]!;
+    if (char !== "\\") {
+      bytes.push(...Buffer.from(char, "utf8"));
+      continue;
+    }
+    const escape = quoted[i + 1];
+    if (escape === undefined) return undefined;
+    const mapped = simple[escape];
+    if (mapped !== undefined) {
+      bytes.push(mapped);
+      i += 1;
+      continue;
+    }
+    const octal = /^[0-7]{1,3}/.exec(quoted.slice(i + 1));
+    if (octal === null) return undefined;
+    bytes.push(Number.parseInt(octal[0], 8));
+    i += octal[0].length;
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
 /** why: file identity comes only from `diff --git a/<old> b/<new>` — a content
  * line always starts with `+`/`-`/space, so an added `++ b/x` renders as
- * `+++ b/x` and must never be read as a header. */
+ * `+++ b/x` and must never be read as a header. An unparsable boundary leaves
+ * the file unset rather than inheriting the previous one. */
 function rightSideHunks(diff: string): Map<string, Array<{ start: number; end: number }>> {
   const hunks = new Map<string, Array<{ start: number; end: number }>>();
   let file: string | undefined;
   for (const line of diff.split(/\r?\n/)) {
-    const gitHeader = /^diff --git .* b\/(.+)$/.exec(line);
-    if (gitHeader !== null) {
-      file = gitHeader[1]!;
-      if (!hunks.has(file)) hunks.set(file, []);
+    if (line.startsWith("diff --git ")) {
+      file = gitHeaderPath(line);
+      if (file !== undefined && !hunks.has(file)) hunks.set(file, []);
       continue;
     }
     const header = /^@@ -[\d,]+ \+(\d+)(?:,(\d+))? @@/.exec(line);

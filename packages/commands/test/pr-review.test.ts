@@ -97,6 +97,30 @@ const CONTENT_DIFF = [
   "",
 ].join("\n");
 
+/** why: a quoted header is the only signal for a path git must escape, and its
+ * octal bytes must decode back to the spelling a finding uses. */
+const QUOTED_DIFF = [
+  "diff --git a/src/a.ts b/src/a.ts",
+  "--- a/src/a.ts",
+  "+++ b/src/a.ts",
+  "@@ -1,2 +1,2 @@",
+  " alpha",
+  " beta",
+  'diff --git "a/src/q\\"uote.ts" "b/src/q\\"uote.ts"',
+  '--- "a/src/q\\"uote.ts"',
+  '+++ "b/src/q\\"uote.ts"',
+  "@@ -30,2 +31,2 @@",
+  " thirty",
+  " thirty-one",
+  'diff --git "a/src/\\346\\227\\245.ts" "b/src/\\346\\227\\245.ts"',
+  '--- "a/src/\\346\\227\\245.ts"',
+  '+++ "b/src/\\346\\227\\245.ts"',
+  "@@ -50,2 +51,2 @@",
+  " fifty",
+  " fifty-one",
+  "",
+].join("\n");
+
 describe("pr-review command family", () => {
 
   test("computes tally from fixture findings and validates fixture report verdicts", async () => {
@@ -242,6 +266,33 @@ describe("pr-review command family", () => {
     const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
     expect(okResult.status).toBe("ok");
     // why: the same span on src/a.ts is not in that file's 1-2 hunk.
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 32, start_line: 31, start_side: "RIGHT", body: "Wrong file" }]));
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks" });
+    expect(refused.message).toContain("comments[0] src/a.ts:31-32");
+    expect(refused.message).toContain("hunks: 1-2");
+  });
+
+  test("a quoted diff header keeps its own hunks, decoded to the finding's spelling", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: QUOTED_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return review;
+      return request.argv[2] === "-H" ? diff : posted;
+    };
+    // why: the escaped path (and the octal-encoded one) must match the decoded
+    // spelling, while neither may inherit the previous file's hunks.
+    for (const [file, start, line] of [['src/q"uote.ts', 31, 32], ["src/日.ts", 51, 52]] as const) {
+      writeFileSync(findings, JSON.stringify([{ path: file, line, start_line: start, start_side: "RIGHT", body: "Quoted path" }]));
+      const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+      expect(okResult.status, file).toBe("ok");
+    }
     writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 32, start_line: 31, start_side: "RIGHT", body: "Wrong file" }]));
     const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
     expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks" });
