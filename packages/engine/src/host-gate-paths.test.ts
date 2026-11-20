@@ -214,10 +214,9 @@ describe("host-gate-paths collaboration authority target", () => {
     expect(isStoreAuthorityTarget(join(home, ".mstar", "repos", "github.com", "acme", "repo", "store.db"))).toBe(false);
   });
 
-  test("denies the physical path of a repository nested beyond the scan bound", () => {
-    // why: the namespace admits deeply nested owners, so a bounded reverse scan
-    // may stop before reaching the repository that owns a physical path. An
-    // unfinished scan can never answer "unrelated": the target is denied.
+  test("denies the physical path of a deeply nested repository symlink", () => {
+    // why: the namespace admits deeply nested owners, so the reverse walk has no
+    // owner-depth limit; it reaches the repository and maps its physical path.
     const physical = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-deep-")));
     const deepOwner = join(home, ".mstar", "repos", "gitlab.com", "g1", "g2", "g3", "g4");
     mkdirSync(deepOwner, { recursive: true });
@@ -227,26 +226,39 @@ describe("host-gate-paths collaboration authority target", () => {
       expect(isStoreAuthorityTarget(`${join(physical, "collaboration.db")}-wal`)).toBe(true);
       // The canonical spelling is denied before any scan runs.
       expect(isStoreAuthorityTarget(join(deepOwner, "repo", "collaboration.db"))).toBe(true);
+      // The scan completed: an unrelated path stays allowed while the deep
+      // repository exists, so the denial above came from mapping, not a failure.
+      const unrelated = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-deep-far-")));
+      expect(isStoreAuthorityTarget(join(unrelated, "collaboration.db"))).toBe(false);
+      rmSync(unrelated, { recursive: true, force: true });
     } finally {
       rmSync(join(home, ".mstar", "repos", "gitlab.com"), { recursive: true, force: true });
       rmSync(physical, { recursive: true, force: true });
     }
   });
 
-  test("fails closed when the reverse scan is cut short, and recovers when it completes", () => {
-    // why: an entry budget can run out before the scan proves coverage. During
-    // that state an outside path is denied; once the namespace is scannable
-    // again the same path is unrelated and allowed.
+  test("scans a large namespace completely and denies only an unscannable one", () => {
+    // why: size is not a reason to deny. A large but complete namespace leaves an
+    // unrelated same-named path alone; only a real failure (here a symlink cycle)
+    // makes the target unprovable and therefore denied.
     const unrelated = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-far-")));
     const crowded = join(home, ".mstar", "repos", "github.com", "many");
+    const loopHost = join(home, ".mstar", "repos", "github.com", "acme");
     mkdirSync(crowded, { recursive: true });
     for (let index = 0; index < 520; index++) mkdirSync(join(crowded, `r${index}`));
     try {
-      expect(isStoreAuthorityTarget(join(unrelated, "collaboration.db"))).toBe(true);
-      // A canonical selection is denied by containment, whatever the scan state.
+      expect(isStoreAuthorityTarget(join(unrelated, "collaboration.db"))).toBe(false);
+      // A canonical selection is denied by containment either way.
       expect(isStoreAuthorityTarget(collaborationDb())).toBe(true);
+
+      mkdirSync(loopHost, { recursive: true });
+      symlinkSync("..", join(loopHost, "loop"));
+      expect(isStoreAuthorityTarget(join(unrelated, "collaboration.db"))).toBe(true);
+      expect(isStoreAuthorityTarget(collaborationDb())).toBe(true);
+      rmSync(join(loopHost, "loop"), { force: true });
     } finally {
       rmSync(crowded, { recursive: true, force: true });
+      rmSync(loopHost, { recursive: true, force: true });
     }
     expect(isStoreAuthorityTarget(join(unrelated, "collaboration.db"))).toBe(false);
     rmSync(unrelated, { recursive: true, force: true });

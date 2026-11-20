@@ -148,90 +148,73 @@ function landedOrNull(candidate: string): string | null {
   }
 }
 
-/** Deepest directory the reverse walk descends into. Depth counts the namespace
- * as 1, so `<host>/<owner...>/<repo>` is depth 4. The bound is a DENIAL trigger,
- * never a coverage claim: passing it makes the scan incomplete. */
-const MAX_NAMESPACE_DEPTH = 6;
-
-/** Entries one reverse walk visits before it stops; exhausting it makes the scan
- * incomplete. */
-const MAX_NAMESPACE_SCAN_ENTRIES = 512;
-
-/** Result of the bounded reverse walk: the repository directories it could
- * prove, and whether it proved coverage of the whole namespace. */
+/** Result of the reverse walk: the physical directories of the namespace, and
+ * whether the walk completed. */
 type NamespaceScan = Readonly<{ dirs: readonly string[]; complete: boolean }>;
 
-/** Physical repository directories of the canonical namespace. A repository
- * directory is `<host>/<owner...>/<repo>` (or `_id/<repo>`), so every entry at
- * that depth belongs to some repository's physical extent; a symlinked entry is
- * mapped at its landed target, which is exactly where a physical-path write
- * would land.
+/** Physical directories of the canonical namespace, each visited once. A
+ * symlinked entry is mapped at its landed target — where a physical-path write
+ * would land — and walked from there.
  *
- * The walk stays inside the namespace and stops on a depth bound, an entry
- * budget, a repeated directory or a read error. Any stop makes the scan
- * INCOMPLETE — the namespace admits deeply nested owners, so an early stop may
- * hide the very repository that owns the target. */
+ * The walk is COMPLETE: it has no owner-depth or entry-count limit, so a large
+ * or deeply nested namespace still proves coverage and an unrelated path stays
+ * allowed. It is iterative (a deep tree cannot exhaust the stack) and `visited`
+ * covers every physical directory once, so duplicate links terminate.
+ *
+ * `complete` is false only for a real failure: a read/stat error, an unresolvable
+ * link chain, or a link to itself/an ancestor (a cycle whose extent cannot be
+ * covered). Callers deny such a target instead of assuming it unrelated. */
 function scanNamespaceRepositories(userHome: string): NamespaceScan {
   const namespace = landedOrNull(resolve(userHome, ".mstar", "repos"));
   if (namespace === null) return { dirs: [], complete: false };
   try {
     if (!statSync(namespace).isDirectory()) return { dirs: [], complete: true };
   } catch (error) {
-    // why: an absent namespace holds no repository to map; any other failure
-    // cannot prove coverage. Both answers are explicit, none is a guess.
+    // why: an absent namespace holds nothing to map; any other failure cannot
+    // prove coverage. Both answers are explicit, none is a guess.
     return { dirs: [], complete: (error as NodeJS.ErrnoException).code === "ENOENT" };
   }
   const dirs: string[] = [];
   const visited = new Set<string>();
-  let complete = true;
-  let budget = MAX_NAMESPACE_SCAN_ENTRIES;
-  const stop = (): void => {
-    complete = false;
-  };
-  const walk = (dir: string, depth: number, host: string | null): void => {
-    if (!complete) return;
-    if (depth > MAX_NAMESPACE_DEPTH || visited.has(dir)) {
-      stop();
-      return;
-    }
+  const pending = [namespace];
+  while (pending.length > 0) {
+    const dir = pending.pop()!;
+    if (visited.has(dir)) continue;
     visited.add(dir);
-    if (depth >= 4 || (depth === 3 && host === "_id")) dirs.push(dir);
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch {
-      stop();
-      return;
-    }
-    budget -= entries.length;
-    if (budget < 0) {
-      stop();
-      return;
+      return { dirs, complete: false };
     }
     for (const entry of entries) {
       const child = join(dir, entry.name);
-      const childHost = depth === 1 ? entry.name : host;
       if (entry.isDirectory()) {
-        walk(child, depth + 1, childHost);
+        dirs.push(child);
+        pending.push(child);
         continue;
       }
       if (!entry.isSymbolicLink()) continue;
       const landed = landedOrNull(child);
-      if (landed === null) {
-        stop();
-        continue;
-      }
+      if (landed === null) return { dirs, complete: false };
+      let isDirectory = false;
       try {
-        if (!statSync(landed).isDirectory()) continue;
-      } catch {
-        stop();
+        isDirectory = statSync(landed).isDirectory();
+      } catch (error) {
+        // why: a dangling link has nothing behind it to map; any other failure
+        // cannot prove coverage.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { dirs, complete: false };
         continue;
       }
-      walk(landed, depth + 1, childHost);
+      if (!isDirectory) continue;
+      // A link to itself or to an ancestor could not be covered in one pass.
+      if (landed === dir || isBelow(landed, dir)) return { dirs, complete: false };
+      if (visited.has(landed)) continue;
+      dirs.push(landed);
+      pending.push(landed);
     }
-  };
-  walk(namespace, 1, null);
-  return { dirs, complete };
+  }
+  return { dirs, complete: true };
 }
 
 /** True when `dir` names a location inside the canonical collaboration
