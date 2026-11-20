@@ -92,6 +92,13 @@ function errorCode(error: unknown, fallback: string): string {
     : fallback;
 }
 
+/** why: typed harness/store refusals keep their code at the envelope level;
+ * everything else stays the verb-level refusal, not an OS error code. */
+function refusalCodeOf(error: unknown, fallback: string): string {
+  const code = errorCode(error, fallback);
+  return code.startsWith("harness.") || code.startsWith("store.") ? code : fallback;
+}
+
 function validatePayload(kind: PersistKind, payload: unknown): void {
   if (kind !== "review") return;
   const gate = validateMstarReviewV1(payload);
@@ -180,7 +187,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
           await store.put({ kind, key: input.key, payload, ...(input.schema === undefined ? {} : { schema: input.schema }) });
           return ok(id, { kind, key: input.key });
         } catch (error) {
-          return refusalEnvelope({ command: id, status: "refused", code: "persist.write-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: errorCode(error, "persist.write-refused") }, recovery: "Correct the reported store or payload issue, then run mstar persist write review --key <key> --input <json> to retry." });
+          return refusalEnvelope({ command: id, status: "refused", code: "persist.write-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: refusalCodeOf(error, "persist.write-refused") }, recovery: "Correct the reported store or payload issue, then run mstar persist write review --key <key> --input <json> to retry." });
         }
       },
     }),
@@ -215,7 +222,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
           }
           return ok(id, { payload });
         } catch (error) {
-          return refusalEnvelope({ command: id, status: "refused", code: "persist.get-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: errorCode(error, "persist.get-refused") }, recovery: "Correct the reported store or validation failure, then run mstar persist get review --key <key> to retry." });
+          return refusalEnvelope({ command: id, status: "refused", code: "persist.get-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: refusalCodeOf(error, "persist.get-refused") }, recovery: "Correct the reported store or validation failure, then run mstar persist get review --key <key> to retry." });
         }
       },
     }),
@@ -234,7 +241,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
           const refs = await store.list(kind);
           return ok(id, refs.map(({ key }) => key).sort());
         } catch (error) {
-          return refusalEnvelope({ command: id, status: "refused", code: "persist.list-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: errorCode(error, "persist.list-refused") }, recovery: "Correct the reported store failure, then run mstar persist list review to retry." });
+          return refusalEnvelope({ command: id, status: "refused", code: "persist.list-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: refusalCodeOf(error, "persist.list-refused") }, recovery: "Correct the reported store failure, then run mstar persist list review to retry." });
         }
       },
     }),
@@ -255,7 +262,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
           await store.delete({ kind, key: input.key });
           return ok(id, { kind, key: input.key, deleted: true });
         } catch (error) {
-          return refusalEnvelope({ command: id, status: "refused", code: "persist.delete-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: errorCode(error, "persist.delete-refused") }, recovery: "Correct the reported store or key failure, then run mstar persist delete review --key <key> to retry." });
+          return refusalEnvelope({ command: id, status: "refused", code: "persist.delete-refused", exitCode: 1, message: messageOf(error), details: { underlyingCode: refusalCodeOf(error, "persist.delete-refused") }, recovery: "Correct the reported store or key failure, then run mstar persist delete review --key <key> to retry." });
         }
       },
     }),

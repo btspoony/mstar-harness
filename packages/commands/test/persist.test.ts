@@ -62,8 +62,8 @@ describe("persist command family", () => {
     mkdirSync(join(linked, ".mstar"), { recursive: true });
     const { context } = setup();
     const result = await definition("persist.write").execute({ kind: "review", key: "orphan", input: JSON.stringify(REVIEW), harness: join(linked, ".mstar") }, context);
-    expect(result).toMatchObject({ status: "refused" });
-    expect(result.message).toContain("harness.root-not-main");
+    expect(result).toMatchObject({ status: "refused", code: "persist.write-refused", details: { underlyingCode: "harness.root-not-main" } });
+    expect(result.message).toContain("main worktree");
     expect(existsSync(join(linked, ".mstar", "sdd", "_reviews", "orphan.json"))).toBe(false);
   });
 

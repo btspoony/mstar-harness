@@ -1090,13 +1090,16 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
     }
   });
 
-  test("a json key never routes around the selected root", () => {
+  test("a json key never routes around the selected checkout", () => {
     const root = mkdtempSync(join(tmpdir(), "store-cross-root-"));
     try {
-      const selected = join(root, "control-a", ".mstar");
-      const foreign = join(root, "control-b", ".mstar", "sdd", "_reviews", "x.json");
-      expect(() => resolveArtifactPath(selected, { kind: "json", key: foreign })).toThrow(/store\.cross-root-refused/);
-      expect(() => resolveArtifactPath(selected, { kind: "json", key: join(selected, "sdd", "_reviews", "x.json") })).not.toThrow();
+      const selected = join(root, "checkout-a", ".mstar");
+      const foreign = join(root, "checkout-b", ".mstar", "sdd", "_reviews", "x.json");
+      const ownCorpus = join(root, "checkout-a", ".agents", "specs", "x.json");
+      const ordinary = join(root, "export.mstar", "x.json");
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: foreign })).toThrow(/another checkout's harness state/);
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: ownCorpus })).not.toThrow();
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: ordinary })).not.toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

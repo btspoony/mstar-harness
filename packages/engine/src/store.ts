@@ -15,7 +15,7 @@
  */
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import type { Dirent } from "node:fs";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { readJson, writeJson } from "./core.js";
 import { realpathNearest } from "./git-probe.js";
 import { CoordinationError, assertProtectedWriteAuthorized, canonicalTarget, type ProtectedWriteKind } from "./coordination-write.js";
@@ -94,28 +94,38 @@ function assertKindAdmitted(kind: string): void {
   }
 }
 
-/** Map an artifact ref to its file path under `harnessRoot` (the store contract — the single kind→path
+/** why: machine consumers branch on codes; a plain message would be the only signal. */
+export class CrossRootRefusedError extends Error {
+  readonly code = "store.cross-root-refused";
+  constructor(message: string) {
+    super(message);
+    this.name = "CrossRootRefusedError";
+  }
+}
+
+/** why: Map an artifact ref to its file path under `harnessRoot` (the store contract — the single kind→path
  * mapping). Exported so host adapters import the contract instead of
  * re-deriving it textually. */
 export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): string {
   const { kind, key } = ref;
   assertKindAdmitted(kind as string);
   if (kind === "json") {
-    // Escape hatch: caller-supplied absolute path. Not a user-facing AC.
+    // why: escape hatch — caller-supplied absolute path. Not a user-facing AC.
     if (!isAbsolute(key)) {
       throw new Error(`ArtifactStore json key must be an absolute path \u2014 got ${JSON.stringify(key)}`);
     }
     if (key.split(/[\\/]+/).includes("..")) {
       throw new Error(`ArtifactStore json key must not contain ".." segments \u2014 got ${JSON.stringify(key)}`);
     }
-    // why: a json key is an absolute escape hatch, but never a cross-root one —
-    // routing another harness's protected documents around the selected root
-    // would bypass that root's authorization.
+    // why: a json key is an absolute escape hatch, but never a cross-checkout
+    // one — the tracked corpora live beside `.mstar`, so ownership is the
+    // checkout containing the selected harness, not the harness dir alone.
     const keyReal = realpathNearest(resolve(key));
     const rootReal = realpathNearest(resolve(harnessRoot));
-    const foreign = [`.mstar${sep}`, `.agents${sep}`, `.plans${sep}`].some((marker) => keyReal.includes(marker));
-    if (foreign && keyReal !== rootReal && !keyReal.startsWith(rootReal + sep)) {
-      throw new Error(`store.cross-root-refused: ${key} belongs to another harness root; select that root instead of routing around it`);
+    const checkoutReal = basename(rootReal) === ".mstar" ? dirname(rootReal) : rootReal;
+    const foreign = [`${sep}.mstar${sep}`, `${sep}.agents${sep}`, `${sep}.plans${sep}`].some((marker) => keyReal.includes(marker));
+    if (foreign && keyReal !== checkoutReal && !keyReal.startsWith(checkoutReal + sep)) {
+      throw new CrossRootRefusedError(`${key} belongs to another checkout's harness state; select that checkout's root instead of routing around it`);
     }
     return key;
   }

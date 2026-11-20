@@ -3,6 +3,14 @@ import { dirname } from "node:path";
 import { readMainWorktree, resolveProcessHarnessDir } from "@mstar-harness/engine";
 import type { InvocationContext } from "../types.js";
 
+export class HarnessRootSelectError extends Error {
+  readonly code = "harness.root-not-main";
+  constructor(message: string) {
+    super(message);
+    this.name = "HarnessRootSelectError";
+  }
+}
+
 /** why: A per-call root follows the MCP selector contract: a blank value is
  * absent (the invocation root applies), a relative value resolves against the
  * invocation cwd, and a value inside a linked checkout is refused — accepting
@@ -22,7 +30,7 @@ export function callHarness(harness: string | undefined, context: InvocationCont
   }
   const main = readMainWorktree(dirname(candidate));
   if (main !== null && main.root !== parentReal) {
-    throw new Error(`harness.root-not-main: ${candidate} is not the Git main worktree's .mstar; run \`mstar path resolve\` and pass its controlHarnessDir.`);
+    throw new HarnessRootSelectError(`${candidate} is not the Git main worktree's .mstar; run \`mstar path resolve\` and pass its controlHarnessDir.`);
   }
   return candidate;
 }
