@@ -1,43 +1,34 @@
 /**
- * issue-sync family — the supported sync entries (mirror-import plan Task 4,
- * one-way push plan Task 2):
+ * note: issue-sync family — the local half of the Linear mirror. Three verbs, no
+ * Linear request anywhere in mstar:
  *
- *   mstar issue-sync import --project <project_id> [--max-pages <n>]
- *   mstar issue-sync push   --project <project_id> [--adopt <localId>=<ref>...]
- *                                                  [--release <localId>...]
+ *   mstar issue-sync pending --project <project_id> [--harness <root>]
+ *   mstar issue-sync apply   --project <project_id> --results <file|-> [--adopt <localId>=<ref>...]
+ *                                                   [--force-adopt <localId>...] [--release <localId>...] [--take-run]
+ *   mstar issue-sync ingest  --project <project_id> --records <file|-> [--harness <root>]
  *
- * `import` refuses — before any write — when the binding cannot run, and
- * otherwise pages the bound Linear project into the local store through the
- * ledger and reports what it imported, updated, skipped or failed plus where it
- * stopped. A retryable ledger failure holds the cursor for the next run; an
- * adapter-unmappable item is reported as stranded and the scan continues.
+ * The agent holding the host's Linear tools performs every Linear call. mstar
+ * hands it the payloads to write (`pending`), records what its tools reported
+ * (`apply`), and associates a listing it fetched back with the local rows those
+ * issues mirror (`ingest`). A run is one `pending`/`apply` pair over ONE run
+ * lease per binding: `pending` claims it and leaves it held, `apply` continues
+ * that run under its token, and either a completed `apply` or an explicit
+ * `--take-run` ends it. The lease excludes a second RUNNING run, not a delivered
+ * tool call: a call the predecessor already issued may still land, which is why
+ * an unconfirmed create stays `pending` and the next `ingest`/`pending`
+ * reconciles it by correlation marker instead of creating again.
  *
- * `push` is the only WRITE surface, and it holds ONE run per binding: the run
- * lease (migration 18) is claimed before any candidate work, released on every
- * exit, and a second run is refused by name with both recoveries rather than
- * racing per-item claims. That excludes a RUNNING second run, not a delivered
- * request: the run token rides into every ledger write, so a run a takeover
- * replaced has its later writes refused instead of applied, but a request the
- * predecessor already sent may still land — which is why reconcile-by-marker is
- * the first recovery, and why taking over a live holder is unsafe. The run
- * refuses the whole of itself before any write when the credential it will
- * actually authenticate with cannot create or update issues, discovers the
- * workspace's real label set, reconciles any ambiguous create by correlation
- * marker, and records only what a confirmed receipt (or an explicit `--adopt`)
- * proved. Every operator verb is validated against the ledger, and against the
- * other verbs, before the first write, so a bad or self-contradicting `--release`
- * cannot land after an `--adopt` already did.
- * `--release` is the one exit for a create whose remote absence reconciliation's
- * own full scan proved: the residue drops to the retryable `failed` edge, so the
- * same run may create. It never deletes, never creates a label, and never sends
- * the full-replace `labels` argument.
- *
- * Refusal vocabulary is the frozen contract's (sync-ledger-contract §4): the
- * retired names `linear.binding-not-ready` / `linear.project-unbound` are never
- * emitted. "Cannot run" is `linear.provider-disabled` with the probe state and
- * its cause in the message; "mirrors nothing" is the named absence
- * `linear.binding-absent`.
+ * Refusal vocabulary: the `sync.*` ledger codes are unchanged (including
+ * `sync.identity-conflict` for a recorded-identity conflict); the
+ * `.mstarc`/`git` refusals are `linear.binding-absent`,
+ * `linear.binding-invalid`, `linear.binding-incomplete`,
+ * `linear.repo-unresolved`, `linear.author-unresolved`, plus the binding
+ * state `linear.provider-disabled` and `linear.mode-refused`; and a refused
+ * tool result is recorded as `linear.write-refused`. Every refusal names its
+ * recovery; none tells the operator to hand-edit a credential file, because
+ * no credential lives in mstar.
  */
+import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { refusalEnvelope } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
@@ -45,153 +36,74 @@ import {
   acquireRun,
   adoptItem,
   assertReleaseTargets,
-  createLinearProvider,
-  DEFAULT_PROBE_DEADLINE_MS,
   externalIdOf,
   identityConflict,
-  IMPORT_DIRECTION,
-  PUSH_DIRECTION,
-  importPage,
-  linearScopeCanWrite,
+  ingestRecords,
+  isOlderInstant,
   openStore,
-  pushItem,
-  readCursor,
+  PUSH_DIRECTION,
+  planPushItem,
   readItem,
   readProjectBinding,
-  readLinearCredential,
-  reconcilePendingCreate,
-  selectPushCandidates,
-  commitLinearCredential,
-  supersededBy,
+  readRepoIdentity,
   readRepoLinearBinding,
-  redactTransportMessage,
+  readRun,
+  reconcileWith,
+  recordResults,
   releaseRun,
-  resolveRepoRoot,
-  resetCursor,
   resolveProcessHarnessDir,
+  resolveRepoRoot,
+  selectPushCandidates,
   SyncError,
-  writeCursor,
-  type IssueProvider,
+  type IngestEntry,
+  type IngestReport,
+  type LinearBinding,
+  type LinearFacetMapping,
+  type PlanOutcome,
   type PushContext,
-  type PushOutcome,
+  type PushPlan,
+  type StoreDb,
+  type PushResult,
   type RunLease,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, CommandRequirement, InvocationContext } from "../types.js";
 
-// Linear's hosted MCP endpoint. Kept beside the command because it is the one
-// default the provider assembly needs; a deployment that self-hosts or proxies
-// the endpoint overrides it where the assembly is constructed.
-const LINEAR_MCP_URL = "https://mcp.linear.app/mcp";
-
-/**
- * The access token this machine stored through `mstar linear auth`, or null.
- *
- * A credential past its expiry is refreshed first: sending an expired token only
- * produces an access-denied that names nothing, while the refresh token beside it
- * was still usable. A credential that is merely due (inside the refresh window)
- * is returned as-is — it works until it expires.
- */
-/**
- * A refusal that survives the trip to the envelope: a plain Error loses its code,
- * and the operator would be told `internal-error` for a condition with an exact
- * recovery.
- */
-function refusalWith(code: string, message: string, recovery: string): Error {
-  return Object.assign(new Error(message), { code, recovery });
-}
-
-export async function resolveStoredToken(invocation: InvocationContext): Promise<string | null> {
-  const state = readLinearCredential();
-  if (state.kind !== "present") return null;
-  const { credential } = state;
-  const expired = credential.expiresAt !== null && credential.expiresAt <= Date.now();
-  if (!expired) return credential.accessToken;
-  const refresh = invocation.effects.linearRefresh;
-  const fallbackKey = process.env.LINEAR_API_KEY;
-  if (refresh === undefined || credential.refreshToken === null || credential.clientId === null) {
-    // An exported key is a documented fallback, not a dead branch: without this,
-    // a headless machine holding both a stale credential and a working key would
-    // refuse instead of importing.
-    if (fallbackKey !== undefined && fallbackKey !== "") return null;
-    throw refusalWith(
-      "linear.reauth-required",
-      "the stored Linear credential has expired and this host cannot refresh it",
-      "Run `mstar linear auth` on the machine that holds the credential, or export LINEAR_API_KEY for a headless run.",
-    );
-  }
-  const fresh = await refresh(LINEAR_MCP_URL, credential.clientId, credential.refreshToken);
-  if (fresh === null) {
-    throw refusalWith(
-      "linear.reauth-required",
-      "the refresh was declined",
-      "Run `mstar linear auth` again; the stored refresh token is no longer accepted.",
-    );
-  }
-  // The refresh waited on the network, so the file may have changed meanwhile.
-  // The commit's lineage check makes that change win: a sign-out stays deleted,
-  // and a grant `mstar linear auth` stored while this round trip was in flight
-  // is not replaced by this older lineage's token (whose
-  // `scope ?? credential.scope` fallback could also restore its narrower scope).
-  // This run still uses the token it obtained.
-  commitLinearCredential((current) => {
-    if (supersededBy(current, credential)) return null;
-    return {
-      accessToken: fresh.accessToken,
-      refreshToken: fresh.refreshToken ?? credential.refreshToken,
-      expiresAt: fresh.expiresAt,
-      scope: fresh.scope ?? credential.scope,
-      clientId: fresh.clientId ?? credential.clientId,
-    };
-  });
-  return fresh.accessToken;
-}
-
 /**
  * One schema PER VERB: the CLI syntax keys must equal the schema keys, so a
- * shared schema would force `import` to accept `--adopt` and vice versa.
+ * shared schema would force `ingest` to accept `--adopt` and vice versa.
+ * why: one schema per verb keeps the CLI syntax and the admitted input from drifting apart.
  */
-const importSchema = z.object({
+const pendingSchema = z.object({
   project: z.string().optional(),
-  maxPages: z.number().int().positive().optional(),
   harness: z.string().optional(),
 });
-const pushSchema = z.object({
+const applySchema = z.object({
   project: z.string().optional(),
+  results: z.string().optional(),
   adopt: z.array(z.string()).optional(),
   forceAdopt: z.array(z.string()).optional(),
   release: z.array(z.string()).optional(),
   takeRun: z.boolean().optional(),
   harness: z.string().optional(),
 });
-const schemas = { import: importSchema, push: pushSchema } as const;
-type Input = z.infer<typeof importSchema> & z.infer<typeof pushSchema>;
+const ingestSchema = z.object({
+  project: z.string().optional(),
+  records: z.string().optional(),
+  harness: z.string().optional(),
+});
+const schemas = { pending: pendingSchema, apply: applySchema, ingest: ingestSchema } as const;
+type Input = z.infer<typeof applySchema> & z.infer<typeof ingestSchema> & z.infer<typeof pendingSchema>;
 
-const verbs = ["import", "push"] as const;
+const verbs = ["pending", "apply", "ingest"] as const;
 type Verb = (typeof verbs)[number];
-
-/** Bound one run at 20 pages × 50 items, so a first run cannot run unbounded. */
-const DEFAULT_MAX_PAGES = 20;
-
-/** A `ready` probe is exactly `initialize` + `tools/list` (provider contract §5). */
-const HANDSHAKE_REQUESTS = 2;
-
-/**
- * Probe state → refusal code (contract §4). `linear.provider-disabled` keeps its
- * configuration-only meaning, so it is NOT the answer for a reachable-but-hosted
- * provider.
- */
-const PROBE_REFUSAL = {
-  "service-absent": "linear.host-unavailable",
-  unreachable: "linear.host-unavailable",
-  "access-denied": "linear.access-denied",
-} as const;
 
 const flags: Record<keyof Input, string> = {
   project: "--project <id>",
-  maxPages: "--max-pages <n>",
   harness: "--harness <root>",
+  results: "--results <file|->",
+  records: "--records <file|->",
   adopt: "--adopt <localId>=<issueUrl|externalId>",
   forceAdopt: "--force-adopt <localId>",
   release: "--release <localId>",
@@ -199,70 +111,87 @@ const flags: Record<keyof Input, string> = {
 };
 
 const options: Record<Verb, (keyof Input)[]> = {
-  import: ["project", "maxPages", "harness"],
-  push: ["project", "adopt", "forceAdopt", "release", "takeRun", "harness"],
+  pending: ["project", "harness"],
+  apply: ["project", "results", "adopt", "forceAdopt", "release", "takeRun", "harness"],
+  ingest: ["project", "records", "harness"],
 };
-const required: Record<Verb, (keyof Input)[]> = { import: ["project"], push: ["project"] };
+const required: Record<Verb, (keyof Input)[]> = {
+  pending: ["project"],
+  apply: ["project", "results"],
+  ingest: ["project", "records"],
+};
 
 /**
- * `--adopt` / `--force-adopt` / `--release` name one item
- * each. Declared variadic so an operator can pass several (`--adopt A=LIN-1
- * --adopt B=LIN-2` or one `--adopt A=LIN-1 --adopt` list) without the CLI
- * refusing the repetition.
+ * `--adopt` / `--force-adopt` / `--release` name one item each. Declared
+ * variadic so an operator can pass several without the CLI refusing the
+ * repetition.
+ * why: these three are the only operator verbs, and each names a different ledger fact.
  */
 const variadicOptions: Partial<Record<keyof Input, true>> = { adopt: true, forceAdopt: true, release: true };
 
 class UsageError extends Error {}
 
 function requireValue(value: string | undefined, flag: string): string {
-  if (value === undefined || !value.trim()) throw new UsageError(`${flag} is required`);
+  if (value === undefined || !value.trim()) throw new UsageError(flag + " is required");
   return value.trim();
 }
 
 function envelope(id: string, data: unknown): CommandEnvelope {
-  return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
+  return { version: 1, command: id, status: "ok", code: id + ".ok", exitCode: 0, data };
 }
 
-/** Recovery text per refusal: every one names a documented entry to run. */
+/**
+ * note: a SyncError refusal survives as a refusal, never an internal error.
+ * why: one code can cover conditions whose repairs differ, so the thrown error may
+ * carry its own recovery line and `engineErrorFacts` preserves it into the envelope;
+ * a caller that supplies none keeps the shared per-code text.
+ */
+function refused(code: string, message: string, recovery?: string): Error {
+  const error = Object.assign(new Error("[" + code + "] " + message), { code });
+  return recovery === undefined ? error : Object.assign(error, { recovery });
+}
+
+/**
+ * Recovery text per refusal: every one names a documented entry to run, and
+ * none of them tells the operator to hand-edit a credential file.
+ * why: a refusal without its recovery line is a hard block, which the contract forbids.
+ */
 const RECOVERY: Record<string, string> = {
   "linear.provider-disabled":
-    "The binding is not enabled for this repo. Fix the .mstarc `[linear]` block (`enabled=true`, `mode=mirror`, `workspace=<slug>`, `team=<key>`), then re-run `mstar issue-sync import --project <project-id>`.",
-  "linear.host-unavailable":
-    "The provider is configured, but this host cannot reach its Linear MCP service right now. Add or repair the Linear MCP entry in the host's MCP configuration (the cause names what failed), then re-run the import. Nothing was written and the cursor did not advance.",
-  "linear.access-denied":
-    "This host reached the Linear MCP service and the credential was rejected or expired. Re-authorize the host's Linear connection (sign in / refresh the API key in the host, not in `.mstarc`), then re-run the import. Nothing was written and the cursor did not advance.",
+    "The Linear mirror is not enabled for this repository. Set enabled=true in the .mstarc [linear] block (with workspace and team), then re-run `mstar issue-sync pending --project <project-id>`.",
   "linear.binding-absent":
-    "This store project mirrors no Linear project yet. Bind one first: `mstar project bind --project <project-id> --provider linear --remote-project <name-or-id> --operation <id>`, then re-run the import.",
-  "linear.query-failed":
-    "A page failed and nothing from it was ingested; the cursor did not advance. Re-run `mstar issue-sync import --project <project-id>` to resume from the recorded cursor once the provider answers again. When the failure is a label-discovery page that advertised a next page without a usable cursor, it is a provider envelope defect: re-running reads the same page and refuses identically, so report it to the provider's maintainers instead of retrying.",
-  "linear.list-unimplemented":
-    "This host exposes no Linear listing adapter, so no page can be requested. Run the import from a host that ships the adapter (dsh this iteration), or install a release whose plugin provides it.",
-  "linear.identity-collision":
-    "A local issue already holds the identity a Linear item would map to. Rename the local capture's sourceIdentity, then re-run the import; the two are never merged.",
-  "store.not-active":
-    'Activate the store first: `mstar store upgrade --operator <name>`, then re-run the import.',
-  "store.not-initialized":
-    'Create and activate the store: `mstar harness scaffold` then `mstar store init`; retrying cannot create it.',
-  "linear.scope-insufficient":
-    "The Linear credential this run authenticates with cannot create or update issues. Reauthorize explicitly: open the dsh plugin Settings and press Authorize on the linear-mcp row, or run `mstar linear auth login` — both request read + issues:create and present the provider's consent screen. A refresh never widens an existing read-only grant.",
-  "linear.write-refused":
-    "The provider refused this write before the mutation ran, so nothing was written and the item is failed for a safe retry. Read the cause: a request-level rejection (an HTTP 4xx other than 408/425) and a schema missing `removeLabels` are both refused this way; a 408 or 425 is reported as `unresolved` instead, because the mutation may already have run. Re-run `mstar issue-sync push --project <project-id>` after addressing it.",
-  "linear.write-ambiguous":
-    "The write was sent but not confirmed, so delivery is unknown and the item stays pending with no external id. The next run reconciles it by correlation marker — exactly one match adopts that issue — and `--adopt <localId>=<issueUrl|externalId>` records the identity when you can see it yourself. When the next run's reconcile scan reports that no remote issue carries the marker and you can confirm the issue is gone, release the residue with `--release <localId>`: that clears it to a retryable failure, so the same run creates it.",
-  "linear.label-unresolved":
-    "Read the cause, which names one of two different situations. When the label discovery walk stopped at its page bound, the workspace advertises more labels than mstar reads: the bound is fixed and the walk restarts from the first page every run, so re-running refuses identically and the label may well exist — do not create one. Bring the workspace's label set within what mstar enumerates (archive or delete unused labels in Linear) and re-run `mstar issue-sync push --project <project-id>`; until then kinds cannot be resolved against a set mstar cannot see. When the walk completed and the label is genuinely absent (push never creates labels), create that label in Linear's UI, or redirect it in `.mstarc` with `[linear.mapping] kind.<kind>=<label>`; other items still push.",
-  "linear.state-unresolved":
-    "The mapped workflow state does not exist in this Linear team and push never creates or renames states. Rename it in Linear's workflow settings, or redirect it in `.mstarc` with `[linear.mapping] disposition.<key>=<name>`, where <key> is the DEFAULT target state (Todo/Done/Canceled) that the local disposition maps to; other items still push.",
-  "sync.identity-conflict":
-    "This item already points at a remote issue and `--adopt` named a different one. Replacing an established identity is not an ordinary edit: re-run `mstar issue-sync push --project <project-id> --force-adopt <localId> --adopt <localId>=<issueUrl>` only if the new reference is the right one. Nothing was written.",
-  "sync.operator-conflict":
-    "The run's own flags contradict each other: one local item cannot be adopted and released in the same run, `--adopt` names one identity per local id, and a `--force-adopt` id must also appear in `--adopt` because the flag only relaxes that entry's replacement. Re-run `mstar issue-sync push --project <project-id>` with one verb per item — `--adopt <localId>=<issueUrl|externalId>` when you can see the remote issue (add `--force-adopt <localId>` only to replace an identity it already records), `--release <localId>` only when reconcile's scan proved no remote issue carries the item's marker. Nothing was written.",
-  "sync.illegal-transition":
-    "Read the cause, which names one of three situations. When `--release` names a row that is not a `pending` push row with no remote id, drop the flag and re-run `mstar issue-sync push --project <project-id>`: reconcile adopts the issue when exactly one carries the item's correlation marker, and `--adopt <localId>=<issueUrl|externalId>` records an identity you confirmed. When the row is a legal release target but the scan was truncated at its page bound, the flag cannot answer a question the scan never read to its end — `--adopt <localId>=<issueUrl|externalId>` is the way in, since it names the identity instead of asking the listing to prove one. When reconcile read several issues carrying the item's marker, name the right one with `--adopt` (add `--force-adopt <localId>` to replace an identity the row already records); one identity per item is the point. Nothing was written.",
+    "This store project mirrors no Linear project yet. Bind one first: `mstar project bind --project <project-id> --provider linear --remote-project <name-or-id> --operation <id>`, or declare the [linear] block in the repository's .mstarc, then re-run.",
+  "linear.binding-invalid":
+    "A [linear] value in .mstarc cannot be read. Read the cause, fix that key in .mstarc, and re-run. Nothing was written.",
+  "linear.binding-incomplete":
+    "The [linear] block is missing a required value. Set workspace and team (and enabled=true), then re-run. Nothing was written.",
+  "linear.mode-refused":
+    "The only supported [linear] mode is mirror. Set mode=mirror in .mstarc, then re-run. Nothing was written.",
+  "linear.repo-unresolved":
+    "The correlation marker needs a repository identity. Add one with `git remote add origin <url>`, or declare `[linear] repo=<owner/name>` in .mstarc, then re-run. Nothing was written.",
+  "linear.author-unresolved":
+    "The correlation marker needs this checkout's git author. Set it with `git config user.name \"Your Name\"` and `git config user.email \"you@example.com\"`, then re-run. Nothing was written.",
   "sync.run-held":
-    "Another push run holds this binding. Its start time, pid and host are in the message: wait for it to finish, then re-run `mstar issue-sync push --project <project-id>`. Only after confirming that holder is dead, take the run over with `mstar issue-sync push --project <project-id> --take-run`.",
+    "Another issue-sync run holds this binding; its start time, pid and host are in the message. Wait for that agent to run `mstar issue-sync apply --project <project-id> --results <file|->`, which ends the run. If you confirmed that holder is dead, take the run over with `mstar issue-sync apply --project <project-id> --results <file|-> --take-run` (send `[]` when you have no results to record).",
   "sync.run-taken":
-    "This push run was taken over while it was working, so it wrote nothing further and stopped. Its earlier writes stand, and a create it had already sent may still land at the provider: re-run `mstar issue-sync push --project <project-id>` (the holder that replaced it, or the next run), which reconciles any unconfirmed create by correlation marker before creating anything.",
+    "This run was taken over while it was working, so it wrote nothing further and stopped. Its earlier writes stand, and a create it had already sent may still land: re-run `mstar issue-sync ingest --project <project-id> --records <file|->` with a listing that shows the current remote issues, so an unconfirmed create is associated by its marker before anything creates again.",
+  "sync.identity-conflict":
+    "This item already points at a remote issue and `--adopt` named a different one. Replacing an established identity is not an ordinary edit: re-run with `--force-adopt <localId>` beside that `--adopt <localId>=<issueUrl>` entry only if the new reference is the right one. Nothing was written.",
+  "sync.operator-conflict":
+    "The run's own flags contradict each other: one local item cannot be adopted and released in the same run, `--adopt` names one identity per local id, and a `--force-adopt` id must also appear in `--adopt`. Re-run with one verb per item. Nothing was written.",
+  "sync.illegal-transition":
+    "Read the cause, which names the row it refused. `--release` clears only a pending create with no remote id: when the ledger already records a remote issue for that item (an `ingest` associated it), its recovery is `--adopt <localId>=<issueUrl|externalId>` or a normal `pending`/`apply` update. Nothing was written.",
+  "sync.not-found":
+    "This local id has no push ledger row, so this run never planned it. Run `mstar issue-sync pending --project <project-id>` first and apply the results that run produced.",
+  "sync.local-issue-missing":
+    "This local id is not an issue in this store. Capture it first, then re-run `mstar issue-sync pending --project <project-id>`.",
+  "linear.write-refused":
+    "The remote refused this item; the cause is the tool's own words. Nothing was recorded as applied, so the item stays retryable: address the cause in Linear (a missing label, state or permission) and re-run `mstar issue-sync pending --project <project-id>`.",
+  "store.not-active":
+    "Activate the store first: `mstar store upgrade --operator <name>`, then re-run.",
+  "store.not-initialized":
+    "Create the store first: `mstar harness scaffold` then `mstar store init`; retrying cannot create it.",
+  usage: "Run `mstar issue-sync <verb> --help` for the accepted flags and payload shapes.",
 };
 
 function refusalFor(id: string, code: string, message: string, details?: Record<string, unknown>): CommandEnvelope<never> {
@@ -271,233 +200,192 @@ function refusalFor(id: string, code: string, message: string, details?: Record<
     status: "refused",
     code,
     exitCode: 1,
-    message: `[${code}] ${message}`,
+    message: "[" + code + "] " + message,
     details: { operation: id, ...details },
-    recovery: RECOVERY[code] ?? "Run `mstar issue-sync import --help` for the supported flags and check the named condition.",
+    // why: A literal, not a composed verb: the help-reachability prover must be able to read
+    // the command this refusal advertises (the per-code map above stays unprovable 
+    // behind its element access, which is the refusal-quality exemption, not this one).
+    recovery: RECOVERY[code] ?? "Read the cause, resolve it, then re-run the same issue-sync verb: `mstar issue-sync pending --project <project-id>` plans the work, `apply` records results, and `ingest` associates a listing.",
   });
 }
 
 function failure(id: string, error: unknown): CommandEnvelope<never> {
-  const message = error instanceof Error ? error.message : String(error);
   if (error instanceof UsageError) {
     return refusalEnvelope({
       command: id,
       status: "usage",
       code: "usage",
       exitCode: 2,
-      message,
+      message: error.message,
       details: { operation: id },
-      recovery:
-        "Check the project binding with `mstar project show`, then pass --project naming a store project whose Linear project is already bound.",
+      recovery: RECOVERY.usage,
     });
   }
   const facts = engineErrorFacts(error);
-  const code = facts.code ?? `${id}.internal-error`;
+  const code = facts.code ?? id + ".internal-error";
+  // shortcut: the recovery below is chosen at runtime (the engine's own text, then
+  // this family's per-code RECOVERY map); the refusal prover evaluates only literal,
+  // conditional, `??`/`||` over provable arms, const bindings and declared helpers, so
+  // the exemption is refreshed under I-000872. upgrade: when the prover can read element
+  // and property access, drop the exemption.
   return refusalEnvelope({
     command: id,
     status: "refused",
     code,
     exitCode: 1,
-    message,
+    message: error instanceof Error ? error.message : String(error),
     details: { operation: id, ...facts.details },
-    recovery:
-      facts.recovery ??
-      RECOVERY[code] ??
-      `Run \`mstar issue-sync import --help\` and check the named condition; retry only after addressing it.`,
+    recovery: facts.recovery ?? RECOVERY[code] ?? "Read the cause, resolve it, then re-run the same issue-sync verb: `mstar issue-sync pending --project <project-id>` plans the work, `apply` records results, and `ingest` associates a listing.",
   });
 }
 
-/** One item the run could not process, reported by identity and page index. */
-type StrandedItem = {
-  page: number;
-  /** Zero-based item index inside the page, or null for a whole-page failure. */
-  index: number | null;
-  externalId: string | null;
-  cause: string;
-};
 
-type ImportReport = {
+/** note: Everything a verb needs from the declarations, resolved once, before any write. */
+type Target = {
   projectId: string;
   bindingId: string;
-  imported: number;
-  updated: number;
-  skipped: number;
-  failed: number;
-  pages: number;
-  /**
-   * Every provider request this run made: the contract-defined handshake
-   * (`initialize` + `tools/list` = 2) plus one `tools/call` per page. This is
-   * the rate-limit budget, evidenced rather than assumed.
-   */
-  requests: number;
-  /** The cursor a later run resumes from (unchanged when nothing advanced). */
-  cursor: string | null;
-  /** Items left unprocessed, by identity and page index. */
-  stranded: StrandedItem[];
-  /**
-   * Why the run stopped: the page bound, a retryable ledger failure holding the
-   * cursor, or the last page. Adapter-level failures alone do not stop a run —
-   * they are reported in `stranded` and the cursor advances (I-000948).
-   */
-  stopped: "complete" | "max-pages" | "stranded";
+  harnessDir: string;
+  binding: LinearBinding;
+  remoteProject: string;
+  identity: { repo: string; author: string };
 };
 
-async function runImport(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
+/**
+ * Read the two declarations this family runs on, in order, before any store or
+ * ledger write: the repository's `.mstarc` `[linear]` block (is the mirror on,
+ * and for which team) and the store's project binding (which remote project).
+ * The git identity comes last, because it is the fact the marker is stamped
+ * with and its refusal names the config command that supplies it.
+ * why: the order matters - the cheaper refusal answers first, before any store write.
+ */
+async function resolveTarget(invocation: InvocationContext, input: Input): Promise<Target> {
   const projectId = requireValue(input.project, "--project");
-  const maxPages = input.maxPages ?? DEFAULT_MAX_PAGES;
   const harnessDir =
     resolveProcessHarnessDir(invocation.cwd, input.harness) ?? input.harness ?? invocation.controlRoot ?? invocation.cwd;
-  const context = { harnessDir };
-
-  // The two declarations are read FIRST: the provider needs the endpoint they
-  // supply, and every refusal must happen before a store write or a listing call.
-  // The root is resolved HERE, once, and passed in. The harness's own checkout
-  // wins; a harness that lives outside any checkout (harness_dir pointing at
-  // shared state) has no repository to read, so the invocation's checkout is the
-  // only thing that can name one.
+  // why: The root is resolved ONCE and passed in: the harness's own checkout wins,
+  // and a harness that lives outside any checkout falls back to the invocation's.
   const repoRoot = resolveRepoRoot(harnessDir) ?? resolveRepoRoot(invocation.cwd) ?? invocation.cwd;
   const repo = readRepoLinearBinding(repoRoot);
-  if (repo.kind !== "bound" || !repo.binding.enabled) {
-    const why =
-      repo.kind === "absent"
-        ? repo.message.replace(/^\[?linear\.[a-z-]+\]?:?\s*/, "")
-        : repo.kind === "invalid"
-          ? repo.message
-          : `a [linear] block exists in ${repo.file} but enabled is not true`;
-    throw Object.assign(new Error(`[linear.provider-disabled] ${why}`), { code: "linear.provider-disabled" });
+  if (repo.kind === "absent") throw refused(repo.code, stripCode(repo.message));
+  if (repo.kind === "invalid") throw refused(repo.code, stripCode(repo.message));
+  if (!repo.binding.enabled) {
+    throw refused(
+      "linear.provider-disabled",
+      "a [linear] block exists in " + repo.file + " but enabled is not true, so this repository mirrors nothing",
+    );
   }
-  const binding = await readProjectBinding(context, projectId);
-  if (binding.kind === "absent") {
-    throw Object.assign(new Error(binding.message), { code: "linear.binding-absent" });
-  }
+  const binding = await readProjectBinding({ harnessDir }, projectId);
+  if (binding.kind === "absent") throw refused(binding.code, stripCode(binding.message));
   if (binding.binding.provider !== "linear") {
-    throw Object.assign(
-      new Error(`[linear.provider-disabled] project ${projectId} mirrors provider "${binding.binding.provider}"; this iteration imports linear only`),
-      { code: "linear.provider-disabled" },
+    throw refused(
+      "linear.provider-disabled",
+      "project " + projectId + " mirrors provider " + JSON.stringify(binding.binding.provider) + "; this command drives a linear binding only",
     );
   }
-
-  // Built here rather than taken from the host. `issueProvider` stays as an
-  // override for tests and for a host that mounts its own MCP client, but the
-  // command no longer REQUIRES one: an unwired host used to turn every real run
-  // into `linear.list-unimplemented`, which is not a refusal an operator could
-  // recover from.
-  const provider: IssueProvider =
-    invocation.effects.issueProvider?.(projectId) ??
-    createLinearProvider({
-      url: LINEAR_MCP_URL,
-      // Precedence is explicit: the stored credential this machine authorized
-      // wins, and an exported key is the fallback for a headless deployment.
-      token: (await resolveStoredToken(invocation)) ?? process.env.LINEAR_API_KEY,
-      deadlineMs: DEFAULT_PROBE_DEADLINE_MS,
-      // The listing is scoped to the binding: a credential that reaches several
-      // teams or projects must never import another one's issues here.
-      scope: { team: repo.binding.team ?? undefined, project: binding.binding.remoteProject },
-    });
-
-  // Each non-ready probe state keeps its OWN cause and recovery (contract §4):
-  // a host that cannot reach its service and a host whose credential was
-  // rejected need different operator actions, and neither is a configuration
-  // fault of `.mstarc`.
-  const probe = await provider.probe();
-  if (probe.state !== "ready") {
-    const code = PROBE_REFUSAL[probe.state];
-    throw Object.assign(
-      new Error(`[${code}] the binding cannot run: probe state "${probe.state}" — ${probe.cause}`),
-      { code },
-    );
-  }
-
-  const bindingId = `linear:${projectId}`;
-  // Cursor writes are per SCAN, not per value: a fixed id made a second scan
-  // that reached the same cursor find the first scan's receipt and skip the
-  // write, so it reported progress the store never recorded.
-  const scanId = new Date().toISOString();
-  const cursorOperation = (suffix: string): string => `linear-import:${bindingId}:cursor:${scanId}:${suffix}`;
-
-  const report: ImportReport = {
+  const identity = readRepoIdentity(repoRoot, repo.binding.repo);
+  if (!identity.ok) throw refused(identity.code, stripCode(identity.message));
+  return {
     projectId,
-    bindingId,
-    imported: 0,
-    updated: 0,
-    skipped: 0,
-    failed: 0,
-    pages: 0,
-    // The probe already spent the two handshake calls; a `ready` state is
-    // exactly `initialize` + `tools/list` per the provider contract.
-    requests: HANDSHAKE_REQUESTS,
-    cursor: null,
-    stranded: [],
-    stopped: "complete",
+    bindingId: "linear:" + projectId,
+    harnessDir,
+    binding: repo.binding,
+    remoteProject: binding.binding.remoteProject,
+    identity: { repo: identity.repo, author: identity.author },
   };
-  const handle = await openStore(context, "write");
+}
+
+/** note: A refusal message without its leading `[code]` - the envelope re-adds it. */
+function stripCode(message: string): string {
+  return message.replace(/^\[[^\]]+\]\s*/, "");
+}
+
+/** note: The push context one ledger write carries: identity, mapping and the run token. */
+function pushContextFor(target: Target, runId: string | undefined): PushContext {
+  return {
+    bindingId: target.bindingId,
+    identity: target.identity,
+    mapping: target.binding.mapping,
+    ...(runId === undefined ? {} : { runId }),
+  };
+}
+
+/**
+ * Read a JSON argument: a file path, or `-` for stdin. An unreadable path or a
+ * body that is not JSON is a USAGE refusal naming the flag - the caller
+ * mistyped it, and no store work has happened yet.
+ * why: `-` for stdin keeps payloads out of process argument lists and shell history.
+ */
+async function readJsonArgument(invocation: InvocationContext, value: string | undefined, flag: string): Promise<unknown> {
+  const source = requireValue(value, flag);
+  let raw: string;
+  if (source === "-") {
+    raw = await invocation.effects.readInput();
+  } else {
+    try {
+      raw = readFileSync(source, "utf8");
+    } catch (error) {
+      throw new UsageError(flag + " " + source + " cannot be read: " + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+  if (raw.trim() === "") {
+    throw new UsageError(flag + " received no content; pass a JSON array (use [] for an empty one)");
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new UsageError(flag + " is not valid JSON: " + (error instanceof Error ? error.message : String(error)));
+  }
+}
+
+/** note: `pending`'s item: the plan a caller's tools write, in the frozen envelope shape. */
+type PendingReport = {
+  binding: { provider: "linear"; workspace: string; team: string; remoteProject: string };
+  identity: { repo: string; author: string };
+  runId: string;
+  items: PushPlan[];
+  skipped: Array<{ localId: string; reason: string }>;
+  unresolved: Array<{ localId: string; cause: string }>;
+};
+
+/**
+ * note: Plan every pushable item and hand the caller the payloads. No Linear call is
+ * made here, and the run lease stays HELD: the caller's tools run between this
+ * verb and `apply`, which ends the run.
+ */
+async function runPending(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
+  const target = await resolveTarget(invocation, input);
+  const handle = await openStore({ harnessDir: target.harnessDir }, "write");
   try {
     const db = handle.db;
-    let cursor = readCursor(db, { bindingId, direction: IMPORT_DIRECTION });
-    report.cursor = cursor;
-    while (report.pages < maxPages) {
-      // A throwing page call leaves the cursor where it was: nothing from that
-      // page was ingested, so the next run re-reads it.
-      const page = await provider.listIssues(cursor);
-      report.requests++;
-      report.pages++;
-      // The repo's own [linear.mapping] correspondence, applied at capture time.
-      // Accepting an override and then ignoring it made the setting a lie.
-      const counts = importPage(db, bindingId, page.items, repo.binding.mapping);
-      report.imported += counts.imported;
-      report.updated += counts.updated;
-      report.skipped += counts.skipped;
-      report.failed += counts.failed;
-      // Contract §2 "Cursor advance and the overlap window", split by whether a
-      // retry could ever help (I-000948):
-      // - an ADAPTER-level failure (a title-less item, a non-object) can never
-      //   change by re-reading the same page, so it is reported as stranded and
-      //   the cursor advances — one poison item must not cap every later page.
-      // - a LEDGER-level failure (identity collision, store refusal) is
-      //   retryable, so the next run re-reads this page (the overlap window) and
-      //   the `failed → pending` retry can actually run.
-      for (const failure of page.failures ?? []) {
-        report.stranded.push({
-          page: report.pages,
-          index: failure.index,
-          externalId: failure.externalId,
-          cause: failure.cause,
-        });
-      }
-      if (counts.failed > 0) {
-        report.stranded.push({
-          page: report.pages,
-          index: null,
-          externalId: null,
-          cause: `${counts.failed} item(s) on this page are failed; the ledger holds the cause and the next run retries them`,
-        });
-        report.stopped = "stranded";
-        break;
-      }
-      if (page.nextCursor === null) {
-        report.stopped = "complete";
-        // A COMPLETED scan rewinds the page pointer: leaving it on the last page
-        // makes every earlier page unreachable, so an issue edited there is
-        // never read again. A scan that stops for any other reason keeps its
-        // pointer — rewinding a stopped run would re-request the same page from
-        // the top forever and drop the position that made progress possible.
-        resetCursor(db, {
-          bindingId,
-          direction: IMPORT_DIRECTION,
-          operationId: cursorOperation("complete"),
-        });
-        report.cursor = null;
-        break;
-      }
-      writeCursor(db, {
-        bindingId,
-        direction: IMPORT_DIRECTION,
-        cursor: page.nextCursor,
-        operationId: cursorOperation(page.nextCursor),
-      });
-      cursor = page.nextCursor;
-      report.cursor = cursor;
-      report.stopped = "max-pages";
+    // why: One run per binding, claimed before any candidate work. `pending` does not
+    // release it: the lease covers the caller's tool calls as much as this
+    // process, and `apply` is what ends the run.
+    const run = acquireRun(db, {
+      bindingId: target.bindingId,
+      direction: PUSH_DIRECTION,
+      holderPid: process.pid,
+      holderHost: hostname(),
+      reason: "issue-sync pending",
+    });
+    const push = pushContextFor(target, run.runId);
+    const report: PendingReport = {
+      binding: {
+        provider: "linear",
+        workspace: target.binding.workspace,
+        team: target.binding.team,
+        remoteProject: target.remoteProject,
+      },
+      identity: target.identity,
+      runId: run.runId,
+      items: [],
+      skipped: [],
+      unresolved: [],
+    };
+    for (const candidate of selectPushCandidates(db, target.bindingId)) {
+      const outcome: PlanOutcome = planPushItem(db, push, candidate);
+      if (outcome.outcome === "planned") report.items.push(outcome.plan);
+      else if (outcome.outcome === "skipped") report.skipped.push({ localId: outcome.localId, reason: outcome.reason });
+      else report.unresolved.push({ localId: outcome.localId, cause: outcome.cause });
     }
     return envelope(id, report);
   } finally {
@@ -505,56 +393,45 @@ async function runImport(id: string, input: Input, invocation: InvocationContext
   }
 }
 
-/** What one push run did, item by item plus the reconcile outcome. */
-type PushReport = {
+/**
+ * One entry of the `apply` report. `outcome` echoes the CALLER'S word
+ * (confirmed/refused/ambiguous) exactly as it handed it in; the ledger state
+ * each word produced appears only in `counts` (applied/unconfirmed/refused), so
+ * the two vocabularies never mix inside one field.
+ * why: the caller's word and the ledger state are different vocabularies and must not mix.
+ */
+type ApplyItem = { localId: string; outcome: "confirmed" | "refused" | "ambiguous"; externalId: string | null; cause?: string };
+type ApplyReport = {
   projectId: string;
   bindingId: string;
-  created: number;
-  updated: number;
-  skipped: number;
-  /** Sent but unconfirmed; the next run reconciles by marker. */
-  unresolved: number;
-  failed: number;
-  /** Rows this run adopted by marker equality after an interrupted create. */
-  reconciled: Array<{ localId: string; externalId: string }>;
-  /**
-   * The page bound the reconcile scan stopped at, present only when it stopped
-   * with more listing advertised. Its presence means the scan was PARTIAL: no
-   * residue was adopted or released against it, and the listing a later run
-   * reads may still hold what this one did not.
-   */
-  stoppedAtPageBound?: number;
-  /** One row per item that did not converge, with the credential-free cause. */
-  items: Array<{ localId: string; outcome: string; externalId: string | null; cause?: string }>;
-  /** The workspace label set this run resolved kind labels against. */
-  labels: string[];
-  /** The team's workflow state names this run resolved dispositions against. */
-  states: string[];
+  runId: string;
+  adopted: Array<{ localId: string; externalId: string | null }>;
+  released: string[];
+  /** note: whether this call ended the run it used, or left a borrowed lease to its holder. */
+  lease: "released" | "left-to-the-holder";
+  items: ApplyItem[];
+  counts: { applied: number; unconfirmed: number; refused: number };
 };
 
 /**
  * Parse `--adopt <localId>=<issueUrl|externalId>`. The FIRST `=` splits, so an
  * identifier containing one survives; a value with no `=` is a usage error
  * rather than a silently ignored flag.
+ * why: an unparseable pair must be refused loudly, never silently dropped or half-read.
  */
 function adoptPairs(values: readonly string[] | undefined): Array<{ localId: string; reference: string }> {
   return (values ?? []).map((value) => {
     const split = value.indexOf("=");
     if (split <= 0 || split === value.length - 1) {
-      throw new UsageError(`--adopt expects <localId>=<issueUrl|externalId>; received ${JSON.stringify(redactTransportMessage(value))}`);
+      throw new UsageError("--adopt expects <localId>=<issueUrl|externalId>; received " + JSON.stringify(value));
     }
     return { localId: value.slice(0, split).trim(), reference: value.slice(split + 1).trim() };
   });
 }
 
 /**
- * Operator verbs are validated against the ledger one by one, so two of them
- * could still contradict each other: `--adopt I-1=LIN-9 --release I-1` passed
- * both single-verb checks on a pending residue, wrote the adoption, and only
- * then had reconcile refuse the release; naming one local id under two
- * `--adopt` entries broke the same guarantee the other way, via
- * `sync.identity-conflict` from the second adoption. Both are contradictions in
- * the request itself, so they are refused before the first write.
+ * note: Operator verbs are validated against each other before the first write, so a
+ * self-contradicting request cannot land half-applied behind a later refusal.
  */
 function assertOperatorVerbsAgree(
   adoptions: ReadonlyArray<{ localId: string; reference: string }>,
@@ -567,7 +444,7 @@ function assertOperatorVerbsAgree(
     if (first !== undefined) {
       throw new SyncError(
         "sync.operator-conflict",
-        `--adopt names ${localId} twice (${redactTransportMessage(first)}, ${redactTransportMessage(reference)}), but one local item has one remote identity; ` +
+        "--adopt names " + localId + " twice (" + first + ", " + reference + "), but one local item has one remote identity; " +
           "keep the pair that is the right issue and re-run; nothing was written",
       );
     }
@@ -577,336 +454,409 @@ function assertOperatorVerbsAgree(
     if (released.has(localId)) {
       throw new SyncError(
         "sync.operator-conflict",
-        `--adopt and --release both name ${localId}; adopting records a remote identity for the item, releasing ` +
+        "--adopt and --release both name " + localId + "; adopting records a remote identity for the item, releasing " +
           "clears a pending create that has none, so they cannot describe one item in one run. Keep the verb that " +
-          "matches what you saw (the issue in Linear, or its proven absence) and re-run; nothing was written",
+          "matches what you saw and re-run; nothing was written",
       );
     }
   }
-  // `--force-adopt` is a modifier of one `--adopt` entry, never a verb of its
-  // own; an id outside that pairing would be dropped without a word and the
-  // operator would believe an established identity could be replaced.
   for (const localId of forcedAdopt) {
     if (!adopted.has(localId)) {
       throw new SyncError(
         "sync.operator-conflict",
-        `--force-adopt names ${localId}, but --adopt does not; the flag only relaxes the identity replacement for ` +
-          `one --adopt entry, so on its own it authorizes nothing. Add --adopt ${localId}=<issueUrl|externalId> ` +
-          "with the reference that is really right, or drop --force-adopt, and re-run; nothing was written",
+        "--force-adopt names " + localId + ", but --adopt does not; the flag only relaxes the identity replacement for " +
+          "one --adopt entry. Add --adopt " + localId + "=<issueUrl|externalId> with the reference that is really right, " +
+          "or drop --force-adopt, and re-run; nothing was written",
       );
     }
   }
 }
 
-async function runPush(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
-  const projectId = requireValue(input.project, "--project");
+/**
+ * Validate the caller's results. A well-formed entry becomes a ledger write; an
+ * ill-formed one does NOT abort the run - the frozen contract says a missing
+ * field is that entry's refusal in the report.
+ * why: per-item validation keeps one malformed entry from failing the whole run.
+ * why: per-entry refusals keep the caller's word so the report reads like the input.
+ */
+/** note: A per-item validation refusal keeps the caller's word and carries the cause. */
+function refusedItem(localId: string, cause: string): ApplyItem {
+  return { localId, outcome: "refused", externalId: null, cause };
+}
+
+function parseResults(raw: unknown): { results: PushResult[]; refused: ApplyItem[] } {
+  if (!Array.isArray(raw)) {
+    throw new UsageError("--results must be a JSON array of {localId, outcome, externalId?, remoteUpdatedAt?, cause?} entries");
+  }
+  const results: PushResult[] = [];
+  const refused: ApplyItem[] = [];
+  raw.forEach((entry, index) => {
+    const name = "(entry " + index + ")";
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      refused.push(refusedItem(name, "not a JSON object"));
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const localId = typeof record.localId === "string" ? record.localId.trim() : "";
+    if (localId === "") {
+      refused.push(refusedItem(name, "no localId"));
+      return;
+    }
+    const outcome = record.outcome;
+    if (outcome !== "confirmed" && outcome !== "refused" && outcome !== "ambiguous") {
+      refused.push(refusedItem(localId, 'outcome must be "confirmed", "refused" or "ambiguous"'));
+      return;
+    }
+    const externalId =
+      typeof record.externalId === "string" && record.externalId.trim() !== "" ? record.externalId.trim() : null;
+    if (outcome === "confirmed" && externalId === null) {
+      refused.push(refusedItem(localId, "a confirmed result must name the remote issue in externalId"));
+      return;
+    }
+    results.push({
+      localId,
+      outcome,
+      ...(externalId === null ? {} : { externalId }),
+      ...(typeof record.url === "string" ? { url: record.url } : {}),
+      ...(typeof record.remoteUpdatedAt === "string" ? { remoteUpdatedAt: record.remoteUpdatedAt } : {}),
+      ...(typeof record.cause === "string" ? { cause: record.cause } : {}),
+    });
+  });
+  return { results, refused };
+}
+
+/**
+ * note: the identity a caller-supplied result names, through the same normalizer `--adopt`
+ * uses, so `LIN-9` and the issue URL that resolves to it compare equal.
+ * why: a value the normalizer rejects cannot match any adoption, and the recorder reports it
+ * per item, so the preflight stays out of that decision.
+ */
+function normalizedOrNull(externalId: string): string | null {
+  try {
+    return externalIdOf(externalId);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refuse an apply whose results were planned BEFORE the run it would continue.
+ *
+ * A continuation borrows the held run's token, so an old retry must not continue a
+ * run that a later `pending` opened: it would write under that holder's token. The
+ * evidence is the claim timestamp of every create cycle in the results — a cycle
+ * claimed before the held run started cannot have been planned by it.
+ *
+ * why: an explicit `--adopt` in this same invocation is not that stale retry: it
+ * validates and records the identity before the results are read, so a stale
+ * result it covers is admitted, and the return value says so - that batch runs
+ * under a lease it did NOT acquire, so its caller must leave the lease alone. A
+ * stale result no adoption covers, or a confirmed one naming an identity the
+ * adoption does not record, is still refused: nothing makes that write sane.
+ *
+ * shortcut: the check needs a create cycle to compare, so an empty `--results`
+ * (or one naming only updates) has no evidence and continues the held run; and a
+ * `--take-run` replacement keeps the original start by design, so a retry racing
+ * a takeover is not detectable this way. upgrade: add an explicit run token to
+ * `apply` when either bound starts to matter.
+ */
+function assertApplyOwnsHeldRun(
+  db: StoreDb,
+  target: Target,
+  held: RunLease | null,
+  takeRun: boolean,
+  results: readonly PushResult[],
+  adoptedIdentities: ReadonlyMap<string, string>,
+): boolean {
+  if (takeRun || held === null) return false;
+  let covered = false;
+  const unadopted = results.find((result) => {
+    const row = readItem(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, localId: result.localId });
+    const stale =
+      row !== null && row.itemState === "pending" && row.externalId === null && isOlderInstant(row.updatedAt, held.startedAt);
+    if (!stale) return false;
+    // why: an explicit `--adopt` in the SAME invocation establishes the identity
+    // before the results are recorded, so the documented recovery composition is
+    // not a stale apply: the adoption, not the older run, carries the identity.
+    const adopted = adoptedIdentities.get(result.localId);
+    if (adopted === undefined) return true;
+    // why: both sides go through the same normalizer, so a `--adopt` that names a
+    // Linear URL covers the result that names the identifier it resolves to.
+    const named = result.externalId === null || result.externalId === undefined ? null : normalizedOrNull(result.externalId);
+    // why: a confirmed result must name the identity the adoption records; a
+    // different one is the identity conflict the recorder refuses per item, and
+    // the batch cannot be made sane by proceeding.
+    if (result.outcome === "confirmed" && named !== adopted) return true;
+    covered = true;
+    return false;
+  });
+  if (unadopted !== undefined) {
+    // why: the recovery is NOT the run-held one - `--take-run` would bypass this very
+    // guard, while the stale result is repaired by naming the identity it is about.
+    throw refused(
+      "sync.run-held",
+      "these results belong to an earlier run: " + JSON.stringify(unadopted.localId) + " was claimed before the run now holding " +
+        target.bindingId + " started (" + held.startedAt + "), so this apply cannot continue it and the lease is untouched. Name the " +
+        "remote identity the result is about with `mstar issue-sync apply --project <project-id> --adopt <localId>=<issueUrl|externalId>`, " +
+        "or associate it by its marker with `mstar issue-sync ingest --project <project-id> --records <file|->`, then re-run this apply",
+      "Record the identity this result is about, then re-run the apply. " +
+        "`mstar issue-sync apply --project <project-id> --results <file|-> --adopt <localId>=<issueUrl|externalId>` names it in the same " +
+        "invocation, and `mstar issue-sync ingest --project <project-id> --records <file|->` associates the issue by its marker first. " +
+        "`--take-run` is not the repair here: it would bypass the ownership check that refused this batch",
+    );
+  }
+  return covered;
+}
+
+/**
+ * Record the caller's results, then END the run.
+ *
+ * The run is CONTINUED (same token), not re-acquired: `pending` claimed it and
+ * left it held for exactly these tool calls. `--take-run` replaces a holder the
+ * operator confirmed dead; with no run row at all - the normal case when
+ * `pending` ran in a session that already released - this acquires a fresh one
+ * so every write still carries a token.
+ * why: apply both continues the held run and ends it, so the lease survives exactly
+ * these writes - unless the batch was admitted only through adoption coverage: then
+ * it borrowed a lease it never acquired, leaves it to its holder, and says so in
+ * the report.
+ */
+async function runApply(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
   const adoptions = adoptPairs(input.adopt);
   const forcedAdopt = new Set((input.forceAdopt ?? []).map((value) => value.trim()).filter((value) => value !== ""));
   const released = new Set((input.release ?? []).map((value) => value.trim()).filter((value) => value !== ""));
   const takeRun = input.takeRun === true;
-
-  // 0. Verbs that contradict each other are refused before anything is resolved
-  //    or written; each is otherwise checked only against its own ledger row.
   assertOperatorVerbsAgree(adoptions, released, forcedAdopt);
-  const harnessDir =
-    resolveProcessHarnessDir(invocation.cwd, input.harness) ?? input.harness ?? invocation.controlRoot ?? invocation.cwd;
-  const context = { harnessDir };
 
-  // 1. SCOPE PREFLIGHT, before anything is resolved or written. Only the
-  //    credential this run will actually authenticate with decides, and that is
-  //    `resolveStoredToken`'s precedence: a usable access token is used, an
-  //    expired one is refreshed (a refresh never widens a grant, so its stored
-  //    scope still decides), and a run that can do neither falls through to an
-  //    exported LINEAR_API_KEY — whose capability, not this file's scope, is
-  //    what applies. An absent credential is not this preflight's call either: a
-  //    host may hold the transport, and the probe reports the truth.
-  const stored = readLinearCredential();
-  if (stored.kind === "present") {
-    const { credential } = stored;
-    const refreshable =
-      invocation.effects.linearRefresh !== undefined && credential.refreshToken !== null && credential.clientId !== null;
-    const usable = credential.expiresAt === null || credential.expiresAt > Date.now();
-    if ((usable || refreshable) && !linearScopeCanWrite(credential.scope)) {
-      throw Object.assign(
-        new Error(
-          `[linear.scope-insufficient] the Linear credential this run will use has scope ${JSON.stringify(credential.scope ?? "absent")}, which cannot create or update issues; nothing was written`,
-        ),
-        { code: "linear.scope-insufficient" },
-      );
-    }
-  }
-
-  // 2. The binding declarations, read before any store or provider work.
-  const repoRoot = resolveRepoRoot(harnessDir) ?? resolveRepoRoot(invocation.cwd) ?? invocation.cwd;
-  const repo = readRepoLinearBinding(repoRoot);
-  if (repo.kind !== "bound" || !repo.binding.enabled) {
-    const why =
-      repo.kind === "absent"
-        ? repo.message.replace(/^\[?linear\.[a-z-]+\]?:?\s*/, "")
-        : repo.kind === "invalid"
-          ? repo.message
-          : `a [linear] block exists in ${repo.file} but enabled is not true`;
-    throw Object.assign(new Error(`[linear.provider-disabled] ${why}`), { code: "linear.provider-disabled" });
-  }
-  const binding = await readProjectBinding(context, projectId);
-  if (binding.kind === "absent") {
-    throw Object.assign(new Error(binding.message), { code: "linear.binding-absent" });
-  }
-  if (binding.binding.provider !== "linear") {
-    throw Object.assign(
-      new Error(`[linear.provider-disabled] project ${projectId} mirrors provider "${binding.binding.provider}"; this iteration pushes to linear only`),
-      { code: "linear.provider-disabled" },
-    );
-  }
-
-  type WriteProvider = IssueProvider & {
-    discoverLabels?: () => Promise<ReadonlySet<string>>;
-    discoverStates?: () => Promise<ReadonlySet<string>>;
-  };
-  const provider: WriteProvider =
-    invocation.effects.issueProvider?.(projectId) ??
-    createLinearProvider({
-      url: LINEAR_MCP_URL,
-      token: (await resolveStoredToken(invocation)) ?? process.env.LINEAR_API_KEY,
-      deadlineMs: DEFAULT_PROBE_DEADLINE_MS,
-      scope: { team: repo.binding.team ?? undefined, project: binding.binding.remoteProject },
-    });
-  const discoverLabels = provider.discoverLabels?.bind(provider);
-  if (discoverLabels === undefined) {
-    throw Object.assign(
-      new Error(
-        "[linear.host-unavailable] this host's provider cannot discover the workspace label set (list_issue_labels), so no kind label could be resolved; nothing was written",
-      ),
-      { code: "linear.host-unavailable" },
-    );
-  }
-  const discoverStates = provider.discoverStates?.bind(provider);
-  if (discoverStates === undefined) {
-    throw Object.assign(
-      new Error(
-        "[linear.host-unavailable] this host's provider cannot discover the team's workflow states (list_issue_statuses), so no disposition could be resolved; nothing was written",
-      ),
-      { code: "linear.host-unavailable" },
-    );
-  }
-
-  const probe = await provider.probe();
-  if (probe.state !== "ready") {
-    const code = PROBE_REFUSAL[probe.state];
-    throw Object.assign(new Error(`[${code}] the binding cannot run: probe state "${probe.state}" — ${probe.cause}`), { code });
-  }
-
-  // 3. Discovery of BOTH mapped vocabularies: a run-level guard, still before
-  //    any write. Only names the workspace really has are ever sent, and push
-  //    never creates a label or a state.
-  const labels = await discoverLabels();
-  const states = await discoverStates();
-
-  const bindingId = `linear:${projectId}`;
-  const handle = await openStore(context, "write");
+  const target = await resolveTarget(invocation, input);
+  const parsed = parseResults(await readJsonArgument(invocation, input.results, "--results"));
+  const handle = await openStore({ harnessDir: target.harnessDir }, "write");
   let run: RunLease | null = null;
+  let borrowedLease = false;
   try {
     const db = handle.db;
-    const storeRow = db.prepare("select store_id from store_meta where id = 1").get() as { store_id: string } | undefined;
-    if (storeRow === undefined) {
-      throw Object.assign(new Error("[store.not-initialized] store_meta is missing, so the pushing store has no identity"), {
-        code: "store.not-initialized",
-      });
-    }
-    // 3b. THE RUN. `push` is an operator command, not a concurrent service: one
-    //     run per binding is claimed here, before any candidate work. The claim is
-    //     an insert inside the store's write transaction, so a second run is refused
-    //     by name (holder + both exits) instead of racing per-item claims; the lease
-    //     is released in the `finally` below, including on refusal and on throw.
-    //     `--take-run` is explicit operator intent, never a timer.
-    //
-    //     The arbitrated fact is ACQUISITION, not the whole run: the run token is
-    //     carried into every ledger write below (`PushContext.runId`), so a run
-    //     that a takeover replaced has those writes refused (`sync.run-taken`)
-    //     rather than applied. A request it had already sent may still land — which
-    //     is why reconcile-by-marker is still the first recovery — and taking over
-    //     a LIVE holder therefore remains unsafe.
-    run = acquireRun(db, {
-      bindingId,
-      direction: PUSH_DIRECTION,
-      holderPid: process.pid,
-      holderHost: hostname(),
-      reason: takeRun ? "operator took the run over with --take-run" : "issue-sync push",
-      takeRun,
-    });
-    const pushContext: PushContext = {
-      bindingId,
-      binding: { workspace: repo.binding.workspace ?? "", team: repo.binding.team ?? binding.binding.team ?? "" },
-      storeId: storeRow.store_id,
-      mapping: repo.binding.mapping,
-      labels,
-      states,
-      runId: run.runId,
-    };
-    const report: PushReport = {
-      projectId,
-      bindingId,
-      created: 0,
-      updated: 0,
-      skipped: 0,
-      unresolved: 0,
-      failed: 0,
-      reconciled: [],
-      items: [],
-      labels: [...labels].sort(),
-      states: [...states].sort(),
-    };
-
-    // 3c. EVERY operator verb is validated against the ledger BEFORE the first
-    //     write. Adoptions and releases arrive together, and a bad `--release`
-    //     discovered after an `--adopt` had already been recorded left the run
-    //     half-applied behind a usage refusal. Either every named item is legal
-    //     or nothing is touched.
+    // why: the ownership preflight below must see the identities this invocation
+    // already validates, so every operator verb is checked before it, not after.
+    const adoptedIdentities = new Map<string, string>();
     for (const { localId, reference } of adoptions) {
       const externalId = externalIdOf(reference);
-      const existing = readItem(db, { bindingId, direction: PUSH_DIRECTION, localId });
+      const existing = readItem(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, localId });
       const conflict = identityConflict(existing, localId, externalId);
       if (conflict !== null && !forcedAdopt.has(localId)) throw conflict;
+      adoptedIdentities.set(localId, externalId);
     }
-    assertReleaseTargets(db, bindingId, released);
+    assertReleaseTargets(db, target.bindingId, released);
 
-    // 4. Operator-confirmed adoptions. These are ordinary ledger verbs: the row
-    //    takes the identity and FORGETS the proof that belonged to the previous
-    //    one, so the candidate loop below converges this item's content onto the
-    //    adopted issue in this same run instead of reporting `skipped` for
-    //    content that remote never received.
+    const held = readRun(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION });
+    // why: the preflight answers whether this batch was admitted ONLY through adoption
+    // coverage, i.e. it runs under a lease this invocation did not acquire; that lease
+    // belongs to its holder and must survive this call.
+    borrowedLease = assertApplyOwnsHeldRun(db, target, held, takeRun, parsed.results, adoptedIdentities);
+    run =
+      takeRun || held === null
+        ? acquireRun(db, {
+            bindingId: target.bindingId,
+            direction: PUSH_DIRECTION,
+            holderPid: process.pid,
+            holderHost: hostname(),
+            reason: takeRun ? "operator took the run over with --take-run" : "issue-sync apply",
+            takeRun,
+          })
+        : held;
+    const push = pushContextFor(target, run.runId);
+    const report: ApplyReport = {
+      projectId: target.projectId,
+      bindingId: target.bindingId,
+      runId: run.runId,
+      adopted: [],
+      released: [],
+      // why: an operator who adopted a residue needs to know the newer holder still
+      // owns the direction, or the next `pending` refusal looks unexplained.
+      lease: borrowedLease ? "left-to-the-holder" : "released",
+      items: [...parsed.refused],
+      counts: { applied: 0, unconfirmed: 0, refused: parsed.refused.length },
+    };
+
+
+    // why: Operator-confirmed adoptions are ordinary ledger verbs: the row takes the
+    // identity and forgets the previous one's proof, so the next `pending`
+    // converges this item's content onto the adopted issue instead of reporting
+    // it unchanged.
     for (const { localId, reference } of adoptions) {
-      const adopted = adoptItem(db, bindingId, localId, reference, { force: forcedAdopt.has(localId), runId: run.runId });
-      report.items.push({ localId, outcome: "adopted", externalId: adopted.externalId });
+      const adopted = adoptItem(db, target.bindingId, localId, reference, {
+        force: forcedAdopt.has(localId),
+        runId: run.runId,
+      });
+      report.adopted.push({ localId, externalId: adopted.externalId });
     }
 
-    // 5. Reconcile ambiguous creates by marker. Zero residue ⇒ zero listing calls.
-    //    An adopted row continues on the ordinary update path below, which is
-    //    what converges its content; an unresolved one is counted once here and
-    //    `pushItem` reports it as `unresolved` without writing anything. A
-    //    `--release` row joins this same scan: the flag acts only on a zero-match
-    //    result and drops the row to `failed`, so the candidate loop creates it.
-    const reconciled = await reconcilePendingCreate(db, provider, pushContext, {
-      release: released,
-      // The same bound the import loop stops at: one number, so the two scans
-      // cannot drift.
-      maxPages: DEFAULT_MAX_PAGES,
-    });
-    report.reconciled = reconciled.adopted;
-    for (const adopted of reconciled.adopted) {
-      report.items.push({ localId: adopted.localId, outcome: "reconciled", externalId: adopted.externalId });
+    // why: A release clears a pending create with no remote id after the operator
+    // confirmed no issue carries its marker (`ingest` is how that is checked: an
+    // associated issue records an external id, which makes this flag refuse).
+    if (released.size > 0) {
+      reconcileWith(db, push, [], { release: released });
+      report.released = [...released];
     }
-    // The scan's verdict on each residue IS the item's cause: it names the page
-    // bound the scan stopped at, where `pushItem`'s generic residue guard offers
-    // `--release` — the one flag a truncated scan refuses. Those ids are skipped
-    // in the candidate loop below, which would otherwise replace this cause and
-    // count the item twice.
-    const unattributed = new Set<string>();
-    for (const entry of reconciled.unresolved) {
-      unattributed.add(entry.localId);
-      report.unresolved += 1;
-      report.items.push({ localId: entry.localId, outcome: "unresolved", externalId: null, cause: entry.cause });
-    }
-    // The scan's own fact, carried to the envelope. Without it a truncated scan
-    // whose residue happened to be fully adopted reads as a complete one, and
-    // every consumer downstream believes the listing was read to its end.
-    if (reconciled.stoppedAtPageBound !== undefined) report.stoppedAtPageBound = reconciled.stoppedAtPageBound;
 
-    // 6. One write per candidate, classified by its receipt.
-    for (const candidate of selectPushCandidates(db, bindingId)) {
-      if (unattributed.has(candidate.localId)) continue;
-      const outcome: PushOutcome = await pushItem(db, provider, pushContext, candidate);
-      report[outcome.outcome]++;
+    for (const outcome of recordResults(db, push, parsed.results)) {
       report.items.push({
         localId: outcome.localId,
-        outcome: outcome.outcome,
+        // why: The CALLER'S word, echoed: `confirmed` stays `confirmed` whether the
+        // ledger landed `applied` or refused the entry as unclaimed; the ledger
+        // state it produced shows only in `counts`.
+        outcome: outcome.outcome === "applied" ? "confirmed" : outcome.outcome === "unconfirmed" ? "ambiguous" : "refused",
         externalId: outcome.externalId,
         ...(outcome.cause === undefined ? {} : { cause: outcome.cause }),
       });
+      if (outcome.outcome === "applied") report.counts.applied += 1;
+      else if (outcome.outcome === "unconfirmed") report.counts.unconfirmed += 1;
+      else report.counts.refused += 1;
     }
     return envelope(id, report);
   } finally {
-    // The run is released on EVERY exit — a completed push, a refused item, or a
-    // throw — and only when this run still holds it: a run taken over by
-    // `--take-run` names a token the successor does not carry, so its own
-    // `finally` deletes nothing and the next run's claim cannot report two
-    // holders.
-    if (run !== null) {
+    // why: The run ends on EVERY exit, and only when this run still holds it: a run a
+    // takeover replaced names a token the successor does not carry, and a lease
+    // merely borrowed for adoption coverage belongs to its holder, so neither is
+    // deleted here.
+    if (run !== null && !borrowedLease) {
       try {
-        releaseRun(handle.db, { bindingId, direction: PUSH_DIRECTION, runId: run.runId });
+        releaseRun(handle.db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, runId: run.runId });
       } catch {
-        // A release that cannot land must not mask the outcome that produced it;
-        // the row stays and the next run reports it as the holder.
+        // why: A release that cannot land must not mask the outcome that produced it.
       }
     }
     handle.close();
   }
 }
 
+/**
+ * Validate a listing the caller fetched. Unlike `--results`, an ill-formed
+ * listing is the caller's own defect and nothing has been written yet, so it is
+ * a usage refusal naming the entry - the association rule never sees a
+ * half-built record.
+ * why: a malformed listing is the caller's defect and must be refused before any ledger write.
+ */
+function parseRecords(raw: unknown): Array<{
+  externalId: string;
+  url: string;
+  title: string;
+  description: string;
+  state: string;
+  priority: string | null;
+  labels: string[];
+  updatedAt: string;
+}> {
+  if (!Array.isArray(raw)) {
+    throw new UsageError(
+      "--records must be a JSON array of {externalId, title, description, state, priority, labels, updatedAt} entries",
+    );
+  }
+  return raw.map((entry, index) => {
+    const name = "--records[" + index + "]";
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new UsageError(name + " is not a JSON object");
+    }
+    const record = entry as Record<string, unknown>;
+    const externalId = typeof record.externalId === "string" ? record.externalId.trim() : "";
+    if (externalId === "") throw new UsageError(name + " has no externalId");
+    const updatedAt = typeof record.updatedAt === "string" ? record.updatedAt.trim() : "";
+    if (updatedAt === "" || Number.isNaN(Date.parse(updatedAt))) {
+      throw new UsageError(name + " needs an ISO-8601 updatedAt; the ledger records it as the remote revision");
+    }
+    // why: title and state are not defaulted: a malformed record would become a fake
+    // drift report against real ledger facts, so it is refused per item instead.
+    const title = typeof record.title === "string" ? record.title.trim() : "";
+    if (title === "") throw new UsageError(name + " has no title; mstar never guesses remote content");
+    const state = typeof record.state === "string" ? record.state.trim() : "";
+    if (state === "") throw new UsageError(name + " has no state; the drift check compares it with the pushed payload");
+    const text = (value: unknown): string => (typeof value === "string" ? value : "");
+    const labels = Array.isArray(record.labels)
+      ? record.labels.filter((label): label is string => typeof label === "string")
+      : [];
+    return {
+      externalId,
+      url: text(record.url),
+      title,
+      description: text(record.description),
+      state,
+      priority: typeof record.priority === "string" ? record.priority : null,
+      labels,
+      updatedAt,
+    };
+  });
+}
+
+/** note: `ingest`'s envelope: the five association buckets, counted and listed. */
+type IngestEnvelope = IngestReport & {
+  projectId: string;
+  bindingId: string;
+  identity: { repo: string; author: string };
+  counts: { associated: number; drift: number; foreign: number; orphan: number; unmanaged: number };
+};
+
+/**
+ * note: Associate a listing with the local rows it mirrors. mstar makes no Linear call
+ * and writes no local issue: the ledger's association is the whole effect.
+ */
+async function runIngest(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
+  const target = await resolveTarget(invocation, input);
+  const records = parseRecords(await readJsonArgument(invocation, input.records, "--records"));
+  const handle = await openStore({ harnessDir: target.harnessDir }, "write");
+  try {
+    const report = ingestRecords(
+      handle.db,
+      { bindingId: target.bindingId, identity: target.identity, mapping: target.binding.mapping },
+      records,
+    );
+    const data: IngestEnvelope = {
+      projectId: target.projectId,
+      bindingId: target.bindingId,
+      identity: target.identity,
+      ...report,
+      counts: {
+        associated: report.associated.length,
+        drift: report.drift.length,
+        foreign: report.foreign.length,
+        orphan: report.orphan.length,
+        unmanaged: report.unmanaged.length,
+      },
+    };
+    return envelope(id, data);
+  } finally {
+    handle.close();
+  }
+}
+
 export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
   const descriptions: Record<Verb, string> = {
-    import:
-      "Import the bound Linear project's issues into this store, read-only toward Linear; a second run with unchanged remote state imports nothing. --max-pages bounds one run (default 20 pages of 50) and the reported cursor resumes it. An issue Linear returns without a usable title/identifier is reported as stranded and the scan continues; repair it in Linear's UI and the next full scan picks it up.",
-    push:
-      "Push this project's local issues to the bound Linear team: create when no remote identity is known, update when a confirmed one exists, skip when the payload is unchanged. ONE push run per binding: a second is refused, naming the holder and both exits - wait, or --take-run. An unconfirmed create stays pending and the next run reconciles it by correlation marker — never by title/description — so nothing creates again while that attempt is unresolved. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself and, when that replaces a different recorded id, clears the old identity's proof; --force-adopt <localId> allows replacing an identity that is already recorded; --release <localId> releases a pending create with no remote id after this run's reconcile scan found no issue carrying its marker, so the same run creates it - a scan that finds a match refuses the release, because that item's recovery is adoption. Requires a credential granted read + issues:create.",
+    pending:
+      "Plan this project's local issues for the host's Linear tools. NOTHING IS SENT: mstar makes no Linear call, holds no Linear credential and opens no socket. Run this first, then write each item with your own Linear MCP tools (discover their names at runtime) and finish with `issue-sync apply`. Each item carries localId, operation (create when the ledger holds no remote identity yet, update when it does), externalId, the payload to write, and the marker that must stay the LAST line of the description verbatim - it is how a later listing is associated with this local issue. `requestHash` is the skip key: an item whose ledger hash equals it is under `skipped` because the remote already says this, so it costs no tool call; `unresolved` names an unconfirmed earlier create that reconciliation must associate before anything creates again.",
+    apply:
+      "Record what your Linear tools reported for the items `issue-sync pending` planned, one entry per item: {localId, outcome, externalId?, remoteUpdatedAt?, cause?}. outcome `confirmed` proves delivery and names the remote issue (externalId) plus its revision when the tool returns one; `refused` means provably NOT delivered (a validation or permission error), so the item stays retryable; `ambiguous` means sent but unconfirmed - a create keeps its pending residue and the next ingest associates it by marker, never by guessing a second create. An unknown localId, an entry this run never planned, or a missing field is that entry's refusal in the report, not a failed run. The report echoes your word: `items[].outcome` is the `confirmed`/`refused`/`ambiguous` you sent, while `counts` groups the LEDGER states each produced (`applied`/`unconfirmed`/`refused`) - the two vocabularies are never mixed in one field. `--results` takes a file path or `-` for stdin, and [] records nothing. --adopt <localId>=<issueUrl|externalId> records an identity you confirmed yourself, BEFORE your results are recorded - so for an item named in both, the adopt wins and the entry's `confirmed` must repeat the adopted id or it is refused as a conflict; --force-adopt allows replacing one the row already records; --release <localId> clears a pending create with no remote id after ingest showed no issue carrying its marker (an associated issue records an id, which makes the flag refuse). ONE run per binding, continued from pending and ended here; --take-run replaces a holder you confirmed dead.",
+    ingest:
+      "Associate a listing your Linear tools returned with the local issues those remote issues mirror. --records takes a file path or - for stdin: [{externalId, url, title, description, state, priority, labels, updatedAt}]. The key is the marker in the description - repo=<owner/name>, local=<issue-id>, author=<Name <email>> - and repo must be this repository, local must exist here, and author must be this checkout's git author. Five buckets, one entry each (localId, externalId, url, and a cause when it is not a clean association): associated (recorded in the ledger, converged), drift (needs your judgement, nothing rewritten: the remote content no longer matches what mstar last confirmed, two remote issues claim one local issue, or the ledger row cannot take the association because a released create left it failed - the cause names the recovery), foreign (another operator's clone of this repository pushed it), orphan (the local issue is gone), unmanaged (no marker, a marker of the retired format, or another repository's - never adopted by title). No local issue is created, updated or closed.",
   };
   return verbs.map((verb) => {
-    const id = `issue-sync.${verb}`;
-    const opts = options[verb];
-    const requirements: CommandRequirement[] = (["cli", "mcp"] as const).flatMap((route): CommandRequirement[] => [
-      ...required[verb].map((name) => ({ name, ownership: "caller" as const, route, required: true })),
-      ...(verb === "import"
-        ? [{
-            name: "maxPages",
-            ownership: "caller" as const,
-            route,
-            required: false,
-            constraint: `optional: bounds one run at <n> pages of 50 items (default ${DEFAULT_MAX_PAGES}); a re-run resumes from the reported cursor`,
-          }]
-        : [
-            {
-              name: "adopt",
-              ownership: "caller" as const,
-              route,
-              required: false,
-              constraint: "optional, repeatable: <localId>=<issueUrl|externalId> for a remote issue you confirmed belongs to that local issue",
-            },
-            {
-              name: "forceAdopt",
-              ownership: "caller" as const,
-              route,
-              required: false,
-              constraint:
-                "optional, repeatable: <localId> that must also appear in --adopt, allowing the already-recorded remote identity to be replaced by that entry; without it a different reference is refused",
-            },
-            {
-              name: "release",
-              ownership: "caller" as const,
-              route,
-              required: false,
-              constraint:
-                "optional, repeatable: <localId> whose `pending` create with no remote id you are releasing after this run's reconcile scan found no issue carrying its marker; a scan that finds a match refuses it (that is adoption)",
-            },
-            {
-              name: "takeRun",
-              ownership: "caller" as const,
-              route,
-              required: false,
-              constraint: "optional: take the push run over from the holder a `sync.run-held` refusal named, once you confirmed it dead",
-            },
-          ]),
-    ]);
+    const id = "issue-sync." + verb;
+    const requirements: CommandRequirement[] = (["cli", "mcp"] as const).flatMap((route): CommandRequirement[] =>
+      options[verb].map((key) => ({
+        name: key,
+        ownership: "caller" as const,
+        route,
+        required: required[verb].includes(key),
+        ...(variadicOptions[key] === true ? { constraint: "optional, repeatable: one local item per value" } : {}),
+      })),
+    );
     return {
       id,
       cli: {
         path: ["issue-sync", verb],
         aliases: [],
         arguments: [],
-        options: opts.map((key) => ({
+        options: options[verb].map((key) => ({
           key,
           flags: flags[key],
           required: required[verb].includes(key),
-          ...(key === "maxPages" ? { defaultValue: DEFAULT_MAX_PAGES } : {}),
           ...(variadicOptions[key] === true ? { variadic: true } : {}),
         })),
       },
@@ -918,12 +868,18 @@ export function getIssueSyncCommandDefinitions(): readonly CommandDefinition[] {
       requirements,
       async execute(value: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
         try {
-          return verb === "push" ? await runPush(id, value, invocation) : await runImport(id, value, invocation);
+          if (verb === "pending") return await runPending(id, value, invocation);
+          if (verb === "apply") return await runApply(id, value, invocation);
+          return await runIngest(id, value, invocation);
         } catch (error) {
-          if (error instanceof SyncError) return refusalFor(id, error.code, error.message.replace(/^\[[^\]]+\]\s*/, ""));
+          // shortcut: the wrapper picks the recovery from its per-code RECOVERY map, so a
+          // wrapper call site has no provable recovery argument; exemption under I-000872.
+          // upgrade: when the prover resolves a wrapper's own map lookup, drop the exemption.
+          if (error instanceof SyncError) return refusalFor(id, error.code, stripCode(error.message));
           return failure(id, error);
         }
       },
     } satisfies CommandDefinition;
   });
 }
+

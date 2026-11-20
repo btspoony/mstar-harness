@@ -8,16 +8,10 @@
  * checkout, with an absolute path, in a shell. MCP is for the runtime surface
  * (plans, workflows, issues, ledger reads), so these are not published there.
  *
- * `linear.auth` is here for a different reason: completing it needs a human in a
- * browser, and it writes a credential into host state. A tool call on a shared
- * connection can do neither — it would block on an authorization nobody is
- * watching, or store a token the operator never granted. The operator runs it in
- * a shell on the machine that will hold the credential.
- *
  * Diagnosis is unaffected: `status validate` reports which workflows exist and
  * who holds them by role and epoch.
  */
-const CLI_ONLY_PREFIXES = ["store.", "linear.auth"] as const;
+const CLI_ONLY_PREFIXES = ["store."] as const;
 
 /** True when a command is store-level and therefore CLI-only. */
 export function isCliOnlyCommand(id: string): boolean {

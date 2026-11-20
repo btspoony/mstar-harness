@@ -61,11 +61,19 @@ All leaf executors share this hard rule (role-specific sibling lists stay in eac
 - Complete assigned work in this session.
 - Do not recursively dispatch sibling roles unless explicitly authorized via `Delegation: allowed (...)`.
 - `Execute as: {role_id}` is identity lock, not orchestration permission.
-- If required inputs are missing or prerequisites unmet, return `Blocked` to PM rather than inventing delegation.
+- If required inputs are missing or prerequisites unmet, return `Blocked` to PM (or the direct caller — § Direct invocation) rather than inventing delegation.
+
+## Direct invocation
+
+A role whose reference has a `## Direct invocation` section (`code-reviewer`, `ops-engineer`) also accepts work from a direct caller — a user or a standalone Bot running that role — without a PM Assignment. Every other leaf role takes work only through a PM Assignment; a direct request to one returns `Blocked`, naming PM dispatch as the way forward. Identity, NEVER rules, anti-recursion red lines and `Delegation` semantics are unchanged: `mstar-dispatch-gates` reads a direct call as `Execute as: {that role}` with `Delegation: forbidden` unless the caller writes `Delegation: allowed (...)`, and the role's NEVER rules stand in for the Assignment's `You MUST NOT` block.
+
+- The caller's request is the Assignment: every field the role needs and the request leaves unset is asked for once, all together, before work starts; a missing field is never guessed.
+- Each `Blocked` / `PM` routing for refusals, ⚠️ items and reports in this file and the role file goes to the caller, with the cause and the input that resolves it.
+- The caller is not a coordinator: no plan selection, workflow/store writes, acceptance or `Done`; a plan-scoped request is `Blocked` pending PM dispatch.
 
 ## Shared anti-recursion NEVER
 
-All leaf executors share these anti-recursion red lines (role-specific sibling lists and role-specific NEVER variants stay in each role file). If any item below matches, **stop** and return `Blocked` to `project-manager` instead of inventing delegation:
+All leaf executors share these anti-recursion red lines (role-specific sibling lists and role-specific NEVER variants stay in each role file). If any item below matches, **stop** and return `Blocked` to `project-manager` (or the direct caller — § Direct invocation) instead of inventing delegation:
 
 - **NEVER** treat document-level parallelism ("split into N plans", "Plan 002–010", "Phase X ∥ Phase Y", "N parallel tracks") as permission to **invoke N subagents** in this session. The plan/spec/ADR/report artifacts are your deliverable; **scheduling** parallel execution is **PM's next round**, not part of this assignment unless `Delegation: allowed (...)` explicitly lists callees.
 - NEVER treat Handoff lines, role names inside Completion Report templates, routing tables, or "suggested owner" groupings as **host invoke commands**; they are **narrative**, not authorization.

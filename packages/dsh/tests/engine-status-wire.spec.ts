@@ -19,10 +19,6 @@ import { describe, expect, it } from 'bun:test'
 import {
   DASHBOARD_VIEW_ENDPOINT,
   ENGINE_STATUS_CHANNEL,
-  LINEAR_AUTHORIZE_BEGIN_ENDPOINT,
-  LINEAR_AUTHORIZE_CANCEL_ENDPOINT,
-  LINEAR_AUTHORIZE_STATUS_ENDPOINT,
-  LINEAR_STATUS_ENDPOINT,
   PANEL_SNAPSHOT_ENDPOINT,
   MILESTONE_ADD_ENDPOINT,
   MILESTONE_ASSIGN_ENDPOINT,
@@ -40,7 +36,7 @@ function contributedEndpoints(): string[] {
 }
 
 describe('panel wire addresses — one declaration, both halves', () => {
-  it('the host contribution serves the picker write, the store-backed read, the per-view read and the Linear card', () => {
+  it('the host contribution serves the picker write, the store-backed read, the per-view read and the milestone writes', () => {
     expect(contributedEndpoints()).toEqual([
       SELECT_WORKFLOW_ENDPOINT,
       PANEL_SNAPSHOT_ENDPOINT,
@@ -49,10 +45,6 @@ describe('panel wire addresses — one declaration, both halves', () => {
       MILESTONE_UPDATE_ENDPOINT,
       MILESTONE_ASSIGN_ENDPOINT,
       MILESTONE_REMOVE_ENDPOINT,
-      LINEAR_STATUS_ENDPOINT,
-      LINEAR_AUTHORIZE_BEGIN_ENDPOINT,
-      LINEAR_AUTHORIZE_STATUS_ENDPOINT,
-      LINEAR_AUTHORIZE_CANCEL_ENDPOINT,
     ])
   })
 

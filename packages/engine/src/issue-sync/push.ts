@@ -1,97 +1,85 @@
 /**
- * issue-sync/push.ts — the one-way push direction over the sync ledger.
+ * note: issue-sync/push.ts — the one-way push direction over the sync ledger.
  *
- * What this module owns, and what it deliberately refuses to claim:
+ * mstar performs no external call here. An agent holding the host's Linear tools
+ * does the writing; this module owns the local half of the run:
  *
- * - CANDIDATES are the bound project's local issues (`provider = 'local'`).
- *   Each is normalized through the shared field mapping into one provider
- *   payload and hashed. The hash is the SKIP RULE — equal hash means the remote
- *   content is already what local says, so nothing is written. It is NOT an
- *   exactly-once proof: the hash is computed from local content, and only a
- *   confirmed receipt (or an operator `--adopt`) ever records an external id.
- * - A CONFIRMED create/update is the only thing that writes `external_id`.
- *   `ambiguous` leaves the row `pending` with no id: the caller must reconcile.
- * - AMBIGUOUS CREATE RECOVERY is marker equality, never prose. Every pushed
- *   description ends with `<!-- mstar-sync: <workspace>/<team>/<storeId>/<localId> -->`;
- *   the store id is the pushing store's random `store_meta.store_id`, so two
- *   harness stores mirroring one team never adopt each other's rows. A unique
- *   title+description match proves nothing about ownership and is never adopted.
- * - The listing is used ONLY for reconciliation. A run with no ambiguous
- *   residue issues zero listing calls.
+ * - CANDIDATES are the bound project's local issues ('provider = local').
+ *   Each is normalized through the shared field mapping into one payload and
+ *   hashed. The hash is the SKIP RULE — equal hash means the remote content is
+ *   already what local says, so nothing is due. It is NOT an exactly-once proof:
+ *   the hash is computed from local content, and only a confirmed result (or an
+ *   operator '--adopt') ever records an external id.
+ * - PLANNING records intent. 'planItem' claims the create BEFORE the caller's
+ *   tool call, so an unconfirmed result leaves a 'pending' residue a later run
+ *   reconciles instead of creating twice.
+ * - A CONFIRMED result is the only thing that writes 'external_id'.
+ *   'ambiguous' leaves a create 'pending' with no id: the caller must reconcile.
+ * - AMBIGUOUS CREATE RECOVERY is marker equality, never prose. Every payload
+ *   description ends with the marker 'marker.ts' encodes — this repository's
+ *   'owner/name', the local issue id, and the pushing checkout's git author — so
+ *   another clone of the same repository never adopts this store's rows by
+ *   accident, and a unique title+description match proves nothing about
+ *   ownership and is never adopted.
  *
- * THE RUN LEASE IS NOT CONCURRENCY. `mstar issue-sync push` holds one lease per
- * binding (`sync_runs`), and every ledger write this module performs carries the
- * run token, so a run that a `--take-run` predecessor replaced has its later
- * writes refused (`sync.run-taken`) instead of applied. What that buys is
- * bounded, and the bound is the honest claim:
- * - No RUNNING `push`'s create can be in flight beside this one's, because only
- *   one run holds the direction.
- * - A request already SENT by a holder that died mid-call may still land at the
- *   provider after the successor has scanned. Nothing here can recall it, which
- *   is why reconcile-by-correlation-marker remains the FIRST recovery and why a
- *   `pending` residue is never created over.
+ * THE RUN LEASE IS NOT CONCURRENCY. One lease per binding ('sync_runs') is held
+ * by the pending/apply pair, and every ledger write carries the run token, so a
+ * run that a '--take-run' predecessor replaced has its later writes refused
+ * ('sync.run-taken') instead of applied. What that buys is bounded, and the
+ * bound is the honest claim:
+ * - No RUNNING run's create can be in flight beside this one's, because only one
+ *   run holds the direction.
+ * - A tool call already ISSUED by a holder that died mid-call may still land at
+ *   the remote after the successor has planned. Nothing here can recall it,
+ *   which is why reconcile-by-correlation-marker remains the FIRST recovery and
+ *   why a 'pending' residue is never created over.
  * - Taking the run over from a LIVE holder is unsafe: the takeover cannot stop
- *   the predecessor's in-flight write, only its later ones. `--take-run` is for a
- *   holder the operator confirmed is dead.
+ *   the predecessor's in-flight call, only its later ledger writes. '--take-run'
+ *   is for a holder the operator confirmed is dead.
  *
- * Credential-free by construction: the provider is injected and carries its own
- * transport; nothing here reads a token.
+ * Credential-free by construction: no transport, no token, and no machine path
+ * reaches this module.
  */
 import { createHash } from "node:crypto";
 import type { StoreDb } from "../store-db.js";
 import type { Disposition, IssueKind, Severity } from "../issue.js";
 import type { LinearFacetMapping } from "../mstarc.js";
-import { SyncError, claimItem, markApplied, markFailed, markUnconfirmed, planItem, readItem, recordRefusal, requireRunLease, type SyncItem } from "../issue-sync.js";
-import { defaultStateOfDisposition, providerPayloadFields } from "./field-mapping.js";
-import type { IssueProvider, ProviderWrite, ProviderWritePayload } from "./provider.js";
+import {
+  isOlderInstant,
+  SyncError,
+  claimItem,
+  markApplied,
+  markFailed,
+  markUnconfirmed,
+  planItem as openLedgerCycle,
+  readItem,
+  readRun,
+  recordRefusal,
+  requireRunLease,
+  type SyncItem,
+} from "../issue-sync.js";
+import { providerPayloadFields } from "./field-mapping.js";
+import { decodeMarker, encodeMarker } from "./marker.js";
+import type { ProviderItem, ProviderWritePayload } from "./provider.js";
 
 /** The only direction this module drives. */
 export const PUSH_DIRECTION = "push" as const;
 
-/**
- * The `.mstarc` connection facts the marker is composed from, plus the store
- * identity. `workspace` is omitted from the marker when unset.
- */
-export type PushBinding = { workspace: string; team: string };
-
-/** Everything one item push needs that is not local content. */
+/** Everything one item plan needs that is not local content. */
 export type PushContext = {
-  /** `"linear:<project_id>"`, the ledger's binding key. */
+  /** note: '"linear:<project_id>"', the ledger's binding key. */
   bindingId: string;
-  binding: PushBinding;
-  /** The pushing store's stable identity (`store_meta.store_id`). */
-  storeId: string;
+  /** note: This checkout's repository identity and git author, stamped into the marker. */
+  identity: { repo: string; author: string };
   mapping?: LinearFacetMapping;
   /**
-   * The label names the workspace really has, discovered once per run. Only a
-   * name in this set is ever sent; a mapped name outside it refuses the ITEM.
-   */
-  labels: ReadonlySet<string>;
-  /**
-   * The workflow state names the bound team really has, discovered once per
-   * run alongside the labels. Push never creates or renames a state, so a
-   * mapped name outside it refuses the ITEM here instead of every item failing
-   * at the provider.
-   */
-  states: ReadonlySet<string>;
-  /**
-   * The run lease this push holds (`RunLease.runId`). Every ledger write this
-   * run performs carries it, so a run that `--take-run` replaced mid-flight has
-   * its later writes REFUSED (`sync.run-taken`) instead of applied — the lease
+   * note: The run lease this run holds ('RunLease.runId'). Every ledger write this
+   * run performs carries it, so a run that '--take-run' replaced mid-flight has
+   * its later writes REFUSED ('sync.run-taken') instead of applied — the lease
    * check at acquisition cannot cover a write the predecessor had not made yet.
    * Omitted by a caller with no lease, which is the same path import takes.
    */
   runId?: string;
-};
-
-export type PushOutcomeKind = "created" | "updated" | "skipped" | "unresolved" | "failed";
-
-export type PushOutcome = {
-  localId: string;
-  outcome: PushOutcomeKind;
-  externalId: string | null;
-  /** Credential-free cause for `unresolved` / `failed`. */
-  cause?: string;
 };
 
 /** One local issue, with the content a payload needs. */
@@ -106,8 +94,54 @@ export type PushCandidate = {
 };
 
 /**
+ * One item ready to be written by the caller's own tools: the payload, the
+ * marker its description carries, and the hash the skip rule compares.
+ */
+export type PushPlan = {
+  localId: string;
+  /** note: 'create' when the ledger holds no identity for this item yet. */
+  operation: "create" | "update";
+  externalId: string | null;
+  payload: ProviderWritePayload;
+  /** note: The marker the description ends with, reported so a caller can check it. */
+  marker: string;
+  requestHash: string;
+};
+
+/** What planning one candidate produced. */
+export type PlanOutcome =
+  | { outcome: "planned"; plan: PushPlan }
+  | { outcome: "skipped"; localId: string; externalId: string; reason: string }
+  | { outcome: "unresolved"; localId: string; cause: string };
+
+/**
+ * What the caller's tool reported for one item. 'refused' is provably NOT
+ * delivered (safe to retry); 'ambiguous' was sent but unconfirmed, so a retry
+ * could duplicate a create and the caller must reconcile instead; 'confirmed'
+ * carries the identity the remote actually returned.
+ */
+export type PushResult = {
+  localId: string;
+  outcome: "confirmed" | "refused" | "ambiguous";
+  externalId?: string | null;
+  url?: string | null;
+  /** note: ISO-8601 instant the remote reports for the written issue. */
+  remoteUpdatedAt?: string | null;
+  /** note: The tool's own cause text, for 'refused' and 'ambiguous'. */
+  cause?: string | null;
+};
+
+/** What recording one result proved, per ledger verb. */
+export type PushOutcome = {
+  localId: string;
+  outcome: "applied" | "unconfirmed" | "refused";
+  externalId: string | null;
+  cause?: string;
+};
+
+/**
  * The bound project's pushable issues: local captures, never imported mirrors.
- * An imported row's `provider` is `linear`, so the import direction can never
+ * An imported row's 'provider' is 'linear', so the import direction can never
  * echo its own mirror back as a create.
  */
 export function selectPushCandidates(db: StoreDb, bindingId: string): PushCandidate[] {
@@ -120,35 +154,22 @@ export function selectPushCandidates(db: StoreDb, bindingId: string): PushCandid
     .all(projectId) as PushCandidate[];
 }
 
-/** `"<provider>:<project_id>"` → the store project id (`sync.invalid-input` otherwise). */
+/** note: The content of one local issue, for the ledger write that names it. */
+function candidateOf(db: StoreDb, localId: string): PushCandidate | null {
+  return (
+    (db
+      .prepare("select id as localId, title, kind, severity, disposition, impact, acceptance from issues where id = ?")
+      .get(localId) as PushCandidate | undefined) ?? null
+  );
+}
+
+/** note: '"<provider>:<project_id>"' → the store project id ('sync.invalid-input' otherwise). */
 function projectIdOf(bindingId: string): string {
   const prefix = "linear:";
   if (typeof bindingId !== "string" || !bindingId.startsWith(prefix) || bindingId.length === prefix.length) {
-    throw new Error(`[sync.invalid-input] bindingId must be "linear:<project_id>"; push drives one Linear binding`);
+    throw new Error('[sync.invalid-input] bindingId must be "linear:<project_id>"; push drives one Linear binding');
   }
   return bindingId.slice(prefix.length);
-}
-
-/**
- * The mstar-owned correlation marker. Application identity only: no token, no
- * path, nothing that exists solely on this machine.
- */
-export function correlationMarker(binding: PushBinding, storeId: string, localId: string): string {
-  const parts = [binding.workspace, binding.team, storeId, localId].filter((part) => part.trim() !== "");
-  return `<!-- mstar-sync: ${parts.join("/")} -->`;
-}
-
-/**
- * The marker one description carries, or null when it carries none. The LAST
- * match wins: a description that quotes a marker in operator text must not let
- * the quoted occurrence decide the identity.
- */
-function markerIn(description: string): string | null {
-  let last: string | null = null;
-  for (const match of description.matchAll(/<!--\s*mstar-sync:\s*([^\n]*?)\s*-->/g)) {
-    last = `<!-- mstar-sync: ${match[1]!.trim()} -->`;
-  }
-  return last;
 }
 
 /**
@@ -171,69 +192,44 @@ export function requestHash(payload: ProviderWritePayload): string {
 }
 
 /**
- * The send-right key for one create: binding, item and content hash.
+ * note: The send-right key for one create: binding, item and content hash.
  *
  * Deliberately NOT keyed on the ledger revision, which every refusal, failure
  * and apply advances. Revision keying existed only to discriminate attempts by
  * making a bypass mint a different key — and it could not cover the window where
  * the predecessor's own claim advanced it, which is the wedge three review rounds
  * found. The run lease is what separates RUNNING attempts now, so
- * the key is a stable per-residue identity: a re-run of the same item can never
- * mint a new key mid-attempt, and `claimItem` re-opens the cycle under this same
+ * the key is a stable per-residue identity: a re-plan of the same item can never
+ * mint a new key mid-attempt, and 'claimItem' re-opens the cycle under this same
  * key when the previous attempt ended.
  */
 function createClaimId(bindingId: string, localId: string, hash: string): string {
-  return `linear-push:${bindingId}:${localId}:create:${hash}`;
+  return "linear-push:" + bindingId + ":" + localId + ":create:" + hash;
 }
 
 /** Markdown description: the two local sections that have no remote field, then the marker. */
 function descriptionFor(candidate: PushCandidate, marker: string): string {
-  return `## Impact\n\n${candidate.impact}\n\n## Acceptance\n\n${candidate.acceptance}\n\n${marker}`;
+  return "## Impact\n\n" + candidate.impact + "\n\n## Acceptance\n\n" + candidate.acceptance + "\n\n" + marker;
 }
 
 /**
- * Push one item and record exactly what the receipt proved.
+ * note: The payload, marker, hash and kind label of one candidate.
  *
- * Ledger protocol (contract §"Ledger protocol"), by the row's state:
- * - no row → `claimItem` (pending, send right) → create
- * - `failed` without an id → claim the retry, then create (only a refusal or a
- *   pre-send refusal writes `failed`, so delivery was never confirmed)
- * - `pending` without an id → unresolved: reconcile first; without an adoption
- *   this run reports `unresolved` and NEVER creates. This guard runs BEFORE any
- *   current-attempt preflight: a label failure now says nothing about whether
- *   the earlier request was delivered.
- * - `applied` with an id and an equal hash → `skipped`, zero write calls
- * - otherwise (an id exists) → update
+ * An existing identity makes the update replace EXACTLY the labels this tool may
+ * own: an unconfirmed earlier update can leave more than one of them on the
+ * remote, so every recorded label except the desired one is removed (removing an
+ * absent label is a no-op). Unknown ownership (none recorded) only adds.
  */
-export async function pushItem(db: StoreDb, provider: IssueProvider, context: PushContext, candidate: PushCandidate): Promise<PushOutcome> {
-  const ledger = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId: candidate.localId });
-  const externalId = ledger?.externalId ?? null;
-  // A `pending` row with no id is the residue of a create nobody confirmed. Its
-  // state is the ONLY record that a remote issue may exist, so a refusal later
-  // in this attempt must not consume it (see `failed`).
-  const ambiguousResidue = externalId === null && ledger?.itemState === "pending";
-  if (ambiguousResidue) {
-    // An unresolved create. Adopting it is reconcile's job; creating again
-    // could duplicate the remote issue, which is the one thing this direction
-    // must never do. Checked before the label preflight so a preflight failure
-    // for THIS attempt cannot erase a historical ambiguity. When the operator's
-    // own reconcile scan finds no match, `--release <localId>` clears the row to
-    // the retryable `failed` edge, which is the one exit for proven absence.
-    //
-    // Nothing lifts this guard. The lease means no RUNNING create can be in
-    // flight beside this one, so the row is a CRASHED attempt's residue — and a
-    // request that crashed attempt already sent may still land, so no flag can
-    // assert that no remote issue exists, which is the only thing that would
-    // make a second create safe.
-    return {
-      localId: candidate.localId,
-      outcome: "unresolved",
-      externalId: null,
-      cause:
-        "a previous create was never confirmed; the next run reconciles it by correlation marker, or name its remote issue with --adopt <localId>=<issueUrl|externalId>. When that scan finds no match, --release <localId> releases the residue so the next push may create",
-    };
-  }
-  const marker = correlationMarker(context.binding, context.storeId, candidate.localId);
+function planOf(
+  context: PushContext,
+  candidate: PushCandidate,
+  ledger: SyncItem | null,
+): { marker: string; payload: ProviderWritePayload; hash: string; kindLabel: string } {
+  const marker = encodeMarker({
+    repo: context.identity.repo,
+    localId: candidate.localId,
+    author: context.identity.author,
+  });
   const fields = providerPayloadFields(candidate, context.mapping);
   const payload: ProviderWritePayload = {
     title: candidate.title,
@@ -242,166 +238,286 @@ export async function pushItem(db: StoreDb, provider: IssueProvider, context: Pu
     state: fields.state,
     labels: [fields.label],
   };
-  const hash = requestHash(payload);
+  if (ledger?.externalId !== null && ledger?.externalId !== undefined) {
+    const stale = ledger.lastKindLabels.filter((label) => label !== fields.label);
+    if (stale.length > 0) payload.removeLabels = stale;
+  }
+  return { marker, payload, hash: requestHash(payload), kindLabel: fields.label };
+}
 
-  // The skip rule comes FIRST. When the ledger already proves the remote says
-  // exactly this, nothing will be written — so a label or state that has since
-  // left the workspace must not turn that into a `failed` row, which would
-  // overwrite the applied row with an error it never earned.
+/**
+ * Plan one item: claim the create, build the payload, and apply the skip rule.
+ * No external call — the caller performs the write with its own tools.
+ *
+ * By the row's state:
+ * - 'pending' without an id → unresolved: reconcile first; without an adoption
+ *   this run reports 'unresolved' and NEVER plans a create. This guard answers
+ *   before anything else, because the row IS the only record that a remote issue
+ *   may exist.
+ * - 'applied' with an id and an equal hash → 'skipped', nothing due
+ * - otherwise (an id exists) → update
+ * - no row or a retryable 'failed' → claim the create, then plan it
+ */
+export function planItem(db: StoreDb, context: PushContext, candidate: PushCandidate): PlanOutcome {
+  const localId = candidate.localId;
+  requireRunLease(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, runId: context.runId });
+  const ledger = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
+  const externalId = ledger?.externalId ?? null;
+  // why: A 'pending' row with no id is the residue of a create nobody confirmed. Its
+  // state is the ONLY record that a remote issue may exist, so nothing in this
+  // attempt may consume it.
+  if (externalId === null && ledger?.itemState === "pending") {
+    // why: An unresolved create. Adopting it is reconciliation's job; planning
+    // another create could duplicate the remote issue, which is the one thing
+    // this direction must never do. When the operator's own reconcile finds no
+    // match, '--release <localId>' clears the row to the retryable 'failed' edge,
+    // which is the one exit for proven absence.
+    //
+    // Nothing lifts this guard. The lease means no RUNNING create can be in
+    // flight beside this one, so the row is a CRASHED attempt's residue — and a
+    // tool call that crashed attempt already issued may still land, so no flag
+    // can assert that no remote issue exists, which is the only thing that would
+    // make a second create safe.
+    return {
+      localId,
+      outcome: "unresolved",
+      cause:
+        "a previous create was never confirmed; the next reconcile adopts it by correlation marker, or name its remote issue with --adopt <localId>=<issueUrl|externalId>. When that listing finds no match, --release <localId> releases the residue so the next plan may create",
+    };
+  }
+  const { marker, payload, hash } = planOf(context, candidate, ledger);
+
+  // why: The skip rule comes FIRST. When the ledger already proves the remote says
+  // exactly this, nothing is due.
   if (externalId !== null && ledger?.itemState === "applied" && ledger.lastRequestHash === hash) {
-    return { localId: candidate.localId, outcome: "skipped", externalId };
-  }
-  // Both mapped names are resolved against what the workspace HAS, before the
-  // call. Push never creates a provider label or state, so an absent name
-  // refuses this item only — and a renamed workflow state is diagnosed here
-  // instead of failing every item at the provider.
-  if (!context.states.has(fields.state)) {
-    // The mapping key is the DEFAULT REMOTE name (`Canceled`), not the local
-    // disposition: that is the key `stateOfDisposition` reads. `waived`,
-    // `duplicate` and `superseded` all collapse onto it, so the message says so
-    // instead of naming a key nobody reads.
-    const mappingKey = defaultStateOfDisposition(candidate.disposition);
-    return failed(
-      db,
-      context,
-      candidate.localId,
-      "linear.state-unresolved",
-      `the team has no workflow state named ${JSON.stringify(fields.state)}; push never creates states. Create or rename it in Linear's workflow settings, or redirect it through [linear.mapping] disposition.${mappingKey}=<name>${mappingKey === candidate.disposition ? "" : ` (keyed by the default target, which ${candidate.disposition} maps to)`}.`,
-      ledger,
-      undefined,
-    );
-  }
-  if (!context.labels.has(fields.label)) {
-    return failed(
-      db,
-      context,
-      candidate.localId,
-      "linear.label-unresolved",
-      `the workspace has no label named ${JSON.stringify(fields.label)}; push never creates labels. Create it in Linear's UI, or redirect it through [linear.mapping] kind.${candidate.kind}=<name>.`,
-      ledger,
-      undefined,
-    );
+    return { outcome: "skipped", localId, externalId, reason: "unchanged" };
   }
   if (externalId !== null) {
-    // A changed kind replaces EXACTLY the labels this tool may own. An
-    // unconfirmed earlier update can leave more than one of them on the remote,
-    // so every recorded label except the desired one is removed (removing an
-    // absent label is a no-op). Unknown ownership (none recorded) only adds.
-    const recorded = ledger?.lastKindLabels ?? [];
-    const stale = recorded.filter((label) => label !== fields.label);
-    if (stale.length > 0) payload.removeLabels = stale;
-    return apply(db, provider, context, candidate.localId, { kind: "update", externalId, payload }, hash, fields.label, ledger);
+    return { outcome: "planned", plan: { localId, operation: "update", externalId, payload, marker, requestHash: hash } };
   }
 
-  // No row or a retryable failure: this is a create. Intent is recorded BEFORE
-  // the write so an ambiguous result leaves a durable residue to reconcile
-  // against.
+  // why: This is a create. Intent is recorded BEFORE the caller issues the call, so an
+  // unconfirmed result leaves a durable residue to reconcile against.
   //
   // The claim is the intent record, not the concurrency arbiter: the run lease
   // means no RUNNING second run exists to race this create, so the key is a
-  // stable per-residue identity — binding, item, content — and a re-run of the
+  // stable per-residue identity — binding, item, content — and a re-plan of the
   // same item opens the cycle under that same key rather than minting a new one.
-  // A `pending` claim is still refused here (the residue guard above answers
-  // first), so a crashed attempt's send right is never
-  // silently taken twice.
+  // A 'pending' claim is still refused here (the residue guard above answers
+  // first), so a crashed attempt's send right is never silently taken twice.
   const claim = claimItem(db, {
     bindingId: context.bindingId,
     direction: PUSH_DIRECTION,
-    localId: candidate.localId,
-    operationId: createClaimId(context.bindingId, candidate.localId, hash),
+    localId,
+    operationId: createClaimId(context.bindingId, localId, hash),
     ...(context.runId === undefined ? {} : { runId: context.runId }),
   });
   if (!claim.claimed) {
     return {
-      localId: candidate.localId,
+      localId,
       outcome: "unresolved",
-      externalId: claim.item.externalId,
-      cause: "this create could not take the send right; the ledger's row decides the outcome and reconciliation resolves it",
+      cause:
+        "this create could not take the send right because the ledger's row already decides it; nothing was sent for this item. " +
+        "Run 'mstar issue-sync ingest' with a listing so an issue carrying this item's marker is associated with it, or record the identity with " +
+        "'mstar issue-sync apply --adopt <localId>=<issueUrl|externalId>'",
     };
   }
-  return apply(db, provider, context, candidate.localId, { kind: "create", payload }, hash, fields.label, ledger);
-}
-
-/** Send one write and record its classification; the row's identity comes only from `confirmed`. */
-async function apply(
-  db: StoreDb,
-  provider: IssueProvider,
-  context: PushContext,
-  localId: string,
-  write: ProviderWrite,
-  hash: string,
-  kindLabel: string,
-  ledger: SyncItem | null,
-): Promise<PushOutcome> {
-  const entryRevision = ledger?.revision ?? 0;
-  const opId = (step: string): string => `linear-push:${context.bindingId}:${localId}:${step}:${hash}:${entryRevision}`;
-  // Checked BEFORE the request leaves as well as inside each ledger write below:
-  // a run that `--take-run` has already replaced sends nothing further, so only a
-  // request that was already in flight when the takeover landed can still arrive
-  // at the provider. Nothing is compared for a caller with no lease.
-  requireRunLease(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, runId: context.runId });
-  const receipt = await provider.applyWrite(write);
-
-  if (receipt.kind === "refused") {
-    // Provably not delivered: safe to retry, so it is written as `failed`. The
-    // row is re-read because a create's intent was just planned above.
-    const current = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId }) ?? ledger;
-    return failed(db, context, localId, receipt.code, receipt.cause, current, hash);
-  }
-  if (receipt.kind === "ambiguous") {
-    if (write.kind === "create") {
-      // Deliberately NO ledger write: the row keeps its (absent) identity as
-      // `pending` residue, and the next run decides by marker, never by guesswork.
-      // That residue is also why the next run cannot create at all until
-      // reconcile attributes it (see `pushItem`'s guard).
-      return { localId, outcome: "unresolved", externalId: null, cause: receipt.cause };
-    }
-    // An update the remote did not confirm: the identity stands, but the payload
-    // proof does not. Dropping the hash is what stops the next pass from
-    // reporting `skipped` off a fact that predates this write; the label this
-    // write may have applied becomes the ownership a corrective update replaces.
-    markUnconfirmed(db, {
-      bindingId: context.bindingId,
-      direction: PUSH_DIRECTION,
-      localId,
-      kindLabel,
-      operationId: opId("unconfirmed"),
-      ...(context.runId === undefined ? {} : { runId: context.runId }),
-    });
-    return { localId, outcome: "unresolved", externalId: ledger?.externalId ?? null, cause: receipt.cause };
-  }
-  markApplied(db, {
-    bindingId: context.bindingId,
-    direction: PUSH_DIRECTION,
-    localId,
-    externalId: receipt.externalId,
-    remoteUpdatedAt: receipt.updatedAt,
-    requestHash: hash,
-    kindLabel,
-    operationId: opId("applied"),
-    ...(context.runId === undefined ? {} : { runId: context.runId }),
-  });
-  return { localId, outcome: write.kind === "create" ? "created" : "updated", externalId: receipt.externalId };
+  return { outcome: "planned", plan: { localId, operation: "create", externalId: null, payload, marker, requestHash: hash } };
 }
 
 /**
- * Record a refusal (or a pre-send refusal) on the item.
+ * Record what the caller's tools reported, through the same ledger verbs the
+ * write path always used: 'confirmed' → 'markApplied', 'refused' →
+ * 'markFailed' (or 'recordRefusal' on a settled row), 'ambiguous' →
+ * 'markUnconfirmed' for an update and NO write for a create, whose residue is
+ * the ambiguity.
+ *
+ * Per-item failures are REPORTED, not thrown: an unknown local id or an
+ * out-of-contract transition is that item's refusal, so one bad entry cannot
+ * abort a whole run's report. A lease refusal is the exception — the run no
+ * longer owns the direction, so the whole run stops.
+ *
+ * A `confirmed` result is refused as that item's failure when the row is a
+ * `pending` create this run did not open (see `openedByThisRun`): recording an
+ * identity there would silently adopt whatever the caller named, bypassing the
+ * marker association and the operator's `--adopt`.
+ *
+ * shortcut: the payload hash is recomputed from the item's CURRENT content, so
+ * an edit between plan and results records a hash for content the remote never
+ * received. upgrade: record the planned hash with the claim when mid-run edits
+ * become common.
+ */
+export function recordResults(db: StoreDb, context: PushContext, results: readonly PushResult[]): PushOutcome[] {
+  requireRunLease(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, runId: context.runId });
+  return results.map((result) => recordOne(db, context, result));
+}
+
+function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushOutcome {
+  const localId = typeof result.localId === "string" ? result.localId : "";
+  try {
+    const ledger = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
+    if (ledger === null) {
+      throw new SyncError(
+        "sync.not-found",
+        "no push ledger row for this item, so this run never planned it; re-run 'issue-sync pending' and apply the results it produced",
+      );
+    }
+    const candidate = candidateOf(db, localId);
+    if (candidate === null) {
+      throw new SyncError(
+        "sync.local-issue-missing",
+        "this local id is not an issue in this store; nothing was recorded for it",
+      );
+    }
+    const { hash, kindLabel } = planOf(context, candidate, ledger);
+    const entryRevision = ledger.revision;
+    const opId = (step: string): string =>
+      "linear-push:" + context.bindingId + ":" + localId + ":" + step + ":" + hash + ":" + entryRevision;
+    const lease = context.runId === undefined ? {} : { runId: context.runId };
+
+    // why: A create cycle this run did not open is not this run's to record — neither a
+    // confirmation NOR a refusal: `failed` is invisible to reconciliation, so
+    // flipping the residue would hide the only record that a remote issue may
+    // exist and let the next run create a duplicate. An ambiguous result writes
+    // nothing, so it keeps its own answer below.
+    if (
+      (result.outcome === "confirmed" || result.outcome === "refused") &&
+      ledger.itemState === "pending" &&
+      ledger.externalId === null &&
+      !openedByThisRun(db, context, ledger)
+    ) {
+      throw new SyncError(
+        "sync.illegal-transition",
+        "this create cycle was opened by an earlier run and never confirmed, so no result of this run can record it and nothing was written. " +
+          "Associate the remote issue by its marker with 'mstar issue-sync ingest', record the identity you confirmed with " +
+          "'mstar issue-sync apply --adopt <localId>=<issueUrl|externalId>', or - when the create never reached Linear - release the residue with " +
+          "'mstar issue-sync apply --release <localId>'",
+      );
+    }
+    if (result.outcome === "refused") {
+      // why: The item is retryable and the report must say how: the cause alone leaves
+      // the operator with a failure and no next step.
+      const cause =
+        (result.cause ?? "the remote refused the write") +
+        " - nothing was applied; fix that cause in Linear, then run 'mstar issue-sync pending' again, which plans the same write";
+      return failed(db, context, localId, "linear.write-refused", cause, true, hash);
+    }
+    if (result.outcome === "ambiguous") {
+      if (ledger.externalId === null) {
+        // why: Deliberately NO ledger write: the row keeps its (absent) identity as a
+        // 'pending' residue, and the next reconcile decides by marker, never by
+        // guesswork. That residue is also why the next plan cannot create at all
+        // until reconciliation attributes it.
+        return {
+          localId,
+          outcome: "unconfirmed",
+          externalId: null,
+          cause:
+            (result.cause ?? "the remote did not confirm the create") +
+            " - it stays unconfirmed: run 'mstar issue-sync ingest' with a listing so its marker associates the issue, or record the identity with 'mstar issue-sync apply --adopt <localId>=<issueUrl|externalId>'",
+        };
+      }
+      // why: An update the remote did not confirm: the identity stands, but the
+      // payload proof does not. Dropping the hash is what stops the next pass
+      // from reporting 'skipped' off a fact that predates this write; the label
+      // this write may have applied becomes ownership a corrective update
+      // replaces.
+      markUnconfirmed(db, {
+        bindingId: context.bindingId,
+        direction: PUSH_DIRECTION,
+        localId,
+        kindLabel,
+        operationId: opId("unconfirmed"),
+        ...lease,
+      });
+      return {
+        localId,
+        outcome: "unconfirmed",
+        externalId: ledger.externalId,
+        ...(result.cause == null ? {} : { cause: result.cause }),
+      };
+    }
+    const externalId = typeof result.externalId === "string" && result.externalId.trim() !== "" ? result.externalId : null;
+    if (externalId === null) {
+      throw new SyncError(
+        "sync.invalid-input",
+        "a confirmed result must name the remote issue in 'externalId'; nothing was recorded for this item. Re-send the entry with the identifier the tool returned",
+      );
+    }
+    // why: A confirmed identity that differs from the row's recorded one is an
+    // identity replacement, not a receipt: the recorded id came from an ingest
+    // association or a same-run --adopt, and moving it silently would leave the
+    // old remote issue behind with no trace. The operator says so explicitly.
+    if (ledger.externalId !== null && ledger.externalId !== externalId) {
+      throw new SyncError(
+        "sync.identity-conflict",
+        "this item already points at " + JSON.stringify(ledger.externalId) + ", so " + JSON.stringify(externalId) +
+          " cannot be recorded from a tool result and nothing was written. If " + JSON.stringify(externalId) +
+          " really is the right issue, record it with 'mstar issue-sync apply --adopt <localId>=" + externalId +
+          " --force-adopt <localId>'",
+      );
+    }
+
+    markApplied(db, {
+      bindingId: context.bindingId,
+      direction: PUSH_DIRECTION,
+      localId,
+      externalId,
+      remoteUpdatedAt: result.remoteUpdatedAt ?? null,
+      requestHash: hash,
+      kindLabel,
+      operationId: opId("applied"),
+      ...lease,
+    });
+    return { localId, outcome: "applied", externalId };
+  } catch (error) {
+    // why: A lease refusal is not this item's cause: the run no longer owns the
+    // direction, so the whole run must stop instead of being reported per item.
+    if (error instanceof SyncError && error.code === "sync.run-taken") throw error;
+    return { localId, outcome: "refused", externalId: null, cause: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Did the run `apply` is recording for OPEN this create cycle?
+ *
+ * The claim is the only ledger write a `pending` create row ever receives, so the
+ * row's `updatedAt` is the moment it was claimed. A run that started AFTER that
+ * write is a different attempt: its results cannot describe this cycle's remote
+ * issue, because the cycle belongs to the attempt that opened it.
+ *
+ * shortcut: evidence is time-based, so a residue of the SAME run this apply
+ * continues still reads as planned, and a caller with no lease at all is taken as
+ * having planned the cycle. upgrade: stamp the claiming run on the row when either
+ * bound starts to matter.
+ */
+function openedByThisRun(db: StoreDb, context: PushContext, ledger: SyncItem): boolean {
+  // A caller with no lease has no "this run" to compare against: its plan/record
+  // pair is the whole evidence, so the cycle is taken as planned. The command
+  // path always carries a lease, and that is where the reviewed adoption hole was.
+  if (context.runId === undefined) return true;
+  const run = readRun(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION });
+  if (run === null || run.runId !== context.runId) return false;
+  return !isOlderInstant(ledger.updatedAt, run.startedAt);
+}
+
+/**
+ * note: Record a refusal on the item.
  *
  * Best-effort by design: the run's report is the record of what happened, and a
  * ledger refusal here must not mask the cause that produced it. Only a genuine
  * ledger conflict reaches the catch now that every state takes a legal verb.
  *
- * A row that already holds an identity or a settled state (`applied`, `failed`,
- * `skipped`) must NOT take the `failed` edge: `applied → failed` is not in the
+ * A row that already holds an identity or a settled state ('applied', 'failed',
+ * 'skipped') must NOT take the 'failed' edge: 'applied → failed' is not in the
  * contract, and the row's identity, hash and ownership are facts an earlier
- * confirmed write proved. A refused UPDATE therefore leaves the row `applied`
+ * confirmed write proved. A refused UPDATE therefore leaves the row 'applied'
  * WITH its cause recorded, and the changed hash still makes the next run retry
- * the write. `recordRefusal` is that error-only verb.
+ * the write. 'recordRefusal' is that error-only verb.
  *
- * A `pending` row with no id never reaches here: `pushItem`'s residue guard
- * answers first, because `failed` is invisible to `reconcilePendingCreate` and
- * downgrading the residue would let a later run create a duplicate nobody can
- * adopt.
+ * A 'pending' row with no id never reaches here: 'planItem''s residue guard
+ * answers first, because 'failed' is invisible to reconciliation and downgrading
+ * the residue would let a later run create a duplicate nobody can adopt.
  */
 function failed(
   db: StoreDb,
@@ -409,29 +525,31 @@ function failed(
   localId: string,
   code: string,
   cause: string,
-  ledger: SyncItem | null,
+  planRow: boolean,
   hash?: string,
 ): PushOutcome {
-  const message = `[${code}] ${cause}`;
+  const message = "[" + code + "] " + cause;
   try {
-    // An item that never reached the ledger still gets a row here, so the
-    // operator can SEE why it is not pushed; `failed → pending` is a legal retry
+    const ledger = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
+    // why: An item that never reached the ledger still gets a row here, so the
+    // operator can SEE why it is not pushed; 'failed → pending' is a legal retry
     // edge, so the next run tries again once the cause is addressed.
-    if (ledger === null) {
-      planItem(db, {
+    if (ledger === null && planRow) {
+      openLedgerCycle(db, {
         bindingId: context.bindingId,
         direction: PUSH_DIRECTION,
         localId,
-        operationId: `linear-push:${context.bindingId}:${localId}:plan:preflight`,
+        operationId: "linear-push:" + context.bindingId + ":" + localId + ":plan:preflight",
         ...(context.runId === undefined ? {} : { runId: context.runId }),
       });
     }
     const current = ledger ?? readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
     if (current !== null) {
-      // `markFailed` is the retry edge and is legal only from `pending`.
+      // why: 'markFailed' is the retry edge and is legal only from 'pending'.
       const retryable = current.itemState === "pending";
       const step = retryable ? "failed" : "refused";
-      const operationId = `linear-push:${context.bindingId}:${localId}:${step}:${hash ?? "preflight"}:${current.revision}`;
+      const operationId =
+        "linear-push:" + context.bindingId + ":" + localId + ":" + step + ":" + (hash ?? "preflight") + ":" + current.revision;
       const input = {
         bindingId: context.bindingId,
         direction: PUSH_DIRECTION,
@@ -448,7 +566,7 @@ function failed(
     if (error instanceof SyncError && error.code === "sync.run-taken") throw error;
     // The returned outcome still carries the cause.
   }
-  return { localId, outcome: "failed", externalId: ledger?.externalId ?? null, cause: message };
+  return { localId, outcome: "refused", externalId: null, cause: message };
 }
 
 export type ReconcileReport = {
@@ -456,11 +574,6 @@ export type ReconcileReport = {
   adopted: Array<{ localId: string; externalId: string }>;
   /** Rows that could not be attributed to exactly one remote issue. */
   unresolved: Array<{ localId: string; cause: string }>;
-  /**
-   * The page bound the scan stopped at, set only when it stopped with a cursor
-   * still advertised. Present means the listing was NOT read to its end.
-   */
-  stoppedAtPageBound?: number;
 };
 
 /**
@@ -468,21 +581,22 @@ export type ReconcileReport = {
  * ledger cannot decide, stated as such so it is never read as a failed attempt.
  */
 const RELEASE_REASON =
-  "released by the operator after reconciliation's full listing scan found no remote issue carrying this item's correlation marker; the next push may create";
+  "released by the operator after reconciliation found no remote issue carrying this item's correlation marker; the next plan may create";
 
 /**
- * A `pending` row with no id can be released only by the operator, and only
- * from the scan that proved absence: `failed` is the ledger's retryable edge, so
- * the next push claims the create again. The revision joins the operation id so
- * a later ambiguity for the same item is a new release, not a replay.
+ * note: A 'pending' row with no id can be released only by the operator, and only
+ * from the listing that proved absence: 'failed' is the ledger's retryable edge,
+ * so the next plan claims the create again. The revision joins the operation id
+ * so a later ambiguity for the same item is a new release, not a replay.
  *
- * What the release CANNOT do is see a request another holder already sent: this
- * run holds the binding's only lease, so no RUNNING create for that residue can
- * be inside a provider call beside it — but a create sent by a holder that died
- * mid-call may still land after this scan. That is why reconcile-by-marker is
- * the first recovery and why releasing over a scan that found nothing is the
- * operator's judgement, recorded as such. The write carries this run's token, so
- * a run a takeover replaced cannot release anything at all.
+ * What the release CANNOT do is see a tool call another holder already issued:
+ * this run holds the binding's only lease, so no RUNNING create for that residue
+ * can be inside a remote call beside it — but a call issued by a holder that
+ * died mid-flight may still land after this listing. That is why
+ * reconcile-by-marker is the first recovery and why releasing over a listing
+ * that found nothing is the operator's judgement, recorded as such. The write
+ * carries this run's token, so a run a takeover replaced cannot release
+ * anything at all.
  */
 function releasePendingCreate(db: StoreDb, context: PushContext, localId: string): void {
   const current = readItem(db, { bindingId: context.bindingId, direction: PUSH_DIRECTION, localId });
@@ -491,16 +605,16 @@ function releasePendingCreate(db: StoreDb, context: PushContext, localId: string
     direction: PUSH_DIRECTION,
     localId,
     error: RELEASE_REASON,
-    operationId: `linear-push:${context.bindingId}:${localId}:release:${current?.revision ?? 0}`,
+    operationId: "linear-push:" + context.bindingId + ":" + localId + ":release:" + (current?.revision ?? 0),
     ...(context.runId === undefined ? {} : { runId: context.runId }),
   });
 }
 
 /**
  * Only the row shape a release exists for can be released. Anything else is an
- * operator error about the ledger, reported before the scan and any write — and
- * the command calls this before its own first write, so a bad `--release` cannot
- * land after an `--adopt` already did.
+ * operator error about the ledger, reported before the listing is read and any
+ * write — and the command calls this before its own first write, so a bad
+ * '--release' cannot land after an '--adopt' already did.
  */
 export function assertReleaseTargets(db: StoreDb, bindingId: string, release: ReadonlySet<string>): void {
   for (const localId of release) {
@@ -508,53 +622,45 @@ export function assertReleaseTargets(db: StoreDb, bindingId: string, release: Re
     if (item === null || item.itemState !== "pending" || item.externalId !== null) {
       throw new SyncError(
         "sync.illegal-transition",
-        `--release ${localId} names no unresolved create: ` +
+        "--release " + localId + " names no unresolved create: " +
           (item === null
             ? "the item has no push ledger row"
-            : `its row is '${item.itemState}'${item.externalId === null ? "" : ` as ${item.externalId}`}`) +
-          "; release clears only a pending create with no remote id - name a known issue with --adopt, and let every other item push normally",
+            : "its row is '" + item.itemState + "'" + (item.externalId === null ? "" : " as " + item.externalId)) +
+          "; release clears only a pending create with no remote id - name a known issue with --adopt, and let every other item plan normally",
       );
     }
   }
 }
 
 /**
- * Adopt ambiguous creates by correlation marker.
+ * Adopt ambiguous creates by correlation marker, over a listing the caller
+ * fetched with its own tools.
  *
- * Runs a listing scan and adopts a row ONLY when exactly one remote issue
- * carries its exact marker. Zero or several matches stay `unresolved`; this
- * function never creates, and prose equality is never evidence.
+ * A row is adopted ONLY when exactly one remote record carries its exact marker
+ * — the same `repo` and `local` this store would write. Zero or several matches
+ * stay 'unresolved'; this function never creates, and prose equality is never
+ * evidence. The author is not part of the match: another clone of the same
+ * repository by the same author is the ingest's `foreign` case, and a residue
+ * the operator can see the issue for is adopted explicitly with '--adopt'.
+ * The listing's completeness is the caller's fact, not this function's: a
+ * listing it did not read to its end proves neither absence nor uniqueness, and
+ * the caller must not present one as complete.
  *
- * `options.maxPages` bounds the scan and must be >= 1, and the caller passes the
- * SAME number the import direction stops at: engine does not own that default,
- * so the two cannot drift. A scan still holding a cursor at that bound is NOT a
- * full listing, so `stoppedAtPageBound` names it and ONE standard follows: a
- * truncated listing proves neither absence nor uniqueness. No release (absence),
- * no adoption (uniqueness) — every residue is reported `unresolved` with the
- * bound in its cause, so `--adopt` or a listing that fits the bound is the way
- * out.
+ * 'options.release' names 'pending'-without-id rows the operator has released
+ * after this same listing found nothing: they drop to 'failed', the retryable
+ * edge, so the next plan may create. A release is REFUSED when reconciliation
+ * found a match — that row's recovery is adoption, or '--adopt' naming the
+ * right issue — and the refusal is decided over the whole listing before the
+ * first write.
  *
- * `options.release` names `pending`-without-id rows the operator has released
- * after this same scan found nothing: they drop to `failed`, the retryable edge,
- * so the next push may create. A release is REFUSED when reconciliation found a
- * match — that row's recovery is adoption, or `--adopt` naming the right issue —
- * and the refusal is decided over the whole scan before the first write.
- *
- * A run with no ambiguous residue short-circuits: zero listing calls.
+ * A run with no ambiguous residue short-circuits: it reads no record.
  */
-export async function reconcilePendingCreate(
+export function reconcileWith(
   db: StoreDb,
-  provider: IssueProvider,
   context: PushContext,
-  options: { release?: ReadonlySet<string>; maxPages: number },
-): Promise<ReconcileReport> {
-  const maxPages = options.maxPages;
-  if (!Number.isInteger(maxPages) || maxPages < 1) {
-    throw new SyncError(
-      "sync.invalid-input",
-      `the reconcile scan needs maxPages >= 1; received ${String(maxPages)}. A scan that reads no page proves nothing and requests nothing`,
-    );
-  }
+  records: readonly ProviderItem[],
+  options: { release?: ReadonlySet<string> } = {},
+): ReconcileReport {
   const release = options.release ?? new Set<string>();
   assertReleaseTargets(db, context.bindingId, release);
   const pending = db
@@ -565,47 +671,27 @@ export async function reconcilePendingCreate(
   const report: ReconcileReport = { adopted: [], unresolved: [] };
   if (pending.length === 0) return report;
 
-  const wanted = new Map<string, string>();
-  for (const { local_id: localId } of pending) {
-    wanted.set(correlationMarker(context.binding, context.storeId, localId), localId);
-  }
+  // why: The association key is (repo, local): this repository's identity plus the
+  // local issue id the marker names. A record pushed from another repository,
+  // another store of a different repo, or by the deleted code's marker shape
+  // decodes to nothing and is never a candidate.
+  const wanted = new Set(pending.map(({ local_id: localId }) => localId));
   const matches = new Map<string, string[]>();
-  let cursor: string | null = null;
-  let pages = 0;
-  do {
-    const page = await provider.listIssues(cursor);
-    pages += 1;
-    for (const item of page.items) {
-      const marker = markerIn(item.description);
-      if (marker === null) continue;
-      const localId = wanted.get(marker);
-      if (localId === undefined) continue;
-      matches.set(localId, [...(matches.get(localId) ?? []), item.externalId]);
-    }
-    cursor = page.nextCursor;
-  } while (cursor !== null && pages < maxPages);
-  if (cursor !== null) report.stoppedAtPageBound = maxPages;
-  const truncated = cursor !== null;
+  for (const record of records) {
+    const marker = decodeMarker(record.description);
+    if (marker === null || marker.repo !== context.identity.repo) continue;
+    if (!wanted.has(marker.localId)) continue;
+    matches.set(marker.localId, [...(matches.get(marker.localId) ?? []), record.externalId]);
+  }
 
-  // ONE standard for a scan that was not read to its end. Both verbs below
-  // decide over "what the listing proved": a truncated listing proves neither
-  // absence (so no release) nor uniqueness (so no adoption). Splitting those
-  // two would let a row leave `pending` bound to one of several remote issues
-  // carrying its marker, where no later scan could surface the other.
   for (const localId of release) {
     const found = matches.get(localId) ?? [];
-    if (truncated) {
-      throw new SyncError(
-        "sync.illegal-transition",
-        `--release ${localId} needs a listing scan that was read to its end, and this one stopped at ${maxPages} pages with more advertised; what sits on the pages never read decides whether this residue has a remote issue at all, so absence is not proved and nothing was written - resolve the issue yourself with --adopt <localId>=<issueUrl|externalId>, or re-run push against a listing that fits the bound`,
-      );
-    }
     if (found.length === 0) continue;
     throw new SyncError(
       "sync.illegal-transition",
       found.length === 1
-        ? `--release ${localId} would discard a proved identity: ${found[0]} carries this item's correlation marker. This is adoption, not release - re-run push without the flag and reconcile adopts it`
-        : `--release ${localId} would risk a duplicate: ${found.length} remote issues carry this item's correlation marker; name the right one with --adopt <localId>=<issueUrl|externalId>`,
+        ? "--release " + localId + " would discard a proved identity: " + found[0] + " carries this item's correlation marker. This is adoption, not release - re-run without the flag and reconciliation adopts it"
+        : "--release " + localId + " would risk a duplicate: " + found.length + " remote issues carry this item's correlation marker; name the right one with --adopt <localId>=<issueUrl|externalId>",
     );
   }
 
@@ -615,27 +701,13 @@ export async function reconcilePendingCreate(
       continue;
     }
     const found = matches.get(localId) ?? [];
-    if (truncated) {
-      // The same standard as the refusal above: uniqueness was not proved, so
-      // adopting "the one match read so far" would be a guess about the pages
-      // never read. The row stays `pending`, which is where a later scan can
-      // still reach it.
-      report.unresolved.push({
-        localId,
-        cause:
-          found.length === 0
-            ? `the reconcile listing stopped at its ${maxPages}-page bound with more pages advertised, so this item's marker was never ruled out; nothing was adopted or written - re-run push against a listing that fits the bound, or resolve the issue yourself with --adopt <localId>=<issueUrl|externalId>`
-            : `${found.length} remote issue(s) carrying this item's correlation marker were read before the listing stopped at its ${maxPages}-page bound with more pages advertised, so uniqueness is not proved; nothing was adopted or written - resolve the remote issue yourself with --adopt <localId>=<issueUrl|externalId>, or re-run push against a listing that fits the bound`,
-      });
-      continue;
-    }
     if (found.length !== 1) {
       report.unresolved.push({
         localId,
         cause:
           found.length === 0
             ? "no remote issue carries this item's correlation marker; the interrupted create is not confirmed either way - if you can confirm the issue is gone, release the residue with --release <localId>, or record the identity with --adopt <localId>=<issueUrl|externalId> when you can see it"
-            : `${found.length} remote issues carry this item's correlation marker; adopting any of them would be a guess`,
+            : found.length + " remote issues carry this item's correlation marker; adopting any of them would be a guess",
       });
       continue;
     }
@@ -645,7 +717,7 @@ export async function reconcilePendingCreate(
       direction: PUSH_DIRECTION,
       localId,
       externalId,
-      operationId: `linear-push:${context.bindingId}:${localId}:adopt:${externalId}`,
+      operationId: "linear-push:" + context.bindingId + ":" + localId + ":adopt:" + externalId,
       ...(context.runId === undefined ? {} : { runId: context.runId }),
     });
     report.adopted.push({ localId, externalId });
@@ -654,30 +726,30 @@ export async function reconcilePendingCreate(
 }
 
 /**
- * Operator-confirmed adoption (`--adopt <localId>=<issueUrl|externalId>`): the
+ * Operator-confirmed adoption ('--adopt <localId>=<issueUrl|externalId>'): the
  * row takes the identity verbatim and FORGETS the proof that belonged to any
  * previous identity.
  *
  * An existing row's payload hash and label ownership describe the issue that row
  * pointed at. Carrying them onto a DIFFERENT issue makes the skip rule match
- * content the new remote never received (the run would report `skipped` without
+ * content the new remote never received (the run would report 'skipped' without
  * writing) and lets a later kind change remove a label recorded for the previous
  * issue. So a changed identity clears both, and content converges on the next
- * push of the same run. Re-confirming the id already recorded is not a change:
+ * plan of the same run. Re-confirming the id already recorded is not a change:
  * that hash and that ownership still describe the same remote issue, so they
  * stay — clearing them would let the update add the new kind label while leaving
  * the recorded one behind, unowned and unremovable.
  *
  * Replacing an ESTABLISHED identity is refused unless the operator forces it
- * (`--force-adopt`): the recorded id is a fact an earlier confirmed write proved,
+ * ('--force-adopt'): the recorded id is a fact an earlier confirmed write proved,
  * and a mistaken edit would silently leave that remote issue behind.
  *
  * The existing row decides the composition, because the ambiguous residue this
- * recovery exists for is a `pending` row and `planItem` has no edge from
- * `pending`:
- * - absent or retryable (`failed`) → `planItem` opens the cycle, then `markApplied`
- *   closes it;
- * - already `pending` or `applied` → the confirmed identity is applied directly.
+ * recovery exists for is a 'pending' row and the ledger has no edge from
+ * 'pending':
+ * - absent or retryable ('failed') → the ledger opens the cycle, then
+ *   'markApplied' closes it;
+ * - already 'pending' or 'applied' → the confirmed identity is applied directly.
  */
 export function adoptItem(
   db: StoreDb,
@@ -690,21 +762,21 @@ export function adoptItem(
   const existing = readItem(db, { bindingId, direction: PUSH_DIRECTION, localId });
   const conflict = identityConflict(existing, localId, externalId);
   if (conflict !== null && options.force !== true) throw conflict;
-  // The row's revision is the generation this adoption is applied OVER, and it
+  // why: The row's revision is the generation this adoption is applied OVER, and it
   // joins the operation id. Going back to an issue this row held earlier repeats
   // every other fact of the adoption that first recorded it (same binding, local
-  // id, external id, `clearProof`), so without it that receipt is replayed —
-  // `markApplied` never runs and the row stays on the id being replaced while the
+  // id, external id, 'clearProof'), so without it that receipt is replayed —
+  // 'markApplied' never runs and the row stays on the id being replaced while the
   // caller reports the new one. The revision advances on every apply, so each
   // re-point is a distinct operation.
   const generation = existing?.revision ?? 0;
   if (existing === null || existing.itemState === "failed") {
-    planItem(db, {
+    openLedgerCycle(db, {
       bindingId,
       direction: PUSH_DIRECTION,
       localId,
       externalId,
-      operationId: `linear-push:${bindingId}:${localId}:adopt-plan:${externalId}:${generation}`,
+      operationId: "linear-push:" + bindingId + ":" + localId + ":adopt-plan:" + externalId + ":" + generation,
       ...(options.runId === undefined ? {} : { runId: options.runId }),
     });
   }
@@ -716,7 +788,7 @@ export function adoptItem(
     direction: PUSH_DIRECTION,
     localId,
     externalId,
-    // Cleared, not carried: see the docstring above. `clearProof` is the only
+    // why: Cleared, not carried: see the docstring above. 'clearProof' is the only
     // way to say "this identity has no proof yet", because an omitted hash
     // means "keep the row's".
     ...(keepProof ? {} : { clearProof: true as const }),
@@ -724,14 +796,16 @@ export function adoptItem(
     // receipt; re-reading the SAME receipt would refuse the second as a conflict.
     // Only a re-point needs the generation: going back to an issue this row held
     // earlier repeats every other fact of the adoption that first recorded it.
-    operationId: `linear-push:${bindingId}:${localId}:${keepProof ? "adopt-confirm" : "adopt-apply"}:${externalId}${keepProof ? "" : `:${generation}`}`,
+    operationId:
+      "linear-push:" + bindingId + ":" + localId + ":" + (keepProof ? "adopt-confirm" : "adopt-apply") + ":" + externalId +
+      (keepProof ? "" : ":" + generation),
     ...(options.runId === undefined ? {} : { runId: options.runId }),
   });
 }
 
 /**
- * The `--adopt` replacement refusal, or null when this adoption is allowed
- * without `--force-adopt`. Shared by the write path and the pre-write preflight,
+ * The '--adopt' replacement refusal, or null when this adoption is allowed
+ * without '--force-adopt'. Shared by the write path and the pre-write preflight,
  * so a run never starts writing against an adoption it will refuse.
  */
 export function identityConflict(
@@ -742,12 +816,14 @@ export function identityConflict(
   if (existing === null || existing.externalId === null || existing.externalId === externalId) return null;
   return new SyncError(
     "sync.identity-conflict",
-    `this item is already adopted as ${JSON.stringify(existing.externalId)}, and replacing an established remote identity is not an ordinary edit. Re-run with --force-adopt ${localId} if ${JSON.stringify(externalId)} is the right issue; nothing was written.`,
+    "this item is already adopted as " + JSON.stringify(existing.externalId) +
+      ", and replacing an established remote identity is not an ordinary edit. Re-run with --force-adopt " + localId +
+      " if " + JSON.stringify(externalId) + " is the right issue; nothing was written.",
   );
 }
 
 /**
- * A `linear.app` issue URL's last path segment is the identifier; anything else
+ * A 'linear.app' issue URL's last path segment is the identifier; anything else
  * is taken verbatim. A URL from another host is refused rather than mined for a
  * guess.
  */
@@ -761,18 +837,18 @@ export function externalIdOf(reference: string): string {
   try {
     url = new URL(raw);
   } catch {
-    throw new Error(`[sync.invalid-input] ${raw} is not a parseable URL; pass a linear.app issue URL or the issue identifier`);
+    throw new Error("[sync.invalid-input] " + raw + " is not a parseable URL; pass a linear.app issue URL or the issue identifier");
   }
   if (url.hostname !== "linear.app" && !url.hostname.endsWith(".linear.app")) {
-    throw new Error(`[sync.invalid-input] ${url.hostname} is not a Linear host; pass a linear.app issue URL or the issue identifier`);
+    throw new Error("[sync.invalid-input] " + url.hostname + " is not a Linear host; pass a linear.app issue URL or the issue identifier");
   }
-  // A Linear issue URL is `/<workspace>/issue/<identifier>/<slug…>`: the
-  // identifier follows `issue`, and the trailing slug is not it.
+  // why: A Linear issue URL is '/<workspace>/issue/<identifier>/<slug…>': the
+  // identifier follows 'issue', and the trailing slug is not it.
   const segments = url.pathname.split("/").filter((part) => part !== "");
   const issueAt = segments.indexOf("issue");
   const identifier = issueAt === -1 ? undefined : segments[issueAt + 1];
   if (identifier === undefined) {
-    throw new Error(`[sync.invalid-input] ${raw} is not a Linear issue URL (expected /<workspace>/issue/<identifier>/...); pass the issue identifier instead`);
+    throw new Error("[sync.invalid-input] " + raw + " is not a Linear issue URL (expected /<workspace>/issue/<identifier>/...); pass the issue identifier instead");
   }
   return identifier;
 }

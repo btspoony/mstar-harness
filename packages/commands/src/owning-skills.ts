@@ -9,6 +9,9 @@ const FAMILY_OWNING_SKILL: Readonly<Record<string, string>> = {
   persist: "mstar-artifacts",
   workflow: "mstar-artifacts",
   issue: "mstar-project-governance",
+  // why: The mirror procedure (host Linear tools driven by these three local verbs)
+  // is owned by the skill that documents it, not by the issue store.
+  "issue-sync": "mstar-issue-mirror",
   milestone: "mstar-project-governance",
   project: "mstar-project-governance",
   catalog: "mstar-conventions",

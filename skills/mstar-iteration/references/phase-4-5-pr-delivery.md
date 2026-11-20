@@ -11,8 +11,8 @@
 3. 创建 PR：`spec_integration_branch` → `target_branch`
 4. PR 正文须含 residual 披露节：本迭代各 plan 的 open R# 清单（id + severity + 跟踪位置 + blocker-defer 标记；无 open 时写 `N/A — none open`）—— 职责 → **`mstar-artifacts`**「Findings cleanup modes」
 5. PR 正文须写明 compass 记录的 `pr_merge_policy`（`reviewed-auto` / `reviewed-bot` / `owner-gated`）—— reviewer 据此知道本 PR 的 review 由本地 loop 还是挂载的 bot 提供，以及是否被期待给出 merge 批准
-6. PR 正文须写明 **Evidence**（证明改动确实生效的前后可比观测：scoped 命令及其实测 before/after 结果，或视觉改动的截图——不得复述 diff）与 **Merge danger**（`Door: one-way | two-way` 加一行 `Blast radius`）—— door 是回滚成本而非严重度：无法在不牵动外部协调的前提下回退的改动为 `one-way`
-7. 记录 PR URL / number（Phase 5 会话 SSOT）
+6. Follow the shared public PR body interface → `mstar-roles/references/project-manager/pr-description.md`; item 4 above is that interface's residual disclosure applied to the iteration's plans, and item 5 is iteration-only.
+7. Record PR URL / number and link the owning-session PM Task Board task (create it when none exists under the board contract) → `mstar-dispatch-gates` § PR feedback ownership (PM only).
 8. **Immediately** 进入 **Phase 5** — **Phase 4 exit ≠ 迭代交付完成**
 
 ---
@@ -28,7 +28,7 @@
 - Phase 5 在 PR head（`spec_integration_branch`）上 push 修复；**禁止**另开替代分支
 - **Checkout / worktree（HARD）**：Phase 5 是 PR 级 **hotfix** loop。产品修复在从 `spec_integration_branch` 出的独立 **fix feature worktree** 上编辑、commit；review 后在 **integration worktree**（路径取 ACTIVE workflow 执行行 `integration_worktree_path`）串行 merge 回 integration，再按 §5.1a push。禁止在 integration 或主 checkout 直接编辑产品代码；三域表 → `mstar-branch-worktree`。
   Hotfix commit 仅用已配置身份；身份缺失或失败则 **Blocked**，不得编造或逐次提交覆盖身份 → `mstar-roles/references/_shared/leaf-executor-core.md`「Git NEVER (repo writes)」。
-- 产品代码修复 → PM **dispatch** dev/ops（`mstar-dispatch-gates`）；Assignment **`Worktree path`** / cwd = 绝对 fix feature worktree 路径；merge 回 integration 由 PM 在 **integration worktree** 执行；PM 线程不代写实现
+- Fix routing and owner recovery → `mstar-dispatch-gates` § PR feedback ownership (PM only); Assignment **`Worktree path`** / cwd = absolute fix feature worktree path; PM merges back in the **integration worktree**.
 - 禁止为「让 CI 变绿」而改 workflow，除非用户明确授权
 - **Push cadence** → **§5.1a**（本地可提前修；**禁止**在 CI / AI review 波次未结束时 push）
 

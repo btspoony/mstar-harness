@@ -14,7 +14,7 @@
  * specs).
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,13 +52,18 @@ describe("mergeTree — overlay contract on a tiny fixture", () => {
   test("copies the overlay on top of dest without clearing it", async () => {
     const { src, dest, cleanup } = await fixturePair();
     try {
-      await writeFile(join(dest, "fullstack-dev.md"), "shared subagent shell");
-      await writeFile(join(src, "project-manager.md"), "---\nmode: primary\n---\nprimary seat");
+      await writeFile(join(dest, "fullstack-dev.md"), "---\nmode: subagent\n---\nsource: shared-shell\n");
+      await writeFile(join(dest, "project-manager.md"), "---\nmode: subagent\n---\nsource: stale-seat\n");
+      await writeFile(join(src, "project-manager.md"), "---\nmode: primary\n---\nsource: opencode-overlay\n");
 
       mergeTree("opencode-agents", src, dest);
 
-      expect(readFileSync(join(dest, "fullstack-dev.md"), "utf8")).toBe("shared subagent shell");
-      expect(readFileSync(join(dest, "project-manager.md"), "utf8")).toBe("---\nmode: primary\n---\nprimary seat");
+      expect(readdirSync(dest).sort()).toEqual(["fullstack-dev.md", "project-manager.md"]);
+      expect(readFileSync(join(dest, "fullstack-dev.md"), "utf8")).toContain("source: shared-shell");
+      const primary = readFileSync(join(dest, "project-manager.md"), "utf8");
+      expect(primary).toContain("mode: primary");
+      expect(primary).toContain("source: opencode-overlay");
+      expect(primary).not.toContain("source: stale-seat");
     } finally {
       await cleanup();
     }
@@ -71,13 +76,17 @@ describe("mergeTree — overlay contract on a tiny fixture", () => {
     try {
       await mkdir(src, { recursive: true });
       await mkdir(join(dest, "stale"), { recursive: true });
-      await writeFile(join(src, "fullstack-dev.md"), "v2");
+      await writeFile(join(src, "fullstack-dev.md"), "---\nmode: subagent\n---\nsource: replacement-shell\n");
+      await writeFile(join(dest, "fullstack-dev.md"), "---\nmode: subagent\n---\nsource: stale-shell\n");
       await writeFile(join(dest, "stale", "old.md"), "leftover");
 
       copyTree("agents", src, dest);
 
       expect(existsSync(join(dest, "stale"))).toBe(false);
-      expect(readFileSync(join(dest, "fullstack-dev.md"), "utf8")).toBe("v2");
+      expect(readdirSync(dest)).toEqual(["fullstack-dev.md"]);
+      const shared = readFileSync(join(dest, "fullstack-dev.md"), "utf8");
+      expect(shared).toContain("source: replacement-shell");
+      expect(shared).not.toContain("source: stale-shell");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

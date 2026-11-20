@@ -17,7 +17,7 @@
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { readDeclaredNodeFloor } from "./core.js";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import * as nodeFs from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,7 +35,6 @@ import {
   bindExecutionSession,
   createExecutionWorkflow,
   readExecutionState,
-  serializeExecutionValue,
   type ExecutionCaller,
   type ExecutionContext,
   type ExecutionSessionRef,
@@ -123,13 +122,6 @@ function rawRun(dbPath: string, sql: string, ...params: Array<string | number | 
   }
 }
 
-function sha256OfBytes(bytes: Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-function sha256OfFile(path: string): string {
-  return sha256OfBytes(readFileSync(path));
-}
 
 /** The typed refusal of one call: its stable code and message, whatever domain raised it. */
 async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; message: string }> {
@@ -1303,83 +1295,6 @@ describe("execution-restore", () => {
    */
   const FROZEN_PROTOCOL_VERSION = 3;
 
-  /**
-   * The §8 loss digest `buildLossInventory` composes, recomputed from the
-   * PRODUCTION preview plus the facts the engine reads directly from the two
-   * store files. `lossDigestOf` folds the point-only (resurrected) receipt ids
-   * into this serialization, so recomposing it here is what makes a dropped or
-   * different resurrection contribution FAIL instead of agreeing with a
-   * fixture-only expectation.
-   */
-  const productionLossDigest = (
-    preview: ExecutionRecoveryPreview,
-    pointPath: string,
-    livePath: string,
-    resurrectedOperationIds: readonly string[],
-  ): string => {
-    const meta = (dbPath: string): { state: string; epoch: number } => {
-      const row = rawGet<{ authority_state: string; authority_epoch: number }>(
-        dbPath,
-        "select authority_state, authority_epoch from store_meta where id = 1",
-      )!;
-      return { state: row.authority_state, epoch: row.authority_epoch };
-    };
-    const schemaVersion = (dbPath: string): number =>
-      rawGet<{ n: number }>(dbPath, "select max(version) as n from schema_version")!.n;
-    const execution = (dbPath: string): Record<string, unknown> | null => {
-      const row = rawGet<Record<string, unknown>>(
-        dbPath,
-        "select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1",
-      );
-      return row === undefined
-        ? null
-        : {
-            protocolVersion: row.protocol_version,
-            authorityState: row.authority_state,
-            revision: row.revision,
-            rootUpdatedAt: row.root_updated_at,
-            manifestId: (row.manifest_id as string | null | undefined) ?? null,
-            activatedAt: (row.activated_at as string | null | undefined) ?? null,
-          };
-    };
-    const hasTable = (dbPath: string, table: string): boolean =>
-      rawGet<{ n: number }>(dbPath, `select count(*) as n from sqlite_master where type = 'table' and name = '${table}'`)!.n > 0;
-    const count = (dbPath: string, table: string): number =>
-      rawGet<{ n: number }>(dbPath, `select count(*) as n from ${table}`)!.n;
-    const backupCounts: Record<string, number> = {
-      issues: count(pointPath, "issues"),
-      occurrences: count(pointPath, "occurrences"),
-      transitions: count(pointPath, "issue_transitions"),
-      migrationReceipts: count(pointPath, "migration_receipts"),
-      ...(hasTable(pointPath, "catalog_entities") ? { catalogEntities: count(pointPath, "catalog_entities") } : {}),
-      ...(hasTable(pointPath, "catalog_links") ? { catalogLinks: count(pointPath, "catalog_links") } : {}),
-    };
-    return sha256OfBytes(
-      Buffer.from(
-        serializeExecutionValue({
-          format: "execution-restore-loss-v1",
-          version: FROZEN_PROTOCOL_VERSION,
-          backupPath: preview.backupPath,
-          backupSha256: sha256OfFile(pointPath),
-          backupEpoch: meta(pointPath).epoch,
-          backupAuthorityState: meta(pointPath).state,
-          backupSchemaVersion: schemaVersion(pointPath),
-          backupExecution: execution(pointPath),
-          backupCounts,
-          liveStoreId: preview.liveStoreId,
-          liveEpoch: meta(livePath).epoch,
-          liveAuthorityState: meta(livePath).state,
-          liveSchemaVersion: schemaVersion(livePath),
-          liveExecution: execution(livePath),
-          authorityDifferences: preview.authorityDifferences,
-          lostOperationIds: preview.lostOperationIds,
-          resurrectedOperationIds,
-          backupCoverageDigest: preview.backupCoverageDigest,
-          liveCoverageDigest: preview.liveCoverageDigest,
-        }),
-      ),
-    );
-  };
 
   /**
    * Constraint 2's restore face, mechanism-asserted: a store holding BOTH receipt

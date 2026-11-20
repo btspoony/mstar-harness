@@ -17,7 +17,6 @@
  * this package builds the engine first; `packages/cli/AGENTS.md` owns the rule.
  */
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";

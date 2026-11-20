@@ -91,6 +91,7 @@ export const en = {
     identityBuiltUnknown: "never built",
     identityRead: (at: string) => `read ${at}`,
     screenScopeAll: "All projects",
+    noProjectReason: "no project resolves for this read",
     screenSubtitle: (scope: string, open: number, clock: string | null) =>
       `${scope} · ${open} open issues${clock === null ? "" : ` · ${clock}`}`,
     pageTitle: "Overview",

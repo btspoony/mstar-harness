@@ -39,8 +39,8 @@ export function projectRow(item: ProjectListDTO["items"][number]): ProjectRow {
     projectId: project.id,
     title: project.title,
     description: project.description,
-    lifecycle: project.lifecycle,
-    lifecycleTone: lifecycleTone(project.lifecycle),
+    lifecycle: project.lifecycle ?? "",
+    lifecycleTone: lifecycleTone(project.lifecycle ?? ""),
     openIssues: item.openIssues,
     openIssuesText: countText(item.openIssues, "open issue"),
   };

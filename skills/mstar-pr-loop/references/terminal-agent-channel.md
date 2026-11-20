@@ -62,7 +62,7 @@ These are shapes, not contracts: exact arguments come from the loaded carrier's 
 
 ## Round loop obligations
 
-- Per round: read the archived report → for `needs fixes` / `blocked`, apply the loop's existing dispatchability and decision boundaries → dispatch bounded fix Assignments, never implement fixes in the coordinator → implementers commit locally at the existing fix sites → wait for the push gate → push one batch → prompt the same channel agent again after the new head's waves, per the ordinary loop.
+- Per round: read the archived report → for `needs fixes` / `blocked`, apply the loop's existing dispatchability and decision boundaries → route bounded fixes through `mstar-dispatch-gates` § PR feedback ownership (PM only), never implement fixes in the coordinator → implementers commit locally at the existing fix sites → wait for the push gate → push one batch → prompt the same channel agent again after the new head's waves, per the ordinary loop.
 - A later round needs no extra prompt wording: the seat session's own § Re-review finds the prior report for the same target. Preserve prior reports and never rewrite history.
 
 ## Supervision boundary

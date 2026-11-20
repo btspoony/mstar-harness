@@ -742,20 +742,11 @@ export {
   TERMINAL_DISPOSITIONS,
   vocabularyMap,
 } from "./issue.js";
-// Provider adapter contract (issue-sync): the engine defines it, the host
-// implements it. One probe-state vocabulary for every consumer.
-export type {
-  IssueProvider,
-  ProbeResult,
-  ProbeState,
-  ProviderItem,
-  ProviderItemFailure,
-  ProviderPage,
-  ProviderWrite,
-  ProviderWritePayload,
-  ProviderWriteReceipt,
-} from "./issue-sync/provider.js";
-export { PROBE_STATES } from "./issue-sync/provider.js";
+// why: The remote record shapes the sync ledger consumes (issue-sync): what an
+// agent's external issue tools hand back, normalized. The engine owns no
+// transport and no credential, so no provider interface, page envelope or
+// failure list lives here — a listing is the caller's own array.
+export type { ProviderItem, ProviderWritePayload } from "./issue-sync/provider.js";
 // Sync ledger (migration 15): the per-item state machine and its read path.
 // Every mutation owns its transaction; a caller composes the verbs sequentially.
 export type {
@@ -779,6 +770,7 @@ export {
   SyncError,
   acquireRun,
   claimItem,
+  isOlderInstant,
   markApplied,
   markFailed,
   markSkipped,
@@ -794,61 +786,46 @@ export {
   resetCursor,
   writeCursor,
 } from "./issue-sync.js";
-// M0 read-only mirror ingest: one listing page → store rows through the capture
-// path and the ledger above.
-export type { ImportPageResult } from "./issue-sync/import.js";
-// Linear MCP adapter: the host-neutral read-only handshake and listing
-// implementation of the provider contract. Moved here from a single host so any
-// host (CLI, dsh, omp) can wire it rather than each writing its own.
-export type { LinearMcpEntry, LinearProbeDeps, RpcOutcome, ToolArguments } from "./issue-sync/linear-probe.js";
-export { createLinearProbe, DEFAULT_PROBE_DEADLINE_MS, listingVerbIn, redactTransportMessage } from "./issue-sync/linear-probe.js";
-export type { LinearAdapterEntry, LinearCallOutcome, LinearListDeps, LinearListSide } from "./issue-sync/linear-adapter.js";
-export { createLinearAdapter, LINEAR_PAGE_SIZE } from "./issue-sync/linear-adapter.js";
-// Provider assembly + streamable-HTTP transport: what makes the import runnable
-// without a host wiring the probe and the adapter together.
-export type { LinearProviderOptions, LinearTransportOptions } from "./issue-sync/linear-provider.js";
-export {
-  createLinearProvider,
-  LINEAR_LABEL_VERBS,
-  LINEAR_LISTING_VERBS,
-  LINEAR_STATE_VERBS,
-  LINEAR_WRITE_VERBS,
-} from "./issue-sync/linear-provider.js";
-// Write side of the Linear adapter: the save verb, the strict fixture envelope
-// and the workspace label discovery the push direction resolves labels against.
-export type { LinearWriteDeps, LinearWriteSide } from "./issue-sync/linear-write.js";
-export { createLinearWrite } from "./issue-sync/linear-write.js";
-// One-way push (M1): candidates, the payload hash, the ledger protocol and
-// ambiguous-create recovery by correlation marker.
+// why: One-way push (M1): candidates, the payload plan, the ledger protocol, the
+// result recorder and ambiguous-create recovery by correlation marker. mstar
+// makes no external call — the caller's own tools write, and these verbs own the
+// local half.
 export type {
-  PushBinding,
+  PlanOutcome,
   PushCandidate,
   PushContext,
   PushOutcome,
-  PushOutcomeKind,
+  PushPlan,
+  PushResult,
   ReconcileReport,
 } from "./issue-sync/push.js";
 export {
   PUSH_DIRECTION,
   adoptItem,
   assertReleaseTargets,
-  correlationMarker,
   externalIdOf,
   identityConflict,
-  pushItem,
-  reconcilePendingCreate,
+  // why: The push planner is exported as `planPushItem`: the ledger's own cycle
+  // opener already owns the name `planItem` on this surface.
+  planItem as planPushItem,
+  reconcileWith,
+  recordResults,
   requestHash,
   selectPushCandidates,
 } from "./issue-sync/push.js";
-export { linearCall, linearRpc } from "./issue-sync/linear-transport.js";
-
-export {
-  IMPORTED_ACCEPTANCE_KEY,
-  IMPORTED_ROOT_CAUSE_KEY,
-  IMPORT_DIRECTION,
-  LINEAR_PROVIDER,
-  importPage,
-} from "./issue-sync/import.js";
+// why: The correlation marker between a Linear issue and the local row it mirrors,
+// plus the git identity that stamps it: repo (owner/name) + local issue id +
+// pushing author. No store id and no token, so any clone of the repository can
+// decide whether a remote issue is its own.
+export type { MarkerFields } from "./issue-sync/marker.js";
+export { decodeMarker, encodeMarker } from "./issue-sync/marker.js";
+export type { RepoIdentity } from "./issue-sync/identity.js";
+export { normalizeRepoRemote, readRepoIdentity } from "./issue-sync/identity.js";
+// why: Ingest association: a listing the caller fetched with its own tools becomes
+// ledger associations only — associated / drift / foreign / orphan / unmanaged.
+// No local issue is created, updated or closed.
+export type { IngestContext, IngestEntry, IngestReport } from "./issue-sync/ingest.js";
+export { ingestRecords } from "./issue-sync/ingest.js";
 // Catalog authority: catalog metadata is
 // the DB authority for project/iteration/plan/document identity, locations,
 // relations and archived/superseded lifecycle. No execution status, no
@@ -1228,32 +1205,6 @@ export {
   WORKFLOW_OPERATION_SEMANTICS,
 } from "./recovery-intent.js";
 
-// The Linear credential this machine holds: host state, stored outside any
-// repository, read by whoever needs to call the service.
-export type { LinearCredential, LinearCredentialState } from "./linear-credential.js";
-export {
-  clearLinearCredential,
-  commitLinearCredential,
-  linearCredentialPath,
-  readLinearCredential,
-  REFRESH_WINDOW_MS,
-  supersededBy,
-  writeLinearCredential,
-} from "./linear-credential.js";
+// why: No Linear credential and no OAuth flow live in the engine: mstar performs no
+// Linear request, and the bearer belongs to the host's own credential store.
 
-// The one OAuth flow: discovery, dynamic registration, PKCE, the code exchange
-// and refresh. The CLI's login and the dsh Settings Authorize both call this,
-// so there is never a second implementation to drift. `LINEAR_MCP_SCOPE` is the
-// single constant both surfaces request.
-export type { AuthorizationServer, PendingAuthorization, RegisteredClient, TokenSet } from "./linear-auth.js";
-export {
-  beginAuthorization,
-  createPkce,
-  discoverAuthorizationServer,
-  exchangeCode,
-  LINEAR_MCP_SCOPE,
-  LINEAR_MCP_URL,
-  linearScopeCanWrite,
-  refreshToken,
-  registerClient,
-} from "./linear-auth.js";

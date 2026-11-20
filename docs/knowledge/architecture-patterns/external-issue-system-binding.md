@@ -3,7 +3,7 @@ title: Binding a local store to an external issue system over MCP
 category: architecture-patterns
 status: active
 created: 2026-11-01
-last_updated: 2026-11-09
+last_updated: 2026-11-19
 source_iteration: iter-<plan-id>
 ---
 
@@ -14,12 +14,12 @@ hosted Linear MCP server. Reusable whenever a local authority grows a projection
 
 ## Split the binding in two layers
 
-A repository-level config file (`<repo-root>/.mstarc` in this repo) answers **how to connect** — its `[linear]` block is exactly four fields (`enabled`, `mode`, `workspace`, `team`; `packages/engine/src/mstarc.ts`); the store's own
+A repository-level config file (`<repo-root>/.mstarc` in this repo) answers **how to connect** — its `[linear]` block is exactly five fields (`enabled`, `mode`, `workspace`, `team`, `repo`; `packages/engine/src/mstarc.ts`); `repo` is the marker identity override used when the checkout has no origin remote; the store's own
 project row answers **what maps to what**. Putting the remote project name in the repo file freezes the binding at
 "one repo, one remote project" — a store project is the natural owner of "which remote project do I mirror", and one
 repo legitimately has several.
 
-Corollary: the connection layer stays flat (four keys), which removes the pressure to change the config format. A
+Corollary: the connection layer stays flat (five keys), which removes the pressure to change the config format. A
 nested format migration is a worse risk than the nesting it enables when a parse failure does not raise but
 silently falls back to a default path.
 
@@ -36,8 +36,8 @@ a one-way door: the row is advanced, the retry is refused `illegal-transition`, 
 resumption safe is what blocks it. Each public verb owns exactly one `begin immediate … commit`; a caller needing a
 wider unit calls verbs in sequence and relies on per-verb receipts.
 
-Record the rule in the frozen contract, not only in the module header — the next consumer builds against the
-contract (`{SPECS_DIR}/linear-one-way-push-write-contract.md` is the current owner).
+Record the rule in the durable decision record, not only in the module header — the next consumer builds against the
+contract (`docs/adr/implemented/architecture/2026-11-19-host-owned-linear-io.md` is the current owner).
 
 ## A cursor that advances past a failure strands it forever
 
@@ -78,11 +78,17 @@ An imported row carries a foreign `provider`; every gate that means "local work 
 than assume the store holds nothing else. The test that shows this is a positive control: flip the same row's
 provider to `local` and watch the gate fire.
 
-## What a read-only iteration still owed
+## The host owns the external I/O; the local authority keeps only its half
 
-Detection, the ledger and the config surface were worth shipping before any write path, because they are the part
-that could be proven against fixtures. (The write path has since shipped — `packages/engine/src/issue-sync/linear-write.ts`
-and `push.ts`, under `{SPECS_DIR}/linear-one-way-push-write-contract.md`; this section records why the read half stood
-alone first, not a claim that writes are still absent.) State the unverified half plainly — no credential meant the MCP tool inventory
-was unknown for this whole iteration, and recording that as a pending gap (with what would settle it) is the honest
-deliverable, not a fabricated tool list.
+The credential lesson generalizes: an application that stores its own OAuth credential for an external system ends
+up owning a second authorization surface beside the agent's own tools, and the two carry different scope
+vocabularies. The standing model is the opposite — the host's standard MCP server performs every external call with
+credentials the host already manages, and the local authority only feeds plans and consumes results
+(`docs/adr/implemented/architecture/2026-11-19-host-owned-linear-io.md`). No transport, token, or socket lives in
+the local code, so the unverified-tool-inventory gap of the first write iteration cannot recur: the tool list is
+discovered at runtime by the agent that holds the tools.
+
+Correlation back to the local rows is identity, not prose: each pushed record carries a marker with the repository
+identity (`repo`, the normalized `origin` remote or the `[linear] repo=` override), the local issue id, and the
+pushing checkout's git author. Ingest associates on `(repo, local)` plus the author check, records the association
+in the ledger only, and never adopts an unmarked or foreign record by title or description.

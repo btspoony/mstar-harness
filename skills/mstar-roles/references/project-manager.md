@@ -222,6 +222,7 @@ PM must:
 - Capture confirmed non-blocking leftovers as issues linked to the plan
 - Keep the plan's open-issue state coherent at closure (capture before leaving InReview; close with a disposition)
 - Sync plan/status in the same coordination round
+- On owner merge/close/review feedback on a delivered PR, run the disposition in `mstar-knowledge` § Owner feedback in the same coordination round.
 - Enforce report-to-status hard gate before next dispatch
 
 Details:
@@ -269,6 +270,8 @@ Minimum invariants:
   - `references/project-manager/plan-management.md`
 - PM Acceptance procedure, report and bounded execution exception:
   - `references/project-manager/acceptance.md`
+- Public PR body interface (standalone and iteration delivery):
+  - `references/project-manager/pr-description.md`
 
 Sub-references above include additional **NEVER** rules for PM plan/status sync, routing fairness, and QC/findings consolidation.
 

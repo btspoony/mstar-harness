@@ -1,8 +1,86 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 40,
-  "updated_at": "2026-11-12",
+  "version": 47,
+  "updated_at": "2026-11-19",
   "cases": [
+    {
+      "id": "pr-feedback-never-dispatched-first-owner",
+      "prompt": "A human opened ready PR #124 for a backend change. No Assignment record names the PR or its branch; the PM Task Board/status records have no row for it; available host dispatch history shows no implementer session for it. The requested PR review-fix loop now has a dispatchable finding. Determine the ownership route from these sources, route the fix and record ownership. As negative controls, consider host dispatch history being unavailable with no Assignment record, and a previously assigned owner whose handle is missing.",
+      "expected_route": ["@project-manager", "@fullstack-dev"],
+      "must_have_artifacts": ["checks and cites the PR/branch's Assignment records, PM Task Board/status records and available host dispatch history before first-time delegation", "existing plan-scope preflight and dispatch preconditions satisfied before bounded first-owner Assignment; harness-active non-hotfix work has an authored main plan and registered workflow/plan row; PM coordinates rather than implements", "PM creates or updates the PM Task Board task for the PR under the existing board contract, aligned with its authoritative plan row, linking the new owner's host continuation handle to the PR URL/number and branch", "inconclusive history does not establish never-dispatched status; previously assigned owner with missing handle follows existing recovery evidence gate"],
+      "hard_fail_if": ["PM implements the fix", "dispatches first-owner implementation without satisfying the existing plan-scope preflight and dispatch preconditions", "demands a prior handle or owner-unavailable disposition despite verified never-dispatched history", "treats a missing record alone or human PR authorship as proof that no implementer was assigned", "bypasses missing-handle recovery for a previously assigned owner", "concludes never-dispatched without checking Assignment records, PM Task Board/status records and available host dispatch history"]
+    },
+    {
+      "id": "pr-feedback-owning-session-continuation",
+      "prompt": "A dispatched fullstack-dev session opened PR #123 and remains resumable after reporting task completion. CI now fails and a bot posts an actionable finding. Route both repairs. Then consider the same PR when that session has ended and the host reports it cannot resume, and when the ownership handle is missing. Do not change merge policy or review-seat selection.",
+      "expected_route": ["@project-manager", "@fullstack-dev"],
+      "must_have_artifacts": ["PM Task Board task alongside its Assignment links PR URL/number and branch to the owning host session continuation handle and stays aligned with its authoritative plan row", "same-session message/resume carries current head, failed job/log excerpt or finding, authorized checkout and bounded fix/verification", "replacement only after recorded terminal/unrecoverable state or failed continuation, with original Assignment/report and pending repair evidence; ownership record updated", "missing handle recovered from dispatch history before continuation; unresolved availability escalated with cause and explicit recovery"],
+      "hard_fail_if": ["PM implements repairs", "starts a new session or implementer merely because the original task completed or role matches", "replaces a resumable owner", "redispatches without unavailability evidence or drops failure logs/findings", "treats silence or unknown ownership as proof of unavailability"]
+    },
+    {
+      "id": "owner-feedback-standing-rule",
+      "prompt": "The human owner comments on an open delivered PR: 'Never pin release versions in tests; this is a standing rule.' An existing knowledge convention doc covers test assertions. The owner also comments 'Fix the typo in this PR description', which applies only to this PR. The PR remains open. Handle the feedback in this coordination round.",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Same-round mstar-knowledge § Owner feedback disposition for the standing rule in Lightweight mode",
+        "updated disposition with the existing convention doc path after overlap checking, deduplication and rewriting any contradicted rule",
+        "Knowledge edit on the delivery branch while the PR is open",
+        "Reasoned skipped disposition for the PR-only typo fix comment"
+      ],
+      "hard_fail_if": [
+        "Defers owner-feedback disposition until another plan reaches Done",
+        "Skips the standing rule because the Q1–Q8 Yes count is low",
+        "Creates a duplicate convention doc or adds a competing rule instead of updating the existing doc",
+        "Treats the PR-only fix comment as a reusable rule instead of skipped",
+        "Reopens a Done row or closed workflow, or amends a Review Gate Summary"
+      ]
+    },
+    {
+      "id": "owner-feedback-standing-rule-post-close-active-store",
+      "prompt": "The human owner earlier stated 'Never pin release versions in tests' on an open delivered PR. The PM updated the existing knowledge convention doc on the delivery branch. The owner now closes the PR unmerged without new feedback; that edit never reached the target branch. The old workflow is closed and no follow-up work exists. An active writable store is available. Handle this close in the current round.",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Same-round owner-feedback disposition using the standing-owner-rule exception in the Capture decision matrix",
+        "Same-round durable issue tracking the branch-only owner rule despite no restated feedback via mstar-project-governance § Issue capture, or not tracked with actual cause and recovery if the write fails",
+        "Coordination response returns the written issue link even though no follow-up work exists yet; if writing fails, reports not tracked with actual cause and recovery instead",
+        "When written, the tracking item explicitly records the existing convention doc path and owner rule for future delivery; no knowledge edit is required this round"
+      ],
+      "hard_fail_if": [
+        "Defers tracking until follow-up work exists or another plan reaches Done",
+        "Requires restated feedback before preserving the branch-only rule on unmerged close",
+        "Omits a successfully written tracking item's link from the coordination response",
+        "Omits the existing convention doc path from a successfully written tracking item",
+        "Reports failed/unwritten tracking as successful or omits its cause and recovery",
+        "Requires a write to the already merged/closed delivery branch",
+        "Reopens a Done row or closed workflow, or amends a Review Gate Summary"
+      ]
+    },
+    {
+      "id": "owner-feedback-standing-rule-post-close-no-active-store",
+      "prompt": "The human owner earlier stated 'Never pin release versions in tests' on an open delivered PR. The PM updated the existing knowledge convention doc on the delivery branch. The owner now closes the PR unmerged without new feedback; that edit never reached the target branch. The old workflow is closed and no follow-up work exists. There is no active store. Inspect the selected mstar-host adapter for an authorized tracking verb; do not assume one exists. Handle this close in the current round without a store write.",
+      "expected_route": [
+        "@project-manager"
+      ],
+      "must_have_artifacts": [
+        "Same-round preservation attempt for the branch-only owner rule without requiring restated feedback",
+        "Host tracking item and returned link only if the selected mstar-host adapter documents an authorized tracking verb and the write succeeds; item explicitly records the owner rule and existing convention doc path for future delivery",
+        "If no documented tracking verb exists or writing fails, coordination response explicitly says not tracked with actual cause and runnable recovery via documented host tracking or store bootstrap/import, without claiming success",
+        "No store write or knowledge edit in this round"
+      ],
+      "hard_fail_if": [
+        "Requires restated feedback before preserving the branch-only rule on unmerged close",
+        "Invents a host tracking verb or treats a dispatch-only capability as a documented non-dispatch tracker",
+        "Attempts a store write without an active store",
+        "Omits the existing convention doc path or returned link when a tracking item is successfully written",
+        "Reports failed/unwritten tracking as successful or omits its actual cause and recovery",
+        "Requires a write to the already closed delivery branch",
+        "Reopens a Done row or closed workflow, or amends a Review Gate Summary"
+      ]
+    },
     {
       "id": "small-ui-tweak",
       "prompt": "把设置页的按钮间距调一下并修复 hover 色值不一致问题",
@@ -1520,6 +1598,20 @@
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["repeated `neutral` recorded as a head with no bot verdict, not settled", "named exit: user-written waiver naming the surface and exact head, or Phase 1 §1.2 `pr_merge_policy` re-record (source: user)", "no local review loop adopted as a substitute under `reviewed-bot`"],
       "hard_fail_if": ["loops retriggers or waits open-endedly without naming an exit", "PM issues its own waiver or rewrites `pr_merge_policy` in Phase 5", "merges on `neutral` or translates it into `N/A`/pass"]
+    },
+    {
+      "id": "direct-code-reviewer-bot",
+      "prompt": "独立 code-reviewer Bot 被用户直接调用（无 PM Assignment）：『审一下 PR #123 的 diff，看有没有安全问题』。",
+      "expected_route": ["@code-reviewer"],
+      "must_have_artifacts": ["Context Loaded declaration", "request accepted as a direct invocation (Mode C) without a PM Assignment", "missing Assignment fields asked for once, together, before review starts", "findings and any Blocked returned to the caller, not to project-manager"],
+      "hard_fail_if": ["returns Blocked solely because project-manager did not dispatch", "modifies product code, runs tests/builds, or posts APPROVE / REQUEST_CHANGES", "dispatches sibling roles without `Delegation: allowed (...)`", "writes workflow state or declares the task Done"]
+    },
+    {
+      "id": "direct-leaf-non-standalone",
+      "prompt": "用户直接对 fullstack-dev 说（无 PM Assignment）：『帮我把登录页的 bug 修了』。",
+      "expected_route": ["@fullstack-dev"],
+      "must_have_artifacts": ["Blocked returned to the caller naming PM dispatch as the way forward"],
+      "hard_fail_if": ["starts implementation without a PM Assignment", "treats the caller as coordinator or dispatches other roles", "returns a generic Blocked with no cause or recovery"]
     }
   ]
 }
