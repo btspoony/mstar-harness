@@ -104,14 +104,19 @@ function parseFinding(entry: unknown, index: number): ReviewPostPlan["inlineComm
  * as an inline fix. The contract puts that block last (title / evidence /
  * impact / fix sketch, then the suggestion), so only a TRAILING last complete
  * line-start `suggestion` block is removed — after its closing fence only
- * blank lines may remain. A fence quoted as a Markdown example, or any last
- * block followed by prose, leaves the body unchanged. */
+ * blank lines may remain. The block closes at the LAST bare fence after the
+ * opener, so replacement text containing its own ``` line does not leak a
+ * tail. A fence quoted as a Markdown example, or any last block followed by
+ * prose, leaves the body unchanged. */
 function withoutSuggestion(body: string): string {
   const lines = body.split(/\r?\n/);
   const openers = lines.flatMap((line, index) => (/^```suggestion\s*$/.test(line) ? [index] : []));
   for (let i = openers.length - 1; i >= 0; i -= 1) {
     const open = openers[i]!;
-    const close = lines.findIndex((line, index) => index > open && /^```\s*$/.test(line));
+    let close = -1;
+    for (let j = lines.length - 1; j > open; j -= 1) {
+      if (/^```\s*$/.test(lines[j]!)) { close = j; break; }
+    }
     if (close === -1) continue;
     if (!lines.slice(close + 1).every((line) => line.trim() === "")) return body.trim();
     return [...lines.slice(0, open), ...lines.slice(close + 1)].join("\n").trim();

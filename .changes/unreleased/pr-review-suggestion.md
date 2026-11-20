@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root, engine, commands
+packages: root, engine, commands, opencode
 ---
 
 - PR-review findings may now carry one optional GitHub `suggestion` block for a local single-line repair — one file, one hunk, one line, mechanically safe, and only after reading the surrounding code; the fence holds replacement text only, stays anchored to the finding's single `RIGHT` line, and is posted verbatim as part of the inline body.
