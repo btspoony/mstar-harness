@@ -22,7 +22,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
 import { readDeclaredNodeFloor, warnUncheckableNodeFloor } from "./core.js";
 // Type-only import: erased at runtime, so it cannot create a cycle. The VALUE
@@ -342,9 +342,24 @@ function busyAware(db: StoreDb, path: string, timeout: number): StoreDb {
  * then WAL (verified), then synchronous=FULL on writers, query_only=ON on
  * readers, and foreign_keys=ON (verified) on both.
  */
-export async function connect(dbPath: string, mode: "read" | "write", timeout = DEFAULT_BUSY_TIMEOUT_MS): Promise<StoreDb> {
+export async function connect(
+  dbPath: string,
+  mode: "read" | "write",
+  timeout = DEFAULT_BUSY_TIMEOUT_MS,
+  noCreate = false,
+): Promise<StoreDb> {
   const { DatabaseSync } = await loadSqliteDriver();
-  return openConnection(dbPath, mode, DatabaseSync, timeout);
+  return openConnection(dbPath, mode, DatabaseSync, timeout, noCreate);
+}
+
+/**
+ * A SQLite `mode=rw` URI addressing `dbPath`: an existing database opens, a
+ * missing one refuses instead of being created. Every path segment is
+ * percent-encoded, so a store path carrying `%`, `?` or `#` is addressed
+ * literally rather than reinterpreted by the URI parser.
+ */
+function existingOnlyUri(dbPath: string): string {
+  return `file:${resolve(dbPath).split(sep).map(encodeURIComponent).join("/")}?mode=rw`;
 }
 
 /** SQLite's own file header is 100 bytes: bytes 0–15 are its format magic and
@@ -477,6 +492,7 @@ function openConnection(
   mode: "read" | "write",
   DatabaseSync: SqliteModule["DatabaseSync"],
   timeout = DEFAULT_BUSY_TIMEOUT_MS,
+  noCreate = false,
 ): StoreDb {
   // node:sqlite rejects an explicit `undefined` options argument - open
   // writers without a second argument, readers with the read-only option.
@@ -488,7 +504,10 @@ function openConnection(
     // back before the read open (see the helpers).
     assertAbsentOrRegularStoreFile(dbPath);
     if (mode === "read") ensureJournalForRead(dbPath);
-    db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
+    db =
+      mode === "read"
+        ? new DatabaseSync(dbPath, { readOnly: true })
+        : new DatabaseSync(noCreate ? existingOnlyUri(dbPath) : dbPath);
   } catch (error) {
     if (mode === "read" && isRawCantOpen(error)) throw error;
     refuseOpenFailure(error, dbPath, timeout);

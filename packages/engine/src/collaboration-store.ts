@@ -378,6 +378,74 @@ const COLLABORATION_TABLES: readonly string[] = [
   "sync_runs",
 ];
 
+/**
+ * The required current-schema columns, taken from `COLLABORATION_SCHEMA` (plus
+ * the shared ledger table). A table that kept its name but lost a required
+ * column is a damaged store, not a current one, and must refuse at admission
+ * instead of failing a later domain query. The DDL is the lane's immutable v1
+ * shape; a future schema change arrives as a new migration with its own list.
+ */
+const COLLABORATION_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  catalog_entities: [
+    "kind", "id", "title", "description", "root_kind", "relative_path", "document_kind", "lifecycle", "revision",
+    "registered_at", "updated_at", "source_hash",
+  ],
+  catalog_links: ["from_kind", "from_id", "relation", "to_kind", "to_id", "ordinal"],
+  catalog_operations: [
+    "operation_id", "request_hash", "phase", "catalog_delta_json", "before_versions_json", "after_versions_json",
+    "result_json", "created_at", "updated_at",
+  ],
+  collaboration_meta: [
+    "id", "repository_key", "mode", "store_id", "authority_state", "authority_epoch", "revision", "catalog_revision",
+    "created_at", "activated_at",
+  ],
+  collaboration_operations: [
+    "key_space", "operation_id", "execution_store_id", "execution_epoch", "request_hash", "result_json",
+    "collaboration_revision", "catalog_revision", "committed_at",
+  ],
+  cutover_publications: [
+    "manifest_id", "phase", "source_store_id", "source_epoch", "source_schema_version", "source_revision",
+    "source_catalog_revision", "manifest_digest", "target_store_id", "target_epoch", "verified_at", "fenced_at",
+    "activated_at",
+  ],
+  issue_counter: ["id", "next_value"],
+  issue_project_moves: [
+    "id", "issue_id", "from_project_id", "to_project_id", "actor", "reason", "occurred_at", "recorded_at",
+    "issue_revision",
+  ],
+  issue_sync_state: [
+    "binding_id", "direction", "local_id", "external_id", "item_state", "last_remote_updated_at", "last_error",
+    "last_skip_reason", "revision", "updated_at", "pending_target", "last_request_hash", "last_kind_label",
+  ],
+  issue_transitions: [
+    "id", "issue_id", "from_disposition", "to_disposition", "actor", "occurred_at", "recorded_at", "reason",
+    "evidence_json", "imported", "issue_revision",
+  ],
+  issues: [
+    "id", "project_id", "title", "kind", "severity", "disposition", "impact", "acceptance", "owner", "registered_at",
+    "closed_at", "closure_note", "created_at", "updated_at", "revision", "provider", "external_id", "url",
+    "identity_key", "milestone_id",
+  ],
+  occurrences: [
+    "id", "issue_id", "occurrence_key", "source_kind", "source_identity", "root_cause_key", "acceptance_key",
+    "location", "observed_behavior", "evidence_json", "discovered_at", "recorded_at", "imported",
+  ],
+  project_bindings: ["project_id", "provider", "workspace", "team", "remote_project", "revision", "updated_at"],
+  project_milestones: [
+    "milestone_id", "project_id", "project_kind", "name", "target", "status", "ordinal", "revision", "created_at",
+    "updated_at",
+  ],
+  project_roadmaps: ["project_id", "project_kind", "content_markdown", "content_hash", "revision", "updated_at"],
+  provenance: [
+    "id", "issue_id", "kind", "target", "source_hash", "legacy_project", "legacy_bucket", "legacy_entry_id",
+    "legacy_json", "imported_at", "origin",
+  ],
+  relations: ["from_issue", "relation", "to_issue"],
+  schema_version: ["version", "name", "checksum", "applied_at"],
+  sync_cursor: ["binding_id", "direction", "cursor", "updated_at"],
+  sync_runs: ["binding_id", "direction", "run_id", "holder_pid", "holder_host", "started_at", "reason"],
+};
+
 /** The exact trusted generation a caller may act on. */
 export type CollaborationStamp = Readonly<{
   repoKey: string;
@@ -522,6 +590,17 @@ function assertCurrentSchema(db: StoreDb, dbPath: string): void {
         `unexpected: ${unexpected.join(", ") || "none"})`,
     );
   }
+  const damaged: string[] = [];
+  for (const [table, required] of Object.entries(COLLABORATION_COLUMNS)) {
+    const columns = new Set(
+      (db.prepare(`pragma table_info(${table})`).all() as Array<{ name?: unknown }>).map((column) => column.name),
+    );
+    const lost = required.filter((column) => !columns.has(column));
+    if (lost.length > 0) damaged.push(`${table}(${lost.join(", ")})`);
+  }
+  if (damaged.length > 0) {
+    throw unreadable(dbPath, `its schema is missing required columns: ${damaged.join("; ")}`);
+  }
 }
 
 function readMeta(db: StoreDb): CollaborationMeta {
@@ -629,12 +708,26 @@ function handleFor(db: StoreDb, authority: CollaborationAuthority): Collaboratio
   };
 }
 
+/**
+ * Async returns assimilate any object OR callable value that carries a `then`
+ * function, so both shapes are "the effect is asynchronous" here.
+ */
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return false;
+  return typeof (value as { then?: unknown }).then === "function";
+}
+
 /** Connect with the same bounded transient read-open retry the execution lane uses. */
-async function connectAt(dbPath: string, mode: "read" | "write", timeout: number): Promise<StoreDb> {
+async function connectAt(
+  dbPath: string,
+  mode: "read" | "write",
+  timeout: number,
+  noCreate = false,
+): Promise<StoreDb> {
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;
   for (let attempt = 1; ; attempt++) {
     try {
-      return await connect(dbPath, mode, timeout);
+      return await connect(dbPath, mode, timeout, noCreate);
     } catch (error) {
       if (attempt < attempts && isTransientReadOpenFailure(error, dbPath)) {
         await sleep(READ_OPEN_BACKOFF_MS);
@@ -858,14 +951,23 @@ export async function withCollaborationWrite<T>(
     probe.close();
   }
 
-  const db = await connectAt(dbPath, "write", timeout);
+  const db = await connectAt(dbPath, "write", timeout, true).catch((error: unknown) => {
+    // The canonical database is gone: refuse without leaving a new (empty)
+    // database at the authority path.
+    if (!existsSync(dbPath)) throw notInitialized(dbPath);
+    throw error;
+  });
   let handle: CollaborationStoreHandle | undefined;
   try {
     db.exec("begin immediate");
     try {
       handle = handleFor(db, admit(db, location, expected, "active"));
       const result = apply(handle);
-      if (result !== null && typeof result === "object" && typeof (result as { then?: unknown }).then === "function") {
+      if (isThenable(result)) {
+        // Consume the abandoned result before refusing: an async effect's
+        // rejection must not surface as an unhandled rejection after this call
+        // has already reported the synchronous-effect refusal.
+        void Promise.resolve(result).catch(() => undefined);
         throw new StoreError(
           "store.corrupt",
           "A collaboration write effect must be synchronous. The returned thenable was rejected before commit and " +

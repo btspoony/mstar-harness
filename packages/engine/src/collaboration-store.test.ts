@@ -16,6 +16,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -321,6 +322,23 @@ describe("collaboration store", () => {
       expect(authorities[index].repoKey).toBe(locations[index].repoKey);
       expect(metaRecord(locations[index].dbPath).repository_key).toBe(locations[index].repoKey);
     }
+
+    // A path whose directory segments carry percent-encoded uppercase must still
+    // open for a guarded write: the no-create write URI addresses it literally.
+    const upperRoot = makeRepo("https://git.example.com/Team/Repo.git");
+    const upperLocation = locationAt(upperRoot);
+    const upperStaged = await initializeCollaborationStore(upperLocation);
+    expect(upperLocation.dbPath).toContain("%54eam");
+    activate(upperLocation.dbPath);
+    await withCollaborationWrite(
+      contextAt(upperRoot),
+      (write) => {
+        write.db.exec(receiptInsert("op-upper"));
+        return "ok";
+      },
+      { repoKey: upperStaged.repoKey, mode: upperStaged.mode, storeId: upperStaged.storeId, epoch: upperStaged.epoch },
+    );
+    expect(receipts(upperLocation.dbPath)).toEqual(["op-upper"]);
   });
 
   test("corrupt bytes, an unsupported ledger and a symlinked target refuse as unreadable", async () => {
@@ -384,6 +402,33 @@ describe("collaboration store", () => {
     await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
     await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
       code: "collaboration.unreadable",
+    });
+  });
+
+  test("a current table name without its required columns refuses as unreadable", async () => {
+    const repo = makeRepo("https://github.com/acme/damaged-columns.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    await initializeCollaborationStore(location);
+    activate(location.dbPath);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      // Same table name, current ledger and metadata, but the issue shape lost
+      // every required column including `impact`.
+      db.exec("alter table issues rename to issues_original");
+      db.exec("create table issues(id text primary key)");
+      db.exec("drop table issues_original");
+    } finally {
+      db.close();
+    }
+
+    await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+      message: expect.stringMatching(/issues\(.*impact/),
+    });
+    await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+      message: expect.stringMatching(/issues\(.*impact/),
     });
   });
 
@@ -503,8 +548,50 @@ describe("collaboration store", () => {
     expect(() => escaped?.db.exec("select 1")).toThrow();
   });
 
-  test("an asynchronous effect is rejected before commit", async () => {
+  test("an asynchronous effect is rejected before commit and leaves no unhandled rejection", async () => {
     const repo = makeRepo("https://github.com/acme/async.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    const staged = await initializeCollaborationStore(location);
+    activate(location.dbPath);
+    const stamp: CollaborationStamp = {
+      repoKey: staged.repoKey,
+      mode: staged.mode,
+      storeId: staged.storeId,
+      epoch: staged.epoch,
+    };
+
+    // No test-side `.catch`: the wrapper itself must observe the abandoned
+    // promise, so an unhandled rejection here fails the case.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await expect(
+        withCollaborationWrite(
+          context,
+          async (write) => {
+            write.db.exec(receiptInsert("op-async"));
+            await Promise.resolve();
+            throw new Error("async effect");
+          },
+          stamp,
+        ),
+      ).rejects.toMatchObject({ code: "store.corrupt", message: expect.stringContaining("synchronous") });
+      // Unhandled rejections are reported at the runtime's next task boundary,
+      // so drain exactly one; no duration is being guessed here.
+      const drained = Promise.withResolvers<void>();
+      setImmediate(drained.resolve);
+      await drained.promise;
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(receipts(location.dbPath)).toEqual([]);
+  });
+
+  test("a callable thenable effect is rejected before commit", async () => {
+    const repo = makeRepo("https://github.com/acme/callable-thenable.git");
     const context = contextAt(repo);
     const location = locationAt(repo);
     const staged = await initializeCollaborationStore(location);
@@ -520,13 +607,12 @@ describe("collaboration store", () => {
       withCollaborationWrite(
         context,
         (write) => {
-          const pending = (async () => {
-            write.db.exec(receiptInsert("op-async"));
-            await Promise.resolve();
-            throw new Error("async effect");
-          })();
-          pending.catch(() => undefined);
-          return pending;
+          write.db.exec(receiptInsert("op-callable-thenable"));
+          return Object.assign(() => "callable", {
+            then: (_resolve: unknown, reject?: (reason: unknown) => void) => {
+              reject?.(new Error("callable thenable"));
+            },
+          });
         },
         stamp,
       ),
@@ -629,6 +715,39 @@ describe("collaboration store", () => {
     expect(readFileSync(location.dbPath).equals(activeBytes)).toBe(true);
     expect(journalMode(location.dbPath)).toBe("delete");
     expect(existsSync(`${location.dbPath}-wal`)).toBe(false);
+  });
+
+  test("a database moved between admission and the writer open is never recreated", async () => {
+    const repo = makeRepo("https://github.com/acme/probe-race.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    await initializeCollaborationStore(location);
+    activate(location.dbPath);
+    const movedPath = `${location.dbPath}.moved`;
+
+    const realLstat = nodeFs.lstatSync;
+    let checks = 0;
+    const racer = spyOn(nodeFs, "lstatSync").mockImplementation(((target: string) => {
+      if (target === location.dbPath) {
+        checks += 1;
+        // 1: the write entry's own regular-file check, 2: the read-only probe's,
+        // 3: the writer's own check - so the canonical database is renamed away
+        // in the exact window between admission and the writer open.
+        if (checks === 3) renameSync(location.dbPath, movedPath);
+      }
+      return realLstat(target);
+    }) as never);
+    try {
+      await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
+        code: "collaboration.not-initialized",
+      });
+    } finally {
+      racer.mockRestore();
+    }
+    // Nothing was recreated at the authority path; the real store is intact
+    // under the name the racing actor moved it to.
+    expect(existsSync(location.dbPath)).toBe(false);
+    expect(metaRecord(movedPath).authority_state).toBe("active");
   });
 
   test("open contention keeps the bounded busy refusal", async () => {
