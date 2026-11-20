@@ -1666,6 +1666,41 @@ describe("prReviewSeatPrompt — per-seat ## Budget block (tier time budget)", (
 });
 
 // ---------------------------------------------------------------------------
+// prReviewSeatPrompt — stage-2 optional suggestion contract
+// One bounded GitHub suggestion block per finding: local single-line repair
+// only, replacement text only, anchored to the finding's one RIGHT line, and
+// part of the inline body posted verbatim (pr-review.md § Seat prompts /
+// § Comment posting).
+// ---------------------------------------------------------------------------
+
+describe("prReviewSeatPrompt — stage-2 optional suggestion contract", () => {
+  const base = {
+    stage: 2 as const,
+    domain: "backend",
+    seat: "api",
+    skillRoot: "/tmp/engine-seat-skill",
+    worktreePath: "/tmp/engine-seat-worktree",
+    reconFacts: [],
+  };
+
+  test("stage-2 output contract allows one bounded single-line suggestion per finding", () => {
+    const prompt = prReviewSeatPrompt(base);
+    expect(prompt).toContain("one optional GitHub ```suggestion block per finding");
+    expect(prompt).toContain("local (one file, one hunk, one line)");
+    expect(prompt).toContain("mechanically safe");
+    expect(prompt).toContain("READ the surrounding code");
+    expect(prompt).toContain("replacement text only");
+    expect(prompt).toContain("ONE `RIGHT` diff line");
+    expect(prompt).toContain("posted verbatim");
+    expect(prompt).toContain("Never suggest a repair spanning hunks or files");
+  });
+
+  test("stage-1 collect contract carries no suggestion artifact", () => {
+    expect(prReviewSeatPrompt({ ...base, stage: 1 })).not.toContain("```suggestion");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // prReviewSeatPrompt — collectFolded seat option (context-pack)
 // When the collect wave folds onto the Stage-2 domain seats (SSOT
 // pr-review.md § Review pipeline fold default; prose "collection folded in

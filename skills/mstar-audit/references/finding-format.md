@@ -22,6 +22,7 @@ Findings flow into a prioritization table and into this run's report. Without st
   LOW (smell, needs investigation). LOW-confidence findings may be reported, but as an
   "investigate" item, not a "fix" item.
 - **Fix sketch**: 1–3 sentences, enough to judge effort honestly; when the finding is structural, the sketch names the restructuring move (per the `## Structural remedies` list). Not the fix itself — just enough to judge effort honestly.
+- **Suggestion** (optional; single-line repairs only): one GitHub `suggestion` fence, replacement text only, anchored to the finding's single `RIGHT` line — allowed only when the repair is one file / one hunk / one line, mechanically safe, and the reviewer read the surrounding code; never multi-hunk or multi-file, never behavior change beyond the stated defect.
 ```
 
 ## Structural remedies
