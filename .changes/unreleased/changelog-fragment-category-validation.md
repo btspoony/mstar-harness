@@ -3,7 +3,7 @@ category: Fixed
 packages: root
 ---
 
-- Release preparation no longer fails on a changelog fragment whose `category:` is not one of the six changelog kinds: the PR test suite now rejects an unknown category, and the stale `Harness` fragment was corrected to `Added`.
+- An unreleased changelog fragment whose `category:` is not one of the six changelog kinds is now rejected by the PR test suite, not only by release preparation; the stale `Harness` fragment that failed the last release prep was corrected to `Added`.
 
 <!-- CN -->
-- Release 准备不再因 changelog fragment 的 `category:` 不是六种变更类型之一而失败：PR 测试套件现在会拒绝未知 category，遗留的 `Harness` fragment 已修正为 `Added`。
+- 未发布的 changelog fragment 若 `category:` 不属于六种变更类型，现在会由 PR 测试套件拒绝，而不再只在 release 准备阶段才被发现；导致上次 release 准备失败的遗留 `Harness` fragment 已修正为 `Added`。
