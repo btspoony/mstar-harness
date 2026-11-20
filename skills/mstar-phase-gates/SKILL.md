@@ -25,7 +25,7 @@ description: Spec-Driven 双阶段门禁：Prepare（specify→clarify→plan）
   - **长期方案优先**：默认先设计目标状态，再裁剪本轮可交付切片；不得以“临时方案 / 混合方案 / 以后再说”替代目标设计。
   - **Durable Roadmap Gate**：若本轮只做部分范围，plan 必须写明 roadmap（批次、依赖、暂缓项、owner/触发条件、最终完成定义）。只有一句“后续再做 / next plan”视为未通过 plan gate。
   - **Recall receipt（锁 plan 前）**：记录相关 knowledge/research 输入——复用与被否决策一并注明；无适用输入时**如实记空**。不做全库扫描、不发明知识；收据缺失不进入 plan lock。语义 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
-  - **ADR 落地（锁 plan 前）**：裁决 `clarify` 的每个 `ADR-candidate`——本轮不实施、须跨本轮存活 → 按 `proposed/TEMPLATE.md` 创建 `{ADR_DIR}/proposed/<class>/` 记录（写入承载本次交付的检出，`mstar path check` 语义），plan 引用路径；本轮实施 → plan 头记 `ADR: <topic>（Done 前落地 implemented/）`，实现既有 `proposed/` 记录的变更在同一变更内按 lifecycle 提升为 `implemented/` 并改指路径；被裁掉的候选不再记录。判据 → `mstar-doc-corpus/references/adr.md` § Proposed or implemented。
+  - **ADR 落地（锁 plan 前）**：裁决 `clarify` 的每个 `ADR-candidate`——本轮不实施、须跨本轮存活 → 按 `proposed/TEMPLATE.md` 创建 `{ADR_DIR}/proposed/<class>/` 记录（写入承载本次交付的检出，`mstar path check` 语义），plan 引用路径；本轮实施 → 不在此落盘，`Done` 前经 `## Review Gate Summary` 的 `ADR: <path>` 行指向 `implemented/`（唯一 carrier → `mstar-artifacts/references/plan-files-and-reports.md`）；实施既有 `proposed/` 记录的变更在同一变更内按 lifecycle 提升为 `implemented/` 并让该行改指路径；被裁掉的候选不再记录。判据 → `mstar-doc-corpus/references/adr.md` § Proposed or implemented。
 - **开发 AC 审查**：锁 plan 前逐项退回把 live API/provider receipt、具名或已认证 host/account、安装后的 plugin/artifact、真实 browser/device、deployed environment 作为开发任务/验收门禁的条目；同轮改写为隔离 fixtures、单元/组件/集成测试或本地构建 CLI/MCP 的对应证明。另行显式授权的独立 operational/E2E workflow 可有自身真实场景，不倒灌开发 plan。此项为语义审查，不用关键词扫描充当机器 gate。
 
 ### B. Execute：`plan(locked) → tasks → implement`
