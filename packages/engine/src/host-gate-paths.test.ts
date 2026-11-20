@@ -213,6 +213,44 @@ describe("host-gate-paths collaboration authority target", () => {
     expect(isStoreAuthorityTarget(join(home, ".mstar", "repos-archive", "acme", "repo", "collaboration.db"))).toBe(false);
     expect(isStoreAuthorityTarget(join(home, ".mstar", "repos", "github.com", "acme", "repo", "store.db"))).toBe(false);
   });
+
+  test("denies the physical path of a repository nested beyond the scan bound", () => {
+    // why: the namespace admits deeply nested owners, so a bounded reverse scan
+    // may stop before reaching the repository that owns a physical path. An
+    // unfinished scan can never answer "unrelated": the target is denied.
+    const physical = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-deep-")));
+    const deepOwner = join(home, ".mstar", "repos", "gitlab.com", "g1", "g2", "g3", "g4");
+    mkdirSync(deepOwner, { recursive: true });
+    symlinkSync(physical, join(deepOwner, "repo"));
+    try {
+      expect(isStoreAuthorityTarget(join(physical, "collaboration.db"))).toBe(true);
+      expect(isStoreAuthorityTarget(`${join(physical, "collaboration.db")}-wal`)).toBe(true);
+      // The canonical spelling is denied before any scan runs.
+      expect(isStoreAuthorityTarget(join(deepOwner, "repo", "collaboration.db"))).toBe(true);
+    } finally {
+      rmSync(join(home, ".mstar", "repos", "gitlab.com"), { recursive: true, force: true });
+      rmSync(physical, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed when the reverse scan is cut short, and recovers when it completes", () => {
+    // why: an entry budget can run out before the scan proves coverage. During
+    // that state an outside path is denied; once the namespace is scannable
+    // again the same path is unrelated and allowed.
+    const unrelated = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-far-")));
+    const crowded = join(home, ".mstar", "repos", "github.com", "many");
+    mkdirSync(crowded, { recursive: true });
+    for (let index = 0; index < 520; index++) mkdirSync(join(crowded, `r${index}`));
+    try {
+      expect(isStoreAuthorityTarget(join(unrelated, "collaboration.db"))).toBe(true);
+      // A canonical selection is denied by containment, whatever the scan state.
+      expect(isStoreAuthorityTarget(collaborationDb())).toBe(true);
+    } finally {
+      rmSync(crowded, { recursive: true, force: true });
+    }
+    expect(isStoreAuthorityTarget(join(unrelated, "collaboration.db"))).toBe(false);
+    rmSync(unrelated, { recursive: true, force: true });
+  });
 });
 
 describe("host-gate-paths case-folded document classification", () => {

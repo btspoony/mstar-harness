@@ -148,40 +148,66 @@ function landedOrNull(candidate: string): string | null {
   }
 }
 
-/** Deepest entry mapped below the namespace. Depth counts the namespace as 1, so
- * `<host>/<owner...>/<repo>` is depth 4 and the bound allows three nested owner
- * segments. */
+/** Deepest directory the reverse walk descends into. Depth counts the namespace
+ * as 1, so `<host>/<owner...>/<repo>` is depth 4. The bound is a DENIAL trigger,
+ * never a coverage claim: passing it makes the scan incomplete. */
 const MAX_NAMESPACE_DEPTH = 6;
 
-/** Entries one reverse-index walk visits before it stops. */
+/** Entries one reverse walk visits before it stops; exhausting it makes the scan
+ * incomplete. */
 const MAX_NAMESPACE_SCAN_ENTRIES = 512;
 
+/** Result of the bounded reverse walk: the repository directories it could
+ * prove, and whether it proved coverage of the whole namespace. */
+type NamespaceScan = Readonly<{ dirs: readonly string[]; complete: boolean }>;
+
 /** Physical repository directories of the canonical namespace. A repository
- * directory is `<host>/<owner...>/<repo>`, so every entry at that depth belongs
- * to some repository's physical extent; a symlinked entry is mapped at its
- * landed target, which is exactly where a physical-path write would land. The
- * walk never leaves the namespace, stops on depth and entry budget, and a
- * visited set makes a symlink cycle terminate.
+ * directory is `<host>/<owner...>/<repo>` (or `_id/<repo>`), so every entry at
+ * that depth belongs to some repository's physical extent; a symlinked entry is
+ * mapped at its landed target, which is exactly where a physical-path write
+ * would land.
  *
- * simplify: repository directories deeper than MAX_NAMESPACE_DEPTH are not
- * mapped; widen the bound when a nested-owner layout exceeds it. */
-function namespaceRepositoryDirs(userHome: string): string[] {
+ * The walk stays inside the namespace and stops on a depth bound, an entry
+ * budget, a repeated directory or a read error. Any stop makes the scan
+ * INCOMPLETE — the namespace admits deeply nested owners, so an early stop may
+ * hide the very repository that owns the target. */
+function scanNamespaceRepositories(userHome: string): NamespaceScan {
   const namespace = landedOrNull(resolve(userHome, ".mstar", "repos"));
-  if (namespace === null) return [];
-  const found: string[] = [];
+  if (namespace === null) return { dirs: [], complete: false };
+  try {
+    if (!statSync(namespace).isDirectory()) return { dirs: [], complete: true };
+  } catch (error) {
+    // why: an absent namespace holds no repository to map; any other failure
+    // cannot prove coverage. Both answers are explicit, none is a guess.
+    return { dirs: [], complete: (error as NodeJS.ErrnoException).code === "ENOENT" };
+  }
+  const dirs: string[] = [];
   const visited = new Set<string>();
+  let complete = true;
   let budget = MAX_NAMESPACE_SCAN_ENTRIES;
+  const stop = (): void => {
+    complete = false;
+  };
   const walk = (dir: string, depth: number, host: string | null): void => {
-    if (depth > MAX_NAMESPACE_DEPTH || budget <= 0 || visited.has(dir)) return;
+    if (!complete) return;
+    if (depth > MAX_NAMESPACE_DEPTH || visited.has(dir)) {
+      stop();
+      return;
+    }
     visited.add(dir);
-    if (depth >= 4 || (depth === 3 && host === "_id")) found.push(dir);
+    if (depth >= 4 || (depth === 3 && host === "_id")) dirs.push(dir);
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch {
+      stop();
       return;
     }
     budget -= entries.length;
+    if (budget < 0) {
+      stop();
+      return;
+    }
     for (const entry of entries) {
       const child = join(dir, entry.name);
       const childHost = depth === 1 ? entry.name : host;
@@ -191,26 +217,21 @@ function namespaceRepositoryDirs(userHome: string): string[] {
       }
       if (!entry.isSymbolicLink()) continue;
       const landed = landedOrNull(child);
-      if (landed === null) continue;
+      if (landed === null) {
+        stop();
+        continue;
+      }
       try {
         if (!statSync(landed).isDirectory()) continue;
       } catch {
+        stop();
         continue;
       }
       walk(landed, depth + 1, childHost);
     }
   };
   walk(namespace, 1, null);
-  return found;
-}
-
-/** True when `dir` lands on a namespace repository directory. Without this a
- * repository directory symlinked out of the namespace would be writable through
- * its physical-only path, which no spelling of the namespace covers. */
-function isReverseMappedRepository(dir: string, userHome: string): boolean {
-  const physical = landedOrNull(dir);
-  if (physical === null) return false;
-  return namespaceRepositoryDirs(userHome).includes(physical);
+  return { dirs, complete };
 }
 
 /** True when `dir` names a location inside the canonical collaboration
@@ -218,10 +239,10 @@ function isReverseMappedRepository(dir: string, userHome: string): boolean {
  * `~/.mstar` or `repos` moved elsewhere — so the configured
  * `<home>/.mstar/repos` spelling and its landed twin both count, and the target
  * is judged in both spellings too (callers pass requested and landed paths
- * alike). A repository directory below the namespace that is a symlink is also
- * mapped back from its physical path. A same-named file outside every spelling
- * — a checkout's own `.mstar`, or `repos-archive/` beside the namespace — is not
- * authority bytes. */
+ * alike). A repository directory below the namespace that is a symlink is mapped
+ * back from its physical path, and an unfinished reverse scan denies the target:
+ * a same-named file outside every spelling is not authority bytes only when the
+ * namespace was fully scannable and did not claim it. */
 function isInCollaborationNamespace(dir: string, userHome: string): boolean {
   const configured = resolve(userHome, ".mstar", "repos");
   const landedNamespace = landedOrNull(configured);
@@ -229,7 +250,10 @@ function isInCollaborationNamespace(dir: string, userHome: string): boolean {
   const roots =
     landedNamespace === null || landedNamespace === configured ? [configured] : [configured, landedNamespace];
   const targets = landedDir === null || landedDir === dir ? [dir] : [dir, landedDir];
-  return roots.some((root) => targets.some((target) => isBelow(root, target))) || isReverseMappedRepository(dir, userHome);
+  if (roots.some((root) => targets.some((target) => isBelow(root, target)))) return true;
+  const scan = scanNamespaceRepositories(userHome);
+  if (landedDir !== null && scan.dirs.includes(landedDir)) return true;
+  return !scan.complete;
 }
 
 /** True when `target` is the collaboration database (or one of its sidecars)
