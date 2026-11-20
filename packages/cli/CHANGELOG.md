@@ -6,6 +6,29 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.8.0] - 2026-11-20
+
+### Harness
+
+- **Fixed harness root:** `{HARNESS_DIR}` is now `<git main worktree root>/.mstar`, derived from Git only. `harness_dir` in `.mstarc`, `MSTAR_HARNESS_DIR`, and the legacy `.agents/` / `.plans/` / `plans/` candidates are retired as selectors, not as errors: the declared key and the environment variable are parsed or read and then ignored, a checkout without `.mstar` simply resolves no harness (`mstar harness scaffold`, then `mstar store upgrade` for an existing store, is how one comes into existence), and a CLI launch outside Git names the root with `--harness`.
+- **MCP carries no connection root:** `mstar mcp --harness` and the environment no longer pin a repository. Every call that touches process state passes `harness` naming the fixed `<main worktree>/.mstar`; the server refuses a missing selector, a relative path, or a linked worktree's `.mstar`.
+- **Scaffold** no longer writes `harness_dir`; a `.mstarc` it creates carries only the corpus and sub-directory keys that differ from the defaults.
+- **PM root resolution:** the project-manager prompt resolves `controlHarnessDir` before reading or writing process state, so a session started in a linked worktree no longer looks for `store.db` under its own checkout.
+- Decision record: `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`.
+- Removed unused recovery-test digest helpers and unused crypto imports without changing test coverage.
+- Assert scaffold preservation through authored markers, ignore rules, parsed leftover state and scaffold receipts instead of whole-file text equality.
+- Replaced dashboard asset byte-identity checks with importable module, offline asset and caller-independent output checks.
+- **`code-reviewer` and `ops-engineer` accept direct invocation**: a user or standalone Bot can call them without a PM Assignment (`leaf-executor-core.md` § Direct invocation); refusals route to the caller with the resolving input, a direct production deploy or destructive change is `high-risk` even when unmarked, a direct ops write needs a declared branch form (default-branch writes need `Branch policy: direct on …`), a direct audit fans out only under the caller's `Delegation: allowed`, coordinator authority stays with PM, and other leaf roles still take work only through PM dispatch.
+- **Codex `code-reviewer` agent**: added `codex/agents/code-reviewer.toml`, installed by `mstar-harness init --target codex`.
+- **Breaking:** removed `mstar linear auth` and the mstar-owned Linear transport entirely — no OAuth flow, no credential file, no REST/GraphQL client remains in the engine, commands or CLI.
+- **Breaking:** replaced `issue-sync push` and `issue-sync import` with three local verbs: `issue-sync pending` (plan payloads + correlation marker, no network), `issue-sync apply --results` (record the agent's Linear tool results), `issue-sync ingest --records` (associate a listing by the `repo/local/author` marker; five buckets, never creates/updates/closes a local issue).
+- Correlation is now a git-identity marker (`repo` from the origin remote or the `[linear] repo=` override, `local` issue id, `author` from git config); the ledger keeps the same run-lease protocol, and `--adopt` / `--force-adopt` / `--release` / `--take-run` stay on `apply`.
+- Migration: delete the old mstar Linear credential file (`$XDG_CONFIG_HOME/mstar/linear/credential.json`, or `~/.config/mstar/linear/credential.json` when `XDG_CONFIG_HOME` is unset — the old reader honoured `XDG_CONFIG_HOME`) — nothing reads it; Linear issues pushed by the previous code carry the retired marker and read as `unmanaged` — run `issue-sync ingest` to see them, then record identities with `issue-sync apply --adopt <localId>=<issueUrl|externalId>`.
+
+- Version alignment with harness **4.8.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.0**.
+
 ## [4.7.3] - 2026-11-18
 
 ### Changed

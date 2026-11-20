@@ -1,6 +1,16 @@
 # @mstar-harness/opencode-v2 Changelog
 
 
+## [4.8.0] - 2026-11-20
+
+### Harness
+
+- Assert write-gate refusal and successful writes through retained markers, parsed document state and callback observations instead of full-file equality.
+
+- Version alignment with harness **4.8.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.0**.
+
 ## [4.7.3] - 2026-11-18
 
 ### Changed

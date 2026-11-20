@@ -636,7 +636,6 @@ var MSTARC_FILE = ".mstarc";
 var MSTARC_SECTION = "config";
 var LINEAR_SECTION = "linear";
 var LINEAR_MAPPING_SECTION = "linear.mapping";
-var MSTARC_HARNESS_DIR_KEY = "harness_dir";
 var MSTARC_PLAN_DIR_KEY = "plan_dir";
 var MSTARC_SDD_DIR_KEY = "sdd_dir";
 var MSTARC_ITERATION_DIR_KEY = "iteration_dir";
@@ -653,7 +652,6 @@ var BOOLEAN_TRUE;
 var BOOLEAN_FALSE;
 var init_mstarc = __esm(() => {
   CONFIG_KEYS = {
-    [MSTARC_HARNESS_DIR_KEY]: "harnessDir",
     [MSTARC_PLAN_DIR_KEY]: "planDir",
     [MSTARC_SDD_DIR_KEY]: "sddDir",
     [MSTARC_ITERATION_DIR_KEY]: "iterationDir",
@@ -11423,10 +11421,7 @@ function resolveSpecsDir(harnessDir, opts = {}) {
   const candidates = [
     join11(repoRoot, ".agents", "specs"),
     join11(repoRoot, "docs", "specs"),
-    join11(repoRoot, "specs"),
-    join11(harness, "designs"),
-    join11(repoRoot, "designs"),
-    join11(harness, "specs")
+    join11(repoRoot, "specs")
   ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory2(candidate) && hasFiles(candidate))
@@ -11441,11 +11436,7 @@ function resolvePlanDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "planDir");
   if (declared !== null)
     return declared;
-  const dir = resolve10(harnessDir);
-  const name = basename5(dir);
-  if (name === ".plans" || name === "plans")
-    return dir;
-  return join11(dir, "plans");
+  return join11(resolve10(harnessDir), "plans");
 }
 function canonicalizeNearestExisting(path) {
   const abs = resolve10(path);
@@ -11501,8 +11492,7 @@ function resolveTrackedDir(harnessDir, opts, key, name, ...extra) {
   const preferred = join11(repoRoot, ".agents", name);
   const candidates = [
     preferred,
-    ...extra.map((segments) => join11(repoRoot, ...segments)),
-    join11(harness, name)
+    ...extra.map((segments) => join11(repoRoot, ...segments))
   ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory2(candidate) && hasFiles(candidate))

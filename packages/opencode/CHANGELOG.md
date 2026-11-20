@@ -6,6 +6,21 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.8.0] - 2026-11-20
+
+### Harness
+
+- **Fixed harness root:** `{HARNESS_DIR}` is now `<git main worktree root>/.mstar`, derived from Git only. `harness_dir` in `.mstarc`, `MSTAR_HARNESS_DIR`, and the legacy `.agents/` / `.plans/` / `plans/` candidates are retired as selectors, not as errors: the declared key and the environment variable are parsed or read and then ignored, a checkout without `.mstar` simply resolves no harness (`mstar harness scaffold`, then `mstar store upgrade` for an existing store, is how one comes into existence), and a CLI launch outside Git names the root with `--harness`.
+- **MCP carries no connection root:** `mstar mcp --harness` and the environment no longer pin a repository. Every call that touches process state passes `harness` naming the fixed `<main worktree>/.mstar`; the server refuses a missing selector, a relative path, or a linked worktree's `.mstar`.
+- **Scaffold** no longer writes `harness_dir`; a `.mstarc` it creates carries only the corpus and sub-directory keys that differ from the defaults.
+- **PM root resolution:** the project-manager prompt resolves `controlHarnessDir` before reading or writing process state, so a session started in a linked worktree no longer looks for `store.db` under its own checkout.
+- Decision record: `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`.
+- Replaced agent overlay full-file comparisons with entry provenance and stale-entry removal assertions.
+
+- Version alignment with harness **4.8.0** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.0**.
+
 ## [4.7.3] - 2026-11-18
 
 ### Bundled harness skills (`harness-skills/` at publish)
