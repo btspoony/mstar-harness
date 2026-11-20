@@ -42,6 +42,8 @@ import {
 import {
   MIGRATIONS,
   StoreError,
+  busyTimeoutMs,
+  connect,
   migrationChecksum,
   nowRfc3339,
   openStore,
@@ -54,6 +56,7 @@ import {
   type StoreContext,
   type StoreDb,
 } from "./store-db.js";
+import { readHarnessVersionOrNull } from "./core.js";
 import {
   backupStore,
   inspectBackupCopy,
@@ -112,12 +115,16 @@ type SourceSnapshot = Readonly<{
   counts: Record<string, number>;
   digest: string;
   rows: Record<string, unknown[][]>;
+  /** Legacy collaboration receipts (`store_operations`), preserved into the new authority. */
+  ledger: unknown[][];
 }>;
 
 type SourceState = Readonly<{
   fence: CollaborationFence | null;
   snapshot: SourceSnapshot | null;
   blockers: Blockers;
+  /** Recorded execution sessions: the stop evidence the fence must be scoped to. */
+  sessions: readonly { sessionId: string; state: string }[];
 }>;
 
 type PublicationRow = Readonly<{
@@ -153,9 +160,16 @@ type Prepared = Readonly<{
   manifest: CutoverManifest;
   digest: string;
   operator: string;
+  attestation: ActivationAttestation;
   source: SourceState;
   target: TargetState;
 }>;
+
+/** Session states that are not quiesced: each needs its own stop attestation. */
+const LIVE_SESSION_STATES: Readonly<Record<string, true>> = { active: true, suspended: true };
+
+/** The legacy receipt columns, in the order both sides are digested. */
+const LEDGER_COLUMNS = ["operation_id", "request_hash", "result_json", "committed_at"] as const;
 
 function sha256(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
@@ -234,27 +248,84 @@ function readCutoverRows(db: StoreDb): Record<string, unknown[][]> {
   return rows;
 }
 
-function countsOf(rows: Record<string, unknown[][]>): Record<string, number> {
+function countsOf(rows: Record<string, unknown[][]>, ledger: unknown[][]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const table of COLLABORATION_CUTOVER_TABLES) counts[table] = rows[table]?.length ?? 0;
+  // The legacy collaboration receipts move with the domain: their population is
+  // part of the reviewed evidence, not an incidental side table.
+  counts.store_operations = ledger.length;
   return counts;
 }
 
-function digestOfRows(rows: Record<string, unknown[][]>): string {
+function digestOfRows(rows: Record<string, unknown[][]>, ledger: unknown[][]): string {
   const hash = createHash("sha256");
   for (const table of COLLABORATION_CUTOVER_TABLES) {
     hash.update(`${table}\n`);
     for (const row of rows[table] ?? []) hash.update(`${JSON.stringify(row)}\n`);
   }
+  hash.update("store_operations\n");
+  for (const row of ledger) hash.update(`${JSON.stringify(row)}\n`);
   return hash.digest("hex");
 }
 
 /** The source digest freezes BOTH the generation stamp and the exact rows. */
-function digestOfSource(source: CutoverSource, rows: Record<string, unknown[][]>): string {
+function digestOfSource(source: CutoverSource, rows: Record<string, unknown[][]>, ledger: unknown[][]): string {
   return sha256(
     `${source.storeId}|${source.epoch}|${source.schemaVersion}|${source.revision}|${source.catalogRevision}\n` +
-      digestOfRows(rows),
+      digestOfRows(rows, ledger),
   );
+}
+
+/**
+ * Classify one combined-store receipt. The execution lane's own records share
+ * this table today - recovery attempts, the legacy execution importer and the
+ * host-state importer - and they stay with the execution store. The
+ * classification uses each execution writer's own discriminant: the
+ * `restore-attempt:` id prefix, the `#dsh-host-state` id suffix, and the
+ * execution importer's documented receipt shape (`verdict` + `sourceDigest` +
+ * `importedIds`, the same fields its own replay lookup validates). Everything
+ * else is an issue/catalog/sync receipt the collaboration authority must keep
+ * replaying.
+ */
+function isExecutionReceipt(row: unknown[]): boolean {
+  const operationId = typeof row[0] === "string" ? row[0] : "";
+  if (operationId.startsWith("restore-attempt:") || operationId.endsWith("#dsh-host-state")) return true;
+  if (typeof row[2] !== "string" || row[2] === "") return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row[2]);
+  } catch {
+    return false;
+  }
+  const record = parsed as Record<string, unknown> | null;
+  return (
+    record !== null &&
+    typeof record === "object" &&
+    typeof record.verdict === "string" &&
+    typeof record.sourceDigest === "string" &&
+    Array.isArray(record.importedIds)
+  );
+}
+
+/** The combined store's collaboration receipts, in their recorded order. */
+function readSourceLedger(db: StoreDb): unknown[][] {
+  if (!tableExists(db, "store_operations")) return [];
+  return readRows(db, "store_operations", LEDGER_COLUMNS).filter((row) => !isExecutionReceipt(row));
+}
+
+/**
+ * The target's preserved receipts, read in the SAME canonical shape. The
+ * cutover claim lives in the same table on its own reserved slot and is never
+ * part of the reviewed receipt population.
+ */
+function readStagedLedger(db: StoreDb): unknown[][] {
+  const rows = db
+    .prepare(
+      "select operation_id, request_hash, result_json, committed_at from collaboration_operations " +
+        "where key_space = 'standalone' and operation_id <> ? order by operation_id, request_hash, result_json, committed_at",
+    )
+    .all(CLAIM_KEY) as Array<Record<string, unknown>>;
+  return rows.map((row) => LEDGER_COLUMNS.map((column) => (typeof row[column] === "bigint" ? String(row[column]) : row[column])));
 }
 
 /**
@@ -311,6 +382,7 @@ function readSourceSnapshot(db: StoreDb): SourceSnapshot {
   // suits a reviewed local database; stream it if collaboration rows reach
   // hundreds of megabytes.
   const rows = readCutoverRows(db);
+  const ledger = readSourceLedger(db);
   const source: CutoverSource = {
     storeId: authority.storeId,
     epoch: authority.epoch,
@@ -318,26 +390,48 @@ function readSourceSnapshot(db: StoreDb): SourceSnapshot {
     revision: authority.revision,
     catalogRevision: authority.catalogRevision,
   };
-  return { source, counts: countsOf(rows), rows, digest: digestOfSource(source, rows) };
+  return { source, counts: countsOf(rows, ledger), rows, ledger, digest: digestOfSource(source, rows, ledger) };
+}
+
+/** The recorded execution sessions of one store: the fence's stop-evidence scope. */
+function readSourceSessions(db: StoreDb): Array<{ sessionId: string; state: string }> {
+  if (!tableExists(db, "execution_sessions")) return [];
+  return (db
+    .prepare("select session_id, state from execution_sessions order by session_id")
+    .all() as Array<{ session_id?: unknown; state?: unknown }>).map((row) => ({
+    sessionId: typeof row.session_id === "string" ? row.session_id : "",
+    state: typeof row.state === "string" ? row.state : "",
+  }));
 }
 
 async function readSourceState(context: StoreContext): Promise<SourceState> {
   const handle = await openStore(context, "read");
   try {
     const fence = readCollaborationFence(handle.db);
-    if (fence !== null) return { fence, snapshot: null, blockers: [] };
-    // One read transaction: the counted rows, the digest and the blocker scan
-    // all describe one committed generation of the source.
+    if (fence !== null) return { fence, snapshot: null, blockers: [], sessions: [] };
+    // One read transaction: the counted rows, the digest, the blocker scan and
+    // the session facts all describe one committed generation of the source.
     handle.db.exec("begin");
     try {
       return {
         fence: null,
         snapshot: readSourceSnapshot(handle.db),
         blockers: readCutoverBlockers(handle.db),
+        sessions: readSourceSessions(handle.db),
       };
     } finally {
       handle.db.exec("commit");
     }
+  } finally {
+    handle.close();
+  }
+}
+
+/** The durable fence of the combined store, or `null` when it is unfenced. */
+async function readSourceFence(context: StoreContext): Promise<CollaborationFence | null> {
+  const handle = await openStore(context, "read");
+  try {
+    return readCollaborationFence(handle.db);
   } finally {
     handle.close();
   }
@@ -392,7 +486,7 @@ function assertManifest(manifest: CutoverManifest): string {
   if (manifest.counts === null || typeof manifest.counts !== "object") {
     throw conflict("The supplied manifest carries no row counts. Re-run `store collaboration plan` and review its output.");
   }
-  for (const table of COLLABORATION_CUTOVER_TABLES) {
+  for (const table of [...COLLABORATION_CUTOVER_TABLES, "store_operations"]) {
     if (!integer(manifest.counts[table])) {
       throw conflict(`The supplied manifest has no row count for ${table}. Re-run \`store collaboration plan\` and review its output.`);
     }
@@ -432,7 +526,8 @@ function sameSource(a: CutoverSource, b: CutoverSource): boolean {
 }
 
 function sameCounts(a: Readonly<Record<string, number>>, b: Readonly<Record<string, number>>): boolean {
-  return COLLABORATION_CUTOVER_TABLES.every((table) => a[table] === b[table]);
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  return [...keys].every((key) => a[key] === b[key]);
 }
 
 function assertSnapshotMatches(snapshot: SourceSnapshot, manifest: CutoverManifest, detail: string): void {
@@ -448,12 +543,24 @@ function assertSnapshotMatches(snapshot: SourceSnapshot, manifest: CutoverManife
   }
 }
 
-function assertFenceMatches(fence: CollaborationFence, manifest: CutoverManifest, digest: string): void {
+function assertFenceMatches(
+  fence: CollaborationFence,
+  manifest: CutoverManifest,
+  digest: string,
+  target?: Readonly<{ storeId: string; epoch: number }>,
+): void {
   if (fence.manifestId !== manifest.manifestId || fence.manifestDigest !== digest) {
     throw conflict(
       `The combined store was already fenced for manifest ${fence.manifestId} (fenced at ${fence.fencedAt}), not for ` +
         `${manifest.manifestId}. Preserve both sides: complete the activation of the fenced manifest, or plan a new ` +
         `cutover only after reconciling the target. Nothing was changed.`,
+    );
+  }
+  if (target !== undefined && (fence.targetStoreId !== target.storeId || fence.targetEpoch !== target.epoch)) {
+    throw conflict(
+      `The persisted fence names target ${fence.targetStoreId} epoch ${fence.targetEpoch}, while this canonical path ` +
+        `holds ${target.storeId} epoch ${target.epoch}. A foreign or replaced target never wins by force: restore the ` +
+        `target the source was fenced for, or recover from the verified pre-fence image. Nothing was published.`,
     );
   }
 }
@@ -591,7 +698,11 @@ function verifyStagedEvidence(db: StoreDb, manifest: CutoverManifest): void {
     );
   }
   const rows = readCutoverRows(db);
-  if (!sameCounts(countsOf(rows), manifest.counts) || digestOfSource(manifest.source, rows) !== manifest.sourceDigest) {
+  const ledger = readStagedLedger(db);
+  if (
+    !sameCounts(countsOf(rows, ledger), manifest.counts) ||
+    digestOfSource(manifest.source, rows, ledger) !== manifest.sourceDigest
+  ) {
     throw conflict(
       "The staged copy no longer matches the reviewed manifest's exact row evidence. Restage from the reviewed " +
         "manifest; the source was not fenced and the target was not activated.",
@@ -606,8 +717,15 @@ function verifyStagedEvidence(db: StoreDb, manifest: CutoverManifest): void {
   }
 }
 
-/** Replace the staged business rows with the source snapshot, exactly. */
-function replaceStagedRows(db: StoreDb, rows: Record<string, unknown[][]>): void {
+/**
+ * Replace the staged business rows and preserved receipts with the source
+ * snapshot, exactly. A legacy operation keeps its id, request hash, result and
+ * commit instant, so an accepted pre-cutover mutation replays instead of
+ * applying again and a same-id/different-request reuse still conflicts. The
+ * claim slot is reserved (staging refuses while a claim exists), so the receipt
+ * population can be replaced wholesale.
+ */
+function replaceStagedRows(db: StoreDb, rows: Record<string, unknown[][]>, ledger: unknown[][]): void {
   for (const table of [...COLLABORATION_CUTOVER_TABLES].reverse()) db.prepare(`delete from ${table}`).run();
   for (const table of COLLABORATION_CUTOVER_TABLES) {
     const columns = COLLABORATION_COLUMNS[table]!;
@@ -616,6 +734,88 @@ function replaceStagedRows(db: StoreDb, rows: Record<string, unknown[][]>): void
     );
     for (const row of rows[table] ?? []) statement.run(...row);
   }
+  db.prepare("delete from collaboration_operations where key_space = 'standalone'").run();
+  const receipt = db.prepare(
+    "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
+      "values ('standalone', ?, ?, ?, ?)",
+  );
+  for (const row of ledger) receipt.run(...row);
+}
+
+/**
+ * Scope the operator attestation to THIS source's stop facts and build. The
+ * existing consumer/session shape has no root field, so the binding is derived:
+ * the running build must be the attested build, every attested session must be
+ * one this source records (a foreign or fabricated stop claim refuses), and
+ * every session still live in the source must be attested stopped/reloaded. An
+ * empty stop list is only the proved absence of booked sessions - never a
+ * substitute for stopping the handles a stored source still records.
+ */
+function assertStopEvidence(
+  attestation: ActivationAttestation,
+  sessions: readonly { sessionId: string; state: string }[],
+): void {
+  const invalid = (detail: string): never => {
+    throw new StoreError(
+      "store.attestation-invalid",
+      `${detail} Attest this exact combined source: its recorded sessions, the build performing the fence and the ` +
+        `operator who approved it. Nothing was fenced or activated.`,
+    );
+  };
+  const build = readHarnessVersionOrNull();
+  const coordinator = attestation.consumers.find((consumer) => consumer.current);
+  if (build === null) {
+    invalid("This build cannot name its own version, so the attestation cannot be bound to the build performing the fence.");
+  }
+  if (coordinator === undefined || coordinator.version !== build) {
+    invalid(
+      `The attestation names build ${String(coordinator?.version)} as the current coordinator, while this activation runs ` +
+        `build ${String(build)}.`,
+    );
+  }
+  const known = new Set(sessions.map((session) => session.sessionId));
+  for (const stopped of attestation.stoppedSessions) {
+    if (!known.has(stopped.sessionId)) {
+      invalid(`The attestation stops session ${stopped.sessionId}, which this combined store does not record.`);
+    }
+  }
+  const attested = new Set(attestation.stoppedSessions.map((stopped) => stopped.sessionId));
+  const surviving = sessions.filter((session) => LIVE_SESSION_STATES[session.state] === true && !attested.has(session.sessionId));
+  if (surviving.length > 0) {
+    invalid(
+      `This combined store still records ${surviving.length} live session(s) that the attestation does not stop ` +
+        `(${surviving.map((session) => `${session.sessionId} is ${session.state}`).join("; ")}).`,
+    );
+  }
+  if (sessions.length > 0 && attested.size === 0) {
+    invalid(`This combined store records ${sessions.length} session(s) and the attestation stops none of them.`);
+  }
+}
+
+/**
+ * Release this activation's own claim, committed: the reviewed source is
+ * provably unfenced and its observation drifted, so the operator re-plans. A
+ * claim owned by another manifest/source is never released here.
+ */
+async function releaseOwnClaim(
+  location: CollaborationLocation,
+  manifest: CutoverManifest,
+  digest: string,
+): Promise<boolean> {
+  return writeCollaborationStage(location, ({ db }) => {
+    const claim = readClaim(db);
+    if (
+      claim === null ||
+      claim.manifestId !== manifest.manifestId ||
+      claim.manifestDigest !== digest ||
+      claim.sourceStoreId !== manifest.source.storeId ||
+      claim.sourceEpoch !== manifest.source.epoch
+    ) {
+      return false;
+    }
+    db.prepare("delete from collaboration_operations where key_space = 'standalone' and operation_id = ?").run(CLAIM_KEY);
+    return true;
+  });
 }
 
 function ensureFenceSchema(db: StoreDb): number {
@@ -694,6 +894,13 @@ export async function applyCollaborationCutover(
     return receiptOf(target.publication, location, true);
   }
   assertSnapshotMatches(state.snapshot!, manifest, "The source changed since the manifest was reviewed.");
+  const collision = state.snapshot!.ledger.find((row) => row[0] === CLAIM_KEY);
+  if (collision !== undefined) {
+    throw conflict(
+      `The source holds a legacy operation whose id is the cutover claim slot (${CLAIM_KEY}); promoting it would let the ` +
+        `claim delete a reviewed receipt. Rename that legacy operation first, then re-plan; nothing was staged.`,
+    );
+  }
 
   await initializeCollaborationStore(location);
   return writeCollaborationStage(location, ({ db, authority }) => {
@@ -742,7 +949,7 @@ export async function applyCollaborationCutover(
       );
     }
 
-    replaceStagedRows(db, state.snapshot!.rows);
+    replaceStagedRows(db, state.snapshot!.rows, state.snapshot!.ledger);
     db.prepare("update collaboration_meta set revision = ?, catalog_revision = ? where id = 1").run(
       manifest.source.revision,
       manifest.source.catalogRevision,
@@ -816,14 +1023,39 @@ async function prepareActivation(
     );
   }
   const source = await readSourceState(context);
+
   if (source.fence === null) {
-    assertSnapshotMatches(source.snapshot!, manifest, "The source changed since the manifest was reviewed.");
+    if (
+      !sameSource(source.snapshot!.source, manifest.source) ||
+      source.snapshot!.digest !== manifest.sourceDigest ||
+      !sameCounts(source.snapshot!.counts, manifest.counts)
+    ) {
+      // Pre-fence drift is a supported recovery: this activation's own claim is
+      // released (committed), and only when the source is still provably
+      // unfenced. A concurrent fence wins: it is re-read after the release.
+      const released = await releaseOwnClaim(location, manifest, digest);
+      const afterFence = await readSourceFence(context);
+      if (afterFence !== null) {
+        throw conflict(
+          `The source was fenced while this activation re-read it (manifest ${afterFence.manifestId}, fenced at ` +
+            `${afterFence.fencedAt}). Resume that fenced activation with its own manifest; this stale attempt ` +
+            `${released ? "released its claim" : "released nothing"}. Nothing else was written.`,
+        );
+      }
+      throw conflict(
+        `The source changed since manifest ${manifest.manifestId} was reviewed. ` +
+          `${released ? "This activation's claim was released, so the source can be re-planned and staged again." : "No claim was released because it is not held by this manifest and source."} ` +
+          `Re-run "store collaboration plan", review the new manifest, then apply and activate it. Nothing was fenced.`,
+      );
+    }
+    assertStopEvidence(attestation, source.sessions);
     if (source.blockers.length > 0) {
       throw notQuiescent(source.blockers, "The source reported pending work when activation started.");
     }
   } else {
-    assertFenceMatches(source.fence, manifest, digest);
+    assertFenceMatches(source.fence, manifest, digest, target.authority);
   }
+
   if (target.authority.state === "active") {
     const published = target.publication;
     if (published === null || published.phase !== "active" || published.manifestDigest !== digest) {
@@ -832,7 +1064,27 @@ async function prepareActivation(
           `through the runtime verbs; an active authority is never republished or replaced. Nothing was written.`,
       );
     }
-    return { context, location, manifest, digest, operator, source, target, replay: receiptOf(published, location, true) };
+    if (published.targetStoreId !== target.authority.storeId || published.targetEpoch !== target.authority.epoch) {
+      throw conflict(
+        `The active publication belongs to target ${published.targetStoreId} epoch ${published.targetEpoch}, while the ` +
+          `canonical path holds ${target.authority.storeId} epoch ${target.authority.epoch}. A foreign target never ` +
+          `wins by force; nothing was replayed.`,
+      );
+    }
+    // Replay is only success when the source is durably fenced: an active
+    // target beside a restored/unfenced source would be two authorities.
+    if (source.fence === null) {
+      throw conflict(
+        `The collaboration target at ${location.dbPath} is active, but this combined source is not fenced (it still ` +
+          `holds the collaboration tables). Replaying would report one authority while the source can still admit ` +
+          `writes. Complete the fence for this source with its own activation, or read collaboration through the active ` +
+          `repository authority. Nothing was replayed.`,
+      );
+    }
+    return {
+      context, location, manifest, digest, operator, attestation, source, target,
+      replay: receiptOf(published, location, true),
+    };
   }
   const publication = target.publication;
   if (publication === null || publication.manifestDigest !== digest) {
@@ -849,7 +1101,7 @@ async function prepareActivation(
         `Nothing was fenced.`,
     );
   }
-  return { context, location, manifest, digest, operator, source, target, replay: null };
+  return { context, location, manifest, digest, operator, attestation, source, target, replay: null };
 }
 
 async function claimActivation(prepared: Prepared): Promise<void> {
@@ -899,27 +1151,46 @@ async function claimActivation(prepared: Prepared): Promise<void> {
       return;
     }
     if (claim.requestHash === requestHash) return;
-    const ownClaim =
-      claim.manifestId === manifest.manifestId &&
-      claim.sourceStoreId === manifest.source.storeId &&
-      claim.sourceEpoch === manifest.source.epoch;
-    if (ownClaim) {
-      // Proven unfenced (the source was read in this activation) and the
-      // reviewed observation drifted: release this activation's own claim so a
-      // re-plan can proceed, and report the drift.
-      db.prepare("delete from collaboration_operations where key_space = 'standalone' and operation_id = ?").run(CLAIM_KEY);
-      throw conflict(
-        `The reviewed observation drifted since this activation was claimed (claimed at ${claim.claimedAt}), and the ` +
-          `source is still unfenced, so the claim was released. Re-plan and apply the new manifest; nothing was fenced ` +
-          `or activated.`,
-      );
-    }
     throw conflict(
       `Another activation holds the canonical target's claim (manifest ${claim.manifestId}, source ` +
         `${claim.sourceStoreId} epoch ${claim.sourceEpoch}, claimed at ${claim.claimedAt}). Preserve both; complete or ` +
         `abandon that activation in its own session. Nothing was fenced.`,
     );
   });
+}
+
+/**
+ * The recovery point must preserve the REVIEWED rows, not just the reviewed
+ * counters: a legacy write that never advanced the shared counter would
+ * otherwise let the fence leave behind an image of different history. The image
+ * is reopened read-only and its moved rows and preserved receipts are digested
+ * exactly like the source.
+ */
+async function verifyBackupRows(path: string, manifest: CutoverManifest): Promise<string> {
+  const db = await connect(path, "read", busyTimeoutMs());
+  let rows: Record<string, unknown[][]>;
+  let ledger: unknown[][];
+  try {
+    if (validateAppliedMigrations(readAppliedMigrations(db, false)) !== manifest.source.schemaVersion) {
+      throw backupIncomplete(
+        `The recovery point at ${path} was written at another schema than the reviewed ${manifest.source.schemaVersion}.`,
+      );
+    }
+    rows = readCutoverRows(db);
+    ledger = readSourceLedger(db);
+  } finally {
+    db.close();
+  }
+  const counts = countsOf(rows, ledger);
+  if (!sameCounts(counts, manifest.counts) || digestOfSource(manifest.source, rows, ledger) !== manifest.sourceDigest) {
+    throw backupIncomplete(
+      `The retained recovery point at ${path} does not hold the reviewed rows (it records ` +
+        `${counts.store_operations} legacy receipts and ${counts.issues} issues, and its row digest differs from the ` +
+        `reviewed manifest). Rename or remove that image, or re-plan against the source's current rows; a fence never ` +
+        `runs on an image that does not preserve the reviewed history.`,
+    );
+  }
+  return path;
 }
 
 /**
@@ -949,18 +1220,32 @@ async function takeOrVerifyFenceBackup(prepared: Prepared): Promise<string> {
           `reviewed source ${manifest.source.storeId} epoch ${manifest.source.epoch} revision ${manifest.source.revision}.`,
       );
     }
-    return out;
+    return verifyBackupRows(out, manifest);
   };
-  if (existsSync(out)) return verify(await inspectBackupCopy(out));
+  const inspect = async (): Promise<BackupInspection> => {
+    try {
+      return await inspectBackupCopy(out);
+    } catch (error) {
+      throw backupIncomplete(
+        `The recovery point at ${out} cannot be verified (${error instanceof Error ? error.message : String(error)}). ` +
+          `Rename or remove that image, or re-plan against the source's current rows.`,
+      );
+    }
+  };
+  if (existsSync(out)) return verify(await inspect());
   try {
     await backupStore(context, { out });
   } catch (error) {
-    throw backupIncomplete(
-      `The source recovery point could not be written to ${out} ` +
-        `(${error instanceof Error ? error.message : String(error)}).`,
-    );
+    // A concurrent attempt may have published the same path first; reuse it
+    // only through the row verification below.
+    if (!existsSync(out)) {
+      throw backupIncomplete(
+        `The source recovery point could not be written to ${out} ` +
+          `(${error instanceof Error ? error.message : String(error)}).`,
+      );
+    }
   }
-  return verify(await inspectBackupCopy(out));
+  return verify(await inspect());
 }
 
 /**
@@ -983,6 +1268,7 @@ async function fenceSource(prepared: Prepared, backupPath: string): Promise<Coll
       }
       const snapshot = readSourceSnapshot(handle.db);
       assertSnapshotMatches(snapshot, manifest, "The source changed after staging and before fencing.");
+      assertStopEvidence(prepared.attestation, readSourceSessions(handle.db));
       const blockers = readCutoverBlockers(handle.db);
       if (blockers.length > 0) throw notQuiescent(blockers, "The source reported pending work at the fence.");
       ensureFenceSchema(handle.db);
@@ -1065,6 +1351,9 @@ async function recordFenced(prepared: Prepared, fence: CollaborationFence): Prom
 async function publishTarget(prepared: Prepared, fence: CollaborationFence): Promise<CutoverReceipt> {
   const { location, manifest, digest } = prepared;
   return writeCollaborationStage(location, ({ db, authority }) => {
+    // The publication proves the fence names THIS target: a replaced or foreign
+    // target with matching manifest evidence never wins by force.
+    assertFenceMatches(fence, manifest, digest, { storeId: authority.storeId, epoch: authority.epoch });
     const publication = readPublication(db, manifest.manifestId);
     if (publication === null || publication.manifestDigest !== digest) {
       throw conflict(
@@ -1137,6 +1426,13 @@ export async function fenceCollaborationCutoverSource(
   const backupPath = await takeOrVerifyFenceBackup(prepared);
   const fence = await fenceSource(prepared, backupPath);
   await recordFenced(prepared, fence);
+  const persisted = await readSourceFence(context);
+  if (persisted === null) {
+    throw conflict(
+      `The fence transaction committed but the combined store no longer records a fence. Preserve the source and its ` +
+        `recovery point at ${fence.backupPath} and investigate before publishing; nothing was published.`,
+    );
+  }
   const publication = await readTargetStateFor(prepared.location, manifest.manifestId);
   return receiptOf(publication!.publication!, prepared.location, false);
 }
@@ -1149,12 +1445,29 @@ export async function activateCollaborationCutover(
   const prepared = await prepareActivation(context, manifest, options);
   if (prepared.replay !== null) return prepared.replay;
   if (prepared.source.fence !== null) {
-    // The fence committed before the target did: reuse it and publish only.
-    return publishTarget(prepared, prepared.source.fence);
+    // The fence committed before the target did: reuse it and publish only. The
+    // fence is re-read here (not taken from the earlier inspection) so the
+    // publication proves the currently persisted fence and its target stamp.
+    const persisted = await readSourceFence(context);
+    if (persisted === null) {
+      throw conflict(
+        `The combined store fenced earlier but no longer records its fence. Preserve the source and its pre-fence ` +
+          `image; nothing was published.`,
+      );
+    }
+    assertFenceMatches(persisted, manifest, prepared.digest, prepared.target.authority);
+    return publishTarget(prepared, persisted);
   }
   await claimActivation(prepared);
   const backupPath = await takeOrVerifyFenceBackup(prepared);
   const fence = await fenceSource(prepared, backupPath);
   await recordFenced(prepared, fence);
-  return publishTarget(prepared, fence);
+  const persisted = await readSourceFence(context);
+  if (persisted === null) {
+    throw conflict(
+      `The fence transaction committed but the combined store no longer records a fence. Preserve the source and its ` +
+        `recovery point at ${fence.backupPath} and investigate before publishing; nothing was published.`,
+    );
+  }
+  return publishTarget(prepared, persisted);
 }
