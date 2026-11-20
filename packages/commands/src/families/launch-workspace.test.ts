@@ -63,7 +63,7 @@ describe("launchDirectoryRefusal", () => {
     expect(refused.message).toContain("the plan's worktree would come from this invocation's working directory");
     expect(refused.message).toContain("LAUNCH directory");
     expect(refused.details.recovery).toContain("mstar mcp --workspace");
-    expect(refused.details.recovery).toContain("mstar mcp --harness");
+    expect(refused.details.recovery).toContain("fixed at");
     expect(refused.details.diagnostics).toEqual([
       {
         path: "worktreePath",
@@ -140,6 +140,6 @@ describe("launchDirectoryDiagnostics", () => {
     });
     expect(facts?.diagnostics.map((entry) => `${entry.path}:${entry.code}`)).toEqual(["worktreePath:required", "reviewDir:invalid_type"]);
     expect(facts?.recovery).toContain("mstar mcp --workspace");
-    expect(facts?.recovery).toContain("mstar mcp --harness");
+    expect(facts?.recovery).toContain("fixed at");
   });
 });

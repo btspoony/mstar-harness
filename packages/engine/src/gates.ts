@@ -23,6 +23,7 @@
  */
 import { existsSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { realpathNearest } from "./git-probe.js";
 import { canonicalizeNearestExisting, resolveHarnessDir, resolveProjectDir, resolveWorkflowDir } from "./path.js";
 import { validateStatus, type StatusV2Doc } from "./status.js";
 import { readJson, type ValidationResult } from "./core.js";
@@ -140,8 +141,7 @@ function resolveHarnessRootOf(target: string): string | null {
 
 export function harnessDocKindOfTarget(targetPath: string): { harnessDir: string; kind: HarnessDocKind } | null {
   if (typeof targetPath !== "string" || targetPath.trim() === "") return null;
-  const lexical = resolve(targetPath);
-  const resolved = join(canonicalizeNearestExisting(dirname(lexical)), basename(lexical));
+  const resolved = realpathNearest(targetPath);
   const name = basename(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE && name !== REGISTER_FILE) return null;
   const classify = (harnessDir: string): { harnessDir: string; kind: HarnessDocKind } | null => {

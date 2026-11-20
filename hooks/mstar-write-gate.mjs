@@ -12625,7 +12625,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
         throw error;
     }
     if (linked) {
-      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Recovery: run this command from the repository's main worktree, or run `mstar path resolve` there and pass its `controlHarnessDir` where the command takes a control root.", { cwd: start, marker: join18(dir, ".git") });
+      throw new CoordinationError("coordination.not-in-git", "`mstar path resolve`; pass its `controlHarnessDir` where the command takes a control root. The linked checkout's main worktree cannot be read.", { cwd: start, marker: join18(dir, ".git") });
     }
     const parent = dirname11(dir);
     if (parent === dir)
@@ -14134,6 +14134,7 @@ class SddScriptError extends Error {
 var GIT_CAPTURE_MAX_BYTES = 64 * 1024 * 1024;
 init_iteration();
 init_project();
+init_git_probe();
 init_path();
 init_status();
 init_core();
@@ -14181,8 +14182,7 @@ function resolveHarnessRootOf(target) {
 function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
-  const lexical = resolve18(targetPath);
-  const resolved = join21(canonicalizeNearestExisting(dirname14(lexical)), basename12(lexical));
+  const resolved = realpathNearest(targetPath);
   const name = basename12(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
@@ -16384,6 +16384,20 @@ async function readAuthorityRoute(harnessDir) {
     return PRE_ACTIVATION_CODES.includes(refusal.code) ? { kind: "legacy" } : { kind: "unavailable", ...refusal };
   }
 }
+function nearestHarnessDir(target) {
+  let dir = dirname6(target);
+  for (;; ) {
+    const candidate = join6(dir, ".mstar");
+    try {
+      if (statSync2(candidate).isDirectory())
+        return candidate;
+    } catch {}
+    const parent = dirname6(dir);
+    if (parent === dir)
+      return null;
+    dir = parent;
+  }
+}
 function aliasedRegisterDir(resolved, landed) {
   if (landed === resolved)
     return null;
@@ -16582,7 +16596,8 @@ try {
     const violations = validateStatusWriteDoc(content, targetPath, gated.kind, { oversized: "violate" });
     if (violations.length === 0)
       continue;
-    const enforcement = resolveRepoEnforcement(gated.harnessDir);
+    const enforcementHost = gated.kind === "register" ? nearestHarnessDir(targetPath) ?? gated.harnessDir : gated.harnessDir;
+    const enforcement = resolveRepoEnforcement(enforcementHost);
     if (!enforcement.hard)
       continue;
     const display = displayTarget(targetPath, gated.harnessDir);

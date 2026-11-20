@@ -5036,7 +5036,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
         throw error;
     }
     if (linked) {
-      throw new CoordinationError("coordination.not-in-git", "The linked checkout's main worktree cannot be read. Recovery: run this command from the repository's main worktree, or run `mstar path resolve` there and pass its `controlHarnessDir` where the command takes a control root.", { cwd: start, marker: join18(dir, ".git") });
+      throw new CoordinationError("coordination.not-in-git", "`mstar path resolve`; pass its `controlHarnessDir` where the command takes a control root. The linked checkout's main worktree cannot be read.", { cwd: start, marker: join18(dir, ".git") });
     }
     const parent = dirname11(dir);
     if (parent === dir)
@@ -10491,6 +10491,7 @@ var init_engine = __esm(() => {
   GIT_CAPTURE_MAX_BYTES = 64 * 1024 * 1024;
   init_iteration();
   init_project();
+  init_git_probe();
   init_path();
   init_status();
   init_core();

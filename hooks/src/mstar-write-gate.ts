@@ -78,6 +78,7 @@ import {
   landedPathOf,
   queryDashboard,
   resolveExecutionReadRoute,
+  resolveHarnessDir,
   resolveRepoEnforcement,
   SymlinkResolutionError,
   validateStatusWriteDoc,
@@ -158,6 +159,22 @@ async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
     return PRE_ACTIVATION_CODES.includes(refusal.code)
       ? { kind: "legacy" }
       : { kind: "unavailable", ...refusal };
+  }
+}
+
+/** The nearest ancestor holding a `.mstar` directory (the caller's own harness). */
+function nearestHarnessDir(target: string): string | null {
+  let dir = dirname(target);
+  for (;;) {
+    const candidate = join(dir, ".mstar");
+    try {
+      if (statSync(candidate).isDirectory()) return candidate;
+    } catch {
+      // keep walking up
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
   }
 }
 
@@ -528,7 +545,13 @@ try {
     const violations = validateStatusWriteDoc(content, targetPath, gated.kind, { oversized: "violate" });
     if (violations.length === 0) continue;
 
-    const enforcement = resolveRepoEnforcement(gated.harnessDir);
+    // The enforcement axis belongs to the caller's path (the source of a
+    // symlink alias), not the landed destination the document is classified
+    // against: a pre-activation source keeps its own repository policy.
+    const enforcementHost = gated.kind === "register"
+      ? nearestHarnessDir(targetPath) ?? gated.harnessDir
+      : gated.harnessDir;
+    const enforcement = resolveRepoEnforcement(enforcementHost);
     if (!enforcement.hard) continue; // soft mode — silent pass (omp Gate-1 parity)
 
     const display = displayTarget(targetPath, gated.harnessDir);

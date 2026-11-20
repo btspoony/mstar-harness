@@ -259,7 +259,7 @@ export function resolveProcessHarnessDir(cwd: string = process.cwd(), harnessDir
     if (linked) {
       throw new CoordinationError(
         "coordination.not-in-git",
-        "The linked checkout's main worktree cannot be read. Recovery: run this command from the repository's main worktree, or run `mstar path resolve` there and pass its `controlHarnessDir` where the command takes a control root.",
+        "`mstar path resolve`; pass its `controlHarnessDir` where the command takes a control root. The linked checkout's main worktree cannot be read.",
         { cwd: start, marker: join(dir, ".git") },
       );
     }
