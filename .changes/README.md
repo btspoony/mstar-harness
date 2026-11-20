@@ -20,7 +20,7 @@ assembles into `CHANGELOG.md` / `CHANGELOG_CN.md` / `packages/*/CHANGELOG.md` at
 
 ```markdown
 ---
-category: Harness        # optional; section header. Default per package (see below).
+category: Changed        # optional; Breaking | Added | Changed | Fixed | Removed | Security. Default: Changed.
 packages: root           # optional; comma list of root | cli | opencode | opencode-v2 | engine | commands | dsh | omp. Default: root.
 ---
 
@@ -33,7 +33,9 @@ packages: root           # optional; comma list of root | cli | opencode | openc
 ```
 
 - **`category`** drives the `### <Category>` header under the version section.
-  Defaults: `root` → `Harness`, `cli` → `Changed`, `opencode` → `Bundled harness skills (\`harness-skills/\` at publish)`, `opencode-v2`/`engine`/`commands`/`dsh`/`omp` → `Changed`.
+  Allowed values are `Breaking`, `Added`, `Changed`, `Fixed`, `Removed`, `Security`.
+  An omitted category defaults to `Changed`; an unknown value fails the release and names the
+  allowed list. `Breaking` renders first, so an incompatible change is visible before the rest.
 - **`packages`** routes bullets to changelog(s). `root` → root EN + root CN.
   `cli`/`opencode`/`opencode-v2`/`engine`/`commands`/`dsh`/`omp` → that package's changelog (EN only).
 - The body before `<!-- CN -->` is English; after it is Chinese. Chinese is written only to
@@ -45,7 +47,7 @@ packages: root           # optional; comma list of root | cli | opencode | openc
 
 ```markdown
 ---
-category: Harness
+category: Added
 packages: root
 ---
 

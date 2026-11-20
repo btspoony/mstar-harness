@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * prepare-release.ts — assemble changelog fragments + bump every surface.
+ * why: assemble changelog fragments and bump every release surface.
  *
  * Usage:
  *   bun run release:prepare                 # auto patch bump (1.8.6 -> 1.8.7)
@@ -20,7 +20,7 @@
  *
  * Fragment format (`.changes/unreleased/<slug>.md`):
  *   ---
- *   category: Harness        # optional; default per package (Harness | Changed | ...)
+ *   category: Changed        # optional; one of Breaking | Added | Changed | Fixed | Removed | Security
  *   packages: root           # optional; comma list of root | cli | opencode | engine
  *   ---
  *   - English bullet.
@@ -74,16 +74,9 @@ const FRAGMENT_PACKAGES = [
   "omp",
 ];
 
-const DEFAULT_CATEGORY: Record<string, string> = {
-  root: "Harness",
-  cli: "Changed",
-  opencode: "Bundled harness skills (`harness-skills/` at publish)",
-  "opencode-v2": "Changed",
-  engine: "Changed",
-  commands: "Changed",
-  dsh: "Changed",
-  omp: "Changed",
-};
+/** Changelog kind sections, in render order. A fragment may name one of these. */
+export const CATEGORY_ORDER = ["Breaking", "Added", "Changed", "Fixed", "Removed", "Security"] as const;
+const DEFAULT_CATEGORY = "Changed";
 
 const REGISTRY_URL = "https://registry.npmjs.org";
 /** Bound on the whole published-version probe; a hung registry must never stall prepare. */
@@ -258,6 +251,15 @@ export function validateFragmentPackages(packages: string[], file: string): stri
   return errors;
 }
 
+/** Validate an explicit fragment `category:` against the kind sections. An omitted category is valid (defaults to Changed). */
+export function validateFragmentCategory(category: string | undefined, file: string): string[] {
+  if (category === undefined) return [];
+  if (!(CATEGORY_ORDER as readonly string[]).includes(category)) {
+    return [`${file}: unknown category "${category}" (expected one of ${CATEGORY_ORDER.join("|")})`];
+  }
+  return [];
+}
+
 async function readFragments(): Promise<Fragment[]> {
   if (!existsSync(UNRELEASED_DIR)) return [];
   const files = readdirSync(UNRELEASED_DIR)
@@ -268,6 +270,7 @@ async function readFragments(): Promise<Fragment[]> {
   for (const f of files) {
     const frag = parseFragment(f, await Bun.file(`${UNRELEASED_DIR}/${f}`).text());
     errors.push(...validateFragmentPackages(frag.packages, f));
+    errors.push(...validateFragmentCategory(frag.category, f));
     out.push(frag);
   }
   if (errors.length) {
@@ -281,13 +284,13 @@ async function readFragments(): Promise<Fragment[]> {
 }
 
 /** Build the markdown body for one changelog target, between the version header and the next section. */
-function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fragment[], version: string): string {
+export function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fragment[], version: string): string {
   const relevant = frags.filter((f) => f.packages.includes(target.pkg));
 
-  // group by category (default per package), preserving fragment order
+  // invariant: groups render in CATEGORY_ORDER rank, Breaking first.
   const groups: { category: string; bullets: string[] }[] = [];
   for (const f of relevant) {
-    const cat = f.category ?? DEFAULT_CATEGORY[target.pkg];
+    const cat = f.category ?? DEFAULT_CATEGORY;
     let g = groups.find((x) => x.category === cat);
     if (!g) {
       g = { category: cat, bullets: [] };
@@ -299,6 +302,8 @@ function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fragment[]
       if (t.trim()) g.bullets.push(t);
     }
   }
+  const rank = (category: string) => (CATEGORY_ORDER as readonly string[]).indexOf(category);
+  groups.sort((a, b) => rank(a.category) - rank(b.category));
 
   const lines: string[] = [];
   if (target.pkg === "root") {
@@ -321,11 +326,9 @@ function buildSectionBody(target: (typeof CHANGELOGS)[number], frags: Fragment[]
       );
     }
   } else {
-    const cat = groups[0]?.category ?? DEFAULT_CATEGORY[target.pkg];
-    const bullets: string[] = [];
-    for (const g of groups) for (const b of g.bullets) bullets.push(b);
-    lines.push(`### ${cat}`, "");
-    if (bullets.length) lines.push(...bullets, "");
+    for (const g of groups) {
+      lines.push(`### ${g.category}`, "", ...g.bullets, "");
+    }
     const note =
       target.pkg === "opencode"
         ? `- Version alignment with harness **${version}** (no OpenCode package API change).`
