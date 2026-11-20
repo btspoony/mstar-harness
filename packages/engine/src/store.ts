@@ -149,9 +149,13 @@ export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): stri
       const selectedMain = mainWorktreeRoot(selectedOwner);
       const keyMain = mainWorktreeRoot(keyOwner);
       const sameRepo = selectedMain !== null && keyMain !== null && selectedMain === keyMain;
-      const foreignHarnessRoot = keyReal.includes(`${sep}.mstar${sep}`);
-      if (!sameRepo || foreignHarnessRoot) {
+      if (!sameRepo) {
         throw new CrossRootRefusedError(`${key} belongs to another checkout's harness state; select that checkout's root instead of routing around it`);
+      }
+      if (keyReal.includes(`${sep}.mstar${sep}`)) {
+        // why: a linked worktree's process root is not selectable and its state
+        // belongs to the main worktree — name the recovery that actually works.
+        throw new CrossRootRefusedError(`${key} is another worktree's process root; harness state belongs to the main worktree. Run \`mstar path resolve\` and use its controlHarnessDir.`);
       }
     }
     return key;
