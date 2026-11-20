@@ -1106,6 +1106,10 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
       expect(() => resolveArtifactPath(join(root, "checkout-a", ".agents"), { kind: "json", key: join(root, "checkout-a", ".plans", "x.json") })).not.toThrow();
       // why: an ordinary `plans` directory is not a harness marker.
       expect(() => resolveArtifactPath(selected, { kind: "json", key: join(root, "checkout-a", "docs", "plans", "x.json") })).not.toThrow();
+      // why: a legacy plans-rooted corpus (status.json evidence) still belongs to its checkout.
+      mkdirSync(join(root, "checkout-b", "plans"), { recursive: true });
+      writeFileSync(join(root, "checkout-b", "plans", "status.json"), "{}");
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: join(root, "checkout-b", "plans", "x.json") })).toThrow(/another checkout's harness state/);
       // why: a root-level `.mstar` still belongs to a foreign owner.
       expect(() => resolveArtifactPath(selected, { kind: "json", key: join(sep, ".mstar", "status.json") })).toThrow(/another checkout's harness state/);
     } finally {

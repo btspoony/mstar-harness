@@ -94,10 +94,17 @@ function assertKindAdmitted(kind: string): void {
   }
 }
 
-/** why: The owner is the checkout whose harness/corpus directory this path traverses first. */
+/** why: The owner is the checkout whose harness/corpus directory this path traverses first.
+ * A bare `plans/` counts only when it carries legacy harness state; an ordinary
+ * `docs/plans/` directory is not a checkout marker. */
 function harnessOwnerOf(target: string): string | null {
   const segments = target.split(sep);
-  const index = segments.findIndex((segment) => segment === ".mstar" || segment === ".agents" || segment === ".plans");
+  const index = segments.findIndex((segment, position) => {
+    if (segment === ".mstar" || segment === ".agents" || segment === ".plans") return true;
+    if (segment !== "plans") return false;
+    const dir = segments.slice(0, position + 1).join(sep) || sep;
+    return existsSync(join(dir, "status.json"));
+  });
   if (index <= 0) return null;
   return segments.slice(0, index).join(sep) || sep;
 }
