@@ -92,7 +92,18 @@ export type StoreErrorCode =
   | "collaboration.not-initialized"
   | "collaboration.not-active"
   | "collaboration.unreadable"
-  | "collaboration.stale-binding";
+  | "collaboration.stale-binding"
+  // The one-way authority cutover (collaboration-cutover.ts): a combined or
+  // partially cut store is not runtime authority, a competing source/mode/
+  // manifest cannot win by force, pending catalog or mirror work must be
+  // settled first, and a fence without a verified recovery point never runs.
+  | "collaboration.cutover-required"
+  | "collaboration.cutover-conflict"
+  | "collaboration.cutover-not-quiescent"
+  | "collaboration.backup-incomplete"
+  // The cutover activation input: an activation needs a named operator whose
+  // own attestation document is the one supplied.
+  | "store.attestation-invalid";
 
 /** Typed refusal with an actionable, stable code and optional machine facts. */
 export class StoreError extends Error {
@@ -1928,6 +1939,59 @@ drop table issue_project_moves_v19_stage;
 drop table issue_sync_state_v19_stage;
 `;
 
+/**
+ * Migration 20 - the collaboration cutover fence, in two parts.
+ *
+ * It detaches the execution-side catalog pin (`catalog_execution_bindings`)
+ * from the portable catalog identity: the pin rows are copied verbatim into a
+ * table of the same shape WITHOUT the foreign key, because catalog entities
+ * move to the per-repository collaboration database and SQLite cannot express
+ * that reference across files. Nothing about a pin's value, revision, hash or
+ * operation id changes; only the constraint that cannot hold after the move is
+ * gone. The cutover resolves pinned `(kind, id)` logically.
+ *
+ * It creates the single-row fence ledger (`collaboration_cutover`) that records
+ * a completed extraction: manifest identity, the exact source generation, the
+ * target stamp and the retained verified recovery point. A fresh store carries
+ * an empty ledger; the fence writes its one row in the cutover transaction, and
+ * that row is what tells a completed fence apart from a store that never held
+ * collaboration rows. Recording this version is also the durable schema
+ * advance: a binary built before the cutover refuses the fenced file as
+ * `store.schema-unsupported` instead of reopening the moved tables.
+ */
+export const MIGRATION_20_SQL = `
+create table catalog_execution_bindings_v20_stage as select * from catalog_execution_bindings;
+drop table catalog_execution_bindings;
+create table catalog_execution_bindings(
+  workflow_id text not null,
+  catalog_kind text not null check (catalog_kind in ('iteration','plan')),
+  catalog_id text not null,
+  workflow_root_kind text not null check (workflow_root_kind in ('repository','harness','plans','iterations','specs','knowledge','projects')),
+  workflow_relative_path text not null,
+  catalog_revision integer not null,
+  input_hash text not null,
+  pin_json text not null,
+  operation_id text not null,
+  primary key (workflow_id, catalog_kind, catalog_id)
+);
+insert into catalog_execution_bindings select * from catalog_execution_bindings_v20_stage;
+drop table catalog_execution_bindings_v20_stage;
+create table if not exists collaboration_cutover(
+  id integer primary key check (id = 1),
+  manifest_id text not null,
+  manifest_digest text not null,
+  source_store_id text not null,
+  source_epoch integer not null,
+  source_schema_version integer not null,
+  source_revision integer not null,
+  source_catalog_revision integer not null,
+  target_store_id text not null,
+  target_epoch integer not null,
+  backup_path text not null,
+  fenced_at text not null
+);
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry - append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -1949,6 +2013,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 17, name: "sync-push-ledger", sql: MIGRATION_17_SQL },
   { version: 18, name: "sync-run-lease", sql: MIGRATION_18_SQL },
   { version: 19, name: "issue-obsolete-disposition", sql: MIGRATION_19_SQL },
+  { version: 20, name: "collaboration-cutover-fence", sql: MIGRATION_20_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
@@ -2179,6 +2244,83 @@ export function readStoreAuthority(db: StoreDb): StoreAuthorityRead {
     storeId: row?.store_id,
     epoch: row?.authority_epoch,
     missing: row === undefined,
+  };
+}
+
+/**
+ * A completed collaboration cutover, as the combined store records it: the
+ * exact manifest it was fenced for, the source generation that was extracted,
+ * the target stamp it was published to and the retained verified recovery
+ * point. The row's presence is the difference between "this store never held
+ * collaboration rows" and "the collaboration rows moved out of this store".
+ */
+export type CollaborationFence = Readonly<{
+  manifestId: string;
+  manifestDigest: string;
+  sourceStoreId: string;
+  sourceEpoch: number;
+  sourceSchemaVersion: number;
+  sourceRevision: number;
+  sourceCatalogRevision: number;
+  targetStoreId: string;
+  targetEpoch: number;
+  backupPath: string;
+  fencedAt: string;
+}>;
+
+/**
+ * Read the fence ledger of an existing store: `null` when the file never held a
+ * cutover (including a store migrated only to an earlier schema, which has no
+ * ledger table at all), the one recorded fence otherwise. A ledger row that
+ * cannot be read as the declared shape is corrupt evidence, never an absent
+ * fence: a caller must not treat a damaged fence as permission to write.
+ */
+export function readCollaborationFence(db: StoreDb): CollaborationFence | null {
+  const present = db
+    .prepare("select count(*) as n from sqlite_master where type='table' and name='collaboration_cutover'")
+    .get() as { n?: number } | undefined;
+  if (!present?.n) return null;
+  const row = db
+    .prepare(
+      "select manifest_id, manifest_digest, source_store_id, source_epoch, source_schema_version, " +
+        "source_revision, source_catalog_revision, target_store_id, target_epoch, backup_path, fenced_at " +
+        "from collaboration_cutover where id = 1",
+    )
+    .get() as Record<string, unknown> | undefined;
+  if (row === undefined) return null;
+  const text = (value: unknown): value is string => typeof value === "string" && value !== "";
+  const count = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value);
+  if (
+    !text(row.manifest_id) ||
+    !text(row.manifest_digest) ||
+    !text(row.source_store_id) ||
+    !count(row.source_epoch) ||
+    !count(row.source_schema_version) ||
+    !count(row.source_revision) ||
+    !count(row.source_catalog_revision) ||
+    !text(row.target_store_id) ||
+    !count(row.target_epoch) ||
+    !text(row.backup_path) ||
+    !text(row.fenced_at)
+  ) {
+    throw new StoreError(
+      "store.corrupt",
+      "collaboration_cutover holds a malformed fence record; the cutover evidence cannot be verified. Nothing was " +
+        "modified; recover the store from its verified pre-fence backup.",
+    );
+  }
+  return {
+    manifestId: row.manifest_id,
+    manifestDigest: row.manifest_digest,
+    sourceStoreId: row.source_store_id,
+    sourceEpoch: row.source_epoch,
+    sourceSchemaVersion: row.source_schema_version,
+    sourceRevision: row.source_revision,
+    sourceCatalogRevision: row.source_catalog_revision,
+    targetStoreId: row.target_store_id,
+    targetEpoch: row.target_epoch,
+    backupPath: row.backup_path,
+    fencedAt: row.fenced_at,
   };
 }
 

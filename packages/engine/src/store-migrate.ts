@@ -31,7 +31,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, type Dirent } from "n
 import { join, resolve } from "node:path";
 import { discoverCatalog, type CatalogImportPlan } from "./catalog-import.js";
 import { catalogRootDir } from "./catalog.js";
-import { initializeStore, openStore, storeDbPath, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { initializeStore, openStore, readCollaborationFence, storeDbPath, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { computeIdentityKey, type Disposition, type IssueKind, type Severity } from "./issue.js";
 import { isOpenResidual, normalizeSeverity } from "./status.js";
 
@@ -667,6 +667,19 @@ async function ensureStagedStore(context: StoreContext): Promise<StoreHandle> {
   }
   const handle = await openStore(context, "write");
   try {
+    // A fenced source no longer owns the collaboration tables: its history is
+    // the verified pre-fence image and the records live in the collaboration
+    // database. Re-importing registers into it would silently recreate a second
+    // collaboration authority, so this transport refuses instead.
+    const fence = readCollaborationFence(handle.db);
+    if (fence !== null) {
+      throw new StoreError(
+        "collaboration.cutover-conflict",
+        `This combined store was already cut over (manifest ${fence.manifestId}, fenced at ${fence.fencedAt}), so a ` +
+          `file-era register import cannot write collaboration rows into it. The pre-cutover rows remain readable in ` +
+          `the verified image at ${fence.backupPath}. Nothing was written.`,
+      );
+    }
     const meta = handle.db.prepare("select authority_state from store_meta where id = 1").get() as
       | { authority_state?: string }
       | undefined;

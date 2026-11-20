@@ -388,7 +388,7 @@ const COLLABORATION_TABLES: readonly string[] = [
  * instead of failing a later domain query. The DDL is the lane's immutable v1
  * shape; a future schema change arrives as a new migration with its own list.
  */
-const COLLABORATION_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+export const COLLABORATION_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   catalog_entities: [
     "kind", "id", "title", "description", "root_kind", "relative_path", "document_kind", "lifecycle", "revision",
     "registered_at", "updated_at", "source_hash",
@@ -448,6 +448,33 @@ const COLLABORATION_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   sync_cursor: ["binding_id", "direction", "cursor", "updated_at"],
   sync_runs: ["binding_id", "direction", "run_id", "holder_pid", "holder_host", "started_at", "reason"],
 };
+
+/**
+ * The collaboration tables a combined source still holds, in dependency order
+ * (parents before children). The cutover copies exactly these rows into the
+ * staged target and the source fence drops exactly these tables in reverse
+ * order. The lane-only names (`collaboration_meta`,
+ * `collaboration_operations`, `cutover_publications`, `schema_version`) have no
+ * combined-store counterpart and are created by the staged initializer.
+ */
+export const COLLABORATION_CUTOVER_TABLES: readonly string[] = [
+  "catalog_entities",
+  "catalog_links",
+  "project_milestones",
+  "project_roadmaps",
+  "issues",
+  "occurrences",
+  "relations",
+  "provenance",
+  "issue_transitions",
+  "issue_project_moves",
+  "issue_sync_state",
+  "sync_cursor",
+  "sync_runs",
+  "project_bindings",
+  "catalog_operations",
+  "issue_counter",
+];
 
 /** The exact trusted generation a caller may act on. */
 export type CollaborationStamp = Readonly<{
@@ -1172,6 +1199,86 @@ export async function readCollaborationAuthority(context: StoreContext): Promise
   const handle = await openCollaborationStore(context, "read");
   handle.close();
   return handle.authority;
+}
+
+/**
+ * Read one existing store in EITHER state under its admission checks: the
+ * cutover's stage/copy verification and publication inspection need the same
+ * private-path, schema and binding proof, but a staged (not yet active) target
+ * is exactly what they must inspect. Nothing here is a runtime read of staged
+ * business data and the returned connection is read-only.
+ */
+export async function readCollaborationStage<T>(
+  location: CollaborationLocation,
+  apply: (scope: { db: StoreDb; authority: CollaborationAuthority }) => T,
+): Promise<T> {
+  assertStoreRuntimeSupported();
+  const handle = await openAdmission(location, "any", undefined, busyTimeoutMs());
+  try {
+    return apply({ db: handle.db, authority: handle.authority });
+  } finally {
+    handle.close();
+  }
+}
+
+/**
+ * Run one cutover effect on the canonical target inside a write transaction,
+ * admitted in EITHER state so staging and the final publication both use the
+ * same `BEGIN IMMEDIATE` + guarded connection the runtime writer has. The caller
+ * owns the state decision (it must re-check the staged/active state inside the
+ * transaction); this wrapper owns admission, the lock and the commit.
+ */
+export async function writeCollaborationStage<T>(
+  location: CollaborationLocation,
+  apply: (scope: { db: StoreDb; authority: CollaborationAuthority }) => T,
+): Promise<T> {
+  assertStoreRuntimeSupported();
+  const dbPath = location.dbPath;
+  const timeout = busyTimeoutMs();
+  assertAdmittedTarget(dbPath);
+  if (!existsSync(dbPath)) throw notInitialized(dbPath);
+  const probe = await connectAt(dbPath, "read", timeout);
+  try {
+    admit(probe, location, undefined, "any");
+  } finally {
+    probe.close();
+  }
+  const db = await connectAt(dbPath, "write", timeout, { noCreate: true, keepJournalMode: true }).catch(
+    (error: unknown) => {
+      if (!existsSync(dbPath)) throw notInitialized(dbPath);
+      throw error;
+    },
+  );
+  try {
+    db.exec("begin immediate");
+    try {
+      const authority = admit(db, location, undefined, "any");
+      const result = apply({ db: guardedWriteDb(db), authority });
+      if (isThenable(result)) {
+        void Promise.resolve(result).catch(() => undefined);
+        throw new StoreError(
+          "store.corrupt",
+          "A collaboration cutover effect must be synchronous. The returned thenable was rejected before commit and " +
+            "nothing was written.",
+        );
+      }
+      db.exec("commit");
+      return result;
+    } catch (error) {
+      try {
+        db.exec("rollback");
+      } catch {
+        // nothing committed either way
+      }
+      throw error;
+    }
+  } finally {
+    try {
+      db.close();
+    } catch {
+      // connection-level failure; the transaction above already rolled back
+    }
+  }
 }
 
 /**

@@ -98,6 +98,19 @@ export {
   readCollaborationAuthority,
   withCollaborationWrite,
 } from "./collaboration-store.js";
+// The one-way authority cutover: reviewed manifest, verified staged copy,
+// activation claim, durable source fence, guarded publication and replay.
+export type {
+  CutoverActivationOptions,
+  CutoverManifest,
+  CutoverReceipt,
+  CutoverSource,
+} from "./collaboration-cutover.js";
+export {
+  activateCollaborationCutover,
+  applyCollaborationCutover,
+  planCollaborationCutover,
+} from "./collaboration-cutover.js";
 export {
   assertPlanWritingPath,
   canonicalizeNearestExisting,
