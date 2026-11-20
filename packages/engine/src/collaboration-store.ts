@@ -15,7 +15,20 @@
  * state or epoch changes.
  */
 import { randomUUID } from "node:crypto";
-import { accessSync, closeSync, constants, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import {
+  accessSync,
+  closeSync,
+  constants,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmdirSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
@@ -583,6 +596,23 @@ function writeAuthorityMarker(dir: string, repositoryKey: string): void {
   }
 }
 
+/** Best-effort rollback of a marker published for a database that never
+ * appeared: remove the marker, then the repository directory only when this
+ * attempt left it empty. A marker-only directory is otherwise a safe state the
+ * next initializer recovers. */
+function discardAuthorityMarker(dir: string): void {
+  try {
+    unlinkSync(join(dir, COLLABORATION_MARKER_FILE));
+  } catch {
+    // already gone: nothing to roll back
+  }
+  try {
+    rmdirSync(dir);
+  } catch {
+    // not empty or already gone: keep whatever else lives there
+  }
+}
+
 /** A published store whose directory entry is not confirmed durable. */
 function barrierRefusal(dbPath: string, error: unknown): StoreError {
   const cause = publicationCause(error);
@@ -957,6 +987,9 @@ export async function initializeCollaborationStore(location: CollaborationLocati
     throw asRefusal(dbPath, error);
   }
 
+  // The marker is published BEFORE the database: there is no moment where a
+  // visible store lacks the evidence that makes its location authority bytes.
+  writeAuthorityMarker(dir, location.repoKey);
   try {
     linkSync(stagingPath, dbPath);
   } catch (error) {
@@ -966,12 +999,15 @@ export async function initializeCollaborationStore(location: CollaborationLocati
       // only after it is verified and its directory entry is confirmed.
       return continueExisting(location, timeout);
     }
+    // No database appeared, so the marker must not outlive this attempt; a
+    // crash here instead leaves a marker-only directory, which the next
+    // initialize recovers and open reports as not-initialized.
+    discardAuthorityMarker(dir);
     throw unreadable(dbPath, `the staged store could not be linked into place (${publicationCause(error)})`);
   }
   // A failed barrier keeps the staging name (the only other reference to those
   // bytes) and reports the published-but-unconfirmed outcome; the same
   // initializer retries it through the continuation above.
-  writeAuthorityMarker(dir, location.repoKey);
   confirmDirectoryEntry(dbPath);
   removeStagingFiles(stagingPath);
   return authority;
