@@ -2214,7 +2214,8 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
   } else {
     lines.push("- Return FINDINGS in your result payload following finding-format.md, each citing code you OPENED YOURSELF.");
     lines.push(`- Every accepted finding carries \`- **Merge class**: ${MERGE_CLASSES.join(" | ")}\` immediately after \`- **Confidence**\`.`);
-    lines.push("- Return ONLY findings \u2014 no fixes, no refactors, no patches.");
+    lines.push("- Return findings. The ONLY fix artifact you may include is one optional GitHub ```suggestion block per finding, and only when the repair is local (one file, one hunk, one line), mechanically safe, and you READ the surrounding code. The fence carries replacement text only \u2014 no explanations or other Markdown inside it.");
+    lines.push("- Never suggest a repair spanning hunks or files, never change behavior beyond the stated defect, and never suggest without reading the surrounding code. The finding stays anchored to ONE `RIGHT` diff line; the suggestion is part of that finding's inline body (title + evidence + impact + fix sketch + suggestion), posted verbatim.");
   }
   lines.push("- Your sandbox may be WRITE-BLOCKED (read-only / EPERM): NEVER depend on writing files. Writable seats may best-effort write their evidence file; the contract never requires it \u2014 the MAIN AGENT writes and consolidates all evidence files from seat payloads.");
   lines.push(`- Evidence-file slug mandate: \`${slug}\` (\`<domain>-<seat>\`, unique per seat) \u2014 use it in any file references you report.`);

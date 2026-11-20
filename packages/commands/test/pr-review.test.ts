@@ -114,6 +114,52 @@ describe("pr-review command family", () => {
     expect(JSON.parse(calls[1]!.stdin ?? "")).toMatchObject({ event: "COMMENT", body: "Review summary", commit_id: "abcdef0123456" });
   });
 
+  test("422 retry folds the body without its suggestion fence and drops inline comments", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([
+      { path: "src/a.ts", line: 3, body: "Unhandled null deref\n\nEvidence: `foo()` returns null before the deref.\n\nFix sketch: guard it.\n\n```suggestion\nconst v = fallback;\n```" },
+      { path: "src/b.ts", line: 9, body: "```suggestion\nconst x = 1;\n```" },
+      { path: "src/c.ts", line: 4, body: "Tainted query\n\nEvidence: the docs quote this shape:\n\n```suggestion\n// example only\n```\n\nImpact: injection.\n\nFix sketch: parameterize it.\n\n```suggestion\nconst q = query(text, params);\n```" },
+      { path: "src/d.ts", line: 7, body: "Mid-body example\n\nEvidence: docs show:\n\n```suggestion\n// quoted only\n```\n\nFix sketch: keep the prose after the quote." },
+      { path: "src/e.ts", line: 11, body: "Fence inside replacement\n\nFix sketch: keep the marker.\n\n```suggestion\nconst a = 1;\n```\nconst b = 2;\n```" },
+      { path: "src/f.ts", line: 5, body: "Race on cache\n\nEvidence:\n\n```suggestion\ncache.set(k,v)\n```\n\nImpact: lost writes.\n\n```ts\ncache.set(k, v)\n```" },
+    ]));
+    let apiCalls = 0;
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+      apiCalls += 1;
+      if (apiCalls === 1) return { exitCode: 1, signal: null, stdout: "", stderr: 'HTTP 422: "line" must be part of the diff' };
+      return { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-2" }), stderr: "" };
+    };
+    const result = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(result.status).toBe("ok");
+    expect(calls).toHaveLength(3);
+    const retried = JSON.parse(calls[2]!.stdin ?? "") as { body: string; comments?: unknown };
+    expect(retried.comments).toBeUndefined();
+    expect(retried.body).toContain("## Inline comments folded into this summary");
+    expect(retried.body).toContain("Unhandled null deref");
+    expect(retried.body).toContain("Fix sketch: guard it.");
+    expect(retried.body).toContain("(inline suggestion omitted: no anchor after 422)");
+    expect(retried.body).toContain("// example only");
+    expect(retried.body).toContain("Fix sketch: parameterize it.");
+    expect(retried.body).not.toContain("const q = query(text, params);");
+    expect(retried.body).toContain("// quoted only");
+    expect(retried.body).toContain("Fix sketch: keep the prose after the quote.");
+    expect(retried.body).toContain("Fence inside replacement");
+    expect(retried.body).toContain("Fix sketch: keep the marker.");
+    expect(retried.body).not.toContain("const a = 1;");
+    expect(retried.body).not.toContain("const b = 2;");
+    expect(retried.body).toContain("Impact: lost writes.");
+    expect(retried.body).toContain("cache.set(k, v)");
+    expect(retried.body.split("```suggestion")).toHaveLength(4); // why: two quoted examples plus the unbalanced src/f body stay, the trailing blocks are gone
+    expect(retried.body).not.toContain("const v = fallback;");
+    expect(retried.body).not.toContain("const x = 1;");
+  });
+
   test("refuses cleanup when a recorded review has no saved report", async () => {
     const { cwd, context, calls } = fixture();
     const worktreePath = path.join(cwd, "review-worktree");

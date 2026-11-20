@@ -99,13 +99,45 @@ function parseFinding(entry: unknown, index: number): ReviewPostPlan["inlineComm
   if (typeof row.path !== "string" || !row.path.trim() || typeof row.body !== "string" || !row.body.trim() || typeof row.line !== "number" || !Number.isInteger(row.line) || row.line < 1) throw new UsageError(`findings[${index}] must be {path: string, line: number >= 1, body: string}`);
   return { path: row.path, line: row.line, side: "RIGHT", body: row.body };
 }
+/** why: a folded inline body loses its trailing suggestion block — the summary
+ * carries no line anchor, so a suggestion there would neither apply nor read
+ * as an inline fix. The contract puts that block last (title / evidence /
+ * impact / fix sketch, then the suggestion), so only a TRAILING block is
+ * removed — after its close only blank lines may remain. The close is the
+ * first bare fence after the opener, except when the span to the last bare
+ * fence is one contiguous replacement run (no blank line and no info-string
+ * fence opener between), which keeps a replacement containing its own ``` line
+ * inside the removed block. Prose between two separate fenced blocks is never
+ * swallowed: an unbalanced span falls back to the first fence, fails the
+ * trailing check, and the body folds unchanged. */
+function withoutSuggestion(body: string): string {
+  const lines = body.split(/\r?\n/);
+  const openers = lines.flatMap((line, index) => (/^```suggestion\s*$/.test(line) ? [index] : []));
+  for (let i = openers.length - 1; i >= 0; i -= 1) {
+    const open = openers[i]!;
+    const fences = lines.flatMap((line, index) => (index > open && /^```\s*$/.test(line) ? [index] : []));
+    if (fences.length === 0) continue;
+    const firstFence = fences[0]!;
+    const lastFence = fences[fences.length - 1]!;
+    const oneReplacementRun =
+      firstFence < lastFence &&
+      lines.slice(firstFence + 1, lastFence).every((line) => line.trim() !== "" && !/^```\s*\S/.test(line));
+    const close = oneReplacementRun ? lastFence : firstFence;
+    if (!lines.slice(close + 1).every((line) => line.trim() === "")) return body.trim();
+    return [...lines.slice(0, open), ...lines.slice(close + 1)].join("\n").trim();
+  }
+  return body.trim();
+}
 function foldComments(body: string, dropped: ReviewPostPlan["inlineComments"]): string {
   return [
     ...body.split(/\r?\n/),
     "",
     "## Inline comments folded into this summary",
     "",
-    ...dropped.map((entry) => `- \`${entry.path}:${entry.line}\` — ${entry.body}`),
+    ...dropped.map((entry) => {
+      const comment = withoutSuggestion(entry.body);
+      return `- \`${entry.path}:${entry.line}\` — ${comment === "" ? "(inline suggestion omitted: no anchor after 422)" : comment}`;
+    }),
   ].join("\n");
 }
 async function execute(verb: Verb, input: Input, context: InvocationContext): Promise<CommandEnvelope> {
