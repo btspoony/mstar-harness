@@ -42,14 +42,17 @@ import { MIGRATIONS, initializeStore, openStore, type StoreContext } from "./sto
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-collab-store-")));
 const HOME = join(ROOT, "home");
 mkdirSync(HOME);
+/** The home the single spy resolves; a case may switch it to a fresh tree. */
+let resolvedHome = HOME;
 
 let homeSpy: { mockRestore(): void } | undefined;
 
 beforeAll(() => {
   // The resolver's fixture seam is its explicit `userHome` option; the store
   // entry points keep the locked signatures without one, so the isolated home
-  // is installed at the runtime boundary the resolver calls.
-  homeSpy = spyOn(nodeOs, "homedir").mockReturnValue(HOME);
+  // is installed at the runtime boundary the resolver calls. One spy serves the
+  // whole file: nesting another and restoring it would discard this one.
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => resolvedHome);
 });
 
 afterAll(() => {
@@ -625,7 +628,9 @@ describe("collaboration store", () => {
       },
       { ...stamp, epoch: stamp.epoch + 1 },
     );
-    expect(() => escaped?.db.exec("select 1")).toThrow();
+    // The guarded facade denies `exec`, so the closed connection is proved
+    // through the one prepared statement the facade still forwards.
+    expect(() => escaped?.db.prepare("select 1").get()).toThrow();
   });
 
   test("an asynchronous effect is rejected before commit and leaves no unhandled rejection", async () => {
@@ -876,34 +881,50 @@ describe("collaboration store", () => {
     expect(existsSync(`${location.dbPath}-wal`)).toBe(false);
   });
 
-  test("a quiesced WAL store admits without sidecars and a stale stamp refuses untouched", async () => {
-    const repo = makeRepo("https://github.com/acme/quiesced.git");
+  test("a WAL-journal store is refused without opening, repairing or creating a journal", async () => {
+    const repo = makeRepo("https://github.com/acme/wal-refusal.git");
     const context = contextAt(repo);
     const location = locationAt(repo);
     await initializeCollaborationStore(location);
     activate(location.dbPath);
-    const authority = await readCollaborationAuthority(context);
 
+    // A normal DELETE-journal store admits and needs no sidecar.
+    const authority = await readCollaborationAuthority(context);
+    expect(authority.state).toBe("active");
+    expect(existsSync(`${location.dbPath}-wal`)).toBe(false);
+    expect(existsSync(`${location.dbPath}-shm`)).toBe(false);
+
+    // A present WAL sidecar is refused before the database is opened.
+    const mainBytes = readFileSync(location.dbPath);
+    writeFileSync(`${location.dbPath}-wal`, "wal sidecar presence marker", { mode: 0o600 });
+    const sidecarBytes = readFileSync(`${location.dbPath}-wal`);
+    await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+      message: expect.stringContaining("WAL-journal store"),
+    });
+    await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+    });
+    // Nothing was opened, repaired, created or converted.
+    expect(readFileSync(location.dbPath).equals(mainBytes)).toBe(true);
+    expect(readFileSync(`${location.dbPath}-wal`).equals(sidecarBytes)).toBe(true);
+    expect(existsSync(`${location.dbPath}-shm`)).toBe(false);
+    rmSync(`${location.dbPath}-wal`, { force: true });
+
+    // A quiesced WAL file (header WAL, no journal) is refused too, never read
+    // immutably and never given a fresh journal.
     const wal = new DatabaseSync(location.dbPath);
     try {
       wal.exec("pragma journal_mode=wal");
     } finally {
       wal.close();
     }
-    expect(journalMode(location.dbPath)).toBe("wal");
     rmSync(`${location.dbPath}-wal`, { force: true });
     rmSync(`${location.dbPath}-shm`, { force: true });
-    const bytes = readFileSync(location.dbPath);
-
-    // The checkpointed file is admitted immutably: no journal is recreated.
-    expect(await readCollaborationAuthority(context)).toEqual(authority);
-    expect(existsSync(`${location.dbPath}-wal`)).toBe(false);
-    expect(existsSync(`${location.dbPath}-shm`)).toBe(false);
-
-    await expect(
-      openCollaborationStore(context, "read", { ...stampOf(authority), epoch: authority.epoch + 1 }),
-    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
-    expect(readFileSync(location.dbPath).equals(bytes)).toBe(true);
+    await expect(readCollaborationAuthority(context)).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+      message: expect.stringContaining("header records WAL"),
+    });
     expect(existsSync(`${location.dbPath}-wal`)).toBe(false);
     expect(existsSync(`${location.dbPath}-shm`)).toBe(false);
   });
@@ -919,6 +940,9 @@ describe("collaboration store", () => {
     const attempts: Array<(write: CollaborationStoreHandle) => unknown> = [
       (write) => write.db.exec("commit"),
       (write) => write.db.exec("/* the wrapper owns it */ rollback"),
+      // A batch whose FIRST statement is ordinary DML still cannot reach its
+      // trailing transaction control: `exec` is refused outright.
+      (write) => write.db.exec(`${receiptInsert("op-batch")}; commit`),
       (write) => write.db.prepare("end").run(),
       (write) => write.db.exec("savepoint inner"),
       (write) => write.close(),
@@ -929,6 +953,8 @@ describe("collaboration store", () => {
         message: expect.stringContaining("owned"),
       });
     }
+    // No statement of a refused batch ran, and no effect survived.
+    expect(receipts(location.dbPath)).toEqual([]);
     // The wrapper still owns the transaction and commits a legitimate effect.
     await withCollaborationWrite(
       context,
@@ -944,7 +970,8 @@ describe("collaboration store", () => {
   test("new directory ancestors are synchronized before success", async () => {
     const freshHome = join(ROOT, `fresh-home-${sequence++}`);
     mkdirSync(freshHome, { recursive: true });
-    const localHome = spyOn(nodeOs, "homedir").mockReturnValue(freshHome);
+    const previousHome = resolvedHome;
+    resolvedHome = freshHome;
     const syncedInodes = new Set<number>();
     try {
       const location = locationAt(makeRepo("https://github.com/acme/ancestors.git"));
@@ -967,7 +994,67 @@ describe("collaboration store", () => {
       ];
       for (const dir of chain) expect(syncedInodes.has(statSync(dir).ino)).toBe(true);
     } finally {
-      localHome.mockRestore();
+      resolvedHome = previousHome;
+    }
+  });
+
+  test("a failed ancestor barrier is retried on continuation", async () => {
+    const freshHome = join(ROOT, `ancestor-retry-${sequence++}`);
+    mkdirSync(freshHome, { recursive: true });
+    const previousHome = resolvedHome;
+    resolvedHome = freshHome;
+    try {
+      const location = locationAt(makeRepo("https://github.com/acme/ancestor-retry.git"));
+      const mstarcDir = join(freshHome, ".mstar");
+      // Fail only the `.mstar` directory's own barrier: an ancestor, not the
+      // store's final directory entry.
+      const failing = spyOn(nodeFs, "fsyncSync").mockImplementation(((fd: number) => {
+        if (namesDirectory(fd)) {
+          let ancestorInode: number | undefined;
+          try {
+            ancestorInode = statSync(mstarcDir).ino;
+          } catch {
+            ancestorInode = undefined;
+          }
+          if (ancestorInode !== undefined && fstatSync(fd).ino === ancestorInode) {
+            throw Object.assign(new Error("simulated ancestor fsync failure"), { code: "EIO" });
+          }
+        }
+        return REAL_FSYNC(fd);
+      }) as never);
+      const refusal = await initializeCollaborationStore(location).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      failing.mockRestore();
+      expect(refusal).toMatchObject({ code: "collaboration.unreadable", details: { published: true } });
+      expect(existsSync(location.dbPath)).toBe(true);
+
+      // The retry re-walks the chain, so the ancestor that failed is confirmed
+      // again before success is reported.
+      const syncedInodes = new Set<number>();
+      const observer = spyOn(nodeFs, "fsyncSync").mockImplementation(((fd: number) => {
+        if (namesDirectory(fd)) syncedInodes.add(fstatSync(fd).ino);
+        return REAL_FSYNC(fd);
+      }) as never);
+      let authority;
+      try {
+        authority = await initializeCollaborationStore(location);
+      } finally {
+        observer.mockRestore();
+      }
+      expect(authority.repoKey).toBe(location.repoKey);
+      const anchor = join(freshHome, ".mstar");
+      const chain = [
+        anchor,
+        join(anchor, "repos"),
+        join(anchor, "repos", "github.com"),
+        join(anchor, "repos", "github.com", "acme"),
+        dirname(location.dbPath),
+      ];
+      for (const dir of chain) expect(syncedInodes.has(statSync(dir).ino)).toBe(true);
+    } finally {
+      resolvedHome = previousHome;
     }
   });
 
@@ -997,15 +1084,10 @@ describe("collaboration store", () => {
     const location = locationAt(repo);
     await initializeCollaborationStore(location);
     activate(location.dbPath);
-    // Already in WAL mode, so the writer's connect step is a no-op and the
-    // contention is met at BEGIN IMMEDIATE itself.
-    const convert = new DatabaseSync(location.dbPath);
-    try {
-      convert.exec("pragma journal_mode=wal");
-    } finally {
-      convert.close();
-    }
 
+    // The store stays in its DELETE journal mode: the holder takes the write
+    // reservation, readers proceed, and the guarded writer waits at
+    // BEGIN IMMEDIATE for the bounded budget.
     const holder = new DatabaseSync(location.dbPath);
     holder.exec("begin immediate");
     const started = Date.now();

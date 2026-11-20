@@ -345,8 +345,6 @@ function busyAware(db: StoreDb, path: string, timeout: number): StoreDb {
 export type StoreConnectOptions = Readonly<{
   /** Open a writer only when the database exists (`mode=rw`); never create it. */
   noCreate?: boolean;
-  /** Never create a missing WAL sidecar before a read. */
-  noRepair?: boolean;
   /** Keep the database's current journal mode instead of switching a writer to WAL. */
   keepJournalMode?: boolean;
 }>;
@@ -378,15 +376,6 @@ function sqliteUriPath(dbPath: string): string {
  */
 function existingOnlyUri(dbPath: string): string {
   return `file:${sqliteUriPath(dbPath)}?mode=rw`;
-}
-
-/**
- * A read-only, immutable SQLite URI. Used only for a quiesced WAL store whose
- * journal is absent: every committed frame is already in the database file, so
- * reading it needs no journal and must not create one.
- */
-function immutableReadUri(dbPath: string): string {
-  return `file:${sqliteUriPath(dbPath)}?mode=ro&immutable=1`;
 }
 
 /** SQLite's own file header is 100 bytes: bytes 0–15 are its format magic and
@@ -495,7 +484,7 @@ function ensureJournalForRead(dbPath: string): void {
 }
 
 /** Whether the file's own header says WAL, read WITHOUT creating anything. */
-function walShapedStoreFile(dbPath: string): boolean {
+export function walShapedStoreFile(dbPath: string): boolean {
   const header = Buffer.alloc(DATABASE_HEADER_BYTES);
   try {
     const source = openSync(dbPath, "r");
@@ -531,17 +520,13 @@ function openConnection(
     // The final path must be a regular file inside the control root: neither
     // intent follows a symlink out of it. A read-only connection can also never
     // create the `-wal` a quiesced WAL store needs, so that empty journal is put
-    // back before the read open (see the helpers) unless the caller forbids the
-    // repair: then the checkpointed file itself is read immutably.
+    // back before the read open (see the helpers).
     assertAbsentOrRegularStoreFile(dbPath);
-    if (mode === "read") {
-      if (options.noRepair !== true) ensureJournalForRead(dbPath);
-      const immutable =
-        options.noRepair === true && !existsSync(`${dbPath}-wal`) && walShapedStoreFile(dbPath);
-      db = immutable ? new DatabaseSync(immutableReadUri(dbPath)) : new DatabaseSync(dbPath, { readOnly: true });
-    } else {
-      db = new DatabaseSync(options.noCreate === true ? existingOnlyUri(dbPath) : dbPath);
-    }
+    if (mode === "read") ensureJournalForRead(dbPath);
+    db =
+      mode === "read"
+        ? new DatabaseSync(dbPath, { readOnly: true })
+        : new DatabaseSync(options.noCreate === true ? existingOnlyUri(dbPath) : dbPath);
   } catch (error) {
     if (mode === "read" && isRawCantOpen(error)) throw error;
     refuseOpenFailure(error, dbPath, timeout);

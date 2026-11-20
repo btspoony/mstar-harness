@@ -42,6 +42,7 @@ import {
   removeStagingFiles,
   syncDirectoryEntry,
   validateAppliedMigrations,
+  walShapedStoreFile,
   type Migration,
   type StoreConnectOptions,
   type StoreContext,
@@ -641,13 +642,29 @@ function assertPrivateStoreFile(dbPath: string): void {
 
 /**
  * Every entry's admission checks, in one place: the private, link-free
- * namespace, the final target type, and - when the store exists - its private
- * bytes. Refuses before creating directories or opening SQLite.
+ * namespace, the final target type, the private bytes and the lane's journal
+ * layout - when the store exists. Refuses before creating directories or
+ * opening SQLite.
  */
 function assertAdmittedTarget(dbPath: string): void {
   assertPrivateStorePath(dbPath);
   assertRegularTarget(dbPath);
-  if (existsSync(dbPath)) assertPrivateStoreFile(dbPath);
+  if (!existsSync(dbPath)) return;
+  assertPrivateStoreFile(dbPath);
+  // The collaboration lane publishes and keeps DELETE-journal stores. A WAL
+  // layout (sidecar or header) cannot be inspected without either creating a
+  // `-shm` or guessing immutability, so it is refused before any open: no
+  // journal is repaired, created or ignored.
+  const walSidecar = existsSync(`${dbPath}-wal`);
+  if (walSidecar || walShapedStoreFile(dbPath)) {
+    throw unreadable(
+      dbPath,
+      `it is a WAL-journal store (${walSidecar ? "a -wal sidecar is present" : "its header records WAL"}); the ` +
+        `collaboration lane admits only a completed DELETE-journal store. Stop every writer and checkpoint or ` +
+        `convert the database back to a rollback journal, or recover from a verified backup pair; no journal was ` +
+        `repaired or created`,
+    );
+  }
 }
 
 /**
@@ -838,23 +855,28 @@ function transactionOwnershipRefusal(): StoreError {
   );
 }
 
+function batchRefusal(): StoreError {
+  return new StoreError(
+    "store.corrupt",
+    "The collaboration write transaction is owned by withCollaborationWrite: the effect may not run `exec` " +
+      "batches (a later statement could end the transaction). Use `prepare(...)` and run one statement at a " +
+      "time; nothing was written.",
+  );
+}
+
 /**
- * The effect's connection keeps transaction ownership with the wrapper: every
- * transaction-control statement and every close is refused, while ordinary
- * reads and DML through `exec`/`prepare` pass through to the wrapper's
- * connection.
+ * The effect's connection keeps transaction ownership with the wrapper. `exec`
+ * is denied outright - a batch's leading keyword says nothing about later
+ * statements - so the only mutation path is a single prepared statement. Every
+ * transaction-control statement and every close is refused.
  */
 function guardedWriteDb(db: StoreDb): StoreDb {
-  const guard = (sql: string): void => {
-    if (TRANSACTION_CONTROL_KEYWORDS[leadingKeyword(sql)] === true) throw transactionOwnershipRefusal();
-  };
   return {
-    exec(sql: string): void {
-      guard(sql);
-      db.exec(sql);
+    exec(): never {
+      throw batchRefusal();
     },
     prepare(sql: string) {
-      guard(sql);
+      if (TRANSACTION_CONTROL_KEYWORDS[leadingKeyword(sql)] === true) throw transactionOwnershipRefusal();
       return db.prepare(sql);
     },
     close(): never {
@@ -898,9 +920,9 @@ async function openAdmission(
   const dbPath = location.dbPath;
   assertAdmittedTarget(dbPath);
   if (!existsSync(dbPath)) throw notInitialized(dbPath);
-  // Admission never repairs an unadmitted store: the probe creates no WAL
-  // sidecar, and a quiesced WAL database is read from its checkpointed file.
-  const db = await connectAt(dbPath, "read", timeout, { noRepair: true });
+  // The lane refuses a WAL layout before any open, so this read needs no repair
+  // and creates no sidecar.
+  const db = await connectAt(dbPath, "read", timeout);
   try {
     return handleFor(db, admit(db, location, expected, requirement));
   } catch (error) {
@@ -909,12 +931,31 @@ async function openAdmission(
   }
 }
 
-/** Confirm the canonical directory entry before any successful continuation. */
-function confirmDirectoryEntry(dbPath: string): void {
-  try {
-    syncDirectoryEntry(dirname(dbPath));
-  } catch (error) {
-    throw barrierRefusal(dbPath, error);
+/**
+ * Synchronize the published subtree before a success is reported: every
+ * existing directory from the user home down to the store's own directory (the
+ * parent entry that names it and the directory itself), ending with the store's
+ * directory, whose fsync makes the database entry durable. Continuation runs
+ * the same walk, so an ancestor barrier that failed in an earlier attempt is
+ * retried instead of assumed durable.
+ */
+function confirmPublishedChain(dbPath: string): void {
+  const synced: Record<string, true> = {};
+  const sync = (target: string): void => {
+    if (synced[target] === true) return;
+    synced[target] = true;
+    try {
+      syncDirectoryEntry(target);
+    } catch (error) {
+      throw barrierRefusal(dbPath, error);
+    }
+  };
+  const home = resolve(homedir());
+  sync(home);
+  let current = home;
+  for (const segment of relative(home, dirname(dbPath)).split(sep).filter((part) => part.length > 0)) {
+    current = join(current, segment);
+    sync(current);
   }
 }
 
@@ -928,17 +969,17 @@ async function continueExisting(location: CollaborationLocation, timeout: number
   const handle = await openAdmission(location, "any", undefined, timeout);
   const authority = handle.authority;
   handle.close();
-  confirmDirectoryEntry(location.dbPath);
+  // The whole chain is re-confirmed: a previously failed ancestor barrier is
+  // retried here, not only the final directory entry.
+  confirmPublishedChain(location.dbPath);
   return authority;
 }
 
 /**
- * Directories that do not exist yet below the store's directory, returned
- * shallowest first. Every existing component must already be a real directory;
- * creation then makes the missing chain private.
+ * Ensure the store's directory chain exists: every existing component must
+ * already be a real directory, and creation makes the missing chain private.
  */
-function createStoreDirectories(dir: string): string[] {
-  const created: string[] = [];
+function createStoreDirectories(dir: string): void {
   let current = dir;
   for (;;) {
     try {
@@ -950,7 +991,6 @@ function createStoreDirectories(dir: string): string[] {
       if ((error as { code?: string }).code !== "ENOENT") {
         throw unreadable(current, `a storage component could not be examined (${publicationCause(error)})`);
       }
-      created.unshift(current);
       const parent = dirname(current);
       if (parent === current) break;
       current = parent;
@@ -960,29 +1000,6 @@ function createStoreDirectories(dir: string): string[] {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch (error) {
     throw unreadable(dir, `its directory could not be created (${publicationCause(error)})`);
-  }
-  return created;
-}
-
-/**
- * Make a newly created subtree reachable across a crash: each new directory's
- * own entry AND the parent entry that names it are synchronized, shallowest
- * first, before publication reports success.
- */
-function confirmCreatedDirectories(dbPath: string, created: readonly string[]): void {
-  const synced: Record<string, true> = {};
-  const sync = (dir: string): void => {
-    if (synced[dir] === true) return;
-    synced[dir] = true;
-    try {
-      syncDirectoryEntry(dir);
-    } catch (error) {
-      throw barrierRefusal(dbPath, error);
-    }
-  };
-  for (const dir of created) {
-    sync(dirname(dir));
-    sync(dir);
   }
 }
 
@@ -1019,7 +1036,7 @@ export async function initializeCollaborationStore(location: CollaborationLocati
   if (existsSync(dbPath)) return continueExisting(location, timeout);
 
   const dir = dirname(dbPath);
-  const createdDirectories = createStoreDirectories(dir);
+  createStoreDirectories(dir);
   const stagingDir = join(dir, `.staging-${process.pid}-${randomUUID()}`);
   const stagingPath = join(stagingDir, basename(dbPath)); // reserved authority basename, protected by every host gate
   try {
@@ -1103,8 +1120,7 @@ export async function initializeCollaborationStore(location: CollaborationLocati
   }
   try {
     // The published subtree and its own name become durable before success.
-    confirmCreatedDirectories(dbPath, createdDirectories);
-    confirmDirectoryEntry(dbPath);
+    confirmPublishedChain(dbPath);
   } finally {
     discardStaging(stagingDir, stagingPath);
   }
@@ -1169,9 +1185,9 @@ export async function withCollaborationWrite<T>(
   assertAdmittedTarget(dbPath);
   if (!existsSync(dbPath)) throw notInitialized(dbPath);
 
-  // Admission on a non-repairing probe: a refused scope creates no sidecar and
-  // changes no journal mode.
-  const probe = await connectAt(dbPath, "read", timeout, { noRepair: true });
+  // Admission on a refusing read: a WAL layout was already refused, so this
+  // probe neither repairs a journal nor creates a sidecar.
+  const probe = await connectAt(dbPath, "read", timeout);
   try {
     admit(probe, location, expected, "active");
   } finally {
