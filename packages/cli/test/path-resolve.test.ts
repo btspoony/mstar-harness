@@ -331,7 +331,7 @@ describe("mstar path check — verdict from Git state", () => {
     withRoot((root) => {
       gitRepo(root);
       writeFileSync(join(root, ".gitignore"), ".mstar/\n");
-      // Non-empty legacy dirs are no longer result dirs; the named probe is
+      // why: non-empty legacy dirs are no longer result dirs; the named probe is
       // judged against the Git verdict of a genuinely ignored corpus dir.
       mkdirSync(join(root, ".mstar", "plans"), { recursive: true });
       writeFileSync(join(root, ".mstar", "plans", "20260808-x.md"), "# plan\n");

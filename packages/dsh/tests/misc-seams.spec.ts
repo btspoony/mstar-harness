@@ -570,9 +570,9 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
 describe('compound gate — fs/write-intent listener ({HARNESS_DIR}/knowledge scope)', () => {
   it('broken knowledge doc → warn advisory (compound.schema.missing-field)', async () => {
     booted = await bootApp()
-    await seedHarness(booted.harnessDir, { 'knowledge/logic-errors/broken.md': KNOWLEDGE_BROKEN })
+    await seedHarness(join(booted.root, '.agents'), { 'knowledge/logic-errors/broken.md': KNOWLEDGE_BROKEN })
     const advisories = captureAdvisories(booted.ctx)
-    const doc = join(booted.harnessDir, 'knowledge', 'logic-errors', 'broken.md')
+    const doc = join(booted.root, '.agents', 'knowledge', 'logic-errors', 'broken.md')
 
     const intent = await booted.ctx.waterfall('fs/write-intent', target(doc), {}, () => undefined)
 
@@ -584,9 +584,9 @@ describe('compound gate — fs/write-intent listener ({HARNESS_DIR}/knowledge sc
 
   it('valid doc → silent pass', async () => {
     booted = await bootApp()
-    await seedHarness(booted.harnessDir, { 'knowledge/logic-errors/good.md': KNOWLEDGE_GOOD })
+    await seedHarness(join(booted.root, '.agents'), { 'knowledge/logic-errors/good.md': KNOWLEDGE_GOOD })
     const advisories = captureAdvisories(booted.ctx)
-    const doc = join(booted.harnessDir, 'knowledge', 'logic-errors', 'good.md')
+    const doc = join(booted.root, '.agents', 'knowledge', 'logic-errors', 'good.md')
 
     await booted.ctx.waterfall('fs/write-intent', target(doc), {}, () => undefined)
 
@@ -598,9 +598,9 @@ describe('compound gate — fs/write-intent listener ({HARNESS_DIR}/knowledge sc
     // The gate resolves the repo root as the parent of {HARNESS_DIR}; the
     // fixture references a present sibling and a missing one.
     await seedFile(join(booted.root, 'src', 'present.ts'), 'export const ok = true\n')
-    await seedHarness(booted.harnessDir, { 'knowledge/logic-errors/refs.md': KNOWLEDGE_MIXED_REF })
+    await seedHarness(join(booted.root, '.agents'), { 'knowledge/logic-errors/refs.md': KNOWLEDGE_MIXED_REF })
     const advisories = captureAdvisories(booted.ctx)
-    const doc = join(booted.harnessDir, 'knowledge', 'logic-errors', 'refs.md')
+    const doc = join(booted.root, '.agents', 'knowledge', 'logic-errors', 'refs.md')
 
     await booted.ctx.waterfall('fs/write-intent', target(doc), {}, () => undefined)
 
@@ -612,9 +612,9 @@ describe('compound gate — fs/write-intent listener ({HARNESS_DIR}/knowledge sc
 
   it('hard mode + broken → repair escape', async () => {
     booted = await bootApp({ enforcement: 'hard' })
-    await seedHarness(booted.harnessDir, { 'knowledge/logic-errors/broken.md': KNOWLEDGE_BROKEN })
+    await seedHarness(join(booted.root, '.agents'), { 'knowledge/logic-errors/broken.md': KNOWLEDGE_BROKEN })
     const advisories = captureAdvisories(booted.ctx)
-    const doc = join(booted.harnessDir, 'knowledge', 'logic-errors', 'broken.md')
+    const doc = join(booted.root, '.agents', 'knowledge', 'logic-errors', 'broken.md')
 
     await booted.ctx.waterfall('fs/write-intent', target(doc), {}, () => undefined)
 
@@ -673,9 +673,9 @@ describe('compound gate — fs/write-intent listener ({HARNESS_DIR}/knowledge sc
 
   it('path-scoping: knowledge README.md index is untouched', async () => {
     booted = await bootApp()
-    await seedHarness(booted.harnessDir, { 'knowledge/README.md': '# Knowledge index\n' })
+    await seedHarness(join(booted.root, '.agents'), { 'knowledge/README.md': '# Knowledge index\n' })
     const advisories = captureAdvisories(booted.ctx)
-    const doc = join(booted.harnessDir, 'knowledge', 'README.md')
+    const doc = join(booted.root, '.agents', 'knowledge', 'README.md')
 
     await booted.ctx.waterfall('fs/write-intent', target(doc), {}, () => undefined)
 
@@ -684,9 +684,9 @@ describe('compound gate — fs/write-intent listener ({HARNESS_DIR}/knowledge sc
 
   it('hostile (no frontmatter) → advisory compound.schema.missing-frontmatter', async () => {
     booted = await bootApp()
-    await seedHarness(booted.harnessDir, { 'knowledge/logic-errors/none.md': KNOWLEDGE_NONE })
+    await seedHarness(join(booted.root, '.agents'), { 'knowledge/logic-errors/none.md': KNOWLEDGE_NONE })
     const advisories = captureAdvisories(booted.ctx)
-    const doc = join(booted.harnessDir, 'knowledge', 'logic-errors', 'none.md')
+    const doc = join(booted.root, '.agents', 'knowledge', 'logic-errors', 'none.md')
 
     await booted.ctx.waterfall('fs/write-intent', target(doc), {}, () => undefined)
 

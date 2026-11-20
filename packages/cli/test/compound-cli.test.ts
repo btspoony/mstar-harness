@@ -25,7 +25,8 @@ async function completeKnowledgeRoot(dir: string): Promise<{ root: string; harne
   const root = realpathSync(dir);
   gitMainWorktree(root);
   const harness = join(root, ".mstar");
-  const configured = join(harness, "knowledge");
+  mkdirSync(harness, { recursive: true });
+  const configured = join(dir, ".agents", "knowledge");
   mkdirSync(configured, { recursive: true });
   writeFileSync(join(configured, "registered.md"), KNOWLEDGE_GOOD);
   const context = { harnessDir: harness };
@@ -86,8 +87,8 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       mkdirSync(harness);
       // why: The configured root is the fixed `<dir>/.mstar`, so the missing store
       // is the one the completeness query refuses over.
-      const knowledgeDir = join(harness, "knowledge");
-      mkdirSync(knowledgeDir);
+      const knowledgeDir = join(dir, ".agents", "knowledge");
+      mkdirSync(knowledgeDir, { recursive: true });
       writeFileSync(join(knowledgeDir, "existing.md"), KNOWLEDGE_GOOD);
       const result = runCli(["compound", "validate", doc, "--knowledge-dir", knowledgeDir], {
         cwd: dir,
@@ -153,7 +154,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
 
       for (const [doc, knowledgeDir] of [
         [join(configured, "registered.md"), configured],
-        [join(configured, "registered.md"), `${harness}/./knowledge/`],
+        [join(configured, "registered.md"), `${configured}/./`],
         // Both sides spelled through the symlink: the scope guard stays lexical.
         [join(link, "registered.md"), link],
       ] as const) {
