@@ -65,7 +65,7 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
 
 The durable summary is not a paste of raw reports. It is a small gate record sufficient for handoff after `{SDD_DIR}` is unavailable. The `Compound disposition` line is the one post-`Done` append: it records the authored outcome on a development plan without amending the engine completion payload.
 
-Decision rationale that must outlive the plan is not a durable-summary field: it is written as an ADR under `docs/adr/` (contract: `mstar-doc-corpus/references/adr.md`), and the summary keeps a pointer to the record.
+Decision rationale that must outlive the plan is not a durable-summary body: it is written as an ADR (contract: `mstar-doc-corpus/references/adr.md`). The summary carries only the pointer — `ADR: <path>` or `ADR: none` — beside `Compound disposition` in `## Review Gate Summary`; PM Acceptance checks that the line exists and, when it names a path, that the record is in the change set.
 
 ## Residual findings（R#）：权威在哪、和主 plan 谁先谁后？
 

@@ -14,6 +14,17 @@ docs/adr/{bucket}/{class}/yyyy-mm-dd-topic.md
 - Classes: `feature/`, `bug-fix/`, `simplification/`, `architecture/`, `process/`, `testing/`.
 - `docs/adr/proposed/TEMPLATE.md` and `docs/adr/implemented/TEMPLATE.md` are the skeletons a new record copies; `rejected/` reuses the proposed shape.
 
+## Where the trigger lives
+
+The contract's required/optional test is the only admission test. The runtime surfaces that point at it, so a decision is recorded in the change that makes it rather than at a later cleanup:
+
+- `mstar-phase-gates` § Prepare — the `clarify` closing summary marks each settled decision that meets the test, or states `ADR: none`.
+- `mstar-artifacts/references/plan-files-and-reports.md` — a plan's `## Review Gate Summary` carries `ADR: <path>` or `ADR: none`; PM Acceptance checks the line.
+- `mstar-knowledge/references/compound-workflow.md` — a standalone development plan writes its record before the PR; iteration plans leave cross-iteration promotion to Phase 3.
+- `mstar-iteration/references/phase-3-iteration-close.md` §3.2 — iteration close writes anything the plans left unrecorded, then checks freshness and supersession.
+
+Mechanical edits, local edits whose rationale is visible in code or the change description, and decisions already recorded stay exempt.
+
 ## What the gate checks, and what it cannot
 
 `bun run validation:drift` (Guard 12, `scripts/adr-check.ts` over the engine's `lintAdrTree`) checks membership, filename shape, `Status` agreeing with the directory for the three live buckets (and an `Archived:` line, with `Status: implemented`, for `archived/`), balanced code fences (an unterminated fence fails the record instead of hiding its tail), and the required and banned sections per bucket. The record-format checks walk `{bucket}/{class}/`, so a stray `.md` directly under `docs/adr/` or directly under a bucket root is invisible to them and review catches it rather than CI; the `INDEX.md` ban covers the whole tree, so an index at either level still fails.
