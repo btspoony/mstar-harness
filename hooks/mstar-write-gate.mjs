@@ -11355,13 +11355,21 @@ function nearestExistingAncestor(target) {
     dir = parent;
   }
 }
+function looksLikeLegacyHarness(dir) {
+  for (const marker of ["status.json", "store.db", "workflows", "projects", "plans", "iterations"]) {
+    if (existsSync8(join11(dir, marker)))
+      return true;
+  }
+  return false;
+}
 function resolveFixedHarnessDir(checkout) {
   refuseRetiredConfiguration(checkout, defaultWorkspaceRoot(checkout));
   const fixed = join11(checkout, ".mstar");
   if (isDirectory2(fixed))
     return fixed;
   for (const legacy of LEGACY_HARNESS_NAMES) {
-    if (isDirectory2(join11(checkout, legacy)))
+    const dir = join11(checkout, legacy);
+    if (isDirectory2(dir) && looksLikeLegacyHarness(dir))
       throw retiredCandidateError(checkout, legacy);
   }
   return null;
@@ -14126,7 +14134,6 @@ class SddScriptError extends Error {
 var GIT_CAPTURE_MAX_BYTES = 64 * 1024 * 1024;
 init_iteration();
 init_project();
-init_git_probe();
 init_path();
 init_status();
 init_core();
@@ -14174,7 +14181,8 @@ function resolveHarnessRootOf(target) {
 function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
-  const resolved = realpathNearest(targetPath);
+  const lexical = resolve18(targetPath);
+  const resolved = join21(canonicalizeNearestExisting(dirname14(lexical)), basename12(lexical));
   const name = basename12(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;

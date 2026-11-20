@@ -38,15 +38,20 @@ function workspaceRoot(cwd: string): string {
   return cwd;
 }
 
-// The engine may be absent in a host that mounts only the hook; the dynamic
-// import keeps the hook inert instead of failing session start (same seam as
-// `summarizeExecutionAuthority` below).
-async function resolveHarnessDir(root: string): Promise<string | null> {
+// The hook must stay usable without node_modules, so the root probe uses Git
+// directly instead of importing the engine (only the authority summary below
+// degrades when the engine is absent).
+function resolveHarnessDir(root: string): string | null {
+  let main = root;
   try {
-    const { readMainWorktree } = await import("@mstar-harness/engine");
-    const main = readMainWorktree(root);
-    if (main === null) return null;
-    const fixed = path.join(main.root, ".mstar");
+    const list = git(["worktree", "list", "--porcelain"], root);
+    const first = list.split("\n").find((line) => line.startsWith("worktree "));
+    if (first) main = first.slice("worktree ".length).trim();
+  } catch {
+    // not a git work tree — the workspace root is the only identity available
+  }
+  const fixed = path.join(main, ".mstar");
+  try {
     return fs.statSync(fixed).isDirectory() ? fixed : null;
   } catch {
     return null;
@@ -91,7 +96,7 @@ const input = readStdinJson();
 try {
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   const root = workspaceRoot(cwd);
-  const harnessDir = await resolveHarnessDir(root);
+  const harnessDir = resolveHarnessDir(root);
   if (!harnessDir) process.exit(0);
 
   const context = [

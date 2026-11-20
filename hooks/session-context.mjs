@@ -4262,13 +4262,21 @@ function nearestExistingAncestor(target) {
     dir = parent;
   }
 }
+function looksLikeLegacyHarness(dir) {
+  for (const marker of ["status.json", "store.db", "workflows", "projects", "plans", "iterations"]) {
+    if (existsSync8(join11(dir, marker)))
+      return true;
+  }
+  return false;
+}
 function resolveFixedHarnessDir(checkout) {
   refuseRetiredConfiguration(checkout, defaultWorkspaceRoot(checkout));
   const fixed = join11(checkout, ".mstar");
   if (isDirectory2(fixed))
     return fixed;
   for (const legacy of LEGACY_HARNESS_NAMES) {
-    if (isDirectory2(join11(checkout, legacy)))
+    const dir = join11(checkout, legacy);
+    if (isDirectory2(dir) && looksLikeLegacyHarness(dir))
       throw retiredCandidateError(checkout, legacy);
   }
   return null;
@@ -10483,7 +10491,6 @@ var init_engine = __esm(() => {
   GIT_CAPTURE_MAX_BYTES = 64 * 1024 * 1024;
   init_iteration();
   init_project();
-  init_git_probe();
   init_path();
   init_status();
   init_core();
@@ -10745,13 +10752,17 @@ function workspaceRoot(cwd) {
   } catch {}
   return cwd;
 }
-async function resolveHarnessDir2(root) {
+function resolveHarnessDir2(root) {
+  let main = root;
   try {
-    await Promise.resolve().then(() => init_engine());
-    const main = readMainWorktree(root);
-    if (main === null)
-      return null;
-    const fixed = path2.join(main.root, ".mstar");
+    const list = git(["worktree", "list", "--porcelain"], root);
+    const first = list.split(`
+`).find((line) => line.startsWith("worktree "));
+    if (first)
+      main = first.slice("worktree ".length).trim();
+  } catch {}
+  const fixed = path2.join(main, ".mstar");
+  try {
     return fs.statSync(fixed).isDirectory() ? fixed : null;
   } catch {
     return null;
@@ -10791,7 +10802,7 @@ var input = readStdinJson();
 try {
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   const root = workspaceRoot(cwd);
-  const harnessDir = await resolveHarnessDir2(root);
+  const harnessDir = resolveHarnessDir2(root);
   if (!harnessDir)
     process.exit(0);
   const context = [

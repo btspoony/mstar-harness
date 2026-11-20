@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { readDeclaredNodeFloor } from "@mstar-harness/engine";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +22,7 @@ afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force
 async function fixture(active = true): Promise<{ root: string; harness: string }> {
   const root = mkdtempSync(join(tmpdir(), "mstar-adopt-terminal-command-"));
   roots.push(root);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   const initial = await initializeStore({ harnessDir: harness });
@@ -43,7 +45,7 @@ async function fixture(active = true): Promise<{ root: string; harness: string }
 
 function invocation(cwd: string): InvocationContext {
   return {
-    cwd, controlRoot: null, sessionId: "caller-session",
+    cwd, controlRoot: join(cwd, ".mstar"), sessionId: "caller-session",
     versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
     signal: new AbortController().signal,
     effects: {
