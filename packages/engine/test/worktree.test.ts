@@ -1666,22 +1666,15 @@ describe("hasHarnessRoot — harness presence follows the {HARNESS_DIR} chain", 
     }
   });
 
-  test("a .mstarc harness_dir declaration refuses instead of declaring a harness", () => {
+  test("a .mstarc harness_dir declaration does not declare a harness", () => {
     const root = tmpRoot("has-harness-mstarc-");
     try {
       const repo = gitRepo(root);
       writeFileSync(join(repo, ".mstarc"), "[config]\nharness_dir=.harness\n");
-      const err = (() => {
-        try {
-          hasHarnessRoot(repo);
-        } catch (e) {
-          return e as HarnessRootRetiredError;
-        }
-        throw new Error("expected HarnessRootRetiredError");
-      })();
-      expect(err).toBeInstanceOf(HarnessRootRetiredError);
-      expect(err.code).toBe("harness.root-retired");
-      expect(err.message).toContain("harness_dir");
+      // why: The retired key is ignored; only the fixed `.mstar` declares a harness.
+      expect(hasHarnessRoot(repo)).toBe(false);
+      mkdirSync(join(repo, ".mstar"), { recursive: true });
+      expect(hasHarnessRoot(repo)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

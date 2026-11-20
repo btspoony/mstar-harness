@@ -6,7 +6,7 @@ Use this reference for `{HARNESS_DIR}` / `{PLAN_DIR}` initialization, status syn
 
 Follow `mstar-conventions` for canonical discovery. The harness root is fixed at `<git main worktree root>/.mstar`; `.mstarc` declares only the corpus and sub-directory layout.
 
-- `harness_dir`, `MSTAR_HARNESS_DIR`, `.agents/`, `.plans/` and `plans/` never select a root. A legacy-only checkout is refused with `mstar harness scaffold` (then `mstar store upgrade` for an existing store).
+- `harness_dir`, `MSTAR_HARNESS_DIR`, `.agents/`, `.plans/` and `plans/` never select a root: the first two are parsed or read and ignored, the rest are never probed. A legacy-only checkout therefore resolves no harness root (no error); `mstar harness scaffold` (then `mstar store upgrade` for an existing store) is how a root comes into existence.
 - `{PLAN_DIR}` defaults to `.mstar/plans/`.
 
 ## Initialization Checklist (when plan management is required)

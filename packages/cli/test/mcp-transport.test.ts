@@ -424,8 +424,10 @@ generated_at: 2026-01-02
    * store that cannot answer refuses instead of reading as complete.
    */
   test("compound validate --knowledge-dir asserts catalog completeness through the surviving action", async () => {
-    const harness = mkdtempSync(join(tmpdir(), "mstar-mcp-catalog-"));
-    const knowledgeDir = join(harness, "knowledge");
+    const root = mkdtempSync(join(tmpdir(), "mstar-mcp-catalog-"));
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const knowledgeDir = join(root, ".agents", "knowledge");
     mkdirSync(knowledgeDir, { recursive: true });
     writeFileSync(join(knowledgeDir, "good.md"), KNOWLEDGE_GOOD);
     const validate = async (client: Client) => envelope(await client.callTool({
@@ -462,7 +464,7 @@ generated_at: 2026-01-02
         expect(JSON.stringify(gap.details?.violations ?? [])).toContain("knowledge/unregistered.md");
       }, { controlRoot: harness });
     } finally {
-      rmSync(harness, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

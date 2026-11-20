@@ -494,13 +494,13 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
 ## Harness dir and environment
 
 - `{HARNESS_DIR}` resolves via the engine `resolveHarnessDir` (`.mstarc`
-  `[config] harness_dir` and the legacy `.agents/` / `.plans/` / `plans/` candidates are retired; the root is the fixed `<main worktree>/.mstar`),
+  `[config] harness_dir` is parsed and ignored and the legacy `.agents/` / `.plans/` / `plans/` candidates are never probed; the root is the fixed `<main worktree>/.mstar`),
   with the plugin Config `harnessDir` allowed only as a matching assertion — a
   different root is refused. The session workspace bounds the **local** probe
   (the session cwd — **never the dsh launch/process cwd**) and never walks
   above it; the process root it reports is still the Git main worktree's
-  `.mstar`. Repos whose only harness is a legacy directory are refused with
-  the scaffold/upgrade recovery.
+  `.mstar`. Repos whose only harness is a legacy directory resolve no root
+  (no error); scaffold/upgrade is the path to creating one.
 - The dispatch gate needs the dispatching agent's own role for the
   anti-recursion precheck: Config **`dispatchBinding`** declares it (dsh
   exposes no per-agent role on the tool-execution context) and is

@@ -344,8 +344,8 @@ describe("knowledge catalog completeness — the DB query that replaced the READ
     const harness = join(root, ".mstar");
     mkdirSync(join(harness, "plans"), { recursive: true });
     for (const relative of bodies) {
-      mkdirSync(dirname(join(harness, "knowledge", relative)), { recursive: true });
-      writeFileSync(join(harness, "knowledge", relative), "# doc\n");
+      mkdirSync(dirname(join(root, ".agents", "knowledge", relative)), { recursive: true });
+      writeFileSync(join(root, ".agents", "knowledge", relative), "# doc\n");
     }
     const context: StoreContext = { harnessDir: harness };
     const handle = await initializeStore(context);
@@ -378,13 +378,13 @@ describe("knowledge catalog completeness — the DB query that replaced the READ
   });
 
   test("catalog discovery: a symlink cycle inside the knowledge dir cannot hang the walk", async () => {
-    const { context } = await knowledgeWorkspace("knowledge-cycle-", ["logic-errors/cycle-a.md"]);
-    const harness = context.harnessDir;
+    const { root, context } = await knowledgeWorkspace("knowledge-cycle-", ["logic-errors/cycle-a.md"]);
+    const knowledgeDir = join(root, ".agents", "knowledge");
     // Two cycle shapes: a dir → root loop and a self-loop. Both must be skipped
     // as symlinks (bounded walk — the test itself would hang on a
     // follow-everything walker).
-    symlinkSync(join(harness, "knowledge"), join(harness, "knowledge", "logic-errors", "back-to-root"));
-    symlinkSync(join(harness, "knowledge"), join(harness, "knowledge", "self-loop"));
+    symlinkSync(knowledgeDir, join(knowledgeDir, "logic-errors", "back-to-root"));
+    symlinkSync(knowledgeDir, join(knowledgeDir, "self-loop"));
     await registerCatalogEntity(context, { kind: "document", id: "doc-cycle-a", title: "Cycle A", rootKind: "knowledge", relativePath: "logic-errors/cycle-a.md", documentKind: "knowledge" }, { operationId: "reg-cycle", actor: "compound" });
     const result = await assertKnowledgeCatalogCompleteness(context);
     expect(result.ok).toBe(true);

@@ -44,7 +44,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import {
   createFsStore,
   getArtifactStore,
@@ -1085,6 +1085,47 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
         store.put({ kind: "json", key: statusPath, payload: { version: 2, updated_at: "2026-09-15", workflows: [] } }),
       );
       expect(existsSync(statusPath)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a json key never routes around the selected checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "store-cross-root-"));
+    try {
+      const selected = join(root, "checkout-a", ".mstar");
+      mkdirSync(join(root, "checkout-a"), { recursive: true });
+      gitInit(join(root, "checkout-a"));
+      execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: join(root, "checkout-a") });
+      const foreign = join(root, "checkout-b", ".mstar", "sdd", "_reviews", "x.json");
+      const nested = join(root, "checkout-a", "vendor", "sub", ".mstar", "status.json");
+      const ownCorpus = join(root, "checkout-a", ".agents", "specs", "x.json");
+      const ordinary = join(root, "export.mstar", "x.json");
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: foreign })).toThrow(/another checkout's harness state/);
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: nested })).toThrow(/another checkout's harness state/);
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: ownCorpus })).not.toThrow();
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: ordinary })).not.toThrow();
+      // why: a non-`.mstar` selected root is still owned by its checkout.
+      expect(() => resolveArtifactPath(join(root, "checkout-a", ".agents"), { kind: "json", key: join(root, "checkout-a", ".plans", "x.json") })).not.toThrow();
+      // why: an ordinary `plans` directory is not a harness marker, even with a status.json.
+      mkdirSync(join(root, "checkout-a", "docs", "plans"), { recursive: true });
+      writeFileSync(join(root, "checkout-a", "docs", "plans", "status.json"), "{}");
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: join(root, "checkout-a", "docs", "plans", "x.json") })).not.toThrow();
+      // why: a legacy plans-rooted corpus at another checkout's root is still foreign.
+      mkdirSync(join(root, "checkout-b", "plans"), { recursive: true });
+      gitInit(join(root, "checkout-b"));
+      writeFileSync(join(root, "checkout-b", "plans", "status.json"), "{}");
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: join(root, "checkout-b", "plans", "x.json") })).toThrow(/another checkout's harness state/);
+      // why: a linked worktree of the selected repository shares its main root.
+      const linked = join(root, "linked");
+      execFileSync("git", ["worktree", "add", "-q", linked, "-b", "feature/linked-plans"], { cwd: join(root, "checkout-a") });
+      mkdirSync(join(linked, "plans"), { recursive: true });
+      writeFileSync(join(linked, "plans", "status.json"), "{}");
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: join(linked, "plans", "x.json") })).not.toThrow();
+      // why: another harness root stays protected even in the same repository.
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: join(linked, ".mstar", "status.json") })).toThrow(/harness state belongs to the main worktree/);
+      // why: a root-level `.mstar` still belongs to a foreign owner.
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: join(sep, ".mstar", "status.json") })).toThrow(/another checkout's harness state/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

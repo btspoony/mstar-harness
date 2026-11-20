@@ -24,7 +24,7 @@ describe("parseMstarc [linear] collection", () => {
 
   test("an absent [linear] section leaves existing behavior untouched", () => {
     const out = parseMstarc("[config]\nharness_dir=.custom\n; comment\nunknown_section\n[other]\nkey=value\n");
-    expect(out.harnessDir).toBe(".custom");
+    expect("harnessDir" in out).toBe(false);
     expect(out.linear).toBeUndefined();
     expect(out.linearMapping).toBeUndefined();
   });

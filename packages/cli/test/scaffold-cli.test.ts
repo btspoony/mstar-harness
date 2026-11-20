@@ -23,6 +23,7 @@
  * Each case runs the real CLI as a subprocess against a temp fixture tree.
  */
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,6 +78,21 @@ function gitInit(root: string): void {
 const MSTAR_FENCE_ENTRIES = [".mstar/"];
 
 describe("mstar harness scaffold — one-shot harness bootstrap", () => {
+  test("a linked checkout scaffolds the main worktree's ignore and guidance", () => {
+    withRoot((root) => {
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+      execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+      const linked = join(root, "task");
+      execFileSync("git", ["worktree", "add", "-q", linked, "-b", "feature/linked-scaffold"], { cwd: root });
+      const result = runCli(["harness", "scaffold", "."], { cwd: linked });
+      expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+      expect(existsSync(join(root, ".mstar"))).toBe(true);
+      expect(readFileSync(join(root, ".gitignore"), "utf8")).toContain(".mstar");
+      expect(existsSync(join(root, ".agents", "AGENTS.md"))).toBe(true);
+      expect(existsSync(join(linked, ".mstar"))).toBe(false);
+    });
+  });
+
   test("a legacy-only checkout does not block help or the scaffold recovery", () => {
     withRoot((root) => {
       gitInit(root);
@@ -278,23 +294,20 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test(".mstarc harness_dir=.custom is refused as retired: nothing is scaffolded and .gitignore is untouched", () => {
+  test(".mstarc harness_dir=.custom is ignored: the fixed .mstar is scaffolded", () => {
     withRoot((root) => {
       writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");
 
       const result = runScaffold([root]);
-      // why: The harness root is fixed at `<checkout>/.mstar`; a `.mstarc` that
-      // still declares `harness_dir` refuses by name instead of scaffolding a
-      // second layout.
-      expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain("harness_dir");
-      expect(result.stdout).toContain("retired");
-      expect(result.stdout).toContain("mstar path resolve");
-      // why: Nothing is created for the retired declaration.
+      // why: The harness root is fixed at `<checkout>/.mstar`; a retired key is
+      // ignored rather than refusing the scaffold.
+      expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+      expect(existsSync(join(root, ".mstar"))).toBe(true);
       expect(existsSync(join(root, ".custom"))).toBe(false);
-      expect(existsSync(join(root, ".mstar"))).toBe(false);
-      expect(existsSync(join(root, ".gitignore"))).toBe(false);
-      expect(existsSync(join(root, ".agents"))).toBe(false);
+      expect(existsSync(join(root, ".gitignore"))).toBe(true);
+      expect(existsSync(join(root, ".agents"))).toBe(true);
+      // why: the retired line is left untouched (the file is author-owned).
+      expect(readFileSync(join(root, ".mstarc"), "utf8")).toContain("harness_dir=.custom");
     });
   });
 

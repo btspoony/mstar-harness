@@ -11355,24 +11355,9 @@ function nearestExistingAncestor(target) {
     dir = parent;
   }
 }
-function looksLikeLegacyHarness(dir) {
-  for (const marker of ["status.json", "store.db", "workflows", "projects", "plans", "iterations"]) {
-    if (existsSync8(join11(dir, marker)))
-      return true;
-  }
-  return false;
-}
 function resolveFixedHarnessDir(checkout) {
-  refuseRetiredConfiguration(checkout, defaultWorkspaceRoot(checkout));
   const fixed = join11(checkout, ".mstar");
-  if (isDirectory2(fixed))
-    return fixed;
-  for (const legacy of LEGACY_HARNESS_NAMES) {
-    const dir = join11(checkout, legacy);
-    if (isDirectory2(dir) && looksLikeLegacyHarness(dir))
-      throw retiredCandidateError(checkout, legacy);
-  }
-  return null;
+  return isDirectory2(fixed) ? fixed : null;
 }
 function localHarnessProbe(start, workspaceRoot) {
   const boundary = canonicalizeNearestExisting(resolve10(start, workspaceRoot ?? defaultWorkspaceRoot(start)));
@@ -11380,7 +11365,6 @@ function localHarnessProbe(start, workspaceRoot) {
   for (;; ) {
     if (!isAtOrBelow3(dir, boundary))
       return null;
-    refuseRetiredConfiguration(dir, boundary);
     const fixed = join11(dir, ".mstar");
     if (isDirectory2(fixed))
       return fixed;
@@ -11391,16 +11375,6 @@ function localHarnessProbe(start, workspaceRoot) {
       return null;
     dir = parent;
   }
-}
-function refuseRetiredConfiguration(startDir, boundary) {
-  const rc = loadMstarc(startDir, boundary);
-  if (rc !== null && rc.config.harnessDir !== undefined) {
-    throw new HarnessRootRetiredError(`The .mstarc at ${join11(rc.dir, MSTARC_FILE)} declares \`harness_dir\`, which is retired: the harness root is fixed at \`<main worktree>/.mstar\`. ` + `Recovery: delete the \`harness_dir\` line from ${join11(rc.dir, MSTARC_FILE)}, then run \`mstar path resolve\`.`, { code: "harness_dir", config: join11(rc.dir, MSTARC_FILE) });
-  }
-}
-function retiredCandidateError(checkout, candidate) {
-  const fixed = join11(checkout, ".mstar");
-  return new HarnessRootRetiredError(`No harness root at ${fixed}; the legacy \`${candidate}/\` candidate is retired and is never adopted. ` + `Recovery: run \`mstar harness scaffold ${checkout}\` (then \`mstar store upgrade\` if this repository has an existing store).`, { code: "legacy-candidate", candidate, checkout });
 }
 function defaultWorkspaceRoot(startDir) {
   try {
@@ -11574,7 +11548,6 @@ function hasFiles(dir) {
     return false;
   }
 }
-var LEGACY_HARNESS_NAMES;
 var HarnessRootRetiredError;
 var REVIEW_RUN_LEVELS;
 var REVIEW_DATE_RE;
@@ -11604,7 +11577,6 @@ var init_path = __esm(() => {
   init_mstarc();
   init_project();
   init_store_db();
-  LEGACY_HARNESS_NAMES = [".agents", ".plans", "plans"];
   HarnessRootRetiredError = class HarnessRootRetiredError extends Error {
     details;
     code = "harness.root-retired";
@@ -14492,6 +14464,7 @@ var MERGE_CLASS_ENUM_RE = new RegExp(`^(${MERGE_CLASSES.join("|")})$`);
 init_qcreview_schema();
 init_coordination();
 init_core();
+init_git_probe();
 init_coordination_write();
 init_coordination();
 init_path();
@@ -16623,13 +16596,7 @@ try {
 `);
     process.exit(2);
   }
-} catch (error) {
-  if (error instanceof HarnessRootRetiredError) {
-    writeSync(2, `[Morning Star write gate] blocked: ${error.message}
-`);
-    process.exit(2);
-  }
-}
+} catch {}
 process.exit(0);
 export {
   storeRuntimeProbe

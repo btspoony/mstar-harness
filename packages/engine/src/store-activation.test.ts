@@ -211,9 +211,9 @@ async function documentIndexFixture(
 ): Promise<Fixture & { manifest: MigrationManifest; activation: ActivationReceipt }> {
   const fixture = freshWorkspace(name);
   writeRegister(fixture.harness, "_default", { entries: { "plan-alpha": [entry({ id: "R1", severity: "critical" })] } });
-  write(fixture.harness, join("knowledge", "guides", "intro.md"), "# Intro\n");
+  write(join(fixture.root, ".agents"), join("knowledge", "guides", "intro.md"), "# Intro\n");
   write(
-    fixture.harness,
+    join(fixture.root, ".agents"),
     join("knowledge", "README.md"),
     [
       "# Knowledge",
@@ -925,7 +925,7 @@ describe("store retirement", () => {
 
   test("retirement excises a reviewed document row whose live reference uses an equivalent path spelling", async () => {
     const fixture = await documentIndexFixture("retirement-equivalent-path-");
-    const readmePath = join(fixture.harness, "knowledge", "README.md");
+    const readmePath = join(fixture.root, ".agents", "knowledge", "README.md");
     expect(readFileSync(readmePath, "utf8")).toContain("`guides//intro.md`");
 
     const induced = await retireStoreSources(fixture.context, fixture.activation, failAt("section-write", 0, "induced retirement failure after the section rewrite")).catch((error: unknown) => error);

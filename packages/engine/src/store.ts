@@ -15,8 +15,9 @@
  */
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import type { Dirent } from "node:fs";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { readJson, writeJson } from "./core.js";
+import { mainWorktreeRoot, realpathNearest } from "./git-probe.js";
 import { CoordinationError, assertProtectedWriteAuthorized, canonicalTarget, type ProtectedWriteKind } from "./coordination-write.js";
 import { resolveProcessHarnessDir } from "./coordination.js";
 import {
@@ -93,19 +94,69 @@ function assertKindAdmitted(kind: string): void {
   }
 }
 
-/** Map an artifact ref to its file path under `harnessRoot` (the store contract — the single kind→path
+/** why: The owner is the checkout whose harness/corpus directory this path traverses first.
+ * A bare `plans/` counts only when it carries legacy harness state; an ordinary
+ * `docs/plans/` directory is not a checkout marker. */
+function harnessOwnerOf(target: string): string | null {
+  const segments = target.split(sep);
+  const index = segments.findIndex((segment, position) => {
+    if (segment === ".mstar" || segment === ".agents" || segment === ".plans") return true;
+    if (segment !== "plans") return false;
+    const dir = segments.slice(0, position + 1).join(sep) || sep;
+    if (!existsSync(join(dir, "status.json"))) return false;
+    // why: a legacy plans-rooted harness is the checkout root's direct child;
+    // every checkout (plain or linked) carries `.git`, while `docs/plans` does not.
+    return existsSync(join(dirname(dir), ".git"));
+  });
+  if (index <= 0) return null;
+  return segments.slice(0, index).join(sep) || sep;
+}
+
+/** why: machine consumers branch on codes; a plain message would be the only signal. */
+export class CrossRootRefusedError extends Error {
+  readonly code = "store.cross-root-refused";
+  constructor(message: string) {
+    super(message);
+    this.name = "CrossRootRefusedError";
+  }
+}
+
+/** why: Map an artifact ref to its file path under `harnessRoot` (the store contract — the single kind→path
  * mapping). Exported so host adapters import the contract instead of
  * re-deriving it textually. */
 export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): string {
   const { kind, key } = ref;
   assertKindAdmitted(kind as string);
   if (kind === "json") {
- // Escape hatch: caller-supplied absolute path. Not a user-facing AC.
+    // why: escape hatch — caller-supplied absolute path. Not a user-facing AC.
     if (!isAbsolute(key)) {
       throw new Error(`ArtifactStore json key must be an absolute path \u2014 got ${JSON.stringify(key)}`);
     }
     if (key.split(/[\\/]+/).includes("..")) {
       throw new Error(`ArtifactStore json key must not contain ".." segments \u2014 got ${JSON.stringify(key)}`);
+    }
+    // why: a json key is an absolute escape hatch, but never a cross-checkout
+    // one — ownership is the checkout that owns the FIRST harness marker in the
+    // path, so a nested checkout inside the selected one is still foreign.
+    const keyReal = realpathNearest(resolve(key));
+    const rootReal = realpathNearest(resolve(harnessRoot));
+    const selectedOwner = harnessOwnerOf(rootReal) ?? dirname(rootReal);
+    const keyOwner = harnessOwnerOf(keyReal);
+    if (keyOwner !== null && keyOwner !== selectedOwner) {
+      // why: a linked worktree shares the selected repository's main root, so
+      // its tracked plans are the same checkout; a different repo stays foreign.
+      // Another harness root (`.mstar`) is never writable through this port.
+      const selectedMain = mainWorktreeRoot(selectedOwner);
+      const keyMain = mainWorktreeRoot(keyOwner);
+      const sameRepo = selectedMain !== null && keyMain !== null && selectedMain === keyMain;
+      if (!sameRepo) {
+        throw new CrossRootRefusedError(`${key} belongs to another checkout's harness state; select that checkout's root instead of routing around it`);
+      }
+      if (keyReal.includes(`${sep}.mstar${sep}`)) {
+        // why: a linked worktree's process root is not selectable and its state
+        // belongs to the main worktree — name the recovery that actually works.
+        throw new CrossRootRefusedError(`${key} is another worktree's process root; harness state belongs to the main worktree. Run \`mstar path resolve\` and use its controlHarnessDir.`);
+      }
     }
     return key;
   }

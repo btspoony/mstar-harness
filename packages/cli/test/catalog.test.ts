@@ -107,7 +107,7 @@ async function populatedFixture(name: string): Promise<{ workspace: string; harn
   write(fixture.harness, "iterations/iter-alpha/README.md", PACKAGE_README);
   write(fixture.harness, "iterations/iter-alpha/delivery-compass.md", ["---", "iteration_id: iter-alpha", "---", "", "# iter-alpha Delivery Compass"].join("\n"));
   write(fixture.harness, "iterations/iter-alpha/guides/notes.md", "# Working notes");
-  write(fixture.harness, "knowledge/patterns/guard.md", KNOWLEDGE_BODY);
+  write(join(fixture.workspace, ".agents"), "knowledge/patterns/guard.md", KNOWLEDGE_BODY);
   write(fixture.harness, "specs/notes/README.md", "# Ordinary README inside a walked root");
   write(fixture.harness, "specs/INSTALL.md", "# Install notes");
   return fixture;
@@ -255,7 +255,7 @@ describe("mstar catalog import", () => {
     const planPath = join(workspace, "plan.json");
     expect(runCli(["catalog", "discover", "--out", planPath], workspace).exitCode).toBe(0);
 
-    write(harness, "knowledge/patterns/guard.md", ["# Guard pattern notes", "", "Edited after the review."].join("\n"));
+    write(join(workspace, ".agents"), "knowledge/patterns/guard.md", ["# Guard pattern notes", "", "Edited after the review."].join("\n"));
 
     const dryRun = runCli(["catalog", "import", "--plan", planPath, ...IMPORT_OPERATION, "--dry-run"], workspace);
     expect(dryRun.exitCode).toBe(0);
@@ -275,7 +275,7 @@ describe("mstar catalog import", () => {
     expect(listed.items).toContainEqual(expect.objectContaining({
       rootKind: "knowledge", relativePath: "patterns/guard.md", documentKind: "knowledge",
     }));
-    expect(readFileSync(join(harness, "knowledge/patterns/guard.md"), "utf8")).toContain("Edited after the review.");
+    expect(readFileSync(join(workspace, ".agents", "knowledge/patterns/guard.md"), "utf8")).toContain("Edited after the review.");
   });
 });
 

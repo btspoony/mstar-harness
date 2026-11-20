@@ -11,10 +11,9 @@
  * `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`. The
  * harness root is one fixed location; `harness_dir` declarations,
  * `MSTAR_HARNESS_DIR` and the legacy `.agents/` / `.plans/` / `plans/`
- * candidates are retired in the same release: a declaration is refused
- * naming the line to delete, a legacy-only checkout is refused naming
- * `mstar harness scaffold` / `mstar store upgrade`, and
- * `opts.harnessDir` remains only as a caller-held assertion surface
+ * candidates are retired in the same release and silently ignored — no
+ * declaration or legacy layout is refused or adopted. `opts.harnessDir`
+ * remains only as a caller-held assertion surface
  * validated by the transport layers. `localProbe` keeps the bounded
  * walk-up for diagnostics (`mstar path resolve`'s `local` answer); it
  * probes the fixed `.mstar` name only.
@@ -51,8 +50,6 @@ export type ResolveHarnessDirOptions = {
    * the Git-derived root before reaching the engine.
    */
   harnessDir?: string;
-  /** why: Retired knob: `MSTAR_HARNESS_DIR` is ignored by the engine since the fixed-root cutover; kept so callers compile while their own slice removes it. */
-  ignoreEnvOverride?: boolean;
   /** why: `localProbe` boundary: stops the upward diagnostics walk. Resolved
    * against `startDir` when relative; the default is the git top-level of
    * `startDir` (sync `git rev-parse --show-cdup`; on failure / non-git
@@ -79,10 +76,10 @@ export type ResolveHarnessDirOptions = {
  * `opts.harnessDir` is returned verbatim (a caller-held assertion), the
  * `localProbe` diagnostic probes only `.mstar` upward within the
  * boundary, and every other call derives the Git main worktree of
- * `startDir`. A `.mstarc` declaring `harness_dir` or a legacy
- * `.agents/` / `.plans/` / `plans/` layout refuses with a named
- * recovery (`HarnessRootRetiredError`); a probe failure or a missing
- * `.mstar` returns `null` (fail-closed — never a substituted root).
+ * `startDir`. A `.mstarc` declaring `harness_dir`, `MSTAR_HARNESS_DIR`
+ * and a legacy `.agents/` / `.plans/` / `plans/` layout are ignored; a
+ * probe failure or a missing `.mstar` returns `null` (fail-closed — never
+ * a substituted root).
  */
 export function resolveHarnessDir(
   startDir: string = process.cwd(),
@@ -124,31 +121,10 @@ function nearestExistingAncestor(target: string): string {
   }
 }
 
-/** why: True when a legacy directory actually carries harness state (not just corpus/plugins). */
-function looksLikeLegacyHarness(dir: string): boolean {
-  for (const marker of ["status.json", "store.db", "workflows", "projects", "plans", "iterations"]) {
-    if (existsSync(join(dir, marker))) return true;
-  }
-  return false;
-}
-
-/**
- * The one harness location — `<checkout>/.mstar` — with the retired
- * layouts refused by name. A missing `.mstar` returns `null` (the
- * repository is not initialized); a `.mstarc` that still declares
- * `harness_dir`, or a legacy `.agents/` / `.plans/` / `plans/` harness,
- * refuses with its recovery. Exported for consumers that already hold
- * the verified checkout root (the sdd workspace control root).
- */
+/** why: The one harness location — `<checkout>/.mstar`. A missing `.mstar` returns `null`; a retired `.mstarc` key or a legacy directory is ignored, never a refusal. */
 export function resolveFixedHarnessDir(checkout: string): string | null {
-  refuseRetiredConfiguration(checkout, defaultWorkspaceRoot(checkout));
   const fixed = join(checkout, ".mstar");
-  if (isDirectory(fixed)) return fixed;
-  for (const legacy of LEGACY_HARNESS_NAMES) {
-    const dir = join(checkout, legacy);
-    if (isDirectory(dir) && looksLikeLegacyHarness(dir)) throw retiredCandidateError(checkout, legacy);
-  }
-  return null;
+  return isDirectory(fixed) ? fixed : null;
 }
 
 /** why: Local checkout only (diagnostics): the same fixed name, no main-worktree substitution. */
@@ -157,7 +133,6 @@ function localHarnessProbe(start: string, workspaceRoot?: string): string | null
   let dir = start;
   for (;;) {
     if (!isAtOrBelow(dir, boundary)) return null;
-    refuseRetiredConfiguration(dir, boundary);
     const fixed = join(dir, ".mstar");
     if (isDirectory(fixed)) return fixed;
     if (dir === boundary) return null;
@@ -167,32 +142,7 @@ function localHarnessProbe(start: string, workspaceRoot?: string): string | null
   }
 }
 
-/** why: Retired harness layout names; probed only to name the refusal/ */
-const LEGACY_HARNESS_NAMES = [".agents", ".plans", "plans"] as const;
-
-/** why: A retired `harness_dir` declaration refuses instead of being silently ignored. */
-function refuseRetiredConfiguration(startDir: string, boundary: string): void {
-  const rc = loadMstarc(startDir, boundary);
-  if (rc !== null && rc.config.harnessDir !== undefined) {
-    throw new HarnessRootRetiredError(
-      `The .mstarc at ${join(rc.dir, MSTARC_FILE)} declares \`harness_dir\`, which is retired: the harness root is fixed at \`<main worktree>/.mstar\`. ` +
-        `Recovery: delete the \`harness_dir\` line from ${join(rc.dir, MSTARC_FILE)}, then run \`mstar path resolve\`.`,
-      { code: "harness_dir", config: join(rc.dir, MSTARC_FILE) },
-    );
-  }
-}
-
-/** why: A legacy layout is refused rather than adopted as a harness root. */
-function retiredCandidateError(checkout: string, candidate: string): HarnessRootRetiredError {
-  const fixed = join(checkout, ".mstar");
-  return new HarnessRootRetiredError(
-    `No harness root at ${fixed}; the legacy \`${candidate}/\` candidate is retired and is never adopted. ` +
-      `Recovery: run \`mstar harness scaffold ${checkout}\` (then \`mstar store upgrade\` if this repository has an existing store).`,
-    { code: "legacy-candidate", candidate, checkout },
-  );
-}
-
-/** Raised when a retired selector or layout would otherwise move the harness root. */
+/** Raised when a supplied scaffold root does not match the fixed location. */
 export class HarnessRootRetiredError extends Error {
   readonly code = "harness.root-retired";
   constructor(
@@ -328,12 +278,6 @@ export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions
     join(repoRoot, ".agents", "specs"),
     join(repoRoot, "docs", "specs"),
     join(repoRoot, "specs"),
-// Legacy 兼容读 (plan-conventions § {SPECS_DIR} 解析 Legacy): read-only —
-// init must NOT create designs/; same empty-dir-as-absent rule applies.
-    join(harness, "designs"),
-    join(repoRoot, "designs"),
-// Legacy read-only tail: pre-move specs under the harness root.
-    join(harness, "specs"),
   ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory(candidate) && hasFiles(candidate)) return candidate;
@@ -353,10 +297,7 @@ export function resolveSpecsDir(harnessDir: string, opts: ResolveSpecsDirOptions
 export function resolvePlanDir(harnessDir: string): string {
   const declared = mstarcDirOverride(harnessDir, "planDir");
   if (declared !== null) return declared;
-  const dir = resolve(harnessDir);
-  const name = basename(dir);
-  if (name === ".plans" || name === "plans") return dir;
-  return join(dir, "plans");
+  return join(resolve(harnessDir), "plans");
 }
 
 /**
@@ -533,8 +474,6 @@ function resolveTrackedDir(
   const candidates = [
     preferred,
     ...extra.map((segments) => join(repoRoot, ...segments)),
-    // Legacy read-only tail: pre-move documents under the harness root.
-    join(harness, name),
   ];
   for (const candidate of new Set(candidates)) {
     if (isDirectory(candidate) && hasFiles(candidate)) return candidate;
@@ -783,7 +722,6 @@ export function resolveScaffoldDirs(
     throw new Error(`harness.root-unresolved: Git could not answer from ${start}; refusing to scaffold a root the resolver would not adopt. Run it from the repository root after the checkout is readable.`);
   }
   const base = mainWorktreeRoot(start) ?? checkout.root ?? start;
-  refuseRetiredConfiguration(base, defaultWorkspaceRoot(base));
   const harnessDir = join(base, ".mstar");
   const supplied = options.harnessDir === undefined ? undefined : canonicalizeNearestExisting(resolve(start, options.harnessDir));
   if (supplied !== undefined && supplied !== harnessDir) {

@@ -39,16 +39,16 @@ The bash `sdd-workspace` script discovered the harness root by probing `.mstar` 
 
 The explicit override this record introduced is retired. The harness root is now one fixed location.
 
-1. **Fixed root.** `resolveHarnessDir` derives `<git main worktree root>/.mstar/` from Git; `harness_dir`, `MSTAR_HARNESS_DIR` and the legacy candidates are refused rather than honored. A CLI outside Git names the root with `--harness`.
+1. **Fixed root.** `resolveHarnessDir` derives `<git main worktree root>/.mstar/` from Git. `harness_dir`, `MSTAR_HARNESS_DIR` and the legacy candidates are retired as selectors: the first two are parsed or read and then ignored, and the legacy candidates are never probed, so a repository without `.mstar` resolves no harness root rather than an error. A CLI outside Git names the root with `--harness`. (Historical: the pre-retirement text here read "refused rather than honored", with a per-selector recovery.)
 2. **Fail-closed FIRST (retained).** In `sddWorkspace`, the linked-worktree guard runs before any resolution: a linked worktree without an established main root refuses instead of creating a second SDD tree.
-3. **Refusals name recovery.** A `harness_dir` declaration names the line to delete; a legacy-only checkout names `mstar harness scaffold` / `mstar store upgrade`; `MSTAR_HARNESS_DIR` names `unset`.
+3. **No refusal recovery for retired selectors (superseded).** The earlier text named a recovery per selector — delete the `harness_dir` line, run `mstar harness scaffold` / `mstar store upgrade` for a legacy-only checkout, `unset MSTAR_HARNESS_DIR`. None of those is required now: ignoring is silent, and scaffold/upgrade are the ordinary path to creating a root rather than repairs.
 4. **Historical ordering.** The old rung chain (override → `.mstarc` → `.mstar` → `.agents`) is gone; only the fail-closed guard ordering survives.
 
 ```ts
 // current sddWorkspace resolution
 const main = readMainWorktree(cwd);   // fail-closed FIRST
 if (main === null) throw failClosed(/* usage hint */);
-const harnessDir = join(main.root, ".mstar"); // fixed; retired selectors refuse
+const harnessDir = join(main.root, ".mstar"); // fixed; retired selectors are ignored
 ```
 
 ## Why This Works (retained ordering)
@@ -59,7 +59,7 @@ const harnessDir = join(main.root, ".mstar"); // fixed; retired selectors refuse
 
 ## Prevention
 
-- Any tool that resolves `{HARNESS_DIR}` must derive it from Git and refuse the retired selectors; no config or environment override is accepted.
+- Any tool that resolves `{HARNESS_DIR}` must derive it from Git and ignore the retired selectors; no config or environment value selects a root. Explicit selectors (`--harness`, MCP `harness`) are validated assertions against the derived root, not overrides.
 - Linked-worktree guards must run before any resolution — never probe-first in a worktree context.
 - When a port intentionally hardens behavior vs its shell original, add a dedicated test + comment; do not leave silent divergences.
 - The control-path SSOT invariant this bug protects is restated in `mstar-branch-worktree` 「Harness path SSOT under default gitignore」; the old `{HARNESS_DIR}/docs/` ADR tree no longer exists.

@@ -218,47 +218,28 @@ describe("resolveHarnessDir — fixed root (ADR 2026-11-20)", () => {
     }
   });
 
-  test("a legacy-only layout refuses, naming scaffold and upgrade as the recovery", () => {
+  test("a legacy-only layout resolves no harness and is never adopted", () => {
     for (const legacy of [".agents", ".plans", "plans"]) {
       const root = tmpRoot(`path-fixed-legacy-${legacy.replace(/\W/g, "")}-`);
       try {
         gitInit(root);
         mkdirSync(join(root, legacy));
         writeFileSync(join(root, legacy, "status.json"), "{}");
-        let err: unknown;
-        try {
-          resolveHarnessDir(root);
-        } catch (e) {
-          err = e;
-        }
-        expect(err).toBeInstanceOf(HarnessRootRetiredError);
-        const message = (err as HarnessRootRetiredError).message;
-        expect(message).toContain(legacy);
-        expect(message).toContain("mstar harness scaffold");
-        expect(message).toContain("mstar store upgrade");
+        expect(resolveHarnessDir(root)).toBeNull();
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
     }
   });
 
-  test("a .mstarc harness_dir declaration refuses, naming the line and recovery", () => {
+  test("a .mstarc harness_dir declaration is ignored", () => {
     const root = tmpRoot("path-fixed-rc-");
     try {
       gitInit(root);
       mkdirSync(join(root, ".mstar"));
-      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.mstar\n");
-      let err: unknown;
-      try {
-        resolveHarnessDir(root);
-      } catch (e) {
-        err = e;
-      }
-      expect(err).toBeInstanceOf(HarnessRootRetiredError);
-      const message = (err as HarnessRootRetiredError).message;
-      expect(message).toContain("harness_dir");
-      expect(message).toContain(join(root, ".mstarc"));
-      expect(message).toContain("mstar path resolve");
+      mkdirSync(join(root, ".custom"));
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n");
+      expect(resolveHarnessDir(root)).toBe(join(root, ".mstar"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -276,18 +257,20 @@ describe("resolveHarnessDir — fixed root (ADR 2026-11-20)", () => {
     }
   });
 
-  test("a retired declaration committed at main refuses from the linked worktree too", () => {
+  test("a retired declaration committed at main is ignored from the linked worktree too", () => {
     const main = tmpRoot("path-fixed-mainrc-");
     const parent = tmpRoot("path-fixed-parenrc-");
     try {
       gitRepo(main);
+      mkdirSync(join(main, ".mstar"));
       writeFileSync(join(main, ".mstarc"), "[config]\nharness_dir=.custom\n");
       git(["add", ".mstarc"], main);
       git(["commit", "-q", "-m", "declare"], main);
       const linked = join(parent, "linked");
       git(["worktree", "add", "-q", linked, "-b", "feature/linked-rc"], main);
-      expect(() => resolveHarnessDir(linked)).toThrow(HarnessRootRetiredError);
-      expect(() => resolveHarnessDir(main)).toThrow(HarnessRootRetiredError);
+      const expected = join(realpathSync(main), ".mstar");
+      expect(resolveHarnessDir(linked)).toBe(expected);
+      expect(resolveHarnessDir(main)).toBe(expected);
     } finally {
       rmSync(main, { recursive: true, force: true });
       rmSync(parent, { recursive: true, force: true });
@@ -472,9 +455,9 @@ describe("resolvePlanDir / resolveSddDir / resolveIterationDir (plan-conventions
     expect(resolvePlanDir(join("/r", ".agents"))).toBe(join("/r", ".agents", "plans"));
   });
 
-  test("resolvePlanDir returns the legacy plans dir itself when the harness root is `.plans` or `plans` (rung 3: {HARNESS_DIR}={PLAN_DIR})", () => {
-    expect(resolvePlanDir(join("/r", ".plans"))).toBe(join("/r", ".plans"));
-    expect(resolvePlanDir(join("/r", "plans"))).toBe(join("/r", "plans"));
+  test("resolvePlanDir always composes <harness>/plans", () => {
+    expect(resolvePlanDir(join("/r", ".plans"))).toBe(join("/r", ".plans", "plans"));
+    expect(resolvePlanDir(join("/r", ".mstar"))).toBe(join("/r", ".mstar", "plans"));
   });
 
   test("resolveSddDir composes {HARNESS_DIR}/sdd/<plan-id>", () => {
@@ -797,13 +780,14 @@ describe("resolveReviewDir / review-run dir names ({REVIEW_DIR}, review-report c
 });
 
 describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
-  test("candidate order: .agents/specs → docs/specs → repo-root specs → legacy {HARNESS_DIR}/specs", () => {
+  test("candidate order: .agents/specs → docs/specs → repo-root specs; legacy {HARNESS_DIR}/specs is ignored", () => {
     const root = tmpRoot("path-specs-order-");
     try {
       const harness = join(root, ".mstar");
       mkdirSync(join(harness, "specs"), { recursive: true });
       writeFileSync(join(harness, "specs", "spec.md"), "# spec\n");
-      expect(resolveSpecsDir(harness, { create: false })).toBe(join(harness, "specs"));
+      // why: the pre-move harness-local specs dir is no longer a read source.
+      expect(resolveSpecsDir(harness, { create: false })).toBe(join(root, ".agents", "specs"));
 
       mkdirSync(join(root, "specs"), { recursive: true });
       writeFileSync(join(root, "specs", "spec.md"), "# spec\n");
@@ -881,27 +865,26 @@ describe("resolveSpecsDir (plan-conventions § {SPECS_DIR} 解析)", () => {
     }
   });
 
-  test("legacy {HARNESS_DIR}/designs is picked when the primary candidates miss (compat read)", () => {
+  test("legacy designs dirs are never adopted", () => {
     const root = tmpRoot("path-specs-designs-harness-");
     try {
-      mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       mkdirSync(join(root, ".mstar", "designs"), { recursive: true });
       mkdirSync(join(root, "designs"), { recursive: true });
       writeFileSync(join(root, ".mstar", "designs", "arch.md"), "# arch\n");
       writeFileSync(join(root, "designs", "other.md"), "# other\n");
-      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, ".mstar", "designs"));
+      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, ".agents", "specs"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("empty legacy {HARNESS_DIR}/designs is skipped → repo-root designs/", () => {
+  test("an empty legacy {HARNESS_DIR}/designs no longer changes the target", () => {
     const root = tmpRoot("path-specs-designs-skip-");
     try {
       mkdirSync(join(root, ".mstar", "designs"), { recursive: true });
       mkdirSync(join(root, "designs"), { recursive: true });
       writeFileSync(join(root, "designs", "arch.md"), "# arch\n");
-      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, "designs"));
+      expect(resolveSpecsDir(join(root, ".mstar"))).toBe(join(root, ".agents", "specs"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1000,16 +983,14 @@ describe("resolveKnowledgeDir (plan-conventions § 路径符号 / tracked-result
     }
   });
 
-  test("legacy {HARNESS_DIR}/knowledge is still read when nothing preferred exists, and never created", () => {
+  test("legacy {HARNESS_DIR}/knowledge is never adopted", () => {
     const root = tmpRoot("path-knowledge-legacy-");
     try {
       const legacy = join(root, ".mstar", "knowledge");
-      expect(resolveKnowledgeDir(join(root, ".mstar"), { create: false })).toBe(join(root, ".agents", "knowledge"));
-      expect(existsSync(join(root, ".agents"))).toBe(false);
-
       mkdirSync(legacy, { recursive: true });
       writeFileSync(join(legacy, "kb.md"), "# kb\n");
-      expect(resolveKnowledgeDir(join(root, ".mstar"), { create: false })).toBe(legacy);
+      expect(resolveKnowledgeDir(join(root, ".mstar"), { create: false })).toBe(join(root, ".agents", "knowledge"));
+      expect(existsSync(join(root, ".agents"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1058,7 +1039,8 @@ describe("resolveAdrDir (tracked-results chain)", () => {
       rmSync(join(root, "docs", "adr"), { recursive: true, force: true });
       mkdirSync(join(harness, "adr"), { recursive: true });
       writeFileSync(join(harness, "adr", "0003.md"), "# adr\n");
-      expect(resolveAdrDir(harness, { create: false })).toBe(join(harness, "adr"));
+      // why: the harness-local adr dir is no longer a read source.
+      expect(resolveAdrDir(harness, { create: false })).toBe(join(root, ".agents", "adr"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1301,16 +1283,16 @@ describe("scaffoldHarness", () => {
     }
   });
 
-  test("a .mstarc declaring harness_dir refuses the scaffold and names the line", async () => {
+  test("a .mstarc declaring harness_dir does not block the scaffold", async () => {
     const root = tmpRoot("path-scaffold-mstarc-retired-");
     try {
       writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");
-      setArtifactStore(createFsStore(resolve(root, ".custom")));
-      await expect(scaffoldHarness(root)).rejects.toThrow(HarnessRootRetiredError);
-      await expect(scaffoldHarness(root)).rejects.toThrow(/harness_dir/);
-      // why: Nothing was created at the retired location or at the fixed root.
+      setArtifactStore(createFsStore(resolve(root, ".mstar")));
+      const harnessDir = await scaffoldHarness(root);
+      expect(harnessDir).toBe(resolve(root, ".mstar"));
+      // why: The retired key is ignored; only the fixed root is created.
+      expect(existsSync(join(root, ".mstar"))).toBe(true);
       expect(existsSync(join(root, ".custom"))).toBe(false);
-      expect(existsSync(join(root, ".mstar"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1498,14 +1480,11 @@ describe("scaffoldHarness", () => {
     }
   });
 
-  test("refuses a .mstarc harness_dir when resolving the scaffold target", async () => {
+  test("a .mstarc harness_dir is ignored when resolving the scaffold target", async () => {
     const root = tmpRoot("path-scaffold-mstarc-harness-");
     try {
       writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");
-      setArtifactStore(createFsStore(resolve(root, ".custom")));
-      await expect(scaffoldHarness(root)).rejects.toThrow(HarnessRootRetiredError);
-      expect(existsSync(join(root, ".custom"))).toBe(false);
-      expect(existsSync(join(root, ".mstar"))).toBe(false);
+      expect(resolveScaffoldDirs(root).harnessDir).toBe(join(root, ".mstar"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1696,9 +1675,9 @@ describe("assertPlanWritingPath (plan-conventions § Plan-Writing Path Gate)", (
     expect(result.code).toBe("plan-path.ok");
   });
 
-  test("accepts plans in the legacy same-dir layout ({HARNESS_DIR}={PLAN_DIR})", () => {
+  test("rejects plans in the legacy same-dir layout", () => {
     const result = assertPlanWritingPath(join("/r", ".plans", "20260808-x.md"), join("/r", ".plans"));
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
   });
 
   test("rejects external default plan dirs (repo-root plans/) when .mstar is the harness", () => {

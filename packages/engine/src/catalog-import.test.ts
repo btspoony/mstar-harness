@@ -120,19 +120,20 @@ const PACKAGE_README = md(
 /** The full mixed fixture used by the discovery and conflict cases. */
 async function mixedFixture(name: string): Promise<Fixture> {
   const fixture = await freshWorkspace(name);
-  const { harness } = fixture;
+  const { harness, workspace } = fixture;
+  const agents = join(workspace, ".agents");
   write(harness, "iterations/README.md", ITERATIONS_README);
   write(harness, "iterations/iter-alpha/README.md", PACKAGE_README);
   write(harness, "iterations/iter-alpha/delivery-compass.md", md("---", "iteration_id: iter-alpha", "---", "", "# iter-alpha Delivery Compass"));
   write(harness, "iterations/iter-alpha/guides/notes.md", md("# Working notes"));
-  write(harness, "knowledge/README.md", KNOWLEDGE_README);
-  write(harness, "knowledge/patterns/guard.md", KNOWLEDGE_BODY);
-  write(harness, "knowledge/patterns/old.md", md("# Old pattern"));
-  write(harness, "knowledge/patterns/20260918-alpha-notes.md", md("# Notes named after a plan"));
-  write(harness, "specs/README.md", md("# Specs", "", "| Document | Description | Status |", "|----------|-------------|--------|"));
-  write(harness, "specs/contract.md", md("# Contract", "", "Spec body."));
-  write(harness, "specs/notes/README.md", md("# Ordinary README inside a walked root"));
-  write(harness, "specs/INSTALL.md", md("# Install notes"));
+  write(agents, "knowledge/README.md", KNOWLEDGE_README);
+  write(agents, "knowledge/patterns/guard.md", KNOWLEDGE_BODY);
+  write(agents, "knowledge/patterns/old.md", md("# Old pattern"));
+  write(agents, "knowledge/patterns/20260918-alpha-notes.md", md("# Notes named after a plan"));
+  write(agents, "specs/README.md", md("# Specs", "", "| Document | Description | Status |", "|----------|-------------|--------|"));
+  write(agents, "specs/contract.md", md("# Contract", "", "Spec body."));
+  write(agents, "specs/notes/README.md", md("# Ordinary README inside a walked root"));
+  write(agents, "specs/INSTALL.md", md("# Install notes"));
   write(harness, "plans/20260918-alpha.md", md("# Alpha plan"));
   write(harness, "projects/proj-a/roadmap.md", md("---", "project_id: proj-a", "title: Project Alpha", "status: active", "---", "", "# Project Alpha"));
   return fixture;
@@ -238,8 +239,8 @@ describe("catalog discovery", () => {
   });
 
   test("excludes ordinary README/INSTALL content and never follows a symlink", async () => {
-    const { context, harness } = await mixedFixture("ordinary-");
-    symlinkSync(join(harness, "knowledge/patterns/guard.md"), join(harness, "specs/linked.md"));
+    const { context, workspace } = await mixedFixture("ordinary-");
+    symlinkSync(join(workspace, ".agents", "knowledge/patterns/guard.md"), join(workspace, ".agents", "specs/linked.md"));
 
     const plan = await discoverCatalog(context);
     expect(entityAt(plan, "notes/README.md")).toBeUndefined();
@@ -355,7 +356,7 @@ describe("catalog import blocking rules", () => {
 
   test("reviewed source drift is reported but does not block the import", async () => {
     const fixture = await freshWorkspace("drift-");
-    const bodyPath = write(fixture.harness, "specs/contract.md", md("# Contract", "", "Reviewed body."));
+    const bodyPath = write(join(fixture.workspace, ".agents"), "specs/contract.md", md("# Contract", "", "Reviewed body."));
     const plan = await planCatalogImport(fixture.context, [{
       rootKind: "specs",
       relativePath: "contract.md",
@@ -416,8 +417,8 @@ describe("catalog import blocking rules", () => {
 describe("fresh-clone tracked bodies", () => {
   test("yield proposals whose unknown metadata is disclosed, and import without inventing relations", async () => {
     const fixture = await freshWorkspace("fresh-clone-");
-    write(fixture.harness, "knowledge/patterns/guard.md", KNOWLEDGE_BODY);
-    write(fixture.harness, "specs/contract.md", md("# Contract", "", "Spec body."));
+    write(join(fixture.workspace, ".agents"), "knowledge/patterns/guard.md", KNOWLEDGE_BODY);
+    write(join(fixture.workspace, ".agents"), "specs/contract.md", md("# Contract", "", "Spec body."));
 
     const plan = await discoverCatalog(fixture.context);
     expect(plan.conflicts).toEqual([]);
@@ -444,7 +445,7 @@ describe("catalog export and portability", () => {
   test("export/import preserves ids, relations and provenance without creating an execution session", async () => {
     const source = await freshWorkspace("export-source-");
     write(source.harness, "projects/proj-a/roadmap.md", md("# Project Alpha"));
-    write(source.harness, "specs/contract.md", md("# Contract", "", "Spec body."));
+    write(join(source.workspace, ".agents"), "specs/contract.md", md("# Contract", "", "Spec body."));
     const reviewed: CatalogImportInput[] = [
       { rootKind: "projects", relativePath: "proj-a", mapping: { kind: "project", id: "proj-a", title: "Project Alpha" } },
       {
@@ -475,7 +476,7 @@ describe("catalog export and portability", () => {
     // A second clone holding the same tracked bodies.
     const clone = await freshWorkspace("export-clone-");
     write(clone.harness, "projects/proj-a/roadmap.md", md("# Project Alpha"));
-    write(clone.harness, "specs/contract.md", md("# Contract", "", "Spec body."));
+    write(join(clone.workspace, ".agents"), "specs/contract.md", md("# Contract", "", "Spec body."));
     const imported = await planCatalogImport(clone.context, catalogExportToInputs(payload));
     expect(imported.conflicts).toEqual([]);
     expect(imported.entities.map((proposal) => proposal.id).sort()).toEqual(["doc-contract", "doc-extra", "proj-a"]);
@@ -505,7 +506,7 @@ describe("catalog export and portability", () => {
 
   test("a reimport attaches to the row that owns the location and relations follow the effective id", async () => {
     const fixture = await freshWorkspace("attach-");
-    write(fixture.harness, "specs/contract.md", md("# Contract", "", "Spec body."));
+    write(join(fixture.workspace, ".agents"), "specs/contract.md", md("# Contract", "", "Spec body."));
     write(fixture.harness, "plans/20260918-alpha.md", md("# Alpha plan"));
 
     const first = await planCatalogImport(fixture.context, [
@@ -539,7 +540,7 @@ describe("catalog export and portability", () => {
 
   test("a reviewed relation whose target is neither planned nor local is reported, not fabricated", async () => {
     const fixture = await freshWorkspace("dangling-");
-    write(fixture.harness, "specs/contract.md", md("# Contract"));
+    write(join(fixture.workspace, ".agents"), "specs/contract.md", md("# Contract"));
     const plan = await planCatalogImport(fixture.context, [
       {
         rootKind: "specs",
@@ -566,9 +567,9 @@ describe("partial import explicitness (RV-3)", () => {
    */
   async function midPlanFailureFixture(name: string): Promise<{ fixture: Fixture; plan: CatalogImportPlan }> {
     const fixture = await freshWorkspace(name);
-    write(fixture.harness, "specs/contract.md", md("# Contract", "", "Spec body."));
+    write(join(fixture.workspace, ".agents"), "specs/contract.md", md("# Contract", "", "Spec body."));
     write(fixture.harness, "plans/20260918-alpha.md", md("# Alpha plan"));
-    write(fixture.harness, "knowledge/patterns/guard.md", md("---", "category: patterns", "---", "", "# Guard pattern notes"));
+    write(join(fixture.workspace, ".agents"), "knowledge/patterns/guard.md", md("---", "category: patterns", "---", "", "# Guard pattern notes"));
     const plan = await planCatalogImport(fixture.context, [
       { rootKind: "specs", relativePath: "contract.md", mapping: { kind: "document", id: "doc-contract", documentKind: "spec", title: "Contract" } },
       {

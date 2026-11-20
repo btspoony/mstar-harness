@@ -137,7 +137,7 @@ const TRACKED_CHANGE_LIMIT = 20;
  * declares nothing resolves no harness from it.
  */
 export function hasHarnessRoot(root: string): boolean {
-  return resolveHarnessDir(root, { ignoreEnvOverride: true, localProbe: true, workspaceRoot: root }) !== null;
+  return resolveHarnessDir(root, { localProbe: true, workspaceRoot: root }) !== null;
 }
 
 /**

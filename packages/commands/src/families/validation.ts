@@ -447,7 +447,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           // decides, and no declared harness means no control-root contract: the
           // check skips.
           const anchorRoot = harnessAnchor === undefined ? undefined : probeCheckoutRoot(harnessAnchor) ?? main.root;
-          const anchorHarness = anchorRoot === undefined ? undefined : resolveHarnessDir(anchorRoot, { ignoreEnvOverride: true, localProbe: true, workspaceRoot: anchorRoot });
+          const anchorHarness = anchorRoot === undefined ? undefined : resolveHarnessDir(anchorRoot, { localProbe: true, workspaceRoot: anchorRoot });
           const namedHarness = harnessAnchor !== undefined && typeof anchorHarness === "string" && canonicalPath(anchorHarness) === canonicalPath(harnessAnchor);
           if (!hasHarnessRoot(main.root) && !namedHarness) return ok(id, gateData({ ok: true, violations: [] }));
           const gate = assertControlClean({ controlRoot: main });
