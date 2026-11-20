@@ -95,13 +95,14 @@ async function spawn(context: InvocationContext, argv: string[], cwd = context.c
 function parseFinding(entry: unknown, index: number): ReviewPostPlan["inlineComments"][number] | null {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
   const row = entry as Record<string, unknown>;
-  if (row.path === undefined && row.body === undefined && row.line === undefined) return null;
+  if (row.path === undefined && row.body === undefined && row.line === undefined && row.start_line === undefined && row.start_side === undefined) return null;
   if (typeof row.path !== "string" || !row.path.trim() || typeof row.body !== "string" || !row.body.trim() || typeof row.line !== "number" || !Number.isInteger(row.line) || row.line < 1) throw new UsageError(`findings[${index}] must be {path: string, line: number >= 1, body: string}`);
   // why: GitHub's `start_side` requires `start_line`, so a lone field would
   // only earn a 422 fold — reject the pair mismatch as a usage error instead.
   const { start_line: startLine, start_side: startSide } = row;
   let range: { start_line: number; start_side: "RIGHT" } | undefined;
   if (startLine !== undefined || startSide !== undefined) {
+    if (startLine === undefined || startSide === undefined) throw new UsageError(`findings[${index}].start_line and .start_side go together - supply both for a range, neither for a single line`);
     if (typeof startLine !== "number" || !Number.isInteger(startLine) || startLine < 1 || startLine >= row.line) throw new UsageError(`findings[${index}].start_line must be an integer >= 1 and less than line (${row.line})`);
     if (startSide !== "RIGHT") throw new UsageError(`findings[${index}].start_side must be "RIGHT"`);
     range = { start_line: startLine, start_side: "RIGHT" };
@@ -148,6 +149,44 @@ function foldComments(body: string, dropped: ReviewPostPlan["inlineComments"]): 
       return `- \`${entry.path}:${entry.line}\` — ${comment === "" ? "(inline suggestion omitted: no anchor after 422)" : comment}`;
     }),
   ].join("\n");
+}
+/** why: hunk membership is a property of the diff, so the check needs the
+ * right-side span each `@@ -a,b +start,length @@` header declares per file. */
+function rightSideHunks(diff: string): Map<string, Array<{ start: number; end: number }>> {
+  const hunks = new Map<string, Array<{ start: number; end: number }>>();
+  let file: string | undefined;
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith("+++ ")) {
+      const target = line.slice(4).trim();
+      file = target === "/dev/null" ? undefined : target.replace(/^b\//, "");
+      if (file !== undefined && !hunks.has(file)) hunks.set(file, []);
+      continue;
+    }
+    const header = /^@@ -[\d,]+ \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (header !== null && file !== undefined) {
+      const start = Number(header[1]);
+      const length = header[2] === undefined ? 1 : Number(header[2]);
+      if (length > 0) hunks.get(file)!.push({ start, end: start + length - 1 });
+    }
+  }
+  return hunks;
+}
+
+/** why: GitHub anchors a `start_line`…`line` pair to one hunk, so a range whose
+ * ends straddle two right-side hunks cannot post; null means every range passes. */
+function rangeHunkProblem(diff: string, comments: ReviewPostPlan["inlineComments"]): string | null {
+  const hunks = rightSideHunks(diff);
+  for (const [index, comment] of comments.entries()) {
+    const startLine = comment.start_line;
+    if (startLine === undefined) continue;
+    const spans = hunks.get(comment.path) ?? [];
+    const inside = spans.some((span) => span.start <= startLine && comment.line <= span.end);
+    if (!inside) {
+      const shown = spans.length === 0 ? "no right-side hunk for this path" : spans.map((span) => `${span.start}-${span.end}`).join(", ");
+      return `comments[${index}] ${comment.path}:${comment.start_line}-${comment.line} must stay inside one right-side hunk (hunks: ${shown})`;
+    }
+  }
+  return null;
 }
 async function execute(verb: Verb, input: Input, context: InvocationContext): Promise<CommandEnvelope> {
   const id = idFor(verb);
@@ -339,6 +378,19 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const plan = planReviewPost(JSON.parse(viewResult.stdout), { body, comments });
       if (plan.pr !== Number(input.pr)) {
         return refusalEnvelope({ command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1, message: `resolved PR ${plan.pr} does not match requested PR ${input.pr}` , recovery: "Select the pull request matching the resolved review target. Run mstar pr-review post --pr <number> --body-file <review.md>."});
+      }
+      // why: GitHub accepts `start_line` + `line` only when both ends sit in
+      // one diff hunk, so a cross-hunk range would 422-fold the whole review
+      // (suggestion included) — verify the anchor before the POST instead.
+      if (plan.inlineComments.some((comment) => comment.start_line !== undefined)) {
+        const diff = await spawn(context, ["gh", "pr", "diff", String(plan.pr), "--repo", plan.ownerRepo]);
+        if (diff.exitCode !== 0 || diff.signal !== null) {
+          return refusalEnvelope({ command: id, status: "refused", code: `${id}.diff-unavailable`, exitCode: 1, message: `cannot verify the line-range anchor: ${diff.stderr || "gh pr diff failed"}` , recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review post --pr <number> --body-file <review.md>."});
+        }
+        const problem = rangeHunkProblem(diff.stdout, plan.inlineComments);
+        if (problem !== null) {
+          return refusalEnvelope({ command: id, status: "refused", code: `${id}.range-spans-hunks`, exitCode: 1, message: `range anchor rejected: ${problem}` , recovery: "Keep start_line and line inside one right-side hunk of the PR diff, or drop start_line/start_side to anchor a single line. Run mstar pr-review post --pr <number> --body-file <review.md>."});
+        }
       }
       const apiPath = `repos/${plan.ownerRepo}/pulls/${plan.pr}/reviews`;
       const payload = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]): string => JSON.stringify({ commit_id: plan.commitId, event: plan.event, body: dropped.length ? foldComments(plan.body, dropped) : plan.body, ...(kept.length ? { comments: kept.map(({ path: filePath, line, side, start_line, start_side, body: commentBody }) => ({ path: filePath, line, side, ...(start_line === undefined ? {} : { start_line, start_side }), body: commentBody })) } : {}) });

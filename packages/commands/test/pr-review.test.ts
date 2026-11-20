@@ -53,6 +53,27 @@ function diagnosticsOf(envelope: CommandEnvelope, label: string): readonly unkno
   return diagnostics;
 }
 
+/** why: the hunk check needs a diff whose right-side spans are 1-5 and 30-35. */
+const RANGE_DIFF = [
+  "diff --git a/src/a.ts b/src/a.ts",
+  "--- a/src/a.ts",
+  "+++ b/src/a.ts",
+  "@@ -1,5 +1,5 @@",
+  " one",
+  " two",
+  " three",
+  " four",
+  " five",
+  "@@ -30,6 +30,6 @@",
+  " thirty",
+  " thirty-one",
+  " thirty-two",
+  " thirty-three",
+  " thirty-four",
+  " thirty-five",
+  "",
+].join("\n");
+
 describe("pr-review command family", () => {
 
   test("computes tally from fixture findings and validates fixture report verdicts", async () => {
@@ -120,31 +141,75 @@ describe("pr-review command family", () => {
     writeFileSync(bodyFile, "Review summary");
     const findings = path.join(cwd, "findings.json");
     writeFileSync(findings, JSON.stringify([
-      { path: "src/a.ts", line: 12, start_line: 9, start_side: "RIGHT", body: "Range finding" },
+      { path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT", body: "Range finding" },
       { path: "src/b.ts", line: 4, body: "Single-line finding" },
     ]));
+    const post = command("pr-review.post");
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: RANGE_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
-      if (request.argv[1] === "pr") return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
-      return { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+      if (request.argv[1] === "pr") return request.argv[2] === "diff" ? diff : review;
+      return posted;
     };
-    const result = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    const result = await post.execute({ pr: "42", bodyFile, findings }, context);
     expect(result.status).toBe("ok");
-    expect(JSON.parse(calls[1]!.stdin ?? "")).toMatchObject({
+    expect(calls[1]!.argv).toEqual(["gh", "pr", "diff", "42", "--repo", "owner/repo"]);
+    expect(JSON.parse(calls[2]!.stdin ?? "")).toMatchObject({
       comments: [
-        { path: "src/a.ts", line: 12, side: "RIGHT", start_line: 9, start_side: "RIGHT", body: "Range finding" },
+        { path: "src/a.ts", line: 4, side: "RIGHT", start_line: 2, start_side: "RIGHT", body: "Range finding" },
         { path: "src/b.ts", line: 4, side: "RIGHT", body: "Single-line finding" },
       ],
     });
     // why: this stdin is the payload the command itself serialized above.
-    const posted = JSON.parse(calls[1]!.stdin ?? "") as { comments: Record<string, unknown>[] };
-    const single = posted.comments[1]!;
+    const body = JSON.parse(calls[2]!.stdin ?? "") as { comments: Record<string, unknown>[] };
+    const single = body.comments[1]!;
     expect(Object.keys(single)).toEqual(["path", "line", "side", "body"]);
     // why: a backwards range is a caller mistake, never a 422-fold candidate.
     writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 12, start_line: 12, start_side: "RIGHT", body: "Backwards" }]));
-    const rejected = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    const rejected = await post.execute({ pr: "42", bodyFile, findings }, context);
     expect(rejected).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect(rejected.message).toContain("findings[0].start_line must be an integer >= 1 and less than line (12)");
+  });
+
+  test("a range spanning two right-side hunks is refused before any POST", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 31, start_line: 4, start_side: "RIGHT", body: "Cross-hunk" }]));
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: RANGE_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return request.argv[2] === "diff" ? diff : review;
+      return posted;
+    };
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks", exitCode: 1 });
+    expect(refused.message).toContain("comments[0] src/a.ts:4-31");
+    expect(refused.message).toContain("hunks: 1-5, 30-35");
+    expect(calls.map((call) => call.argv[2] ?? call.argv[1])).toEqual(["view", "diff"]);
+    // why: one hunk down, the same anchor is legal and must reach the POST.
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT", body: "In-hunk" }]));
+    calls.length = 0;
+    const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(okResult.status).toBe("ok");
+    expect(JSON.parse(calls[2]!.stdin ?? "")).toMatchObject({ comments: [{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT" }] });
+  });
+
+  test("a lone range field is a usage refusal, never a silent drop", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ start_side: "RIGHT" }]));
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(refused.message).toContain("findings[0] must be {path: string, line: number >= 1, body: string}");
+    expect(calls).toHaveLength(0);
   });
 
   test("422 retry folds the body without its suggestion fence and drops inline comments", async () => {
