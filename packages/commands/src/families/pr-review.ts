@@ -150,16 +150,17 @@ function foldComments(body: string, dropped: ReviewPostPlan["inlineComments"]): 
     }),
   ].join("\n");
 }
-/** why: hunk membership is a property of the diff, so the check needs the
- * right-side span each `@@ -a,b +start,length @@` header declares per file. */
+/** why: file identity comes only from `diff --git a/<old> b/<new>` — a content
+ * line always starts with `+`/`-`/space, so an added `++ b/x` renders as
+ * `+++ b/x` and must never be read as a header. */
 function rightSideHunks(diff: string): Map<string, Array<{ start: number; end: number }>> {
   const hunks = new Map<string, Array<{ start: number; end: number }>>();
   let file: string | undefined;
   for (const line of diff.split(/\r?\n/)) {
-    if (line.startsWith("+++ ")) {
-      const target = line.slice(4).trim();
-      file = target === "/dev/null" ? undefined : target.replace(/^b\//, "");
-      if (file !== undefined && !hunks.has(file)) hunks.set(file, []);
+    const gitHeader = /^diff --git .* b\/(.+)$/.exec(line);
+    if (gitHeader !== null) {
+      file = gitHeader[1]!;
+      if (!hunks.has(file)) hunks.set(file, []);
       continue;
     }
     const header = /^@@ -[\d,]+ \+(\d+)(?:,(\d+))? @@/.exec(line);
@@ -370,23 +371,33 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         if (!Array.isArray(parsed)) throw new UsageError("--findings must be a JSON array");
         comments = parsed.flatMap((entry, index) => { const value = parseFinding(entry, index); return value ? [value] : []; });
       }
-      const viewResult = await spawn(context, ["gh", "pr", "view", String(Number(input.pr)), "--json", "url,headRefOid"]);
+      const viewResult = await spawn(context, ["gh", "pr", "view", String(Number(input.pr)), "--json", "url,headRefOid,baseRefOid"]);
 
       if (viewResult.exitCode !== 0 || viewResult.signal !== null) {
         return refusalEnvelope({ command: id, status: "refused", code: `${id}.unauthorized`, exitCode: 1, message: viewResult.stderr || "GitHub authentication/target lookup failed" , recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review post --pr <number> --body-file <review-file>."});
       }
-      const plan = planReviewPost(JSON.parse(viewResult.stdout), { body, comments });
+      const parsedView: unknown = JSON.parse(viewResult.stdout);
+      const record: Record<string, unknown> = parsedView !== null && typeof parsedView === "object" && !Array.isArray(parsedView) ? Object.fromEntries(Object.entries(parsedView)) : {};
+      const plan = planReviewPost(
+        {
+          ...(typeof record.url === "string" ? { url: record.url } : {}),
+          ...(typeof record.headRefOid === "string" ? { headRefOid: record.headRefOid } : {}),
+        },
+        { body, comments },
+      );
       if (plan.pr !== Number(input.pr)) {
         return refusalEnvelope({ command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1, message: `resolved PR ${plan.pr} does not match requested PR ${input.pr}` , recovery: "Select the pull request matching the resolved review target. Run mstar pr-review post --pr <number> --body-file <review.md>."});
       }
       // why: GitHub accepts `start_line` + `line` only when both ends sit in
       // one diff hunk, so a cross-hunk range would 422-fold the whole review
-      // (suggestion included) — verify the anchor before the POST instead.
+      // (suggestion included) — verify the anchor against the SAME head the
+      // POST names as commit_id, never the moving current head.
       if (plan.inlineComments.some((comment) => comment.start_line !== undefined)) {
-        const diff = await spawn(context, ["gh", "pr", "diff", String(plan.pr), "--repo", plan.ownerRepo]);
-        if (diff.exitCode !== 0 || diff.signal !== null) {
-          return refusalEnvelope({ command: id, status: "refused", code: `${id}.diff-unavailable`, exitCode: 1, message: `cannot verify the line-range anchor: ${diff.stderr || "gh pr diff failed"}` , recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review post --pr <number> --body-file <review.md>."});
-        }
+        const baseOid = record.baseRefOid;
+        const unavailable = (cause: string) => refusalEnvelope({ command: id, status: "refused", code: `${id}.diff-unavailable`, exitCode: 1, message: `cannot verify the line-range anchor at ${plan.commitId}: ${cause}` , recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review post --pr <number> --body-file <review.md>."});
+        if (typeof baseOid !== "string" || !/^[0-9a-f]{7,40}$/.test(baseOid)) return unavailable("pr view returned no baseRefOid");
+        const diff = await spawn(context, ["gh", "api", "-H", "Accept: application/vnd.github.v3.diff", `repos/${plan.ownerRepo}/compare/${baseOid}...${plan.commitId}`]);
+        if (diff.exitCode !== 0 || diff.signal !== null) return unavailable(diff.stderr || "gh api compare failed");
         const problem = rangeHunkProblem(diff.stdout, plan.inlineComments);
         if (problem !== null) {
           return refusalEnvelope({ command: id, status: "refused", code: `${id}.range-spans-hunks`, exitCode: 1, message: `range anchor rejected: ${problem}` , recovery: "Keep start_line and line inside one right-side hunk of the PR diff, or drop start_line/start_side to anchor a single line. Run mstar pr-review post --pr <number> --body-file <review.md>."});

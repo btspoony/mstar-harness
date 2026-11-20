@@ -74,6 +74,29 @@ const RANGE_DIFF = [
   "",
 ].join("\n");
 
+/** why: an added content line `++ b/src/a.ts` renders as `+++ b/src/a.ts`, so
+ * the fixture proves file identity never comes from a `+++` line. */
+const CONTENT_DIFF = [
+  "diff --git a/src/c.ts b/src/c.ts",
+  "--- a/src/c.ts",
+  "+++ b/src/c.ts",
+  "@@ -1,3 +1,4 @@",
+  " one",
+  " two",
+  "+++ b/src/a.ts",
+  " three",
+  "@@ -30,2 +31,2 @@",
+  " thirty",
+  " thirty-one",
+  "diff --git a/src/a.ts b/src/a.ts",
+  "--- a/src/a.ts",
+  "+++ b/src/a.ts",
+  "@@ -1,2 +1,2 @@",
+  " alpha",
+  " beta",
+  "",
+].join("\n");
+
 describe("pr-review command family", () => {
 
   test("computes tally from fixture findings and validates fixture report verdicts", async () => {
@@ -111,7 +134,7 @@ describe("pr-review command family", () => {
     const unauthorized = await post.execute({ pr: "42", bodyFile }, context);
     expect(unauthorized.status).toBe("refused");
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.argv).toEqual(["gh", "pr", "view", "42", "--json", "url,headRefOid"]);
+    expect(calls[0]!.argv).toEqual(["gh", "pr", "view", "42", "--json", "url,headRefOid,baseRefOid"]);
 
     calls.length = 0;
     context.effects.spawn = async (request) => {
@@ -145,17 +168,17 @@ describe("pr-review command family", () => {
       { path: "src/b.ts", line: 4, body: "Single-line finding" },
     ]));
     const post = command("pr-review.post");
-    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
     const diff = { exitCode: 0, signal: null, stdout: RANGE_DIFF, stderr: "" };
     const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
-      if (request.argv[1] === "pr") return request.argv[2] === "diff" ? diff : review;
-      return posted;
+      if (request.argv[1] === "pr") return review;
+      return request.argv[2] === "-H" ? diff : posted;
     };
     const result = await post.execute({ pr: "42", bodyFile, findings }, context);
     expect(result.status).toBe("ok");
-    expect(calls[1]!.argv).toEqual(["gh", "pr", "diff", "42", "--repo", "owner/repo"]);
+    expect(calls[1]!.argv).toEqual(["gh", "api", "-H", "Accept: application/vnd.github.v3.diff", "repos/owner/repo/compare/1234567...abcdef0123456"]);
     expect(JSON.parse(calls[2]!.stdin ?? "")).toMatchObject({
       comments: [
         { path: "src/a.ts", line: 4, side: "RIGHT", start_line: 2, start_side: "RIGHT", body: "Range finding" },
@@ -179,25 +202,67 @@ describe("pr-review command family", () => {
     writeFileSync(bodyFile, "Review summary");
     const findings = path.join(cwd, "findings.json");
     writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 31, start_line: 4, start_side: "RIGHT", body: "Cross-hunk" }]));
-    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
     const diff = { exitCode: 0, signal: null, stdout: RANGE_DIFF, stderr: "" };
     const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
-      if (request.argv[1] === "pr") return request.argv[2] === "diff" ? diff : review;
-      return posted;
+      if (request.argv[1] === "pr") return review;
+      return request.argv[2] === "-H" ? diff : posted;
     };
     const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
     expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks", exitCode: 1 });
     expect(refused.message).toContain("comments[0] src/a.ts:4-31");
     expect(refused.message).toContain("hunks: 1-5, 30-35");
-    expect(calls.map((call) => call.argv[2] ?? call.argv[1])).toEqual(["view", "diff"]);
+    expect(calls.map((call) => call.argv[2] === "-H" ? "compare" : call.argv[2] ?? call.argv[1])).toEqual(["view", "compare"]);
     // why: one hunk down, the same anchor is legal and must reach the POST.
     writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT", body: "In-hunk" }]));
     calls.length = 0;
     const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
     expect(okResult.status).toBe("ok");
     expect(JSON.parse(calls[2]!.stdin ?? "")).toMatchObject({ comments: [{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT" }] });
+  });
+
+  test("an added `+++ b/<path>` content line never reattributes a file's hunks", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: CONTENT_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return review;
+      return request.argv[2] === "-H" ? diff : posted;
+    };
+    // why: 31-32 is src/c.ts's second hunk, which follows the `+++ b/src/a.ts`
+    // content line and must keep that attribution.
+    writeFileSync(findings, JSON.stringify([{ path: "src/c.ts", line: 32, start_line: 31, start_side: "RIGHT", body: "Content hijack" }]));
+    const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(okResult.status).toBe("ok");
+    // why: the same span on src/a.ts is not in that file's 1-2 hunk.
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 32, start_line: 31, start_side: "RIGHT", body: "Wrong file" }]));
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks" });
+    expect(refused.message).toContain("comments[0] src/a.ts:31-32");
+    expect(refused.message).toContain("hunks: 1-2");
+  });
+
+  test("a range without a pinned base is refused instead of validated against a moving head", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT", body: "Range finding" }]));
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+    };
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.diff-unavailable", exitCode: 1 });
+    expect(refused.message).toContain("at abcdef0123456: pr view returned no baseRefOid");
+    expect(calls).toHaveLength(1);
   });
 
   test("a lone range field is a usage refusal, never a silent drop", async () => {
