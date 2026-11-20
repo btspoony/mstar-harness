@@ -145,9 +145,12 @@ export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): stri
     if (keyOwner !== null && keyOwner !== selectedOwner) {
       // why: a linked worktree shares the selected repository's main root, so
       // its tracked plans are the same checkout; a different repo stays foreign.
+      // Another harness root (`.mstar`) is never writable through this port.
       const selectedMain = mainWorktreeRoot(selectedOwner);
       const keyMain = mainWorktreeRoot(keyOwner);
-      if (selectedMain === null || keyMain === null || selectedMain !== keyMain) {
+      const sameRepo = selectedMain !== null && keyMain !== null && selectedMain === keyMain;
+      const foreignHarnessRoot = keyReal.includes(`${sep}.mstar${sep}`);
+      if (!sameRepo || foreignHarnessRoot) {
         throw new CrossRootRefusedError(`${key} belongs to another checkout's harness state; select that checkout's root instead of routing around it`);
       }
     }

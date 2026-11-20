@@ -1122,6 +1122,8 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
       mkdirSync(join(linked, "plans"), { recursive: true });
       writeFileSync(join(linked, "plans", "status.json"), "{}");
       expect(() => resolveArtifactPath(selected, { kind: "json", key: join(linked, "plans", "x.json") })).not.toThrow();
+      // why: another harness root stays protected even in the same repository.
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: join(linked, ".mstar", "status.json") })).toThrow(/another checkout's harness state/);
       // why: a root-level `.mstar` still belongs to a foreign owner.
       expect(() => resolveArtifactPath(selected, { kind: "json", key: join(sep, ".mstar", "status.json") })).toThrow(/another checkout's harness state/);
     } finally {
