@@ -92,7 +92,7 @@ function errorCode(error: unknown, fallback: string): string {
     : fallback;
 }
 
-/** why: typed harness/store refusals keep their code at the envelope level;
+/** why: typed harness/store/coordination refusals keep their code at the envelope level;
  * everything else stays the verb-level refusal, not an OS error code. */
 function refusalCodeOf(error: unknown, fallback: string): string {
   const code = errorCode(error, fallback);

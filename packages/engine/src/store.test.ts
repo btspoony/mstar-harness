@@ -44,7 +44,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import {
   createFsStore,
   getArtifactStore,
@@ -1104,6 +1104,10 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
       expect(() => resolveArtifactPath(selected, { kind: "json", key: ordinary })).not.toThrow();
       // why: a non-`.mstar` selected root is still owned by its checkout.
       expect(() => resolveArtifactPath(join(root, "checkout-a", ".agents"), { kind: "json", key: join(root, "checkout-a", ".plans", "x.json") })).not.toThrow();
+      // why: an ordinary `plans` directory is not a harness marker.
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: join(root, "checkout-a", "docs", "plans", "x.json") })).not.toThrow();
+      // why: a root-level `.mstar` still belongs to a foreign owner.
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: join(sep, ".mstar", "status.json") })).toThrow(/another checkout's harness state/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

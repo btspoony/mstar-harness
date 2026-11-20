@@ -97,7 +97,7 @@ function assertKindAdmitted(kind: string): void {
 /** why: The owner is the checkout whose harness/corpus directory this path traverses first. */
 function harnessOwnerOf(target: string): string | null {
   const segments = target.split(sep);
-  const index = segments.findIndex((segment) => segment === ".mstar" || segment === ".agents" || segment === ".plans" || segment === "plans");
+  const index = segments.findIndex((segment) => segment === ".mstar" || segment === ".agents" || segment === ".plans");
   if (index <= 0) return null;
   return segments.slice(0, index).join(sep) || sep;
 }
