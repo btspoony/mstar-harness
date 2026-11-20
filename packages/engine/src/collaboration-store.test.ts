@@ -360,7 +360,7 @@ describe("collaboration store", () => {
     await withCollaborationWrite(
       contextAt(upperRoot),
       (write) => {
-        write.db.exec(receiptInsert("op-upper"));
+        write.db.prepare(receiptInsert("op-upper")).run();
         return "ok";
       },
       { repoKey: upperStaged.repoKey, mode: upperStaged.mode, storeId: upperStaged.storeId, epoch: upperStaged.epoch },
@@ -562,7 +562,7 @@ describe("collaboration store", () => {
     const committed = await withCollaborationWrite(
       context,
       (write) => {
-        write.db.exec(receiptInsert("op-committed"));
+        write.db.prepare(receiptInsert("op-committed")).run();
         return write.authority.revision;
       },
       stamp,
@@ -574,7 +574,7 @@ describe("collaboration store", () => {
       withCollaborationWrite(
         context,
         (write) => {
-          write.db.exec(receiptInsert("op-rolled-back"));
+          write.db.prepare(receiptInsert("op-rolled-back")).run();
           throw new Error("domain refusal");
         },
         stamp,
@@ -656,7 +656,7 @@ describe("collaboration store", () => {
         withCollaborationWrite(
           context,
           async (write) => {
-            write.db.exec(receiptInsert("op-async"));
+            write.db.prepare(receiptInsert("op-async")).run();
             await Promise.resolve();
             throw new Error("async effect");
           },
@@ -692,7 +692,7 @@ describe("collaboration store", () => {
       withCollaborationWrite(
         context,
         (write) => {
-          write.db.exec(receiptInsert("op-callable-thenable"));
+          write.db.prepare(receiptInsert("op-callable-thenable")).run();
           return Object.assign(() => "callable", {
             then: (_resolve: unknown, reject?: (reason: unknown) => void) => {
               reject?.(new Error("callable thenable"));
