@@ -111,12 +111,14 @@ export class McpControlRootError extends Error {
   }
 }
 
-function unresolvedControlRootMessage(cwd: string): string {
+function unresolvedControlRootMessage(cwd: string, rootInputs: readonly string[]): string {
+  const recovery = rootInputs.length > 0
+    ? `Recovery: pass the call's \`${rootInputs[0]}\` selector naming the control root \u2014 the absolute \`<main worktree>/.mstar\` path; \`mstar path resolve\` prints it as \`controlHarnessDir\`.`
+    : "Recovery: this command publishes no root selector on a shared connection. Run it through the CLI from the repository (`mstar <command>`), or use a command that publishes a root selector.";
   return (
     `[mcp.control-root-unresolved] This call named no control root. ` +
     `The MCP server is one shared service, so its launch cwd (${cwd}) and its launch configuration never choose a repository. ` +
-    "Recovery: pass the call's `harness` selector naming the control root \u2014 the absolute `<main worktree>/.mstar` path. " +
-    "`mstar path resolve` prints it as `controlHarnessDir`; a linked worktree resolves to the main checkout's `.mstar`, never its own."
+    recovery
   );
 }
 
@@ -240,7 +242,7 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
     else if (ROOT_FREE_COMMANDS.has(definition.id)) controlRoot = null;
     else {
       const cwd = process.cwd();
-      throw new McpControlRootError(unresolvedControlRootMessage(cwd), { cwd });
+      throw new McpControlRootError(unresolvedControlRootMessage(cwd, definition.rootInputs ?? []), { cwd });
     }
     return {
       cwd: options.workspace ?? (controlRoot === null ? process.cwd() : dirname(controlRoot)),

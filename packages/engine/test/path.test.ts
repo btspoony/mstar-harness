@@ -224,6 +224,7 @@ describe("resolveHarnessDir — fixed root (ADR 2026-11-20)", () => {
       try {
         gitInit(root);
         mkdirSync(join(root, legacy));
+        writeFileSync(join(root, legacy, "status.json"), "{}");
         let err: unknown;
         try {
           resolveHarnessDir(root);

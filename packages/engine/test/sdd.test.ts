@@ -537,6 +537,7 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
     try {
       git(["init", "-q"], control);
       mkdirSync(join(control, ".agents"));
+      writeFileSync(join(control, ".agents", "status.json"), "{}");
       let err: unknown;
       try {
         sddWorkspace("plan-1", { cwd: control, controlRoot: control });

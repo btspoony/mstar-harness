@@ -662,8 +662,8 @@ describe("MCP harness root", () => {
       expect(rootless.isError).toBe(true);
       expect(text).toContain("mcp.control-root-unresolved");
       expect(text).toContain(realpathSync(fixture.cwd));
-      expect(text).toContain("`harness` selector");
-      expect(text).toContain("mstar path resolve");
+      expect(text).toContain("publishes no root selector");
+      expect(text).toContain("mstar <command>");
       // The retired launch pins are not recoveries anymore.
       expect(text).not.toContain("--harness");
       expect(text).not.toContain("MSTAR_HARNESS_DIR");
@@ -689,7 +689,7 @@ describe("MCP harness root", () => {
       expect(result.isError).toBe(true);
       expect(text).toContain("mcp.control-root-unresolved");
       expect(text).toContain(realpathSync(fixture.cwd));
-      expect(text).toContain("`harness` selector");
+      expect(text).toContain("publishes no root selector");
       expect(text).not.toContain("store.not-initialized");
     } finally {
       process.chdir(previousCwd);
@@ -1484,9 +1484,8 @@ describe("MCP control-root admission class", () => {
     try {
       const refused = await callRawTool(createContextResolver(), "status.validate", {});
       const text = rawText(refused);
-      expect(text).toContain("`harness` selector");
-      expect(text).toContain("mstar path resolve");
-      expect(text).toContain("controlHarnessDir");
+      expect(text).toContain("publishes no root selector");
+      expect(text).toContain("mstar <command>");
       // The retired launch pins are not recoveries anymore: there is no
       // connection-level root to declare.
       expect(text).not.toContain("--harness");
@@ -1875,7 +1874,7 @@ describe("MCP per-call root selectors and operation targets", () => {
       expect(result.isError).toBe(true);
       const text = rawText(result);
       expect(text).toContain("mcp.control-root-unresolved");
-      expect(text).toContain("`harness` selector");
+      expect(text).toContain("publishes no root selector");
       expect(text).not.toContain("--harness");
     } finally {
       process.chdir(previousCwd);

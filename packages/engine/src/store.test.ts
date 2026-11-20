@@ -68,11 +68,10 @@ function tmpRoot(prefix: string): string {
 }
 
 /**
- * Run `fn` with `MSTAR_HARNESS_DIR` set to `value` (undefined deletes it),
- * restoring the previous env in all paths. Caller rule : `fn`
- * must read `process.env` synchronously before its first `await` — the env
- * window closes as soon as `fn` returns, which for an async callback is
- * immediately.
+ * Run `fn` with the process cwd set to `value` (undefined leaves it
+ * unchanged), restoring the previous cwd after the await. `value` must be an
+ * existing directory; cwd is process-global, so the window closes only once
+ * the async callback settles.
  */
 async function withEnv<T>(value: string | undefined, fn: () => T | Promise<T>): Promise<T> {
   const previousCwd = process.cwd();

@@ -138,6 +138,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       gitInit(root);
       mkdirSync(join(root, ".agents", "specs"), { recursive: true });
       writeFileSync(join(root, ".agents", "specs", "adr.md"), "# ADR\n");
+      writeFileSync(join(root, ".agents", "status.json"), "{}");
       const result = runResolve([root]);
       // The fixed root is `<checkout>/.mstar`; a legacy layout is refused by
       // name with its scaffold recovery instead of being adopted. The command
