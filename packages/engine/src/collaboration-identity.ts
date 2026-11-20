@@ -28,6 +28,7 @@ export type CollaborationLocation = Readonly<{
 
 export type CollaborationIdentityCode =
   | "collaboration.repo-identity-unresolved"
+  | "collaboration.config-unreadable"
   | "collaboration.mode-required"
   | "collaboration.mode-invalid"
   | "collaboration.mode-unavailable";
@@ -82,6 +83,9 @@ function canonicalHost(raw: string): string {
 function splitOrigin(raw: string): { host: string; path: string } {
   const value = raw.trim();
   if (value === "") unresolved("The origin remote is empty");
+  // why: WHATWG strips or rewrites these before a parsed URL can expose them,
+  // so an invalid origin must be judged in its raw spelling.
+  if (/[\u0000-\u001f\u007f]/.test(value)) unresolved("The origin contains an ASCII control character");
   // why: WHATWG URL treats a backslash as a path separator for http(s), so a
   // raw backslash can hide `..` from the slash-only raw-path check below.
   if (value.includes("\\")) unresolved("The origin contains a backslash path separator");
@@ -91,6 +95,9 @@ function splitOrigin(raw: string): { host: string; path: string } {
     if (protocol !== "https:" && protocol !== "http:" && protocol !== "ssh:") {
       unresolved(`The origin transport ${protocol} is not a portable Git remote`);
     }
+    // why: `URL.search`/`.hash` are empty for a bare `?` or `#`, so the raw
+    // delimiter is the only place that spelling can be refused.
+    if (value.includes("?") || value.includes("#")) unresolved("The origin carries a query or fragment");
     // why: WHATWG URL already dropped literal and `%2e` dot segments from
     // `parsed.pathname`, so the raw spelling is the only place to judge them.
     const rawPath = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*(\/[^?#]*)?/i.exec(value)?.[1] ?? "";
@@ -101,7 +108,6 @@ function splitOrigin(raw: string): { host: string; path: string } {
     } catch {
       unresolved("The origin is not a well-formed URL");
     }
-    if (parsed.search !== "" || parsed.hash !== "") unresolved("The origin carries a query or fragment");
     // why: userinfo is dropped by never reading username/password.
     const hostname = canonicalHost(parsed.hostname);
     const port = parsed.port;
@@ -162,11 +168,28 @@ function readOrigin(mainRoot: string): string | null {
 }
 
 function readConfig(mainRoot: string): { mode?: string; repoId?: string } {
+  const file = join(resolve(mainRoot), MSTARC_FILE);
   let text: string;
   try {
-    text = readFileSync(join(resolve(mainRoot), MSTARC_FILE), "utf8");
-  } catch {
-    return {};
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    const reason = (error as NodeJS.ErrnoException).code;
+    // why: only a genuinely absent file means "no configuration"; every other
+    // failure would otherwise be reported as a missing mode the operator
+    // cannot fix by adding one.
+    if (reason === "ENOENT") return {};
+    const cause =
+      reason === "EISDIR"
+        ? "it is a directory"
+        : reason === "ENOTDIR"
+          ? "a parent path component is not a directory"
+          : reason === "EACCES" || reason === "EPERM"
+            ? "it is not readable by this process"
+            : `it could not be read (${reason ?? "unknown error"})`;
+    throw new CollaborationIdentityError(
+      "collaboration.config-unreadable",
+      `${file} cannot be read because ${cause}; make it a readable regular file or remove it, then re-run`,
+    );
   }
   return parseMstarc(text).collaboration ?? {};
 }
@@ -190,7 +213,7 @@ function resolveMode(raw: string | undefined): CollaborationMode {
   }
   throw new CollaborationIdentityError(
     "collaboration.mode-invalid",
-    "'" + raw + "' is not a supported collaboration mode; use 'mode=local' or 'mode=mirror'",
+    `The [${COLLABORATION_SECTION}] mode setting in ${MSTARC_FILE} is not supported; use 'mode=local' or 'mode=mirror' and re-run`,
   );
 }
 
@@ -211,9 +234,31 @@ function canonicalIdentity(mainRoot: string, repoId: string | undefined): { repo
   return { repoKey: [host, ...segments].join("/"), dirs: [host, ...segments] };
 }
 
-/** Percent-encode uppercase ASCII so case-insensitive filesystems keep the keys apart. */
+/**
+ * Basenames reserved for the authority database and its SQLite sidecars. A
+ * repository segment that spells one must not become a directory with that
+ * name, or one identity's database file would occupy another's storage dir.
+ */
+const RESERVED_AUTHORITY_BASENAMES: Readonly<Record<string, true>> = {
+  "collaboration.db": true,
+  "collaboration.db-wal": true,
+  "collaboration.db-shm": true,
+  "collaboration.db-journal": true,
+};
+
+/**
+ * Filesystem spelling of one directory segment: percent-encode uppercase ASCII
+ * so case-insensitive filesystems keep case-sensitive repositories apart, and
+ * percent-encode the head of a reserved basename so it cannot occupy the
+ * authority filename namespace. `repoKey` keeps the canonical spelling.
+ */
 function encodeSegment(segment: string): string {
-  return segment.replace(/[A-Z]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
+  // why: `%` cannot appear in an accepted segment, so any encoded spelling is
+  // disjoint from every other segment's filesystem name.
+  const escaped = RESERVED_AUTHORITY_BASENAMES[segment.toLowerCase()] === true
+    ? `%${segment.charCodeAt(0).toString(16).toUpperCase()}${segment.slice(1)}`
+    : segment;
+  return escaped.replace(/[A-Z]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 /**

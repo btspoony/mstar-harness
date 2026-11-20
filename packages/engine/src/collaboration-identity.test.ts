@@ -7,17 +7,29 @@
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { CollaborationIdentityError, resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, openCollaborationStore } from "./collaboration-store.js";
 import { parseMstarc } from "./mstarc.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-collab-identity-")));
 const HOME = join(ROOT, "home");
 mkdirSync(HOME);
 
+let homeSpy: { mockRestore(): void } | undefined;
+
+beforeAll(() => {
+  // The store entry points keep their locked signatures (no userHome option),
+  // so the isolated home is installed at the runtime boundary they call.
+  homeSpy = spyOn(nodeOs, "homedir").mockReturnValue(HOME);
+});
+
 afterAll(() => {
+  homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 
@@ -40,8 +52,24 @@ function makeRepo(origin?: string | readonly string[], mstarc?: string): string 
   return dir;
 }
 
+function contextAt(root: string) {
+  return { harnessDir: join(root, ".mstar"), checkoutRoot: root };
+}
+
 function resolveAt(root: string) {
-  return resolveCollaborationLocation({ harnessDir: join(root, ".mstar"), checkoutRoot: root }, { userHome: HOME });
+  return resolveCollaborationLocation(contextAt(root), { userHome: HOME });
+}
+
+/** Flip a staged record to active: this plan ships no public activator. */
+function activateStaged(dbPath: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+  } finally {
+    db.close();
+  }
 }
 
 function refusal(run: () => unknown): { code: string; message: string } {
@@ -269,10 +297,83 @@ describe("collaboration identity", () => {
     expect(last.repoKey).toBe("id:second");
   });
 
+  test("an unreadable configuration is a named diagnostic, not a missing mode", () => {
+    const repo = makeRepo("https://github.com/acme/widgets.git");
+    mkdirSync(join(repo, ".mstarc"));
+    const result = refusal(() => resolveAt(repo));
+    expect(result.code).toBe("collaboration.config-unreadable");
+    expect(result.message).toContain(join(repo, ".mstarc"));
+    expect(result.message).toContain("remove");
+
+    // A genuinely absent file keeps its own missing-mode refusal.
+    const absent = makeRepo("https://github.com/acme/widgets.git");
+    expect(refusal(() => resolveAt(absent)).code).toBe("collaboration.mode-required");
+  });
+
+  test("reserved authority basenames cannot occupy a repository directory", async () => {
+    const nested = "https://git.example.com/order-one/a/collaboration.db/b.git";
+    const parent = "https://git.example.com/order-one/a.git";
+    const nestedFirst = "https://git.example.com/order-two/a/collaboration.db/b.git";
+    const parentSecond = "https://git.example.com/order-two/a.git";
+    const mstarc = "[collaboration]\nmode=local\n";
+    const parentRepo = makeRepo(parent, mstarc);
+    const nestedRepo = makeRepo(nested, mstarc);
+    const nestedFirstRepo = makeRepo(nestedFirst, mstarc);
+    const parentSecondRepo = makeRepo(parentSecond, mstarc);
+
+    // Database file first, then the repository whose directory used to spell it.
+    await initializeCollaborationStore(resolveAt(parentRepo));
+    await initializeCollaborationStore(resolveAt(nestedRepo));
+    // Reverse creation order.
+    await initializeCollaborationStore(resolveAt(nestedFirstRepo));
+    await initializeCollaborationStore(resolveAt(parentSecondRepo));
+
+    const nestedLocation = resolveAt(nestedRepo);
+    expect(nestedLocation.repoKey).toBe("git.example.com/order-one/a/collaboration.db/b");
+    expect(nestedLocation.dbPath).toBe(
+      join(HOME, ".mstar", "repos", "git.example.com", "order-one", "a", "%63ollaboration.db", "b", "collaboration.db"),
+    );
+
+    for (const repo of [parentRepo, nestedRepo, nestedFirstRepo, parentSecondRepo]) {
+      activateStaged(resolveAt(repo).dbPath);
+      const handle = await openCollaborationStore(contextAt(repo), "read");
+      expect(handle.authority.state).toBe("active");
+      handle.close();
+    }
+  });
+
+  test("raw query fragment and control characters are refused before normalization", () => {
+    for (const origin of [
+      "https://github.com/acme/widgets.git?",
+      "https://github.com/acme/widgets.git#",
+      "https://github.com/acme/widgets.git\u0001",
+      "https://github.com/acme/te\tam/repo.git",
+    ]) {
+      const result = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=local\n")));
+      expect(result.code).toBe("collaboration.repo-identity-unresolved");
+    }
+  });
+
+  test("an invalid mode never echoes the submitted value", () => {
+    const secret = "synthetic-secret-9f3a";
+    const result = refusal(() =>
+      resolveAt(makeRepo("https://github.com/acme/widgets.git", `[collaboration]\nmode=${secret}\n`)),
+    );
+    expect(result.code).toBe("collaboration.mode-invalid");
+    expect(result.message).toContain("mode");
+    expect(result.message).toContain("mode=local");
+    expect(result.message).not.toContain(secret);
+  });
+
   test("resolution is side-effect free", () => {
-    const location = resolveAt(makeRepo("https://github.com/acme/widgets.git", "[collaboration]\nmode=local\n"));
-    expect(location.dbPath.startsWith(join(HOME, ".mstar", "repos"))).toBe(true);
-    expect(existsSync(join(HOME, ".mstar"))).toBe(false);
+    const untouched = join(ROOT, `untouched-home-${sequence++}`);
+    mkdirSync(untouched);
+    const location = resolveCollaborationLocation(
+      contextAt(makeRepo("https://github.com/acme/widgets.git", "[collaboration]\nmode=local\n")),
+      { userHome: untouched },
+    );
+    expect(location.dbPath.startsWith(join(untouched, ".mstar", "repos"))).toBe(true);
+    expect(existsSync(join(untouched, ".mstar"))).toBe(false);
   });
 
   test("parseMstarc keeps the collaboration section", () => {
