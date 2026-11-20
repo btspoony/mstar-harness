@@ -98,8 +98,7 @@ function validatePayload(kind: PersistKind, payload: unknown): void {
   if (!gate.ok) throw new Error(`refusing to persist invalid ${kind} document: ${gate.violations.map((v) => `[${v.severity}] ${v.code}: ${v.message}`).join("; ")}`);
 }
 
-/**
- * Resolve the store for one persist verb. `root` is the call's validated
+/** why: Resolve the store for one persist verb. `root` is the call's validated
  * harness (`input.harness`) when one is named, otherwise the invocation root:
  * the launcher pin on a pinned MCP connection, the CLI-derived fixed root
  * otherwise. A blank selector is absent, never a cwd-relative store, and the
