@@ -152,7 +152,8 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(readFileSync(join(root, ".agents", "AGENTS.md"), "utf8")).toContain("authored agent policy");
       const config = readFileSync(join(root, ".mstarc"), "utf8");
       expect(config).toContain("authored layout policy");
-      expect(config).toContain("harness_dir=.mstar");
+      // why: the harness root is fixed; the retired key is never emitted.
+      expect(config).not.toContain("harness_dir");
       expect(readFileSync(join(root, ".agents", "adr", "README.md"), "utf8")).toContain("authored ADR index");
       expect(existsSync(join(root, ".mstar", "projects", "_default", "roadmap.md"))).toBe(false);
     });
