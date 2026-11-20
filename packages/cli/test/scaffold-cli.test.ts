@@ -306,7 +306,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(existsSync(join(root, ".custom"))).toBe(false);
       expect(existsSync(join(root, ".gitignore"))).toBe(true);
       expect(existsSync(join(root, ".agents"))).toBe(true);
-      // The retired line is left untouched (the file is author-owned).
+      // why: the retired line is left untouched (the file is author-owned).
       expect(readFileSync(join(root, ".mstarc"), "utf8")).toContain("harness_dir=.custom");
     });
   });

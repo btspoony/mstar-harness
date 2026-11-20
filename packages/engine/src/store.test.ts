@@ -1095,11 +1095,15 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
     try {
       const selected = join(root, "checkout-a", ".mstar");
       const foreign = join(root, "checkout-b", ".mstar", "sdd", "_reviews", "x.json");
+      const nested = join(root, "checkout-a", "vendor", "sub", ".mstar", "status.json");
       const ownCorpus = join(root, "checkout-a", ".agents", "specs", "x.json");
       const ordinary = join(root, "export.mstar", "x.json");
       expect(() => resolveArtifactPath(selected, { kind: "json", key: foreign })).toThrow(/another checkout's harness state/);
+      expect(() => resolveArtifactPath(selected, { kind: "json", key: nested })).toThrow(/another checkout's harness state/);
       expect(() => resolveArtifactPath(selected, { kind: "json", key: ownCorpus })).not.toThrow();
       expect(() => resolveArtifactPath(selected, { kind: "json", key: ordinary })).not.toThrow();
+      // why: a non-`.mstar` selected root is still owned by its checkout.
+      expect(() => resolveArtifactPath(join(root, "checkout-a", ".agents"), { kind: "json", key: join(root, "checkout-a", ".plans", "x.json") })).not.toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

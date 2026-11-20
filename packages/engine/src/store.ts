@@ -94,6 +94,14 @@ function assertKindAdmitted(kind: string): void {
   }
 }
 
+/** why: The owner is the checkout whose harness/corpus directory this path traverses first. */
+function harnessOwnerOf(target: string): string | null {
+  const segments = target.split(sep);
+  const index = segments.findIndex((segment) => segment === ".mstar" || segment === ".agents" || segment === ".plans" || segment === "plans");
+  if (index <= 0) return null;
+  return segments.slice(0, index).join(sep) || sep;
+}
+
 /** why: machine consumers branch on codes; a plain message would be the only signal. */
 export class CrossRootRefusedError extends Error {
   readonly code = "store.cross-root-refused";
@@ -118,13 +126,13 @@ export function resolveArtifactPath(harnessRoot: string, ref: ArtifactRef): stri
       throw new Error(`ArtifactStore json key must not contain ".." segments \u2014 got ${JSON.stringify(key)}`);
     }
     // why: a json key is an absolute escape hatch, but never a cross-checkout
-    // one — the tracked corpora live beside `.mstar`, so ownership is the
-    // checkout containing the selected harness, not the harness dir alone.
+    // one — ownership is the checkout that owns the FIRST harness marker in the
+    // path, so a nested checkout inside the selected one is still foreign.
     const keyReal = realpathNearest(resolve(key));
     const rootReal = realpathNearest(resolve(harnessRoot));
-    const checkoutReal = basename(rootReal) === ".mstar" ? dirname(rootReal) : rootReal;
-    const foreign = [`${sep}.mstar${sep}`, `${sep}.agents${sep}`, `${sep}.plans${sep}`].some((marker) => keyReal.includes(marker));
-    if (foreign && keyReal !== checkoutReal && !keyReal.startsWith(checkoutReal + sep)) {
+    const selectedOwner = harnessOwnerOf(rootReal) ?? dirname(rootReal);
+    const keyOwner = harnessOwnerOf(keyReal);
+    if (keyOwner !== null && keyOwner !== selectedOwner) {
       throw new CrossRootRefusedError(`${key} belongs to another checkout's harness state; select that checkout's root instead of routing around it`);
     }
     return key;

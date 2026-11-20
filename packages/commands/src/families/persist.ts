@@ -96,7 +96,7 @@ function errorCode(error: unknown, fallback: string): string {
  * everything else stays the verb-level refusal, not an OS error code. */
 function refusalCodeOf(error: unknown, fallback: string): string {
   const code = errorCode(error, fallback);
-  return code.startsWith("harness.") || code.startsWith("store.") ? code : fallback;
+  return code.startsWith("harness.") || code.startsWith("store.") || code.startsWith("coordination.") ? code : fallback;
 }
 
 function validatePayload(kind: PersistKind, payload: unknown): void {

@@ -159,10 +159,8 @@ function buildHardCustom(base: string): Tree {
 }
 
 function buildRetiredLegacy(base: string): Tree {
-  // why: Retired contract: `.agents/` is a legacy candidate that is never
-  // adopted. Sparse (compass only — no marker set), so classification
-  // reaches the fixed-root resolver and refuses `harness.root-retired`
-  // naming `mstar harness scaffold`; every write still blocks.
+  // why: A `.agents/` layout is ignored, never adopted: without `.mstar` there
+  // is no harness root, so the gate does not classify these writes at all.
   const root = mkdtempSync(join(base, "retired-legacy-"));
   const harness = join(root, ".agents");
   writeCompass(harness, "hard");
@@ -180,9 +178,8 @@ function buildRetiredLegacy(base: string): Tree {
 }
 
 function buildRetiredDeclared(base: string): Tree {
-  // why: Retired contract: `.mstarc` `harness_dir` at the repo root is a
-  // retired declaration — resolution refuses `harness.root-retired`
-  // naming the line and `mstar path resolve`; every write still blocks.
+  // why: `.mstarc` `harness_dir` is ignored: the declared `.harness` dir is not
+  // a root, so these writes are not classified.
   const root = mkdtempSync(join(base, "retired-declared-"));
   writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.harness\n");
   const harness = join(root, ".harness");
@@ -262,23 +259,17 @@ describe("omp Gate-1 coordination write refusal for retired FILE-route inputs", 
     // block/pass matrix is no longer authoritative. With no ACTIVE store,
     // every coordination-document operation is refused instead of falling
     // through to the retired document validator.
-    const mismatches = Object.entries(actual).filter(([, result]) => result !== "block");
+    const mismatches = Object.entries(actual).filter(([key, result]) => {
+      const retired = key.startsWith("retired-legacy/") || key.startsWith("retired-declared/");
+      return retired ? result !== "pass" : result !== "block";
+    });
     expect(Object.keys(actual)).toHaveLength(60);
     expect(mismatches).toEqual([]);
 
-    // why: Retired-contract reasons: the `.mstarc harness_dir` tree blocks with
-    // the retired-declaration refusal (config line + `mstar path resolve`),
-    // and the `.agents/` tree blocks with the retired-candidate refusal
-    // (legacy name + `mstar harness scaffold`).
-    for (const [key, text] of Object.entries(reasons)) {
-      if (key.startsWith("retired-declared/")) {
-        expect(text).toContain("harness_dir");
-        expect(text).toContain("mstar path resolve");
-      }
-      if (key.startsWith("retired-legacy/")) {
-        expect(text).toContain(".agents");
-        expect(text).toContain("mstar harness scaffold");
-      }
+    // why: Retired trees are ignored, not refused — the gate does not classify
+    // them at all, so no retired-contract reason is produced.
+    for (const key of Object.keys(reasons)) {
+      expect(key.startsWith("retired-legacy/") || key.startsWith("retired-declared/")).toBe(false);
     }
   }, 60_000);
 });
