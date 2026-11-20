@@ -46,7 +46,7 @@ PM **必须**在对话中打印本 checklist；不得默认同过。
 
 - **cwd / 写入面**：在本 Phase 的 integration worktree（`integration_worktree_path`，检出 `spec_integration_branch`）直写 tracked 的 `{SPECS_DIR}/` 与 `{ADR_DIR}/`；主 checkout（control root）只承载 gitignored 进程产物。这些写入随 §3.5 的 close commit 进入 integration 分支（**禁止**在主 checkout commit，见 §3.5）。
 - **specs 提升**：满足 `{SPECS_DIR}` 准入（已锁定、跨迭代成立、`primary_spec` / `spec_refs` 权威 —— `iteration-artifact-boundaries.md`「`{SPECS_DIR}/` 准入」）的已审 package specs，由 PM **结构化重写**（**非**整文件复制）写入上述 integration worktree 的 tracked `{SPECS_DIR}/`；同时完成 `Promoted to:` 标注、受影响 plan `primary_spec` / `spec_refs` 与 compass 引用改指权威路径，以及 catalog 登记与 `derived-from` 关系（`mstar catalog register` / `mstar catalog link`）。
-- **ADR 提升**：仅当迭代产生了跨迭代、需长期保留的决策；按 `mstar-doc-corpus` ADR 契约写入 `{ADR_DIR}/implemented/<class>/` 并完成 catalog 登记。无则记 `N/A`。
+- **ADR 提升**：判据是 `mstar-doc-corpus/references/adr.md` § When a record is required，不以「是否跨迭代」收窄；各 plan 已在 `ADR:` 行记录（durable summary）的不重复写，只核对 freshness 与 supersession（`Supersedes:` / `Superseded-by:`），未记录的在此补写到 `{ADR_DIR}/implemented/<class>/` 并完成 catalog 登记。无则记 `N/A`。
 - **记录面**：§3.4 填充 compass `## Corpus Promotion Summary`（specs/ADR 篇数、跳过及原因、各 plan compound disposition 指针）；每篇新 doc 完成 catalog 登记。**若无提升，仍须写明 `无 spec/ADR 提升` 及原因**，不得静默。
 
 ## 3.3 更新 roadmap
