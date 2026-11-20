@@ -8,6 +8,30 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [4.8.1] - 2026-11-20
+
+### Added
+
+- PR-review inline comments may now anchor a finding to a contiguous `RIGHT` line range (`start_line` + `start_side` alongside `line`): the optional GitHub `suggestion` block replaces exactly that anchored range, and the repair stays limited to one file, one hunk, mechanically safe and only after reading the surrounding code. A single-line finding's payload is unchanged.
+- `pr-review post` passes `start_line` / `start_side` through to the Reviews API, refuses a range that is not contiguous or whose sides differ, and verifies against the head-aligned diff at the POSTed `commit_id` that a range's ends sit inside one right-side hunk before posting; the at-most-once 422 fold still treats each inline body as one unit.
+- PR-review findings may now carry one optional GitHub `suggestion` block for a local single-line repair — one file, one hunk, one line, mechanically safe, and only after reading the surrounding code; the fence holds replacement text only, stays anchored to the finding's single `RIGHT` line, and is posted verbatim as part of the inline body.
+- When GitHub rejects inline comments with 422, the folded summary body strips its trailing `suggestion` block only (a quoted fence earlier in the evidence stays) and emits an omission marker when nothing else remains.
+
+### Changed
+
+- Point the ADR record contract at the moment a decision is made: the `clarify` closing summary now marks settled decisions meeting the admission test (`ADR:` or `ADR: none`), and a plan's `## Review Gate Summary` carries `ADR: <path>|none` before `Done`, checked by PM Acceptance.
+- Make the plan-level judgement cover standalone plans too: their record is written before `Done` and acceptance, not in `compound` — whose knowledge scoring could skip the step.
+- Align iteration Phase 3 §3.2 with the contract — `When a record is required` is the only criterion, without narrowing it to cross-iteration decisions; already-recorded decisions are only checked for freshness and supersession.
+
+### Fixed
+
+- Release changelogs now group entries by change kind — `Breaking`, `Added`, `Changed`, `Fixed`, `Removed`, `Security` — instead of collapsing every unlabelled fragment under `### Harness`. An omitted `category` defaults to `Changed`, and `Breaking` renders first.
+- An unreleased changelog fragment whose `category:` is not one of the six changelog kinds is now rejected by the PR test suite, not only by release preparation; the stale `Harness` fragment that failed the last release prep was corrected to `Added`.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 4.8.1**.
+
 ## [4.8.0] - 2026-11-20
 
 ### Harness
