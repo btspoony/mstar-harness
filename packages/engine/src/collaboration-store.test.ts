@@ -946,6 +946,11 @@ describe("collaboration store", () => {
       (write) => write.db.prepare("end").run(),
       (write) => write.db.exec("savepoint inner"),
       (write) => write.close(),
+      // SQLite's prepare skips leading empty statements, so a prefixed
+      // transaction-control statement is still the statement that would run.
+      (write) => write.db.prepare("; commit").run(),
+      (write) => write.db.prepare(";; rollback").run(),
+      (write) => write.db.prepare("  ; /* lead */ -- then\n ; end").run(),
     ];
     for (const attempt of attempts) {
       await expect(withCollaborationWrite(context, attempt, stamp)).rejects.toMatchObject({

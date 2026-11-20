@@ -827,7 +827,13 @@ const TRANSACTION_CONTROL_KEYWORDS: Readonly<Record<string, true>> = {
   RELEASE: true,
 };
 
-/** The first SQL keyword, ignoring leading whitespace and comments. */
+/**
+ * The first SQL keyword, ignoring everything that can precede it without being
+ * a statement of its own: whitespace, line and block comments, and any number
+ * of empty statements (`;`). SQLite's own prepare skips those separators, so
+ * `"; commit"` prepares the `commit` statement - the classifier must skip them
+ * too, or the prefix becomes a transaction-control bypass.
+ */
 function leadingKeyword(sql: string): string {
   let rest = sql;
   for (;;) {
@@ -840,6 +846,10 @@ function leadingKeyword(sql: string): string {
     if (trimmed.startsWith("/*")) {
       const commentEnd = trimmed.indexOf("*/");
       rest = commentEnd === -1 ? "" : trimmed.slice(commentEnd + 2);
+      continue;
+    }
+    if (trimmed.startsWith(";")) {
+      rest = trimmed.slice(1);
       continue;
     }
     const word = /^[A-Za-z]+/.exec(trimmed);
