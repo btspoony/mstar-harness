@@ -95,9 +95,19 @@ async function spawn(context: InvocationContext, argv: string[], cwd = context.c
 function parseFinding(entry: unknown, index: number): ReviewPostPlan["inlineComments"][number] | null {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
   const row = entry as Record<string, unknown>;
-  if (row.path === undefined && row.body === undefined && row.line === undefined) return null;
+  if (row.path === undefined && row.body === undefined && row.line === undefined && row.start_line === undefined && row.start_side === undefined) return null;
   if (typeof row.path !== "string" || !row.path.trim() || typeof row.body !== "string" || !row.body.trim() || typeof row.line !== "number" || !Number.isInteger(row.line) || row.line < 1) throw new UsageError(`findings[${index}] must be {path: string, line: number >= 1, body: string}`);
-  return { path: row.path, line: row.line, side: "RIGHT", body: row.body };
+  // why: GitHub's `start_side` requires `start_line`, so a lone field would
+  // only earn a 422 fold — reject the pair mismatch as a usage error instead.
+  const { start_line: startLine, start_side: startSide } = row;
+  let range: { start_line: number; start_side: "RIGHT" } | undefined;
+  if (startLine !== undefined || startSide !== undefined) {
+    if (startLine === undefined || startSide === undefined) throw new UsageError(`findings[${index}].start_line and .start_side go together - supply both for a range, neither for a single line`);
+    if (typeof startLine !== "number" || !Number.isInteger(startLine) || startLine < 1 || startLine >= row.line) throw new UsageError(`findings[${index}].start_line must be an integer >= 1 and less than line (${row.line})`);
+    if (startSide !== "RIGHT") throw new UsageError(`findings[${index}].start_side must be "RIGHT"`);
+    range = { start_line: startLine, start_side: "RIGHT" };
+  }
+  return { path: row.path, line: row.line, side: "RIGHT", ...range, body: row.body };
 }
 /** why: a folded inline body loses its trailing suggestion block — the summary
  * carries no line anchor, so a suggestion there would neither apply nor read
@@ -136,9 +146,100 @@ function foldComments(body: string, dropped: ReviewPostPlan["inlineComments"]): 
     "",
     ...dropped.map((entry) => {
       const comment = withoutSuggestion(entry.body);
-      return `- \`${entry.path}:${entry.line}\` — ${comment === "" ? "(inline suggestion omitted: no anchor after 422)" : comment}`;
+      const anchor = entry.start_line === undefined ? `${entry.path}:${entry.line}` : `${entry.path}:${entry.start_line}-${entry.line}`;
+      return `- \`${anchor}\` — ${comment === "" ? "(inline suggestion omitted: no anchor after 422)" : comment}`;
     }),
   ].join("\n");
+}
+/** why: the `diff --git` token is not a path source (spaces stay unquoted and a
+ * rename may mix bare/quoted sides), so the right-side path comes from `+++ `;
+ * a quoted token decodes whole, a bare one keeps its spaces, minus any
+ * trailing `\t<timestamp>`, and the accepted spelling is the finding's. */
+function rightSidePath(token: string): string | undefined {
+  // why: git appends a tab + timestamp to a `+++` label whose path has a space,
+  // quoted or not — strip it before deciding how the label is written.
+  const label = token.replace(/\t.*$/, "");
+  const quoted = /^"(.*)"$/.exec(label);
+  const path = quoted === null ? label : decodeGitQuotedPath(quoted[1]!);
+  if (path === undefined || !path.startsWith("b/") || path.length === 2) return undefined;
+  return path.slice(2);
+}
+
+/** why: git escapes non-ASCII paths as octal bytes, so the decode buffers the
+ * bytes first and reads the path back as UTF-8; an unknown escape is unparsable. */
+function decodeGitQuotedPath(quoted: string): string | undefined {
+  const simple: Record<string, number> = { '"': 0x22, "\\": 0x5c, a: 0x07, b: 0x08, t: 0x09, n: 0x0a, v: 0x0b, f: 0x0c, r: 0x0d };
+  const bytes: number[] = [];
+  for (let i = 0; i < quoted.length; i += 1) {
+    const char = quoted[i]!;
+    if (char !== "\\") {
+      bytes.push(...Buffer.from(char, "utf8"));
+      continue;
+    }
+    const escape = quoted[i + 1];
+    if (escape === undefined) return undefined;
+    const mapped = simple[escape];
+    if (mapped !== undefined) {
+      bytes.push(mapped);
+      i += 1;
+      continue;
+    }
+    const octal = /^[0-7]{1,3}/.exec(quoted.slice(i + 1));
+    if (octal === null) return undefined;
+    bytes.push(Number.parseInt(octal[0], 8));
+    i += octal[0].length;
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+/** why: a content line always starts with `+`/`-`/space, so `+++ ` is a file
+ * header only before that file's first `@@`; afterwards it is hunk content and
+ * must never reattribute the file. A boundary that parses no path leaves the
+ * file unset rather than inheriting the previous one. */
+function rightSideHunks(diff: string): Map<string, Array<{ start: number; end: number }>> {
+  const hunks = new Map<string, Array<{ start: number; end: number }>>();
+  let file: string | undefined;
+  let inHunk = false;
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith("diff --git ")) {
+      file = undefined;
+      inHunk = false;
+      continue;
+    }
+    if (!inHunk && line.startsWith("+++ ")) {
+      if (file === undefined) {
+        file = rightSidePath(line.slice(4));
+        if (file !== undefined && !hunks.has(file)) hunks.set(file, []);
+      }
+      continue;
+    }
+    const header = /^@@ -[\d,]+ \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (header !== null) {
+      inHunk = true;
+      if (file === undefined) continue;
+      const start = Number(header[1]);
+      const length = header[2] === undefined ? 1 : Number(header[2]);
+      if (length > 0) hunks.get(file)!.push({ start, end: start + length - 1 });
+    }
+  }
+  return hunks;
+}
+
+/** why: GitHub anchors a `start_line`…`line` pair to one hunk, so a range whose
+ * ends straddle two right-side hunks cannot post; null means every range passes. */
+function rangeHunkProblem(diff: string, comments: ReviewPostPlan["inlineComments"]): string | null {
+  const hunks = rightSideHunks(diff);
+  for (const [index, comment] of comments.entries()) {
+    const startLine = comment.start_line;
+    if (startLine === undefined) continue;
+    const spans = hunks.get(comment.path) ?? [];
+    const inside = spans.some((span) => span.start <= startLine && comment.line <= span.end);
+    if (!inside) {
+      const shown = spans.length === 0 ? "no right-side hunk for this path" : spans.map((span) => `${span.start}-${span.end}`).join(", ");
+      return `comments[${index}] ${comment.path}:${comment.start_line}-${comment.line} must stay inside one right-side hunk (hunks: ${shown})`;
+    }
+  }
+  return null;
 }
 async function execute(verb: Verb, input: Input, context: InvocationContext): Promise<CommandEnvelope> {
   const id = idFor(verb);
@@ -322,17 +423,40 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         if (!Array.isArray(parsed)) throw new UsageError("--findings must be a JSON array");
         comments = parsed.flatMap((entry, index) => { const value = parseFinding(entry, index); return value ? [value] : []; });
       }
-      const viewResult = await spawn(context, ["gh", "pr", "view", String(Number(input.pr)), "--json", "url,headRefOid"]);
+      const viewResult = await spawn(context, ["gh", "pr", "view", String(Number(input.pr)), "--json", "url,headRefOid,baseRefOid"]);
 
       if (viewResult.exitCode !== 0 || viewResult.signal !== null) {
         return refusalEnvelope({ command: id, status: "refused", code: `${id}.unauthorized`, exitCode: 1, message: viewResult.stderr || "GitHub authentication/target lookup failed" , recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review post --pr <number> --body-file <review-file>."});
       }
-      const plan = planReviewPost(JSON.parse(viewResult.stdout), { body, comments });
+      const parsedView: unknown = JSON.parse(viewResult.stdout);
+      const record: Record<string, unknown> = parsedView !== null && typeof parsedView === "object" && !Array.isArray(parsedView) ? Object.fromEntries(Object.entries(parsedView)) : {};
+      const plan = planReviewPost(
+        {
+          ...(typeof record.url === "string" ? { url: record.url } : {}),
+          ...(typeof record.headRefOid === "string" ? { headRefOid: record.headRefOid } : {}),
+        },
+        { body, comments },
+      );
       if (plan.pr !== Number(input.pr)) {
         return refusalEnvelope({ command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1, message: `resolved PR ${plan.pr} does not match requested PR ${input.pr}` , recovery: "Select the pull request matching the resolved review target. Run mstar pr-review post --pr <number> --body-file <review.md>."});
       }
+      // why: GitHub accepts `start_line` + `line` only when both ends sit in
+      // one diff hunk, so a cross-hunk range would 422-fold the whole review
+      // (suggestion included) — verify the anchor against the SAME head the
+      // POST names as commit_id, never the moving current head.
+      if (plan.inlineComments.some((comment) => comment.start_line !== undefined)) {
+        const baseOid = record.baseRefOid;
+        const unavailable = (cause: string) => refusalEnvelope({ command: id, status: "refused", code: `${id}.diff-unavailable`, exitCode: 1, message: `cannot verify the line-range anchor at ${plan.commitId}: ${cause}` , recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr-review post --pr <number> --body-file <review.md>."});
+        if (typeof baseOid !== "string" || !/^[0-9a-f]{7,40}$/.test(baseOid)) return unavailable("pr view returned no baseRefOid");
+        const diff = await spawn(context, ["gh", "api", "-H", "Accept: application/vnd.github.v3.diff", `repos/${plan.ownerRepo}/compare/${baseOid}...${plan.commitId}`]);
+        if (diff.exitCode !== 0 || diff.signal !== null) return unavailable(diff.stderr || "gh api compare failed");
+        const problem = rangeHunkProblem(diff.stdout, plan.inlineComments);
+        if (problem !== null) {
+          return refusalEnvelope({ command: id, status: "refused", code: `${id}.range-spans-hunks`, exitCode: 1, message: `range anchor rejected: ${problem}` , recovery: "Keep start_line and line inside one right-side hunk of the PR diff, or drop start_line/start_side to anchor a single line. Run mstar pr-review post --pr <number> --body-file <review.md>."});
+        }
+      }
       const apiPath = `repos/${plan.ownerRepo}/pulls/${plan.pr}/reviews`;
-      const payload = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]): string => JSON.stringify({ commit_id: plan.commitId, event: plan.event, body: dropped.length ? foldComments(plan.body, dropped) : plan.body, ...(kept.length ? { comments: kept.map(({ path: filePath, line, side, body: commentBody }) => ({ path: filePath, line, side, body: commentBody })) } : {}) });
+      const payload = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]): string => JSON.stringify({ commit_id: plan.commitId, event: plan.event, body: dropped.length ? foldComments(plan.body, dropped) : plan.body, ...(kept.length ? { comments: kept.map(({ path: filePath, line, side, start_line, start_side, body: commentBody }) => ({ path: filePath, line, side, ...(start_line === undefined ? {} : { start_line, start_side }), body: commentBody })) } : {}) });
       const send = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]) => spawn(context, ["gh", "api", "--method", "POST", apiPath, "--input", "-"], context.cwd, payload(kept, dropped));
       let response = await send(plan.inlineComments, []);
       if (response.exitCode !== 0 && /HTTP\s+422|"status"\s*:\s*422/.test(`${response.stderr}\n${response.stdout}`) && plan.inlineComments.length) response = await send([], plan.inlineComments);

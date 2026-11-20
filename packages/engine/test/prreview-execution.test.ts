@@ -90,6 +90,15 @@ const INLINE_OK: ReviewInlineComment = {
   body: "off-by-one: this slice drops the last element",
 };
 
+/** why: a range anchor carries both `start_line` and `start_side` alongside
+ * the end `line`, so the plan must keep the pair rather than normalize it. */
+const INLINE_RANGE: ReviewInlineComment = {
+  ...INLINE_OK,
+  line: 57,
+  start_line: 55,
+  start_side: "RIGHT",
+};
+
 describe("planReviewPost — pr-review.md § Comment posting", () => {
   test("fork-PR fixture: owner/repo resolves from url (BASE repo), never the fork headRepository", () => {
     const plan = planReviewPost(FORK_PR_VIEW, { body: "review body", comments: [INLINE_OK] });
@@ -155,6 +164,21 @@ describe("planReviewPost — pr-review.md § Comment posting", () => {
     expect(() => payload([{ ...INLINE_OK, side: "LEFT" }])).toThrow(/side/);
     expect(() => payload([{ ...INLINE_OK, path: "  " }])).toThrow(/path/);
     expect(() => payload([{ ...INLINE_OK, body: "" }])).toThrow(/body/);
+  });
+
+  test("a contiguous RIGHT-side range is kept; every malformed range throws", () => {
+    const payload = (comments: readonly unknown[]) =>
+      planReviewPost(BASE_PR_VIEW, { body: "b", comments: comments as readonly ReviewInlineComment[] });
+    expect(payload([INLINE_RANGE]).inlineComments).toEqual([INLINE_RANGE]);
+    expect(payload([INLINE_OK]).inlineComments).toEqual([INLINE_OK]);
+    expect(Object.keys(payload([INLINE_OK]).inlineComments[0]!)).toEqual(["path", "line", "side", "body"]);
+    expect(() => payload([{ ...INLINE_RANGE, start_line: 57 }])).toThrow(/start_line must be less than line/);
+    expect(() => payload([{ ...INLINE_RANGE, start_line: 58 }])).toThrow(/start_line must be less than line/);
+    expect(() => payload([{ ...INLINE_RANGE, start_line: 1.5 }])).toThrow(/start_line must be a positive integer/);
+    expect(() => payload([{ ...INLINE_RANGE, start_line: 0 }])).toThrow(/start_line must be a positive integer/);
+    expect(() => payload([{ ...INLINE_RANGE, start_side: "LEFT" }])).toThrow(/start_side/);
+    expect(() => payload([{ ...INLINE_RANGE, start_side: undefined }])).toThrow(/go together/);
+    expect(() => payload([{ ...INLINE_OK, start_side: "RIGHT" }])).toThrow(/go together/);
   });
 
   test("omitted comments plan a review with none (POST payload may carry zero inline comments)", () => {
@@ -356,7 +380,9 @@ describe("prReviewSeatPrompt — ingredient skeleton (pr-review.md § Seat promp
     expect(prompt).toContain("finding-format.md");
     expect(prompt).toContain("- **Merge class**: must-fix | should-fix | may-fix | nit` immediately after `- **Confidence**`");
     expect(prompt).toContain("one optional GitHub ```suggestion block per finding");
-    expect(prompt).toContain("local (one file, one hunk, one line)");
+    expect(prompt).toContain("local (one file, one hunk, one contiguous line range)");
+    expect(prompt).toContain("`start_line` + `start_side`");
+    expect(prompt).toContain("replaces exactly the anchored line or range");
     expect(prompt).toContain("The fence carries replacement text only");
     // Stage 1 collects EVIDENCE — no findings table, no verdict.
     const stage1 = prReviewSeatPrompt({ ...SEAT, stage: 1, tier: "deep" });

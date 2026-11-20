@@ -53,6 +53,138 @@ function diagnosticsOf(envelope: CommandEnvelope, label: string): readonly unkno
   return diagnostics;
 }
 
+/** why: the hunk check needs a diff whose right-side spans are 1-5 and 30-35. */
+const RANGE_DIFF = [
+  "diff --git a/src/a.ts b/src/a.ts",
+  "--- a/src/a.ts",
+  "+++ b/src/a.ts",
+  "@@ -1,5 +1,5 @@",
+  " one",
+  " two",
+  " three",
+  " four",
+  " five",
+  "@@ -30,6 +30,6 @@",
+  " thirty",
+  " thirty-one",
+  " thirty-two",
+  " thirty-three",
+  " thirty-four",
+  " thirty-five",
+  "",
+].join("\n");
+
+/** why: an added content line `++ b/src/a.ts` renders as `+++ b/src/a.ts`, so
+ * the fixture proves file identity never comes from a `+++` line. */
+const CONTENT_DIFF = [
+  "diff --git a/src/c.ts b/src/c.ts",
+  "--- a/src/c.ts",
+  "+++ b/src/c.ts",
+  "@@ -1,3 +1,4 @@",
+  " one",
+  " two",
+  "+++ b/src/a.ts",
+  " three",
+  "@@ -30,2 +31,2 @@",
+  " thirty",
+  " thirty-one",
+  "diff --git a/src/a.ts b/src/a.ts",
+  "--- a/src/a.ts",
+  "+++ b/src/a.ts",
+  "@@ -1,2 +1,2 @@",
+  " alpha",
+  " beta",
+  "",
+].join("\n");
+
+/** why: a quoted header is the only signal for a path git must escape, and its
+ * octal bytes must decode back to the spelling a finding uses. */
+const QUOTED_DIFF = [
+  "diff --git a/src/a.ts b/src/a.ts",
+  "--- a/src/a.ts",
+  "+++ b/src/a.ts",
+  "@@ -1,2 +1,2 @@",
+  " alpha",
+  " beta",
+  'diff --git "a/src/q\\"uote.ts" "b/src/q\\"uote.ts"',
+  '--- "a/src/q\\"uote.ts"',
+  '+++ "b/src/q\\"uote.ts"',
+  "@@ -30,2 +31,2 @@",
+  " thirty",
+  " thirty-one",
+  'diff --git "a/src/\\346\\227\\245.ts" "b/src/\\346\\227\\245.ts"',
+  '--- "a/src/\\346\\227\\245.ts"',
+  '+++ "b/src/\\346\\227\\245.ts"',
+  "@@ -50,2 +51,2 @@",
+  " fifty",
+  " fifty-one",
+  "",
+].join("\n");
+
+/** why: git leaves spaces unquoted, so the `diff --git` boundary carries an
+ * ambiguous token pair; only `+++ ` names the right-side path. */
+const SPACE_DIFF = [
+  "diff --git a/src/a.ts b/src/a.ts",
+  "--- a/src/a.ts",
+  "+++ b/src/a.ts",
+  "@@ -1,2 +1,2 @@",
+  " alpha",
+  " beta",
+  "diff --git a/src/file name.ts b/src/file name.ts",
+  "--- a/src/file name.ts",
+  "+++ b/src/file name.ts",
+  "@@ -30,2 +31,2 @@",
+  " thirty",
+  " thirty-one",
+  "",
+].join("\n");
+
+/** why: a rename may mix a bare old side with a quoted new side; `+++ ` is the
+ * only line that names the destination the review comments on. */
+const RENAME_DIFF = [
+  'diff --git a/legacy-name.ts "b/src/q\\"uote.ts"',
+  "similarity index 90%",
+  "rename from legacy-name.ts",
+  'rename to src/q"uote.ts',
+  "--- a/legacy-name.ts",
+  '+++ "b/src/q\\"uote.ts"',
+  "@@ -40,2 +41,2 @@",
+  " forty",
+  " forty-one",
+  "",
+].join("\n");
+
+/** why: git tabs a `+++` label whose path has a literal space and still
+ * C-quotes the non-ASCII byte, so the tab must go before the quote split. */
+const TAB_DIFF = [
+  "diff --git a/src/a.ts b/src/a.ts",
+  "--- a/src/a.ts",
+  "+++ b/src/a.ts",
+  "@@ -1,2 +1,2 @@",
+  " alpha",
+  " beta",
+  'diff --git "a/src/file \\346\\227\\245.ts" "b/src/file \\346\\227\\245.ts"',
+  '--- "a/src/file \\346\\227\\245.ts"',
+  '+++ "b/src/file \\346\\227\\245.ts"\t2026-01-01 00:00:00 +0000',
+  "@@ -60,2 +61,2 @@",
+  " sixty",
+  " sixty-one",
+  "",
+].join("\n");
+
+/** why: the 422 fixture carries one range comment, so its anchor must be inside
+ * a right-side hunk before the fold test can reach the POST. */
+const FOLD_DIFF = [
+  "diff --git a/src/g.ts b/src/g.ts",
+  "--- a/src/g.ts",
+  "+++ b/src/g.ts",
+  "@@ -20,3 +20,3 @@",
+  " twenty",
+  " twenty-one",
+  " twenty-two",
+  "",
+].join("\n");
+
 describe("pr-review command family", () => {
 
   test("computes tally from fixture findings and validates fixture report verdicts", async () => {
@@ -90,7 +222,7 @@ describe("pr-review command family", () => {
     const unauthorized = await post.execute({ pr: "42", bodyFile }, context);
     expect(unauthorized.status).toBe("refused");
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.argv).toEqual(["gh", "pr", "view", "42", "--json", "url,headRefOid"]);
+    expect(calls[0]!.argv).toEqual(["gh", "pr", "view", "42", "--json", "url,headRefOid,baseRefOid"]);
 
     calls.length = 0;
     context.effects.spawn = async (request) => {
@@ -114,6 +246,220 @@ describe("pr-review command family", () => {
     expect(JSON.parse(calls[1]!.stdin ?? "")).toMatchObject({ event: "COMMENT", body: "Review summary", commit_id: "abcdef0123456" });
   });
 
+  test("post passes a contiguous range anchor through, and omits it for a single line", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([
+      { path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT", body: "Range finding" },
+      { path: "src/b.ts", line: 4, body: "Single-line finding" },
+    ]));
+    const post = command("pr-review.post");
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: RANGE_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return review;
+      return request.argv[2] === "-H" ? diff : posted;
+    };
+    const result = await post.execute({ pr: "42", bodyFile, findings }, context);
+    expect(result.status).toBe("ok");
+    expect(calls[1]!.argv).toEqual(["gh", "api", "-H", "Accept: application/vnd.github.v3.diff", "repos/owner/repo/compare/1234567...abcdef0123456"]);
+    expect(JSON.parse(calls[2]!.stdin ?? "")).toMatchObject({
+      comments: [
+        { path: "src/a.ts", line: 4, side: "RIGHT", start_line: 2, start_side: "RIGHT", body: "Range finding" },
+        { path: "src/b.ts", line: 4, side: "RIGHT", body: "Single-line finding" },
+      ],
+    });
+    // why: this stdin is the payload the command itself serialized above.
+    const body = JSON.parse(calls[2]!.stdin ?? "") as { comments: Record<string, unknown>[] };
+    const single = body.comments[1]!;
+    expect(Object.keys(single)).toEqual(["path", "line", "side", "body"]);
+    // why: a backwards range is a caller mistake, never a 422-fold candidate.
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 12, start_line: 12, start_side: "RIGHT", body: "Backwards" }]));
+    const rejected = await post.execute({ pr: "42", bodyFile, findings }, context);
+    expect(rejected).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(rejected.message).toContain("findings[0].start_line must be an integer >= 1 and less than line (12)");
+  });
+
+  test("a range spanning two right-side hunks is refused before any POST", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 31, start_line: 4, start_side: "RIGHT", body: "Cross-hunk" }]));
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: RANGE_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return review;
+      return request.argv[2] === "-H" ? diff : posted;
+    };
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks", exitCode: 1 });
+    expect(refused.message).toContain("comments[0] src/a.ts:4-31");
+    expect(refused.message).toContain("hunks: 1-5, 30-35");
+    expect(calls.map((call) => call.argv[2] === "-H" ? "compare" : call.argv[2] ?? call.argv[1])).toEqual(["view", "compare"]);
+    // why: one hunk down, the same anchor is legal and must reach the POST.
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT", body: "In-hunk" }]));
+    calls.length = 0;
+    const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(okResult.status).toBe("ok");
+    expect(JSON.parse(calls[2]!.stdin ?? "")).toMatchObject({ comments: [{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT" }] });
+  });
+
+  test("an added `+++ b/<path>` content line never reattributes a file's hunks", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: CONTENT_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return review;
+      return request.argv[2] === "-H" ? diff : posted;
+    };
+    // why: 31-32 is src/c.ts's second hunk, which follows the `+++ b/src/a.ts`
+    // content line and must keep that attribution.
+    writeFileSync(findings, JSON.stringify([{ path: "src/c.ts", line: 32, start_line: 31, start_side: "RIGHT", body: "Content hijack" }]));
+    const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(okResult.status).toBe("ok");
+    // why: the same span on src/a.ts is not in that file's 1-2 hunk.
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 32, start_line: 31, start_side: "RIGHT", body: "Wrong file" }]));
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks" });
+    expect(refused.message).toContain("comments[0] src/a.ts:31-32");
+    expect(refused.message).toContain("hunks: 1-2");
+  });
+
+  test("a quoted diff header keeps its own hunks, decoded to the finding's spelling", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: QUOTED_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return review;
+      return request.argv[2] === "-H" ? diff : posted;
+    };
+    // why: the escaped path (and the octal-encoded one) must match the decoded
+    // spelling, while neither may inherit the previous file's hunks.
+    for (const [file, start, line] of [['src/q"uote.ts', 31, 32], ["src/日.ts", 51, 52]] as const) {
+      writeFileSync(findings, JSON.stringify([{ path: file, line, start_line: start, start_side: "RIGHT", body: "Quoted path" }]));
+      const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+      expect(okResult.status, file).toBe("ok");
+    }
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 32, start_line: 31, start_side: "RIGHT", body: "Wrong file" }]));
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks" });
+    expect(refused.message).toContain("comments[0] src/a.ts:31-32");
+    expect(refused.message).toContain("hunks: 1-2");
+  });
+
+  test("an unquoted spaced path keeps its own hunks", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: SPACE_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return review;
+      return request.argv[2] === "-H" ? diff : posted;
+    };
+    writeFileSync(findings, JSON.stringify([{ path: "src/file name.ts", line: 32, start_line: 31, start_side: "RIGHT", body: "Spaced path" }]));
+    const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(okResult.status).toBe("ok");
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 32, start_line: 31, start_side: "RIGHT", body: "Wrong file" }]));
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks" });
+    expect(refused.message).toContain("comments[0] src/a.ts:31-32");
+    expect(refused.message).toContain("hunks: 1-2");
+  });
+
+  test("a mixed bare/quoted rename attributes hunks to the +++ destination", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: RENAME_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return review;
+      return request.argv[2] === "-H" ? diff : posted;
+    };
+    writeFileSync(findings, JSON.stringify([{ path: 'src/q"uote.ts', line: 42, start_line: 41, start_side: "RIGHT", body: "Rename destination" }]));
+    const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(okResult.status).toBe("ok");
+    // why: the bare old-side name owns no right-side hunk in this diff.
+    writeFileSync(findings, JSON.stringify([{ path: "legacy-name.ts", line: 42, start_line: 41, start_side: "RIGHT", body: "Rename source" }]));
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks" });
+    expect(refused.message).toContain("no right-side hunk for this path");
+  });
+
+  test("a tab-suffixed quoted label still yields the path a finding spells", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: TAB_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return review;
+      return request.argv[2] === "-H" ? diff : posted;
+    };
+    writeFileSync(findings, JSON.stringify([{ path: "src/file 日.ts", line: 62, start_line: 61, start_side: "RIGHT", body: "Spaced quoted path" }]));
+    const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(okResult.status).toBe("ok");
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 62, start_line: 61, start_side: "RIGHT", body: "Wrong file" }]));
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks" });
+    expect(refused.message).toContain("hunks: 1-2");
+  });
+
+  test("a range without a pinned base is refused instead of validated against a moving head", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 4, start_line: 2, start_side: "RIGHT", body: "Range finding" }]));
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+    };
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.diff-unavailable", exitCode: 1 });
+    expect(refused.message).toContain("at abcdef0123456: pr view returned no baseRefOid");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a lone range field is a usage refusal, never a silent drop", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([{ start_side: "RIGHT" }]));
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(refused.message).toContain("findings[0] must be {path: string, line: number >= 1, body: string}");
+    expect(calls).toHaveLength(0);
+  });
+
   test("422 retry folds the body without its suggestion fence and drops inline comments", async () => {
     const { cwd, context, calls } = fixture();
     const bodyFile = path.join(cwd, "body.md");
@@ -126,21 +472,28 @@ describe("pr-review command family", () => {
       { path: "src/d.ts", line: 7, body: "Mid-body example\n\nEvidence: docs show:\n\n```suggestion\n// quoted only\n```\n\nFix sketch: keep the prose after the quote." },
       { path: "src/e.ts", line: 11, body: "Fence inside replacement\n\nFix sketch: keep the marker.\n\n```suggestion\nconst a = 1;\n```\nconst b = 2;\n```" },
       { path: "src/f.ts", line: 5, body: "Race on cache\n\nEvidence:\n\n```suggestion\ncache.set(k,v)\n```\n\nImpact: lost writes.\n\n```ts\ncache.set(k, v)\n```" },
+      { path: "src/g.ts", line: 22, start_line: 20, start_side: "RIGHT", body: "Range finding\n\nFix sketch: tighten it.\n\n```suggestion\nconst a = 1;\nconst b = 2;\n```" },
     ]));
     let apiCalls = 0;
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
-      if (request.argv[1] === "pr") return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+      if (request.argv[1] === "pr") return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+      if (request.argv[2] === "-H") return { exitCode: 0, signal: null, stdout: FOLD_DIFF, stderr: "" };
       apiCalls += 1;
       if (apiCalls === 1) return { exitCode: 1, signal: null, stdout: "", stderr: 'HTTP 422: "line" must be part of the diff' };
       return { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-2" }), stderr: "" };
     };
     const result = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
     expect(result.status).toBe("ok");
-    expect(calls).toHaveLength(3);
-    const retried = JSON.parse(calls[2]!.stdin ?? "") as { body: string; comments?: unknown };
+    expect(calls).toHaveLength(4);
+    const retried = JSON.parse(calls[3]!.stdin ?? "") as { body: string; comments?: unknown };
     expect(retried.comments).toBeUndefined();
     expect(retried.body).toContain("## Inline comments folded into this summary");
+    // why: a range comment keeps its start anchor in the fold; single-line
+    // comments stay `path:line`.
+    expect(retried.body).toContain("`src/g.ts:20-22` — Range finding");
+    expect(retried.body).toContain("`src/a.ts:3` — Unhandled null deref");
+    expect(retried.body).toContain("`src/b.ts:9` — (inline suggestion omitted: no anchor after 422)");
     expect(retried.body).toContain("Unhandled null deref");
     expect(retried.body).toContain("Fix sketch: guard it.");
     expect(retried.body).toContain("(inline suggestion omitted: no anchor after 422)");

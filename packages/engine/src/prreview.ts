@@ -1675,12 +1675,16 @@ export function lines_missing_fence(text: string): boolean {
 // planReviewPost — § Comment posting procedure steps 1-2 (deterministic part)
 // ---------------------------------------------------------------------------
 
-/** One inline review comment: `path` + `line` in the three-dot diff, RIGHT
- * side only (§ Comment posting step 2 — comments[] entry shape). */
+/** One inline review comment: `path` + `line` (the anchor's last line) in the
+ * three-dot diff, RIGHT side only (§ Comment posting step 2 — comments[] entry
+ * shape). `start_line` + `start_side` widen the anchor to a contiguous range;
+ * a suggestion then replaces exactly that range. */
 export type ReviewInlineComment = {
   path: string;
   line: number;
   side: "RIGHT";
+  start_line?: number;
+  start_side?: "RIGHT";
   body: string;
 };
 
@@ -1733,10 +1737,30 @@ function requireInlineComment(comment: ReviewInlineComment, index: number): Revi
   if (comment.side !== "RIGHT") {
     throwPlanError(what, `side must be "RIGHT" (three-dot diff side) - got ${JSON.stringify(String(comment.side))}`);
   }
+  if (comment.start_line !== undefined) {
+    if (!Number.isInteger(comment.start_line) || comment.start_line < 1) {
+      throwPlanError(what, `start_line must be a positive integer - got ${JSON.stringify(String(comment.start_line))}`);
+    }
+    if (comment.start_line >= comment.line) {
+      throwPlanError(what, `start_line must be less than line (a contiguous range ending at line) - got ${comment.start_line} >= ${comment.line}`);
+    }
+  }
+  if (comment.start_side !== undefined && comment.start_side !== "RIGHT") {
+    throwPlanError(what, `start_side must be "RIGHT" when supplied - got ${JSON.stringify(String(comment.start_side))}`);
+  }
+  if ((comment.start_line === undefined) !== (comment.start_side === undefined)) {
+    throwPlanError(what, "start_line and start_side go together - supply both for a range, neither for a single line");
+  }
   if (typeof comment.body !== "string" || comment.body.trim() === "") {
     throwPlanError(what, "body must be a non-empty string");
   }
-  return { path: comment.path, line: comment.line, side: "RIGHT", body: comment.body };
+  return {
+    path: comment.path,
+    line: comment.line,
+    side: "RIGHT",
+    ...(comment.start_line === undefined ? {} : { start_line: comment.start_line, start_side: "RIGHT" as const }),
+    body: comment.body,
+  };
 }
 
 /**
@@ -1753,7 +1777,9 @@ function requireInlineComment(comment: ReviewInlineComment, index: number): Revi
  * it.
  * - `event` is always the literal `"COMMENT"`; no other value exists in
  * this contract.
- * - Inline comments validated per-entry (path / positive line / RIGHT).
+ * - Inline comments validated per-entry (path / positive line / RIGHT /
+ *   optional contiguous range whose `start_line` precedes `line` and whose
+ *   `start_side` is `RIGHT`).
  */
 export function planReviewPost(
   prView: { url?: string; headRepository?: unknown; headRefOid?: string },
@@ -2214,8 +2240,8 @@ export function prReviewSeatPrompt(opts: PrReviewSeatPromptOptions): string {
   } else {
     lines.push("- Return FINDINGS in your result payload following finding-format.md, each citing code you OPENED YOURSELF.");
     lines.push(`- Every accepted finding carries \`- **Merge class**: ${MERGE_CLASSES.join(" | ")}\` immediately after \`- **Confidence**\`.`);
-    lines.push("- Return findings. The ONLY fix artifact you may include is one optional GitHub ```suggestion block per finding, and only when the repair is local (one file, one hunk, one line), mechanically safe, and you READ the surrounding code. The fence carries replacement text only \u2014 no explanations or other Markdown inside it.");
-    lines.push("- Never suggest a repair spanning hunks or files, never change behavior beyond the stated defect, and never suggest without reading the surrounding code. The finding stays anchored to ONE `RIGHT` diff line; the suggestion is part of that finding's inline body (title + evidence + impact + fix sketch + suggestion), posted verbatim.");
+    lines.push("- Return findings. The ONLY fix artifact you may include is one optional GitHub ```suggestion block per finding, and only when the repair is local (one file, one hunk, one contiguous line range), mechanically safe, and you READ the surrounding code. The fence carries replacement text only \u2014 no explanations or other Markdown inside it.");
+    lines.push("- Never suggest a repair spanning hunks, files, or non-contiguous lines, never change behavior beyond the stated defect, and never suggest without reading the surrounding code. The finding stays anchored to ONE `RIGHT` diff line, or one contiguous `RIGHT` range declared as `start_line` + `start_side`; the suggestion replaces exactly the anchored line or range and is part of that finding's inline body (title + evidence + impact + fix sketch + suggestion), posted verbatim.");
   }
   lines.push("- Your sandbox may be WRITE-BLOCKED (read-only / EPERM): NEVER depend on writing files. Writable seats may best-effort write their evidence file; the contract never requires it \u2014 the MAIN AGENT writes and consolidates all evidence files from seat payloads.");
   lines.push(`- Evidence-file slug mandate: \`${slug}\` (\`<domain>-<seat>\`, unique per seat) \u2014 use it in any file references you report.`);
