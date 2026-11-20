@@ -146,7 +146,8 @@ function foldComments(body: string, dropped: ReviewPostPlan["inlineComments"]): 
     "",
     ...dropped.map((entry) => {
       const comment = withoutSuggestion(entry.body);
-      return `- \`${entry.path}:${entry.line}\` — ${comment === "" ? "(inline suggestion omitted: no anchor after 422)" : comment}`;
+      const anchor = entry.start_line === undefined ? `${entry.path}:${entry.line}` : `${entry.path}:${entry.start_line}-${entry.line}`;
+      return `- \`${anchor}\` — ${comment === "" ? "(inline suggestion omitted: no anchor after 422)" : comment}`;
     }),
   ].join("\n");
 }

@@ -172,6 +172,19 @@ const TAB_DIFF = [
   "",
 ].join("\n");
 
+/** why: the 422 fixture carries one range comment, so its anchor must be inside
+ * a right-side hunk before the fold test can reach the POST. */
+const FOLD_DIFF = [
+  "diff --git a/src/g.ts b/src/g.ts",
+  "--- a/src/g.ts",
+  "+++ b/src/g.ts",
+  "@@ -20,3 +20,3 @@",
+  " twenty",
+  " twenty-one",
+  " twenty-two",
+  "",
+].join("\n");
+
 describe("pr-review command family", () => {
 
   test("computes tally from fixture findings and validates fixture report verdicts", async () => {
@@ -459,21 +472,28 @@ describe("pr-review command family", () => {
       { path: "src/d.ts", line: 7, body: "Mid-body example\n\nEvidence: docs show:\n\n```suggestion\n// quoted only\n```\n\nFix sketch: keep the prose after the quote." },
       { path: "src/e.ts", line: 11, body: "Fence inside replacement\n\nFix sketch: keep the marker.\n\n```suggestion\nconst a = 1;\n```\nconst b = 2;\n```" },
       { path: "src/f.ts", line: 5, body: "Race on cache\n\nEvidence:\n\n```suggestion\ncache.set(k,v)\n```\n\nImpact: lost writes.\n\n```ts\ncache.set(k, v)\n```" },
+      { path: "src/g.ts", line: 22, start_line: 20, start_side: "RIGHT", body: "Range finding\n\nFix sketch: tighten it.\n\n```suggestion\nconst a = 1;\nconst b = 2;\n```" },
     ]));
     let apiCalls = 0;
     context.effects.spawn = async (request) => {
       calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
-      if (request.argv[1] === "pr") return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+      if (request.argv[1] === "pr") return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+      if (request.argv[2] === "-H") return { exitCode: 0, signal: null, stdout: FOLD_DIFF, stderr: "" };
       apiCalls += 1;
       if (apiCalls === 1) return { exitCode: 1, signal: null, stdout: "", stderr: 'HTTP 422: "line" must be part of the diff' };
       return { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-2" }), stderr: "" };
     };
     const result = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
     expect(result.status).toBe("ok");
-    expect(calls).toHaveLength(3);
-    const retried = JSON.parse(calls[2]!.stdin ?? "") as { body: string; comments?: unknown };
+    expect(calls).toHaveLength(4);
+    const retried = JSON.parse(calls[3]!.stdin ?? "") as { body: string; comments?: unknown };
     expect(retried.comments).toBeUndefined();
     expect(retried.body).toContain("## Inline comments folded into this summary");
+    // why: a range comment keeps its start anchor in the fold; single-line
+    // comments stay `path:line`.
+    expect(retried.body).toContain("`src/g.ts:20-22` — Range finding");
+    expect(retried.body).toContain("`src/a.ts:3` — Unhandled null deref");
+    expect(retried.body).toContain("`src/b.ts:9` — (inline suggestion omitted: no anchor after 422)");
     expect(retried.body).toContain("Unhandled null deref");
     expect(retried.body).toContain("Fix sketch: guard it.");
     expect(retried.body).toContain("(inline suggestion omitted: no anchor after 422)");
