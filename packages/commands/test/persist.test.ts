@@ -50,6 +50,22 @@ function definition(id: string): CommandDefinition {
 const REVIEW = { schema: "mstar.review/v1", verdict: "ship it", summary_md: "Review summary.", findings: [] };
 
 describe("persist command family", () => {
+  test("a blank harness selector is absent and a relative one resolves against the invocation cwd", async () => {
+    const { harness, context } = setup();
+    const blankDoc = join(harness, "blank-selector.json");
+    await definition("persist.write").execute({ kind: "json", key: blankDoc, input: "{}", harness: "   " }, context);
+    expect(existsSync(blankDoc)).toBe(true);
+
+    const relativeDoc = join(harness, "relative-selector.json");
+    await definition("persist.write").execute({ kind: "json", key: relativeDoc, input: "{}", harness: ".mstar" }, context);
+    expect(existsSync(relativeDoc)).toBe(true);
+
+    // why: a blank selector must not root the store at the process cwd and
+    // silently split state; delete reads the invocation root.
+    await definition("persist.delete").execute({ kind: "json", key: blankDoc, harness: "" }, context);
+    expect(existsSync(blankDoc)).toBe(false);
+  });
+
   test("registers default write under the stable persist.write tool identity", () => {
     expect(definition("persist.write").cli.path).toEqual(["persist", "write"]);
     expect(definition("persist.write").id.replace(/[.-]/g, "_")).toBe("persist_write");

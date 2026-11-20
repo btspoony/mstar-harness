@@ -5,6 +5,7 @@ import { engineErrorFacts } from "./family-refusal.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEffects, CommandEnvelope, InvocationContext } from "../types.js";
 import type { RunningDashboard } from "../dashboard/server.js";
+import { callHarness } from "./root-selector.js";
 const id = "dashboard";
 const inputSchema = z.object({
   port: z.coerce.number().int().min(0).max(65535).default(0),
@@ -86,7 +87,7 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
       diagnostics: decodeInputDiagnostics(parsed.error, input),
     });
   }
-  const harnessDir = parsed.data.harness ?? context.controlRoot;
+  const harnessDir = callHarness(parsed.data.harness, context);
   if (harnessDir === null) {
     return failure("dashboard.harness-unavailable", new Error("no {HARNESS_DIR} found from the working directory"));
   }

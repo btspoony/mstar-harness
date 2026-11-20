@@ -821,7 +821,8 @@ export function resolveScaffoldDirs(
  * Existing content is read by the resolvers, not re-homed by the scaffold.
  *
  * Idempotent: an existing `.mstarc`, directory, template or README is never
- * rewritten. Returns the fixed `<root>/.mstar` harness dir; a
+ * rewritten. Returns the fixed `<main worktree>/.mstar` harness dir — a linked
+ * checkout targets its main worktree, never its own tree — and a
  * `options.harnessDir` must equal it (see `resolveScaffoldDirs`).
  * The scaffold does NOT create a legacy `residuals.json` register: the issue
  * store (`store.db`) is the findings authority and the register is migration

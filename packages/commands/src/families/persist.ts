@@ -16,6 +16,7 @@ import { resolveCliPath } from "../host-health.js";
 import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope } from "../types.js";
+import { callHarness } from "./root-selector.js";
 
 const payloadContracts = persistPayloadContracts();
 const kinds = Object.keys(payloadContracts) as ["review", "json"];
@@ -98,14 +99,13 @@ function validatePayload(kind: PersistKind, payload: unknown): void {
 }
 
 /**
- * Resolve the store for one persist verb. `root` is the invocation's
- * server-owned control root: the transport's cwd probe for the CLI and the
- * launcher pin for `mstar mcp --harness`, never a client-supplied value. The
- * root is therefore not a per-call capability a caller can relocate: the
- * FsStore classifies protected targets against the same root it writes, so a
- * client that could choose it could bypass that classification. An injected
- * `--store`/`MSTAR_STORE_MODULE` module keeps precedence — it owns its own
- * root — and a null root keeps the ambient artifact-store fallback.
+ * Resolve the store for one persist verb. `root` is the call's validated
+ * harness (`input.harness`) when one is named, otherwise the invocation root:
+ * the launcher pin on a pinned MCP connection, the CLI-derived fixed root
+ * otherwise. A blank selector is absent, never a cwd-relative store, and the
+ * FsStore classifies protected targets against the same root it writes. An
+ * injected `--store`/`MSTAR_STORE_MODULE` module keeps precedence — it owns its
+ * own root — and a null root keeps the ambient artifact-store fallback.
  */
 async function resolveStore(storeFlag: string | undefined, root: string | null): Promise<ArtifactStore> {
   if (storeFlag !== undefined) return guardInjectedStore(await loadStoreModule(storeFlag));
@@ -177,7 +177,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         try { payload = JSON.parse(raw); } catch (error) { return refusalEnvelope({ command: id, status: "refused", code: "persist.invalid-json", exitCode: 1, message: `persist payload is not valid JSON: ${messageOf(error)}`, recovery: "Correct the JSON syntax, then run mstar persist write review --key <key> --input <json> to retry." }); }
         try {
           validatePayload(kind, payload);
-          const store = await resolveStore(input.store, input.harness ?? context.controlRoot);
+          const store = await resolveStore(input.store, callHarness(input.harness, context));
           await store.put({ kind, key: input.key, payload, ...(input.schema === undefined ? {} : { schema: input.schema }) });
           return ok(id, { kind, key: input.key });
         } catch (error) {
@@ -198,7 +198,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const keyProblem = invalidKey(kind, input.key);
         if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem, recovery: "Correct the key against the supported kind and key constraints, then run mstar persist get review --key <key> to retry." });
         try {
-          const store = await resolveStore(input.store, input.harness ?? context.controlRoot);
+          const store = await resolveStore(input.store, callHarness(input.harness, context));
           if (input.versioned === true) {
             const root = (store as ArtifactStore & { root?: unknown }).root;
             if (typeof root !== "string") return refusalEnvelope({ command: id, status: "refused", code: "coordination.local-store-required", exitCode: 1, message: "versioned reads require the local FsStore", recovery: "Read versioned bytes through the local FsStore; run mstar persist get review --key <key> --versioned." });
@@ -230,7 +230,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         if (isFailure(kind)) return kind;
         if (kind === "json") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "ArtifactStore json keys are absolute paths and cannot be listed" });
         try {
-          const store = await resolveStore(input.store, input.harness ?? context.controlRoot);
+          const store = await resolveStore(input.store, callHarness(input.harness, context));
           if (typeof store.list !== "function") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "store does not support list" });
           const refs = await store.list(kind);
           return ok(id, refs.map(({ key }) => key).sort());
@@ -251,7 +251,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const keyProblem = invalidKey(kind, input.key);
         if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem, recovery: "Correct the key against the supported kind and key constraints, then run mstar persist delete review --key <key> to retry." });
         try {
-          const store = await resolveStore(input.store, input.harness ?? context.controlRoot);
+          const store = await resolveStore(input.store, callHarness(input.harness, context));
           if (typeof store.delete !== "function") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "store does not support delete" });
           await store.delete({ kind, key: input.key });
           return ok(id, { kind, key: input.key, deleted: true });

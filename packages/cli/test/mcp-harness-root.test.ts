@@ -79,9 +79,8 @@ async function competingCwdHarness(): Promise<{ harness: string; cwd: string }> 
 }
 
 /** why: Two roots a persist verb could distinguish: each owns the SAME review key
- * (`sdd/_reviews/<key>.json`) with a different payload. The persist family
- * publishes no root selector, so on a shared connection neither is reachable
- * — the refusal lands before either document can be touched.
+ * (`sdd/_reviews/<key>.json`) with a different payload. The published `harness`
+ * selector chooses one per call, so a write through one never touches the other.
  */
 const PERSIST_PROBE_KEY = "root-probe";
 
