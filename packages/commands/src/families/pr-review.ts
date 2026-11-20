@@ -102,9 +102,10 @@ function parseFinding(entry: unknown, index: number): ReviewPostPlan["inlineComm
 /** A folded inline body loses its trailing suggestion block: the summary
  * carries no line anchor, so a suggestion there would neither apply nor read
  * as an inline fix. The contract puts that block last (title / evidence /
- * impact / fix sketch, then the suggestion), so only the LAST complete
- * line-start `suggestion` block is removed — an earlier fence quoted as a
- * Markdown example in the evidence stays intact. */
+ * impact / fix sketch, then the suggestion), so only a TRAILING last complete
+ * line-start `suggestion` block is removed — after its closing fence only
+ * blank lines may remain. A fence quoted as a Markdown example, or any last
+ * block followed by prose, leaves the body unchanged. */
 function withoutSuggestion(body: string): string {
   const lines = body.split(/\r?\n/);
   const openers = lines.flatMap((line, index) => (/^```suggestion\s*$/.test(line) ? [index] : []));
@@ -112,6 +113,7 @@ function withoutSuggestion(body: string): string {
     const open = openers[i]!;
     const close = lines.findIndex((line, index) => index > open && /^```\s*$/.test(line));
     if (close === -1) continue;
+    if (!lines.slice(close + 1).every((line) => line.trim() === "")) return body.trim();
     return [...lines.slice(0, open), ...lines.slice(close + 1)].join("\n").trim();
   }
   return body.trim();

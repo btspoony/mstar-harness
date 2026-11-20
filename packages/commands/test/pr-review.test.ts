@@ -123,6 +123,7 @@ describe("pr-review command family", () => {
       { path: "src/a.ts", line: 3, body: "Unhandled null deref\n\nEvidence: `foo()` returns null before the deref.\n\nFix sketch: guard it.\n\n```suggestion\nconst v = fallback;\n```" },
       { path: "src/b.ts", line: 9, body: "```suggestion\nconst x = 1;\n```" },
       { path: "src/c.ts", line: 4, body: "Tainted query\n\nEvidence: the docs quote this shape:\n\n```suggestion\n// example only\n```\n\nImpact: injection.\n\nFix sketch: parameterize it.\n\n```suggestion\nconst q = query(text, params);\n```" },
+      { path: "src/d.ts", line: 7, body: "Mid-body example\n\nEvidence: docs show:\n\n```suggestion\n// quoted only\n```\n\nFix sketch: keep the prose after the quote." },
     ]));
     let apiCalls = 0;
     context.effects.spawn = async (request) => {
@@ -144,7 +145,9 @@ describe("pr-review command family", () => {
     expect(retried.body).toContain("// example only");
     expect(retried.body).toContain("Fix sketch: parameterize it.");
     expect(retried.body).not.toContain("const q = query(text, params);");
-    expect(retried.body.split("```suggestion")).toHaveLength(2); // the quoted example stays, the trailing block is gone
+    expect(retried.body).toContain("// quoted only");
+    expect(retried.body).toContain("Fix sketch: keep the prose after the quote.");
+    expect(retried.body.split("```suggestion")).toHaveLength(3); // two quoted examples stay, the trailing block is gone
     expect(retried.body).not.toContain("const v = fallback;");
     expect(retried.body).not.toContain("const x = 1;");
   });
