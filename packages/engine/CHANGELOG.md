@@ -6,6 +6,19 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [4.8.1] - 2026-11-20
+
+### Added
+
+- PR-review inline comments may now anchor a finding to a contiguous `RIGHT` line range (`start_line` + `start_side` alongside `line`): the optional GitHub `suggestion` block replaces exactly that anchored range, and the repair stays limited to one file, one hunk, mechanically safe and only after reading the surrounding code. A single-line finding's payload is unchanged.
+- `pr-review post` passes `start_line` / `start_side` through to the Reviews API, refuses a range that is not contiguous or whose sides differ, and verifies against the head-aligned diff at the POSTed `commit_id` that a range's ends sit inside one right-side hunk before posting; the at-most-once 422 fold still treats each inline body as one unit.
+- PR-review findings may now carry one optional GitHub `suggestion` block for a local single-line repair — one file, one hunk, one line, mechanically safe, and only after reading the surrounding code; the fence holds replacement text only, stays anchored to the finding's single `RIGHT` line, and is posted verbatim as part of the inline body.
+- When GitHub rejects inline comments with 422, the folded summary body strips its trailing `suggestion` block only (a quoted fence earlier in the evidence stays) and emits an omission marker when nothing else remains.
+
+- Version alignment with harness **4.8.1**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **4.8.1**.
+
 ## [4.8.0] - 2026-11-20
 
 ### Changed

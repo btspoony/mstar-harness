@@ -1,6 +1,6 @@
 {
   "name": "morning-star-harness",
-  "version": "4.8.0",
+  "version": "4.8.1",
   "description": "Morning Star harness engineering Agent Plugin for Devin: a TS Harness Workflow Engine that enforces deterministic workflow gates, plus mstar-* judgment skills for multi-agent code delivery.",
   "author": {
     "name": "Bohao Tang",

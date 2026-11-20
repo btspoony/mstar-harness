@@ -6,6 +6,30 @@
 
 ## [Unreleased]
 
+## [4.8.1] - 2026-11-20
+
+### Added
+
+- PR 审查 inline 评论现可把 finding 锚定到一段连续的 `RIGHT` 行区间（`line` 之外再加 `start_line` + `start_side`）：可选的 GitHub `suggestion` 块正好替换该区间，且仍限单文件、单 hunk、机械安全，并须先阅读周边代码；单行 finding 的 payload 不变。
+- `pr-review post` 会把 `start_line` / `start_side` 传给 Reviews API，拒绝不连续或两侧不一致的区间，并在发布前按与 POSTed `commit_id` 对齐的 diff 校验区间两端落在同一个右侧 hunk 内；最多一次的 422 折叠仍把每条 inline 正文当作一个整体处理。
+- PR 审查 finding 现可携带一个可选的 GitHub `suggestion` 块，仅用于局部单行修复——单文件、单 hunk、单行、机械安全，且必须先阅读周边代码；fence 内只含替换文本，锚定该 finding 唯一的 `RIGHT` 行，并作为 inline 正文的一部分逐字发布。
+- GitHub 以 422 拒绝 inline 评论时，折叠进 summary 的正文只移除其末尾的 `suggestion` 块（证据中较早引用的 fence 保留）；若其余内容为空则输出省略标记。
+
+### Changed
+
+- 把 ADR 记录契约挂到决策发生的时刻：`clarify` 收口摘要须标出满足准入条件的已决事项（`ADR:` 或 `ADR: none`），plan 的 `## Review Gate Summary` 在 `Done` 前带同一 `ADR: <path>|none` 指针，由 PM Acceptance 核对。
+- 让 plan 级判定覆盖 standalone plan：记录在 `Done` 与验收之前写入，不放在 `compound`——其知识结晶评分可能整步跳过。
+- 迭代 Phase 3 §3.2 与契约对齐——以 `When a record is required` 为唯一判据，不再收窄为「跨迭代」决策；已记录的只核对 freshness 与 supersession。
+
+### Fixed
+
+- Release changelog 现按变更类型分组 —— `Breaking`、`Added`、`Changed`、`Fixed`、`Removed`、`Security`，不再把所有未标注 fragment 堆到 `### Harness`。省略 `category` 默认 `Changed`，`Breaking` 排在最前。
+- 未发布的 changelog fragment 若 `category:` 不属于六种变更类型，现在会由 PR 测试套件拒绝，而不再只在 release 准备阶段才被发现；导致上次 release 准备失败的遗留 `Harness` fragment 已修正为 `Added`。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 4.8.1**。
+
 ## [4.8.0] - 2026-11-20
 
 ### Harness
