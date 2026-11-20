@@ -154,8 +154,7 @@ export interface McpStdioOptions {
   trustCallerSessionId?: boolean;
 }
 
-/**
- * The root one admitted CALL named, as a root fact: absolute, and equal to the
+/** why: The root one admitted CALL named, as a root fact: absolute, and equal to the
  * fixed `<main worktree>/.mstar`. A relative selector has no launch-directory
  * anchor — the invocation workspace is anchored at the root's parent, so
  * resolving it against the launch directory would name a directory the caller
@@ -231,7 +230,7 @@ function callRoot(selector: string, commandId: string): string {
  */
 export function createContextResolver(options: McpStdioOptions = {}): ResolveContext {
   const resolver: ResolveContext = (definition, _sessionId, signal, _services, effects: McpEffects, call?: ResolveContextCall) => {
-    // The root the ADMITTED CALL named. A blank value is not a declaration:
+    // why: The root the ADMITTED CALL named. A blank value is not a declaration:
     // the command resolvers treat it as absent, so it must not become a root
     // candidate here either. It must be ABSOLUTE and equal to the fixed
     // control root; `callRoot` refuses everything else with the recovery.
@@ -258,7 +257,7 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
       effects,
     };
   };
-  // The connection declares no root: every call that touches process state
+  // why: The connection declares no root: every call that touches process state
   // names one, and registration publishes `harness` as required.
   Object.defineProperty(resolver, "defaultHarness", {
     get: () => undefined,

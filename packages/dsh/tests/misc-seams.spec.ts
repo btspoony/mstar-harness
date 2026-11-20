@@ -453,7 +453,7 @@ describe('design-md gate — fs/write-intent listener', () => {
 
 describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   it('secret values in the on-disk report → warn advisory, intent proceeds', async () => {
-    // Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
     // {REVIEW_DIR} scope compares the intent path with the resolved harness,
     // so the fixture must address both canonically.
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
@@ -470,7 +470,7 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   })
 
   it('clean report → silent pass', async () => {
-    // Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
     // {REVIEW_DIR} scope compares the intent path with the resolved harness,
     // so the fixture must address both canonically.
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
@@ -484,7 +484,7 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   })
 
   it('path-scoping: a non-markdown file in the run dir is untouched', async () => {
-    // Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
     // {REVIEW_DIR} scope compares the intent path with the resolved harness,
     // so the fixture must address both canonically.
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
@@ -499,7 +499,7 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   })
 
   it('hard mode + secret → repair escape', async () => {
-    // Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
     // {REVIEW_DIR} scope compares the intent path with the resolved harness,
     // so the fixture must address both canonically.
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
@@ -516,7 +516,7 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   })
 
   it('path-scoping: a plan-shaped `.md` outside {REVIEW_DIR} is untouched', async () => {
-    // Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
     // {REVIEW_DIR} scope compares the intent path with the resolved harness,
     // so the fixture must address both canonically.
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
@@ -531,7 +531,7 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   })
 
   it('path-scoping: the run README.md IS in scope (it is the report)', async () => {
-    // Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
     // {REVIEW_DIR} scope compares the intent path with the resolved harness,
     // so the fixture must address both canonically.
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
@@ -546,7 +546,7 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   })
 
   it('no harness dir → the `reviews` path segment still scopes the seam', async () => {
-    // Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
     // {REVIEW_DIR} scope compares the intent path with the resolved harness,
     // so the fixture must address both canonically.
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
@@ -654,7 +654,7 @@ describe('compound gate — fs/write-intent listener ({HARNESS_DIR}/knowledge sc
   it('anchors the scope on the harness checkout, not the harness dir parent (nested harness)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-nested-'))
     gitInit(root)
-    // The boot harness is EXPLICIT (a nested dir that is not the fixed
+    // why: The boot harness is EXPLICIT (a nested dir that is not the fixed
     // root): its parent is NOT the corpus anchor, so the gate must scope
     // `<repo>/.agents/knowledge` — the checkout the Git probe names.
     const nestedHarness = join(root, 'runtime', 'harness')

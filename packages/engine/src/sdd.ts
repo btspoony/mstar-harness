@@ -92,7 +92,7 @@ export class SddScriptError extends Error {
 export type SddWorkspaceOptions = {
  /** Main worktree repo root — CLI 2nd arg / `MSTAR_CONTROL_ROOT`. */
   controlRoot?: string;
- /** Explicit harness root — must equal the fixed `<controlRoot>/.mstar` (assertion surface). */
+ /** why: Explicit harness root — must equal the fixed `<controlRoot>/.mstar` (assertion surface). */
   harnessDir?: string;
  /** Working directory for git probes; default `process.cwd()`. */
   cwd?: string;
@@ -290,7 +290,7 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
       1,
     );
   }
- // The resolved harness dir must not redirect the process SSOT into a
+ // why: The resolved harness dir must not redirect the process SSOT into a
  // linked/foreign Git checkout. The checkout containing the harness
  // (nearest existing ancestor) must be the established main root — a
  // walk bounded at the root so a non-Git main root never inherits an

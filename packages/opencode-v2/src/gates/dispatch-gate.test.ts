@@ -12,7 +12,7 @@ import type { ToolHooks } from "@opencode/plugin/effect/tool";
 import { registerDispatchGate } from "../hooks/mod";
 import { dispatchBefore } from "./dispatch";
 
-// The dispatch gate reads the process control root. Keep it on a clean temp
+// why: The dispatch gate reads the process control root. Keep it on a clean temp
 // Git worktree so the developer's checkout state cannot decide the test.
 let previousCwd: string;
 let controlRoot: string;

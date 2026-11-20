@@ -96,7 +96,7 @@ function registerArgs(harness: string, extra: string[] = [], compassRef = COMPAS
   ];
 }
 
-/** Temp fixture: a real Git main worktree whose fixed `<root>/.mstar` is the
+/** why: Temp fixture: a real Git main worktree whose fixed `<root>/.mstar` is the
  * harness; returns the harness path plus a byte-snapshot helper. */
 async function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void | Promise<void>): Promise<void> {
   const repo = mkdtempSync(join(tmpdir(), "mstar-iteration-register-"));

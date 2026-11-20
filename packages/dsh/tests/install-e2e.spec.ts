@@ -81,7 +81,7 @@ import { packageRoot } from '../scripts/bundle-harness-assets.ts'
 const REPO_ROOT = resolve(import.meta.dir, '../../..')
 /** The real CLI entry (plan 001 surface) run as a subprocess. */
 const CLI_ENTRY = join(REPO_ROOT, 'packages/cli/src/index.ts')
-/** Neutral cwd for CLI subprocesses: harness resolution must answer from the
+/** why: Neutral cwd for CLI subprocesses: harness resolution must answer from the
  * disposable home, never from the ambient control checkout's own `.mstarc`. */
 const cliCwd = mkdtempSync(join(tmpdir(), 'dsh-cli-cwd-'))
 /** The repo's own build mirror (synced by bundle-assets; gitignored). */

@@ -311,7 +311,7 @@ describe('the shipped mstar-mcp row, launched', () => {
       expect(refused.result?.isError).toBe(true)
       const text = (refused.result?.content ?? []).map((block) => block.text ?? '').join('\n')
       expect(text).toContain('mcp.control-root-unresolved')
-      // The fixed-root recovery names the CLI route: `status.validate`
+      // why: The fixed-root recovery names the CLI route: `status.validate`
       // publishes no root selector on a shared connection.
       expect(text).toContain('publishes no root selector')
     } finally {

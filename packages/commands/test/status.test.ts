@@ -198,8 +198,7 @@ describe("status command family", () => {
     }
   });
 
-  /**
-   * F7: the store-vs-build-vs-first-unknown facts are the engine's own machine
+  /** why: F7: the store-vs-build-vs-first-unknown facts are the engine's own machine
    * facts, and this command surface must forward them rather than reduce a
    * typed store refusal to its code and prose. The fixture is a real store
    * written past this build's supported maximum, planted at the fixed
@@ -218,7 +217,7 @@ describe("status command family", () => {
       insert.run(supportedMax + 2, "from-an-even-newer-build", "e".repeat(64), "2026-09-18T00:00:00.000Z");
       store.close();
 
-      // `status.validate` reads the process root from cwd; controlRoot is not a
+      // why: `status.validate` reads the process root from cwd; controlRoot is not a
       // harness override, so the repo fixture above is what selects the store.
       const result = await statusDefinition("status.validate").execute({}, context(dir));
       expect(result).toMatchObject({ status: "refused", code: "store.schema-unsupported", exitCode: 1 });

@@ -79,7 +79,7 @@ async function envelopeOf(options: McpStdioOptions, tool: string, args: Record<s
 function harnessFixture(): { harness: string; dispose: () => void } {
   const root = mkdtempSync(path.join(os.tmpdir(), "mstar-leaf-seat-"));
   const harness = path.join(root, ".mstar");
-  // The per-call `harness` selector must be the fixed `.mstar` under a Git
+  // why: The per-call `harness` selector must be the fixed `.mstar` under a Git
   // main worktree: a bare directory is refused before the seat rule applies.
   mkdirSync(harness, { recursive: true });
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });

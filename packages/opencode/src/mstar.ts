@@ -1,5 +1,4 @@
-/**
- * MorningStarHarness plugin for OpenCode.
+/** why: MorningStarHarness plugin for OpenCode.
  *
  * - Injects one-time harness bootstrap into first user message.
  * - Registers skill paths only inside this package: `harness-skills/` (synced by `bundle-assets` at build time; includes `mstar-host`).

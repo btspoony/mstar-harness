@@ -226,7 +226,7 @@ async function issueStoreContext(): Promise<{ root: string; harness: string; con
   const root = mkdtempSync(join(tmpdir(), "bounded-issue-"));
   roots.push(root);
   const harness = join(root, ".mstar");
-  // The harness root is fixed at the Git main worktree's `.mstar`: the issue
+  // why: The harness root is fixed at the Git main worktree's `.mstar`: the issue
   // verbs resolve the store from cwd, so the fixture is a real repo.
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
   mkdirSync(harness, { recursive: true });

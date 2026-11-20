@@ -60,7 +60,7 @@ function write(harness: string, relativePath: string, text: string): string {
   return absolute;
 }
 
-/** A temp workspace: a real Git main worktree whose `.mstar` harness root
+/** why: A temp workspace: a real Git main worktree whose `.mstar` harness root
  * holds an active store — the fixed-root resolver derives it from cwd. */
 async function harnessFixture(name: string): Promise<{ workspace: string; harness: string }> {
   const root = mkdtempSync(join(tmpdir(), `mstar-catalog-cli-${name}`));

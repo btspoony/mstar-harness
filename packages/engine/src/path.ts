@@ -51,10 +51,9 @@ export type ResolveHarnessDirOptions = {
    * the Git-derived root before reaching the engine.
    */
   harnessDir?: string;
-  /** Retired knob: `MSTAR_HARNESS_DIR` is ignored by the engine since the fixed-root cutover; kept so callers compile while their own slice removes it. */
+  /** why: Retired knob: `MSTAR_HARNESS_DIR` is ignored by the engine since the fixed-root cutover; kept so callers compile while their own slice removes it. */
   ignoreEnvOverride?: boolean;
-  /**
-   * `localProbe` boundary: stops the upward diagnostics walk. Resolved
+  /** why: `localProbe` boundary: stops the upward diagnostics walk. Resolved
    * against `startDir` when relative; the default is the git top-level of
    * `startDir` (sync `git rev-parse --show-cdup`; on failure / non-git
    * start it falls back to `startDir` itself — a non-git start probes
@@ -89,16 +88,16 @@ export function resolveHarnessDir(
   startDir: string = process.cwd(),
   opts: ResolveHarnessDirOptions = {},
 ): string | null {
-  // Canonicalize first: a start inside a not-yet-created layout (a file
+  // why: Canonicalize first: a start inside a not-yet-created layout (a file
   // under a missing directory) still resolves to its nearest existing
   // ancestor, so classification gates never lose the root over a gap.
   const start = canonicalizeNearestExisting(resolve(startDir));
-  // An explicit value is a caller-held fact, never a discovery input: the
+  // why: An explicit value is a caller-held fact, never a discovery input: the
   // transport layers validate it against the Git-derived root before it
   // reaches this function.
   if (opts.harnessDir !== undefined) return resolve(start, opts.harnessDir);
   if (opts.localProbe === true) return localHarnessProbe(start, opts.workspaceRoot);
-  // Harness state is process state: the root is the Git main worktree plus
+  // why: Harness state is process state: the root is the Git main worktree plus
   // the fixed `.mstar` directory. No configuration, environment or candidate
   // chain can move it. A probe failure is fail-closed: when the caller's
   // checkout is known but the main root is unreadable, no root is answered.
@@ -114,7 +113,7 @@ export function resolveHarnessDir(
   return resolveFixedHarnessDir(main);
 }
 
-/** The nearest existing ancestor of `target` (the target itself when it exists). */
+/** why: The nearest existing ancestor of `target` (the target itself when it exists). */
 function nearestExistingAncestor(target: string): string {
   let dir = resolve(target);
   for (;;) {
@@ -125,7 +124,7 @@ function nearestExistingAncestor(target: string): string {
   }
 }
 
-/** True when a legacy directory actually carries harness state (not just corpus/plugins). */
+/** why: True when a legacy directory actually carries harness state (not just corpus/plugins). */
 function looksLikeLegacyHarness(dir: string): boolean {
   for (const marker of ["status.json", "store.db", "workflows", "projects", "plans", "iterations"]) {
     if (existsSync(join(dir, marker))) return true;
@@ -152,7 +151,7 @@ export function resolveFixedHarnessDir(checkout: string): string | null {
   return null;
 }
 
-/** Local checkout only (diagnostics): the same fixed name, no main-worktree substitution. */
+/** why: Local checkout only (diagnostics): the same fixed name, no main-worktree substitution. */
 function localHarnessProbe(start: string, workspaceRoot?: string): string | null {
   const boundary = canonicalizeNearestExisting(resolve(start, workspaceRoot ?? defaultWorkspaceRoot(start)));
   let dir = start;
@@ -168,10 +167,10 @@ function localHarnessProbe(start: string, workspaceRoot?: string): string | null
   }
 }
 
-/** Retired harness layout names; probed only to name the refusal/ */
+/** why: Retired harness layout names; probed only to name the refusal/ */
 const LEGACY_HARNESS_NAMES = [".agents", ".plans", "plans"] as const;
 
-/** A retired `harness_dir` declaration refuses instead of being silently ignored. */
+/** why: A retired `harness_dir` declaration refuses instead of being silently ignored. */
 function refuseRetiredConfiguration(startDir: string, boundary: string): void {
   const rc = loadMstarc(startDir, boundary);
   if (rc !== null && rc.config.harnessDir !== undefined) {
@@ -183,7 +182,7 @@ function refuseRetiredConfiguration(startDir: string, boundary: string): void {
   }
 }
 
-/** A legacy layout is refused rather than adopted as a harness root. */
+/** why: A legacy layout is refused rather than adopted as a harness root. */
 function retiredCandidateError(checkout: string, candidate: string): HarnessRootRetiredError {
   const fixed = join(checkout, ".mstar");
   return new HarnessRootRetiredError(
@@ -544,8 +543,7 @@ function resolveTrackedDir(
   return preferred;
 }
 
-/**
- * Shared resolution for the v3 workflow-layout dirs (`{WORKFLOW_DIR}` /
+/** why: Shared resolution for the v3 workflow-layout dirs (`{WORKFLOW_DIR}` /
  * `{PROJECT_DIR}` / `{REVIEW_DIR}`): resolve the harness dir from
  * `startDir` first (`resolveHarnessDir` — the fixed `<main
  * worktree>/.mstar` root, or the verbatim `opts.harnessDir` assertion),
@@ -827,7 +825,7 @@ export function resolveScaffoldDirs(
 export async function scaffoldHarness(root: string, options: ScaffoldOptions = {}): Promise<string> {
   const { harnessDir, projectDir } = resolveScaffoldDirs(root, options);
   const harness = resolve(harnessDir);
-  // Each corpus: the `.mstarc` declaration when one is in scope, else the
+  // why: Each corpus: the `.mstarc` declaration when one is in scope, else the
   // greenfield `<root>/.agents/<kind>` default — never a resolver candidate,
   // which would adopt a non-empty directory that merely exists (legacy
   // `{HARNESS_DIR}/<kind>/` above all) and declare *that* as the write target.
@@ -867,7 +865,7 @@ function writeBootstrapMstarc(
   corpus: { knowledge: string; specs: string; adr: string },
 ): void {
   if (findMstarc(root, root) !== null) return;
-  // Each corpus key is written relative to this file's directory (the
+  // why: Each corpus key is written relative to this file's directory (the
   // repository root), from the directories the scaffold actually creates.
   const content =
     "; Morning Star harness layout for this repository.\n" +

@@ -49,7 +49,7 @@ afterEach(async () => {
 
 /** A fresh workspace root directory. */
 async function makeWorkspace(prefix: string): Promise<string> {
-  // The Git-reported main worktree is realpath'd (/var → /private/var on
+  // why: The Git-reported main worktree is realpath'd (/var → /private/var on
   // macOS); fixtures compare against the canonical form.
   return realpathSync(await mkdtemp(join(tmpdir(), prefix)))
 }
@@ -140,12 +140,12 @@ describe('HarnessResolver — fixed-root resolution: the session workspace names
   it('a `.mstar` above the session workspace at the git main worktree resolves — the harness root is fixed, not a workspace-local probe', async () => {
     const home = await makeWorkspace('dsh-ws-boundary-')
     const repo = join(home, 'proj')
-    gitInit(repo) // the Git main worktree
+    gitInit(repo) // why: the Git main worktree
     await mkdir(join(repo, '.mstar'), { recursive: true }) // harness ABOVE the session workspace
     const ws = join(repo, 'packages', 'app') // the session workspace (deep)
     await mkdir(ws, { recursive: true })
     const resolver = new HarnessResolver(undefined)
-    // The fixed root is the Git main worktree's `.mstar`: a deeper session
+    // why: The fixed root is the Git main worktree's `.mstar`: a deeper session
     // workspace in the same repo resolves it (the retired walk-up boundary
     // no longer applies — resolution is a Git question, not a probe).
     expect(resolver.forWorkspace(ws)).toBe(join(repo, '.mstar'))
@@ -154,9 +154,9 @@ describe('HarnessResolver — fixed-root resolution: the session workspace names
 
   it('a `~/.mstar`-style fixture in the parent chain above the workspace is never returned (the global-collision regression)', async () => {
     const home = await makeWorkspace('dsh-ws-collision-')
-    await mkdir(join(home, '.mstar'), { recursive: true }) // the "global" ~/.mstar fixture — outside the repo
+    await mkdir(join(home, '.mstar'), { recursive: true }) // why: the "global" ~/.mstar fixture — outside the repo
     const repo = join(home, 'proj')
-    gitInit(repo) // has NO .mstar: the workspace resolves no harness
+    gitInit(repo) // why: has NO .mstar: the workspace resolves no harness
     const ws = join(repo, 'nested', 'deep') // the session workspace, deep under the fixture home
     await mkdir(ws, { recursive: true })
     const resolver = new HarnessResolver(undefined)
@@ -167,14 +167,14 @@ describe('HarnessResolver — fixed-root resolution: the session workspace names
   it('a workspace harness at its own `.mstar` resolves — the workspace is its own main worktree', async () => {
     const home = await makeWorkspace('dsh-ws-local-')
     const ws = join(home, 'proj')
-    gitInit(ws) // the workspace is the Git main worktree
-    await mkdir(join(ws, '.mstar'), { recursive: true }) // the fixed root
+    gitInit(ws) // why: the workspace is the Git main worktree
+    await mkdir(join(ws, '.mstar'), { recursive: true }) // why: the fixed root
     const resolver = new HarnessResolver(undefined)
     expect(resolver.forWorkspace(ws)).toBe(join(ws, '.mstar'))
   })
 
   it('a RELATIVE session cwd still resolves the workspace harness (regression: a relative cwd must be canonicalized before the Git probe)', async () => {
-    // Real-world geometry: the dsh process cwd sits ABOVE the session
+    // why: Real-world geometry: the dsh process cwd sits ABOVE the session
     // workspace, so the session carries a relative cwd like `packages/app`
     // (no leading `..`). The resolver canonicalizes it to an absolute path
     // before the Git probe. Reproduce it by chdir'ing to a synthetic
@@ -201,7 +201,7 @@ describe('HarnessResolver — fixed-root resolution: the session workspace names
 
   it('explicit config.harnessDir stays authoritative outside the workspace repo', async () => {
     const home = await makeWorkspace('dsh-ws-explicit-outside-')
-    await mkdir(join(home, '.mstar'), { recursive: true }) // outside the workspace repo
+    await mkdir(join(home, '.mstar'), { recursive: true }) // why: outside the workspace repo
     const ws = join(home, 'proj', 'src')
     await mkdir(ws, { recursive: true })
     const resolver = new HarnessResolver(join(home, '.mstar'))

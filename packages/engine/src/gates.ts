@@ -105,8 +105,7 @@ export function isHarnessRootDir(dir: string): boolean {
   return parentResolved !== null && resolve(parentResolved) === dir;
 }
 
-/**
- * Resolve the harness root containing `target` by marker probe: the nearest ancestor holding the v2 coordination-document
+/** why: Resolve the harness root containing `target` by marker probe: the nearest ancestor holding the v2 coordination-document
  * markers — a `status.json` root file plus the layout directories — IS the
  * harness root. This never mistakes the NESTED `{HARNESS_DIR}/plans`
  * subdir of the default `.mstar` layout for the root, so coordination
@@ -165,7 +164,7 @@ export function harnessDocKindOfTarget(targetPath: string): { harnessDir: string
     return null;
   };
   const probeRoot = resolveHarnessRootOf(dirname(resolved));
-  // A marker miss falls back to the fixed root resolution — an unpopulated
+  // why: A marker miss falls back to the fixed root resolution — an unpopulated
   // `.mstar` carries no markers yet but is still the root to protect.
   const harnessDir = probeRoot ?? resolveHarnessDir(dirname(resolved));
   if (harnessDir === null) return null;

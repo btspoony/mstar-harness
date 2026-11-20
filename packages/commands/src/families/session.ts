@@ -390,7 +390,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
         const env: Record<string, string> = { ...process.env as Record<string, string>, MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(identity) };
         delete env.MSTAR_HOST_SESSION_ID;
         try {
-          // The child derives the fixed root from the main worktree, so run it
+          // why: The child derives the fixed root from the main worktree, so run it
           // there when this session already resolved one; the retired env pin
           // no longer carries a root.
           const child = await context.effects.spawn({ argv, cwd: root === null ? context.cwd : dirname(root), env, signal: context.signal });

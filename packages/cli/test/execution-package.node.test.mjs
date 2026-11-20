@@ -185,7 +185,7 @@ function cliEnv(fixture, identity) {
     if (STRIPPED_ENV.includes(key)) continue;
     env[key] = value;
   }
-  // The child's cwd is the fixture checkout (runCli), so the fixed-root
+  // why: The child's cwd is the fixture checkout (runCli), so the fixed-root
   // resolver finds `<root>/.mstar` itself — no env pin exists anymore.
   if (identity !== undefined) {
     env.MSTAR_HOST_SESSION_ID = identity.sessionId;
@@ -613,7 +613,7 @@ test("the store the built CLI wrote is a real node:sqlite authority", async () =
 
   // Read the store the CLI actually wrote, straight through node:sqlite.
   const dbPath = join(fixture.harness, "store.db");
-  // WAL mode leaves a live -wal/-shm pair after the CLI exits; a read-only
+  // why: WAL mode leaves a live -wal/-shm pair after the CLI exits; a read-only
   // open cannot run recovery, so open writable (the contract is "the store
   // is real", not "open is read-only").
   const db = new DatabaseSync(dbPath, { readOnly: false });
@@ -662,7 +662,7 @@ test("the store the built CLI wrote is a real node:sqlite authority", async () =
 
 test("committed ZCode hook refuses the retired coordination-document route on an ACTIVE authority", async () => {
   const fixture = await makeActiveWorkspace("mstar-r3-hook-active");
-  // The hook's process cwd is the fixture checkout: the event's `cwd` field
+  // why: The hook's process cwd is the fixture checkout: the event's `cwd` field
   // resolves the gate's harness probe to `<root>/.mstar` on its own.
 
   // A VALID root status.json write is still refused: while the execution

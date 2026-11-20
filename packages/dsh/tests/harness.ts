@@ -1035,13 +1035,13 @@ export async function seedActiveWorkflow(
   cwd = dirname(harnessDir),
   selectedWorkflowId: string | null = workflowId,
 ): Promise<void> {
-  // Canonicalize the harness root once: Git-reported paths are realpath'd
+  // why: Canonicalize the harness root once: Git-reported paths are realpath'd
   // (/var → /private/var on macOS), and the durable session binding records
   // `harnessRoot` — the resolver's `executionBinding.harnessRoot !==
   // harnessDir` guard compares it against the Git-canonicalized root.
   await mkdir(harnessDir, { recursive: true })
   harnessDir = realpathSync(harnessDir)
-  // `cwd` stays caller-given: the session's binding is keyed by the exact
+  // why: `cwd` stays caller-given: the session's binding is keyed by the exact
   // cwd string the carrying session advertises.
   let expected: ExecutionToken | undefined = activeExecutionTokens.get(harnessDir)
   if (expected === undefined) {
@@ -1140,7 +1140,7 @@ export const INVALID_STATUS = {
  */
 export function gitInit(root: string): void {
   if (existsSync(join(root, '.git'))) return
-  // Pin the default branch: CI runners do not configure `init.defaultBranch`,
+  // why: Pin the default branch: CI runners do not configure `init.defaultBranch`,
   // and fixtures record `main` in their row scope.
   execFileSync('git', ['init', '-q', '-b', 'main', root], { stdio: 'ignore' })
 }
@@ -1247,11 +1247,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-mstar-boot-'))
   const harnessDir = join(root, '.mstar')
   await mkdir(harnessDir, { recursive: true })
-  // Canonical spelling: the resolver answers the Git-reported (realpath'd)
+  // why: Canonical spelling: the resolver answers the Git-reported (realpath'd)
   // root, and the boot config must name the SAME path the D4 resolution and
   // every binding comparison use.
   const bootHarnessDir = realpathSync(harnessDir)
-  // The fixture is a real Git worktree whose harness is the fixed
+  // why: The fixture is a real Git worktree whose harness is the fixed
   // `<main worktree>/.mstar`: engine-side resolution from this workspace
   // and the plugin's configured harness dir agree by construction (the
   // workflow-ledger target resolver in `workflow-selection.ts` only

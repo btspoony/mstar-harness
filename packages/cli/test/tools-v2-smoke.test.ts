@@ -25,7 +25,7 @@ import { join } from "node:path";
 import mstarGates from "../../omp/src/hooks/pre/mstar-gates";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "tools-v2-smoke", "repo");
-// The harness root is fixed at `<checkout>/.mstar`, so the fixture's legacy
+// why: The harness root is fixed at `<checkout>/.mstar`, so the fixture's legacy
 // `plans/`-rooted layout is migrated onto that root before Git sees it.
 const SNAPSHOT_REL = join(".mstar", "workflows", "wf-smoke", "snapshot.json");
 // Default-layout fixture is committed under a non-ignored name
@@ -46,7 +46,7 @@ interface SmokeRepo {
 async function setupRepo(): Promise<SmokeRepo> {
   const root = mkdtempSync(join(tmpdir(), "tools-smoke-"));
   cpSync(FIXTURE, root, { recursive: true });
-  // Fixed-root migration: the fixture's legacy `plans/` harness root becomes
+  // why: Fixed-root migration: the fixture's legacy `plans/` harness root becomes
   // `<root>/.mstar`, the alias copy is dropped, and the harness stays
   // gitignored so the control root carries no committable change.
   renameSync(join(root, "plans"), join(root, MSTAR_REL));
@@ -107,7 +107,7 @@ async function setupRepo(): Promise<SmokeRepo> {
 async function setupMstarRepo(): Promise<SmokeRepo> {
   const root = mkdtempSync(join(tmpdir(), "tools-smoke-mstar-"));
   cpSync(FIXTURE, root, { recursive: true });
-  // The legacy `plans/`-rooted layout is retired; keep only the fixed root.
+  // why: The legacy `plans/`-rooted layout is retired; keep only the fixed root.
   rmSync(join(root, "plans"), { recursive: true, force: true });
   renameSync(join(root, MSTAR_FIXTURE_DIR), join(root, MSTAR_REL));
   writeFileSync(join(root, ".gitignore"), ".mstar/\nlinked/\nintegration/\n");
@@ -178,7 +178,7 @@ async function setupDoubleHarnessRepo(): Promise<SmokeRepo> {
     ),
   );
   writeFileSync(join(inner, "projects", "_inner", "residuals.json"), JSON.stringify({ entries: {} }, null, 2));
-  // The REAL fixed root of this checkout. A nested `.mstar` is never a process
+  // why: The REAL fixed root of this checkout. A nested `.mstar` is never a process
   // root, so only this one may classify coordination documents.
   const fixed = join(root, MSTAR_REL);
   mkdirSync(join(fixed, "workflows", "wf-root"), { recursive: true });
@@ -351,8 +351,7 @@ describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recu
     return handler;
   };
 
-  /**
-   * Pin the repo-policy resolution for one call. The gate discovers the
+  /** why: Pin the repo-policy resolution for one call. The gate discovers the
    * control worktree from the SESSION cwd (`composeDispatchGate({ cwd })`
    * defaults to `process.cwd()`), and no env root channel exists any more, so
    * the fixture steers it with a temporary `chdir`.
@@ -613,7 +612,7 @@ describe("default .mstar root layout (W-REV-2)", () => {
 });
 
 describe("nested harness never adopted (W-REV-3)", () => {
-  // Fixed-root contract: a checkout holds exactly ONE process root,
+  // why: Fixed-root contract: a checkout holds exactly ONE process root,
   // `<checkout>/.mstar`. A nested `.mstar` (here under `inner/`) is never a
   // root, so a doc inside it is not a coordination doc of this process and
   // must stay ungated — while the SAME rel under the real root is gated. A
@@ -639,7 +638,7 @@ describe("nested harness never adopted (W-REV-3)", () => {
     } as never);
     expect(handler).toBeDefined();
 
-    // Nested harness: not the process root, so nothing classifies it.
+    // why: Nested harness: not the process root, so nothing classifies it.
     const nestedSnapshot = join(root, "inner", ".mstar", "workflows", "wf-inner", "snapshot.json");
     const nested = await handler!({
       toolName: "write",
@@ -652,7 +651,7 @@ describe("nested harness never adopted (W-REV-3)", () => {
     });
     expect(nestedStatus).toBeUndefined();
 
-    // The REAL root is gated: an invalid snapshot write refuses under the
+    // why: The REAL root is gated: an invalid snapshot write refuses under the
     // ACTIVE authority (the retired file route), as does root status.json.
     const realSnapshot = join(root, MSTAR_REL, "workflows", "wf-root", "snapshot.json");
     const validSnapshot = JSON.parse(readFile(realSnapshot)) as Record<string, unknown>;
@@ -669,7 +668,7 @@ describe("nested harness never adopted (W-REV-3)", () => {
       input: { path: realSnapshot, content: JSON.stringify(validSnapshot) },
     });
     const passedResult = passed as { block?: boolean; reason?: string } | undefined;
-    // ACTIVE disposition: even a schema-valid snapshot write refuses.
+    // why: ACTIVE disposition: even a schema-valid snapshot write refuses.
     expect(passedResult?.block).toBe(true);
     expect(passedResult?.reason).toContain("execution.direct-write-refused");
 
@@ -680,7 +679,7 @@ describe("nested harness never adopted (W-REV-3)", () => {
     const rootBlockedResult = rootBlocked as { reason: string } | undefined;
     expect(rootBlockedResult?.reason).toContain("execution.direct-write-refused");
 
-    // A non-canonical snapshot layout stays ungated even under the real root
+    // why: A non-canonical snapshot layout stays ungated even under the real root
     // — the classification must not over-gate.
     const stray = join(root, MSTAR_REL, "workflows", "snapshot.json");
     writeFileSync(stray, JSON.stringify({ schema_version: 99 }));

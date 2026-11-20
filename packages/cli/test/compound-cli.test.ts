@@ -8,15 +8,14 @@ import { runCli, withTempDir } from "./harness";
 import { cliEnvelope, violationCodes } from "./support/cli-assertions";
 import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
 
-/** Make `dir` a real Git main worktree (the spawned CLI's fixed root is
+/** why: Make `dir` a real Git main worktree (the spawned CLI's fixed root is
  * `<main worktree>/.mstar`, never a bare temp directory). */
 function gitMainWorktree(dir: string): void {
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   execFileSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
 }
 
-/**
- * One workspace whose configured knowledge root is COMPLETE (its only body has
+/** why: One workspace whose configured knowledge root is COMPLETE (its only body has
  * a catalog row), so any later verdict is about the directory the caller named.
  * Returns the physical root: the engine realpaths its roots and macOS tmpdirs
  * are symlinked. The root is a real Git main worktree, because a spawned CLI
@@ -85,7 +84,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const harness = join(dir, ".mstar");
       mkdirSync(harness);
-      // The configured root is the fixed `<dir>/.mstar`, so the missing store
+      // why: The configured root is the fixed `<dir>/.mstar`, so the missing store
       // is the one the completeness query refuses over.
       const knowledgeDir = join(harness, "knowledge");
       mkdirSync(knowledgeDir);

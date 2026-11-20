@@ -83,7 +83,7 @@ describe("audit command family", () => {
 
   test("scaffold defaults the run dir to {REVIEW_DIR}/<date>-codebase-<level>-<round>", async () => {
     const root = realpathSync(tempRoot());
-    // The harness root is fixed at the Git main worktree's `.mstar`, so the
+    // why: The harness root is fixed at the Git main worktree's `.mstar`, so the
     // review-dir derivation resolves only inside a real repo.
     gitInit(root);
     mkdirSync(path.join(root, ".mstar"), { recursive: true });

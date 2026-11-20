@@ -29,7 +29,7 @@ afterAll(() => {
 
 async function workspace(name: string): Promise<{ dir: string; context: StoreContext }> {
   const dir = mkdtempSync(join(ROOT, name));
-  // A spawned CLI derives the fixed `<git main worktree>/.mstar` root from its
+  // why: A spawned CLI derives the fixed `<git main worktree>/.mstar` root from its
   // cwd, so the fixture is a genuine checkout rather than a bare directory.
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   spawnSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
@@ -706,7 +706,7 @@ describe("hostile invocation-cwd dotenv", () => {
     expect(before.planRows.map((row) => row.plan_id)).toEqual([planId]);
 
     const churn = JSON.stringify({ kind: "update-row", workflowId, planId });
-    // The hostile `.env` sits in the fixture checkout's own root: the fixed
+    // why: The hostile `.env` sits in the fixture checkout's own root: the fixed
     // root comes from `<dir>/.mstar` via Git, and a retired `MSTAR_HARNESS_DIR`
     // pin (here a decoy root with no store) must not redirect it.
     const decoy = join(ROOT, "hostile-decoy-root");
@@ -724,7 +724,7 @@ describe("hostile invocation-cwd dotenv", () => {
     const cliDir = join(import.meta.dir, "..");
     const bundle = join(cliDir, "dist", "mstar-harness.js");
     expect(existsSync(bundle)).toBe(true);
-    // The child runs from the fixture checkout, so the only root it can serve
+    // why: The child runs from the fixture checkout, so the only root it can serve
     // is `<dir>/.mstar`; the decoy pin in the cwd `.env` must be ignored.
     const child = spawn("bun", [bundle, "dashboard", "--port", "0"], {
       cwd: dir, env, stdio: ["ignore", "pipe", "pipe"],

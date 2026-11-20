@@ -453,7 +453,7 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
 
   it('(o5) a WHITESPACE-only cwd is a relative segment, not "omitted" (judged where it resolves)', async () => {
     const { app, provider } = await bootWithProvider()
-    // `resolve(parent, '   ')` lexically resolves INTO the parent, which is
+    // why: `resolve(parent, '   ')` lexically resolves INTO the parent, which is
     // where the start is judged: with a NON-harness parent the resolved
     // location governs nothing, so the start proceeds — reading the value as
     // "omitted" would instead have judged it against the harness workspace.

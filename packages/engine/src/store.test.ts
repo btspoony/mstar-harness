@@ -67,8 +67,7 @@ function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
-/**
- * Run `fn` with the process cwd set to `value` (undefined leaves it
+/** why: Run `fn` with the process cwd set to `value` (undefined leaves it
  * unchanged), restoring the previous cwd after the await. `value` must be an
  * existing directory; cwd is process-global, so the window closes only once
  * the async callback settles.
@@ -76,7 +75,7 @@ function tmpRoot(prefix: string): string {
 async function withEnv<T>(value: string | undefined, fn: () => T | Promise<T>): Promise<T> {
   const previousCwd = process.cwd();
   try {
-    // The process control root is derived from cwd under the fixed-root
+    // why: The process control root is derived from cwd under the fixed-root
     // contract; chdir keeps the async call inside the fixture.
     if (value !== undefined) process.chdir(value);
     return await fn();
@@ -86,7 +85,7 @@ async function withEnv<T>(value: string | undefined, fn: () => T | Promise<T>): 
 }
 
 
-/** Initialize a git repo at `root` so the fixed `<repo>/.mstar` root resolves. */
+/** why: Initialize a git repo at `root` so the fixed `<repo>/.mstar` root resolves. */
 function gitInit(root: string): void {
   execFileSync("git", ["init", "-q"], { cwd: root });
 }
@@ -669,7 +668,7 @@ describe("setArtifactStore / getArtifactStore", () => {
       setArtifactStore(undefined);
       const previousCwd = process.cwd();
       try {
-        // The default FsStore resolves the fixed root from cwd, not env.
+        // why: The default FsStore resolves the fixed root from cwd, not env.
         process.chdir(root);
         const store = authorizedStore(getArtifactStore() as ArtifactStore & { root: string });
         const payload = { verdict: "approve" };
@@ -693,7 +692,7 @@ describe("setArtifactStore / getArtifactStore", () => {
       mkdirSync(join(root, ".mstar"), { recursive: true });
       const previousCwd = process.cwd();
       try {
-        // A stale env pin cannot redirect the fixed root.
+        // why: A stale env pin cannot redirect the fixed root.
         process.env[ENV_KEY] = elsewhere;
         process.chdir(root);
         const store = authorizedStore(getArtifactStore() as ArtifactStore & { root: string });
@@ -794,7 +793,7 @@ describe("injected ArtifactStore \u2014 retired project-register guard", () => {
     const root = await legacyControlRoot("injected-guard-register-");
     const previousCwd = process.cwd();
     try {
-      // The process control root is derived from cwd under the fixed-root
+      // why: The process control root is derived from cwd under the fixed-root
       // contract (the retired env rung is gone), so the store's targets are
       // judged against this fixture's `.mstar`.
       process.chdir(root);

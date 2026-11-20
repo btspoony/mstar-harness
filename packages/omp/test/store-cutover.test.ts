@@ -77,7 +77,7 @@ interface Fixture {
  * the repo `.mstarc` the gates resolve through `resolveRepoEnforcement`. */
 function makeHarness(id: string, enforcement?: "hard" | "soft"): Fixture {
   const root = mkdtempSync(join(tmpdir(), `omp-g4b-${id}-`));
-  // A real git worktree — the fixed harness root resolves from the Git
+  // why: A real git worktree — the fixed harness root resolves from the Git
   // main worktree; without `git init` no root is answered.
   execFileSync("git", ["init", "-q"], { cwd: root, stdio: "ignore" });
   roots.push(root);
@@ -453,7 +453,7 @@ describe("omp write gate — authority paths refuse, documents keep their valida
 
     const vetoed = await runWrite(handler, source.register, VALID_REGISTER);
     expect(vetoed?.block).toBe(true);
-    // The symlink's landed destination (the ACTIVE harness's register) is
+    // why: The symlink's landed destination (the ACTIVE harness's register) is
     // the authority candidate: the destination's ACTIVE store retires the
     // register route outright — stricter-wins, never the source-only probe.
     expect(vetoed?.reason).toContain("project.register.retired");

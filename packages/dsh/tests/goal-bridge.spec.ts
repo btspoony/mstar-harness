@@ -495,7 +495,7 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
         }))
         expect(captured.filter((m) => m.startsWith('warn:'))).toHaveLength(0)
 
-        // Control: a workspace whose Git main worktree carries `.mstar`
+        // why: Control: a workspace whose Git main worktree carries `.mstar`
         // attributes and warns.
         const ws = join(root, 'workspace')
         const wsHarness = join(ws, '.mstar')

@@ -328,7 +328,7 @@ function controlFacts(startDir: string): ControlFacts {
   } catch (error) {
     if (!retired(error)) throw error;
   }
-  // The process root comes from Git only: the first `worktree list` record is
+  // why: The process root comes from Git only: the first `worktree list` record is
   // the main checkout, whatever the start path looks like.
   const controlRoot = readMainWorktree(startDir)?.root ?? null;
   if (unavailable === undefined) {
@@ -411,7 +411,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           fields: [{ field: "path", subject: "the scaffold root", value: input.path }],
         });
         if (unnamedRoot !== undefined) return unnamedRoot;
-        // An omitted path is the invocation workspace. The harness root is
+        // why: An omitted path is the invocation workspace. The harness root is
         // fixed at the Git main worktree's `.mstar`, so the scaffold targets
         // that checkout instead of re-deriving a root from the workspace.
         const root = input.path === undefined ? context.cwd : resolveCliPath(input.path, context.cwd);

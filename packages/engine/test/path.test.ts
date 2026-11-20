@@ -85,18 +85,18 @@ const CANONICAL_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
 !.agents/adr/**
 `;
 function tmpRoot(prefix: string): string {
-  // Git answers with the real path (macOS /var → /private/var), so fixture
+  // why: Git answers with the real path (macOS /var → /private/var), so fixture
   // roots are canonicalized up front: a `resolve()` of a raw tmpdir path
   // would compare unequal to the worktree-list record.
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
 
-/** Run git inside a fixture repo; trimmed stdout. */
+/** why: Run git inside a fixture repo; trimmed stdout. */
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-/** Real git repo with one commit (worktree-add requires a HEAD). */
+/** why: Real git repo with one commit (worktree-add requires a HEAD). */
 function gitRepo(root: string): void {
   git(["init", "-q"], root);
   git(["config", "user.email", "path-test@example.com"], root);
@@ -170,7 +170,7 @@ describe("resolveHarnessDir — fixed root (ADR 2026-11-20)", () => {
       mkdirSync(join(main, ".mstar"));
       const linked = join(parent, "linked");
       git(["worktree", "add", "-q", linked, "-b", "feature/linked"], main);
-      // A shadow .mstar inside the linked checkout is never adopted.
+      // why: A shadow .mstar inside the linked checkout is never adopted.
       mkdirSync(join(linked, ".mstar"));
       const nested = join(linked, "src", "deep");
       mkdirSync(nested, { recursive: true });
@@ -358,14 +358,14 @@ describe("resolveHarnessDir — localProbe boundary (roadmap §7c)", () => {
   test("(a) explicit workspaceRoot: a `.mstar` ABOVE the boundary is never returned", () => {
     const root = tmpRoot("path-boundary-a-");
     try {
-      // "global" fixture: `.mstar` sits above the workspace root, exactly
+      // why: "global" fixture: `.mstar` sits above the workspace root, exactly
       // like the `~/.mstar` CLI-install root the defect adopted.
       mkdirSync(join(root, ".mstar"));
       const workspace = join(root, "project");
       const probe = join(workspace, "src", "deep");
       mkdirSync(probe, { recursive: true });
       expect(resolveHarnessDir(probe, { localProbe: true, workspaceRoot: workspace })).toBeNull();
-      // a harness BELOW the start still wins (never the fixture above).
+      // why: a harness BELOW the start still wins (never the fixture above).
       mkdirSync(join(workspace, ".mstar"));
       expect(resolveHarnessDir(probe, { localProbe: true, workspaceRoot: workspace })).toBe(resolve(workspace, ".mstar"));
     } finally {
@@ -412,7 +412,7 @@ describe("resolveHarnessDir — localProbe boundary (roadmap §7c)", () => {
   test("(c2) default git boundary: a `.git` repo-root harness still resolves from a subdir without explicit workspaceRoot", () => {
     const root = tmpRoot("path-boundary-c2-");
     try {
-      // Real git repo fixture: the default local-probe boundary is `git
+      // why: Real git repo fixture: the default local-probe boundary is `git
       // rev-parse --show-cdup` from the start dir = the repo root.
       gitInit(root);
       mkdirSync(join(root, ".mstar"));
@@ -430,7 +430,7 @@ describe("resolveHarnessDir — localProbe boundary (roadmap §7c)", () => {
       mkdirSync(join(root, ".mstar"));
       const probe = join(root, "sub");
       mkdirSync(probe, { recursive: true });
-      // tmp root is not a git repo → default boundary = start → null even
+      // why: tmp root is not a git repo → default boundary = start → null even
       // though `.mstar` exists one level up.
       expect(resolveHarnessDir(probe, { localProbe: true })).toBeNull();
     } finally {
@@ -458,7 +458,7 @@ describe("resolveHarnessDir — localProbe boundary (roadmap §7c)", () => {
       mkdirSync(join(root, ".mstar"));
       const probe = join(root, "sub");
       mkdirSync(probe, { recursive: true });
-      // ".." = the parent of the start dir — a boundary at the tmp root.
+      // why: ".." = the parent of the start dir — a boundary at the tmp root.
       expect(resolveHarnessDir(probe, { localProbe: true, workspaceRoot: ".." })).toBe(resolve(root, ".mstar"));
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -628,7 +628,7 @@ describe("resolveWorkflowDir / resolveProjectDir (v3 workflow lifecycle layout)"
     try {
       mkdirSync(join(root, "proj", ".mstar"), { recursive: true });
       writeFileSync(join(root, ".mstarc"), "[config]\nworkflow_dir=outer-wf\n");
-      // The override walk stops at the harness dir's parent, so the
+      // why: The override walk stops at the harness dir's parent, so the
       // outer config does not apply.
       expect(resolveWorkflowDir(join(root, "proj"), { harnessDir: join(root, "proj", ".mstar") })).toBe(
         join(root, "proj", ".mstar", "workflows"),
@@ -646,7 +646,7 @@ describe("resolveWorkflowDir / resolveProjectDir (v3 workflow lifecycle layout)"
       const opts = { harnessDir: join(root, "custom-harness") };
       expect(resolveWorkflowDir(root, opts)).toBe(join(root, "runtime", "wf"));
       expect(resolveProjectDir(root, opts)).toBe(join(root, "store", "projects"));
-      // No declaration: defaults compose under the asserted harness dir.
+      // why: No declaration: defaults compose under the asserted harness dir.
       writeFileSync(join(root, ".mstarc"), "[config]\n");
       expect(resolveWorkflowDir(root, opts)).toBe(join(root, "custom-harness", "workflows"));
       expect(resolveProjectDir(root, opts)).toBe(join(root, "custom-harness", "projects"));
@@ -662,7 +662,7 @@ describe("resolveWorkflowDir / resolveProjectDir (v3 workflow lifecycle layout)"
       mkdirSync(join(root, ".mstar"), { recursive: true });
       writeFileSync(join(root, ".mstarc"), "[config]\nworkflow_dir=runtime/wf\nproject_dir=store/projects\n");
       withEnv(join(root, "custom-harness"), () => {
-        // The env pin must not redirect the fixed root.
+        // why: The env pin must not redirect the fixed root.
         expect(resolveWorkflowDir(root)).toBe(join(root, "runtime", "wf"));
         expect(resolveProjectDir(root)).toBe(join(root, "store", "projects"));
         writeFileSync(join(root, ".mstarc"), "[config]\n");
@@ -1255,9 +1255,9 @@ describe("scaffoldHarness", () => {
     try {
       const nested = join(root, "runtime", "harness");
       await expect(scaffoldHarness(root, { harnessDir: nested })).rejects.toThrow(HarnessRootRetiredError);
-      // Nothing was scaffolded at the refused location.
+      // why: Nothing was scaffolded at the refused location.
       expect(existsSync(join(root, "runtime"))).toBe(false);
-      // The equal assertion is accepted.
+      // why: The equal assertion is accepted.
       setArtifactStore(createFsStore(resolve(root, ".mstar")));
       const harnessDir = await scaffoldHarness(root, { harnessDir: join(root, ".mstar") });
       expect(harnessDir).toBe(join(root, ".mstar"));
@@ -1292,7 +1292,7 @@ describe("scaffoldHarness", () => {
       setArtifactStore(createFsStore(resolve(root, ".custom")));
       await expect(scaffoldHarness(root)).rejects.toThrow(HarnessRootRetiredError);
       await expect(scaffoldHarness(root)).rejects.toThrow(/harness_dir/);
-      // Nothing was created at the retired location or at the fixed root.
+      // why: Nothing was created at the retired location or at the fixed root.
       expect(existsSync(join(root, ".custom"))).toBe(false);
       expect(existsSync(join(root, ".mstar"))).toBe(false);
     } finally {

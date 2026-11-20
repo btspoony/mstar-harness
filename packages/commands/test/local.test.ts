@@ -40,7 +40,7 @@ import { linkedWorktreeOf } from "../src/families/local.js";
 
 const previousProjectRoot = process.env.MSTAR_CLI_PROJECT_ROOT;
 const fixtures: string[] = [];
-// Every path.resolve case here probes from a start directory. The retired
+// why: Every path.resolve case here probes from a start directory. The retired
 // MSTAR_HARNESS_DIR is ignored by the engine, but clearing it keeps the
 // fixture independent of a caller shell that still exports it.
 let previousHarnessDir: string | undefined;
@@ -97,7 +97,7 @@ describe("shared host-health helpers", () => {
   });
 
   test("path resolve reports reviewDir, honoring a .mstarc review_dir override outside the harness", async () => {
-    // The harness root is fixed at the Git main worktree's `.mstar`, so the
+    // why: The harness root is fixed at the Git main worktree's `.mstar`, so the
     // fixture is a real repo; `.mstarc` keeps only the review_dir override
     // (`harness_dir` is retired) and realpath keeps the /private/var spelling.
     const root = realpathSync(fixture());
@@ -199,7 +199,7 @@ describe("shared host-health helpers", () => {
         workflowDir: path.join(controlHarness, "workflows"),
         projectDir: path.join(controlHarness, "projects"),
         reviewDir: path.join(controlHarness, "reviews"),
-        // The linked checkout carries `.agents/plugins/` only: `.agents/` is a
+        // why: The linked checkout carries `.agents/plugins/` only: `.agents/` is a
         // retired harness candidate, so its own probe resolves no harness.
         local: { harnessDir: null },
       },
@@ -444,7 +444,7 @@ describe("shared host-health helpers", () => {
   test("path resolve refuses a linked checkout whose main worktree cannot be read", async () => {
     const orphan = path.join(realpathSync(fixture()), "orphan");
     mkdirSync(orphan, { recursive: true });
-    // A `.git` FILE is the linked-checkout marker; its gitdir points nowhere,
+    // why: A `.git` FILE is the linked-checkout marker; its gitdir points nowhere,
     // so no main worktree can be read from it. MSTAR_HARNESS_DIR is retired
     // and ignored, so nothing short-circuits the walk.
     writeText(orphan, ".git", "gitdir: /nonexistent/mstar-fixture.git\n");
@@ -1029,7 +1029,7 @@ describe("zcode host health", () => {
 });
 describe("trusted root, author.declared ignore, and host capability", () => {
   test("trusted root path reads resolve without Git root discovery", () => {
-    // localProbe is the caller's own checkout probe: it reads only the fixed
+    // why: localProbe is the caller's own checkout probe: it reads only the fixed
     // `.mstar` candidate inside the supplied boundary and never calls Git.
     const root = realpathSync(fixture());
     const nested = path.join(root, "nested");

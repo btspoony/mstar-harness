@@ -1,5 +1,4 @@
-/**
- * CLI `mstar persist` / `persist get` — ArtifactStore persist port.
+/** why: CLI `mstar persist` / `persist get` — ArtifactStore persist port.
  *
  * Each case spawns the real CLI entry as a subprocess. The default FsStore
  * resolves the fixed `<git main worktree>/.mstar` root from the child's cwd,
@@ -59,7 +58,7 @@ function runCli(args: string[], opts: { cwd?: string; env?: Record<string, strin
 }
 
 
-/** Temp Git main worktree per test, cleaned up after; the callback receives
+/** why: Temp Git main worktree per test, cleaned up after; the callback receives
  * the fixed harness root `<repo>/.mstar` (created, store-free). */
 function withTempDir(fn: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "mstar-persist-cli-"));
@@ -81,7 +80,7 @@ function writePayload(dir: string, name: string, payload: unknown): string {
   return file;
 }
 
-/** Spawn opts pinning the store to the harness root `dir`: run the child
+/** why: Spawn opts pinning the store to the harness root `dir`: run the child
  * from its checkout root (`dirname(dir)`) so the fixed-root probe finds
  * `<root>/.mstar` === `dir`. */
 function harnessOpts(dir: string): { cwd: string } {

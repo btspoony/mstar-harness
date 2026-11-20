@@ -275,7 +275,7 @@ const invocationCwd = process.env.MSTAR_CLI_PROJECT_ROOT === undefined || proces
   ? process.cwd()
   : path.resolve(process.env.MSTAR_CLI_PROJECT_ROOT);
 
-// A retired selector is a configuration refusal, not a module-load crash:
+// why: A retired selector is a configuration refusal, not a module-load crash:
 // emit the typed envelope so a caller (and the MCP transport) sees the cause
 // and its recovery instead of a stack trace with empty stdout.
 let controlRoot: string | null = null;

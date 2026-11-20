@@ -107,7 +107,7 @@ function buildCustomTree(base: string): Tree {
 }
 
 function buildUnpopulatedTree(base: string): Tree {
-  // Fixed `.mstar` root present but not populated with markers —
+  // why: Fixed `.mstar` root present but not populated with markers —
   // classification only via the resolveHarnessDir fallback.
   const root = mkdtempSync(join(tmpdir(), "gates-unpopulated-"));
   const harness = join(root, ".mstar");
@@ -169,7 +169,7 @@ describe("gates.harnessDocKindOfTarget", () => {
     // Inside .mstar/plans the rung-3 probe would resolve plans/ as the
     // harness — the marker probe must win for the root's own docs.
     expect(harnessDocKindOfTarget(tree.status)).toEqual({ harnessDir: tree.harness, kind: "status" });
-    // plans/ holds no canonical docs under the fixed root: a status.json
+    // why: plans/ holds no canonical docs under the fixed root: a status.json
     // directly inside it is not a harness root doc, and the
     // snapshot/register rel shapes are not gated either.
     expect(harnessDocKindOfTarget(join(tree.harness, "plans", "workflows", "wf-x", "snapshot.json"))).toBeNull();

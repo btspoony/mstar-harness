@@ -249,10 +249,10 @@ describe("execution-omp-harness-root — the fixed root is the Git main worktree
     git(["worktree", "add", "-q", "-b", "linked-branch", linked], fixture.main);
     try {
       expect(resolveHarnessDir(linked)).toBe(realpathSync(fixture.harness));
-      // No `.mstar` in the linked worktree — nothing resolves there.
+      // why: No `.mstar` in the linked worktree — nothing resolves there.
       mkdirSync(join(linked, ".mstar"), { recursive: true });
       expect(resolveHarnessDir(linked)).toBe(realpathSync(fixture.harness));
-      // The main checkout's own probe still answers its own root.
+      // why: The main checkout's own probe still answers its own root.
       expect(resolveHarnessDir(fixture.main)).toBe(realpathSync(fixture.harness));
     } finally {
       git(["worktree", "remove", "--force", linked], fixture.main);

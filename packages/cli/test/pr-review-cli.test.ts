@@ -554,7 +554,7 @@ describe("mstar pr-review tally", () => {
 describe("mstar pr-review report-path", () => {
   test("--reviews-dir defaults to {REVIEW_DIR} under the discovered harness dir", () => {
     withTempDir((dir) => {
-      // cwd = a real Git main worktree whose fixed root is <cwd>/.mstar, so
+      // why: cwd = a real Git main worktree whose fixed root is <cwd>/.mstar, so
       // {REVIEW_DIR} = <cwd>/.mstar/reviews.
       execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
       execFileSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });

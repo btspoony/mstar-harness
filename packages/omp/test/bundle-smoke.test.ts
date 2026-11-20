@@ -677,7 +677,7 @@ describe("@mstar-harness/omp packed artifact", () => {
       const packageVersion = stringField(pkg, "version");
       const peer = (pkg.peerDependencies ?? {}) as Record<string, unknown>;
       mkdirSync(join(project, ".mstar"), { recursive: true });
-      // The harness root is fixed at the Git main worktree's `.mstar`: the
+      // why: The harness root is fixed at the Git main worktree's `.mstar`: the
       // disposable project must be a real Git worktree, or nothing resolves
       // and the phase2 bind refuses with `phase2.harness-not-found` before
       // ever reaching the authority's own `store.not-initialized`.

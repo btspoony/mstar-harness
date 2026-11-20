@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { runCli, withTempDir } from "./harness";
 import { cliEnvelope } from "./support/cli-assertions";
 
-/** Make `dir` a real Git main worktree: the CLI derives its fixed
+/** why: Make `dir` a real Git main worktree: the CLI derives its fixed
  * `<main worktree>/.mstar` root from the cwd, so a bare temp dir resolves no
  * harness at all. */
 function gitMainWorktree(dir: string): void {
@@ -54,7 +54,7 @@ describe("mstar audit scaffold — review run dir from findings JSON", () => {
 
   test("run dir defaults to {REVIEW_DIR}/<date>-codebase-<level>-<round>", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
-      // cwd = a real Git main worktree → {REVIEW_DIR} = <cwd>/.mstar/reviews
+      // why: cwd = a real Git main worktree → {REVIEW_DIR} = <cwd>/.mstar/reviews
       gitMainWorktree(dir);
       mkdirSync(join(dir, ".mstar"), { recursive: true });
       const findingsFile = join(dir, "findings.json");
@@ -113,7 +113,7 @@ describe("mstar audit scaffold — review run dir from findings JSON", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
-      // A cwd outside any checkout resolves no fixed harness root, so the
+      // why: A cwd outside any checkout resolves no fixed harness root, so the
       // reviews dir is named explicitly; with no Git there is no SHA to read.
       const reviewsDir = join(dir, "reviews");
       const result = runCli(["audit", "scaffold", findingsFile, "--reviews-dir", reviewsDir, "--date", "2026-08-08"], { cwd: dir });
@@ -127,7 +127,7 @@ describe("mstar audit scaffold — review run dir from findings JSON", () => {
       mkdirSync(join(dir, ".mstar"), { recursive: true });
       const findingsFile = join(dir, "findings.json");
       writeFileSync(findingsFile, JSON.stringify(FINDINGS));
-      // cwd = a fixture checkout: the run dir defaults under its fixed root.
+      // why: cwd = a fixture checkout: the run dir defaults under its fixed root.
       // --date pinned so the run dir is not a calendar flake.
       const result = runCli(["audit", "scaffold", findingsFile, "--date", "2026-08-08", "--sha", "deadbee"], { cwd: dir });
       expect(result.exitCode).toBe(0);

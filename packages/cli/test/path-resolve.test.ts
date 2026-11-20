@@ -59,7 +59,7 @@ function runResolve(args: string[]): RunResult {
   return runCli(["path", "resolve", ...args]);
 }
 
-/** Empty temp root (realpath'd: the CLI reports physical paths on macOS, where
+/** why: Empty temp root (realpath'd: the CLI reports physical paths on macOS, where
  * `tmpdir()` is a `/var` symlink); `.mstar/` and specs content added per test. */
 function withRoot(fn: (root: string) => void): void {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-path-resolve-")));
@@ -70,8 +70,7 @@ function withRoot(fn: (root: string) => void): void {
   }
 }
 
-/**
- * A real Git main worktree at `root`. The fixed-root contract resolves
+/** why: A real Git main worktree at `root`. The fixed-root contract resolves
  * `{HARNESS_DIR}` only through a readable main worktree, so the fixture must be
  * a genuine checkout (a bare `.git` skeleton no longer classifies).
  */
@@ -140,7 +139,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
       writeFileSync(join(root, ".agents", "specs", "adr.md"), "# ADR\n");
       writeFileSync(join(root, ".agents", "status.json"), "{}");
       const result = runResolve([root]);
-      // The fixed root is `<checkout>/.mstar`; a legacy layout is refused by
+      // why: The fixed root is `<checkout>/.mstar`; a legacy layout is refused by
       // name with its scaffold recovery instead of being adopted. The command
       // layer currently reports the engine's typed `harness.root-retired`
       // throw as `command.internal` (production gap, reported separately), so
@@ -188,7 +187,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
         projectDir: join(root, ".mstar", "projects"),
         reviewDir: join(root, ".mstar", "reviews"),
       });
-      // Git names the process root: controlRoot is the main worktree the
+      // why: Git names the process root: controlRoot is the main worktree the
       // caller sits in, and its harness root is the same fixed `.mstar`.
       expect(data(result)).toMatchObject({
         controlRoot: root,

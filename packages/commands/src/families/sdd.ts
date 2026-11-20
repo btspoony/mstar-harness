@@ -65,7 +65,7 @@ async function execute(id: string, input: SddInput, invocation: InvocationContex
   try {
     const verb = id.slice("sdd.".length);
     if (verb === "workspace") {
-      // The CLI argument names the worktree root; the MCP `controlRoot`
+      // why: The CLI argument names the worktree root; the MCP `controlRoot`
       // selector is the call root and names the fixed `.mstar` (see
       // `rootInputs`). Normalize the selector shape back to the worktree root
       // the engine pins — it already refused either spelling before this.
@@ -117,7 +117,7 @@ function cliDefinition(verb: (typeof verbs)[number]): CommandDefinition<SddInput
     id,
     cli: { path: shape.path, aliases: [], arguments: shape.arguments, options: shape.options },
     input: inputSchemas[verb],
-    // `workspace` resolves its own root from `controlRoot`, not from a
+    // why: `workspace` resolves its own root from `controlRoot`, not from a
     // `harness` field: name the real selector so the per-call root governs it.
     ...(verb === "workspace" ? { rootInputs: ["controlRoot"] } : {}),
     output: commandEnvelopeSchema,

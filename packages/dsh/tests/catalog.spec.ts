@@ -1110,7 +1110,7 @@ Implement the invalidation.
   })
 
   it('cross-workspace isolation: a ledger record in workspace A invalidates ONLY A — B\'s cached entry survives within the TTL ', async () => {
-    // Two workspaces, each with its OWN probed harness root — no explicit
+    // why: Two workspaces, each with its OWN probed harness root — no explicit
     // config, so each session cwd resolves its own `{HARNESS_DIR}` and its own
     // cache key (the session id + cwd) + reverse-map entry (D4: per-session
     // keys, per-harness invalidation — a record deletes EVERY session of the

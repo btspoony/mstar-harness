@@ -1,5 +1,4 @@
-/**
- * The unreadable-store boundary, proved as behaviour in ONE isolated fixture.
+/** why: The unreadable-store boundary, proved as behaviour in ONE isolated fixture.
  *
  * A physically unreadable `store.db` is not restorable online (`store execution
  * restore-preview`/`restore` both need a successful inventory of the live
@@ -56,12 +55,12 @@ describe("unreadable store — refusal boundary and the documented fresh-clone b
       expect(recovery).toContain("mstar harness scaffold");
       expect(recovery).toContain("mstar store init");
       expect(recovery).toContain("mstar catalog discover");
-      // It never advertises an online restore of a store no reader can inventory,
+      // why: It never advertises an online restore of a store no reader can inventory,
       // and it never points at the retired root selector.
       expect(recovery).not.toContain("mstar store restore");
       expect(recovery).not.toContain("MSTAR_HARNESS_DIR");
 
-      // (b) A fresh clone has no `.mstar`; the fixed root bootstraps there.
+      // why: (b) A fresh clone has no `.mstar`; the fixed root bootstraps there.
       const fresh = join(root, "fresh-clone");
       mkdirSync(fresh, { recursive: true });
       execFileSync("git", ["init", "-q"], { cwd: fresh });
@@ -70,7 +69,7 @@ describe("unreadable store — refusal boundary and the documented fresh-clone b
       const scaffold = envelopeOf(runCli(["harness", "scaffold", fresh], { cwd: fresh }));
       expect(scaffold.status).toBe("ok");
       expect(scaffold.data?.harnessDir).toBe(join(realpathSync(fresh), ".mstar"));
-      // The repository's declared layout is never edited, and the scaffold does
+      // why: The repository's declared layout is never edited, and the scaffold does
       // not write the retired `harness_dir` key.
       expect(readFileSync(join(fresh, ".mstarc"), "utf8")).toBe(declared);
       expect(readFileSync(join(fresh, ".mstarc"), "utf8")).not.toContain("harness_dir");

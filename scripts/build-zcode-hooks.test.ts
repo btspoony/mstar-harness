@@ -1,5 +1,4 @@
-/**
- * scripts/build-zcode-hooks.ts — build + bundle smoke (cross-host hooks
+/** why: scripts/build-zcode-hooks.ts — build + bundle smoke (cross-host hooks
  * contract D2, knowledge doc
  * bun-bundle-ascii-literals two-layer guard). Covers:
  * - the artifact carries the generated banner and INLINES the engine:

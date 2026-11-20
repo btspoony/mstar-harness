@@ -125,7 +125,7 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
       const result = runCli(["sdd", "workspace", "plan-1"], {
         cwd: root,
       });
-      // Verified-discovery invariant: without a verified main worktree the
+      // why: Verified-discovery invariant: without a verified main worktree the
       // engine resolves and creates NO SDD tree — an explicit standalone
       // root must come via CONTROL_ROOT.
       expect(result.exitCode).toBe(1);

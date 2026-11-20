@@ -88,8 +88,7 @@ function targetRefusal(id: string, supplied: string): CommandEnvelope {
     }],
   });
 }
-/**
- * The guard's view of one path: its filesystem identity, or why it has none.
+/** why: The guard's view of one path: its filesystem identity, or why it has none.
  *
  * The control root arrives as a Git-derived realpath while `--harness` is only
  * resolved lexically, so a symlinked spelling of the same live directory used

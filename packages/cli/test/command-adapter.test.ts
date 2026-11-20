@@ -18,7 +18,7 @@ import { decodePayloadInputs, mapParserError, registerCliCommands, renderCommand
 import { clearIdentityChannels, IDENTITY_CHANNELS, restoreIdentityChannels } from "./harness";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 
-// Every case here runs in-process, so an ambient leaf-seat or session marker
+// why: Every case here runs in-process, so an ambient leaf-seat or session marker
 // exported by the invoking shell would authorize/refuse the call instead of the
 // state the case sets. Clear them per case and restore the shell's after.
 beforeEach(clearIdentityChannels);
@@ -40,8 +40,7 @@ function context(): InvocationContext {
   };
 }
 
-/**
- * One isolated issue harness with an initialized store whose writer is sealed
+/** why: One isolated issue harness with an initialized store whose writer is sealed
  * (the sibling fixture pattern): the registered CLI opens the store read-only,
  * and a just-closed writer's deferred cleanup can otherwise race that open.
  * The checkout is a real Git main worktree: the fixed harness root is derived
@@ -103,7 +102,7 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("Usage: mstar mcp");
   expect(result.stdout).toContain("Run the Morning Star MCP server over stdio");
-  // The connection carries no harness root: the root is fixed at
+  // why: The connection carries no harness root: the root is fixed at
   // `<git main worktree>/.mstar` and each relevant call passes `harness`.
   expect(result.stdout).not.toContain("--harness <path>");
   expect(result.stdout).not.toContain("MSTAR_HARNESS_DIR");
@@ -580,9 +579,9 @@ describe("generated CLI adapter", () => {
   });
 
   test("forwards session recovery selectors and refuses the operator-identity gap as usage", async () => {
-    // ACTIVE disposition: `workflow recover-coordinator` is retired; the
-    // recovery selectors travel on `session recover` (single --prior-session,
-    // --attestation, --expect, --operation).
+    // why: The fixed root is derived from the invocation cwd, so this case runs
+    // against its own Git main worktree instead of the checkout's state.
+    const { invocation } = await cliHarness();
     const args = [
       "session", "recover",
       "--workflow", "wf-recover-selector",
@@ -592,7 +591,7 @@ describe("generated CLI adapter", () => {
       "--expect", "exec-v1:workflow:00000000-0000-4000-8000-000000000000:1:WyJ3Zi1yZWNvdmVyLXNlbGVjdG9yIiwiY29vcmRpbmF0b3IiXQ:1",
       "--prior-session", "prior-coordinator",
     ];
-    const recovered = await run([...args, "--session-id", "cli-main-session"]);
+    const recovered = await run([...args, "--session-id", "cli-main-session"], undefined, false, invocation);
     const recoveredEnvelope = JSON.parse(recovered.stdout);
     expect(recoveredEnvelope.status).toBe("refused");
     expect(recoveredEnvelope.code).not.toBe("command.invalid-input");
@@ -604,7 +603,7 @@ describe("generated CLI adapter", () => {
     delete process.env.MSTAR_EXECUTION_IDENTITY;
     delete process.env.DSH_SESSION_ID;
     try {
-      const withoutRuntimeIdentity = await run(args);
+      const withoutRuntimeIdentity = await run(args, undefined, false, invocation);
       const usageEnvelope = JSON.parse(withoutRuntimeIdentity.stdout);
       expect(usageEnvelope).toMatchObject({ status: "usage" });
       expect(String(usageEnvelope.message)).toContain("--session-id");

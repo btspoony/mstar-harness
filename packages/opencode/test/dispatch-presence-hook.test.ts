@@ -478,7 +478,7 @@ describe("anti-recursion in validateDispatchAssignment (caller-scoped, issue #15
   });
 
   test("repo-level hard (`.mstarc`) hardens a flag-less Assignment (dsh resolveDispatchHard parity)", () => {
-    // The fixed root is the Git main worktree's `.mstar`: declare hard in the
+    // why: The fixed root is the Git main worktree's `.mstar`: declare hard in the
     // chdir'd fixture repo's `.mstarc`, and commit it so the control-root
     // cleanliness gate keeps answering clean.
     writeFileSync(join(fixtureRepo, ".mstarc"), "[config]\nenforcement=hard\n");

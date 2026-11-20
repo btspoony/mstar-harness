@@ -110,7 +110,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       }
       expect(existsSync(join(harnessDir, "AGENTS.md"))).toBe(false);
 
-      // The tracked .mstarc declares only the corpus layout: the harness root
+      // why: The tracked .mstarc declares only the corpus layout: the harness root
       // is fixed at `.mstar/`, so no `harness_dir` key is emitted (a file that
       // still declares it is refused as retired).
       const config = readFileSync(join(root, ".mstarc"), "utf8");
@@ -240,14 +240,14 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");
 
       const result = runScaffold([root]);
-      // The harness root is fixed at `<checkout>/.mstar`; a `.mstarc` that
+      // why: The harness root is fixed at `<checkout>/.mstar`; a `.mstarc` that
       // still declares `harness_dir` refuses by name instead of scaffolding a
       // second layout.
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toContain("harness_dir");
       expect(result.stdout).toContain("retired");
       expect(result.stdout).toContain("mstar path resolve");
-      // Nothing is created for the retired declaration.
+      // why: Nothing is created for the retired declaration.
       expect(existsSync(join(root, ".custom"))).toBe(false);
       expect(existsSync(join(root, ".mstar"))).toBe(false);
       expect(existsSync(join(root, ".gitignore"))).toBe(false);
@@ -293,7 +293,7 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       gitInit(root);
       mkdirSync(join(root, "packages", "foo"), { recursive: true });
 
-      // Spawned from a nested directory with the checkout root named: the
+      // why: Spawned from a nested directory with the checkout root named: the
       // harness dir is `<repoRoot>/.mstar` and BOTH the comparison and the
       // fence target anchor at the git top-level.
       const result = runCli(["harness", "scaffold", root], { cwd: join(root, "packages", "foo") });

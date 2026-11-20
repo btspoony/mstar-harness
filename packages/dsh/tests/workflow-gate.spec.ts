@@ -176,7 +176,7 @@ async function makeWorkspace(prefix: string): Promise<string> {
   return await mkdtemp(join(tmpdir(), prefix))
 }
 
-/** A workspace whose `<git main worktree>/.mstar` harness is the fixed root. */
+/** why: A workspace whose `<git main worktree>/.mstar` harness is the fixed root. */
 async function makeHarnessWorkspace(prefix: string): Promise<string> {
   const ws = await makeWorkspace(prefix)
   gitInit(ws)
@@ -369,7 +369,7 @@ describe('workflow gate — non-workflow tools unaffected', () => {
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
 
-    // The control-root cleanliness gate reads the process main worktree:
+    // why: The control-root cleanliness gate reads the process main worktree:
     // run the dispatch from the fixture's clean harness repo, never the
     // ambient checkout the suite runs in.
     const prev = process.cwd()
@@ -391,7 +391,7 @@ describe('workflow gate — non-workflow tools unaffected', () => {
     const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
     const advisories = captureAdvisories(app.ctx)
 
-    // The control-root cleanliness gate reads the process main worktree:
+    // why: The control-root cleanliness gate reads the process main worktree:
     // run the dispatch from the fixture's clean harness repo, never the
     // ambient checkout the suite runs in.
     const prev = process.cwd()
@@ -729,7 +729,7 @@ describe('workflow ledger — the adopted-root receipt survives a restart', () =
     // The ADOPTED root carries the store, the lifecycle, the bind and the C1
     // slot for (SESSION, ws) — the state a cross-root native bind leaves there.
     await seedActiveWorkflow(adoptedRoot, 'wf-adopted', [], {}, SESSION, ws, 'wf-adopted')
-    // The workspace's own fixed `.mstar` harness is the fallback the
+    // why: The workspace's own fixed `.mstar` harness is the fallback the
     // resolver would answer without the durable record — it disagrees
     // with the adopted root, so the assertion below discriminates
     // between the two routes.
@@ -910,7 +910,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     // The deny reason cites the uncovered plan (the P-b red line) — the
     // same reason shape the P-b describe-block tests (a)/(e) pin.
     expect(decision.reason).toContain('plan-orphan')
-    // The verdict row records into the ACTIVE workflow dir of the calling
+    // why: The verdict row records into the ACTIVE workflow dir of the calling
     // workspace's harness (`.mstar/workflows/wf-1/agent-flow.jsonl`).
     const events = readAgentFlow(join(ws, '.mstar', 'workflows/wf-1'), 'wf-1')!.events
     expect(events).toHaveLength(1)
@@ -1165,7 +1165,7 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     sessions.append(parent, 'tool-workflow/run-start', { runId: 'run-w1-e2e', name: 'deploy-x' })
     await drainLedger()
 
-    // W-1: never asked ⇒ never cached — the observation must NOT promote the
+    // why: W-1: never asked ⇒ never cached — the observation must NOT promote the
     // run to allow (a P-b advisory run is not an approval resolution). The
     // drain above is what makes this non-vacuous: the row really landed (it
     // would otherwise be read before the queued task ran). This case's harness

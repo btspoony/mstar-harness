@@ -40,7 +40,7 @@ test("a below-floor Node runtime refuses store and status commands with their ow
     // so the refusal is the one a below-floor Node user receives.
     const preload = join(root, "spoof-node-version.mjs");
     writeFileSync(preload, 'Object.defineProperty(process.versions, "node", { value: "22.5.0", configurable: true });\n');
-    // `status validate` reads an existing store and discovers the control root.
+    // why: `status validate` reads an existing store and discovers the control root.
     // The harness root is fixed at `<git main worktree>/.mstar`, so every
     // fixture root is a real Git main worktree whose `.mstar` is the root the
     // resolver derives from the cwd probe.
@@ -51,14 +51,14 @@ test("a below-floor Node runtime refuses store and status commands with their ow
       spawnSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
       return repo;
     };
-    // `status validate` reads an existing store, so seed `.mstar` under a
+    // why: `status validate` reads an existing store, so seed `.mstar` under a
     // real main worktree with the real Node.
     const statusRoot = gitMainWorktree("status-root");
     const statusHarness = join(statusRoot, ".mstar");
     mkdirSync(statusHarness, { recursive: true });
     const seeded = spawnSync(NODE_BIN, [DIST, "store", "init", "--harness", statusHarness], { encoding: "utf8" });
     expect(seeded.status).toBe(0);
-    // `store upgrade` needs an existing store too; `store init` needs the
+    // why: `store upgrade` needs an existing store too; `store init` needs the
     // `.mstar` directory present so admission can validate the fixed root.
     const upgradeRoot = gitMainWorktree("upgrade-root");
     const upgradeHarness = join(upgradeRoot, ".mstar");

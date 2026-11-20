@@ -1,5 +1,4 @@
-/**
- * omp Gate-1 golden block/pass parity (cross-host hooks contract D1).
+/** why: omp Gate-1 golden block/pass parity (cross-host hooks contract D1).
  *
  * The GOLDEN map below is the literal record of the PRE-refactor omp gate
  * behavior (captured by running the pre-extraction
@@ -160,7 +159,7 @@ function buildHardCustom(base: string): Tree {
 }
 
 function buildRetiredLegacy(base: string): Tree {
-  // Retired contract: `.agents/` is a legacy candidate that is never
+  // why: Retired contract: `.agents/` is a legacy candidate that is never
   // adopted. Sparse (compass only — no marker set), so classification
   // reaches the fixed-root resolver and refuses `harness.root-retired`
   // naming `mstar harness scaffold`; every write still blocks.
@@ -181,7 +180,7 @@ function buildRetiredLegacy(base: string): Tree {
 }
 
 function buildRetiredDeclared(base: string): Tree {
-  // Retired contract: `.mstarc` `harness_dir` at the repo root is a
+  // why: Retired contract: `.mstarc` `harness_dir` at the repo root is a
   // retired declaration — resolution refuses `harness.root-retired`
   // naming the line and `mstar path resolve`; every write still blocks.
   const root = mkdtempSync(join(base, "retired-declared-"));
@@ -267,7 +266,7 @@ describe("omp Gate-1 coordination write refusal for retired FILE-route inputs", 
     expect(Object.keys(actual)).toHaveLength(60);
     expect(mismatches).toEqual([]);
 
-    // Retired-contract reasons: the `.mstarc harness_dir` tree blocks with
+    // why: Retired-contract reasons: the `.mstarc harness_dir` tree blocks with
     // the retired-declaration refusal (config line + `mstar path resolve`),
     // and the `.agents/` tree blocks with the retired-candidate refusal
     // (legacy name + `mstar harness scaffold`).

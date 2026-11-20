@@ -13,7 +13,7 @@ afterAll(() => rmSync(root,{recursive:true,force:true}));
 function invocation(cwd:string): InvocationContext { return { cwd,controlRoot:null,versions:{engine:null,cli:null,plugin:null,host:null,platform:null},signal:new AbortController().signal,effects:{spawnProcess:async()=>({exitCode:0,stdout:"",stderr:""})} } as InvocationContext; }
 test("milestone commands use store revision CAS with replay", async () => {
  const cwd=join(root,"fixture"), harness=join(cwd,".mstar");
- // The harness root is fixed at the Git main worktree's `.mstar`, so cwd-based
+ // why: The harness root is fixed at the Git main worktree's `.mstar`, so cwd-based
  // store discovery needs a real repo even for an unborn branch.
  mkdirSync(cwd,{recursive:true}); execFileSync("git",["init","-q","-b","main"],{cwd});
  mkdirSync(harness,{recursive:true});

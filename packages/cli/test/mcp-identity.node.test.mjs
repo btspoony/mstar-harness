@@ -106,7 +106,7 @@ function startMcpServer(fixture, { trustCallerSessionId = true } = {}) {
     if (STRIPPED_ENV.includes(key)) continue;
     env[key] = value;
   }
-  // The server carries no connection root, and the engine derives the fixed
+  // why: The server carries no connection root, and the engine derives the fixed
   // `<git main worktree>/.mstar` from the child's cwd (fixture.root), so no
   // root pin is set or honored here.
   const child = spawn(process.execPath, [CLI_ENTRY, "mcp", ...(trustCallerSessionId ? ["--trust-caller-session-id"] : [])], { cwd: fixture.root, env, stdio: ["pipe", "pipe", "pipe"] });

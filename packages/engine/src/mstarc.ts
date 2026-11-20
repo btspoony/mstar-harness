@@ -1,5 +1,4 @@
-/**
- * `.mstarc` — repo-local Morning Star harness config file (gitignored by
+/** why: `.mstarc` — repo-local Morning Star harness config file (gitignored by
  * default, plan-conventions § Git 跟踪策略). INI-shaped; the `[config]`
  * section declares the harness directory symbols:
  *

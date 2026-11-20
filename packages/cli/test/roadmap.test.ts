@@ -39,7 +39,7 @@ function data(result: Result): Record<string, unknown> {
 }
 
 async function fixture(name: string): Promise<{ dir: string; context: StoreContext }> {
-  // A real Git main worktree whose `.mstar` is the fixed harness root.
+  // why: A real Git main worktree whose `.mstar` is the fixed harness root.
   const dir = mkdtempSync(join(ROOT, name));
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   spawnSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
