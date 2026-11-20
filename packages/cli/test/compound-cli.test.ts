@@ -26,7 +26,7 @@ async function completeKnowledgeRoot(dir: string): Promise<{ root: string; harne
   gitMainWorktree(root);
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const configured = join(dir, ".agents", "knowledge");
+  const configured = join(root, ".agents", "knowledge");
   mkdirSync(configured, { recursive: true });
   writeFileSync(join(configured, "registered.md"), KNOWLEDGE_GOOD);
   const context = { harnessDir: harness };

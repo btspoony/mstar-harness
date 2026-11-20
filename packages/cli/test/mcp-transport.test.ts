@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Client, InMemoryTransport, type CallToolResult } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
 import { commandEnvelopeSchema, getCommandDefinitions, type CommandDefinition, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
@@ -425,7 +425,7 @@ generated_at: 2026-01-02
    */
   test("compound validate --knowledge-dir asserts catalog completeness through the surviving action", async () => {
     const harness = mkdtempSync(join(tmpdir(), "mstar-mcp-catalog-"));
-    const knowledgeDir = join(harness, "knowledge");
+    const knowledgeDir = join(dirname(harness), ".agents", "knowledge");
     mkdirSync(knowledgeDir, { recursive: true });
     writeFileSync(join(knowledgeDir, "good.md"), KNOWLEDGE_GOOD);
     const validate = async (client: Client) => envelope(await client.callTool({
