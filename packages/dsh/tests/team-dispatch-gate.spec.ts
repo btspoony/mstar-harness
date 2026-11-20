@@ -23,7 +23,9 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, type BootResult } from './harness.ts'
+import { useCleanControlRoot, bootApp, type BootResult } from './harness.ts'
+
+useCleanControlRoot()
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from '../src/gates/dispatch.ts'
 

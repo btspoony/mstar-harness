@@ -17,10 +17,10 @@ tags: [harness-dir, workspace-root, probe, resolve-harness-dir]
 
 ## Guidance
 
-- **Stop boundary is caller-passed**: engine `resolveHarnessDir(startDir, opts)` gains optional `opts.workspaceRoot` — the probe checks `{HARNESS_DIR}/` → `.agents/` → `.plans/`/`plans/` only at-or-below the boundary; a harness dir above it is never returned. Boundary per caller: **CLI/engine default** = git top-level of `startDir` (via `git rev-parse --show-cdup` relative output walked lexically — avoids macOS `/var`→`/private/var` symlink mismatch; non-git start probes only itself — intentional tightening); **dsh** = the session workspace (`HarnessResolver.forWorkspace` passes `workspaceRoot = cwd`; empty cwd → null, never a `process.cwd()` fallback).
-- **Explicit overrides keep authority**: `opts.harnessDir` / `MSTAR_HARNESS_DIR` / dsh `config.harnessDir` short-circuit BEFORE the boundary check — an override outside the boundary still wins.
-- **dsh vs CLI boundaries intentionally diverge**: dsh = session workspace (probe start = boundary); CLI = git top-level. A project subdir opened as the dsh workspace degrades to null for the project-root harness — documented tradeoff (workspace UX, may be enhanced later via "walk up to nearest harness within git top-level").
-- **Residual corner**: if the git top-level (or dsh session cwd) ITSELF is under `~/.mstar`'s ancestor (e.g. home is a git repo), the collision persists — the real fix is the tracked hygiene follow-up: relocate the CLI global install root off `~/.mstar`.
+- **Stop boundary now scopes only the local probe**: the fixed root comes from Git; `opts.workspaceRoot` still bounds `localProbe` diagnostics and the dsh session workspace, but it cannot move the process root.
+- **Explicit overrides are retired**: `opts.harnessDir` / `MSTAR_HARNESS_DIR` no longer select a root; a CLI outside Git names it with `--harness`, and every other value is refused. dsh `config.harnessDir` follows the same rule.
+- **dsh vs CLI boundaries**: dsh still derives its session workspace, but the harness root it reports is the Git main worktree's `.mstar`; a project subdir opened as the workspace no longer changes the harness answer.
+- **Residual corner resolved**: the fixed root never walks above the main worktree, so the historical `~/.mstar` adoption cannot recur.
 - **Version alignment**: dsh IS a `VERSION_SURFACES` entry (`scripts/release-surfaces.ts`, `packages/dsh/package.json`) and `release:validate` fails on any drift, so the historical "not in the release gate, manual sync" caveat no longer applies.
 
 ## Why This Matters
@@ -33,5 +33,5 @@ Any change to harness-root discovery (engine/CLI/dsh/other hosts); any new probe
 
 ## Examples
 
-- Engine: probe from a workspace whose parent chain contains a `~/.mstar`-like fixture → `null`; override outside the boundary still resolves.
+- Engine: probe from a workspace whose parent chain contains a `~/.mstar`-like fixture → `null`; an override outside the boundary is refused — the fixed root is Git-derived.
 - dsh: session workspace parent has `.mstar` → the probe stops at the session workspace (null or workspace-local harness only).

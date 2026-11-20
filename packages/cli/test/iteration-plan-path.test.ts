@@ -30,7 +30,7 @@ function compassRefFor(workflowId: string): string {
 function runCli(args: string[], harness: string, identity: ExecutionIdentity): RunResult {
   return spawnCli(args, {
     cwd: harness,
-    env: { MSTAR_HARNESS_DIR: harness, MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(identity) },
+    env: { MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(identity) },
   });
 }
 

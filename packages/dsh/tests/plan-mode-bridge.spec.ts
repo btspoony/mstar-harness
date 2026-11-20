@@ -33,7 +33,7 @@ const ITER = 'iter-00000816-pm'
 
 async function tempHarness(prefix: string): Promise<{ root: string; harnessDir: string }> {
   const root = await mkdtemp(join(tmpdir(), prefix))
-  const harnessDir = join(root, 'harness')
+  const harnessDir = join(root, '.mstar')
   await mkdir(harnessDir, { recursive: true })
   return { root, harnessDir }
 }

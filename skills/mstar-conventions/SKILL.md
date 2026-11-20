@@ -39,22 +39,19 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 
 > **Engine check:** engine `resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveAdrDir` / `resolveWorkflowDir` / `resolveProjectDir` / `resolveReviewDir` — or run `mstar path resolve [path]`, whose JSON envelope prints the resolved dirs (including `specsDir`, `knowledgeDir`, `adrDir`) — to confirm the resolution below. On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
-### `{HARNESS_DIR}` 解析顺序（找到即停；探测**永不越过工作区根**——CLI=start 的 git top-level（非 git→start 自身）；dsh=会话工作区）
+### `{HARNESS_DIR}` 解析
 
-1. 显式 override：`opts.harnessDir` / `MSTAR_HARNESS_DIR`（全权优先，短路一切探测与配置文件）
-2. 否则 **`.mstarc`** `[config] harness_dir=<dir>`（仓库本地声明，见下「`.mstarc` 格式」；find-first-stop 向上找最近文件，**不越过工作区根**）
-3. 否则 `.mstar/` → `{HARNESS_DIR}=.mstar/`, `{PLAN_DIR}=.mstar/plans/`
-4. 否则 `.agents/` → legacy `{HARNESS_DIR}=.agents/`, `{PLAN_DIR}=.agents/plans/`
-5. 否则 `.plans/` 或 `plans/` → 遗留同目录 `{HARNESS_DIR}={PLAN_DIR}`
-6. 皆无 → 未启用 plan；进度走对话与 Completion Report
+`{HARNESS_DIR}` 固定为 **`<git main worktree root>/.mstar/`**：只由 Git 派生（`git worktree list --porcelain` 的首条记录 = 主 worktree），`.mstarc`、环境变量与候选链都不能移动它。linked worktree 携带 tracked `.mstarc`，但它声明的布局不改变根。
 
-并存时 **`.mstar/` 优先**；仅当项目已有 `.agents/` 且无 `.mstar/` 时继续沿用 `.agents/`。
+- **`harness_dir` 已退役**：`.mstarc` 声明该键即拒绝，恢复 = 删除该行后运行 `mstar path resolve`。
+- **`MSTAR_HARNESS_DIR` 已退役**：设置后不再选择根（值被忽略）；清理由 `unset MSTAR_HARNESS_DIR`；Git 之外启动的 CLI 用 `--harness <absolute .mstar>`。
+- **legacy 候选已退役**：`.agents/`、`.plans/`、`plans/` 永不被采纳；仓库只有这些目录时拒绝，恢复 = `mstar harness scaffold`（已有 store 时再 `mstar store upgrade`）。
+- 无 harness 根 → 未启用 plan；进度走对话与 Completion Report。
 
 #### `.mstarc` 格式（INI 子集；仓库内 **tracked**，由 scaffold 在缺失时写入，→ `references/git-tracking-and-gitignore.md`）
 
 ```ini
 [config]
-harness_dir=.custom_dir
 plan_dir=planning
 sdd_dir=process/sdd
 iteration_dir=process/iterations
@@ -68,16 +65,16 @@ enforcement=hard
 ```
 
 - `#` / `;` 注释；`[section]` 头；`key=value`（去空白）。仅读 `[config]` 段，未知键忽略（向前兼容）。
-- 目录键：`harness_dir`（`{HARNESS_DIR}`）、`plan_dir`（`{PLAN_DIR}`）、`sdd_dir`（`{SDD_DIR}` 的 per-plan 基目录，`<plan-id>` 仍会追加）、`iteration_dir`（`{ITERATION_DIR}`）、`knowledge_dir`（`{KNOWLEDGE_DIR}`，**权威**——声明后不再走候选链）、`specs_dir`（`{SPECS_DIR}`，**权威**——同上）、`adr_dir`（`{ADR_DIR}`，**权威**——同上）、`workflow_dir`（`{WORKFLOW_DIR}`）、`project_dir`（`{PROJECT_DIR}`）、`review_dir`（`{REVIEW_DIR}`）。全部相对 `.mstarc` 所在目录解析（绝对路径亦可）；无需目录已存在（可后续 scaffold；v3 的 `workflows/` / `projects/` / `reviews/` 子目录由 engine writers 按需创建）。
+- 目录键：`plan_dir`（`{PLAN_DIR}`）、`sdd_dir`（`{SDD_DIR}` 的 per-plan 基目录，`<plan-id>` 仍会追加）、`iteration_dir`（`{ITERATION_DIR}`）、`knowledge_dir`（`{KNOWLEDGE_DIR}`，**权威**——声明后不再走候选链）、`specs_dir`（`{SPECS_DIR}`，**权威**——同上）、`adr_dir`（`{ADR_DIR}`，**权威**——同上）、`workflow_dir`（`{WORKFLOW_DIR}`）、`project_dir`（`{PROJECT_DIR}`）、`review_dir`（`{REVIEW_DIR}`）。全部相对 `.mstarc` 所在目录解析（绝对路径亦可）；无需目录已存在（可后续 scaffold；v3 的 `workflows/` / `projects/` / `reviews/` 子目录由 engine writers 按需创建）。`harness_dir` 不在列表中：它已退役，声明即拒绝。
 - **`enforcement=hard|soft`**：仓库级硬门禁策略（`hard` 硬门禁、`soft` 本地回滚；其他值忽略）。优先级：显式 Config > Assignment `Enforcement: hard` 头标记（仅派发闸门）> `.mstarc` > 迭代 compass frontmatter > 默认 warn-only。`.mstarc` `soft` 可回滚 hard compass；`.mstarc` `hard` 硬化无标记的派发与各闸门。
 - 子目录键与 `enforcement` 由 engine `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveAdrDir` / `resolveWorkflowDir` / `resolveProjectDir` / `resolveReviewDir` / `resolveRepoEnforcement` 读取：从 harness 目录与其父目录（仓库根，`.mstarc` 的文档化位置）向上找最近配置文件。
-- 优先级：显式 override > `.mstarc` > 探测。非默认布局的仓库写一个 `.mstarc` 即可程序化解目录问题，无需逐宿主设置 env / config。
+- 优先级：`.mstarc` 只决定子目录与 corpus 布局，**不决定 harness 根**。`opts.harnessDir` / `--harness` 是调用方已经持有的值，由 transport 对照 Git 派生根校验，不是发现输入；Git 之外启动时才用它命名根。
 
 **无 engine 时的手工解析（runtime 缺席，技能文本为权威）：**
 
 1. 从当前目录向上找**最近**的 `.mstarc`（find-first-stop），**不越过工作区根**（CLI=git top-level，非 git=start 自身；dsh=会话工作区）。
 2. 读 `[config]` 段：`key=value`（去空白），`#`/`;` 注释与空行忽略；同一键最后一次出现生效。
-3. `harness_dir` 存在 → 相对该 `.mstarc` 所在目录解析（绝对路径直接用），即 `{HARNESS_DIR}`；无需目录已存在。
+3. `{HARNESS_DIR}` = `<git main worktree root>/.mstar/`（Git 派生；linked worktree 里也指向主 worktree）。读到 `harness_dir` 立即拒绝并按恢复删除该行；不要从 cwd 拼 `.mstar`。
 4. 其余键（`plan_dir` / `sdd_dir` / `iteration_dir` / `knowledge_dir` / `specs_dir` / `adr_dir` / `workflow_dir` / `project_dir` / `review_dir`）从 **`{HARNESS_DIR}` 或其父目录**（仓库根）向上找最近 `.mstarc` 读取；值同样相对配置文件目录解析；`knowledge_dir` / `specs_dir` / `adr_dir` 声明后直接采用（跳过下方候选链与空目录规则），`sdd_dir` 只替换基目录（`<plan-id>` 仍追加），`workflow_dir` / `project_dir` / `review_dir` 直接替换默认子目录名。
 5. 未声明的键回落默认组合：`{HARNESS_DIR}/plans/`、`{HARNESS_DIR}/sdd/<plan-id>/`、`{HARNESS_DIR}/iterations/`、`{HARNESS_DIR}/workflows/`、`{HARNESS_DIR}/projects/`、`{HARNESS_DIR}/reviews/`；`{SPECS_DIR}` / `{KNOWLEDGE_DIR}` / `{ADR_DIR}` 走下方候选链。
 
@@ -99,7 +96,7 @@ enforcement=hard
 - `{KNOWLEDGE_DIR}`：`.mstarc` `knowledge_dir`（权威）→ `<repo-root>/.agents/knowledge/`（默认）→ legacy 只读 `{HARNESS_DIR}/knowledge/`（链尾）→ 回退创建 `<repo-root>/.agents/knowledge/`（`resolveKnowledgeDir` 默认创建，`{ create: false }` 关闭）。
 - `{ADR_DIR}`：`.mstarc` `adr_dir`（权威）→ `<repo-root>/.agents/adr/`（默认）→ `<repo-root>/docs/adr/` → legacy 只读 `{HARNESS_DIR}/adr/`（链尾）→ 回退创建 `<repo-root>/.agents/adr/`（`resolveAdrDir`）。
 
-`{HARNESS_DIR}/<kind>/` 在这三条链里只是 **legacy 只读源**：只要解析出的 `{HARNESS_DIR}` 不是 `<repo-root>/.agents/`（即该候选不与第 2 项同一目录），它永不创建、永不作为回退，也不再被任何文档表述为语料所在；直到没有仓库预期在迁移前位置携带内容时才删除该候选。`.mstarc` 已声明的仓库（含本仓库）布局不变——声明即命中第 1 项。`.agents/` 默认值只描述未声明时的行为，且它位于 `{HARNESS_DIR}` 之外，所以 `.mstar/` 整体 gitignored 时 tracked 语料仍随仓库提交。`<repo-root>` 是**该 `.agents/` 默认值所属的检出**：调用方知道就传（`opts.repoRoot`——CLI 取 start 的 git top-level，scaffold 取 scaffold 根，catalog 取持有该 harness 的主 worktree），不知道时才是 harness 目录的父目录；harness 配在检出之外（`MSTAR_HARNESS_DIR`、嵌套 `.mstarc`）时两种答案不同，而只有前者能提交。
+`{HARNESS_DIR}/<kind>/` 在这三条链里只是 **legacy 只读源**：只要解析出的 `{HARNESS_DIR}` 不是 `<repo-root>/.agents/`（即该候选不与第 2 项同一目录），它永不创建、永不作为回退，也不再被任何文档表述为语料所在；直到没有仓库预期在迁移前位置携带内容时才删除该候选。`.mstarc` 已声明的仓库（含本仓库）corpus 布局不变——声明的 corpus 键仍权威。`.agents/` 默认值只描述未声明时的行为，且它位于 `{HARNESS_DIR}` 之外，所以 `.mstar/` 整体 gitignored 时 tracked 语料仍随仓库提交。`<repo-root>` 是**该 `.agents/` 默认值所属的检出**：调用方知道就传（`opts.repoRoot`——CLI 取 start 的 git top-level，scaffold 取 scaffold 根，catalog 取持有该 harness 的主 worktree），不知道时才是 harness 目录的父目录；harness 配在检出之外（`MSTAR_HARNESS_DIR`、嵌套 `.mstarc`）时两种答案不同，而只有前者能提交。
 
 > **Engine check:** engine `resolveSpecsDir` / `resolveKnowledgeDir` / `resolveAdrDir` — or run `mstar path resolve` (prints all three) — to confirm the candidate order (empty-dir-as-absent included). On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 

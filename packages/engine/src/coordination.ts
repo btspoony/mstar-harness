@@ -250,25 +250,16 @@ export function resolveProcessHarnessDir(cwd: string = process.cwd(), harnessDir
     try {
       const marker = statSync(join(dir, ".git"));
       // Stop at the nearest independent repository, not its enclosing checkout.
-      if (marker.isDirectory()) return resolveHarnessDir(start, { workspaceRoot: dir });
+      if (marker.isDirectory()) return resolveHarnessDir(start, { localProbe: true, workspaceRoot: dir });
       linked = marker.isFile();
     } catch (error) {
       const code = errorCode(error);
       if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
     }
     if (linked) {
-      // The explicit env rung outranks the Git verdict: a non-blank
-      // MSTAR_HARNESS_DIR is a caller-supplied root, never a local-artifact
-      // guess, so it is honored BEFORE the refusal. This is the recovery the
-      // MCP control-root refusal names for exactly this cause — a command
-      // that re-resolves its own root here would otherwise throw before ever
-      // reaching the variable that answers it. Without the variable the
-      // refusal stands.
-      const envRoot = process.env.MSTAR_HARNESS_DIR;
-      if (typeof envRoot === "string" && envRoot.trim() !== "") return resolveHarnessDir(start);
       throw new CoordinationError(
         "coordination.not-in-git",
-        "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.",
+        "`mstar path resolve`; pass its `controlHarnessDir` where the command takes a control root. The linked checkout's main worktree cannot be read.",
         { cwd: start, marker: join(dir, ".git") },
       );
     }

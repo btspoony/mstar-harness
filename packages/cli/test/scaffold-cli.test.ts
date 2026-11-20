@@ -52,7 +52,7 @@ function runScaffold(args: string[]): RunResult {
 
 /** Empty temp root; `.mstar/` and specs content added per test. */
 function withRoot(fn: (root: string) => void): void {
-  const root = mkdtempSync(join(tmpdir(), "mstar-scaffold-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-scaffold-")));
   try {
     fn(root);
   } finally {
@@ -77,6 +77,25 @@ function gitInit(root: string): void {
 const MSTAR_FENCE_ENTRIES = [".mstar/"];
 
 describe("mstar harness scaffold — one-shot harness bootstrap", () => {
+  test("a legacy-only checkout does not block help or the scaffold recovery", () => {
+    withRoot((root) => {
+      gitInit(root);
+      mkdirSync(join(root, ".agents"), { recursive: true });
+      writeFileSync(join(root, ".agents", "status.json"), "{}");
+      // why: the retired layout must not kill the CLI before dispatch.
+      const help = runCli(["--help"], { cwd: root });
+      expect(help.exitCode, help.stdout + help.stderr).toBe(0);
+      const outside = mkdtempSync(join(tmpdir(), "mstar-scaffold-outside-"));
+      try {
+        const result = runCli(["harness", "scaffold", root], { cwd: outside });
+        expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+        expect(existsSync(join(root, ".mstar"))).toBe(true);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+  });
+
   test("fresh bootstrap: creates .mstar/ process dirs, .agents/ tracked corpora, .mstarc, .gitignore snippet and .agents/AGENTS.md but no roadmap authority", () => {
     withRoot((root) => {
       const result = runScaffold([root]);
@@ -110,9 +129,12 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       }
       expect(existsSync(join(harnessDir, "AGENTS.md"))).toBe(false);
 
-      // The tracked .mstarc declares the layout the scaffold just produced.
+      // why: The tracked .mstarc declares only the corpus layout: the harness root
+      // is fixed at `.mstar/`, so no `harness_dir` key is emitted (a file that
+      // still declares it is refused as retired).
       const config = readFileSync(join(root, ".mstarc"), "utf8");
-      expect(config).toContain("harness_dir=.mstar");
+      expect(config).toContain("The harness root is fixed at .mstar/");
+      expect(config).not.toContain("harness_dir");
       expect(config).toContain("knowledge_dir=.agents/knowledge");
       expect(config).toContain("specs_dir=.agents/specs");
       expect(config).toContain("adr_dir=.agents/adr");
@@ -149,7 +171,8 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
       expect(readFileSync(join(root, ".agents", "AGENTS.md"), "utf8")).toContain("authored agent policy");
       const config = readFileSync(join(root, ".mstarc"), "utf8");
       expect(config).toContain("authored layout policy");
-      expect(config).toContain("harness_dir=.mstar");
+      // why: the harness root is fixed; the retired key is never emitted.
+      expect(config).not.toContain("harness_dir");
       expect(readFileSync(join(root, ".agents", "adr", "README.md"), "utf8")).toContain("authored ADR index");
       expect(existsSync(join(root, ".mstar", "projects", "_default", "roadmap.md"))).toBe(false);
     });
@@ -255,23 +278,23 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test(".mstarc harness_dir=.custom: custom layout keeps .gitignore untouched", () => {
+  test(".mstarc harness_dir=.custom is refused as retired: nothing is scaffolded and .gitignore is untouched", () => {
     withRoot((root) => {
       writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.custom\n", "utf8");
 
       const result = runScaffold([root]);
-      expect(result.exitCode).toBe(0);
-      const resultData = scaffoldData(result);
-      expect(resultData.harnessDir).toBe(join(root, ".custom"));
-      expect(resultData.skipped).toContain(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
-      // Files land under the declared dir, not .mstar/.
-      expect(existsSync(join(root, ".custom", "status.json"))).toBe(false);
-      expect(existsSync(join(root, ".custom", "projects", "_default"))).toBe(true);
-      expect(existsSync(join(root, ".custom", "projects", "_default", "roadmap.md"))).toBe(false);
-      expect(existsSync(join(root, ".agents", "AGENTS.md"))).toBe(true);
+      // why: The harness root is fixed at `<checkout>/.mstar`; a `.mstarc` that
+      // still declares `harness_dir` refuses by name instead of scaffolding a
+      // second layout.
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain("harness_dir");
+      expect(result.stdout).toContain("retired");
+      expect(result.stdout).toContain("mstar path resolve");
+      // why: Nothing is created for the retired declaration.
+      expect(existsSync(join(root, ".custom"))).toBe(false);
       expect(existsSync(join(root, ".mstar"))).toBe(false);
-      // No .gitignore mutation for custom layouts.
       expect(existsSync(join(root, ".gitignore"))).toBe(false);
+      expect(existsSync(join(root, ".agents"))).toBe(false);
     });
   });
 
@@ -303,48 +326,23 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test(".mstarc harness_dir=config/.mstar: basename matches default but path is custom — .gitignore untouched", () => {
+  test("fresh fence at the git top-level: subdir path arg scaffolds the repo-root .mstar (PR #147)", () => {
     withRoot((root) => {
-      // Regression (PR #147): a custom harness dir whose BASENAME
-      // is `.mstar` (e.g. config/.mstar) used to be misclassified as the
-      // default layout, so scaffold wrote root-relative `.mstar/**` patterns
-      // into <root>/.gitignore that never match config/.mstar/... — process
-      // artifacts stayed unignored while scaffold reported the fence
-      // installed. The gate must be exact-path equality with <root>/.mstar.
-      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=config/.mstar\n", "utf8");
-
-      const result = runScaffold([root]);
-      expect(result.exitCode).toBe(0);
-      const resultData = scaffoldData(result);
-      expect(resultData.harnessDir).toBe(join(root, "config", ".mstar"));
-      expect(resultData.skipped).toContain(".gitignore (canonical harness snippet) — custom harness layout manages its own ignore rules");
-      // Files land under the declared custom dir.
-      expect(existsSync(join(root, "config", ".mstar", "status.json"))).toBe(false);
-      expect(existsSync(join(root, "config", ".mstar", "projects", "_default"))).toBe(true);
-      expect(existsSync(join(root, "config", ".mstar", "projects", "_default", "roadmap.md"))).toBe(false);
-      expect(existsSync(join(root, ".agents", "AGENTS.md"))).toBe(true);
-      // No default-layout dir and NO .gitignore created/modified.
-      expect(existsSync(join(root, ".mstar"))).toBe(false);
-      expect(existsSync(join(root, ".gitignore"))).toBe(false);
-    });
-  });
-
-  test("fresh fence at the git top-level: repo-root .mstarc harness_dir=.mstar + subdir path arg (PR #147)", () => {
-    withRoot((root) => {
-      // Regression (PR #147): a repo-root `.mstarc` declaring
-      // `harness_dir=.mstar` resolves the harness dir against the config
-      // file's location — <repoRoot>/.mstar. Scaffolding a SUBDIRECTORY path
-      // used to compare that against <subdir>/.mstar, skip the canonical
-      // fence, and leave status/plans/projects committable. The comparison
-      // AND the fence target must anchor at the git top-level.
+      // Regression (PR #147): scaffolding a SUBDIRECTORY path used to compare
+      // the harness dir against <subdir>/.mstar, skip the canonical fence and
+      // leave status/plans/projects committable. Under the fixed-root contract
+      // the harness dir is `<repoRoot>/.mstar`, and BOTH the comparison and the
+      // fence target must anchor at the git top-level.
       gitInit(root);
-      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.mstar\n", "utf8");
       mkdirSync(join(root, "packages", "foo"), { recursive: true });
 
-      const result = runScaffold([join(root, "packages", "foo")]);
+      // why: Spawned from a nested directory with the checkout root named: the
+      // harness dir is `<repoRoot>/.mstar` and BOTH the comparison and the
+      // fence target anchor at the git top-level.
+      const result = runCli(["harness", "scaffold", root], { cwd: join(root, "packages", "foo") });
       expect(result.exitCode).toBe(0);
       const resultData = scaffoldData(result);
-      expect(resultData.harnessDir).toBe(join(root, ".mstar"));
+      expect(resultData.harnessDir).toBe(join(realpathSync(root), ".mstar"));
       expect(resultData.created).toContain(".gitignore (canonical harness snippet)");
 
       // Fence lands in the REPO-ROOT .gitignore, not the subdir's.

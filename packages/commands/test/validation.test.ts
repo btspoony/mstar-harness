@@ -243,27 +243,29 @@ describe("validation command family", () => {
     expect(withIntegration).toMatchObject({ status: "usage", exitCode: 2 });
     expect(withIntegration.message).toContain("--integration");
   });
-  test("--control-clean reads the {HARNESS_DIR} chain and a named --harness anchor", async () => {
-    // invariant: legacy `.agents/` declares a harness, so the check runs instead of skipping.
+  test("--control-clean reads the fixed .mstar root and a named --harness anchor", async () => {
+    // invariant: the fixed `.mstar` root declares a harness, so the check runs
+    // instead of skipping; the retired `.agents/` candidate never does.
     const cwd = tempRoot();
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd });
-    writeFileSync(path.join(cwd, ".gitignore"), "state/\n");
+    writeFileSync(path.join(cwd, ".gitignore"), "state/\n.mstar/\n");
+    mkdirSync(path.join(cwd, ".mstar"), { recursive: true });
     mkdirSync(path.join(cwd, ".agents", "specs"), { recursive: true });
     writeFileSync(path.join(cwd, ".agents", "specs", "spec.md"), "spec\n");
     execFileSync("git", ["add", "-A"], { cwd });
     execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "-m", "initial"], { cwd });
     writeFileSync(path.join(cwd, ".agents", "specs", "spec.md"), "spec edited\n");
-    const legacy = await definition("worktree.check").execute({ controlClean: true }, context(cwd));
-    expect(legacy).toMatchObject({ status: "refused", exitCode: 1, code: "worktree.main.tracked-changes" });
+    const fixed = await definition("worktree.check").execute({ controlClean: true }, context(cwd));
+    expect(fixed).toMatchObject({ status: "refused", exitCode: 1, code: "worktree.main.tracked-changes" });
 
-    // invariant: a relative anchor resolves from the invocation workspace, and the
-    // legacy `.agents/` it names is the harness the chain resolves, so a dirty
+    // invariant: a relative anchor resolves from the invocation workspace, and
+    // the fixed root it names is the harness the chain resolves, so a dirty
     // checkout is refused rather than skipped.
-    expect(await definition("worktree.check").execute({ controlClean: true, harness: ".agents" }, context(cwd))).toMatchObject({ status: "refused", code: "worktree.main.tracked-changes" });
+    expect(await definition("worktree.check").execute({ controlClean: true, harness: ".mstar" }, context(cwd))).toMatchObject({ status: "refused", code: "worktree.main.tracked-changes" });
 
-    // invariant: an existing directory the {HARNESS_DIR} chain does not resolve as
-    // a harness is not one, so the check skips even on a dirty checkout - the
-    // path existing is not a control-root contract.
+    // invariant: an existing directory the chain does not resolve as a harness
+    // is not one, so the check skips even on a dirty checkout - the path
+    // existing is not a control-root contract.
     const plain = tempRoot();
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: plain });
     writeFileSync(path.join(plain, ".gitignore"), "state/\n");

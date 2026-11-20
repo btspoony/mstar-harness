@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   CoordinationError,
+  HarnessRootRetiredError,
   checkPathOwnership,
   detectHarnessKind,
   detectHost,
@@ -301,7 +302,7 @@ type ControlFacts = {
   /** Envelope fields describing the control root. */
   control: Record<string, unknown>;
   /** A named cause when the control root cannot be read at all. */
-  unavailable?: { code: "coordination.not-in-git" | "path.control-root-unreadable"; message: string };
+  unavailable?: { code: "coordination.not-in-git" | "path.control-root-unreadable" | "harness.root-retired"; message: string };
 };
 
 /**
@@ -314,21 +315,35 @@ type ControlFacts = {
  * not "not in git", so they carry their own code.
  */
 function controlFacts(startDir: string): ControlFacts {
-  const harnessDir = resolveHarnessDir(startDir, { localProbe: true });
-  // The process root comes from Git only: the first `worktree list` record is
-  // the main checkout, whatever the start path looks like.
-  const controlRoot = readMainWorktree(startDir)?.root ?? null;
+  let harnessDir: string | null = null;
   let controlHarnessDir: string | null = null;
   let unavailable: ControlFacts["unavailable"];
+  const retired = (error: unknown): boolean => {
+    if (!(error instanceof HarnessRootRetiredError)) return false;
+    unavailable = { code: "harness.root-retired", message: error.message };
+    return true;
+  };
   try {
-    controlHarnessDir = resolveProcessHarnessDir(startDir);
+    harnessDir = resolveHarnessDir(startDir, { localProbe: true });
   } catch (error) {
-    const code = error instanceof CoordinationError ? error.code : (error as NodeJS.ErrnoException).code;
-    if (code !== "coordination.not-in-git" && code !== "EACCES" && code !== "EPERM") throw error;
-    unavailable = {
-      code: code === "coordination.not-in-git" ? "coordination.not-in-git" : "path.control-root-unreadable",
-      message: error instanceof Error ? error.message : String(error),
-    };
+    if (!retired(error)) throw error;
+  }
+  // why: The process root comes from Git only: the first `worktree list` record is
+  // the main checkout, whatever the start path looks like.
+  const controlRoot = readMainWorktree(startDir)?.root ?? null;
+  if (unavailable === undefined) {
+    try {
+      controlHarnessDir = resolveProcessHarnessDir(startDir);
+    } catch (error) {
+      if (!retired(error)) {
+        const code = error instanceof CoordinationError ? error.code : (error as NodeJS.ErrnoException).code;
+        if (code !== "coordination.not-in-git" && code !== "EACCES" && code !== "EPERM") throw error;
+        unavailable = {
+          code: code === "coordination.not-in-git" ? "coordination.not-in-git" : "path.control-root-unreadable",
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
   }
   // A plain subdirectory of the main checkout belongs to that worktree; a
   // nested `git worktree add` under it is a distinct checkout. Git's own
@@ -396,23 +411,25 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           fields: [{ field: "path", subject: "the scaffold root", value: input.path }],
         });
         if (unnamedRoot !== undefined) return unnamedRoot;
-        // An omitted path is the invocation workspace: a pinned server owns
-        // that workspace, and the launch process cwd is not it. A pinned
-        // server also names the exact harness dir, which the scaffold must
-        // target verbatim: re-discovering it from the workspace would follow
-        // MSTAR_HARNESS_DIR / .mstarc / the default `<workspace>/.mstar` and
-        // scaffold a different root.
+        // why: An omitted path is the invocation workspace. The harness root is
+        // fixed at the Git main worktree's `.mstar`, so the scaffold targets
+        // that checkout instead of re-deriving a root from the workspace.
         const root = input.path === undefined ? context.cwd : resolveCliPath(input.path, context.cwd);
-        const harnessPin = input.path === undefined ? context.harnessPin : undefined;
-        const scaffoldOptions = harnessPin === undefined ? {} : { harnessDir: harnessPin };
-        setArtifactStore(createFsStore(resolveScaffoldDirs(root, scaffoldOptions).harnessDir));
-        const harnessDir = await scaffoldHarness(root, scaffoldOptions);
+        setArtifactStore(createFsStore(resolveScaffoldDirs(root).harnessDir));
+        const harnessDir = await scaffoldHarness(root);
         const projectDir = resolveProjectDir(root, { harnessDir });
         const created: string[] = [];
         const skipped: string[] = [];
         const workspaceRoot = gitWorkspaceRoot(root);
         const defaultHarness = path.join(workspaceRoot, ".mstar");
-        if (detectHarnessKind(harnessDir) === "mstar" && path.resolve(harnessDir) === defaultHarness) {
+        const sameDir = (a: string, b: string): boolean => {
+          try {
+            return fs.realpathSync(a) === fs.realpathSync(b);
+          } catch {
+            return path.resolve(a) === path.resolve(b);
+          }
+        };
+        if (detectHarnessKind(harnessDir) === "mstar" && sameDir(harnessDir, defaultHarness)) {
           const gitignorePath = path.join(workspaceRoot, ".gitignore");
           const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
           if (hasHarnessRootDeclaration(current)) skipped.push(".gitignore (author-owned harness-root declaration)");
@@ -603,9 +620,9 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         // back to local artifacts — misreporting the worktree's own directory
         // as the process root is the confusion this command exists to remove.
         if (unavailable !== undefined) {
-          return refusalEnvelope({ command: "path.resolve", status: "refused", code: unavailable.code, exitCode: 1, message: `the checkout ${startDir} cannot read its control root`, details: {
+          return refusalEnvelope({ command: "path.resolve", status: "refused", code: unavailable.code, exitCode: 1, message: unavailable.code === "harness.root-retired" ? unavailable.message : `the checkout ${startDir} cannot read its control root`, details: {
             startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control, local: { harnessDir },
-          } , recovery: "From the main worktree: run mstar status validate; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path resolve."});
+          } , recovery: "From the main worktree: run mstar status validate; or run mstar path resolve and use its controlHarnessDir."});
         }
         if (linkedWorktree && controlRoot !== null) {
           // In a linked checkout the local probe is the worktree's own
@@ -614,7 +631,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           if (controlHarnessDir === null) {
             return refusalEnvelope({ command: "path.resolve", status: "refused", code: "path.harness-not-found", exitCode: 1, message: `no control harness dir found for the linked checkout ${startDir} (control root ${controlRoot})`, details: {
               startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null, reviewDir: null, ...control, local: { harnessDir },
-            } , recovery: "From the main worktree: run mstar harness scaffold; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path resolve."});
+            } , recovery: "From the main worktree: run mstar harness scaffold; or run mstar path resolve and use its controlHarnessDir."});
           }
           // Two owners: gitignored process state follows the control harness,
           // tracked results follow the checkout that carries the branch. The
@@ -715,9 +732,9 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         }
         const { harnessDir, controlRoot, controlHarnessDir, linkedWorktree, control, unavailable } = controlFacts(startDir);
         if (unavailable !== undefined) {
-          return refusalEnvelope({ command: "path.check", status: "refused", code: unavailable.code, exitCode: 1, message: `the checkout ${startDir} cannot read its control root`, details: {
+          return refusalEnvelope({ command: "path.check", status: "refused", code: unavailable.code, exitCode: 1, message: unavailable.code === "harness.root-retired" ? unavailable.message : `the checkout ${startDir} cannot read its control root`, details: {
             startDir, ...control, checked: [],
-          } , recovery: "From the main worktree: run mstar status validate; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path check."});
+          } , recovery: "From the main worktree: run mstar status validate; or run mstar path resolve and use its controlHarnessDir."});
         }
         // The two domains have different owners. Ignored harness files live in
         // the control harness (unchanged by `path resolve`). Committable
@@ -730,7 +747,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         if (processHarness === null) {
           return refusalEnvelope({ command: "path.check", status: "refused", code: "path.harness-not-found", exitCode: 1, message: `no harness dir found from ${startDir}${controlRoot === null ? "" : ` (control root ${controlRoot})`}`, details: {
             startDir, ...control, checked: [],
-          } , recovery: "From the main worktree: run mstar harness scaffold; or set MSTAR_HARNESS_DIR to the control harness root. Run mstar path check."});
+          } , recovery: "From the main worktree: run mstar harness scaffold; or run mstar path resolve and use its controlHarnessDir."});
         }
         const callerCheckoutRoot = probeCheckoutRoot(startDir);
         // Without a probed harness the caller checkout still names a result

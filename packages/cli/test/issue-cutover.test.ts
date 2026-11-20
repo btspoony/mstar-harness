@@ -381,7 +381,6 @@ describe("mstar issue — the retired commands refuse with the migration path (G
     const retiredKind = runCli(
       ["persist", "residuals", "--key", PROJECT_ID, "--file", payloadPath],
       fixture.root,
-      { MSTAR_HARNESS_DIR: fixture.harness },
     );
     expect(retiredKind.exitCode).toBe(2);
     expect(jsonOf(retiredKind).code).toBe("command.invalid-input");
@@ -389,7 +388,6 @@ describe("mstar issue — the retired commands refuse with the migration path (G
     const alias = runCli(
       ["persist", "json", "--key", fixture.registerPath, "--file", payloadPath],
       fixture.root,
-      { MSTAR_HARNESS_DIR: fixture.harness },
     );
     expect(alias.exitCode).toBe(2);
     expect(jsonOf(alias).code).toBe("command.invalid-input");

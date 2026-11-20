@@ -382,7 +382,7 @@ export function getArtifactStore(): ArtifactStore {
   const root = resolveHarnessDir(process.cwd());
   if (root === null) {
     throw new Error(
-      `harness dir not found from ${resolve(process.cwd())} \u2014 cannot create the default FsStore (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`,
+      `harness dir not found from ${resolve(process.cwd())} \u2014 cannot create the default FsStore (run \`mstar harness scaffold\` from the repository, or pass opts.harnessDir)`,
     );
   }
   return createFsStore(root);

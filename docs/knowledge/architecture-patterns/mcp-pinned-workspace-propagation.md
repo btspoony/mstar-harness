@@ -6,12 +6,14 @@ category: architecture-patterns
 severity: high
 plan_id: <plan-id>
 applies_when:
-  - "adding a connection-level pin (--harness, --identity-env) to a host adapter"
+  - "propagating a per-call root through the invocation context instead of re-deriving it"
   - "a command family resolves its own root from cwd, an input field, or a discovery helper"
-  - "fixing a review finding where a pinned server mutates the launch checkout"
+  - "fixing a review finding where a server mutates the launch checkout"
 ---
 
 # MCP pinned workspace: propagate the pin, do not re-derive it
+
+> **Superseded (2026-11-20):** the connection pin (`mstar mcp --harness`, `MSTAR_HARNESS_DIR`) is retired; the MCP server carries no root and every call names the fixed `<main worktree>/.mstar`. The propagation lesson below still applies to any per-call root the transport forwards.
 
 Hard-won rules from the dsh identity batch (PRs #531/#536): a server launched with an explicit harness pin (`mstar mcp --harness <absolute path>`) must treat that pin as a connection-level invariant. Five review rounds found five different ways the pin leaked back to the launch checkout; each fix narrowed the general lesson.
 
@@ -29,7 +31,7 @@ A blank or whitespace value must be treated exactly like an absent one. Two sepa
 
 ## Scaffold targets must be passed verbatim, not re-resolved
 
-Root-discovery helpers (`resolveScaffoldDirs`) legitimately consult `MSTAR_HARNESS_DIR`, `.mstarc`, then `<root>/.mstar`. That is correct for a CLI invocation and wrong for a pinned server: a custom root name (`/repo/control`) got scaffolded into `/repo/.mstar`, and an inherited `MSTAR_HARNESS_DIR` could redirect the write further — while the call reported success. Give the discovery helper an explicit `harnessDir` option (used verbatim, skipping every rung) and have the pinned handler pass the pin. Test with a **non-default root basename** and with a **conflicting environment variable**; the canonical `<workspace>/.mstar` case alone hides both defects.
+Root-discovery helpers (`resolveScaffoldDirs`) used to consult `MSTAR_HARNESS_DIR`, `.mstarc`, then `<root>/.mstar`; that made a pinned server and a CLI invocation disagree, and an inherited `MSTAR_HARNESS_DIR` could redirect the write. The selector is now retired: the scaffold target is fixed to `<root>/.mstar`, and the helper refuses a `harnessDir` option that disagrees with it. Test the fixed root with a **conflicting environment variable** present; the canonical case alone hides a regression that reintroduces the rung.
 
 ## Test the production assembly, and mutate to prove the regression
 

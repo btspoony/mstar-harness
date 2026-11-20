@@ -33,7 +33,9 @@ import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { ENGINE_STATUS_CONTEXT_NAME } from '../src/gates/system-prompt.ts'
 import { EXECUTION_DIRECT_WRITE_CODE, STORE_DIRECT_WRITE_CODE, storeAuthorityRefusals } from '../src/gates/store-authority.ts'
 import { activeRowsOf, readExecutionWorkflowSource } from '../src/gates/workflow-selection.ts'
-import { bootApp, seedHarness, v2Root, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { useCleanControlRoot, bootApp, seedHarness, v2Root, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+
+useCleanControlRoot()
 
 let booted: BootResult | undefined
 const roots: string[] = []

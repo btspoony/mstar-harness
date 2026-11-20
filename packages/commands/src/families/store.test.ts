@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,6 +88,7 @@ async function protectedStoreState(harness: string) {
 test("store.upgrade discovers the canonical project harness and imports its legacy workflow without attestation", async () => {
   const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-command-"));
   try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
     legacyWorkspace(harness);

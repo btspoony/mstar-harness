@@ -41,6 +41,7 @@
  * sorted ascending, listed keys round-trip through `get`).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -66,25 +67,28 @@ function tmpRoot(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
-/**
- * Run `fn` with `MSTAR_HARNESS_DIR` set to `value` (undefined deletes it),
- * restoring the previous env in all paths. Caller rule : `fn`
- * must read `process.env` synchronously before its first `await` — the env
- * window closes as soon as `fn` returns, which for an async callback is
- * immediately.
+/** why: Run `fn` with the process cwd set to `value` (undefined leaves it
+ * unchanged), restoring the previous cwd after the await. `value` must be an
+ * existing directory; cwd is process-global, so the window closes only once
+ * the async callback settles.
  */
-function withEnv<T>(value: string | undefined, fn: () => T): T {
-	const previous = process.env[ENV_KEY];
-	if (value === undefined) delete process.env[ENV_KEY];
-	else process.env[ENV_KEY] = value;
-	try {
-		return fn();
-	} finally {
-		if (previous === undefined) delete process.env[ENV_KEY];
-		else process.env[ENV_KEY] = previous;
-	}
+async function withEnv<T>(value: string | undefined, fn: () => T | Promise<T>): Promise<T> {
+  const previousCwd = process.cwd();
+  try {
+    // why: The process control root is derived from cwd under the fixed-root
+    // contract; chdir keeps the async call inside the fixture.
+    if (value !== undefined) process.chdir(value);
+    return await fn();
+  } finally {
+    process.chdir(previousCwd);
+  }
 }
 
+
+/** why: Initialize a git repo at `root` so the fixed `<repo>/.mstar` root resolves. */
+function gitInit(root: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: root });
+}
 /** Recording store for the injection tests (recording-store pattern). */
 function recordingStore(): ArtifactStore & { puts: ArtifactDoc[] } {
   const puts: ArtifactDoc[] = [];
@@ -162,7 +166,9 @@ function memoryStore(): ArtifactStore {
  * purpose is to exercise the pre-activation transport behavior. */
 async function legacyControlRoot(label: string): Promise<string> {
   const root = tmpRoot(label);
-  const handle = await initializeStore({ harnessDir: root });
+  gitInit(root);
+  mkdirSync(join(root, ".mstar"), { recursive: true });
+  const handle = await initializeStore({ harnessDir: join(root, ".mstar") });
   handle.db.prepare("update execution_meta set authority_state = 'legacy' where id = 1").run();
   handle.close();
   return root;
@@ -172,7 +178,9 @@ async function legacyControlRoot(label: string): Promise<string> {
  * injected store's protected targets must be judged against. */
 async function activeControlRoot(label: string): Promise<string> {
   const root = tmpRoot(label);
-  const handle = await initializeStore({ harnessDir: root });
+  gitInit(root);
+  mkdirSync(join(root, ".mstar"), { recursive: true });
+  const handle = await initializeStore({ harnessDir: join(root, ".mstar") });
   handle.close();
   return root;
 }
@@ -654,31 +662,50 @@ describe("setArtifactStore / getArtifactStore", () => {
   test("setArtifactStore(undefined) resets to the default FsStore", async () => {
     const root = tmpRoot("store-default-");
     try {
+      gitInit(root);
+      mkdirSync(join(root, ".mstar"), { recursive: true });
       setArtifactStore(recordingStore());
       setArtifactStore(undefined);
-      await withEnv(root, async () => {
+      const previousCwd = process.cwd();
+      try {
+        // why: The default FsStore resolves the fixed root from cwd, not env.
+        process.chdir(root);
         const store = authorizedStore(getArtifactStore() as ArtifactStore & { root: string });
         const payload = { verdict: "approve" };
         await store.put({ kind: "review", key: "review-default", payload });
         const got = await store.get({ kind: "review", key: "review-default" });
         expect(got).toEqual(payload);
-        expect(existsSync(join(root, "sdd", "_reviews", "review-default.json"))).toBe(true);
-      });
+        expect(existsSync(join(root, ".mstar", "sdd", "_reviews", "review-default.json"))).toBe(true);
+      } finally {
+        process.chdir(previousCwd);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("default store resolves the harness root from MSTAR_HARNESS_DIR", async () => {
+  test("default store resolves the fixed harness root; MSTAR_HARNESS_DIR is ignored", async () => {
     const root = tmpRoot("store-default-env-");
+    const elsewhere = tmpRoot("store-default-env-elsewhere-");
     try {
-      await withEnv(root, async () => {
+      gitInit(root);
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      const previousCwd = process.cwd();
+      try {
+        // why: A stale env pin cannot redirect the fixed root.
+        process.env[ENV_KEY] = elsewhere;
+        process.chdir(root);
         const store = authorizedStore(getArtifactStore() as ArtifactStore & { root: string });
         await store.put({ kind: "review", key: "review-env", payload: { verdict: "approve" } });
-        expect(existsSync(join(root, "sdd", "_reviews", "review-env.json"))).toBe(true);
-      });
+        expect(existsSync(join(root, ".mstar", "sdd", "_reviews", "review-env.json"))).toBe(true);
+        expect(existsSync(join(elsewhere, "sdd"))).toBe(false);
+      } finally {
+        delete process.env[ENV_KEY];
+        process.chdir(previousCwd);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
     }
   });
 
@@ -764,7 +791,12 @@ describe("injected ArtifactStore \u2014 retired project-register guard", () => {
 
   test("an injected store cannot recreate, read or delete the retired project register", async () => {
     const root = await legacyControlRoot("injected-guard-register-");
+    const previousCwd = process.cwd();
     try {
+      // why: The process control root is derived from cwd under the fixed-root
+      // contract (the retired env rung is gone), so the store's targets are
+      // judged against this fixture's `.mstar`.
+      process.chdir(root);
       const store = probeStore();
       setArtifactStore(store);
       const active = getArtifactStore();
@@ -783,11 +815,11 @@ describe("injected ArtifactStore \u2014 retired project-register guard", () => {
       // A `json` alias is classified by its CANONICAL target: the register path
       // the project layer would use, the same path before it exists (a missing
       // leaf must not create one), and a symlink onto it.
-      const register = join(root, "projects", "proj-1", "residuals.json");
+      const register = join(root, ".mstar", "projects", "proj-1", "residuals.json");
       const missingLeaf = withEnv(root, () => active.put({ kind: "json", key: register, payload: { entries: [] } }));
       await expect(missingLeaf).rejects.toThrow(/project registers are retired migration history/);
 
-      mkdirSync(join(root, "projects", "proj-1"), { recursive: true });
+      mkdirSync(join(root, ".mstar", "projects", "proj-1"), { recursive: true });
       writeFileSync(register, `${JSON.stringify({ entries: [] })}\n`, "utf8");
       const alias = join(root, "register-alias.json");
       symlinkSync(register, alias);
@@ -802,6 +834,7 @@ describe("injected ArtifactStore \u2014 retired project-register guard", () => {
       expect(store.deletes).toEqual([]);
       expect(existsSync(register)).toBe(true);
     } finally {
+      process.chdir(previousCwd);
       rmSync(root, { recursive: true, force: true });
     }
   });

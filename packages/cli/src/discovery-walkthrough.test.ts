@@ -67,6 +67,7 @@ describe("#324 fixture discovery walkthrough", () => {
 
   test("a close's inputs are derivable from the CLI surfaces in \u22643 calls per input", () => {
     // Fixture store: one call creates and activates the ACTIVE authority.
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: fixture });
     mkdirSync(harnessDir, { recursive: true });
     const plansDir = path.join(harnessDir, "plans");
     mkdirSync(plansDir, { recursive: true });
@@ -174,6 +175,8 @@ describe("#324 fixture discovery walkthrough", () => {
     const wrongFixture = mkdtempSync(path.join(tmpdir(), "mstar-324-wrongkind-"));
     const wrongHarness = path.join(wrongFixture, ".mstar");
     const wrongScratch = mkdtempSync(path.join(tmpdir(), "mstar-324-s2-"));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: wrongFixture });
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: wrongScratch });
     mkdirSync(path.join(wrongHarness, "plans"), { recursive: true });
     writeFileSync(path.join(wrongHarness, "plans", "p-walk.md"), "# Walk plan\n\n**plan_id:** p-walk\n\nbody\n");
     try {
@@ -233,6 +236,8 @@ describe("#324 fixture discovery walkthrough", () => {
     const legacyFixture = mkdtempSync(path.join(tmpdir(), "mstar-324-legacy-"));
     const legacyHarness = path.join(legacyFixture, ".mstar");
     const legacyScratch = mkdtempSync(path.join(tmpdir(), "mstar-324-s3-"));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: legacyFixture });
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: legacyScratch });
     mkdirSync(path.join(legacyHarness, "plans"), { recursive: true });
     writeFileSync(path.join(legacyHarness, "plans", "p-legacy.md"), "# Legacy plan\n\n**plan_id:** p-legacy\n\nbody\n");
     try {

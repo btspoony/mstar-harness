@@ -39,7 +39,9 @@ import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { DshHostAdapter, HarnessResolver, type Config } from '../src/index.ts'
 import type { DispatchGateAdvisory, StatusGateAdvisory } from '../src/index.ts'
-import { bootApp, VALID_STATUS_V2, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+import { useCleanControlRoot, bootApp, VALID_STATUS_V2, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+
+useCleanControlRoot()
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 

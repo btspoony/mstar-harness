@@ -1,12 +1,12 @@
-/**
- * CLI `mstar persist` / `persist get` — ArtifactStore persist port.
+/** why: CLI `mstar persist` / `persist get` — ArtifactStore persist port.
  *
  * Each case spawns the real CLI entry as a subprocess. The default FsStore
- * is pinned to a temp harness via `MSTAR_HARNESS_DIR` (the store resolves
- * the harness dir from env ahead of cwd probing — the same resolution the
- * writers use, so the round-trip asserts real file placement). The
- * `--store` / `MSTAR_STORE_MODULE` path loads a self-contained temp module
- * (no engine import — the loader accepts a plain factory).
+ * resolves the fixed `<git main worktree>/.mstar` root from the child's cwd,
+ * so every temp dir below is a real Git main worktree and the spawn cwd is
+ * its root — the same resolution the writers use, so the round-trip asserts
+ * real file placement. The `--store` / `MSTAR_STORE_MODULE` path loads a
+ * self-contained temp module (no engine import — the loader accepts a plain
+ * factory).
  *
  * Ordering: run this suite only after `bun run --cwd ../engine build` (run from
  * `packages/cli`) has finished — never beside a concurrent engine build. The
@@ -18,8 +18,9 @@
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { persistPayloadContracts, synthesizeReview } from "@mstar-harness/engine";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
 import { runCli as spawnCli, type RunResult } from "./harness";
@@ -56,11 +57,16 @@ function runCli(args: string[], opts: { cwd?: string; env?: Record<string, strin
 }
 
 
-/** Temp dir per test, cleaned up after. */
+/** why: Temp Git main worktree per test, cleaned up after; the callback receives
+ * the fixed harness root `<repo>/.mstar` (created, store-free). */
 function withTempDir(fn: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "mstar-persist-cli-"));
   try {
-    fn(dir);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+    execFileSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
+    const harness = join(dir, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    fn(harness);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -73,9 +79,11 @@ function writePayload(dir: string, name: string, payload: unknown): string {
   return file;
 }
 
-/** Env pinning the default FsStore to `dir`. */
-function harnessEnv(dir: string): Record<string, string> {
-  return { MSTAR_HARNESS_DIR: dir };
+/** why: Spawn opts pinning the store to the harness root `dir`: run the child
+ * from its checkout root (`dirname(dir)`) so the fixed-root probe finds
+ * `<root>/.mstar` === `dir`. */
+function harnessOpts(dir: string): { cwd: string } {
+  return { cwd: dirname(dir) };
 }
 
 /** Valid payloads (each passes the kind's existing validator). */
@@ -144,7 +152,7 @@ function recordingStoreModuleSource(envVar: string): string {
  * `persist write` validates documents before replacing them. Snapshot writes
  * remain coordinator-session protected; status writes use ordinary replacement.
  */
-describe("mstar persist — FsStore round-trip in a temp harness dir (MSTAR_HARNESS_DIR)", () => {
+describe("mstar persist — FsStore round-trip in a fixed <git root>/.mstar harness", () => {
   // Dispositions (issue #428): the status/snapshot persist faces are retired
   // with the pre-activation file route. Protected coordination documents are
   // written only through the engine's lifecycle producers (asserted in the
@@ -154,7 +162,7 @@ describe("mstar persist — FsStore round-trip in a temp harness dir (MSTAR_HARN
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "payload.json", REGISTER_PAYLOAD);
       const put = runCli(["persist", "write", "residuals", "--key", "proj-1", "--file", payloadFile], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(put.exitCode).toBe(1);
       expect(message(put)).toContain("residuals is retired");
@@ -163,7 +171,7 @@ describe("mstar persist — FsStore round-trip in a temp harness dir (MSTAR_HARN
       expect(existsSync(join(dir, "projects"))).toBe(false);
 
       // The read/delete faces refuse the same way — the kind has no authority.
-      const get = runCli(["persist", "get", "residuals", "--key", "proj-1"], { env: harnessEnv(dir) });
+      const get = runCli(["persist", "get", "residuals", "--key", "proj-1"], harnessOpts(dir));
       expect(get.exitCode).toBe(1);
       expect(message(get)).toContain("residuals is retired");
     });
@@ -175,7 +183,7 @@ describe("mstar persist — FsStore round-trip in a temp harness dir (MSTAR_HARN
       mkdirSync(join(dir, "projects", "proj-1"), { recursive: true });
       const payloadFile = writePayload(dir, "payload.json", REGISTER_PAYLOAD);
       const put = runCli(["persist", "write", "json", "--key", registerPath, "--file", payloadFile], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(put.exitCode).toBe(1);
       expect(message(put)).toContain("project registers are retired migration history");
@@ -183,11 +191,11 @@ describe("mstar persist — FsStore round-trip in a temp harness dir (MSTAR_HARN
 
       // The alias is not a read path either, and a same-named file outside the
       // resolved project dir is not a register (the guard is boundary-scoped).
-      const get = runCli(["persist", "get", "json", "--key", registerPath], { env: harnessEnv(dir) });
+      const get = runCli(["persist", "get", "json", "--key", registerPath], harnessOpts(dir));
       expect(get.exitCode).toBe(1);
       const outside = join(dir, "elsewhere", "residuals.json");
       const allowed = runCli(["persist", "write", "json", "--key", outside, "--file", payloadFile], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(allowed.exitCode).toBe(0);
       expect(existsSync(outside)).toBe(true);
@@ -197,17 +205,17 @@ describe("mstar persist — FsStore round-trip in a temp harness dir (MSTAR_HARN
   test("review round-trips for a plan-shaped key (sdd/<key>/review/report.json) and an other key (sdd/_reviews/)", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
-      const planShaped = runCli(["persist", "write", "review", "--key", "20260827-artifact-store", "--file", payloadFile], { env: harnessEnv(dir) },);
+      const planShaped = runCli(["persist", "write", "review", "--key", "20260827-artifact-store", "--file", payloadFile], harnessOpts(dir),);
       expect(planShaped.exitCode).toBe(0);
       expect(existsSync(join(dir, "sdd", "20260827-artifact-store", "review", "report.json"))).toBe(true);
 
       const otherKey = runCli(["persist", "write", "review", "--key", "review-abc", "--file", payloadFile], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(otherKey.exitCode).toBe(0);
       expect(existsSync(join(dir, "sdd", "_reviews", "review-abc.json"))).toBe(true);
 
-      const get = runCli(["persist", "get", "review", "--key", "20260827-artifact-store"], { env: harnessEnv(dir) });
+      const get = runCli(["persist", "get", "review", "--key", "20260827-artifact-store"], harnessOpts(dir));
       expect(get.exitCode).toBe(0);
       expect(persistedPayload(get)).toEqual(REVIEW_PAYLOAD);
     });
@@ -217,11 +225,11 @@ describe("mstar persist — FsStore round-trip in a temp harness dir (MSTAR_HARN
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "payload.json", { hello: "world" });
       const target = join(dir, "custom", "payload.json");
-      const put = runCli(["persist", "write", "json", "--key", target, "--file", payloadFile], { env: harnessEnv(dir) });
+      const put = runCli(["persist", "write", "json", "--key", target, "--file", payloadFile], harnessOpts(dir));
       expect(put.exitCode).toBe(0);
       expect(existsSync(target)).toBe(true);
 
-      const get = runCli(["persist", "get", "json", "--key", target], { env: harnessEnv(dir) });
+      const get = runCli(["persist", "get", "json", "--key", target], harnessOpts(dir));
       expect(get.exitCode).toBe(0);
       expect(persistedPayload(get)).toEqual({ hello: "world" });
     });
@@ -231,7 +239,7 @@ describe("mstar persist — FsStore round-trip in a temp harness dir (MSTAR_HARN
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "payload.json", { hello: "world" });
       const r = runCli(["persist", "write", "json", "--key", "relative/path.json", "--file", payloadFile], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("absolute path");
@@ -244,7 +252,7 @@ describe("mstar persist — validators run before put", () => {
     withTempDir((dir) => {
       const bad = { ...REVIEW_PAYLOAD, verdict: "approve" };
       const payloadFile = writePayload(dir, "bad-review.json", bad);
-      const r = runCli(["persist", "write", "review", "--key", "review-bad", "--file", payloadFile], { env: harnessEnv(dir) });
+      const r = runCli(["persist", "write", "review", "--key", "review-bad", "--file", payloadFile], harnessOpts(dir));
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("refusing to persist invalid review document");
       expect(existsSync(join(dir, "sdd", "_reviews", "review-bad.json"))).toBe(false);
@@ -254,13 +262,13 @@ describe("mstar persist — validators run before put", () => {
   test("issue authority: the retired residuals kind is refused before any payload is read (exit 1)", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "bad-residuals.json", { nope: 1 });
-      const r = runCli(["persist", "write", "residuals", "--key", "proj-1", "--file", payloadFile], { env: harnessEnv(dir) },);
+      const r = runCli(["persist", "write", "residuals", "--key", "proj-1", "--file", payloadFile], harnessOpts(dir),);
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("residuals is retired");
       expect(existsSync(join(dir, "projects", "proj-1", "residuals.json"))).toBe(false);
       // Retirement precedes the payload read: a missing file changes nothing.
       const missing = runCli(["persist", "write", "residuals", "--key", "proj-1", "--file", join(dir, "absent.json")], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(missing.exitCode).toBe(1);
       expect(message(missing)).toContain("residuals is retired");
@@ -273,7 +281,7 @@ describe("mstar persist — validators run before put", () => {
       const payloadFile = join(dir, "bad.json");
       writeFileSync(payloadFile, "{ not json", "utf8");
       const r = runCli(["persist", "write", "json", "--key", join(dir, "out.json"), "--file", payloadFile], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("not valid JSON");
@@ -286,7 +294,7 @@ describe("mstar persist review — validateMstarReviewV1 before put", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "m1-review.json", { verdict: "approve" });
       const r = runCli(["persist", "write", "review", "--key", "20260827-review-json", "--file", payloadFile], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("refusing to persist invalid review document");
@@ -302,7 +310,7 @@ describe("mstar persist review — validateMstarReviewV1 before put", () => {
         summary_md: "summary",
         findings: [],
       });
-      const r = runCli(["persist", "write", "review", "--key", "review-abc", "--file", payloadFile], { env: harnessEnv(dir) });
+      const r = runCli(["persist", "write", "review", "--key", "review-abc", "--file", payloadFile], harnessOpts(dir));
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("refusing to persist invalid review document");
       expect(message(r)).toContain("review.missing-schema");
@@ -313,7 +321,7 @@ describe("mstar persist review — validateMstarReviewV1 before put", () => {
   test("aggregated refusal names every missing review field in one attempt", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "empty.json", {});
-      const r = runCli(["persist", "write", "review", "--key", "review-empty", "--file", payloadFile], { env: harnessEnv(dir) });
+      const r = runCli(["persist", "write", "review", "--key", "review-empty", "--file", payloadFile], harnessOpts(dir));
       expect(r.exitCode).toBe(1);
       const refusal = message(r);
       // One refusal, every problem: the caller repairs the document once.
@@ -328,7 +336,7 @@ describe("mstar persist review — validateMstarReviewV1 before put", () => {
     withTempDir((dir) => {
       const mismatched = { ...REVIEW_PAYLOAD, verdict: "ship it" };
       const payloadFile = writePayload(dir, "mismatch.json", mismatched);
-      const r = runCli(["persist", "write", "review", "--key", "pr-42", "--file", payloadFile], { env: harnessEnv(dir) });
+      const r = runCli(["persist", "write", "review", "--key", "pr-42", "--file", payloadFile], harnessOpts(dir));
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("refusing to persist invalid review document");
       expect(message(r)).toContain("review.verdict-tally-mismatch");
@@ -343,7 +351,7 @@ describe("mstar persist review — validateMstarReviewV1 before put", () => {
         tally: { verdict: "needs fixes" }, // no scorePct / counts / chatHeader
       };
       const payloadFile = writePayload(dir, "doctored-tally.json", doctored);
-      const r = runCli(["persist", "write", "review", "--key", "pr-42", "--file", payloadFile], { env: harnessEnv(dir) });
+      const r = runCli(["persist", "write", "review", "--key", "pr-42", "--file", payloadFile], harnessOpts(dir));
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("refusing to persist invalid review document");
       expect(message(r)).toContain("review.tally-malformed");
@@ -364,7 +372,7 @@ describe("mstar persist review — validateMstarReviewV1 before put", () => {
         ],
       });
       const payloadFile = writePayload(dir, "synthesized-review.json", synthesized);
-      const r = runCli(["persist", "write", "review", "--key", "pr-7", "--file", payloadFile], { env: harnessEnv(dir) });
+      const r = runCli(["persist", "write", "review", "--key", "pr-7", "--file", payloadFile], harnessOpts(dir));
       expect(r.exitCode).toBe(0);
       expect(envelope(r)).toMatchObject({ command: "persist.write", status: "ok", data: { kind: "review", key: "pr-7" } });
       expect(existsSync(join(dir, "sdd", "_reviews", "pr-7.json"))).toBe(true);
@@ -377,11 +385,11 @@ describe("mstar persist review — validateMstarReviewV1 before put", () => {
       // The optional-narrative contract in the exact shape the CLI receives.
       expect("summary_md" in absent).toBe(false);
       const payloadFile = writePayload(dir, "no-narrative.json", absent);
-      const r = runCli(["persist", "write", "review", "--key", "pr-8", "--file", payloadFile], { env: harnessEnv(dir) });
+      const r = runCli(["persist", "write", "review", "--key", "pr-8", "--file", payloadFile], harnessOpts(dir));
       expect(r.exitCode).toBe(0);
       expect(envelope(r)).toMatchObject({ command: "persist.write", status: "ok", data: { kind: "review", key: "pr-8" } });
 
-      const get = runCli(["persist", "get", "review", "--key", "pr-8"], { env: harnessEnv(dir) });
+      const get = runCli(["persist", "get", "review", "--key", "pr-8"], harnessOpts(dir));
       expect(get.exitCode).toBe(0);
       const stored = persistedPayload(get) as Record<string, unknown>;
       expect("summary_md" in stored).toBe(false);
@@ -392,7 +400,7 @@ describe("mstar persist review — validateMstarReviewV1 before put", () => {
   test("still refuses a present-but-blank summary_md (exit 1, no write)", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "blank-narrative.json", { ...REVIEW_PAYLOAD, summary_md: "   " });
-      const r = runCli(["persist", "write", "review", "--key", "pr-9", "--file", payloadFile], { env: harnessEnv(dir) });
+      const r = runCli(["persist", "write", "review", "--key", "pr-9", "--file", payloadFile], harnessOpts(dir));
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("review.blank-summary");
       expect(existsSync(join(dir, "sdd", "_reviews", "pr-9.json"))).toBe(false);
@@ -422,11 +430,11 @@ describe("mstar persist — usage errors", () => {
   test("unknown kind → usage, exit 2", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "payload.json", { a: 1 });
-      const put = runCli(["persist", "write", "bogus", "--key", "k", "--file", payloadFile], { env: harnessEnv(dir) });
+      const put = runCli(["persist", "write", "bogus", "--key", "k", "--file", payloadFile], harnessOpts(dir));
       expect(put.exitCode).toBe(2);
       expect(message(put)).toContain("kind must be review or json");
 
-      const get = runCli(["persist", "get", "bogus", "--key", "k"], { env: harnessEnv(dir) });
+      const get = runCli(["persist", "get", "bogus", "--key", "k"], harnessOpts(dir));
       expect(get.exitCode).toBe(2);
       expect(message(get)).toContain("kind must be review or json");
     });
@@ -438,7 +446,7 @@ describe("mstar persist — usage errors", () => {
       const r = runCli([
         "persist", "write", "review", "--key", "k", "--file", payloadFile,
         "--input", JSON.stringify({ alternate: true }),
-      ], { env: harnessEnv(dir) });
+      ], harnessOpts(dir));
       expect(r.exitCode).toBe(2);
       expect(message(r)).toContain("mutually exclusive");
     });
@@ -446,7 +454,7 @@ describe("mstar persist — usage errors", () => {
 
   test("missing payload file → exit 1", () => {
     withTempDir((dir) => {
-      const r = runCli(["persist", "write", "review", "--key", "k", "--file", join(dir, "no-such.json")], { env: harnessEnv(dir) });
+      const r = runCli(["persist", "write", "review", "--key", "k", "--file", join(dir, "no-such.json")], harnessOpts(dir));
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("payload file not found");
     });
@@ -456,7 +464,7 @@ describe("mstar persist — usage errors", () => {
 describe("mstar persist get — absent document", () => {
   test("missing key → exit 1 with a message (no stored document)", () => {
     withTempDir((dir) => {
-      const r = runCli(["persist", "get", "review", "--key", "no-such-review"], { env: harnessEnv(dir) });
+      const r = runCli(["persist", "get", "review", "--key", "no-such-review"], harnessOpts(dir));
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("no stored document");
     });
@@ -467,13 +475,13 @@ describe("mstar persist — inline JSON input", () => {
   test("--input supplies a validated replacement payload (round-trip; malformed JSON refuses)", () => {
     withTempDir((dir) => {
       const put = runCli(["persist", "write", "review", "--key", "review-inline", "--input", JSON.stringify(REVIEW_PAYLOAD)], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(put.exitCode).toBe(0);
       expect(existsSync(join(dir, "sdd", "_reviews", "review-inline.json"))).toBe(true);
 
       const malformed = runCli(["persist", "write", "review", "--key", "review-inline", "--input", "{not json"], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(malformed.exitCode).toBe(1);
       expect(message(malformed)).toContain("not valid JSON");
@@ -484,12 +492,12 @@ describe("mstar persist — inline JSON input", () => {
     withTempDir((dir) => {
       const target = join(dir, "loose.json");
       const put = runCli(["persist", "write", "json", "--key", target, "--input", JSON.stringify({ anything: ["goes", 1] })], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(put.exitCode).toBe(0);
       expect(JSON.parse(readFileSync(target, "utf8"))).toEqual({ anything: ["goes", 1] });
 
-      const get = runCli(["persist", "get", "json", "--key", target], { env: harnessEnv(dir) });
+      const get = runCli(["persist", "get", "json", "--key", target], harnessOpts(dir));
       expect(get.exitCode).toBe(0);
       expect(persistedPayload(get)).toEqual({ anything: ["goes", 1] });
     });
@@ -530,7 +538,7 @@ describe("mstar persist — --store / MSTAR_STORE_MODULE module injection", () =
       process.env.MSTAR_STORE_MODULE = ambient;
       try {
         // Deleted by the wrapper: the child falls back to the FsStore.
-        const pinnedOut = runCli(["persist", "write", "review", "--key", "pin-1", "--file", payloadFile], { env: harnessEnv(dir) });
+        const pinnedOut = runCli(["persist", "write", "review", "--key", "pin-1", "--file", payloadFile], harnessOpts(dir));
         expect(pinnedOut.exitCode).toBe(0);
         expect(message(pinnedOut)).not.toContain("ambient module loaded");
 
@@ -539,8 +547,7 @@ describe("mstar persist — --store / MSTAR_STORE_MODULE module injection", () =
         writeFileSync(moduleFile, storeModuleSource("PERSIST_MODULE_FILE"), "utf8");
         const outFile = join(dir, "module-out.json");
         const repinned = runCli(["persist", "write", "review", "--key", "pin-2", "--file", payloadFile], {
-          env: { ...harnessEnv(dir), MSTAR_STORE_MODULE: moduleFile, PERSIST_MODULE_FILE: outFile },
-        });
+          env: { MSTAR_STORE_MODULE: moduleFile, PERSIST_MODULE_FILE: outFile }, ...harnessOpts(dir) });
         expect(repinned.exitCode).toBe(0);
         expect(existsSync(outFile)).toBe(true);
       } finally {
@@ -554,7 +561,7 @@ describe("mstar persist — --store / MSTAR_STORE_MODULE module injection", () =
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
       const r = runCli(["persist", "write", "review", "--key", "k", "--file", payloadFile, "--store", "http://example.com/s.mjs"], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("only filesystem paths are allowed");
@@ -566,7 +573,7 @@ describe("mstar persist — --schema under the D3 fail-loud store contract", () 
   test("--schema + default FsStore is a store refusal: exit 1 with the canonical message", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
-      const r = runCli(["persist", "write", "review", "--key", "20260827-artifact-store", "--file", payloadFile, "--schema", "mstar.review/v1"], { env: harnessEnv(dir) },);
+      const r = runCli(["persist", "write", "review", "--key", "20260827-artifact-store", "--file", payloadFile, "--schema", "mstar.review/v1"], harnessOpts(dir),);
       expect(r.exitCode).toBe(1);
       expect(message(r)).toContain("FsStore does not persist schema ids");
       expect(existsSync(join(dir, "sdd", "20260827-artifact-store", "review", "report.json"))).toBe(false);
@@ -606,7 +613,7 @@ describe("mstar persist — --schema under the D3 fail-loud store contract", () 
       "--schema",
       "mstar.review/v1",
       "--store",
-      module,], { env: { ...harnessEnv(dir), PERSIST_SCHEMA_FILE: out } },);
+      module,], { ...harnessOpts(dir), env: { PERSIST_SCHEMA_FILE: out } },);
       expect(r.exitCode).toBe(0);
       expect(JSON.parse(readFileSync(out, "utf8")).schema).toBe("mstar.review/v1");
     });
@@ -620,13 +627,13 @@ describe("mstar persist list — D4/D5 enumeration face", () => {
   test("review union: plan-shaped dir keys + _reviews flat keys (D4)", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
-      const planShaped = runCli(["persist", "write", "review", "--key", "20260828-store-cli-faces", "--file", payloadFile], { env: harnessEnv(dir) },);
+      const planShaped = runCli(["persist", "write", "review", "--key", "20260828-store-cli-faces", "--file", payloadFile], harnessOpts(dir),);
       expect(planShaped.exitCode).toBe(0);
       const flat = runCli(["persist", "write", "review", "--key", "review-abc", "--file", payloadFile], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(flat.exitCode).toBe(0);
-      const list = runCli(["persist", "list", "review"], { env: harnessEnv(dir) });
+      const list = runCli(["persist", "list", "review"], harnessOpts(dir));
       expect(list.exitCode).toBe(0);
       expect(envelope(list).data).toEqual(["20260828-store-cli-faces", "review-abc"]);
     });
@@ -634,7 +641,7 @@ describe("mstar persist list — D4/D5 enumeration face", () => {
 
   test("empty kind → empty stdout, exit 0 (D5)", () => {
     withTempDir((dir) => {
-      const list = runCli(["persist", "list", "review"], { env: harnessEnv(dir) });
+      const list = runCli(["persist", "list", "review"], harnessOpts(dir));
       expect(list.exitCode).toBe(0);
       expect(envelope(list).data).toEqual([]);
     });
@@ -642,7 +649,7 @@ describe("mstar persist list — D4/D5 enumeration face", () => {
 
   test("json kind → usage error exit 2 before calling list (D5)", () => {
     withTempDir((dir) => {
-      const list = runCli(["persist", "list", "json"], { env: harnessEnv(dir) });
+      const list = runCli(["persist", "list", "json"], harnessOpts(dir));
       expect(list.exitCode).toBe(2);
       expect(message(list)).toContain("json keys are absolute paths and cannot be listed");
       expect(envelope(list)).toMatchObject({ command: "persist.list", status: "usage", code: "command.invalid-input" });
@@ -651,7 +658,7 @@ describe("mstar persist list — D4/D5 enumeration face", () => {
 
   test("unknown kind → usage, exit 2", () => {
     withTempDir((dir) => {
-      const list = runCli(["persist", "list", "bogus"], { env: harnessEnv(dir) });
+      const list = runCli(["persist", "list", "bogus"], harnessOpts(dir));
       expect(list.exitCode).toBe(2);
       expect(message(list)).toContain("kind must be review or json");
     });
@@ -662,8 +669,7 @@ describe("mstar persist list — D4/D5 enumeration face", () => {
       const moduleFile = join(dir, "store-mod.ts");
       writeFileSync(moduleFile, storeModuleSource("PERSIST_MODULE_FILE"), "utf8");
       const list = runCli(["persist", "list", "review", "--store", moduleFile], {
-        env: { ...harnessEnv(dir), PERSIST_MODULE_FILE: join(dir, "recording.json") },
-      });
+        env: { PERSIST_MODULE_FILE: join(dir, "recording.json") }, ...harnessOpts(dir) });
       expect(list.exitCode).toBe(2);
       expect(message(list)).toContain("store does not support list");
     });
@@ -691,10 +697,10 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
   test("valid review doc + --validate → exit 0 with the payload and validation: ok (D1)", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
-      const put = runCli(["persist", "write", "review", "--key", "review-d1", "--file", payloadFile], { env: harnessEnv(dir) });
+      const put = runCli(["persist", "write", "review", "--key", "review-d1", "--file", payloadFile], harnessOpts(dir));
       expect(put.exitCode).toBe(0);
       const get = runCli(["persist", "get", "review", "--key", "review-d1", "--validate"], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(get.exitCode).toBe(0);
       expect(persistedPayload(get)).toEqual(REVIEW_PAYLOAD);
@@ -709,7 +715,7 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
       mkdirSync(join(dir, "sdd", "_reviews"), { recursive: true });
       writeFileSync(target, JSON.stringify({ ...REVIEW_PAYLOAD, verdict: "approve" }), "utf8");
       const get = runCli(["persist", "get", "review", "--key", "review-bad", "--validate"], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(get.exitCode).toBe(1);
       expect(envelope(get)).toMatchObject({ command: "persist.get", status: "refused" });
@@ -723,7 +729,7 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
       const target = join(dir, "sdd", "_reviews", "review-raw.json");
       mkdirSync(join(dir, "sdd", "_reviews"), { recursive: true });
       writeFileSync(target, JSON.stringify(invalid), "utf8");
-      const get = runCli(["persist", "get", "review", "--key", "review-raw"], { env: harnessEnv(dir) });
+      const get = runCli(["persist", "get", "review", "--key", "review-raw"], harnessOpts(dir));
       expect(get.exitCode).toBe(0);
       expect(persistedPayload(get)).toEqual(invalid);
       expect(message(get)).not.toContain("validation");
@@ -735,7 +741,7 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
       const loose = { anything: ["goes", 1] };
       const looseFile = writePayload(dir, "loose.json", loose);
       const get = runCli(["persist", "get", "json", "--key", looseFile, "--validate"], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(get.exitCode).toBe(0);
       expect(persistedPayload(get)).toEqual(loose);
@@ -746,7 +752,7 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
   test("miss + --validate → exit 1 with the existing miss string; validation never runs (D1)", () => {
     withTempDir((dir) => {
       const get = runCli(["persist", "get", "review", "--key", "no-such-review", "--validate"], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(get.exitCode).toBe(1);
       expect(envelope(get)).toMatchObject({ command: "persist.get", status: "refused" });
@@ -764,19 +770,19 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "review.json", REVIEW_PAYLOAD);
       const put = runCli(["persist", "write", "review", "--key", "review-abc", "--file", payloadFile], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(put.exitCode).toBe(0);
       const target = join(dir, "sdd", "_reviews", "review-abc.json");
       expect(existsSync(target)).toBe(true);
 
-      const del = runCli(["persist", "delete", "review", "--key", "review-abc"], { env: harnessEnv(dir) });
+      const del = runCli(["persist", "delete", "review", "--key", "review-abc"], harnessOpts(dir));
       expect(del.exitCode).toBe(0);
       expect(envelope(del)).toMatchObject({ command: "persist.delete", status: "ok", data: { deleted: true, kind: "review", key: "review-abc" } });
       expect(existsSync(target)).toBe(false);
 
       // Idempotent: an already-absent key is a no-op.
-      const again = runCli(["persist", "delete", "review", "--key", "review-abc"], { env: harnessEnv(dir) });
+      const again = runCli(["persist", "delete", "review", "--key", "review-abc"], harnessOpts(dir));
       expect(again.exitCode).toBe(0);
       expect(envelope(again)).toMatchObject({ command: "persist.delete", status: "ok", data: { deleted: true, kind: "review", key: "review-abc" } });
     });
@@ -784,7 +790,7 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
 
   test("delete without --key → usage error exit 2 (D5)", () => {
     withTempDir((dir) => {
-      const del = runCli(["persist", "delete", "review"], { env: harnessEnv(dir) });
+      const del = runCli(["persist", "delete", "review"], harnessOpts(dir));
       expect(del.exitCode).toBe(2);
       expectUsageDiagnostic(del, "key");
     });
@@ -792,7 +798,7 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
 
   test("delete with an unknown kind → usage error exit 2 (D5)", () => {
     withTempDir((dir) => {
-      const del = runCli(["persist", "delete", "bogus", "--key", "x"], { env: harnessEnv(dir) });
+      const del = runCli(["persist", "delete", "bogus", "--key", "x"], harnessOpts(dir));
       expect(del.exitCode).toBe(2);
       expect(message(del)).toContain("kind must be review or json");
     });
@@ -803,8 +809,7 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
       const moduleFile = join(dir, "store-mod.ts");
       writeFileSync(moduleFile, storeModuleSource("PERSIST_MODULE_FILE"), "utf8");
       const del = runCli(["persist", "delete", "review", "--key", "review-abc", "--store", moduleFile], {
-        env: { ...harnessEnv(dir), PERSIST_MODULE_FILE: join(dir, "recording.json") },
-      });
+        env: { PERSIST_MODULE_FILE: join(dir, "recording.json") }, ...harnessOpts(dir) });
       expect(del.exitCode).toBe(2);
       expect(message(del)).toContain("store does not support delete");
     });
@@ -816,8 +821,7 @@ describe("mstar persist get --validate + persist delete — D1/D2 faces", () => 
       writeFileSync(moduleFile, deletingStoreModuleSource("PERSIST_MODULE_FILE"), "utf8");
       const recording = join(dir, "recording.json");
       const del = runCli(["persist", "delete", "review", "--key", "review-abc", "--store", moduleFile], {
-        env: { ...harnessEnv(dir), PERSIST_MODULE_FILE: recording },
-      });
+        env: { PERSIST_MODULE_FILE: recording }, ...harnessOpts(dir) });
       expect(del.exitCode).toBe(0);
       expect(envelope(del)).toMatchObject({ command: "persist.delete", status: "ok", data: { deleted: true, kind: "review", key: "review-abc" } });
       expect(JSON.parse(readFileSync(recording, "utf8"))).toEqual({ kind: "review", key: "review-abc" });
@@ -834,7 +838,7 @@ describe("mstar persist coordinated-writer — identity and path boundaries", ()
       writeFileSync(join(dir, "sdd", "_reviews", "review-abc.json"), original, "utf8");
       const payloadFile = writePayload(dir, "payload.json", REVIEW_PAYLOAD);
 
-      const replaced = runCli(["persist", "write", "review", "--key", "review-abc", "--file", payloadFile], { env: harnessEnv(dir) });
+      const replaced = runCli(["persist", "write", "review", "--key", "review-abc", "--file", payloadFile], harnessOpts(dir));
       expect(replaced.exitCode).toBe(0);
       expect(JSON.parse(readFileSync(join(dir, "sdd", "_reviews", "review-abc.json"), "utf8"))).toEqual(REVIEW_PAYLOAD);
       expect(REVIEW_PAYLOAD).not.toEqual(JSON.parse(original));
@@ -844,7 +848,7 @@ describe("mstar persist coordinated-writer — identity and path boundaries", ()
   test("a json alias of a protected target is refused by canonical path, not by kind name", () => {
     withTempDir((dir) => {
       const payloadFile = writePayload(dir, "payload.json", STATUS_PAYLOAD);
-      const put = runCli(["persist", "write", "json", "--key", join(dir, "status.json"), "--file", payloadFile], { env: harnessEnv(dir) },);
+      const put = runCli(["persist", "write", "json", "--key", join(dir, "status.json"), "--file", payloadFile], harnessOpts(dir),);
       expect(put.exitCode).toBe(1);
       expect(message(put)).toContain("Raw writes are refused for protected coordination documents.");
       expect(existsSync(join(dir, "status.json"))).toBe(false);
@@ -855,7 +859,7 @@ describe("mstar persist coordinated-writer — identity and path boundaries", ()
   test("--versioned reports the absent token for a missing document (the first-create precondition)", () => {
     withTempDir((dir) => {
       const read = runCli(["persist", "get", "review", "--key", "review-none", "--versioned"], {
-        env: harnessEnv(dir),
+        ...harnessOpts(dir),
       });
       expect(read.exitCode).toBe(0);
       expect(envelope(read).data).toEqual({ payload: null, version: "absent" });
@@ -867,8 +871,7 @@ describe("mstar persist coordinated-writer — identity and path boundaries", ()
       const moduleFile = join(dir, "store-mod.ts");
       writeFileSync(moduleFile, storeModuleSource("PERSIST_MODULE_FILE"), "utf8");
       const read = runCli(["persist", "get", "review", "--key", "review-abc", "--versioned", "--store", moduleFile], {
-        env: { ...harnessEnv(dir), PERSIST_MODULE_FILE: join(dir, "recording.json") },
-      });
+        env: { PERSIST_MODULE_FILE: join(dir, "recording.json") }, ...harnessOpts(dir) });
       expect(read.exitCode).toBe(1);
       expect(envelope(read).code).toBe("coordination.local-store-required");
     });

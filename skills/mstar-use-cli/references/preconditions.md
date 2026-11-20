@@ -6,13 +6,14 @@ This is a diagnostic map, not a mandatory setup ladder. Invoke the intended publ
 
 ## 1. Which harness root
 
-Commands that touch harness state resolve a harness directory first. Resolution starts from an explicit value and falls through to discovery:
+Commands that touch harness state resolve a harness directory first. The root is fixed: **`<git main worktree root>/.mstar/`**. It is derived from Git only; no `.mstarc` key, environment variable or candidate chain moves it.
 
-1. an explicit override — the command's own root option, or the harness-dir environment variable (a `.mstarc` declaration in the repository config file is the same tier);
-2. otherwise the documented probe: the harness directory, then any legacy harness directory, then the legacy plan directories;
-3. otherwise nothing resolves.
+- `harness_dir` is retired: a `.mstarc` that declares it is refused, and the recovery is deleting that line.
+- `MSTAR_HARNESS_DIR` is retired: the value is ignored and never selects a root; `unset` it.
+- `.agents/`, `.plans/` and `plans/` are never adopted as harness roots; a repository whose only harness is one of them is refused with `mstar harness scaffold` (then `mstar store upgrade` for an existing store).
+- A CLI process outside any Git work tree names the root with `--harness <absolute .mstar>`; without it the command refuses and names both recoveries.
 
-The probe walks up from the start directory but **never crosses the workspace root**, and for a linked checkout the workspace root is the worktree itself. So a feature worktree cannot discover the control harness by walking up — process documents are gitignored and simply are not there.
+A linked checkout resolves the main worktree's `.mstar`; its own `.mstarc` is a tracked copy whose layout declaration does not move the root.
 
 Two resolutions coexist in the CLI and can disagree from the same cwd:
 
@@ -21,11 +22,11 @@ Two resolutions coexist in the CLI and can disagree from the same cwd:
 | process root | the main worktree of the repository, not the checkout the process sits in | a command run inside a linked worktree still addresses the control harness |
 | local probe | the process cwd, bounded by the workspace root | a feature worktree resolves whatever harness-shaped directory *it* happens to carry, or nothing |
 
-That is the trap worth wiring into habits: **never assume cwd discovery addresses the control harness.** Where a stray legacy harness directory exists in the worktree, the local probe resolves it and reports success against the wrong root; where none exists, the same command fails against a directory the operator never chose.
+That is the trap worth wiring into habits: **never assume cwd discovery addresses the control harness.** Where a stray `.mstar/` exists in the worktree, the local probe reports it; the effective root still comes from the control checkout, and legacy `.agents/` / `.plans/` / `plans/` directories are never adopted at all.
 
-Use the path-resolution command to see what the current cwd resolves before running anything that reads or writes process state. Its top-level members are the **effective** answers: in a linked checkout `harnessDir` is the control harness, `linkedWorktree: true`, and `controlRoot` / `controlHarnessDir` name the main checkout and its harness. The checkout's own probe is reported beside them under `local` — read it only to diagnose why a local artifact exists, never as the process root. Name `controlHarnessDir` explicitly whenever the process may sit outside the control checkout (the root option, the environment override, or a positional control root where the command takes one).
+Use the path-resolution command to see what the current cwd resolves before running anything that reads or writes process state. Its top-level members are the **effective** answers: in a linked checkout `harnessDir` is the control harness, `linkedWorktree: true`, and `controlRoot` / `controlHarnessDir` name the main checkout and its harness. The checkout's own probe is reported beside them under `local` — read it only to diagnose why a local artifact exists, never as the process root. Name `controlHarnessDir` explicitly for an MCP call, or for a CLI launch outside Git; a CLI inside Git derives it from the main worktree.
 
-Failure shapes: no resolvable root exits `1` and prints a guidance line naming the bounded probe, the start directory and the bootstrap verb. A linked checkout whose main worktree cannot be read refuses explicitly rather than degrading to local artifacts. A resolution that succeeds is not proof it chose the root the run intended.
+Failure shapes: no resolvable root exits `1` and prints a guidance line naming the fixed root, the start directory and the bootstrap verb. A linked checkout whose main worktree cannot be read refuses explicitly rather than degrading to local artifacts. A resolution that succeeds is not proof it chose the root the run intended.
 
 ## 2. Control root vs feature worktree
 
@@ -38,7 +39,7 @@ Failure shapes: no resolvable root exits `1` and prints a guidance line naming t
 Consequences:
 
 - coordinator verbs belong to main-worktree residency, or to the recorded integration worktree for the integration steps; running them from a product checkout is a precondition failure, not a convenience;
-- a command run from the feature worktree that needs process state must name the control root explicitly;
+- a CLI command run from the feature worktree derives the control root through Git; an MCP call must name it explicitly;
 - the reverse also holds: writing product files from the control checkout mixes the two domains, and a worktree check will notice.
 
 ## 3. cwd neutrality

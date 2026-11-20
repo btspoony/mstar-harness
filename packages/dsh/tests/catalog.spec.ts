@@ -35,7 +35,7 @@
  * decision unchanged . Fiber disposal removes the listener (HMR-safe).
  */
 import { describe, expect, it, afterEach, spyOn } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -293,7 +293,7 @@ describe('mstar-engine-status catalog — pre-step composition (REAL-composition
     // is built on first use) — the compass must exist before apply() runs to
     // be seen by the build.
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'iterations/00000808-catalog-test/delivery-compass.md': [
@@ -446,7 +446,7 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
 
   it('renders an ACTIVE payload as ONE compact delta line — workflow + non-Done plans, never the watermark trio (D1)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-projection-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-projection', [
       { id: 'plan-projection', title: 'Plan', file: 'plans/plan-projection.md', status: 'Todo' },
       { id: 'plan-finished', title: 'Plan', file: 'plans/plan-finished.md', status: 'Done' },
@@ -483,7 +483,7 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
 
   it('panelDigestOf ignores ONLY the self-perturbing store revision — and never mutates the payload (D2)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-panelkey-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-panelkey', [], {}, SESSION_ID, root, 'wf-panelkey')
     await seedOpenIssue(harnessDir, { title: 'panel-visible issue', severity: 'high', operationId: 'op-panelkey-1' })
     const app = booted = await bootApp({ root, harnessDir })
@@ -559,7 +559,7 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
 
   it('a residual-count-only change appends NO row — the compact delta ignores facts it does not render (D2)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-cadence-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-cadence', [], {}, SESSION_ID, root, 'wf-cadence')
     // TTL 0: each step rebuilds, so the fixture's change reaches the gate
     // immediately (the CHANGE, not the turn, decides whether the row is
@@ -620,7 +620,7 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
 
   it('a transition from an error selection to an ACTIVE workflow appends exactly one row', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-transition-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     const app = booted = await bootApp({ root, harnessDir, catalogTtlMs: 0 })
     await seedStore(app.harnessDir)
 
@@ -838,7 +838,7 @@ describe('compact engine-status delta — the model-row comparison key', () => {
 
   it('an iteration-gate change appends a new row through the real pre-step (the gate is a rendered delta fact)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-gate-delta-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     const COMPASS_REL = 'iterations/iter-gate/delivery-compass.md'
     /** A steering compass registering the given plan ids (the gate's plan set). */
     const compassDoc = (plans: readonly string[]): string => [
@@ -882,7 +882,7 @@ describe('compact engine-status delta — the model-row comparison key', () => {
 describe('mstar-engine-status catalog — status.missing is an identifiable error state (row-trim finding A)', () => {
   it('renders the error verdict with a recovery path for the panel/CLI and injects no model row (A)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-status-missing-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     const app = booted = await bootApp({ root, harnessDir })
     // The SYNCHRONOUS builder is the documented `status.missing` producer: no
     // ACTIVE execution workflow was pre-read, so the payload must say so. A
@@ -923,7 +923,7 @@ describe('mstar-engine-status catalog — status.missing is an identifiable erro
 describe('mstar-engine-status catalog — watermark fallback without a system-prompt service (row-trim finding C)', () => {
   it('renders the watermark trio only for the fallback composition, ahead of the state lines (C)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-watermark-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     const app = booted = await bootApp({ root, harnessDir })
     const payload = buildCatalogPayload(app.ctx, harnessDir)
 
@@ -975,7 +975,7 @@ describe('mstar-engine-status catalog — iteration compassStatus (spec panel-f4
   /** Boot with an ACTIVE execution workflow and its referenced delivery compass. */
   async function payloadWithCompass(status: 'active' | 'locked' | 'completed'): Promise<MstarEngineStatusPayload> {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compassstatus-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, ITERATION_WORKFLOW, [], {
       type: 'iteration',
       compass_ref: 'iterations/iter-00000811-catalog-compass/delivery-compass.md',
@@ -1018,7 +1018,7 @@ describe('mstar-engine-status catalog — plan iterationRefs ', () => {
   /** Boot an ACTIVE workflow whose plans carry `metadata.iteration_refs`. */
   async function stateWithPlans(plans: unknown[]): Promise<NonNullable<MstarEngineStatusPayload['state']>> {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-iterationrefs-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-iterrefs', plans as never[], {}, SESSION_ID, root, 'wf-iterrefs')
     const app = booted = await bootApp({ root, harnessDir })
     await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
@@ -1064,7 +1064,7 @@ Implement the invalidation.
 
   /** A one-workflow ACTIVE execution tree. */
   async function seedActiveTree(root: string): Promise<string> {
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-1', [], {}, SESSION_ID, root, 'wf-1')
     return harnessDir
   }
@@ -1110,13 +1110,16 @@ Implement the invalidation.
   })
 
   it('cross-workspace isolation: a ledger record in workspace A invalidates ONLY A — B\'s cached entry survives within the TTL ', async () => {
-    // Two workspaces, each with its OWN probed harness root — no explicit
+    // why: Two workspaces, each with its OWN probed harness root — no explicit
     // config, so each session cwd resolves its own `{HARNESS_DIR}` and its own
     // cache key (the session id + cwd) + reverse-map entry (D4: per-session
     // keys, per-harness invalidation — a record deletes EVERY session of the
     // affected harness, never a global clear).
-    const wsA = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-a-'))
-    const wsB = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-b-'))
+    // Git-reported roots are realpath'd (/var → /private/var on macOS);
+    // fixtures address them canonically so the resolver and the record
+    // route agree on one harness-dir spelling.
+    const wsA = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-a-')))
+    const wsB = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-isolate-b-')))
     for (const ws of [wsA, wsB]) {
       await seedActiveWorkflow(join(ws, '.mstar'), 'wf-1', [], {}, 'seed-wf-1', ws, 'wf-1')
     }
@@ -1245,7 +1248,7 @@ describe('mstar-engine-status catalog — compact delta plans join cap (spec D4)
   /** Boot a one-workflow ACTIVE tree whose snapshot carries `count` leased plans. */
   const catalogFor = async (count: number) => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-cap-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     const plans = Array.from({ length: count }, (_, index) => capRow(index))
     await seedActiveWorkflow(harnessDir, 'wf-cap', plans, {}, SESSION_ID, root, 'wf-cap')
     const app = booted = await bootApp({ root, harnessDir })
@@ -1266,7 +1269,7 @@ describe('mstar-engine-status catalog — compact delta plans join cap (spec D4)
 
   it('all Done (2) → `plans: all done` — an empty registry and a finished workflow never share one text', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-cap-done-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-cap', [
       { ...capRow(0), status: 'Done' },
       { ...capRow(1), status: 'Done' },
@@ -1318,7 +1321,7 @@ describe('mstar-engine-status catalog — compact delta plans join cap (spec D4)
 describe('catalog teardown — fiber.dispose removes the pre-step listener (HMR-safe)', () => {
   it('disposes the listener on fiber.dispose and a reloaded fiber restores it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     // An ACTIVE workflow context: the listener injects the row only for one.
     await seedActiveWorkflow(harnessDir, 'wf-teardown', [], {}, SESSION_ID, root, 'wf-teardown')
     const ctx = new Context()
@@ -1361,7 +1364,7 @@ Pick.
 
   it('two same-cwd sessions with different picks keep their own plans/ledger within TTL; one ledger invalidation refreshes both', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-d4-isolate-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-a', [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }], {}, 'seed-wf-a', root, 'wf-a')
     await seedActiveWorkflow(harnessDir, 'wf-b', [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }], {}, 'seed-wf-b', root, 'wf-b')
     const app = booted = await bootApp({ root, harnessDir })
@@ -1429,7 +1432,7 @@ Pick.
 
   it('an unbound session with multiple ACTIVE workflows remains a picker error', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-d4-terminal-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-a', [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }], {}, 'seed-wf-a', root, 'wf-a')
     await seedActiveWorkflow(harnessDir, 'wf-b', [{ id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done' }], {}, 'seed-wf-b', root, 'wf-b')
     const app = booted = await bootApp({ root, harnessDir })
@@ -1451,7 +1454,7 @@ Pick.
 
   it('state, direction and iteration gate all come from the same selected workflow', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-d4-cohere-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     const compass = (id: string, direction: string): string => [
       '---',
       `iteration_id: ${id}`,
@@ -1521,7 +1524,7 @@ describe('D4 catalog identity encoding + selected compass path', () => {
 
   it('refuses a compass_ref whose basename is not delivery-compass.md', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-basename-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-a', [{ id: 'plan-a', title: 'Plan A', file: 'plans/plan-a.md', status: 'Todo' }], {
       type: 'iteration', compass_ref: 'iterations/wf-a/notes.md',
     }, SESSION_ID, root, 'wf-a')
@@ -1537,7 +1540,7 @@ describe('D4 catalog identity encoding + selected compass path', () => {
   it('refuses a delivery-compass.md symlink whose target escapes the harness', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-symlink-'))
     const outsideDir = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-compass-outside-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await mkdir(harnessDir, { recursive: true })
     const outsideFile = join(outsideDir, 'delivery-compass.md')
     await writeFile(outsideFile, compassDoc('wf-a', 'Escaped direction.'))

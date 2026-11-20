@@ -42,7 +42,9 @@ import { readAgentFlow, recordDispatch, SETTLE_SEAM } from '../src/index.ts'
 import type { AgentFlowView } from '../src/index.ts'
 import { registerSettleListener, setAgentFlowLogger } from '../src/gates/agent-flow.ts'
 import type { AgentFlowPairing } from '../src/gates/agent-flow.ts'
-import { FakeJobRegistry, FakeSubagentProvider, FakeSubagentService, activationTick, bootApp, executeToolCall, provideTeamServices, seedActiveWorkflow, selectedGenerationFor, startActivationViaNativeChannel, type BootResult } from './harness.ts'
+import { useCleanControlRoot, FakeJobRegistry, FakeSubagentProvider, FakeSubagentService, activationTick, bootApp, executeToolCall, provideTeamServices, seedActiveWorkflow, selectedGenerationFor, startActivationViaNativeChannel, type BootResult } from './harness.ts'
+
+useCleanControlRoot()
 
 let booted: BootResult | undefined
 
@@ -138,7 +140,7 @@ function flowOf(app: BootResult): AgentFlowView {
  */
 async function tempHarness(prefix: string): Promise<{ root: string; harnessDir: string; workflowDir: string }> {
   const root = await mkdtemp(join(tmpdir(), prefix))
-  const harnessDir = join(root, 'harness')
+  const harnessDir = join(root, '.mstar')
   await seedActiveWorkflow(harnessDir)
   return { root, harnessDir, workflowDir: join(harnessDir, 'workflows/wf-1') }
 }

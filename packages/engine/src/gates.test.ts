@@ -15,12 +15,13 @@
  *   dispatch -> `status.invalid-json` parity codes (parse failure,
  *   non-object JSON, on-disk unparseable snapshot/register) -> 2 MB size
  *   guards on BOTH paths -> fresh-scaffold silent pass -> never throws.
- * - `violationLine` / `formatStatusWriteBlockReason`: exact block-reason
- *   shape incl. the host skill pointer.
+ * - Fixed harness root (`<main worktree>/.mstar`, ADR 2026-11-20):
+ * `resolveHarnessDir` classifies an unpopulated root; retired
+ * `harness_dir` declarations are refused, never adopted.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -66,6 +67,7 @@ interface Tree {
 function buildDefaultTree(base: string, id: string): Tree {
   const root = mkdtempSync(join(tmpdir(), `${id}-`));
   const harness = join(root, ".mstar");
+  mkdirSync(harness, { recursive: true });
   mkdirSync(join(harness, "workflows"), { recursive: true });
   mkdirSync(join(harness, "projects"), { recursive: true });
   mkdirSync(join(harness, "plans"), { recursive: true }); // nested rung — must NOT be probed as the root
@@ -73,7 +75,7 @@ function buildDefaultTree(base: string, id: string): Tree {
   gitInit(root);
   const tree: Tree = {
     root,
-    harness,
+    harness: realpathSync(harness),
     status: join(harness, "status.json"),
     snapshot: join(harness, "workflows", "wf-g", "snapshot.json"),
     register: join(harness, "projects", "_g", "residuals.json"),
@@ -86,6 +88,7 @@ function buildDefaultTree(base: string, id: string): Tree {
 function buildCustomTree(base: string): Tree {
   const root = mkdtempSync(join(tmpdir(), "gates-custom-"));
   const harness = join(root, ".mstar");
+  mkdirSync(harness, { recursive: true });
   mkdirSync(join(harness, "cw-wf"), { recursive: true });
   mkdirSync(join(harness, "cw-pj"), { recursive: true });
   writeFileSync(join(harness, "status.json"), VALID_STATUS);
@@ -93,8 +96,8 @@ function buildCustomTree(base: string): Tree {
   gitInit(root);
   const tree: Tree = {
     root,
-    harness,
     status: join(harness, "status.json"),
+    harness: realpathSync(harness),
     snapshot: join(harness, "cw-wf", "wf-g", "snapshot.json"),
     register: join(harness, "cw-pj", "_g", "residuals.json"),
   };
@@ -103,38 +106,16 @@ function buildCustomTree(base: string): Tree {
   return tree;
 }
 
-function buildDoubleTree(base: string): Tree {
-  // Outer FULL-marker root; inner SPARSE harness (no status.json) holding
-  // the coordination docs — the probe returns the outer root, the W-REV-3
-  // retry must re-classify against the inner declared-root resolution.
-  const root = mkdtempSync(join(tmpdir(), "gates-double-"));
-  mkdirSync(join(root, "workflows"), { recursive: true });
-  mkdirSync(join(root, "projects"), { recursive: true });
-  writeFileSync(join(root, "status.json"), VALID_STATUS);
-  const inner = join(root, "inner", ".mstar");
-  mkdirSync(join(inner, "workflows", "wf-g"), { recursive: true });
-  mkdirSync(join(inner, "projects", "_g"), { recursive: true });
-  gitInit(root);
-  return {
-    root,
-    harness: inner,
-    status: join(inner, "status.json"),
-    snapshot: join(inner, "workflows", "wf-g", "snapshot.json"),
-    register: join(inner, "projects", "_g", "residuals.json"),
-  };
-}
-
-function buildDeclaredTree(base: string): Tree {
-  // `.mstarc` harness_dir at the repo root; harness dir NOT populated with
-  // markers — classification only via the resolveHarnessDir fallback.
-  const root = mkdtempSync(join(tmpdir(), "gates-declared-"));
-  writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.harness\n");
-  const harness = join(root, ".harness");
+function buildUnpopulatedTree(base: string): Tree {
+  // why: Fixed `.mstar` root present but not populated with markers —
+  // classification only via the resolveHarnessDir fallback.
+  const root = mkdtempSync(join(tmpdir(), "gates-unpopulated-"));
+  const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   gitInit(root);
   const tree: Tree = {
-    root,
-    harness,
+    root: realpathSync(root),
+    harness: realpathSync(harness),
     status: join(harness, "status.json"),
     snapshot: join(harness, "workflows", "wf-g", "snapshot.json"),
     register: join(harness, "projects", "_g", "residuals.json"),
@@ -150,8 +131,7 @@ beforeAll(() => {
   trees.push(
     { name: "default", tree: buildDefaultTree(tmpdir(), "gates-default") },
     { name: "custom", tree: buildCustomTree(tmpdir()) },
-    { name: "double", tree: buildDoubleTree(tmpdir()) },
-    { name: "declared", tree: buildDeclaredTree(tmpdir()) },
+    { name: "unpopulated", tree: buildUnpopulatedTree(tmpdir()) },
   );
 });
 
@@ -189,15 +169,11 @@ describe("gates.harnessDocKindOfTarget", () => {
     // Inside .mstar/plans the rung-3 probe would resolve plans/ as the
     // harness — the marker probe must win for the root's own docs.
     expect(harnessDocKindOfTarget(tree.status)).toEqual({ harnessDir: tree.harness, kind: "status" });
-    // plans/ holds no canonical snapshot/register docs (fail-open stays
-    // bounded). A status.json directly inside plans/ classifies at the
-    // plans rung via the W-REV-3 retry (verbatim pre-extraction behavior:
-    // the declared-root fallback can return the plans rung; pathological,
-    // and soft-governed in practice — plans/ carries no compass). Pinned
-    // as-is so the moved code stays byte-faithful.
+    // why: plans/ holds no canonical docs under the fixed root: a status.json
+    // directly inside it is not a harness root doc, and the
+    // snapshot/register rel shapes are not gated either.
     expect(harnessDocKindOfTarget(join(tree.harness, "plans", "workflows", "wf-x", "snapshot.json"))).toBeNull();
-    const inPlans = harnessDocKindOfTarget(join(tree.harness, "plans", "status.json"));
-    expect(inPlans).toEqual({ harnessDir: join(tree.harness, "plans"), kind: "status" });
+    expect(harnessDocKindOfTarget(join(tree.harness, "plans", "status.json"))).toBeNull();
   });
 
   test("non-canonical rel shapes stay ungated (never over-gate)", () => {
@@ -216,18 +192,25 @@ describe("gates.harnessDocKindOfTarget", () => {
     expect(harnessDocKindOfTarget(join(tree.harness, "projects", "_g", "residuals.json"))).toBeNull();
   });
 
-  test("W-REV-3 double harness: inner sparse-harness docs re-classify to the inner root", () => {
+  test("unpopulated fixed root: .mstar without markers still classifies via the fallback", () => {
     const { tree } = trees[2]!;
     expect(harnessDocKindOfTarget(tree.status)).toEqual({ harnessDir: tree.harness, kind: "status" });
     expect(harnessDocKindOfTarget(tree.snapshot)).toEqual({ harnessDir: tree.harness, kind: "snapshot" });
     expect(harnessDocKindOfTarget(tree.register)).toEqual({ harnessDir: tree.harness, kind: "register" });
   });
 
-  test("declared root (.mstarc harness_dir) classifies via the fallback", () => {
-    const { tree } = trees[3]!;
-    expect(harnessDocKindOfTarget(tree.status)).toEqual({ harnessDir: tree.harness, kind: "status" });
-    expect(harnessDocKindOfTarget(tree.snapshot)).toEqual({ harnessDir: tree.harness, kind: "snapshot" });
-    expect(harnessDocKindOfTarget(tree.register)).toEqual({ harnessDir: tree.harness, kind: "register" });
+  test("a .mstarc harness_dir declaration refuses instead of classifying", () => {
+    const root = mkdtempSync(join(tmpdir(), "gates-retired-"));
+    try {
+      mkdirSync(join(root, ".mstar"), { recursive: true });
+      writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.mstar\n");
+      gitInit(root);
+      const target = join(root, ".mstar", "status.json");
+      writeFileSync(target, VALID_STATUS);
+      expect(() => harnessDocKindOfTarget(target)).toThrow("harness_dir");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("blank/empty target is never gated", () => {

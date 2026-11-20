@@ -1,5 +1,4 @@
-/**
- * MorningStarHarness plugin for OpenCode.
+/** why: MorningStarHarness plugin for OpenCode.
  *
  * - Injects one-time harness bootstrap into first user message.
  * - Registers skill paths only inside this package: `harness-skills/` (synced by `bundle-assets` at build time; includes `mstar-host`).
@@ -40,11 +39,10 @@
  * ( the marker probe (`status.json` + `workflows/` +
  * `projects/` ancestor, correct for the default `.mstar` layout whose
  * nested `plans/` rung used to shadow the root), falling back to
- * `resolveHarnessDir` — a repo `.mstarc` `[config] harness_dir`, else
- * probing (`.mstar/` → `.agents/` → `.plans/`|`plans/`); repos with a
- * non-probed harness root MUST set `MSTAR_HARNESS_DIR` in the OpenCode
- * server env or declare `.mstarc` — see package README
- * "Status write lint (hook coverage)". * - Dual-mode `beforeDispatch` dispatch lint (roadmap §8.5): on `task`-tool
+ * `resolveHarnessDir` — the fixed `<main worktree>/.mstar`; `harness_dir`
+ * and `MSTAR_HARNESS_DIR` are retired and refused, and the legacy
+ * `.agents/` / `.plans/` / `plans/` candidates are never adopted — see
+ * package README "Status write lint (hook coverage)". * - Dual-mode `beforeDispatch` dispatch lint (roadmap §8.5): on `task`-tool
  * executions (subagent dispatch), validates the Assignment header — field
  * presence (`Execute as` / `Delegation` / `Task category`, backward-compat
  * `assignment.presence.*` codes), full field validation from the engine

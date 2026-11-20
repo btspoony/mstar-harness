@@ -59,9 +59,10 @@ function runResolve(args: string[]): RunResult {
   return runCli(["path", "resolve", ...args]);
 }
 
-/** Empty temp root; `.mstar/` and specs content added per test. */
+/** why: Empty temp root (realpath'd: the CLI reports physical paths on macOS, where
+ * `tmpdir()` is a `/var` symlink); `.mstar/` and specs content added per test. */
 function withRoot(fn: (root: string) => void): void {
-  const root = mkdtempSync(join(tmpdir(), "mstar-path-resolve-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-path-resolve-")));
   try {
     fn(root);
   } finally {
@@ -69,22 +70,19 @@ function withRoot(fn: (root: string) => void): void {
   }
 }
 
-/**
- * Minimal valid git work tree (no `git init` subprocess): the engine's
- * default CLI boundary runs `git rev-parse --show-cdup`, which only needs a
- * valid `.git` layout (HEAD + config + objects/ + refs/) — no commits.
- * Mirrors the engine path.test.ts `gitInit` fixture.
+/** why: A real Git main worktree at `root`. The fixed-root contract resolves
+ * `{HARNESS_DIR}` only through a readable main worktree, so the fixture must be
+ * a genuine checkout (a bare `.git` skeleton no longer classifies).
  */
 function gitInit(root: string): void {
-  mkdirSync(join(root, ".git", "objects"), { recursive: true });
-  mkdirSync(join(root, ".git", "refs"), { recursive: true });
-  writeFileSync(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
-  writeFileSync(join(root, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n");
+  execFileSync("git", ["init", "-q", "-b", "main", root], { stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["-C", root, "-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { stdio: "ignore" });
 }
 
 describe("mstar path resolve — harness/specs dir resolution", () => {
   test(".mstar/ present → exit 0, prints harness + specs dirs", () => {
     withRoot((root) => {
+      gitInit(root);
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(root, ".mstar", "specs", "adr.md"), "# ADR\n");
       const result = runResolve([root]);
@@ -134,17 +132,28 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
     });
   });
 
-  test("legacy .agents/ harness resolves when .mstar/ absent", () => {
+  test("legacy .agents/ candidate is refused, never adopted as the harness root", () => {
     withRoot((root) => {
+      gitInit(root);
       mkdirSync(join(root, ".agents", "specs"), { recursive: true });
       writeFileSync(join(root, ".agents", "specs", "adr.md"), "# ADR\n");
+      writeFileSync(join(root, ".agents", "status.json"), "{}");
       const result = runResolve([root]);
-      expect(data(result).harnessDir).toBe(join(root, ".agents"));
+      // why: The fixed root is `<checkout>/.mstar`; a legacy layout is refused by
+      // name with its scaffold recovery instead of being adopted. The command
+      // layer currently reports the engine's typed `harness.root-retired`
+      // throw as `command.internal` (production gap, reported separately), so
+      // this pins the observable refusal, not that envelope code.
+      expect(result.exitCode).toBe(1);
+      expect(envelope(result).message).toContain(".agents");
+      expect(envelope(result).message).toContain("retired");
+      expect(envelope(result).message).toContain("mstar harness scaffold");
     });
   });
 
   test("specs falls through to docs/specs when {HARNESS_DIR}/specs is empty (empty-dir-as-absent)", () => {
     withRoot((root) => {
+      gitInit(root);
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true }); // empty
       mkdirSync(join(root, "docs", "specs"), { recursive: true });
       writeFileSync(join(root, "docs", "specs", "adr.md"), "# ADR\n");
@@ -165,6 +174,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
 
   test("success returns structured harness, specs, workflow, project and review directories", () => {
     withRoot((root) => {
+      gitInit(root);
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(root, ".mstar", "specs", "adr.md"), "# ADR\n");
       const result = runResolve([root]);
@@ -177,10 +187,10 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
         projectDir: join(root, ".mstar", "projects"),
         reviewDir: join(root, ".mstar", "reviews"),
       });
-      // Outside Git there is no process root: controlRoot stays null, and the
-      // control harness falls back to the same local probe (never a guess).
+      // why: Git names the process root: controlRoot is the main worktree the
+      // caller sits in, and its harness root is the same fixed `.mstar`.
       expect(data(result)).toMatchObject({
-        controlRoot: null,
+        controlRoot: root,
         controlHarnessDir: join(root, ".mstar"),
         linkedWorktree: false,
       });
@@ -189,6 +199,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
 
   test("workflow + project dirs resolve under the harness dir (compass ruling 4)", () => {
     withRoot((root) => {
+      gitInit(root);
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
       writeFileSync(join(root, ".mstar", "specs", "adr.md"), "# ADR\n");
       const result = runResolve([root]);
@@ -208,6 +219,7 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
 
   test("read-only: resolve never creates the .agents fallback when every candidate is absent", () => {
     withRoot((root) => {
+      gitInit(root);
       mkdirSync(join(root, ".mstar"), { recursive: true });
       const result = runResolve([root]);
       expect(result.exitCode).toBe(0);
@@ -219,8 +231,9 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
 
   test("resolve reports knowledgeDir and adrDir without creating them", () => {
     withRoot((root) => {
+      gitInit(root);
       mkdirSync(join(root, ".mstar", "specs"), { recursive: true });
-      writeFileSync(join(root, ".mstar", "specs", "spec.md"), "# spec\n");
+      writeFileSync(join(root, ".mstar", "specs", "adr.md"), "# ADR\n");
       const result = runResolve([root]);
       expect(result.exitCode).toBe(0);
       expect(data(result).knowledgeDir).toBe(join(root, ".agents", "knowledge"));
@@ -264,14 +277,14 @@ const TRACKED_RESULTS_IGNORE = [
   "",
 ].join("\n");
 
-describe("mstar path check \u2014 verdict from Git state", () => {
-  test("a control harness environment override keeps tracked results in the linked checkout", () => {
+describe("mstar path check — verdict from Git state", () => {
+  test("tracked results stay in the linked checkout, never the main worktree's root", () => {
     withRoot((root) => {
       gitRepo(root);
       commitIgnore(root, TRACKED_RESULTS_IGNORE);
       mkdirSync(join(root, ".mstar"), { recursive: true });
       const worktree = addWorktree(root, root);
-      const result = runCli(["path", "check"], { cwd: worktree, env: { MSTAR_HARNESS_DIR: join(root, ".mstar") } });
+      const result = runCli(["path", "check"], { cwd: worktree });
       expect(result.exitCode).toBe(0);
       expect(data(result).trackedHarness).toBe(join(realpathSync(worktree), ".mstar"));
       expect(data(result).specsDir).toBe(join(realpathSync(worktree), ".agents", "specs"));

@@ -37,7 +37,7 @@ let harnessDir = ''
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'dsh-status-store-'))
-  harnessDir = join(root, 'harness')
+  harnessDir = join(root, '.mstar')
   await mkdir(harnessDir, { recursive: true })
 })
 

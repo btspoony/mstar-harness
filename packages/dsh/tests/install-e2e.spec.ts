@@ -66,7 +66,7 @@
  * on the runner PATH (skip-guard below; the registry probe would pass).
  */
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { cp, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
@@ -81,6 +81,9 @@ import { packageRoot } from '../scripts/bundle-harness-assets.ts'
 const REPO_ROOT = resolve(import.meta.dir, '../../..')
 /** The real CLI entry (plan 001 surface) run as a subprocess. */
 const CLI_ENTRY = join(REPO_ROOT, 'packages/cli/src/index.ts')
+/** why: Neutral cwd for CLI subprocesses: harness resolution must answer from the
+ * disposable home, never from the ambient control checkout's own `.mstarc`. */
+const cliCwd = mkdtempSync(join(tmpdir(), 'dsh-cli-cwd-'))
 /** The repo's own build mirror (synced by bundle-assets; gitignored). */
 const LOCAL_MIRROR = join(packageRoot, 'harness-agents')
 /** The profile the dsh CLI fixes for installs (dsh adapter `web`). */
@@ -139,7 +142,7 @@ function runDsh(dshHome: string, args: string[], timeoutMs = 120_000): string {
 /** Run the REAL CLI `init --target dsh` (plan 001 surface) as a subprocess. */
 function runCliInit(dshHome: string, timeoutMs = 300_000): string {
   const proc = Bun.spawnSync([process.execPath, 'run', CLI_ENTRY, 'init', '--target', 'dsh'], {
-    cwd: join(REPO_ROOT, 'packages/cli'),
+    cwd: cliCwd,
     env: dshEnv(dshHome),
     stdout: 'pipe',
     stderr: 'pipe',

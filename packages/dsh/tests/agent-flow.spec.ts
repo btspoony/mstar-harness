@@ -20,7 +20,7 @@ afterEach(async () => {
 async function activeFixture() {
   const root = await mkdtemp(join(tmpdir(), 'dsh-agent-flow-native-'))
   roots.push(root)
-  const harnessDir = join(root, '.agents')
+  const harnessDir = join(root, '.mstar')
   await seedActiveWorkflow(harnessDir, 'wf-1', [], {}, 'session-1', root)
   return { root, harnessDir, workflowDir: join(harnessDir, 'workflows', 'wf-1'), selectedGeneration: selectedGenerationFor(harnessDir) }
 }
@@ -448,7 +448,7 @@ Catalog correlation regression.
   it('returns unavailable without native authority', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-agent-flow-unavailable-'))
     roots.push(root)
-    expect(readFlow(join(root, '.agents', 'workflows', 'wf-1'))).toBeNull()
+    expect(readFlow(join(root, '.mstar', 'workflows', 'wf-1'))).toBeNull()
   })
 
   it('never settles an activation result at tool return — the open dispatch settles on the child subagent/end', async () => {

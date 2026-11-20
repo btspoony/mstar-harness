@@ -41,19 +41,18 @@
 # Control root: every command that needs a harness root must be TOLD one. The
 # server never infers it from the launch cwd — that directory is the HOST's,
 # it says nothing about which workspace a caller belongs to, and adopting it
-# would root writes on an unrelated project. The root is declared by the
-# launch (`mstar mcp --harness <absolute path>`, or a non-blank
-# `MSTAR_HARNESS_DIR` in the server environment), which pins the connection
-# for every call and also anchors the invocation workspace at the pinned
-# root's parent (so a command that derives paths from its cwd — e.g.
-# `audit.scaffold` deriving `{REVIEW_DIR}` — writes under the declared
-# harness, not the launch cwd). Without a connection pin, each call to a
-# command that needs a root must name its own through the published `harness`
-# selector; that selector is REQUIRED on an unpinned connection, so a caller
-# cannot forget it. Commands that read no root (`schema`, `path.resolve`,
-# `host.*`, `doctor`, the read-only validators) and `harness.scaffold` run with
-# a null root; any other call is refused with the cause and the recoveries
-# (`mcp.control-root-unresolved`). The shipped row declares no root; an
+# would root writes on an unrelated project. The server is one shared service,
+# so neither a launch flag nor the environment names a repository:
+# `harness_dir`, `MSTAR_HARNESS_DIR` and `mstar mcp --harness` are retired.
+# Each call to a command that needs a root names it through the published
+# `harness` selector, which must be the fixed `<main worktree>/.mstar`; that
+# selector is REQUIRED, so a caller cannot forget it, and the resolved root
+# also anchors the invocation workspace at its parent (so a command that
+# derives paths from its cwd — e.g. `audit.scaffold` deriving `{REVIEW_DIR}` —
+# writes under that harness, not the launch cwd). Commands that read no root
+# (`schema`, `path.resolve`, `host.*`, `doctor`, the read-only validators) and
+# `harness.scaffold` run with a null root; any other call is refused with the
+# cause and the recovery (`mcp.control-root-unresolved`). The shipped row declares no root; an
 # override restates the row's whole `config`, including the `args` list.
 #
 # Identity: the row passes `--trust-caller-session-id`. A stdio child has no

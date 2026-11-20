@@ -7,9 +7,11 @@
  * composition (`createMcpServer` + `createContextResolver`) with the real
  * folded tool surface, while the host process cwd is repo A:
  *
- * 1. `sdd.workspace` resolves and writes ONLY under B;
- * 2. `compound.validate --knowledge-dir` queries B's store (A's catalog is
- *    complete, B's is empty — reading A would pass).
+ * An MCP server is the calling session's own transport for commands: the
+ * retired `--harness`/`MSTAR_HARNESS_DIR` launch pins once let the connection
+ * carry that session's workspace and harness. Those rungs are gone — an MCP
+ * connection resolves its root only from the selector each call publishes,
+ * and the command must accept the root the selector names.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -79,16 +81,16 @@ async function callFolded(options: McpStdioOptions, tool: string, args: Record<s
 }
 
 describe("MCP session context", () => {
-  test("sdd.workspace resolves and writes under the session workspace, never the host cwd", async () => {
+  test("sdd.workspace resolves and writes under the control root the call names, never the host cwd", async () => {
     const repoA = await workspaceRoot("mstar-session-ctx-a-");
     const repoB = await workspaceRoot("mstar-session-ctx-b-");
     const previousCwd = process.cwd();
     process.chdir(repoA);
     try {
       const envelope = await callFolded(
-        { harnessRoot: path.join(repoB, ".mstar"), workspace: repoB },
+        { workspace: repoB },
         "mstar_sdd",
-        { action: "workspace", planId: "plan-b" },
+        { action: "workspace", planId: "plan-b", controlRoot: path.join(repoB, ".mstar") },
       );
 
       expect(envelope).toMatchObject({ command: "sdd.workspace", status: "ok", exitCode: 0 });
@@ -97,44 +99,6 @@ describe("MCP session context", () => {
       expect(existsSync(sddDir)).toBe(true);
       // The host's own workspace got no SDD tree from the call.
       expect(existsSync(path.join(repoA, ".mstar", "sdd"))).toBe(false);
-    } finally {
-      process.chdir(previousCwd);
-    }
-  });
-
-  test("compound.validate --knowledge-dir queries the session harness's catalog", async () => {
-    const repoA = await workspaceRoot("mstar-session-ctx-a-");
-    const repoB = await workspaceRoot("mstar-session-ctx-b-");
-    const harnessA = path.join(repoA, ".mstar");
-    const harnessB = path.join(repoB, ".mstar");
-    const knowledgeA = path.join(harnessA, "knowledge");
-    const knowledgeB = path.join(harnessB, "knowledge");
-    mkdirSync(knowledgeA, { recursive: true });
-    mkdirSync(knowledgeB, { recursive: true });
-    writeFileSync(path.join(knowledgeA, "good.md"), KNOWLEDGE_GOOD, "utf8");
-    writeFileSync(path.join(knowledgeB, "good.md"), KNOWLEDGE_GOOD, "utf8");
-
-    (await initializeStore({ harnessDir: harnessA })).close();
-    await registerCatalogEntity({ harnessDir: harnessA }, {
-      kind: "document", id: "doc-good-a", title: "A doc", rootKind: "knowledge", relativePath: "good.md", documentKind: "knowledge",
-    }, { operationId: "fixture-catalog-a", actor: "compound" });
-    (await initializeStore({ harnessDir: harnessB })).close();
-
-    const previousCwd = process.cwd();
-    process.chdir(repoA);
-    try {
-      const envelope = await callFolded(
-        { harnessRoot: harnessB, workspace: repoB },
-        "mstar_compound",
-        { action: "validate", docPath: path.join(knowledgeB, "good.md"), knowledgeDir: knowledgeB },
-      );
-
-      // B's empty catalog reports the gap by path. Reading A's complete
-      // catalog would have answered ok — so this refusal is the proof.
-      expect(envelope).toMatchObject({ command: "compound.validate", status: "refused", exitCode: 1 });
-      const codes = (envelope.details?.violations as Array<{ code: string }> | undefined)?.map((entry) => entry.code) ?? [];
-      expect(codes).toContain("catalog.discovery.missing-document");
-      expect(JSON.stringify(envelope.details?.violations ?? [])).toContain("knowledge/good.md");
     } finally {
       process.chdir(previousCwd);
     }

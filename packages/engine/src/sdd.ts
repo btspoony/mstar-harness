@@ -12,11 +12,12 @@ import { collectActiveLifecycleBranches } from "./lifecycle-branches.js";
  * slice 2 (roadmap §8.2) before the
  * scripts were removed in slice 5.
  *
- * Harness-root override: `MSTAR_HARNESS_DIR` env / `opts.harnessDir` (plan
- * finding 2026-08-08) — the default harness-dir fallback only knows the
- * conventional names (`.mstar`/`.agents`) and picks the wrong root in repos
- * with another root; the engine honors the explicit override in addition to
- * CONTROL_ROOT.
+ * Harness root: fixed at `<main worktree>/.mstar/` (ADR
+ * 2026-11-20-fixed-harness-root). `.mstarc` `harness_dir`,
+ * `MSTAR_HARNESS_DIR` and the `.agents/` fallback are retired — a retired
+ * declaration or a legacy-only checkout refuses via
+ * `HarnessRootRetiredError` from `path.ts`, and an explicit
+ * `opts.harnessDir` is an assertion that must equal the fixed root.
  *
  * SDD execution context (spec A3, issue #428 ACTIVE port):
  * `SddExecutionContext` / `resolveSddExecutionContext` / `checkSddAction`
@@ -52,9 +53,9 @@ import {
   assertPlanWritingPath,
   assertSafePathComponent,
   canonicalizeNearestExisting,
+  resolveFixedHarnessDir,
   resolveSddDir,
 } from "./path.js";
-import { findMstarc, parseMstarc } from "./mstarc.js";
 import { type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { WORKFLOW_DELIVERY_KINDS } from "./workflow.js";
 import { readExecutionPlanAdmission, type ExecutionState } from "./execution-store.js";
@@ -91,7 +92,7 @@ export class SddScriptError extends Error {
 export type SddWorkspaceOptions = {
  /** Main worktree repo root — CLI 2nd arg / `MSTAR_CONTROL_ROOT`. */
   controlRoot?: string;
- /** Explicit harness root — `MSTAR_HARNESS_DIR` / `--harness-dir`. */
+ /** why: Explicit harness root — must equal the fixed `<controlRoot>/.mstar` (assertion surface). */
   harnessDir?: string;
  /** Working directory for git probes; default `process.cwd()`. */
   cwd?: string;
@@ -206,15 +207,12 @@ function checkoutRootNearestExisting(dir: string, boundary: string): string | nu
  *    the main worktree when Git is available — an integration/foreign
  *    linked checkout is refused, never silently redirected; explicit
  *    non-Git standalone roots are preserved;
- * 3. explicit harness-root override (`opts.harnessDir` / `MSTAR_HARNESS_DIR`)
- *    — resolved relative to the established main root;
- * 4. `.mstarc` `[config] harness_dir` at the main root (repo-declared root;
- *    resolved against the config file's directory);
- * 5. fallback: existing `.mstar`/`.agents` dir under the main root, else
- *    `.mstar` (the retired `status.json`/`workflows/<id>/snapshot.json`
- *    probe no longer gates resolution — issue #428 retires the file route;
- *    a harness dir is resolved by location, its authority is the store);
- * 6. the resolved harness dir must not redirect the process SSOT into a
+ * 3. the harness dir is the fixed `<control root>/.mstar`
+ *    (`resolveFixedHarnessDir` — a `.mstarc` `harness_dir` declaration or
+ *    a legacy `.agents/` / `.plans/` / `plans/` layout refuses with the
+ *    named recovery); an explicit `opts.harnessDir` is an assertion that
+ *    must equal that root, otherwise refused;
+ * 4. the resolved harness dir must not redirect the process SSOT into a
  *    linked/foreign Git checkout — refused before any mkdir/write.
  */
 export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): string {
@@ -280,42 +278,28 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
     root = main.root;
   }
 
-  const harnessOverride = opts.harnessDir ?? (process.env.MSTAR_HARNESS_DIR || undefined);
-  let harnessDir: string;
-  if (harnessOverride) {
-    harnessDir = resolve(root, harnessOverride);
-  } else {
- // `.mstarc` [config] harness_dir — repo-declared harness root (root is
- // the workspace boundary; a config above it never applies).
-    const rc = findMstarc(root, root);
-    const rcHarnessDir = rc !== null ? parseMstarc(readFileSync(rc, "utf8")).harnessDir : undefined;
-    if (rcHarnessDir) {
-      harnessDir = resolve(rc !== null ? dirname(rc) : root, rcHarnessDir);
-    } else {
- // Dir-existence fallback (`.mstar` first) — the retired status/snapshot
- // probe no longer gates resolution (issue #428); the store inside the
- // harness dir is the authority, not its file markers.
-      if (isDirectory(join(root, ".mstar"))) {
-        harnessDir = join(root, ".mstar");
-      } else if (isDirectory(join(root, ".agents"))) {
-        harnessDir = join(root, ".agents");
-      } else {
-        harnessDir = join(root, ".mstar");
-      }
-    }
+  const harnessDir =
+    opts.harnessDir === undefined
+      ? (resolveFixedHarnessDir(root) ?? join(root, ".mstar"))
+      : canonicalizeNearestExisting(resolve(root, opts.harnessDir));
+  const fixed = join(root, ".mstar");
+  if (harnessDir !== fixed) {
+    throw new SddScriptError(
+      `mstar sdd workspace: the harness root is fixed at ${fixed}; the supplied harness root "${harnessDir}" does not match.\n` +
+        `  The root is never relocated \u2014 drop the override.`,
+      1,
+    );
   }
-
- // The resolved harness dir must not redirect the process SSOT into a
- // linked/foreign Git checkout (an absolute override or a `.mstarc`
- // declaration could). The checkout containing the harness (nearest
- // existing ancestor) must be the established main root — a walk bounded
- // at the root so a non-Git main root never inherits an unrelated
- // ancestor's checkout identity.
+ // why: The resolved harness dir must not redirect the process SSOT into a
+ // linked/foreign Git checkout. The checkout containing the harness
+ // (nearest existing ancestor) must be the established main root — a
+ // walk bounded at the root so a non-Git main root never inherits an
+ // unrelated ancestor's checkout identity.
   const harnessCheckout = checkoutRootNearestExisting(harnessDir, root);
   if (harnessCheckout !== null && harnessCheckout !== root) {
     throw new SddScriptError(
       `mstar sdd workspace: harness root "${harnessDir}" resolves inside Git checkout "${harnessCheckout}", not the verified main worktree "${root}".\n` +
-        `  Refusing to redirect the process SSOT into a linked checkout \u2014 resolve MSTAR_HARNESS_DIR / .mstarc harness_dir relative to the main worktree.`,
+        `  Refusing to redirect the process SSOT into a linked checkout \u2014 the harness root is fixed at <main worktree>/.mstar.`,
       1,
     );
   }

@@ -61,7 +61,7 @@ const textOf = (row: UserMessage | undefined): string =>
 describe('mstar-engine-status — open-issue facts come from the store', () => {
   it('no store at all → no model row, and the payload names the unavailable cause', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-noroot-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-1')]),
@@ -83,7 +83,7 @@ describe('mstar-engine-status — open-issue facts come from the store', () => {
 
   it('an active store with no open issue → residualFindings [] (an authoritative empty answer)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-noopen-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await mkdir(harnessDir, { recursive: true })
     await seedActiveWorkflow(harnessDir, 'wf-1', [], {}, 'state-no-open', root)
     booted = await bootApp({ root })
@@ -111,7 +111,7 @@ describe('mstar-engine-status — open-issue detail order, fields and cap', () =
   /** Seed a v2 tree plus a store holding one open issue per severity; returns the harness dir. */
   async function seedWithIssues(): Promise<string> {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-register-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-1')]),
@@ -176,7 +176,7 @@ describe('mstar-engine-status — open-issue detail order, fields and cap', () =
 describe('mstar-engine-status — advisory degrade (state section null)', () => {
   it('no status.json → no row is appended while the payload discloses the authority verdict', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-harness-state-absent-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await mkdir(harnessDir, { recursive: true })
     booted = await bootApp({ root })
 

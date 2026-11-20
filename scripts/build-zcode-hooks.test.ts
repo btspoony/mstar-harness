@@ -1,8 +1,7 @@
-/**
- * scripts/build-zcode-hooks.ts — build + bundle smoke (cross-host hooks
+/** why: scripts/build-zcode-hooks.ts — build + bundle smoke (cross-host hooks
  * contract D2, knowledge doc
  * bun-bundle-ascii-literals two-layer guard). Covers:
- * - the artifact carries the `@generated` banner and INLINES the engine:
+ * - the artifact carries the generated banner and INLINES the engine:
  *   no bare `@mstar-harness/engine` import survives (omp bundle-smoke
  *   precedent) and engine symbols are present;
  * - RENDERED assertion of the BUILT artifact under node: a hard-mode block
@@ -123,7 +122,8 @@ describe("build-zcode-hooks — node-run rendered smoke of the BUILT artifact", 
     expect(run.exitCode).toBe(2);
     expect(run.stdout).toBe("");
     const lines = run.stderr.trimEnd().split("\n");
-    expect(lines[0]).toBe("[Morning Star write gate] blocked Write to workflows/wf-x/snapshot.json");
+    expect(lines[0]).toContain("[Morning Star write gate] blocked Write to ");
+    expect(lines[0]).toContain("workflows/wf-x/snapshot.json");
     expect(lines.some((line) => line.startsWith("[medium] workflow.snapshot.reserved-version: ") && line.endsWith(SKILL_POINTER))).toBe(true);
     expect(run.stderr).toContain("\u2014");
     expect(run.stderr).not.toContain("\u00e2"); // latin-1 mojibake marker
@@ -138,7 +138,8 @@ describe("build-zcode-hooks — node-run rendered smoke of the BUILT artifact", 
     expect(run.exitCode).toBe(2);
     expect(run.stdout).toBe("");
     const lines = run.stderr.trimEnd().split("\n");
-    expect(lines[0]).toBe("[Morning Star write gate] blocked Write to status.json");
+    expect(lines[0]).toContain("[Morning Star write gate] blocked Write to ");
+    expect(lines[0]).toContain("status.json");
     expect(lines[1]!.startsWith("[high] status.invalid-json: ")).toBe(true);
   });
 

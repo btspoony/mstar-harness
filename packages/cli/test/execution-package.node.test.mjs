@@ -114,6 +114,8 @@ const STRIPPED_ENV = [
   "MSTAR_HOST_SESSION_ID",
   "MSTAR_EXECUTION_IDENTITY",
   "MSTAR_WRITE_GATE",
+  "MSTAR_LEAF_SEAT",
+  "DSH_MSTAR_LEAF_SEAT",
 ];
 
 const roots = [];
@@ -183,7 +185,8 @@ function cliEnv(fixture, identity) {
     if (STRIPPED_ENV.includes(key)) continue;
     env[key] = value;
   }
-  env.MSTAR_HARNESS_DIR = fixture.harness;
+  // why: The child's cwd is the fixture checkout (runCli), so the fixed-root
+  // resolver finds `<root>/.mstar` itself — no env pin exists anymore.
   if (identity !== undefined) {
     env.MSTAR_HOST_SESSION_ID = identity.sessionId;
     env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(identity);
@@ -610,8 +613,10 @@ test("the store the built CLI wrote is a real node:sqlite authority", async () =
 
   // Read the store the CLI actually wrote, straight through node:sqlite.
   const dbPath = join(fixture.harness, "store.db");
-  assert.ok(existsSync(dbPath), `the built CLI wrote no store at ${dbPath}`);
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+  // why: WAL mode leaves a live -wal/-shm pair after the CLI exits; a read-only
+  // open cannot run recovery, so open writable (the contract is "the store
+  // is real", not "open is read-only").
+  const db = new DatabaseSync(dbPath, { readOnly: false });
   try {
     const tables = db
       .prepare("select name from sqlite_master where type = 'table' order by name")
@@ -657,9 +662,8 @@ test("the store the built CLI wrote is a real node:sqlite authority", async () =
 
 test("committed ZCode hook refuses the retired coordination-document route on an ACTIVE authority", async () => {
   const fixture = await makeActiveWorkspace("mstar-r3-hook-active");
-  // The ZCode hook resolves the harness root through the same engine path
-  // resolution; pin it to this fixture so no ambient root can be consulted.
-  const env = { MSTAR_HARNESS_DIR: fixture.harness };
+  // why: The hook's process cwd is the fixture checkout: the event's `cwd` field
+  // resolves the gate's harness probe to `<root>/.mstar` on its own.
 
   // A VALID root status.json write is still refused: while the execution
   // authority is ACTIVE the file is retired as a persistence route.
@@ -668,7 +672,6 @@ test("committed ZCode hook refuses the retired coordination-document route on an
       { file_path: join(fixture.harness, "status.json"), content: JSON.stringify({ version: 2, updated_at: "2026-09-23", workflows: [] }) },
       fixture.root,
     ),
-    { env },
   );
   assert.equal(retired.exitCode, 2, `expected a block, got ${retired.exitCode} (stderr: ${retired.stderr})`);
   assert.equal(retired.stdout, "");
@@ -679,7 +682,6 @@ test("committed ZCode hook refuses the retired coordination-document route on an
   // The authority database itself is never hand-writable.
   const storeWrite = runGate(
     writeEvent({ file_path: join(fixture.harness, "store.db"), content: "nope" }, fixture.root),
-    { env },
   );
   assert.equal(storeWrite.exitCode, 2);
   assert.equal(storeWrite.stdout, "");
@@ -691,7 +693,6 @@ test("committed ZCode hook refuses the retired coordination-document route on an
       { file_path: join(fixture.harness, "workflows", WORKFLOW_ID, "snapshot.json"), content: JSON.stringify({ schema_version: 1 }) },
       fixture.root,
     ),
-    { env },
   );
   assert.equal(snapshot.exitCode, 2);
   assert.ok(snapshot.stderr.includes("[high] execution.direct-write-refused: "), `unexpected: ${snapshot.stderr}`);
@@ -814,7 +815,7 @@ test("H2's OMP source fixture recipe executes on the built engine under real Nod
   assert.equal(planRead.data.coordination.prepared.prepared_by, OMP_COORDINATOR_ID);
 
   // The populated fixture is a real SQLite authority, not an in-memory stub.
-  const db = new DatabaseSync(join(fixture.harness, "store.db"), { readOnly: true });
+  const db = new DatabaseSync(join(fixture.harness, "store.db"), { readOnly: false });
   try {
     const sessions = db
       .prepare("select role, session_id from execution_sessions where workflow_id = ? order by role")

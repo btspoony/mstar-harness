@@ -118,18 +118,16 @@ function linkedWorktreeFixture(root: string): string {
 }
 
 describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
-  test("plain non-Git dir with only a harness override fails closed (exit 1, nothing created)", async () => {
+  test("plain non-Git dir fails closed (exit 1, nothing created)", async () => {
     const root = tmpRoot("mstar-sdd-ws-");
     try {
-      const harnessDir = join(root, ".custom-root");
+      const harnessDir = join(root, ".mstar");
       const result = runCli(["sdd", "workspace", "plan-1"], {
         cwd: root,
-        env: { MSTAR_HARNESS_DIR: harnessDir },
       });
-      // Verified-discovery invariant: without a verified main worktree the
-      // engine resolves and creates NO SDD tree — a harness override alone
-      // never authorizes a write from a plain (non-Git) dir; an explicit
-      // standalone root must come via CONTROL_ROOT.
+      // why: Verified-discovery invariant: without a verified main worktree the
+      // engine resolves and creates NO SDD tree — an explicit standalone
+      // root must come via CONTROL_ROOT.
       expect(result.exitCode).toBe(1);
       expectEnvelopeMessage(result, "cannot verify the main worktree");
       expectEnvelopeMessage(result, "MSTAR_CONTROL_ROOT");
@@ -157,14 +155,13 @@ describe("mstar sdd workspace — resolve/ensure {SDD_DIR}", () => {
     }
   });
 
-  test("linked worktree + CONTROL_ROOT + MSTAR_HARNESS_DIR → exit 0, SDD dir under control root", async () => {
+  test("linked worktree + CONTROL_ROOT → exit 0, SDD dir under <control root>/.mstar", async () => {
     const root = tmpRoot("mstar-sdd-ws-ctrl-");
     try {
       const linked = linkedWorktreeFixture(root);
-      const harnessDir = join(root, ".custom-root");
+      const harnessDir = join(root, ".mstar");
       const result = runCli(["sdd", "workspace", "plan-1", root], {
         cwd: linked,
-        env: { MSTAR_HARNESS_DIR: harnessDir },
       });
       expect(result.exitCode).toBe(0);
       expect(envelopeOf(result)).toMatchObject({

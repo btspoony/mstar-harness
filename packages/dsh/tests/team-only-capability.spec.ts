@@ -21,7 +21,9 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { bootApp, executeToolCall, type BootResult } from './harness.ts'
+import { useCleanControlRoot, bootApp, executeToolCall, type BootResult } from './harness.ts'
+
+useCleanControlRoot()
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import {
   resolveMemberId,

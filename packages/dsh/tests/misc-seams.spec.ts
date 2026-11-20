@@ -18,6 +18,7 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { randomBytes } from 'node:crypto'
+import { realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -34,7 +35,7 @@ import {
 } from '../src/index.ts'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
-import { bootApp, executeToolCall, FakeLoaderRegistry, seedHarness, valueOf, type BootResult } from './harness.ts'
+import { bootApp, executeToolCall, gitInit, FakeLoaderRegistry, seedHarness, valueOf, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 
@@ -210,7 +211,7 @@ description: Fixture role hub.
 
 /** Review report path under the boot `{REVIEW_DIR}` (`<harness>/reviews`). */
 function reviewReportPath(root: string, name = 'README.md'): string {
-  return join(root, 'harness', 'reviews', '2026-08-08-codebase-standard-1', name)
+  return join(root, '.mstar', 'reviews', '2026-08-08-codebase-standard-1', name)
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +266,7 @@ describe('lint*Write — known-doc branch (warn gate; hard veto)', () => {
     const gate = lintCompoundWrite(KNOWLEDGE_MIXED_REF, {
       target: '/k/doc.md',
       hard: false,
-      harnessDir: join(root, 'harness'),
+      harnessDir: join(root, '.mstar'),
     })
     expect(gate.ok).toBe(false)
     const codes = gate.violations.map((v) => v.code)
@@ -452,7 +453,10 @@ describe('design-md gate — fs/write-intent listener', () => {
 
 describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   it('secret values in the on-disk report → warn advisory, intent proceeds', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // {REVIEW_DIR} scope compares the intent path with the resolved harness,
+    // so the fixture must address both canonically.
+    const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
     booted = await bootApp({ root })
     await seedFile(reviewReportPath(root), AUDIT_SECRET)
     const advisories = captureAdvisories(booted.ctx)
@@ -466,7 +470,10 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   })
 
   it('clean report → silent pass', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // {REVIEW_DIR} scope compares the intent path with the resolved harness,
+    // so the fixture must address both canonically.
+    const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
     booted = await bootApp({ root })
     await seedFile(reviewReportPath(root), AUDIT_REPORT)
     const advisories = captureAdvisories(booted.ctx)
@@ -477,7 +484,10 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   })
 
   it('path-scoping: a non-markdown file in the run dir is untouched', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // {REVIEW_DIR} scope compares the intent path with the resolved harness,
+    // so the fixture must address both canonically.
+    const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
     booted = await bootApp({ root })
     const sidecar = reviewReportPath(root, 'findings.json')
     await seedFile(sidecar, AUDIT_SECRET)
@@ -489,7 +499,10 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   })
 
   it('hard mode + secret → repair escape', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // {REVIEW_DIR} scope compares the intent path with the resolved harness,
+    // so the fixture must address both canonically.
+    const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
     booted = await bootApp({ root, enforcement: 'hard' })
     await seedFile(reviewReportPath(root), AUDIT_SECRET)
     const advisories = captureAdvisories(booted.ctx)
@@ -503,7 +516,10 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   })
 
   it('path-scoping: a plan-shaped `.md` outside {REVIEW_DIR} is untouched', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // {REVIEW_DIR} scope compares the intent path with the resolved harness,
+    // so the fixture must address both canonically.
+    const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
     booted = await bootApp({ root })
     const plan = join(root, 'plans', '001-fix-n1.md')
     await seedFile(plan, AUDIT_SECRET)
@@ -515,7 +531,10 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   })
 
   it('path-scoping: the run README.md IS in scope (it is the report)', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // {REVIEW_DIR} scope compares the intent path with the resolved harness,
+    // so the fixture must address both canonically.
+    const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
     booted = await bootApp({ root })
     await seedFile(reviewReportPath(root, 'README.md'), AUDIT_SECRET)
     const advisories = captureAdvisories(booted.ctx)
@@ -527,7 +546,10 @@ describe('audit gate — fs/write-intent listener ({REVIEW_DIR} scope)', () => {
   })
 
   it('no harness dir → the `reviews` path segment still scopes the seam', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-'))
+    // why: Git-reported roots are realpath'd (/var → /private/var on macOS); the
+    // {REVIEW_DIR} scope compares the intent path with the resolved harness,
+    // so the fixture must address both canonically.
+    const root = realpathSync(await mkdtemp(join(tmpdir(), 'dsh-mstar-audit-')))
     booted = await bootApp({ root, harnessDir: null })
     const report = join(root, 'reviews', '2026-08-08-pr134', 'report.md')
     await seedFile(report, AUDIT_SECRET)
@@ -631,14 +653,10 @@ describe('compound gate — fs/write-intent listener ({HARNESS_DIR}/knowledge sc
 
   it('anchors the scope on the harness checkout, not the harness dir parent (nested harness)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-nested-'))
-    // Minimal git work tree (no `git init` subprocess): `rev-parse
-    // --show-toplevel` only needs a valid `.git` layout.
-    await mkdir(join(root, '.git', 'objects'), { recursive: true })
-    await mkdir(join(root, '.git', 'refs'), { recursive: true })
-    await writeFile(join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n')
-    await writeFile(join(root, '.git', 'config'), '[core]\n\trepositoryformatversion = 0\n')
-    // A nested harness (`<repo>/runtime/harness`): its parent is NOT the
-    // corpus anchor, so the gate must scope `<repo>/.agents/knowledge`.
+    gitInit(root)
+    // why: The boot harness is EXPLICIT (a nested dir that is not the fixed
+    // root): its parent is NOT the corpus anchor, so the gate must scope
+    // `<repo>/.agents/knowledge` — the checkout the Git probe names.
     const nestedHarness = join(root, 'runtime', 'harness')
     await mkdir(nestedHarness, { recursive: true })
     booted = await bootApp({ root, harnessDir: nestedHarness })
@@ -819,7 +837,7 @@ describe('shared envelope', () => {
     new FakeLoaderRegistry(ctx)
     const advisories = captureAdvisories(ctx)
     try {
-      const harnessDir = join(root, 'harness')
+      const harnessDir = join(root, '.mstar')
       await mkdir(harnessDir, { recursive: true })
       const audit = reviewReportPath(root)
       await seedFile(join(root, 'DESIGN.md'), DESIGN_BROKEN)

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -197,16 +198,16 @@ describe("status command family", () => {
     }
   });
 
-  /**
-   * F7: the store-vs-build-vs-first-unknown facts are the engine's own machine
+  /** why: F7: the store-vs-build-vs-first-unknown facts are the engine's own machine
    * facts, and this command surface must forward them rather than reduce a
    * typed store refusal to its code and prose. The fixture is a real store
-   * written past this build's supported maximum in an isolated OS-temp root
-   * outside every Git worktree, observed with an explicit harness.
+   * written past this build's supported maximum, planted at the fixed
+   * `<main worktree>/.mstar` of an isolated OS-temp repo.
    */
   test("an unreadable store keeps the engine's code, machine details and recovery facts", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "status-schema-facts-"));
     try {
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
       const harnessDir = path.join(dir, ".mstar");
       mkdirSync(harnessDir, { recursive: true });
       const store = await initializeStore({ harnessDir });
@@ -216,7 +217,9 @@ describe("status command family", () => {
       insert.run(supportedMax + 2, "from-an-even-newer-build", "e".repeat(64), "2026-09-18T00:00:00.000Z");
       store.close();
 
-      const result = await statusDefinition("status.validate").execute({}, { ...context(dir), controlRoot: harnessDir });
+      // why: `status.validate` reads the process root from cwd; controlRoot is not a
+      // harness override, so the repo fixture above is what selects the store.
+      const result = await statusDefinition("status.validate").execute({}, context(dir));
       expect(result).toMatchObject({ status: "refused", code: "store.schema-unsupported", exitCode: 1 });
       if (result.status === "ok") throw new Error("expected the store refusal");
       if (result.status !== "refused") throw new Error("expected the store refusal");

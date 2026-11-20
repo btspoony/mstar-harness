@@ -33,7 +33,7 @@ function errorCode(error: unknown, fallback: string): string {
 function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> { return definition; }
 function harnessDir(context: InvocationContext, override?: string): string {
   const resolved = resolveProcessHarnessDir(context.cwd, override);
-  if (!resolved) throw new Error(`harness dir not found from ${context.cwd} — pass harness or set MSTAR_HARNESS_DIR`);
+  if (!resolved) throw new Error(`harness dir not found from ${context.cwd} — run \`mstar path resolve\` and pass its \`controlHarnessDir\``);
   return resolved;
 }
 function assertWorkflowId(id: string): void {

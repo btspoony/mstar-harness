@@ -18,6 +18,7 @@
  * refused BEFORE any engine round-trip. A non-leaf connection is unaffected.
  */
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -78,6 +79,11 @@ async function envelopeOf(options: McpStdioOptions, tool: string, args: Record<s
 function harnessFixture(): { harness: string; dispose: () => void } {
   const root = mkdtempSync(path.join(os.tmpdir(), "mstar-leaf-seat-"));
   const harness = path.join(root, ".mstar");
+  // why: The per-call `harness` selector must be the fixed `.mstar` under a Git
+  // main worktree: a bare directory is refused before the seat rule applies.
+  mkdirSync(harness, { recursive: true });
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", "commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: root });
   return { harness, dispose: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -148,7 +154,7 @@ describe("MCP leaf seat", () => {
     const fixture = harnessFixture();
     try {
       const envelope = await envelopeOf(
-        { harnessRoot: fixture.harness, seat: "leaf" },
+        { seat: "leaf" },
         "mstar_schema",
         { action: "schema", command: "plan.bind" },
       );
@@ -165,9 +171,9 @@ describe("MCP leaf seat", () => {
       const fixture = harnessFixture();
       try {
         const envelope = await envelopeOf(
-          { harnessRoot: fixture.harness, seat: "leaf" },
+          { seat: "leaf" },
           "mstar_plan",
-          { action },
+          { action, harness: fixture.harness },
         );
         expect(envelope).toMatchObject({
           command: `plan.${action}`,
@@ -196,9 +202,9 @@ describe("MCP leaf seat", () => {
       const fixture = harnessFixture();
       try {
         const envelope = await envelopeOf(
-          { harnessRoot: fixture.harness, seat: "leaf" },
+          { seat: "leaf" },
           tool,
-          { action, ...args },
+          { action, harness: fixture.harness, ...args },
         );
         expect(envelope).toMatchObject({
           command: `workflow.${action}`,
@@ -219,9 +225,9 @@ describe("MCP leaf seat", () => {
       // identity of its own, so the leaf must keep it: the server's refusal is
       // never reached and the command answers with its own input facts.
       const envelope = await envelopeOf(
-        { harnessRoot: fixture.harness, seat: "leaf" },
+        { seat: "leaf" },
         "mstar_plan",
-        { action: "prepare", workflow: "wf-a", plan: "p" },
+        { action: "prepare", workflow: "wf-a", plan: "p", harness: fixture.harness },
       );
       expect(envelope.command).toBe("plan.prepare");
       expect(envelope.code).not.toBe("plan.prepare.leaf-seat");
@@ -239,9 +245,9 @@ describe("MCP leaf seat", () => {
       // this seat check, so the refusal must land before the spawn effect, and
       // `touch` would have created the marker had any child run.
       const envelope = await envelopeOf(
-        { harnessRoot: fixture.harness, seat: "leaf", trustCallerSessionId: true },
+        { seat: "leaf", trustCallerSessionId: true },
         "mstar_session",
-        { action: "run", workflow: LAUNCH_WORKFLOW, role: "coordinator", argv: ["touch", marker], sessionId: LAUNCH_SESSION },
+        { action: "run", workflow: LAUNCH_WORKFLOW, role: "coordinator", argv: ["touch", marker], sessionId: LAUNCH_SESSION, harness: fixture.harness },
       );
       expect(envelope).toMatchObject({
         command: "session.run",
@@ -260,9 +266,9 @@ describe("MCP leaf seat", () => {
     const marker = path.join(path.dirname(fixture.harness), "spawned-by-launcher");
     try {
       const envelope = await envelopeOf(
-        { harnessRoot: fixture.harness, trustCallerSessionId: true },
+        { trustCallerSessionId: true },
         "mstar_session",
-        { action: "run", workflow: LAUNCH_WORKFLOW, role: "coordinator", argv: ["touch", marker], sessionId: LAUNCH_SESSION },
+        { action: "run", workflow: LAUNCH_WORKFLOW, role: "coordinator", argv: ["touch", marker], sessionId: LAUNCH_SESSION, harness: fixture.harness },
       );
       expect(envelope).toMatchObject({ command: "session.run", status: "ok", exitCode: 0 });
       expect(existsSync(marker)).toBe(true);
@@ -276,7 +282,7 @@ describe("MCP leaf seat", () => {
     try {
       // Same command, no seat declared: the call reaches the shared command
       // (which refuses its own missing input facts), never the leaf refusal.
-      const envelope = await envelopeOf({ harnessRoot: fixture.harness }, "mstar_plan", { action: "bind" });
+      const envelope = await envelopeOf({}, "mstar_plan", { action: "bind", harness: fixture.harness });
       expect(envelope.command).toBe("plan.bind");
       expect(envelope.code).not.toBe("plan.bind.leaf-seat");
     } finally {

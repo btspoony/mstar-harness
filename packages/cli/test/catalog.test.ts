@@ -7,7 +7,7 @@
  * test field forwarding or source strings.
  */
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -60,11 +60,15 @@ function write(harness: string, relativePath: string, text: string): string {
   return absolute;
 }
 
-/** A temp workspace: a real `.mstar` harness root plus an active store. */
+/** why: A temp workspace: a real Git main worktree whose `.mstar` harness root
+ * holds an active store — the fixed-root resolver derives it from cwd. */
 async function harnessFixture(name: string): Promise<{ workspace: string; harness: string }> {
   const root = mkdtempSync(join(tmpdir(), `mstar-catalog-cli-${name}`));
   roots.push(root);
   const workspace = join(root, "ws");
+  mkdirSync(workspace, { recursive: true });
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workspace });
+  execFileSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: workspace });
   const harness = join(workspace, ".mstar");
   mkdirSync(harness, { recursive: true });
   const handle = await initializeStore({ harnessDir: harness });

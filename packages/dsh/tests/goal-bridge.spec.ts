@@ -17,16 +17,20 @@
  * asserts the goal is untouched with an EMPTY service-call log.
  */
 import { describe, expect, it } from 'bun:test'
+import { gitInit } from './harness.ts'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { HarnessResolver } from '../src/gates/_shared.ts'
+import { usePlainCwd } from './harness.ts'
+
+usePlainCwd()
 import { registerGoalBridge, setGoalBridgeLogger } from '../src/gates/goal-bridge.ts'
 
 async function tempHarness(prefix: string): Promise<{ root: string; harnessDir: string }> {
   const root = await mkdtemp(join(tmpdir(), prefix))
-  const harnessDir = join(root, 'harness')
+  const harnessDir = join(root, '.mstar')
   await mkdir(harnessDir, { recursive: true })
   return { root, harnessDir }
 }
@@ -491,10 +495,12 @@ describe('goal bridge — blocked sync advisory (session/event firehose)', () =>
         }))
         expect(captured.filter((m) => m.startsWith('warn:'))).toHaveLength(0)
 
-        // Control: a workspace WITH a harness root (.mstar) attributes and warns.
+        // why: Control: a workspace whose Git main worktree carries `.mstar`
+        // attributes and warns.
         const ws = join(root, 'workspace')
         const wsHarness = join(ws, '.mstar')
         await mkdir(wsHarness, { recursive: true })
+        gitInit(ws)
         ctx.events.emit('session/event', { id: 'sess-ws', header: { cwd: ws }, events: [] }, goalChangeEnvelope({
           operation: 'block',
           phase: 'blocked',

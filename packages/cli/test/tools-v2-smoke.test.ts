@@ -25,7 +25,9 @@ import { join } from "node:path";
 import mstarGates from "../../omp/src/hooks/pre/mstar-gates";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "tools-v2-smoke", "repo");
-const SNAPSHOT_REL = join("plans", "workflows", "wf-smoke", "snapshot.json");
+// why: The harness root is fixed at `<checkout>/.mstar`, so the fixture's legacy
+// `plans/`-rooted layout is migrated onto that root before Git sees it.
+const SNAPSHOT_REL = join(".mstar", "workflows", "wf-smoke", "snapshot.json");
 // Default-layout fixture is committed under a non-ignored name
 // (`.mstar/` is gitignored at the harness repo root) and renamed to
 // `.mstar` inside the temp repo (W-REV-2).
@@ -44,6 +46,12 @@ interface SmokeRepo {
 async function setupRepo(): Promise<SmokeRepo> {
   const root = mkdtempSync(join(tmpdir(), "tools-smoke-"));
   cpSync(FIXTURE, root, { recursive: true });
+  // why: Fixed-root migration: the fixture's legacy `plans/` harness root becomes
+  // `<root>/.mstar`, the alias copy is dropped, and the harness stays
+  // gitignored so the control root carries no committable change.
+  renameSync(join(root, "plans"), join(root, MSTAR_REL));
+  rmSync(join(root, MSTAR_FIXTURE_DIR), { recursive: true, force: true });
+  writeFileSync(join(root, ".gitignore"), ".mstar/\nlinked/\nintegration/\n");
   // Real git repo + linked worktree so l1PreDispatchCheck probes pass.
   git(["init", "-q"], root);
   git(["config", "user.email", "tools-smoke@example.com"], root);
@@ -84,8 +92,8 @@ async function setupRepo(): Promise<SmokeRepo> {
 
   // The write gate answers from the ACTIVE execution authority: provision one
   // in the plans-rooted harness so document validation can run.
-  await initializeStore({ harnessDir: join(root, "plans") }).then((handle) => handle.close());
-  return { root, linked, harness: join(root, "plans"), snapshotPath, mstar: "" };
+  await initializeStore({ harnessDir: join(root, MSTAR_REL) }).then((handle) => handle.close());
+  return { root, linked, harness: join(root, MSTAR_REL), snapshotPath, mstar: "" };
 }
 
 /**
@@ -99,7 +107,10 @@ async function setupRepo(): Promise<SmokeRepo> {
 async function setupMstarRepo(): Promise<SmokeRepo> {
   const root = mkdtempSync(join(tmpdir(), "tools-smoke-mstar-"));
   cpSync(FIXTURE, root, { recursive: true });
+  // why: The legacy `plans/`-rooted layout is retired; keep only the fixed root.
+  rmSync(join(root, "plans"), { recursive: true, force: true });
   renameSync(join(root, MSTAR_FIXTURE_DIR), join(root, MSTAR_REL));
+  writeFileSync(join(root, ".gitignore"), ".mstar/\nlinked/\nintegration/\n");
   git(["init", "-q"], root);
   git(["config", "user.email", "tools-smoke@example.com"], root);
   git(["config", "user.name", "Tools Smoke"], root);
@@ -167,13 +178,27 @@ async function setupDoubleHarnessRepo(): Promise<SmokeRepo> {
     ),
   );
   writeFileSync(join(inner, "projects", "_inner", "residuals.json"), JSON.stringify({ entries: {} }, null, 2));
+  // why: The REAL fixed root of this checkout. A nested `.mstar` is never a process
+  // root, so only this one may classify coordination documents.
+  const fixed = join(root, MSTAR_REL);
+  mkdirSync(join(fixed, "workflows", "wf-root"), { recursive: true });
+  writeFileSync(
+    join(fixed, "workflows", "wf-root", "snapshot.json"),
+    JSON.stringify(
+      { schema_version: 1, id: "wf-root", type: "plan", status: "running", started_at: "2026-08-01", updated_at: "2026-08-19", plans: [] },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(join(root, ".gitignore"), ".mstar/\n");
   git(["init", "-q"], root);
   git(["config", "user.email", "tools-smoke@example.com"], root);
   git(["config", "user.name", "Tools Smoke"], root);
   git(["add", "-A"], root);
   git(["commit", "-q", "-m", "base"], root);
   await initializeStore({ harnessDir: join(root, "inner", ".mstar") }).then((handle) => handle.close());
-  return { root, linked: "", harness: join(root, "inner", ".mstar"), snapshotPath: "", mstar: "" };
+  await initializeStore({ harnessDir: fixed }).then((handle) => handle.close());
+  return { root, linked: "", harness: fixed, snapshotPath: "", mstar: "" };
 }
 
 /**
@@ -311,7 +336,7 @@ afterAll(() => {
 });
 
 describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recursion)", () => {
-  const ENV_KEY = "MSTAR_HARNESS_DIR";
+
 
   /** Register the hook's tool_call handler with a warnings collector. */
   const registerHandler = (warnings: string[]): ((event: unknown) => Promise<unknown>) => {
@@ -326,15 +351,18 @@ describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recu
     return handler;
   };
 
-  /** Pin the repo-hard resolution (session-cwd probe) for one call. */
-  const withHarnessDir = async <T>(dir: string, run: () => Promise<T>): Promise<T> => {
-    const previous = process.env[ENV_KEY];
-    process.env[ENV_KEY] = dir;
+  /** why: Pin the repo-policy resolution for one call. The gate discovers the
+   * control worktree from the SESSION cwd (`composeDispatchGate({ cwd })`
+   * defaults to `process.cwd()`), and no env root channel exists any more, so
+   * the fixture steers it with a temporary `chdir`.
+   */
+  const withRepoCwd = async <T>(dir: string, run: () => Promise<T>): Promise<T> => {
+    const previous = process.cwd();
+    process.chdir(dir);
     try {
       return await run();
     } finally {
-      if (previous === undefined) delete process.env[ENV_KEY];
-      else process.env[ENV_KEY] = previous;
+      process.chdir(previous);
     }
   };
 
@@ -362,10 +390,12 @@ describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recu
   test("C5-compliant dispatch (entry agent == Execute as) under header hard → NOT blocked, no warnings", async () => {
     const warnings: string[] = [];
     const handler = registerHandler(warnings);
-    const res = await handler({
-      toolName: "task",
-      input: { tasks: [{ name: "ReviewEdit", agent: "product-manager", task: VALID_HARD_ASSIGNMENT }] },
-    });
+    const res = await withRepoCwd(repo!.root, () =>
+      handler({
+        toolName: "task",
+        input: { tasks: [{ name: "ReviewEdit", agent: "product-manager", task: VALID_HARD_ASSIGNMENT }] },
+      }),
+    );
     expect(res).toBeUndefined();
     expect(warnings).toEqual([]);
   });
@@ -373,10 +403,12 @@ describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recu
   test("omitted agent under header hard → NOT blocked (no empty-binding pincer)", async () => {
     const warnings: string[] = [];
     const handler = registerHandler(warnings);
-    const res = await handler({
-      toolName: "task",
-      input: { tasks: [{ name: "ReviewEdit", task: VALID_HARD_ASSIGNMENT }] },
-    });
+    const res = await withRepoCwd(repo!.root, () =>
+      handler({
+        toolName: "task",
+        input: { tasks: [{ name: "ReviewEdit", task: VALID_HARD_ASSIGNMENT }] },
+      }),
+    );
     expect(res).toBeUndefined();
     expect(warnings).toEqual([]);
   });
@@ -397,7 +429,7 @@ describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recu
     const warnings: string[] = [];
     const handler = registerHandler(warnings);
     const emptyHarness = mkdtempSync(join(tmpdir(), "tools-smoke-soft-"));
-    const res = await withHarnessDir(emptyHarness, () =>
+    const res = await withRepoCwd(emptyHarness, () =>
       handler({
         toolName: "task",
         input: { tasks: [{ name: "Soft", agent: "product-manager", task: MISSING_DELEGATION_SOFT }] },
@@ -410,7 +442,7 @@ describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recu
   test("repo-level hard compass hardens a flag-less dispatch (Gate 1 / dsh resolveDispatchHard parity)", async () => {
     const warnings: string[] = [];
     const handler = registerHandler(warnings);
-    const res = await withHarnessDir(repo!.harness, () =>
+    const res = await withRepoCwd(repo!.root, () =>
       handler({
         toolName: "task",
         input: { tasks: [{ name: "RepoHard", agent: "product-manager", task: MISSING_DELEGATION_SOFT }] },
@@ -424,7 +456,7 @@ describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recu
   test("repo-level hard compass + compliant flag-less dispatch → NOT blocked", async () => {
     const warnings: string[] = [];
     const handler = registerHandler(warnings);
-    const res = await withHarnessDir(repo!.harness, () =>
+    const res = await withRepoCwd(repo!.root, () =>
       handler({
         toolName: "task",
         input: { tasks: [{ name: "RepoHardOk", agent: "product-manager", task: VALID_SOFT_ASSIGNMENT }] },
@@ -471,7 +503,7 @@ describe("omp hook Gate 1 (S-d)", () => {
     expect(passedResult?.reason).toContain("execution.direct-write-refused");
 
     // Root status.json kind still validated with the static validator.
-    const rootPath = join(root, "plans", "status.json");
+    const rootPath = join(root, MSTAR_REL, "status.json");
     const rootBlocked = await handler!({
       toolName: "write",
       input: { path: rootPath, content: JSON.stringify({ version: 1, plans: [] }) },
@@ -491,7 +523,7 @@ describe("omp hook Gate 1 (S-d)", () => {
     } as never);
     expect(handler).toBeDefined();
 
-    const rootPath = join(root, "plans", "status.json");
+    const rootPath = join(root, MSTAR_REL, "status.json");
     const original = readFile(rootPath);
     try {
       // Oversized invalid file: without the guard the edit path would read +
@@ -579,14 +611,12 @@ describe("default .mstar root layout (W-REV-2)", () => {
   });
 });
 
-describe("pathological double harness (W-REV-3)", () => {
-  // Regression: `harnessDocKindOfTarget` resolves the root by marker probe
-  // (`resolveHarnessRootOf`) FIRST — when a nested SPARSE harness (a
-  // `.mstar/` root missing one of the three full markers) sits below an
-  // outer FULL-marker root, the probe returns the OUTER root, the inner
-  // doc's rel falls outside the canonical set, and the doc is silently
-  // UNGATED. The fix retries `resolveHarnessDir` (name probe) when the
-  // probe root hit but rel is non-canonical, so inner docs stay gated.
+describe("nested harness never adopted (W-REV-3)", () => {
+  // why: Fixed-root contract: a checkout holds exactly ONE process root,
+  // `<checkout>/.mstar`. A nested `.mstar` (here under `inner/`) is never a
+  // root, so a doc inside it is not a coordination doc of this process and
+  // must stay ungated — while the SAME rel under the real root is gated. A
+  // regression that adopts the nested dir would gate (block) the first arm.
   let doubleRepo: SmokeRepo | undefined;
 
   beforeAll(async () => {
@@ -597,7 +627,7 @@ describe("pathological double harness (W-REV-3)", () => {
     if (doubleRepo) rmSync(doubleRepo.root, { recursive: true, force: true });
   });
 
-  test("omp hook Gate 1: inner sparse-harness docs hard-blocked under an outer full-marker root", async () => {
+  test("omp hook Gate 1: a nested .mstar stays ungated while the fixed root is gated", async () => {
     const root = doubleRepo!.root;
     let handler: ((event: unknown) => Promise<unknown>) | undefined;
     mstarGates({
@@ -608,14 +638,26 @@ describe("pathological double harness (W-REV-3)", () => {
     } as never);
     expect(handler).toBeDefined();
 
-    const snapshotPath = join(root, "inner", ".mstar", "workflows", "wf-inner", "snapshot.json");
-    const validSnapshot = JSON.parse(readFile(snapshotPath)) as Record<string, unknown>;
+    // why: Nested harness: not the process root, so nothing classifies it.
+    const nestedSnapshot = join(root, "inner", ".mstar", "workflows", "wf-inner", "snapshot.json");
+    const nested = await handler!({
+      toolName: "write",
+      input: { path: nestedSnapshot, content: JSON.stringify({ schema_version: 99 }) },
+    });
+    expect(nested).toBeUndefined();
+    const nestedStatus = await handler!({
+      toolName: "write",
+      input: { path: join(root, "inner", ".mstar", "status.json"), content: JSON.stringify({ version: 1, plans: [] }) },
+    });
+    expect(nestedStatus).toBeUndefined();
 
-    // The inner harness compass hardens the repo — an invalid snapshot
-    // write must be blocked (the classification must reach the gate).
+    // why: The REAL root is gated: an invalid snapshot write refuses under the
+    // ACTIVE authority (the retired file route), as does root status.json.
+    const realSnapshot = join(root, MSTAR_REL, "workflows", "wf-root", "snapshot.json");
+    const validSnapshot = JSON.parse(readFile(realSnapshot)) as Record<string, unknown>;
     const blocked = await handler!({
       toolName: "write",
-      input: { path: snapshotPath, content: JSON.stringify({ schema_version: 99 }) },
+      input: { path: realSnapshot, content: JSON.stringify({ schema_version: 99 }) },
     });
     const blockedResult = blocked as { block: boolean; reason: string } | undefined;
     expect(blockedResult?.block).toBe(true);
@@ -623,27 +665,23 @@ describe("pathological double harness (W-REV-3)", () => {
 
     const passed = await handler!({
       toolName: "write",
-      input: { path: snapshotPath, content: JSON.stringify(validSnapshot) },
+      input: { path: realSnapshot, content: JSON.stringify(validSnapshot) },
     });
     const passedResult = passed as { block?: boolean; reason?: string } | undefined;
-    // ACTIVE disposition: even a schema-valid snapshot write refuses — the
-    // file route is retired entirely under an ACTIVE authority.
+    // why: ACTIVE disposition: even a schema-valid snapshot write refuses.
     expect(passedResult?.block).toBe(true);
     expect(passedResult?.reason).toContain("execution.direct-write-refused");
 
-    // Root status.json kind still gated through the inner sparse root
-    // (file absent at classification time — the write-gate scenario).
-    const rootPath = join(root, "inner", ".mstar", "status.json");
     const rootBlocked = await handler!({
       toolName: "write",
-      input: { path: rootPath, content: JSON.stringify({ version: 1, plans: [] }) },
+      input: { path: join(root, MSTAR_REL, "status.json"), content: JSON.stringify({ version: 1, plans: [] }) },
     });
     const rootBlockedResult = rootBlocked as { reason: string } | undefined;
     expect(rootBlockedResult?.reason).toContain("execution.direct-write-refused");
 
-    // Non-canonical snapshot layout stays ungated (silent pass) — the fix
-    // must not over-gate.
-    const stray = join(root, "inner", ".mstar", "workflows", "snapshot.json");
+    // why: A non-canonical snapshot layout stays ungated even under the real root
+    // — the classification must not over-gate.
+    const stray = join(root, MSTAR_REL, "workflows", "snapshot.json");
     writeFileSync(stray, JSON.stringify({ schema_version: 99 }));
     const strayRes = await handler!({ toolName: "write", input: { path: stray, content: "{}" } });
     expect(strayRes).toBeUndefined();

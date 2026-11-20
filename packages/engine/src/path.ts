@@ -1,31 +1,26 @@
 /**
- * Engine path module — harness directory discovery, spec/plan/sdd/iteration
- * path composition, v3 workflow/project/review dir resolution, scaffold
+ * Engine path module — harness directory resolution (fixed at
+ * `<git main worktree>/.mstar/`), spec/plan/sdd/iteration path
+ * composition, v3 workflow/project/review dir resolution, scaffold
  * generation, canonical `.gitignore` snippet and the plan-writing path
  * gate.
  *
  * Spec source: `skills/mstar-conventions/SKILL.md` § 路径符号 (SSOT),
- * § {HARNESS_DIR} 解析顺序（找到即停）, § {SPECS_DIR} 解析（找到非空目录即停）
- * and § Git 跟踪策略 / § Plan-Writing Path Gate. Resolution order stays
- * `.mstarc` `[config] harness_dir` → `.mstar/` → `.agents/` → `.plans/`/
- * `plans/` per consumer convention; the explicit harness-root override
- * (`MSTAR_HARNESS_DIR` env / `opts.harnessDir`) covers repos whose harness
- * root is not one of the probed names (slice-2 plan finding 2026-08-08) and
- * stays the highest authority (above `.mstarc`).
+ * § {SPECS_DIR} 解析（找到非空目录即停）and § Git 跟踪策略 /
+ * § Plan-Writing Path Gate, plus ADR
+ * `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`. The
+ * harness root is one fixed location; `harness_dir` declarations,
+ * `MSTAR_HARNESS_DIR` and the legacy `.agents/` / `.plans/` / `plans/`
+ * candidates are retired in the same release: a declaration is refused
+ * naming the line to delete, a legacy-only checkout is refused naming
+ * `mstar harness scaffold` / `mstar store upgrade`, and
+ * `opts.harnessDir` remains only as a caller-held assertion surface
+ * validated by the transport layers. `localProbe` keeps the bounded
+ * walk-up for diagnostics (`mstar path resolve`'s `local` answer); it
+ * probes the fixed `.mstar` name only.
  *
- * Workspace-root stop boundary (roadmap §7c): `resolveHarnessDir` NEVER
- * walks above the
- * workspace root — an optional `opts.workspaceRoot` stops the upward probe
- * (a harness dir above it is never returned; the `~/.mstar` global-collision
- * defect is the special case). The default boundary is the git top-level of
- * `startDir` (sync `git rev-parse --show-cdup`; non-git start falls back
- * to `startDir` itself — probes only itself, never upward; deliberate
- * tightening). Callers with a session-workspace boundary (dsh
- * `HarnessResolver.forWorkspace`) pass `workspaceRoot` explicitly; the engine
- * git-probes only for this single default resolution, never during the walk.
- *
- * The canonical `.gitignore` snippet is embedded so the engine never reads
- * skill files at runtime (roadmap §8.5 standalone rule).
+ * The canonical `.gitignore` snippet is embedded so the engine never
+ * reads skill files at runtime (roadmap §8.5 standalone rule).
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -49,27 +44,25 @@ import { StoreError, type StoreContext } from "./store-db.js";
  */
 export type ResolveHarnessDirOptions = {
   /**
- * Explicit harness root. Resolved against `startDir` when relative.
- * Takes precedence over `MSTAR_HARNESS_DIR` and over default probing.
- * Authoritative: the path is returned even when it does not exist yet
- * (the caller may scaffold it).
- */
+   * Explicit harness root. Resolved against `startDir` when relative and
+   * returned verbatim with no discovery. The harness root is fixed at
+   * `<git main worktree>/.mstar/` (ADR 2026-11-20), so this stays a
+   * caller-held assertion: transport layers validate the value against
+   * the Git-derived root before reaching the engine.
+   */
   harnessDir?: string;
-  /** Ignore the process override when resolving checkout-local tracked results. */
+  /** why: Retired knob: `MSTAR_HARNESS_DIR` is ignored by the engine since the fixed-root cutover; kept so callers compile while their own slice removes it. */
   ignoreEnvOverride?: boolean;
-  /**
- * Workspace-root stop boundary (roadmap §7c). The upward probe keeps
- * walking only
- * while `dir` is at or below this root — a harness dir above it is never
- * returned (the `~/.mstar` global-collision defect is the special case).
- * Resolved against `startDir` when relative. When omitted, the default
- * boundary is the git top-level of `startDir` (sync `git rev-parse
- * --show-cdup`; on failure / non-git start it falls back to
- * `startDir` itself — a non-git start probes only itself, never upward;
- * deliberate tightening). The boundary is an explicit caller value: the
- * engine git-probes only for this default resolution, never during the
- * walk.
- */
+  /** why: `localProbe` boundary: stops the upward diagnostics walk. Resolved
+   * against `startDir` when relative; the default is the git top-level of
+   * `startDir` (sync `git rev-parse --show-cdup`; on failure / non-git
+   * start it falls back to `startDir` itself — a non-git start probes
+   * only itself, never upward; deliberate tightening). The boundary is an
+   * explicit caller value: the engine git-probes only for this default
+   * resolution, never during the walk. Has no effect without
+   * `localProbe` — the process root comes from the Git main worktree,
+   * not from a walk.
+   */
   workspaceRoot?: string;
   /**
    * Probe only the caller's own checkout: never substitute the main worktree
@@ -81,69 +74,133 @@ export type ResolveHarnessDirOptions = {
 };
 
 /**
- * Resolve `{HARNESS_DIR}` per plan-conventions § {HARNESS_DIR} 解析顺序
- * (find-first-stop): `.mstarc` `[config] harness_dir` → `.mstar/` →
- * `.agents/` → `.plans/`/`plans/`, walking up from `startDir` but NEVER
- * above the workspace root (`opts.workspaceRoot`, default = git top-level
- * of `startDir`). The `.mstarc` layer: the nearest config file at or below
- * the boundary declares `harness_dir`, resolved against the config file's
- * own directory — no dir-existence requirement (callers may scaffold) and
- * no boundary check on the result (explicit layers keep authority; only
- * the config discovery walk is bounded). Harness candidates from probing
- * are dir-existence checks (the empty-dir rule applies to `{SPECS_DIR}`
- * only). An explicit override via `opts.harnessDir` or `MSTAR_HARNESS_DIR`
- * wins over both and short-circuits before any boundary logic.
- *
- * Returns the absolute harness dir, or `null` when no candidate exists
- * within the workspace boundary.
+ * Resolve `{HARNESS_DIR}` per the fixed-root contract (ADR
+ * `2026-11-20-fixed-harness-root`): `<git main worktree>/.mstar/` —
+ * `opts.harnessDir` is returned verbatim (a caller-held assertion), the
+ * `localProbe` diagnostic probes only `.mstar` upward within the
+ * boundary, and every other call derives the Git main worktree of
+ * `startDir`. A `.mstarc` declaring `harness_dir` or a legacy
+ * `.agents/` / `.plans/` / `plans/` layout refuses with a named
+ * recovery (`HarnessRootRetiredError`); a probe failure or a missing
+ * `.mstar` returns `null` (fail-closed — never a substituted root).
  */
 export function resolveHarnessDir(
   startDir: string = process.cwd(),
   opts: ResolveHarnessDirOptions = {},
 ): string | null {
-  const start = resolve(startDir);
-  const explicit = opts.harnessDir ?? (opts.ignoreEnvOverride ? undefined : process.env.MSTAR_HARNESS_DIR);
-  if (explicit) return resolve(start, explicit);
-  // Harness state is process state: every harness root and every `.mstarc` is
-  // read from the main worktree. A linked worktree carries a tracked copy of
-  // `.mstarc`, and honoring it would make the worktree look like a process
-  // root. The probes run only where they can change the answer, and a probe
-  // failure is fail-closed: when the caller's checkout is known but the main
-  // root is unreadable, no harness root is answered instead of silently
-  // adopting the worktree's own. `localProbe` asks about the caller's own
-  // checkout instead, and an explicit `opts.workspaceRoot` keeps the caller's
-  // own boundary.
-  let base = start;
-  if (opts.workspaceRoot === undefined && opts.localProbe !== true) {
-    // A probe failure (missing git, timeout) is not "not a Git repository":
-    // refuse discovery rather than let the worktree's own config pass for the
-    // process root.
-    const probe = checkoutRootOrFailure(start);
-    // "Git could not answer" refuses discovery: the worktree's own config must
-    // not pass for the process root. The write gate compensates with its own
-    // process-root fallback, so process documents stay gated; a write the
-    // worktree makes into its own tree is not covered by that fallback.
-    if (probe.failed) return null;
-    if (probe.root !== null) {
-      const main = mainWorktreeRoot(start);
-      if (main === null) return null;
-      if (probe.root !== main) base = main;
-    }
-  }
-  const boundary = resolve(base, opts.workspaceRoot ?? defaultWorkspaceRoot(base));
-  const rc = loadMstarc(base, boundary);
-  if (rc !== null && rc.config.harnessDir) return resolve(rc.dir, rc.config.harnessDir);
-  let dir = base;
+  // why: Canonicalize first: a start inside a not-yet-created layout (a file
+  // under a missing directory) still resolves to its nearest existing
+  // ancestor, so classification gates never lose the root over a gap.
+  const start = canonicalizeNearestExisting(resolve(startDir));
+  // why: An explicit value is a caller-held fact, never a discovery input: the
+  // transport layers validate it against the Git-derived root before it
+  // reaches this function.
+  if (opts.harnessDir !== undefined) return resolve(start, opts.harnessDir);
+  if (opts.localProbe === true) return localHarnessProbe(start, opts.workspaceRoot);
+  // why: Harness state is process state: the root is the Git main worktree plus
+  // the fixed `.mstar` directory. No configuration, environment or candidate
+  // chain can move it. A probe failure is fail-closed: when the caller's
+  // checkout is known but the main root is unreadable, no root is answered.
+  // Git answers from the nearest existing ancestor: a target that does not
+  // exist yet (a new snapshot below a not-yet-created directory) still
+  // belongs to the checkout that contains it.
+  const gitStart = nearestExistingAncestor(start);
+  const probe = checkoutRootOrFailure(gitStart);
+  if (probe.failed) return null;
+  if (probe.root === null) return null;
+  const main = mainWorktreeRoot(gitStart);
+  if (main === null) return null;
+  return resolveFixedHarnessDir(main);
+}
+
+/** why: The nearest existing ancestor of `target` (the target itself when it exists). */
+function nearestExistingAncestor(target: string): string {
+  let dir = resolve(target);
   for (;;) {
-// Stop boundary: never probe a harness dir above the workspace root.
+    if (existsSync(dir)) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return dir;
+    dir = parent;
+  }
+}
+
+/** why: True when a legacy directory actually carries harness state (not just corpus/plugins). */
+function looksLikeLegacyHarness(dir: string): boolean {
+  for (const marker of ["status.json", "store.db", "workflows", "projects", "plans", "iterations"]) {
+    if (existsSync(join(dir, marker))) return true;
+  }
+  return false;
+}
+
+/**
+ * The one harness location — `<checkout>/.mstar` — with the retired
+ * layouts refused by name. A missing `.mstar` returns `null` (the
+ * repository is not initialized); a `.mstarc` that still declares
+ * `harness_dir`, or a legacy `.agents/` / `.plans/` / `plans/` harness,
+ * refuses with its recovery. Exported for consumers that already hold
+ * the verified checkout root (the sdd workspace control root).
+ */
+export function resolveFixedHarnessDir(checkout: string): string | null {
+  refuseRetiredConfiguration(checkout, defaultWorkspaceRoot(checkout));
+  const fixed = join(checkout, ".mstar");
+  if (isDirectory(fixed)) return fixed;
+  for (const legacy of LEGACY_HARNESS_NAMES) {
+    const dir = join(checkout, legacy);
+    if (isDirectory(dir) && looksLikeLegacyHarness(dir)) throw retiredCandidateError(checkout, legacy);
+  }
+  return null;
+}
+
+/** why: Local checkout only (diagnostics): the same fixed name, no main-worktree substitution. */
+function localHarnessProbe(start: string, workspaceRoot?: string): string | null {
+  const boundary = canonicalizeNearestExisting(resolve(start, workspaceRoot ?? defaultWorkspaceRoot(start)));
+  let dir = start;
+  for (;;) {
     if (!isAtOrBelow(dir, boundary)) return null;
-    for (const candidate of [join(dir, ".mstar"), join(dir, ".agents"), join(dir, ".plans"), join(dir, "plans")]) {
-      if (isDirectory(candidate)) return candidate;
-    }
-    if (dir === boundary) return null; // probed the boundary itself; stop here
+    refuseRetiredConfiguration(dir, boundary);
+    const fixed = join(dir, ".mstar");
+    if (isDirectory(fixed)) return fixed;
+    if (dir === boundary) return null;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
+  }
+}
+
+/** why: Retired harness layout names; probed only to name the refusal/ */
+const LEGACY_HARNESS_NAMES = [".agents", ".plans", "plans"] as const;
+
+/** why: A retired `harness_dir` declaration refuses instead of being silently ignored. */
+function refuseRetiredConfiguration(startDir: string, boundary: string): void {
+  const rc = loadMstarc(startDir, boundary);
+  if (rc !== null && rc.config.harnessDir !== undefined) {
+    throw new HarnessRootRetiredError(
+      `The .mstarc at ${join(rc.dir, MSTARC_FILE)} declares \`harness_dir\`, which is retired: the harness root is fixed at \`<main worktree>/.mstar\`. ` +
+        `Recovery: delete the \`harness_dir\` line from ${join(rc.dir, MSTARC_FILE)}, then run \`mstar path resolve\`.`,
+      { code: "harness_dir", config: join(rc.dir, MSTARC_FILE) },
+    );
+  }
+}
+
+/** why: A legacy layout is refused rather than adopted as a harness root. */
+function retiredCandidateError(checkout: string, candidate: string): HarnessRootRetiredError {
+  const fixed = join(checkout, ".mstar");
+  return new HarnessRootRetiredError(
+    `No harness root at ${fixed}; the legacy \`${candidate}/\` candidate is retired and is never adopted. ` +
+      `Recovery: run \`mstar harness scaffold ${checkout}\` (then \`mstar store upgrade\` if this repository has an existing store).`,
+    { code: "legacy-candidate", candidate, checkout },
+  );
+}
+
+/** Raised when a retired selector or layout would otherwise move the harness root. */
+export class HarnessRootRetiredError extends Error {
+  readonly code = "harness.root-retired";
+  constructor(
+    message: string,
+    readonly details: Record<string, string>,
+  ) {
+    super(message);
+    this.name = "HarnessRootRetiredError";
   }
 }
 
@@ -486,17 +543,16 @@ function resolveTrackedDir(
   return preferred;
 }
 
-/**
- * Shared resolution for the v3 workflow-layout dirs (`{WORKFLOW_DIR}` /
- * `{PROJECT_DIR}`): resolve the harness dir from `startDir` first
- * (`resolveHarnessDir` — explicit `opts.harnessDir` / `MSTAR_HARNESS_DIR`
- * override, `.mstarc` `harness_dir`, then the bounded probe), apply the
- * `.mstarc` sub-dir declaration for `key` (same semantics as the other
- * `{X}_DIR` keys: relative values resolve against the config file's
- * directory, absolute allowed, dir need not exist, discovery never passes
- * the harness dir's parent), else compose `{HARNESS_DIR}/<fallback>`.
- * Throws when no harness dir resolves — a silent default would point at a
- * non-harness location.
+/** why: Shared resolution for the v3 workflow-layout dirs (`{WORKFLOW_DIR}` /
+ * `{PROJECT_DIR}` / `{REVIEW_DIR}`): resolve the harness dir from
+ * `startDir` first (`resolveHarnessDir` — the fixed `<main
+ * worktree>/.mstar` root, or the verbatim `opts.harnessDir` assertion),
+ * apply the `.mstarc` sub-dir declaration for `key` (same semantics as
+ * the other `{X}_DIR` keys: relative values resolve against the config
+ * file's directory, absolute allowed, dir need not exist, discovery
+ * never passes the harness dir's parent), else compose
+ * `{HARNESS_DIR}/<fallback>`. Throws when no harness dir resolves — a
+ * silent default would point at a non-harness location.
  */
 function resolveHarnessSubdir(
   startDir: string,
@@ -507,7 +563,7 @@ function resolveHarnessSubdir(
   const harness = resolveHarnessDir(startDir, opts);
   if (harness === null) {
     throw new Error(
-      `harness dir not found from ${resolve(startDir)} \u2014 cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`,
+      `harness dir not found from ${resolve(startDir)} \u2014 cannot resolve the ${fallback} dir (run \`mstar harness scaffold\` from the repository's main worktree)`,
     );
   }
   const declared = mstarcDirOverride(harness, key);
@@ -695,50 +751,48 @@ const SCAFFOLD_DIRS = ["plans", "iterations", "sdd", "reviews"] as const;
 /** Options for `resolveScaffoldDirs` / `scaffoldHarness`. */
 export type ScaffoldOptions = {
   /**
-   * Explicit harness dir to scaffold, used verbatim. When present, the
-   * `MSTAR_HARNESS_DIR` / `.mstarc` / default-`.mstar` discovery rungs are
-   * skipped: a caller that already owns the exact root (e.g. `mstar mcp
-   * --harness`) must not have it re-derived from the workspace. The project
-   * dir is still derived from it.
+   * Caller-held harness root. The harness root is fixed at
+   * `<root>/.mstar` (ADR 2026-11-20): a supplied value must equal it and
+   * any other path is refused — the option exists so transports that
+   * already derived the root can assert it, never to relocate it.
    */
   harnessDir?: string;
 };
 
 /**
- * Resolve the scaffold target dirs for `root` — the harness dir and the
- * project dir — from the same config source the runtime resolvers use
- * (plan-conventions § {HARNESS_DIR} 解析顺序): explicit `MSTAR_HARNESS_DIR`
- * env wins, then `.mstarc` `[config] harness_dir` (found per find-first-stop
- * within the workspace-root boundary, resolved against the config file's
- * directory), else the default `.mstar/`. The project dir defaults to
- * `{HARNESS_DIR}/projects/` with the `.mstarc` `[config] project_dir`
- * override honored independently (same `mstarcDirOverride` semantics as
- * `resolveProjectDir`). Unlike `resolveHarnessDir`, the probe rung is
- * skipped: scaffold initializes the default `.mstar/` even when a legacy
- * `.agents/` exists (default behavior unchanged without a `.mstarc`).
- *
- * An `options.harnessDir` caller value wins over every discovery rung and is
- * returned as given, so a pinned root cannot be redirected by an inherited
- * environment variable or by the workspace's `.mstarc`.
+ * Resolve the scaffold target dirs for `root`: the harness dir is the
+ * fixed `join(root, ".mstar")`. An `options.harnessDir` must resolve to
+ * the same path or is refused (`HarnessRootRetiredError`, actual +
+ * expected named). A `.mstarc` declaring `harness_dir` refuses via the
+ * same retired-configuration helper the resolver uses. The project dir
+ * defaults to `{HARNESS_DIR}/projects/` with the `.mstarc` `[config]
+ * project_dir` override honored independently (same `mstarcDirOverride`
+ * semantics as `resolveProjectDir`). Scaffold does not adopt a legacy
+ * `.agents/` / `.plans/` / `plans/` layout — it IS the recovery named
+ * by that refusal, so it always creates the fixed root.
  */
 export function resolveScaffoldDirs(
   root: string,
   options: ScaffoldOptions = {},
 ): { harnessDir: string; projectDir: string } {
   const start = resolve(root);
-  if (options.harnessDir !== undefined) {
-    const harnessDir = options.harnessDir;
-    const projectDir = mstarcDirOverride(harnessDir, "projectDir") ?? join(harnessDir, "projects");
-    return { harnessDir, projectDir };
+  const checkout = checkoutRootOrFailure(start);
+  // why: a failed probe is not "not a checkout" — creating a second root under
+  // the caller's directory would be invisible to every fixed-root reader.
+  if (checkout.failed) {
+    throw new Error(`harness.root-unresolved: Git could not answer from ${start}; refusing to scaffold a root the resolver would not adopt. Run it from the repository root after the checkout is readable.`);
   }
-  const boundary = resolve(start, defaultWorkspaceRoot(start));
-  const rc = loadMstarc(start, boundary);
-  const explicit = process.env.MSTAR_HARNESS_DIR;
-  const harnessDir = explicit
-    ? resolve(start, explicit)
-    : rc !== null && rc.config.harnessDir
-      ? resolve(rc.dir, rc.config.harnessDir)
-      : join(start, ".mstar");
+  const base = checkout.root ?? start;
+  refuseRetiredConfiguration(base, defaultWorkspaceRoot(base));
+  const harnessDir = join(base, ".mstar");
+  const supplied = options.harnessDir === undefined ? undefined : canonicalizeNearestExisting(resolve(start, options.harnessDir));
+  if (supplied !== undefined && supplied !== harnessDir) {
+    throw new HarnessRootRetiredError(
+      `The harness root is fixed at ${harnessDir}; the supplied value ${supplied} does not match. ` +
+        `Recovery: drop the override \u2014 the scaffold always creates ${harnessDir}.`,
+      { code: "harness-dir-override", actual: supplied, expected: harnessDir },
+    );
+  }
   const declaredProjectDir = mstarcDirOverride(harnessDir, "projectDir");
   const projectDir = declaredProjectDir !== null ? declaredProjectDir : join(harnessDir, "projects");
   return { harnessDir, projectDir };
@@ -767,9 +821,8 @@ export function resolveScaffoldDirs(
  * Existing content is read by the resolvers, not re-homed by the scaffold.
  *
  * Idempotent: an existing `.mstarc`, directory, template or README is never
- * rewritten. Returns the absolute resolved harness dir.
- * `options.harnessDir` scaffolds exactly that dir (see `resolveScaffoldDirs`);
- * an omitted override keeps the discovery behavior above.
+ * rewritten. Returns the fixed `<root>/.mstar` harness dir; a
+ * `options.harnessDir` must equal it (see `resolveScaffoldDirs`).
  * The scaffold does NOT create a legacy `residuals.json` register: the issue
  * store (`store.db`) is the findings authority and the register is migration
  * history.
@@ -777,19 +830,24 @@ export function resolveScaffoldDirs(
 export async function scaffoldHarness(root: string, options: ScaffoldOptions = {}): Promise<string> {
   const { harnessDir, projectDir } = resolveScaffoldDirs(root, options);
   const harness = resolve(harnessDir);
-  // Each corpus: the `.mstarc` declaration when one is in scope, else the
+  // why: Each corpus: the `.mstarc` declaration when one is in scope, else the
   // greenfield `<root>/.agents/<kind>` default — never a resolver candidate,
   // which would adopt a non-empty directory that merely exists (legacy
   // `{HARNESS_DIR}/<kind>/` above all) and declare *that* as the write target.
   // A bootstrap must never re-home existing content.
   // `root` is the repository the scaffold ran for (the tracked-results owner);
-  // the `.agents/` corpora belong there even when `harness_dir` points outside
-  // the checkout (an explicit `MSTAR_HARNESS_DIR`, a nested harness).
-  const repoRoot = resolve(root);
+  // the `.agents/` corpora belong at the CHECKOUT root beside the fixed
+  // `.mstar`, so a subdirectory argument never creates a second root the
+  // resolver would not adopt.
+  const checkout = checkoutRootOrFailure(resolve(root));
+  if (checkout.failed) {
+    throw new Error(`harness.root-unresolved: Git could not answer from ${resolve(root)}; refusing to scaffold a root the resolver would not adopt.`);
+  }
+  const repoRoot = checkout.root ?? resolve(root);
   const knowledgeDir = mstarcDirOverride(harness, "knowledgeDir") ?? join(repoRoot, ".agents", "knowledge");
   const specsDir = mstarcDirOverride(harness, "specsDir") ?? join(repoRoot, ".agents", "specs");
   const adrDir = mstarcDirOverride(harness, "adrDir") ?? join(repoRoot, ".agents", "adr");
-  writeBootstrapMstarc(repoRoot, harness, { knowledge: knowledgeDir, specs: specsDir, adr: adrDir });
+  writeBootstrapMstarc(repoRoot, { knowledge: knowledgeDir, specs: specsDir, adr: adrDir });
   for (const dir of SCAFFOLD_DIRS) mkdirSync(join(harness, dir), { recursive: true });
   // `_default` is the fallback project identity; its directory is a location,
   // not a mandate to create or register a Markdown roadmap.
@@ -802,45 +860,29 @@ export async function scaffoldHarness(root: string, options: ScaffoldOptions = {
 }
 
 /**
- * Write the tracked `.mstarc` at the harness dir's parent (the repository
- * root) when absent. `harness_dir` is the resolved harness basename relative
- * to that parent, so the declaration reproduces the layout that was just
- * resolved instead of re-deriving it.
+ * Write the tracked `.mstarc` at the repository root when absent. The
+ * file declares only the corpus layout — `harness_dir` is retired and is
+ * never written (ADR 2026-11-20): the harness root is the fixed
+ * `<root>/.mstar`, which no configuration may move.
  *
- * A `.mstarc` already in scope from `root` (the file that declared the
- * layout, e.g. `harness_dir=config/.mstar`) is authoritative and never
- * edited, second-guessed or duplicated at a nested parent. The destination
- * is guarded on its own path too: an explicit `harnessDir` whose parent
- * already holds an author-owned `.mstarc` is not visible from `root`, so the
- * write is skipped whenever that file exists.
+ * A `.mstarc` already in scope at `root` is author-owned and never
+ * edited, second-guessed or duplicated.
  */
 function writeBootstrapMstarc(
   root: string,
-  harnessDir: string,
   corpus: { knowledge: string; specs: string; adr: string },
 ): void {
-  const parent = dirname(harnessDir);
-  const rel = relative(root, parent);
-  // A harness outside the scaffold root (e.g. `MSTAR_HARNESS_DIR` elsewhere)
-  // owns its own declaration: writing one next to it would create a file the
-  // caller never named.
-  if (rel.startsWith("..") || isAbsolute(rel)) return;
   if (findMstarc(root, root) !== null) return;
-  // Each corpus key is written relative to this file's directory, from the
-  // directory the scaffold actually creates. A nested harness (`root/runtime/
-  // harness`) puts the declaration at `root/runtime/`, where the literal
-  // `.agents/knowledge` would resolve to `root/runtime/.agents/knowledge` —
-  // a second corpus beside the one created at the repository root.
+  // why: Each corpus key is written relative to this file's directory (the
+  // repository root), from the directories the scaffold actually creates.
   const content =
     "; Morning Star harness layout for this repository.\n" +
-    "; Values mirror the resolved layout so candidate-chain drift cannot move them.\n" +
+    "; The harness root is fixed at .mstar/ \u2014 only the tracked corpus layout is declared.\n" +
     "[config]\n" +
-    `harness_dir=${relative(parent, harnessDir)}\n` +
-    `knowledge_dir=${relative(parent, corpus.knowledge)}\n` +
-    `specs_dir=${relative(parent, corpus.specs)}\n` +
-    `adr_dir=${relative(parent, corpus.adr)}\n`;
-  mkdirSync(parent, { recursive: true });
-  writeIfAbsent(join(parent, MSTARC_FILE), content);
+    `knowledge_dir=${relative(root, corpus.knowledge)}\n` +
+    `specs_dir=${relative(root, corpus.specs)}\n` +
+    `adr_dir=${relative(root, corpus.adr)}\n`;
+  writeIfAbsent(join(root, MSTARC_FILE), content);
 }
 
 /**

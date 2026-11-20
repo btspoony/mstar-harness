@@ -88,16 +88,15 @@ function targetRefusal(id: string, supplied: string): CommandEnvelope {
     }],
   });
 }
-/**
- * The guard's view of one path: its filesystem identity, or why it has none.
+/** why: The guard's view of one path: its filesystem identity, or why it has none.
  *
  * The control root arrives as a Git-derived realpath while `--harness` is only
  * resolved lexically, so a symlinked spelling of the same live directory used
  * to compare unequal. `real` collapses that alias and `dev`+`ino` settles what
  * `realpath` alone cannot (bind mounts, case-folding volumes).
  *
- * `absent` (`ENOENT`) is a path that does not exist — an explicit
- * `harness_dir`/`MSTAR_HARNESS_DIR` that has not been scaffolded yet, and which
+ * `absent` (`ENOENT`) is a path that does not exist — a caller-supplied
+ * control root that has not been scaffolded yet, and which
  * therefore protects no live store. Every other failure (permissions, a symlink
  * loop, a non-directory ancestor) is a comparison this guard could not make.
  */

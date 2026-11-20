@@ -65,19 +65,16 @@ async function execute(id: string, input: SddInput, invocation: InvocationContex
   try {
     const verb = id.slice("sdd.".length);
     if (verb === "workspace") {
-      // Root precedence: the caller's explicit control root, then the
-      // server-owned invocation context (the session workspace a mounted MCP
-      // server was launched with, plus its exact harness pin), then the
-      // engine's process probe. Without the middle rung a host process serving
-      // a session in another workspace created the SDD tree in its own cwd.
-      // The MCP transport removes a caller's control root on a pinned
-      // connection (`rootInputs`): there the connection pin decides, so this
-      // handler only sees an explicit root from a launcher that declared none.
-      const serverHarness = input.controlRoot === undefined ? invocation.harnessPin : undefined;
+      // why: The CLI argument names the worktree root; the MCP `controlRoot`
+      // selector is the call root and names the fixed `.mstar` (see
+      // `rootInputs`). Normalize the selector shape back to the worktree root
+      // the engine pins — it already refused either spelling before this.
+      const controlRoot = input.controlRoot !== undefined && path.basename(input.controlRoot) === ".mstar"
+        ? path.dirname(input.controlRoot)
+        : input.controlRoot;
       return ok(id, { sddDir: sddWorkspace(required(input.planId, "PLAN_ID"), {
         cwd: invocation.cwd,
-        ...(input.controlRoot === undefined ? {} : { controlRoot: input.controlRoot }),
-        ...(serverHarness === undefined ? {} : { harnessDir: serverHarness }),
+        ...(controlRoot === undefined ? {} : { controlRoot }),
       }) });
     }
     if (verb === "task-brief") {
@@ -120,8 +117,8 @@ function cliDefinition(verb: (typeof verbs)[number]): CommandDefinition<SddInput
     id,
     cli: { path: shape.path, aliases: [], arguments: shape.arguments, options: shape.options },
     input: inputSchemas[verb],
-    // `workspace` resolves its own root from `controlRoot`, not from a
-    // `harness` field: name the real selector so the MCP pin governs it.
+    // why: `workspace` resolves its own root from `controlRoot`, not from a
+    // `harness` field: name the real selector so the per-call root governs it.
     ...(verb === "workspace" ? { rootInputs: ["controlRoot"] } : {}),
     output: commandEnvelopeSchema,
     effects: shape.effects,

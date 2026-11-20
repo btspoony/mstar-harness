@@ -1,9 +1,9 @@
 // Bundled with `bun run hooks:build`; lazy engine loading preserves degraded context on load failures.
 // Morning Star harness — ZCode SessionStart hook.
-// Detects a harness-managed workspace ({HARNESS_DIR} discovery per mstar-conventions:
-// `.mstarc` harness_dir override -> `.mstar/` -> `.agents/` -> `.plans`/`plans`,
-// probed at the git workspace root) and injects a compact ACTIVE execution
-// summary so the session knows the harness is active before any role work starts.
+// Detects a harness-managed workspace whose fixed root is
+// `<git main worktree root>/.mstar` (retired selectors are refused by the
+// engine, never probed here) and injects a compact ACTIVE execution summary
+// so the session knows the harness is active before any role work starts.
 // Silent no-op outside harness workspaces. Never fails the session: any error exits 0.
 
 import fs from "node:fs";
@@ -38,40 +38,24 @@ function workspaceRoot(cwd: string): string {
   return cwd;
 }
 
-function parseMstarcHarnessDir(root: string): string | null {
-  try {
-    const text = fs.readFileSync(path.join(root, ".mstarc"), "utf8");
-    let inConfig = false;
-    for (const line of text.split(/\r?\n/)) {
-      const t = line.trim();
-      if (!t || t.startsWith("#") || t.startsWith(";")) continue;
-      const section = t.match(/^\[([^\]]+)\]$/);
-      if (section) {
-        inConfig = section[1].trim() === "config";
-        continue;
-      }
-      if (!inConfig) continue;
-      const kv = t.match(/^harness_dir\s*=\s*(.+)$/);
-      if (kv) return kv[1].trim().replace(/^["']|["']$/g, "");
-    }
-  } catch {
-    // no .mstarc at the workspace root — fall through to the default chain
-  }
-  return null;
-}
-
+// The hook must stay usable without node_modules, so the root probe uses Git
+// directly instead of importing the engine (only the authority summary below
+// degrades when the engine is absent).
 function resolveHarnessDir(root: string): string | null {
-  const declared = parseMstarcHarnessDir(root);
-  if (declared) return path.isAbsolute(declared) ? declared : path.join(root, declared);
-  for (const candidate of [".mstar", ".agents", ".plans", "plans"]) {
-    const dir = path.join(root, candidate);
-    try {
-      if (fs.statSync(dir).isDirectory()) return dir;
-    } catch {
-      // keep probing
-    }
+  let main = root;
+  try {
+    const list = git(["worktree", "list", "--porcelain"], root);
+    const first = list.split("\n").find((line) => line.startsWith("worktree "));
+    if (first) main = first.slice("worktree ".length).trim();
+  } catch {
+    // not a git work tree — the workspace root is the only identity available
   }
-  return null;
+  const fixed = path.join(main, ".mstar");
+  try {
+    return fs.statSync(fixed).isDirectory() ? fixed : null;
+  } catch {
+    return null;
+  }
 }
 
 async function summarizeExecutionAuthority(harnessDir: string): Promise<string> {

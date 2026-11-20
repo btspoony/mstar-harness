@@ -29,6 +29,10 @@ afterAll(() => {
 
 async function workspace(name: string): Promise<{ dir: string; context: StoreContext }> {
   const dir = mkdtempSync(join(ROOT, name));
+  // why: A spawned CLI derives the fixed `<git main worktree>/.mstar` root from its
+  // cwd, so the fixture is a genuine checkout rather than a bare directory.
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  spawnSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
   mkdirSync(join(dir, ".mstar"), { recursive: true });
   const context: StoreContext = { harnessDir: join(dir, ".mstar") };
   const handle = await initializeStore(context);
@@ -702,13 +706,16 @@ describe("hostile invocation-cwd dotenv", () => {
     expect(before.planRows.map((row) => row.plan_id)).toEqual([planId]);
 
     const churn = JSON.stringify({ kind: "update-row", workflowId, planId });
-    const invocationDir = mkdtempSync(join(ROOT, "hostile-invocation-cwd-"));
-    expect(existsSync(join(invocationDir, ".mstar"))).toBe(false);
-    writeFileSync(join(invocationDir, ".env"), [
+    // why: The hostile `.env` sits in the fixture checkout's own root: the fixed
+    // root comes from `<dir>/.mstar` via Git, and a retired `MSTAR_HARNESS_DIR`
+    // pin (here a decoy root with no store) must not redirect it.
+    const decoy = join(ROOT, "hostile-decoy-root");
+    mkdirSync(join(decoy, ".mstar"), { recursive: true });
+    writeFileSync(join(dir, ".env"), [
       "MSTAR_STORE_TEST_RUNNER=1",
       `MSTAR_PROJECTION_DB_CHURN='${churn}'`,
       "MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR=induced",
-      `MSTAR_HARNESS_DIR=${context.harnessDir}`,
+      `MSTAR_HARNESS_DIR=${join(decoy, ".mstar")}`,
       "",
     ].join("\n"));
     const env = { ...process.env };
@@ -717,10 +724,10 @@ describe("hostile invocation-cwd dotenv", () => {
     const cliDir = join(import.meta.dir, "..");
     const bundle = join(cliDir, "dist", "mstar-harness.js");
     expect(existsSync(bundle)).toBe(true);
-    // No local `.mstar` exists: the built CLI can serve this fixture only if
-    // Bun loaded MSTAR_HARNESS_DIR from this same invocation cwd's `.env`.
+    // why: The child runs from the fixture checkout, so the only root it can serve
+    // is `<dir>/.mstar`; the decoy pin in the cwd `.env` must be ignored.
     const child = spawn("bun", [bundle, "dashboard", "--port", "0"], {
-      cwd: invocationDir, env, stdio: ["ignore", "pipe", "pipe"],
+      cwd: dir, env, stdio: ["ignore", "pipe", "pipe"],
     });
     let dashboardUrl: string | undefined;
     try {

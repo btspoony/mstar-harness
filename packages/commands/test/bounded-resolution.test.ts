@@ -20,6 +20,7 @@
  * as completion until a replay finishes the instruction.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -225,6 +226,9 @@ async function issueStoreContext(): Promise<{ root: string; harness: string; con
   const root = mkdtempSync(join(tmpdir(), "bounded-issue-"));
   roots.push(root);
   const harness = join(root, ".mstar");
+  // why: The harness root is fixed at the Git main worktree's `.mstar`: the issue
+  // verbs resolve the store from cwd, so the fixture is a real repo.
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
   mkdirSync(harness, { recursive: true });
   await (await initializeStore({ harnessDir: harness })).close();
   return { root, harness, context: testContext(root) };

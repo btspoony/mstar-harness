@@ -50,7 +50,7 @@ The plugin registers a `tool.execute.before` hook for `write`/`edit` tools that 
 
 Everything else keeps the original behaviour — `{HARNESS_DIR}/status.json` / snapshot writes are validated against the engine schema and reported as warnings, soft-enforced writes pass silently, and the hook never modifies a write.
 
-Hook coverage follows the engine `resolveHarnessDir` resolution — a repo `.mstarc` `[config] harness_dir` (gitignored local config), else the probe order (`.mstar/` → `.agents/` → `.plans/`/`plans/` walking up from the target file). Repos whose harness root is not one of those names are **not** auto-discovered: set **`MSTAR_HARNESS_DIR`** in the OpenCode server environment (absolute path to the harness root) or declare it in `.mstarc` to enable the gate for such repos. The store API is loaded lazily, so the plugin still mounts on an engine that predates it.
+Hook coverage follows the engine `resolveHarnessDir` resolution — the fixed `<git main worktree root>/.mstar`. `harness_dir` in `.mstarc` and `MSTAR_HARNESS_DIR` are retired and refused, and a repository whose only harness is a legacy directory is refused with the scaffold/upgrade recovery. The store API is loaded lazily, so the plugin still mounts on an engine that predates it.
 
 ## Dispatch presence lint (hook coverage)
 

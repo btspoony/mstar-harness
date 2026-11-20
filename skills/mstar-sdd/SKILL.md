@@ -51,7 +51,7 @@ Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep 
 ## Per-task loop (PM only · Workflow)
 
 1. Record `BASE_SHA` (never use `HEAD~1` later)
-2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<main-repo-root>`（= **Git 派生的主 worktree 根**；Git 主 worktree 发现失败（`readMainWorktree` 返回 null）时 fail closed）或 `mstar sdd workspace <plan-id> <main-repo-root>`；显式 Git root 必须与派生主根 canonicalize 一致，integration/外来检出被拒而非静默重定向；probe 仅查 `status.json` 或任一 workflow snapshot 文件存在性，不校验 `workflows[]`（这是当前发现探针，不是 ACTIVE 状态读写路由）；无文件命中则回退到主根下已有 `.mstar` / `.agents` 目录，否则 `.mstar`，不因 linked worktree 缺文件而拒绝）
+2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<main-repo-root>`（= **Git 派生的主 worktree 根**；Git 主 worktree 发现失败（`readMainWorktree` 返回 null）时 fail closed）或 `mstar sdd workspace <plan-id> <main-repo-root>`；显式 Git root 必须与派生主根 canonicalize 一致，integration/外来检出被拒而非静默重定向；probe 仅查 `status.json` 或任一 workflow snapshot 文件存在性，不校验 `workflows[]`（这是当前发现探针，不是 ACTIVE 状态读写路由）；无文件命中则使用主根下的固定 `.mstar`（`.agents/` 回退已退役），不因 linked worktree 缺文件而拒绝）
 3. `mstar sdd task-brief <plan> N` → brief file
 4. Dispatch implementer:
     - Copy the plan task's budget into the Assignment header field **`Task budget (implement / ops rounds)`** (canonical template → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; one-round capacity criterion → `mstar-artifacts/references/plan-quality-bar.md` item 7) — header region only, before the body markers
@@ -123,7 +123,7 @@ Minor findings → `## Minor (for plan QC)` section in same file.
 
 ## CLI
 
-The SDD helpers are engine-backed commands under **`mstar sdd`**（引擎 CLI；原 bash 脚本已移除，行为语义不变）。Run the `mstar` binary from any checkout; env vars `MSTAR_CONTROL_ROOT` / `MSTAR_HARNESS_DIR` / `SDD_DIR` are honored exactly as before.
+The SDD helpers are engine-backed commands under **`mstar sdd`**（引擎 CLI；原 bash 脚本已移除，行为语义不变）。Run the `mstar` binary from any checkout; `MSTAR_CONTROL_ROOT` / `SDD_DIR` remain honored, while `MSTAR_HARNESS_DIR` is retired (the value is ignored; unset it).
 
 | Command | Usage |
 |--------|--------|

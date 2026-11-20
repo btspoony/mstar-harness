@@ -93,7 +93,7 @@ const carrierExec = (name: 'team_task_create' | 'team_task_update' | 'send_messa
 async function activeFixture() {
   const root = await mkdtemp(join(tmpdir(), 'dsh-team-agent-flow-'))
   roots.push(root)
-  const harnessDir = join(root, '.agents')
+  const harnessDir = join(root, '.mstar')
   await seedActiveWorkflow(harnessDir, 'wf-1', [], {}, 'session-1', root)
   return { root, harnessDir, workflowDir: join(harnessDir, 'workflows', 'wf-1'), selectedGeneration: selectedGenerationFor(harnessDir) }
 }

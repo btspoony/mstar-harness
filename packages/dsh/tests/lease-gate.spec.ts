@@ -24,7 +24,9 @@ import { describe, expect, it, afterEach } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+import { useCleanControlRoot, bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+
+useCleanControlRoot()
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined

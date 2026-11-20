@@ -132,8 +132,9 @@ const TRACKED_CHANGE_LIMIT = 20;
  * `harness_dir` → `.mstar/` → `.agents/` → `.plans/` / `plans/`) rather than a
  * hand-rolled pair of names. `localProbe` + a `root` boundary keep the question
  * about that checkout alone (no main-worktree substitution, no upward walk past
- * it), and `ignoreEnvOverride` keeps `MSTAR_HARNESS_DIR` from answering for a
- * repository that declares nothing.
+ * it), and `ignoreEnvOverride` is retained for callers but the environment no
+ * longer selects a root: `MSTAR_HARNESS_DIR` is retired and a repository that
+ * declares nothing resolves no harness from it.
  */
 export function hasHarnessRoot(root: string): boolean {
   return resolveHarnessDir(root, { ignoreEnvOverride: true, localProbe: true, workspaceRoot: root }) !== null;

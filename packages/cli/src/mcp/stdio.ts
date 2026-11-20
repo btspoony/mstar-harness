@@ -1,4 +1,6 @@
-import { dirname, isAbsolute, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { readMainWorktree } from "@mstar-harness/engine";
 import { serveStdio, StdioServerTransport, type StdioServerHandle } from "@modelcontextprotocol/server/stdio";
 import type { Transport } from "@modelcontextprotocol/server";
 import { withToolCorrection } from "./correction.js";
@@ -109,14 +111,14 @@ export class McpControlRootError extends Error {
   }
 }
 
-function unresolvedControlRootMessage(cwd: string): string {
+function unresolvedControlRootMessage(cwd: string, rootInputs: readonly string[]): string {
+  const recovery = rootInputs.length > 0
+    ? `Recovery: pass the call's \`${rootInputs[0]}\` selector naming the control root \u2014 the absolute \`<main worktree>/.mstar\` path; \`mstar path resolve\` prints it as \`controlHarnessDir\`.`
+    : "Recovery: this command publishes no root selector on a shared connection. Run it through the CLI from the repository (`mstar <command>`), or use a command that publishes a root selector.";
   return (
-    `[mcp.control-root-unresolved] No control root was DECLARED for this MCP connection. ` +
-    `The launch cwd (${cwd}) is the HOST's directory and is never used as one: it says nothing about which workspace a caller belongs to, so adopting it would root writes on an unrelated project. ` +
-    "Recovery \u2014 the two launcher recoveries work for EVERY command: " +
-    "launch the server with `mstar mcp --harness <absolute path>`; " +
-    "set MSTAR_HARNESS_DIR in the server environment to the harness directory. " +
-    "The per-call recovery is tool-dependent: only a command that publishes a `harness` input accepts one, so pass the call's `harness` selector naming the workspace's harness \u2014 or use `mstar_schema` to pick a command that does not need a root at all."
+    `[mcp.control-root-unresolved] This call named no control root. ` +
+    `The MCP server is one shared service, so its launch cwd (${cwd}) and its launch configuration never choose a repository. ` +
+    recovery
   );
 }
 
@@ -124,15 +126,6 @@ function unresolvedControlRootMessage(cwd: string): string {
 export type McpSeat = "leaf";
 
 export interface McpStdioOptions {
-  /**
-   * Harness root the launcher DECLARES for the whole connection (`--harness`).
-   * It pins every call's `controlRoot` and is the admission default for any
-   * command that resolves its own root from `input.harness`. A non-blank
-   * `MSTAR_HARNESS_DIR` in the server environment is the same declaration when
-   * this option is unset; a call's own `harness` selector is used only when the
-   * launch declared neither. The launch cwd is never a root candidate.
-   */
-  harnessRoot?: string;
   /**
    * Session workspace every call runs from (the invocation `cwd`). Unset
    * anchors it on the declared root's parent directory, so cwd-derived paths
@@ -161,116 +154,94 @@ export interface McpStdioOptions {
   trustCallerSessionId?: boolean;
 }
 
-/**
- * The root the launch declared for the whole connection, or undefined when it
- * declared none. The `--harness` flag wins over `MSTAR_HARNESS_DIR`: both are
- * launcher facts, and the explicit flag is the stronger one; neither is
- * overridable by a caller. A blank variable is not a declaration.
- *
- * Both forms must be ABSOLUTE, the same rule the CLI `--harness` boundary
- * enforces: a relative declaration would anchor the invocation workspace on a
- * directory nobody named. `--harness` is already refused at that boundary; the
- * environment form has no CLI boundary to refuse it, so it is refused here, at
- * the seam, with the named cause and the absolute-path recovery. Resolving an
- * accepted root once at the seam keeps every downstream `dirname` anchor
- * absolute. Read ONCE when the factory runs — the declared root is a launch
- * fact.
+/** why: The root one admitted CALL named, as a root fact: absolute, and equal to the
+ * fixed `<main worktree>/.mstar`. A relative selector has no launch-directory
+ * anchor — the invocation workspace is anchored at the root's parent, so
+ * resolving it against the launch directory would name a directory the caller
+ * never did. A selector naming a linked worktree, a legacy directory or any
+ * other path is refused instead of adopted, because the process root is one
+ * Git-derived location.
  */
-function declaredRoot(options: McpStdioOptions): string | undefined {
-  if (options.harnessRoot !== undefined) return resolve(options.harnessRoot);
-  const fromEnv = process.env.MSTAR_HARNESS_DIR;
-  if (typeof fromEnv !== "string" || fromEnv.trim() === "") return undefined;
-  if (!isAbsolute(fromEnv)) {
+function callRoot(selector: string, commandId: string): string {
+  if (!isAbsolute(selector)) {
     throw new McpControlRootError(
-      `[mcp.control-root-unresolved] MSTAR_HARNESS_DIR must be an absolute path; got ${JSON.stringify(fromEnv)}. ` +
-        "The server's launch directory is never used as a root anchor, so a relative value cannot mean \"relative to the launch directory\". " +
-        "Recovery: set MSTAR_HARNESS_DIR to an absolute harness directory, or launch the server with `mstar mcp --harness <absolute path>`.",
+      `[mcp.control-root-unresolved] ${commandId}'s "harness" selector must be an absolute path; got ${JSON.stringify(selector)}. ` +
+        "Recovery: pass `mstar path resolve`'s `controlHarnessDir` (an absolute `<main worktree>/.mstar` path).",
       { cwd: process.cwd() },
     );
   }
-  return resolve(fromEnv);
-}
-
-/**
- * The root one admitted CALL named, as a root fact: absolute, like `--harness`
- * and `MSTAR_HARNESS_DIR`. A relative selector has no launch-directory anchor —
- * the invocation workspace is anchored at the root's parent, so resolving it
- * against the launch directory would name a directory the caller never did.
- * Refused with the named cause and the same recoveries the pin offers.
- */
-function callRoot(selector: string, commandId: string): string {
-  if (isAbsolute(selector)) return resolve(selector);
-  throw new McpControlRootError(
-    `[mcp.control-root-unresolved] ${commandId}'s "harness" selector must be an absolute path; got ${JSON.stringify(selector)}. ` +
-      "The launch directory is the HOST's directory and never anchors a caller's root, so a relative selector is refused instead of resolved. " +
-      "Recovery: pass an absolute harness directory as `harness`, or declare the root for the whole connection \u2014 `mstar mcp --harness <absolute path>`, or a non-blank, absolute MSTAR_HARNESS_DIR in the server environment \u2014 and no call needs the selector.",
-    { cwd: process.cwd() },
-  );
+  const root = resolve(selector);
+  if (!existsSync(root) || basename(root) !== ".mstar") {
+    throw new McpControlRootError(
+      `[mcp.control-root-unresolved] ${commandId}'s "harness" selector must name the fixed existing control root .mstar; got ${JSON.stringify(root)}. ` +
+        "Recovery: run `mstar path resolve` and pass its `controlHarnessDir`.",
+      { cwd: process.cwd() },
+    );
+  }
+  const parent = dirname(root);
+  let parentReal: string;
+  try {
+    parentReal = realpathSync(parent);
+  } catch {
+    throw new McpControlRootError(
+      `[mcp.control-root-unresolved] ${commandId}'s "harness" selector has an unreadable parent ${JSON.stringify(parent)}. ` +
+        "Recovery: run `mstar path resolve` and pass its `controlHarnessDir`.",
+      { cwd: process.cwd() },
+    );
+  }
+  const main = readMainWorktree(parent);
+  if (main === null || main.root !== parentReal) {
+    throw new McpControlRootError(
+      `[mcp.control-root-unresolved] ${commandId}'s "harness" selector ${JSON.stringify(root)} is not the Git main worktree's .mstar; ` +
+        (main === null ? "Git cannot name a main worktree there" : `the main worktree is ${main.root}`) +
+        ". Recovery: run `mstar path resolve` from the repository and pass its `controlHarnessDir`.",
+      { cwd: process.cwd() },
+    );
+  }
+  return root;
 }
 
 /**
  * Build the stdio context resolver for one launch. The exported `resolveContext`
  * below is this factory with no options: a generic shared connection that
- * declares no root and carries no identity.
+ * carries no root of its own and no identity.
  *
- * Root selection is one ordered rule, and the launch cwd is never a candidate:
+ * Root selection, and the launch cwd is never a candidate:
  *
- * 1. the connection pin — `--harness`, else a non-blank `MSTAR_HARNESS_DIR`;
- * 2. the root the ADMITTED CALL named (`harness` selector, validated by shared
- *    admission), refused unless it is an absolute path;
- * 3. a null root for the commands whose contract needs none — the bootstrap
+ * 1. the root the ADMITTED CALL named (`harness` selector), which must be the
+ *    fixed `<main worktree>/.mstar`;
+ * 2. a null root for the commands whose contract needs none — the bootstrap
  *    exception (`harness.scaffold`, which establishes a root) and the
  *    root-free class (`ROOT_FREE_COMMANDS`);
- * 4. otherwise the call is REFUSED (`mcp.control-root-unresolved`) with the
- *    cause and every recovery.
+ * 3. otherwise the call is REFUSED (`mcp.control-root-unresolved`) with the
+ *    cause and recovery.
  *
- * A relative root — a launcher declaration or a per-call selector — is refused
- * the same way, because neither has a directory to anchor on: the launch cwd is
- * the HOST's, and a path re-resolved against the root's own parent double-joins.
+ * The MCP server is one long-lived service: no launch flag or environment
+ * variable names a repository, because that would root unrelated calls at the
+ * same harness. The caller's session is the only place the repository is
+ * known, so the per-call selector is the only route.
  *
- * A connection pin always beats a per-call selector, so a caller can never root
- * a call on a workspace the launcher did not declare. The order matters:
- * testing the call selector before `MSTAR_HARNESS_DIR` would let a caller
- * override a launcher-declared pin — the bug this rule exists to prevent.
- *
- * The rule the resolution uses also anchors the invocation **workspace**: `cwd`
- * is the root's parent directory, never `process.cwd()`, so every implicit
- * harness-derived path — a command's review root (e.g. `audit.scaffold` without
- * `--reviews-dir`), a relative `--dir` / findings path — follows the root the
- * call actually uses instead of the host's directory. The null-root paths (the
- * bootstrap exception and the root-free class) keep `process.cwd()`: they have
- * no root to anchor on, so the workspace is marked `launchDirectory: true` and
- * the commands that would default a path from it refuse instead of reading or
- * writing the host's checkout. A launcher that declares the workspace itself
- * (`--workspace`) names that directory, so the marker is absent.
- *
- * The declared root — `--harness`, else `MSTAR_HARNESS_DIR` — is also published
- * as `harnessPin` (the exact harness dir, not its parent), so a command that
- * owns root placement — `harness.scaffold` with no explicit path — initializes
- * the pinned harness itself instead of re-discovering a root from the workspace
- * anchor. It is the ABSOLUTE root the launcher declared, so a handler that
- * re-derives a target from the invocation workspace cannot place a second
- * harness beside it.
+ * The resolved root also anchors the invocation **workspace**: `cwd` is the
+ * root's parent directory, never `process.cwd()`, so every implicit
+ * harness-derived path follows the root the call uses instead of the host's
+ * directory. The null-root paths keep `process.cwd()` and mark the workspace
+ * `launchDirectory: true`, so a command that would default a path from it
+ * refuses rather than reading the host's checkout.
  */
 export function createContextResolver(options: McpStdioOptions = {}): ResolveContext {
-  const pinned = declaredRoot(options);
   const resolver: ResolveContext = (definition, _sessionId, signal, _services, effects: McpEffects, call?: ResolveContextCall) => {
-    // The root the ADMITTED CALL named. A blank value is not a declaration:
+    // why: The root the ADMITTED CALL named. A blank value is not a declaration:
     // the command resolvers treat it as absent, so it must not become a root
-    // candidate here either. Like the launcher forms it must be ABSOLUTE:
-    // `cwd` below is derived from `dirname(root)`, so a relative root would be
-    // re-resolved against its own parent and double-join the path, and the
-    // launch directory is never an anchor. A relative selector is refused with
-    // the named cause instead of resolved.
+    // candidate here either. It must be ABSOLUTE and equal to the fixed
+    // control root; `callRoot` refuses everything else with the recovery.
     const callHarness = typeof call?.harness === "string" && call.harness.trim() !== "" ? callRoot(call.harness, definition.id) : undefined;
     let controlRoot: string | null;
-    if (pinned !== undefined) controlRoot = pinned;
-    else if (callHarness !== undefined) controlRoot = callHarness;
+    if (callHarness !== undefined) controlRoot = callHarness;
     else if (NULL_ROOT_BOOTSTRAP_COMMANDS.has(definition.id)) controlRoot = null;
     else if (ROOT_FREE_COMMANDS.has(definition.id)) controlRoot = null;
     else {
       const cwd = process.cwd();
-      throw new McpControlRootError(unresolvedControlRootMessage(cwd), { cwd });
+      throw new McpControlRootError(unresolvedControlRootMessage(cwd, definition.rootInputs ?? []), { cwd });
     }
     return {
       cwd: options.workspace ?? (controlRoot === null ? process.cwd() : dirname(controlRoot)),
@@ -281,23 +252,15 @@ export function createContextResolver(options: McpStdioOptions = {}): ResolveCon
       // HOST's checkout and says nothing about the caller's workspace, so a
       // command may neither default a path input from it nor answer about it.
       ...(options.workspace === undefined && controlRoot === null ? { launchDirectory: true as const } : {}),
-      // The declared root is also the exact harness dir: commands that own root
-      // placement (e.g. `harness.scaffold`) must target it verbatim, not
-      // re-derive it from the invocation workspace. Published from the pin this
-      // seam resolved, which is the absolute launcher fact. No declaration, no
-      // pin.
-      ...(pinned === undefined ? {} : { harnessPin: pinned }),
       versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
       signal,
       effects,
     };
   };
-  // The declared root is the connection's default for admission: a command that
-  // resolves its own root from `input.harness` has that field filled from it,
-  // and registration publishes `harness` as REQUIRED when this is undefined —
-  // an unpinned connection, where the caller must name the root on every call.
+  // why: The connection declares no root: every call that touches process state
+  // names one, and registration publishes `harness` as required.
   Object.defineProperty(resolver, "defaultHarness", {
-    get: () => pinned,
+    get: () => undefined,
     enumerable: true,
   });
   // Registration reads this to decide whether the per-call `sessionId`

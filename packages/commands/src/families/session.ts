@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { constants } from "node:os";
-import { isAbsolute } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 import { z } from "zod";
 import {
   createFsStore,
@@ -389,9 +389,11 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
         const binding = { verified: true as const, coordinator };
         const env: Record<string, string> = { ...process.env as Record<string, string>, MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(identity) };
         delete env.MSTAR_HOST_SESSION_ID;
-        if (root !== null) env.MSTAR_HARNESS_DIR = root;
         try {
-          const child = await context.effects.spawn({ argv, cwd: context.cwd, env, signal: context.signal });
+          // why: The child derives the fixed root from the main worktree, so run it
+          // there when this session already resolved one; the retired env pin
+          // no longer carries a root.
+          const child = await context.effects.spawn({ argv, cwd: root === null ? context.cwd : dirname(root), env, signal: context.signal });
           const childCode = child.signal === null
             ? child.exitCode ?? 0
             : 128 + (constants.signals[child.signal as keyof typeof constants.signals] ?? 0);

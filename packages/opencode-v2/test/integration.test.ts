@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, resolve, join } from "node:path";
@@ -193,7 +194,11 @@ describe("built OpenCode V2 package integration", () => {
     const root = mkdtempSync(join(tmpdir(), "opencode-v2-integration-"));
     try {
       mkdirSync(join(root, ".mstar", "projects", "_default"), { recursive: true });
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+      writeFileSync(join(root, ".gitignore"), ".mstar/\n");
       writeFileSync(join(root, ".mstarc"), "[config]\nenforcement=hard\n");
+      execFileSync("git", ["add", ".gitignore", ".mstarc"], { cwd: root });
+      execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "init"], { cwd: root });
       writeFileSync(join(root, ".mstar", "status.json"), JSON.stringify({ version: 2, updated_at: "2026-10-10", workflows: [] }));
       writeFileSync(join(root, ".mstar", "store.db"), "fixture");
       process.chdir(root);

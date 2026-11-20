@@ -31,7 +31,9 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import * as plugin from '../src/index.ts'
 import type { SkillLintAdvisory } from '../src/index.ts'
-import { FakeAgentPresetRegistry, FakeLoaderRegistry, FakeSubagentProvider, FakeSubagentService, seedActiveWorkflow } from './harness.ts'
+import { useCleanControlRoot, FakeAgentPresetRegistry, FakeLoaderRegistry, FakeSubagentProvider, FakeSubagentService, seedActiveWorkflow } from './harness.ts'
+
+useCleanControlRoot()
 
 /** Violating writable Assignment (missing Execute as — the field-gate case). */
 const MISSING_EXECUTE_AS = `## Assignment
@@ -110,7 +112,7 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
   // Disposition: status.json write-intent assertions are removed with the retired file-route subject; dispatch/service disposal remains covered here.
   it('disposes the gates + service on fiber.dispose and a reloaded fiber restores them', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-hmr-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     const ctx = new Context()
     // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
     // before apply — same loader-guarantee the real dsh app provides.
@@ -143,7 +145,7 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
 
   it('disposes the skill-lint and catalog listeners on fiber.dispose; a reloaded fiber restores them', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-hmr-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     const skillRoot = join(root, 'skills')
     // An ACTIVE workflow context: the catalog row is injected only for one.
     await seedActiveWorkflow(harnessDir)
@@ -187,7 +189,7 @@ describe('HMR safety — fiber.dispose removes every gate contribution', () => {
 
   it('disposes the native persona channel on fiber.dispose; a reloaded fiber restores it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-hmr-'))
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     const ctx = new Context()
     // The plugin's top-level `inject: ['loader']` (Task 1) must resolve
     // before apply — same loader-guarantee the real dsh app provides.

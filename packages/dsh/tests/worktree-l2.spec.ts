@@ -50,7 +50,9 @@ import { readActiveLifecycleBranchDocs, storeDbPath } from '@mstar-harness/engin
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+import { useCleanControlRoot, bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
+
+useCleanControlRoot()
 import { buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
@@ -122,7 +124,7 @@ const secondLastMessage = (decision: PreStepDecision): UserMessage | undefined =
 
 /** Seed one ACTIVE iteration workflow snapshot and its referenced compass. */
 async function seedIteration(root: string, plans: unknown[], compass: string): Promise<void> {
-  const harnessDir = join(root, 'harness')
+  const harnessDir = join(root, '.mstar')
   await seedActiveWorkflow(harnessDir, 'iter-00000808-wt', plans as never[], {
     type: 'iteration',
     compass_ref: 'iterations/iter-00000808-wt/delivery-compass.md',
@@ -229,7 +231,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-wt-l2-gate-'))
     fixtureRoots.push(root)
     await seedIteration(root, [PLAN_TODO], COMPASS_ACTIVE)
-    const app = booted = await bootApp({ root, harnessDir: join(root, 'harness') })
+    const app = booted = await bootApp({ root, harnessDir: join(root, '.mstar') })
     const inbox = [inboxMessage()]
 
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload(inbox), defaultEnter(inbox))
@@ -286,7 +288,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     // All plans Done but the STEERING compass is still locked — the §3.5
     // close-exit checklist fails (status must be completed + end_date).
     await seedIteration(root, [PLAN_DONE], COMPASS_ACTIVE)
-    const app = booted = await bootApp({ root, harnessDir: join(root, 'harness') })
+    const app = booted = await bootApp({ root, harnessDir: join(root, '.mstar') })
 
     const decision = await app.ctx.waterfall('agent/pre-step', stepPayload([]), defaultEnter([]))
 
@@ -305,7 +307,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-wt-l2-delegate-'))
     fixtureRoots.push(root)
     await seedIteration(root, [PLAN_TODO], COMPASS_ACTIVE)
-    const app = booted = await bootApp({ root, harnessDir: join(root, 'harness') })
+    const app = booted = await bootApp({ root, harnessDir: join(root, '.mstar') })
     const inbox = [inboxMessage()]
     // A later-mounted decider replaces the message set with its own enter
     // decision; the mstar listener must build on THAT.
@@ -325,7 +327,7 @@ describe('pre-step iteration gate — catalog composition (REAL-composition boot
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-wt-l2-abort-'))
     fixtureRoots.push(root)
     await seedIteration(root, [PLAN_TODO], COMPASS_ACTIVE)
-    const app = booted = await bootApp({ root, harnessDir: join(root, 'harness') })
+    const app = booted = await bootApp({ root, harnessDir: join(root, '.mstar') })
     const controller = new AbortController()
     controller.abort()
 
@@ -787,7 +789,7 @@ Do the thing, evidence-first.
   it('a plan row state carrying coordination is refused, never trusted as the row state', async () => {
     const root = tmpRoot('dsh-wt-l1-plan-owned-')
     seedL1Topology(root)
-    const harnessDir = join(root, 'harness')
+    const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-1', [planWithScope(join(root, 'wt-a'), 'feature/a')], { branch: { base: 'main' } }, 'seed-wf-1', root, 'wf-1')
     // A second authority written into the row state must refuse the whole
     // projection: silently reading it would let a stale `state_json` coordinate.

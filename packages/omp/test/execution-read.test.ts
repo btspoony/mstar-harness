@@ -45,6 +45,7 @@ import {
   initializeStore,
   readExecutionAuthority,
   registerCatalogEntity,
+  resolveHarnessDir,
 } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from "@mstar-harness/engine";
 import { inspectPhase1Readiness, reserveHandoffBinding } from "../src/model-handoff-readiness";
@@ -235,6 +236,29 @@ async function seedActiveAuthority(
   });
   return bound.data;
 }
+
+/* ------------------------------------------------------------------------ *
+ * Fixed harness root — a linked worktree resolves the MAIN checkout's
+ * `.mstar` (ADR 2026-11-20; the root is never the linked worktree's own).
+ * ------------------------------------------------------------------------ */
+
+describe("execution-omp-harness-root — the fixed root is the Git main worktree's .mstar", () => {
+  test("a linked worktree resolves the main checkout's .mstar, never its own", () => {
+    const fixture = makeFixture("linked-worktree");
+    const linked = join(fixture.root, "linked");
+    git(["worktree", "add", "-q", "-b", "linked-branch", linked], fixture.main);
+    try {
+      expect(resolveHarnessDir(linked)).toBe(realpathSync(fixture.harness));
+      // why: No `.mstar` in the linked worktree — nothing resolves there.
+      mkdirSync(join(linked, ".mstar"), { recursive: true });
+      expect(resolveHarnessDir(linked)).toBe(realpathSync(fixture.harness));
+      // why: The main checkout's own probe still answers its own root.
+      expect(resolveHarnessDir(fixture.main)).toBe(realpathSync(fixture.harness));
+    } finally {
+      git(["worktree", "remove", "--force", linked], fixture.main);
+    }
+  });
+});
 
 /* ------------------------------------------------------------------------ *
  * execution-omp-readiness — the credential-dependent consumers

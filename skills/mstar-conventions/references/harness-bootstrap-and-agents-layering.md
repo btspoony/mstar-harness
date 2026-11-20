@@ -12,7 +12,7 @@
 
 ## Bootstrap 最小步骤
 
-1. **Bootstrap 唯一路径 = `mstar harness scaffold` + `mstar store init`**：scaffold 创建 `{HARNESS_DIR}`（推荐 `.mstar/`，整体 gitignored）下的进程目录（`plans/` / `iterations/` / `sdd/` / `reviews/`）与 `projects/_default/`（可用 catalog 中登记），写入仓库根的 tracked `.mstarc`（四键声明布局），并按解析结果创建 tracked 语料 `.agents/knowledge|specs|adr`（`{ADR_DIR}` 种子 README + 两个模板 + 四个桶目录）；**不**写 `status.json`，不产出 roadmap Markdown 或 register。
+1. **Bootstrap 唯一路径 = `mstar harness scaffold` + `mstar store init`**：scaffold 创建 `{HARNESS_DIR}`（固定 `<repo-root>/.mstar/`，整体 gitignored）下的进程目录（`plans/` / `iterations/` / `sdd/` / `reviews/`）与 `projects/_default/`（可用 catalog 中登记），写入仓库根的 tracked `.mstarc`（corpus / 子目录键；**不写** `harness_dir`），并按解析结果创建 tracked 语料 `.agents.knowledge|specs|adr`（`{ADR_DIR}` 种子 README + 两个模板 + 四个桶目录）；**不**写 `status.json`，不产出 roadmap Markdown 或 register。
 2. Store：ACTIVE root register / plan 行 / leases / sessions 在 store；findings 是 store issues，project register 无条件退役为迁移历史。初始化/升级与 staged activation 的分工只按 **`mstar-conventions` SKILL.md「初始化 Plan 目录」**：全新用 `store init`；已有/legacy 用 `store upgrade` 导入并激活执行权威；`store activate` 仅用于 reviewed staged migration，不是例行追加步骤。无 ACTIVE store 的 harness 没有执行权威——用对话追踪（no-plan mode），门禁（QC/PM Acceptance）仍适用。
 3. per-plan SDD 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建（`sdd/` 由 scaffold 建好）。
 4. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（canonical snippet → `mstar-conventions/references/git-tracking-and-gitignore.md`；legacy `.agents/` 有等价表）。
@@ -21,7 +21,7 @@
 7. 校准根 `AGENTS.md`：只保留仓库级长期约束，显式引用 `.agents/AGENTS.md` 作为 harness SSOT。
 8. 仅在确有稳定边界时新增目录级 `AGENTS.md`（如 `contracts/`、`gateway/`、`sdk/`）。
 
-**程序化路径**：`mstar harness scaffold [path]`（CLI，默认 cwd）完成步骤 1（含 `_default` 项目登记与 `.mstarc`）、4 与 6 —— 调用 engine `scaffoldHarness`（写 `.mstarc`、建进程目录与 tracked 语料、种子 ADR 树）、追加 canonical gitignore snippet（已存在或作者已声明根规则则跳过）、写 `<workspace-root>/.agents/AGENTS.md`（已存在则跳过）；随后 `mstar store init` 完成步骤 2 的执行权威激活。幂等，重跑只补缺失件，不从既有 `roadmap.md` 自动创建内容权威。步骤 3 的 per-plan 子目录、5、7、8 仍按需手工。scaffold 遵循 `.mstarc` 的 `harness_dir` / `project_dir` 覆盖（写入解析后的目录）；`.mstarc` 只在仓库内无可解析声明、且 harness 目录父目录位于 scaffold 根内时写入，已有文件永不改写。解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义 harness 布局自行管理 ignore 规则）。
+**程序化路径**：`mstar harness scaffold [path]`（CLI，默认 cwd）完成步骤 1（含 `_default` 项目登记与 `.mstarc`）、4 与 6 —— 调用 engine `scaffoldHarness`（写 `.mstarc`、建进程目录与 tracked 语料、种子 ADR 树）、追加 canonical gitignore snippet（已存在或作者已声明根规则则跳过）、写 `<workspace-root>/.agents/AGENTS.md`（已存在则跳过）；随后 `mstar store init` 完成步骤 2 的执行权威激活。幂等，重跑只补缺失件，不从既有 `roadmap.md` 自动创建内容权威。步骤 3 的 per-plan 子目录、5、7、8 仍按需手工。scaffold 固定 `<repo-root>/.mstar`，只遵循 `.mstarc` 的 corpus / `project_dir` 键；`harness_dir` 声明即拒绝。`.mstarc` 只在仓库内无可解析声明时写入，已有文件永不改写。
 
 **gitignore 归一化契约**：scaffold 对默认布局的根 `.gitignore` 仅做四类收敛——分区（用户针对性 `.mstar/…` 规则整体移到 fence 之后、相对顺序不变）、去重冗余宽规则、错位主宽规则前移至首个 canonical negation 之前（仅当跨越行全部为 scaffold 自有语义）、补齐 canonical negation 使其出现在最后一条宽规则之后。保证：① tracked 结果（AGENTS/knowledge/specs）不因错序 fence 被忽略；② 用户针对性规则的字面意图最后生效（`!x` 即 track `x`）。自我否定的规则序列（先 `!x` 后被宽规则压制）按字面意图解析；每次变更均在 scaffold 输出中报告。
 

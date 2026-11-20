@@ -20,7 +20,7 @@
  * is deliberately NOT a dependency of this repository — it is an interactive
  * verification tool, so the gate rides it when present and steps aside when not.
  */
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -368,6 +368,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
   beforeAll(async () => {
     if (!browserAvailable) console.log(SKIP_REASON);
     root = mkdtempSync(join(tmpdir(), "mstar-render-gate-"));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
     mkdirSync(join(root, ".mstar"), { recursive: true });
     const context = { harnessDir: join(root, ".mstar") };
     (await initializeStore(context)).close();

@@ -5,15 +5,15 @@
  * never disables enforcement.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveHarnessDir } from "../src/path.js";
+import { resolveHarnessDir, resolveScaffoldDirs } from "../src/path.js";
 
 const roots: string[] = [];
 
 function dir(): string {
-  const root = mkdtempSync(join(tmpdir(), "probe-failure-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "probe-failure-")));
   roots.push(root);
   mkdirSync(join(root, ".mstar"), { recursive: true });
   return root;
@@ -60,6 +60,26 @@ describe("resolveHarnessDir probe failure", () => {
     delete process.env.MSTAR_HARNESS_DIR;
     try {
       expect(resolveHarnessDir(root, { localProbe: true })).toBe(join(root, ".mstar"));
+    } finally {
+      process.env.PATH = savedPath;
+      if (savedHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;
+      else process.env.MSTAR_HARNESS_DIR = savedHarness;
+    }
+  });
+
+  test("scaffold refuses a failed probe instead of creating a second root", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "probe-failure-scaffold-")));
+    roots.push(root);
+    const savedPath = process.env.PATH;
+    const savedHarness = process.env.MSTAR_HARNESS_DIR;
+    process.env.PATH = "/nonexistent";
+    delete process.env.MSTAR_HARNESS_DIR;
+    try {
+      // why: a failed probe is not "not a checkout" — the scaffold must not
+      // create artifacts the fixed-root resolver would never adopt.
+      expect(() => resolveScaffoldDirs(root)).toThrow(/harness\.root-unresolved/);
+      expect(existsSync(join(root, ".mstar"))).toBe(false);
+      expect(existsSync(join(root, ".mstarc"))).toBe(false);
     } finally {
       process.env.PATH = savedPath;
       if (savedHarness === undefined) delete process.env.MSTAR_HARNESS_DIR;

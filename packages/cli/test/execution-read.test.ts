@@ -88,13 +88,13 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-/** Run the real CLI entry from the fixture root. The shared spawn env pins out
- * the ambient harness and identity vars; the fixture's harness dir and its
- * per-case extras go on top. */
+/** why: Run the real CLI entry from the fixture root. The shared spawn env pins out
+ * the ambient harness and identity vars; per-case extras go on top. The root
+ * itself comes from the fixture checkout — the env pin is retired. */
 function runCli(args: string[], fixture: Fixture, extraEnv: Record<string, string> = {}): RunResult {
   return harnessRunCli(args, {
     cwd: fixture.root,
-    env: { ...cliEnv({ MSTAR_HARNESS_DIR: fixture.harnessDir }), ...extraEnv },
+    env: { ...cliEnv(), ...extraEnv },
   });
 }
 

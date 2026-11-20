@@ -1,5 +1,4 @@
-/**
- * omp Gate-1 golden block/pass parity (cross-host hooks contract D1).
+/** why: omp Gate-1 golden block/pass parity (cross-host hooks contract D1).
  *
  * The GOLDEN map below is the literal record of the PRE-refactor omp gate
  * behavior (captured by running the pre-extraction
@@ -11,16 +10,16 @@
  * imported from the engine `gates` module — must produce the identical
  * block/pass decision for every cell.
  *
- * Tree set (each git-inited so the declared-root fallback's workspace
- * boundary probe works):
+ * Tree set (each git-inited so the fixed `<main worktree>/.mstar`
+ * resolution answers a root):
  * - hard-default: `.mstar/` full markers + hard compass.
  * - soft-default: `.mstar/` full markers + soft compass.
  * - hard-custom: `.mstarc` custom `workflow_dir`/`project_dir` (Phase-5
  *   F1) + hard compass; canonical paths are the DECLARED dir names.
- * - hard-double: outer FULL-marker root (soft by absence of a compass) +
- *   inner SPARSE hard-governed harness (W-REV-3 re-classification).
- * - hard-declared: root `.mstarc` `harness_dir`, harness unpopulated
- *   (declared-root fallback branch).
+ * - retired-legacy: a sparse `.agents/` harness (retired candidate —
+ *   classification refuses `harness.root-retired`).
+ * - retired-declared: root `.mstarc` `harness_dir` (retired declaration —
+ *   resolution refuses `harness.root-retired`).
  *
  * Target files for snapshot/register are absent in every tree (the write
  * path validates the content string, not the disk); the `missing` variant
@@ -159,38 +158,39 @@ function buildHardCustom(base: string): Tree {
   return tree;
 }
 
-function buildHardDouble(base: string): Tree {
-  // Outer FULL-marker root (soft by absence of a compass); inner SPARSE
-  // hard-governed harness. Targets point at the inner harness.
-  const { root } = buildTree(base, "hard-double");
-  mkdirSync(join(root, "workflows"), { recursive: true });
-  mkdirSync(join(root, "projects"), { recursive: true });
-  writeFileSync(join(root, "status.json"), VALID_STATUS);
-  const inner = join(root, "inner", ".mstar");
-  mkdirSync(join(inner, "workflows", "wf-g"), { recursive: true });
-  mkdirSync(join(inner, "projects", "_g"), { recursive: true });
-  writeCompass(inner, "hard");
+function buildRetiredLegacy(base: string): Tree {
+  // why: Retired contract: `.agents/` is a legacy candidate that is never
+  // adopted. Sparse (compass only — no marker set), so classification
+  // reaches the fixed-root resolver and refuses `harness.root-retired`
+  // naming `mstar harness scaffold`; every write still blocks.
+  const root = mkdtempSync(join(base, "retired-legacy-"));
+  const harness = join(root, ".agents");
+  writeCompass(harness, "hard");
   gitInit(root);
-  return {
-    id: "hard-double",
+  const tree: Tree = {
+    id: "retired-legacy",
     root,
-    status: join(inner, "status.json"), // absent at classification time
-    snapshot: join(inner, "workflows", "wf-g", "snapshot.json"),
-    register: join(inner, "projects", "_g", "residuals.json"),
+    status: join(harness, "status.json"),
+    snapshot: join(harness, "workflows", "wf-g", "snapshot.json"),
+    register: join(harness, "projects", "_g", "residuals.json"),
   };
+  mkdirParents(tree.snapshot);
+  mkdirParents(tree.register);
+  return tree;
 }
 
-function buildHardDeclared(base: string): Tree {
-  // Declared root only: `.mstarc` harness_dir at the repo root, harness
-  // dir NOT populated with markers.
-  const root = mkdtempSync(join(base, "hard-declared-"));
+function buildRetiredDeclared(base: string): Tree {
+  // why: Retired contract: `.mstarc` `harness_dir` at the repo root is a
+  // retired declaration — resolution refuses `harness.root-retired`
+  // naming the line and `mstar path resolve`; every write still blocks.
+  const root = mkdtempSync(join(base, "retired-declared-"));
   writeFileSync(join(root, ".mstarc"), "[config]\nharness_dir=.harness\n");
   const harness = join(root, ".harness");
   mkdirSync(harness, { recursive: true });
   writeCompass(harness, "hard");
   gitInit(root);
   const tree: Tree = {
-    id: "hard-declared",
+    id: "retired-declared",
     root,
     status: join(harness, "status.json"),
     snapshot: join(harness, "workflows", "wf-g", "snapshot.json"),
@@ -211,8 +211,8 @@ beforeAll(() => {
     buildHardDefault(base),
     buildSoftDefault(base),
     buildHardCustom(base),
-    buildHardDouble(base),
-    buildHardDeclared(base),
+    buildRetiredLegacy(base),
+    buildRetiredDeclared(base),
   );
 });
 
@@ -233,6 +233,7 @@ describe("omp Gate-1 coordination write refusal for retired FILE-route inputs", 
     expect(handler).toBeDefined();
 
     const actual: Record<string, "block" | "pass"> = {};
+    const reasons: Record<string, string> = {};
     for (const tree of trees) {
       const targets: Array<[string, string]> = [
         ["status", tree.status],
@@ -252,6 +253,7 @@ describe("omp Gate-1 coordination write refusal for retired FILE-route inputs", 
             input: content === undefined ? { path } : { path, content },
           })) as { block: boolean; reason: string } | undefined;
           actual[`${tree.id}/${kind}/${variant}`] = res === undefined ? "pass" : "block";
+          if (res !== undefined) reasons[`${tree.id}/${kind}/${variant}`] = res.reason;
         }
       }
     }
@@ -263,6 +265,21 @@ describe("omp Gate-1 coordination write refusal for retired FILE-route inputs", 
     const mismatches = Object.entries(actual).filter(([, result]) => result !== "block");
     expect(Object.keys(actual)).toHaveLength(60);
     expect(mismatches).toEqual([]);
+
+    // why: Retired-contract reasons: the `.mstarc harness_dir` tree blocks with
+    // the retired-declaration refusal (config line + `mstar path resolve`),
+    // and the `.agents/` tree blocks with the retired-candidate refusal
+    // (legacy name + `mstar harness scaffold`).
+    for (const [key, text] of Object.entries(reasons)) {
+      if (key.startsWith("retired-declared/")) {
+        expect(text).toContain("harness_dir");
+        expect(text).toContain("mstar path resolve");
+      }
+      if (key.startsWith("retired-legacy/")) {
+        expect(text).toContain(".agents");
+        expect(text).toContain("mstar harness scaffold");
+      }
+    }
   }, 60_000);
 });
 
