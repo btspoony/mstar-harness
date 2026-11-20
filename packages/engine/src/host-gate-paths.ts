@@ -21,9 +21,9 @@
  * that into their own refusal envelope. Enforcement decisions stay with the
  * host; this module only resolves paths and classifies names.
  */
-import { readlinkSync, realpathSync } from "node:fs";
+import { readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isHarnessRootDir, type HarnessDocKind } from "./gates.js";
 import { resolveProjectDir, resolveWorkflowDir } from "./path.js";
 
@@ -148,13 +148,80 @@ function landedOrNull(candidate: string): string | null {
   }
 }
 
+/** Deepest entry mapped below the namespace. Depth counts the namespace as 1, so
+ * `<host>/<owner...>/<repo>` is depth 4 and the bound allows three nested owner
+ * segments. */
+const MAX_NAMESPACE_DEPTH = 6;
+
+/** Entries one reverse-index walk visits before it stops. */
+const MAX_NAMESPACE_SCAN_ENTRIES = 512;
+
+/** Physical repository directories of the canonical namespace. A repository
+ * directory is `<host>/<owner...>/<repo>`, so every entry at that depth belongs
+ * to some repository's physical extent; a symlinked entry is mapped at its
+ * landed target, which is exactly where a physical-path write would land. The
+ * walk never leaves the namespace, stops on depth and entry budget, and a
+ * visited set makes a symlink cycle terminate.
+ *
+ * simplify: repository directories deeper than MAX_NAMESPACE_DEPTH are not
+ * mapped; widen the bound when a nested-owner layout exceeds it. */
+function namespaceRepositoryDirs(userHome: string): string[] {
+  const namespace = landedOrNull(resolve(userHome, ".mstar", "repos"));
+  if (namespace === null) return [];
+  const found: string[] = [];
+  const visited = new Set<string>();
+  let budget = MAX_NAMESPACE_SCAN_ENTRIES;
+  const walk = (dir: string, depth: number, host: string | null): void => {
+    if (depth > MAX_NAMESPACE_DEPTH || budget <= 0 || visited.has(dir)) return;
+    visited.add(dir);
+    if (depth >= 4 || (depth === 3 && host === "_id")) found.push(dir);
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    budget -= entries.length;
+    for (const entry of entries) {
+      const child = join(dir, entry.name);
+      const childHost = depth === 1 ? entry.name : host;
+      if (entry.isDirectory()) {
+        walk(child, depth + 1, childHost);
+        continue;
+      }
+      if (!entry.isSymbolicLink()) continue;
+      const landed = landedOrNull(child);
+      if (landed === null) continue;
+      try {
+        if (!statSync(landed).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      walk(landed, depth + 1, childHost);
+    }
+  };
+  walk(namespace, 1, null);
+  return found;
+}
+
+/** True when `dir` lands on a namespace repository directory. Without this a
+ * repository directory symlinked out of the namespace would be writable through
+ * its physical-only path, which no spelling of the namespace covers. */
+function isReverseMappedRepository(dir: string, userHome: string): boolean {
+  const physical = landedOrNull(dir);
+  if (physical === null) return false;
+  return namespaceRepositoryDirs(userHome).includes(physical);
+}
+
 /** True when `dir` names a location inside the canonical collaboration
  * namespace. The namespace itself is reachable through symlinks — a user home,
  * `~/.mstar` or `repos` moved elsewhere — so the configured
  * `<home>/.mstar/repos` spelling and its landed twin both count, and the target
  * is judged in both spellings too (callers pass requested and landed paths
- * alike). A same-named file outside every spelling — a checkout's own `.mstar`,
- * or `repos-archive/` beside the namespace — is not authority bytes. */
+ * alike). A repository directory below the namespace that is a symlink is also
+ * mapped back from its physical path. A same-named file outside every spelling
+ * — a checkout's own `.mstar`, or `repos-archive/` beside the namespace — is not
+ * authority bytes. */
 function isInCollaborationNamespace(dir: string, userHome: string): boolean {
   const configured = resolve(userHome, ".mstar", "repos");
   const landedNamespace = landedOrNull(configured);
@@ -162,7 +229,7 @@ function isInCollaborationNamespace(dir: string, userHome: string): boolean {
   const roots =
     landedNamespace === null || landedNamespace === configured ? [configured] : [configured, landedNamespace];
   const targets = landedDir === null || landedDir === dir ? [dir] : [dir, landedDir];
-  return roots.some((root) => targets.some((target) => isBelow(root, target)));
+  return roots.some((root) => targets.some((target) => isBelow(root, target))) || isReverseMappedRepository(dir, userHome);
 }
 
 /** True when `target` is the collaboration database (or one of its sidecars)

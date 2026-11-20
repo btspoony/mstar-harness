@@ -175,6 +175,30 @@ describe("host-gate-paths collaboration authority target", () => {
     }
   });
 
+  test("protects a repository directory symlinked out of the namespace", () => {
+    // why: a repository directory below the namespace can itself be a symlink
+    // (moved storage, a per-repo mount). Its physical path holds the same
+    // authority bytes, so the landed physical spelling must be denied too.
+    const physical = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-repo-")));
+    const lexicalRepo = join(home, ".mstar", "repos", "github.com", "acme", "repo");
+    mkdirSync(join(home, ".mstar", "repos", "github.com", "acme"), { recursive: true });
+    symlinkSync(physical, lexicalRepo);
+    try {
+      const db = join(physical, "collaboration.db");
+      expect(isStoreAuthorityTarget(db)).toBe(true);
+      expect(isStoreAuthorityTarget(`${db}-shm`)).toBe(true);
+      // The canonical spelling and the landed file agree on the same denial.
+      expect(isStoreAuthorityTarget(join(lexicalRepo, "collaboration.db"))).toBe(true);
+      expect(isStoreAuthorityTarget(landedPathOf(join(lexicalRepo, "collaboration.db")))).toBe(true);
+      // A tree that is not a repository directory of this namespace stays free.
+      expect(isStoreAuthorityTarget(join(physical, "..", "unrelated", "collaboration.db"))).toBe(false);
+    } finally {
+      rmSync(lexicalRepo, { force: true });
+      rmSync(join(home, ".mstar", "repos", "github.com"), { recursive: true, force: true });
+      rmSync(physical, { recursive: true, force: true });
+    }
+  });
+
   test("anchors on the process home, never a caller-selected one", () => {
     const otherHome = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-other-home-")));
     expect(isStoreAuthorityTarget(join(otherHome, ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db"))).toBe(
