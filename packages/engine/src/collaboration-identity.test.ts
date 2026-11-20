@@ -6,7 +6,7 @@
  * real user home or opens a database.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -304,6 +304,20 @@ describe("collaboration identity", () => {
     expect(result.code).toBe("collaboration.config-unreadable");
     expect(result.message).toContain(join(repo, ".mstarc"));
     expect(result.message).toContain("remove");
+
+    // A dangling symlink is a present but unreadable entry, never "absent".
+    const dangling = makeRepo("https://github.com/acme/widgets.git");
+    symlinkSync(join(dangling, "missing-config"), join(dangling, ".mstarc"));
+    const danglingResult = refusal(() => resolveAt(dangling));
+    expect(danglingResult.code).toBe("collaboration.config-unreadable");
+    expect(danglingResult.message).toContain("symbolic link");
+
+    // A symlink is refused even when its target is readable: the file that
+    // supplies trusted selection must be the tracked file itself.
+    const linked = makeRepo("https://github.com/acme/widgets.git");
+    writeFileSync(join(linked, "real-config"), "[collaboration]\nmode=local\n");
+    symlinkSync(join(linked, "real-config"), join(linked, ".mstarc"));
+    expect(refusal(() => resolveAt(linked)).code).toBe("collaboration.config-unreadable");
 
     // A genuinely absent file keeps its own missing-mode refusal.
     const absent = makeRepo("https://github.com/acme/widgets.git");

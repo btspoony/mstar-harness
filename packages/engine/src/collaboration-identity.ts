@@ -9,7 +9,7 @@
  * no directory.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { exitStatusOf, gitProbeTimeoutMs, mainWorktreeRoot } from "./git-probe.js";
@@ -167,28 +167,44 @@ function readOrigin(mainRoot: string): string | null {
   return values[0]!;
 }
 
+function configUnreadable(file: string, cause: string): never {
+  throw new CollaborationIdentityError(
+    "collaboration.config-unreadable",
+    `${file} cannot be read because ${cause}; make it a readable regular file or remove it, then re-run`,
+  );
+}
+
 function readConfig(mainRoot: string): { mode?: string; repoId?: string } {
   const file = join(resolve(mainRoot), MSTARC_FILE);
+  let stats: Stats;
+  try {
+    // why: `lstat` reports the directory entry itself, so a dangling symlink is
+    // a present entry rather than the absent file `readFileSync` would report.
+    stats = lstatSync(file);
+  } catch (error) {
+    const reason = (error as NodeJS.ErrnoException).code;
+    // why: only a missing directory entry means "no configuration"; every other
+    // failure is a cause that adding a mode cannot fix.
+    if (reason === "ENOENT") return {};
+    configUnreadable(
+      file,
+      reason === "ENOTDIR"
+        ? "a parent path component is not a directory"
+        : `it could not be inspected (${reason ?? "unknown error"})`,
+    );
+  }
+  if (stats.isSymbolicLink()) configUnreadable(file, "it is a symbolic link");
+  if (!stats.isFile()) configUnreadable(file, stats.isDirectory() ? "it is a directory" : "it is not a regular file");
   let text: string;
   try {
     text = readFileSync(file, "utf8");
   } catch (error) {
     const reason = (error as NodeJS.ErrnoException).code;
-    // why: only a genuinely absent file means "no configuration"; every other
-    // failure would otherwise be reported as a missing mode the operator
-    // cannot fix by adding one.
-    if (reason === "ENOENT") return {};
-    const cause =
-      reason === "EISDIR"
-        ? "it is a directory"
-        : reason === "ENOTDIR"
-          ? "a parent path component is not a directory"
-          : reason === "EACCES" || reason === "EPERM"
-            ? "it is not readable by this process"
-            : `it could not be read (${reason ?? "unknown error"})`;
-    throw new CollaborationIdentityError(
-      "collaboration.config-unreadable",
-      `${file} cannot be read because ${cause}; make it a readable regular file or remove it, then re-run`,
+    configUnreadable(
+      file,
+      reason === "EACCES" || reason === "EPERM"
+        ? "it is not readable by this process"
+        : `it could not be read (${reason ?? "unknown error"})`,
     );
   }
   return parseMstarc(text).collaboration ?? {};
