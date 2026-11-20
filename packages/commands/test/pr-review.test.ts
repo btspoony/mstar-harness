@@ -154,6 +154,24 @@ const RENAME_DIFF = [
   "",
 ].join("\n");
 
+/** why: git tabs a `+++` label whose path has a literal space and still
+ * C-quotes the non-ASCII byte, so the tab must go before the quote split. */
+const TAB_DIFF = [
+  "diff --git a/src/a.ts b/src/a.ts",
+  "--- a/src/a.ts",
+  "+++ b/src/a.ts",
+  "@@ -1,2 +1,2 @@",
+  " alpha",
+  " beta",
+  'diff --git "a/src/file \\346\\227\\245.ts" "b/src/file \\346\\227\\245.ts"',
+  '--- "a/src/file \\346\\227\\245.ts"',
+  '+++ "b/src/file \\346\\227\\245.ts"\t2026-01-01 00:00:00 +0000',
+  "@@ -60,2 +61,2 @@",
+  " sixty",
+  " sixty-one",
+  "",
+].join("\n");
+
 describe("pr-review command family", () => {
 
   test("computes tally from fixture findings and validates fixture report verdicts", async () => {
@@ -377,6 +395,28 @@ describe("pr-review command family", () => {
     const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
     expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks" });
     expect(refused.message).toContain("no right-side hunk for this path");
+  });
+
+  test("a tab-suffixed quoted label still yields the path a finding spells", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    const review = { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456", baseRefOid: "1234567" }), stderr: "" };
+    const diff = { exitCode: 0, signal: null, stdout: TAB_DIFF, stderr: "" };
+    const posted = { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return review;
+      return request.argv[2] === "-H" ? diff : posted;
+    };
+    writeFileSync(findings, JSON.stringify([{ path: "src/file 日.ts", line: 62, start_line: 61, start_side: "RIGHT", body: "Spaced quoted path" }]));
+    const okResult = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(okResult.status).toBe("ok");
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 62, start_line: 61, start_side: "RIGHT", body: "Wrong file" }]));
+    const refused = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "pr-review.post.range-spans-hunks" });
+    expect(refused.message).toContain("hunks: 1-2");
   });
 
   test("a range without a pinned base is refused instead of validated against a moving head", async () => {

@@ -155,8 +155,11 @@ function foldComments(body: string, dropped: ReviewPostPlan["inlineComments"]): 
  * a quoted token decodes whole, a bare one keeps its spaces, minus any
  * trailing `\t<timestamp>`, and the accepted spelling is the finding's. */
 function rightSidePath(token: string): string | undefined {
-  const quoted = /^"(.*)"$/.exec(token);
-  const path = quoted === null ? token.replace(/\t.*$/, "") : decodeGitQuotedPath(quoted[1]!);
+  // why: git appends a tab + timestamp to a `+++` label whose path has a space,
+  // quoted or not — strip it before deciding how the label is written.
+  const label = token.replace(/\t.*$/, "");
+  const quoted = /^"(.*)"$/.exec(label);
+  const path = quoted === null ? label : decodeGitQuotedPath(quoted[1]!);
   if (path === undefined || !path.startsWith("b/") || path.length === 2) return undefined;
   return path.slice(2);
 }
