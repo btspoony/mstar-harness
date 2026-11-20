@@ -147,7 +147,7 @@ describe("pr-review command family", () => {
     expect(retried.body).not.toContain("const q = query(text, params);");
     expect(retried.body).toContain("// quoted only");
     expect(retried.body).toContain("Fix sketch: keep the prose after the quote.");
-    expect(retried.body.split("```suggestion")).toHaveLength(3); // two quoted examples stay, the trailing block is gone
+    expect(retried.body.split("```suggestion")).toHaveLength(3); // why: two quoted examples stay, the trailing block is gone
     expect(retried.body).not.toContain("const v = fallback;");
     expect(retried.body).not.toContain("const x = 1;");
   });

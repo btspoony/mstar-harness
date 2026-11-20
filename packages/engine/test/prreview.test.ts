@@ -1667,10 +1667,10 @@ describe("prReviewSeatPrompt — per-seat ## Budget block (tier time budget)", (
 
 // ---------------------------------------------------------------------------
 // prReviewSeatPrompt — stage-2 optional suggestion contract
-// One bounded GitHub suggestion block per finding: local single-line repair
-// only, replacement text only, anchored to the finding's one RIGHT line, and
-// part of the inline body posted verbatim (pr-review.md § Seat prompts /
-// § Comment posting).
+// why: one bounded GitHub suggestion block per finding — local single-line
+// repair only, replacement text only, anchored to the finding's one RIGHT
+// line, and part of the inline body posted verbatim (pr-review.md § Seat
+// prompts / § Comment posting).
 // ---------------------------------------------------------------------------
 
 describe("prReviewSeatPrompt — stage-2 optional suggestion contract", () => {

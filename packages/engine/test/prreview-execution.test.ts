@@ -351,11 +351,13 @@ describe("prReviewSeatPrompt — ingredient skeleton (pr-review.md § Seat promp
     expect(bare).not.toContain("## Decided tradeoffs");
   });
 
-  test("Stage 2 adds finding-format.md and the Merge-class instruction; Return-ONLY-findings, no fixes", () => {
+  test("Stage 2 adds finding-format.md and the Merge-class instruction; one bounded optional suggestion", () => {
     const prompt = prReviewSeatPrompt(SEAT);
     expect(prompt).toContain("finding-format.md");
     expect(prompt).toContain("- **Merge class**: must-fix | should-fix | may-fix | nit` immediately after `- **Confidence**`");
-    expect(prompt).toContain("Return ONLY findings \u2014 no fixes");
+    expect(prompt).toContain("one optional GitHub ```suggestion block per finding");
+    expect(prompt).toContain("local (one file, one hunk, one line)");
+    expect(prompt).toContain("The fence carries replacement text only");
     // Stage 1 collects EVIDENCE — no findings table, no verdict.
     const stage1 = prReviewSeatPrompt({ ...SEAT, stage: 1, tier: "deep" });
     expect(stage1).not.toContain("finding-format.md");

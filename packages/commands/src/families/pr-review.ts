@@ -99,7 +99,7 @@ function parseFinding(entry: unknown, index: number): ReviewPostPlan["inlineComm
   if (typeof row.path !== "string" || !row.path.trim() || typeof row.body !== "string" || !row.body.trim() || typeof row.line !== "number" || !Number.isInteger(row.line) || row.line < 1) throw new UsageError(`findings[${index}] must be {path: string, line: number >= 1, body: string}`);
   return { path: row.path, line: row.line, side: "RIGHT", body: row.body };
 }
-/** A folded inline body loses its trailing suggestion block: the summary
+/** why: a folded inline body loses its trailing suggestion block — the summary
  * carries no line anchor, so a suggestion there would neither apply nor read
  * as an inline fix. The contract puts that block last (title / evidence /
  * impact / fix sketch, then the suggestion), so only a TRAILING last complete
