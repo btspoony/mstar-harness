@@ -48,12 +48,34 @@ const SAFE_SEGMENT = /^[A-Za-z0-9._+-]+$/;
 /** Explicit origin-less id: `[a-z0-9][a-z0-9._-]{0,127}`. */
 const SAFE_REPO_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const DEFAULT_PORT: Record<string, string> = { "https:": "443", "http:": "80", "ssh:": "22" };
+/** DNS host: dot-separated non-empty labels; `~` stays reserved for `host~port`. */
+const SAFE_HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/;
 
 function unresolved(cause: string): never {
   throw new CollaborationIdentityError(
     "collaboration.repo-identity-unresolved",
     `${cause}. Correct the origin or the Git probe, or add a valid [${COLLABORATION_SECTION}] repo_id to ${MSTARC_FILE} for a genuinely origin-less repository, then re-run`,
   );
+}
+
+/** Refuse literal and percent-encoded dot segments in a raw origin path. */
+function assertNoDotSegments(rawPath: string): void {
+  for (const segment of rawPath.split("/")) {
+    if (segment === "") continue;
+    // why: WHATWG URL decodes `%2e` and drops dot segments before callers see
+    // the path, so only the raw spelling can be judged.
+    const decoded = segment.replace(/%2e/gi, ".");
+    if (decoded === "." || decoded === "..") unresolved("The origin path contains a dot segment");
+  }
+}
+
+/** Lowercase DNS host without its terminal dot; refusal when it is not a safe one. */
+function canonicalHost(raw: string): string {
+  const host = raw.replace(/\.$/, "").toLowerCase();
+  if (host === "") unresolved("The origin names no host");
+  if (host.includes("~")) unresolved("The origin host uses the reserved '~' port delimiter");
+  if (!SAFE_HOST.test(host)) unresolved("The origin host is not a safe DNS name");
+  return host;
 }
 
 /** Split an origin into host (with `~port` for nondefault ports) and path. */
@@ -66,6 +88,10 @@ function splitOrigin(raw: string): { host: string; path: string } {
     if (protocol !== "https:" && protocol !== "http:" && protocol !== "ssh:") {
       unresolved(`The origin transport ${protocol} is not a portable Git remote`);
     }
+    // why: WHATWG URL already dropped literal and `%2e` dot segments from
+    // `parsed.pathname`, so the raw spelling is the only place to judge them.
+    const rawPath = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*(\/[^?#]*)?/i.exec(value)?.[1] ?? "";
+    assertNoDotSegments(rawPath);
     let parsed: URL;
     try {
       parsed = new URL(value);
@@ -74,8 +100,7 @@ function splitOrigin(raw: string): { host: string; path: string } {
     }
     if (parsed.search !== "" || parsed.hash !== "") unresolved("The origin carries a query or fragment");
     // why: userinfo is dropped by never reading username/password.
-    const hostname = parsed.hostname.replace(/\.$/, "").toLowerCase();
-    if (hostname === "") unresolved("The origin names no host");
+    const hostname = canonicalHost(parsed.hostname);
     const port = parsed.port;
     const host = port === "" || port === DEFAULT_PORT[protocol] ? hostname : `${hostname}~${port}`;
     return { host, path: parsed.pathname };
@@ -83,9 +108,7 @@ function splitOrigin(raw: string): { host: string; path: string } {
   // SCP SSH spelling: `[user@]host:path`; anything else is not portable.
   const scp = /^(?:[^@/]+@)?([^:/]+):(.+)$/.exec(value);
   if (scp === null) unresolved("The origin is not a portable https, http, ssh or SCP SSH remote");
-  const hostname = scp[1]!.replace(/\.$/, "").toLowerCase();
-  if (hostname === "") unresolved("The origin names no host");
-  return { host: hostname, path: scp[2]! };
+  return { host: canonicalHost(scp[1]!), path: scp[2]! };
 }
 
 /** Owner path below the host, with one terminal `.git` and slashes removed. */
@@ -110,26 +133,29 @@ function originPathSegments(path: string, host: string): string[] {
  * Git cannot answer or several fetch origins disagree.
  */
 function readOrigin(mainRoot: string): string | null {
+  let out: string;
   try {
-    const out = execFileSync("git", ["-C", mainRoot, "config", "--get-all", "remote.origin.url"], {
+    out = execFileSync("git", ["-C", mainRoot, "config", "--get-all", "remote.origin.url"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: gitProbeTimeoutMs(),
       env: { ...process.env, LC_ALL: "C", LANG: "C" },
     });
-    const values = out
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line !== "");
-    if (values.length === 0) return null;
-    if (new Set(values).size > 1) unresolved("The origin remote has ambiguous multiple fetch origins");
-    return values[0]!;
   } catch (error) {
     // why: exit 1 is Git's "key unset"; every other failure is unreadable Git,
     // which must never masquerade as an origin-less checkout.
     if (exitStatusOf(error) === 1) return null;
     unresolved("Git could not be read to determine the origin remote");
   }
+  // why: Git terminates every value with a newline, so only the trailing
+  // artifact is dropped; interior empty lines are configured empty values.
+  const lines = out.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const values = lines.map((line) => line.trim());
+  if (values.length === 0) unresolved("The origin remote is configured with no URL value");
+  if (values.includes("")) unresolved("The origin remote is configured with an empty URL value");
+  if (new Set(values).size > 1) unresolved("The origin remote has ambiguous multiple fetch origins");
+  return values[0]!;
 }
 
 function readConfig(mainRoot: string): { mode?: string; repoId?: string } {
@@ -143,10 +169,13 @@ function readConfig(mainRoot: string): { mode?: string; repoId?: string } {
 }
 
 function resolveMode(raw: string | undefined): CollaborationMode {
-  if (raw === undefined) {
+  if (raw === undefined || raw === "") {
     throw new CollaborationIdentityError(
       "collaboration.mode-required",
-      `No [${COLLABORATION_SECTION}] mode is configured in ${MSTARC_FILE}; add 'mode=local' or 'mode=mirror' and re-run`,
+      (raw === ""
+        ? `An empty [${COLLABORATION_SECTION}] mode is configured in ${MSTARC_FILE}; `
+        : `No [${COLLABORATION_SECTION}] mode is configured in ${MSTARC_FILE}; `) +
+        "add 'mode=local' or 'mode=mirror' and re-run",
     );
   }
   if (raw === "local" || raw === "mirror") return raw;

@@ -207,6 +207,64 @@ describe("collaboration identity", () => {
     expect(resolveAt(makeRepo(origin, "[collaboration]\nmode=mirror\n")).mode).toBe("mirror");
   });
 
+  test("scp hosts must be safe DNS names and leave the port delimiter to URLs", () => {
+    for (const origin of ["git@..:team/repo.git", "git@team..:repo.git", "git@git.example.com~2222:team/repo.git"]) {
+      const result = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=local\n")));
+      expect(result.code).toBe("collaboration.repo-identity-unresolved");
+    }
+    // DNS terminal-dot spelling is the same host, not a second namespace.
+    const dotted = resolveAt(makeRepo("git@Git.Example.com.:team/repo.git", "[collaboration]\nmode=local\n"));
+    expect(dotted.repoKey).toBe("git.example.com/team/repo");
+    // Only a URL port may qualify a host.
+    const ported = resolveAt(makeRepo("ssh://git@git.example.com:2222/team/repo.git", "[collaboration]\nmode=local\n"));
+    expect(ported.repoKey).toBe("git.example.com~2222/team/repo");
+  });
+
+  test("dot segments are refused before URL normalization", () => {
+    for (const origin of [
+      "https://git.example.com/a/../team/repo.git",
+      "https://git.example.com/a/%2e%2e/team/repo.git",
+      "https://git.example.com/%2E/team/repo.git",
+      "git@git.example.com:a/../team/repo.git",
+    ]) {
+      const result = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=local\n")));
+      expect(result.code).toBe("collaboration.repo-identity-unresolved");
+    }
+    // A dot inside a name is not a dot segment.
+    const dotted = resolveAt(makeRepo("https://git.example.com/team/my.repo.git", "[collaboration]\nmode=local\n"));
+    expect(dotted.repoKey).toBe("git.example.com/team/my.repo");
+  });
+
+  test("a configured empty origin is refused, never treated as origin-less", () => {
+    const blank = makeRepo(undefined, "[collaboration]\nmode=local\n");
+    git(blank, "config", "remote.origin.url", "");
+    const empty = refusal(() => resolveAt(blank));
+    expect(empty.code).toBe("collaboration.repo-identity-unresolved");
+    expect(empty.message.toLowerCase()).toContain("empty");
+
+    const blankWithId = makeRepo(undefined, "[collaboration]\nmode=local\nrepo_id=team-repo\n");
+    git(blankWithId, "config", "remote.origin.url", "");
+    expect(refusal(() => resolveAt(blankWithId)).code).toBe("collaboration.repo-identity-unresolved");
+
+    const mixed = makeRepo(["https://github.com/acme/widgets.git", ""], "[collaboration]\nmode=local\n");
+    expect(refusal(() => resolveAt(mixed)).code).toBe("collaboration.repo-identity-unresolved");
+  });
+
+  test("a repeated collaboration key is authoritative at its last occurrence", () => {
+    const origin = "https://github.com/acme/widgets.git";
+    const clearedMode = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=local\nmode=\n")));
+    expect(clearedMode.code).toBe("collaboration.mode-required");
+    expect(resolveAt(makeRepo(origin, "[collaboration]\nmode=local\nmode=mirror\n")).mode).toBe("mirror");
+
+    const clearedId = refusal(() =>
+      resolveAt(makeRepo(undefined, "[collaboration]\nmode=local\nrepo_id=team-repo\nrepo_id=\n")),
+    );
+    expect(clearedId.code).toBe("collaboration.repo-identity-unresolved");
+    expect(clearedId.message).toContain("repo_id");
+    const last = resolveAt(makeRepo(undefined, "[collaboration]\nmode=local\nrepo_id=first\nrepo_id=second\n"));
+    expect(last.repoKey).toBe("id:second");
+  });
+
   test("resolution is side-effect free", () => {
     const location = resolveAt(makeRepo("https://github.com/acme/widgets.git", "[collaboration]\nmode=local\n"));
     expect(location.dbPath.startsWith(join(HOME, ".mstar", "repos"))).toBe(true);
@@ -218,5 +276,9 @@ describe("collaboration identity", () => {
     expect(config.collaboration).toEqual({ mode: "mirror", repoId: "team-repo" });
     expect(config.enforcement).toBe("hard");
     expect(parseMstarc("[collaboration]\nmode=local\n").collaboration).toEqual({ mode: "local" });
+    // The last occurrence wins, an explicit empty later value included.
+    expect(parseMstarc("[collaboration]\nmode=local\nmode=\n").collaboration).toEqual({ mode: "" });
+    expect(parseMstarc("[collaboration]\nmode=local\nmode=mirror\n").collaboration).toEqual({ mode: "mirror" });
+    expect(parseMstarc("[collaboration]\nrepo_id=first\nrepo_id=second\n").collaboration).toEqual({ repoId: "second" });
   });
 });
