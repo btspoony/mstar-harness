@@ -1104,10 +1104,13 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
       expect(() => resolveArtifactPath(selected, { kind: "json", key: ordinary })).not.toThrow();
       // why: a non-`.mstar` selected root is still owned by its checkout.
       expect(() => resolveArtifactPath(join(root, "checkout-a", ".agents"), { kind: "json", key: join(root, "checkout-a", ".plans", "x.json") })).not.toThrow();
-      // why: an ordinary `plans` directory is not a harness marker.
+      // why: an ordinary `plans` directory is not a harness marker, even with a status.json.
+      mkdirSync(join(root, "checkout-a", "docs", "plans"), { recursive: true });
+      writeFileSync(join(root, "checkout-a", "docs", "plans", "status.json"), "{}");
       expect(() => resolveArtifactPath(selected, { kind: "json", key: join(root, "checkout-a", "docs", "plans", "x.json") })).not.toThrow();
-      // why: a legacy plans-rooted corpus (status.json evidence) still belongs to its checkout.
+      // why: a legacy plans-rooted corpus at another checkout's root is still foreign.
       mkdirSync(join(root, "checkout-b", "plans"), { recursive: true });
+      gitInit(join(root, "checkout-b"));
       writeFileSync(join(root, "checkout-b", "plans", "status.json"), "{}");
       expect(() => resolveArtifactPath(selected, { kind: "json", key: join(root, "checkout-b", "plans", "x.json") })).toThrow(/another checkout's harness state/);
       // why: a root-level `.mstar` still belongs to a foreign owner.
