@@ -10,6 +10,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { COLLABORATION_MARKER_FILE } from "./collaboration-store.js";
 import {
   MAX_SYMLINK_HOPS,
   SYMLINK_RESOLUTION_REFUSED_CODE,
@@ -131,6 +132,10 @@ describe("host-gate-paths collaboration authority target", () => {
 
   const collaborationDb = (): string => join(home, ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db");
 
+  /** The marker the store publishes beside its database. */
+  const writeMarker = (dir: string, body: string = JSON.stringify({ version: 1, repositoryKey: "github.com/acme/repo" })): void =>
+    writeFileSync(join(dir, COLLABORATION_MARKER_FILE), body);
+
   test("protects the collaboration database and every SQLite sidecar", () => {
     const db = collaborationDb();
     for (const target of [db, `${db}-wal`, `${db}-shm`, `${db}-journal`]) {
@@ -165,8 +170,6 @@ describe("host-gate-paths collaboration authority target", () => {
       const db = join(physical, "github.com", "acme", "repo", "collaboration.db");
       expect(isStoreAuthorityTarget(db)).toBe(true);
       expect(isStoreAuthorityTarget(`${db}-journal`)).toBe(true);
-      // The lexical selection stays protected, and an unrelated physical tree
-      // with the same basename is not claimed.
       expect(isStoreAuthorityTarget(collaborationDb())).toBe(true);
       expect(isStoreAuthorityTarget(join(physical, "..", "unrelated", "collaboration.db"))).toBe(false);
     } finally {
@@ -175,11 +178,13 @@ describe("host-gate-paths collaboration authority target", () => {
     }
   });
 
-  test("protects a repository directory symlinked out of the namespace", () => {
-    // why: a repository directory below the namespace can itself be a symlink
-    // (moved storage, a per-repo mount). Its physical path holds the same
-    // authority bytes, so the landed physical spelling must be denied too.
+  test("protects a repository directory that carries the authority marker", () => {
+    // why: a repository directory below the namespace can be a symlink to
+    // external storage. The store's own marker beside the database is the
+    // evidence that the physical location holds authority bytes, so the
+    // physical-only spelling is denied without scanning the namespace.
     const physical = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-repo-")));
+    writeMarker(physical);
     const lexicalRepo = join(home, ".mstar", "repos", "github.com", "acme", "repo");
     mkdirSync(join(home, ".mstar", "repos", "github.com", "acme"), { recursive: true });
     symlinkSync(physical, lexicalRepo);
@@ -187,10 +192,13 @@ describe("host-gate-paths collaboration authority target", () => {
       const db = join(physical, "collaboration.db");
       expect(isStoreAuthorityTarget(db)).toBe(true);
       expect(isStoreAuthorityTarget(`${db}-shm`)).toBe(true);
-      // The canonical spelling and the landed file agree on the same denial.
       expect(isStoreAuthorityTarget(join(lexicalRepo, "collaboration.db"))).toBe(true);
       expect(isStoreAuthorityTarget(landedPathOf(join(lexicalRepo, "collaboration.db")))).toBe(true);
-      // A tree that is not a repository directory of this namespace stays free.
+      // A file alias into the marked directory lands on authority bytes too.
+      const alias = join(root, "collaboration-file-alias");
+      symlinkSync(db, alias);
+      expect(isStoreAuthorityTarget(landedPathOf(alias))).toBe(true);
+      // A neighbouring tree without the marker is not claimed.
       expect(isStoreAuthorityTarget(join(physical, "..", "unrelated", "collaboration.db"))).toBe(false);
     } finally {
       rmSync(lexicalRepo, { force: true });
@@ -199,12 +207,37 @@ describe("host-gate-paths collaboration authority target", () => {
     }
   });
 
+  test("allows a same-named database outside the namespace without a valid marker", () => {
+    const plain = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-plain-")));
+    try {
+      // No marker: an ordinary file, however it is named.
+      writeFileSync(join(plain, "collaboration.db"), "not authority bytes");
+      expect(isStoreAuthorityTarget(join(plain, "collaboration.db"))).toBe(false);
+      expect(isStoreAuthorityTarget(join(plain, "collaboration.db-wal"))).toBe(false);
+      // A malformed or unsupported marker is not evidence either.
+      writeMarker(plain, "{not json");
+      expect(isStoreAuthorityTarget(join(plain, "collaboration.db"))).toBe(false);
+      writeMarker(plain, JSON.stringify({ version: 2, repositoryKey: "github.com/acme/repo" }));
+      expect(isStoreAuthorityTarget(join(plain, "collaboration.db"))).toBe(false);
+      writeMarker(plain, JSON.stringify({ version: 1, repositoryKey: "" }));
+      expect(isStoreAuthorityTarget(join(plain, "collaboration.db"))).toBe(false);
+      // The valid marker beside the name is what makes it authority bytes.
+      writeMarker(plain);
+      expect(isStoreAuthorityTarget(join(plain, "collaboration.db"))).toBe(true);
+    } finally {
+      rmSync(plain, { recursive: true, force: true });
+    }
+  });
+
   test("anchors on the process home, never a caller-selected one", () => {
     const otherHome = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-other-home-")));
-    expect(isStoreAuthorityTarget(join(otherHome, ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db"))).toBe(
-      false,
-    );
-    rmSync(otherHome, { recursive: true, force: true });
+    try {
+      expect(
+        isStoreAuthorityTarget(join(otherHome, ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db")),
+      ).toBe(false);
+    } finally {
+      rmSync(otherHome, { recursive: true, force: true });
+    }
   });
 
   test("does not deny a similarly named database outside the user-level namespace", () => {
@@ -212,56 +245,6 @@ describe("host-gate-paths collaboration authority target", () => {
     expect(isStoreAuthorityTarget(join(home, ".mstar", "collaboration.db"))).toBe(false);
     expect(isStoreAuthorityTarget(join(home, ".mstar", "repos-archive", "acme", "repo", "collaboration.db"))).toBe(false);
     expect(isStoreAuthorityTarget(join(home, ".mstar", "repos", "github.com", "acme", "repo", "store.db"))).toBe(false);
-  });
-
-  test("denies the physical path of a deeply nested repository symlink", () => {
-    // why: the namespace admits deeply nested owners, so the reverse walk has no
-    // owner-depth limit; it reaches the repository and maps its physical path.
-    const physical = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-deep-")));
-    const deepOwner = join(home, ".mstar", "repos", "gitlab.com", "g1", "g2", "g3", "g4");
-    mkdirSync(deepOwner, { recursive: true });
-    symlinkSync(physical, join(deepOwner, "repo"));
-    try {
-      expect(isStoreAuthorityTarget(join(physical, "collaboration.db"))).toBe(true);
-      expect(isStoreAuthorityTarget(`${join(physical, "collaboration.db")}-wal`)).toBe(true);
-      // The canonical spelling is denied before any scan runs.
-      expect(isStoreAuthorityTarget(join(deepOwner, "repo", "collaboration.db"))).toBe(true);
-      // The scan completed: an unrelated path stays allowed while the deep
-      // repository exists, so the denial above came from mapping, not a failure.
-      const unrelated = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-deep-far-")));
-      expect(isStoreAuthorityTarget(join(unrelated, "collaboration.db"))).toBe(false);
-      rmSync(unrelated, { recursive: true, force: true });
-    } finally {
-      rmSync(join(home, ".mstar", "repos", "gitlab.com"), { recursive: true, force: true });
-      rmSync(physical, { recursive: true, force: true });
-    }
-  });
-
-  test("scans a large namespace completely and denies only an unscannable one", () => {
-    // why: size is not a reason to deny. A large but complete namespace leaves an
-    // unrelated same-named path alone; only a real failure (here a symlink cycle)
-    // makes the target unprovable and therefore denied.
-    const unrelated = realpathSync(mkdtempSync(join(tmpdir(), "host-gate-far-")));
-    const crowded = join(home, ".mstar", "repos", "github.com", "many");
-    const loopHost = join(home, ".mstar", "repos", "github.com", "acme");
-    mkdirSync(crowded, { recursive: true });
-    for (let index = 0; index < 520; index++) mkdirSync(join(crowded, `r${index}`));
-    try {
-      expect(isStoreAuthorityTarget(join(unrelated, "collaboration.db"))).toBe(false);
-      // A canonical selection is denied by containment either way.
-      expect(isStoreAuthorityTarget(collaborationDb())).toBe(true);
-
-      mkdirSync(loopHost, { recursive: true });
-      symlinkSync("..", join(loopHost, "loop"));
-      expect(isStoreAuthorityTarget(join(unrelated, "collaboration.db"))).toBe(true);
-      expect(isStoreAuthorityTarget(collaborationDb())).toBe(true);
-      rmSync(join(loopHost, "loop"), { force: true });
-    } finally {
-      rmSync(crowded, { recursive: true, force: true });
-      rmSync(loopHost, { recursive: true, force: true });
-    }
-    expect(isStoreAuthorityTarget(join(unrelated, "collaboration.db"))).toBe(false);
-    rmSync(unrelated, { recursive: true, force: true });
   });
 });
 

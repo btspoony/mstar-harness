@@ -875,8 +875,10 @@ async function continueExisting(location: CollaborationLocation, timeout: number
 /**
  * Create-only staged initialization for one canonical scope. A missing
  * database is built complete in a private staging file and published with one
- * create-only hard link; a matching record already on disk (staged or active)
- * is reused without clearing it, and a record for another repository, mode,
+ * create-only hard link; the private authority marker is then published beside
+ * it, so the location is recognizable as authority bytes and open can prove the
+ * pair still agrees. A matching record already on disk (staged or active) is
+ * reused without clearing it, and a record for another repository, mode,
  * state, store id or schema refuses.
  */
 export async function initializeCollaborationStore(location: CollaborationLocation): Promise<CollaborationAuthority> {
@@ -978,7 +980,8 @@ export async function initializeCollaborationStore(location: CollaborationLocati
 /**
  * Open the scope's active collaboration authority. Never creates a database:
  * a missing one is `collaboration.not-initialized`, an inert staged one is
- * `collaboration.not-active`, and an invalid/corrupt/inaccessible one is
+ * `collaboration.not-active`, and an invalid/corrupt/inaccessible one — or one
+ * whose `COLLABORATION_MARKER_FILE` is missing or names another repository — is
  * `collaboration.unreadable`. An expected stamp that no longer matches refuses
  * `collaboration.stale-binding` before the handle is returned.
  *

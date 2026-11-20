@@ -21,9 +21,10 @@
  * that into their own refusal envelope. Enforcement decisions stay with the
  * host; this module only resolves paths and classifies names.
  */
-import { readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { hasCollaborationAuthorityMarker } from "./collaboration-store.js";
 import { isHarnessRootDir, type HarnessDocKind } from "./gates.js";
 import { resolveProjectDir, resolveWorkflowDir } from "./path.js";
 
@@ -148,84 +149,12 @@ function landedOrNull(candidate: string): string | null {
   }
 }
 
-/** Result of the reverse walk: the physical directories of the namespace, and
- * whether the walk completed. */
-type NamespaceScan = Readonly<{ dirs: readonly string[]; complete: boolean }>;
-
-/** Physical directories of the canonical namespace, each visited once. A
- * symlinked entry is mapped at its landed target — where a physical-path write
- * would land — and walked from there.
- *
- * The walk is COMPLETE: it has no owner-depth or entry-count limit, so a large
- * or deeply nested namespace still proves coverage and an unrelated path stays
- * allowed. It is iterative (a deep tree cannot exhaust the stack) and `visited`
- * covers every physical directory once, so duplicate links terminate.
- *
- * `complete` is false only for a real failure: a read/stat error, an unresolvable
- * link chain, or a link to itself/an ancestor (a cycle whose extent cannot be
- * covered). Callers deny such a target instead of assuming it unrelated. */
-function scanNamespaceRepositories(userHome: string): NamespaceScan {
-  const namespace = landedOrNull(resolve(userHome, ".mstar", "repos"));
-  if (namespace === null) return { dirs: [], complete: false };
-  try {
-    if (!statSync(namespace).isDirectory()) return { dirs: [], complete: true };
-  } catch (error) {
-    // why: an absent namespace holds nothing to map; any other failure cannot
-    // prove coverage. Both answers are explicit, none is a guess.
-    return { dirs: [], complete: (error as NodeJS.ErrnoException).code === "ENOENT" };
-  }
-  const dirs: string[] = [];
-  const visited = new Set<string>();
-  const pending = [namespace];
-  while (pending.length > 0) {
-    const dir = pending.pop()!;
-    if (visited.has(dir)) continue;
-    visited.add(dir);
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return { dirs, complete: false };
-    }
-    for (const entry of entries) {
-      const child = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        dirs.push(child);
-        pending.push(child);
-        continue;
-      }
-      if (!entry.isSymbolicLink()) continue;
-      const landed = landedOrNull(child);
-      if (landed === null) return { dirs, complete: false };
-      let isDirectory = false;
-      try {
-        isDirectory = statSync(landed).isDirectory();
-      } catch (error) {
-        // why: a dangling link has nothing behind it to map; any other failure
-        // cannot prove coverage.
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { dirs, complete: false };
-        continue;
-      }
-      if (!isDirectory) continue;
-      // A link to itself or to an ancestor could not be covered in one pass.
-      if (landed === dir || isBelow(landed, dir)) return { dirs, complete: false };
-      if (visited.has(landed)) continue;
-      dirs.push(landed);
-      pending.push(landed);
-    }
-  }
-  return { dirs, complete: true };
-}
-
 /** True when `dir` names a location inside the canonical collaboration
  * namespace. The namespace itself is reachable through symlinks — a user home,
  * `~/.mstar` or `repos` moved elsewhere — so the configured
  * `<home>/.mstar/repos` spelling and its landed twin both count, and the target
  * is judged in both spellings too (callers pass requested and landed paths
- * alike). A repository directory below the namespace that is a symlink is mapped
- * back from its physical path, and an unfinished reverse scan denies the target:
- * a same-named file outside every spelling is not authority bytes only when the
- * namespace was fully scannable and did not claim it. */
+ * alike). */
 function isInCollaborationNamespace(dir: string, userHome: string): boolean {
   const configured = resolve(userHome, ".mstar", "repos");
   const landedNamespace = landedOrNull(configured);
@@ -233,17 +162,23 @@ function isInCollaborationNamespace(dir: string, userHome: string): boolean {
   const roots =
     landedNamespace === null || landedNamespace === configured ? [configured] : [configured, landedNamespace];
   const targets = landedDir === null || landedDir === dir ? [dir] : [dir, landedDir];
-  if (roots.some((root) => targets.some((target) => isBelow(root, target)))) return true;
-  const scan = scanNamespaceRepositories(userHome);
-  if (landedDir !== null && scan.dirs.includes(landedDir)) return true;
-  return !scan.complete;
+  return roots.some((root) => targets.some((target) => isBelow(root, target)));
 }
 
-/** True when `target` is the collaboration database (or one of its sidecars)
- * inside the canonical user-level namespace. */
+/** True when `target` is the collaboration database (or one of its sidecars) and
+ * belongs to the collaboration authority: it is inside the canonical user-level
+ * namespace in either spelling, or it sits beside a valid
+ * `COLLABORATION_MARKER_FILE`. The marker is the evidence that a location
+ * outside the namespace (a repository directory symlinked elsewhere, so only the
+ * physical path is presented) still holds authority bytes; a same-named file
+ * without one is an ordinary file and stays allowed. */
 function isCollaborationAuthorityTarget(target: string, userHome: string): boolean {
   if (!COLLABORATION_AUTHORITY_NAMES.includes(basename(target).toLowerCase())) return false;
-  return isInCollaborationNamespace(resolve(dirname(target)), userHome);
+  const dir = resolve(dirname(target));
+  if (isInCollaborationNamespace(dir, userHome)) return true;
+  if (hasCollaborationAuthorityMarker(dir)) return true;
+  const landedDir = landedOrNull(dir);
+  return landedDir !== null && landedDir !== dir && hasCollaborationAuthorityMarker(landedDir);
 }
 
 /** True when `target` (absolute) IS runtime-owned database bytes: the execution
