@@ -1683,16 +1683,18 @@ describe("prReviewSeatPrompt — stage-2 optional suggestion contract", () => {
     reconFacts: [],
   };
 
-  test("stage-2 output contract allows one bounded single-line suggestion per finding", () => {
+  test("stage-2 output contract allows one bounded suggestion per finding on a line or contiguous range", () => {
     const prompt = prReviewSeatPrompt(base);
     expect(prompt).toContain("one optional GitHub ```suggestion block per finding");
-    expect(prompt).toContain("local (one file, one hunk, one line)");
+    expect(prompt).toContain("local (one file, one hunk, one contiguous line range)");
     expect(prompt).toContain("mechanically safe");
     expect(prompt).toContain("READ the surrounding code");
     expect(prompt).toContain("replacement text only");
     expect(prompt).toContain("ONE `RIGHT` diff line");
+    expect(prompt).toContain("one contiguous `RIGHT` range declared as `start_line` + `start_side`");
+    expect(prompt).toContain("the suggestion replaces exactly the anchored line or range");
     expect(prompt).toContain("posted verbatim");
-    expect(prompt).toContain("Never suggest a repair spanning hunks or files");
+    expect(prompt).toContain("Never suggest a repair spanning hunks, files, or non-contiguous lines");
   });
 
   test("stage-1 collect contract carries no suggestion artifact", () => {

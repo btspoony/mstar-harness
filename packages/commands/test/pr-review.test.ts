@@ -114,6 +114,39 @@ describe("pr-review command family", () => {
     expect(JSON.parse(calls[1]!.stdin ?? "")).toMatchObject({ event: "COMMENT", body: "Review summary", commit_id: "abcdef0123456" });
   });
 
+  test("post passes a contiguous range anchor through, and omits it for a single line", async () => {
+    const { cwd, context, calls } = fixture();
+    const bodyFile = path.join(cwd, "body.md");
+    writeFileSync(bodyFile, "Review summary");
+    const findings = path.join(cwd, "findings.json");
+    writeFileSync(findings, JSON.stringify([
+      { path: "src/a.ts", line: 12, start_line: 9, start_side: "RIGHT", body: "Range finding" },
+      { path: "src/b.ts", line: 4, body: "Single-line finding" },
+    ]));
+    context.effects.spawn = async (request) => {
+      calls.push({ argv: request.argv, cwd: request.cwd, ...(request.stdin !== undefined ? { stdin: request.stdin } : {}) });
+      if (request.argv[1] === "pr") return { exitCode: 0, signal: null, stdout: JSON.stringify({ url: "https://github.com/owner/repo/pull/42", headRefOid: "abcdef0123456" }), stderr: "" };
+      return { exitCode: 0, signal: null, stdout: JSON.stringify({ html_url: "https://github.com/owner/repo/pull/42#review-1" }), stderr: "" };
+    };
+    const result = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(result.status).toBe("ok");
+    expect(JSON.parse(calls[1]!.stdin ?? "")).toMatchObject({
+      comments: [
+        { path: "src/a.ts", line: 12, side: "RIGHT", start_line: 9, start_side: "RIGHT", body: "Range finding" },
+        { path: "src/b.ts", line: 4, side: "RIGHT", body: "Single-line finding" },
+      ],
+    });
+    // why: this stdin is the payload the command itself serialized above.
+    const posted = JSON.parse(calls[1]!.stdin ?? "") as { comments: Record<string, unknown>[] };
+    const single = posted.comments[1]!;
+    expect(Object.keys(single)).toEqual(["path", "line", "side", "body"]);
+    // why: a backwards range is a caller mistake, never a 422-fold candidate.
+    writeFileSync(findings, JSON.stringify([{ path: "src/a.ts", line: 12, start_line: 12, start_side: "RIGHT", body: "Backwards" }]));
+    const rejected = await command("pr-review.post").execute({ pr: "42", bodyFile, findings }, context);
+    expect(rejected).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(rejected.message).toContain("findings[0].start_line must be an integer >= 1 and less than line (12)");
+  });
+
   test("422 retry folds the body without its suggestion fence and drops inline comments", async () => {
     const { cwd, context, calls } = fixture();
     const bodyFile = path.join(cwd, "body.md");

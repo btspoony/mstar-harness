@@ -97,7 +97,16 @@ function parseFinding(entry: unknown, index: number): ReviewPostPlan["inlineComm
   const row = entry as Record<string, unknown>;
   if (row.path === undefined && row.body === undefined && row.line === undefined) return null;
   if (typeof row.path !== "string" || !row.path.trim() || typeof row.body !== "string" || !row.body.trim() || typeof row.line !== "number" || !Number.isInteger(row.line) || row.line < 1) throw new UsageError(`findings[${index}] must be {path: string, line: number >= 1, body: string}`);
-  return { path: row.path, line: row.line, side: "RIGHT", body: row.body };
+  // why: GitHub's `start_side` requires `start_line`, so a lone field would
+  // only earn a 422 fold — reject the pair mismatch as a usage error instead.
+  const { start_line: startLine, start_side: startSide } = row;
+  let range: { start_line: number; start_side: "RIGHT" } | undefined;
+  if (startLine !== undefined || startSide !== undefined) {
+    if (typeof startLine !== "number" || !Number.isInteger(startLine) || startLine < 1 || startLine >= row.line) throw new UsageError(`findings[${index}].start_line must be an integer >= 1 and less than line (${row.line})`);
+    if (startSide !== "RIGHT") throw new UsageError(`findings[${index}].start_side must be "RIGHT"`);
+    range = { start_line: startLine, start_side: "RIGHT" };
+  }
+  return { path: row.path, line: row.line, side: "RIGHT", ...range, body: row.body };
 }
 /** why: a folded inline body loses its trailing suggestion block — the summary
  * carries no line anchor, so a suggestion there would neither apply nor read
@@ -332,7 +341,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         return refusalEnvelope({ command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1, message: `resolved PR ${plan.pr} does not match requested PR ${input.pr}` , recovery: "Select the pull request matching the resolved review target. Run mstar pr-review post --pr <number> --body-file <review.md>."});
       }
       const apiPath = `repos/${plan.ownerRepo}/pulls/${plan.pr}/reviews`;
-      const payload = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]): string => JSON.stringify({ commit_id: plan.commitId, event: plan.event, body: dropped.length ? foldComments(plan.body, dropped) : plan.body, ...(kept.length ? { comments: kept.map(({ path: filePath, line, side, body: commentBody }) => ({ path: filePath, line, side, body: commentBody })) } : {}) });
+      const payload = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]): string => JSON.stringify({ commit_id: plan.commitId, event: plan.event, body: dropped.length ? foldComments(plan.body, dropped) : plan.body, ...(kept.length ? { comments: kept.map(({ path: filePath, line, side, start_line, start_side, body: commentBody }) => ({ path: filePath, line, side, ...(start_line === undefined ? {} : { start_line, start_side }), body: commentBody })) } : {}) });
       const send = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]) => spawn(context, ["gh", "api", "--method", "POST", apiPath, "--input", "-"], context.cwd, payload(kept, dropped));
       let response = await send(plan.inlineComments, []);
       if (response.exitCode !== 0 && /HTTP\s+422|"status"\s*:\s*422/.test(`${response.stderr}\n${response.stdout}`) && plan.inlineComments.length) response = await send([], plan.inlineComments);
