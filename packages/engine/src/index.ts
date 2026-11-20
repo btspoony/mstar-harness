@@ -69,6 +69,7 @@ export type {
 } from "./path.js";
 export type { LinearBinding, LinearBindingRefusal, LinearFacetMapping, MstarcConfig, MstarcStringKey, RepoLinearBinding } from "./mstarc.js";
 export {
+  COLLABORATION_SECTION,
   LINEAR_MAPPING_SECTION,
   LINEAR_SECTION,
   MSTARC_FILE,
@@ -86,6 +87,17 @@ export {
   readRepoLinearBinding,
   resolveRepoRoot,
 } from "./mstarc.js";
+export type { CollaborationIdentityCode, CollaborationLocation, CollaborationMode } from "./collaboration-identity.js";
+export { CollaborationIdentityError, resolveCollaborationLocation } from "./collaboration-identity.js";
+// The collaboration lane's own store: independent staged schema, create-only
+// publication and active-only handles. No execution table or method.
+export type { CollaborationAuthority, CollaborationStamp, CollaborationStoreHandle } from "./collaboration-store.js";
+export {
+  initializeCollaborationStore,
+  openCollaborationStore,
+  readCollaborationAuthority,
+  withCollaborationWrite,
+} from "./collaboration-store.js";
 export {
   assertPlanWritingPath,
   canonicalizeNearestExisting,

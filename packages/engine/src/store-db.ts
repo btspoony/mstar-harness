@@ -22,7 +22,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
 import { readDeclaredNodeFloor, warnUncheckableNodeFloor } from "./core.js";
 // Type-only import: erased at runtime, so it cannot create a cycle. The VALUE
@@ -85,7 +85,14 @@ export type StoreErrorCode =
   | "store.created-handle-failed"
   | "store.upgrade-dsh-source-refused"
   | "store.upgrade-dsh-ack-unmatched"
-  | "store.upgrade-dsh-failed";
+  | "store.upgrade-dsh-failed"
+  // The collaboration lane's own database boundary (collaboration-store.ts):
+  // missing routed database, inert staged database, invalid/corrupt/inaccessible
+  // database, and a trusted repository/mode/store-id/epoch that does not match.
+  | "collaboration.not-initialized"
+  | "collaboration.not-active"
+  | "collaboration.unreadable"
+  | "collaboration.stale-binding";
 
 /** Typed refusal with an actionable, stable code and optional machine facts. */
 export class StoreError extends Error {
@@ -255,7 +262,7 @@ const MAX_BUSY_TIMEOUT_MS = 2147483647;
  * value is floored into that domain and falls back to the published 5000ms
  * constant when even the floor is out of it - the number the pragma uses is
  * then the number every refusal reports. */
-function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS): number {
+export function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS): number {
   const floored = Math.floor(value);
   return Number.isInteger(floored) && floored > 0 && floored <= MAX_BUSY_TIMEOUT_MS ? floored : DEFAULT_BUSY_TIMEOUT_MS;
 }
@@ -276,7 +283,7 @@ function refuseOpenFailure(error: unknown, dbPath: string, timeout = DEFAULT_BUS
 }
 
 /** Map a bounded-wait BUSY failure to the stable visible refusal. */
-function isBusyError(error: unknown): boolean {
+export function isBusyError(error: unknown): boolean {
   const err = error as { code?: string; errcode?: string | number; message?: string };
   return (
     err?.errcode === 5 ||
@@ -331,13 +338,44 @@ function busyAware(db: StoreDb, path: string, timeout: number): StoreDb {
 }
 
 /**
+ * Per-owner connection policy. Each member is opt-in and defaults to the
+ * execution lane's established behavior, so uncustomized callers keep the
+ * exact pragma order and side effects they had before.
+ */
+export type StoreConnectOptions = Readonly<{
+  /** Open a writer only when the database exists (`mode=rw`); never create it. */
+  noCreate?: boolean;
+  /** Keep the database's current journal mode instead of switching a writer to WAL. */
+  keepJournalMode?: boolean;
+}>;
+
+/**
  * Open a connection with the contract §2 pragma order: busy_timeout first,
  * then WAL (verified), then synchronous=FULL on writers, query_only=ON on
  * readers, and foreign_keys=ON (verified) on both.
  */
-async function connect(dbPath: string, mode: "read" | "write", timeout = DEFAULT_BUSY_TIMEOUT_MS): Promise<StoreDb> {
+export async function connect(
+  dbPath: string,
+  mode: "read" | "write",
+  timeout = DEFAULT_BUSY_TIMEOUT_MS,
+  options: StoreConnectOptions = {},
+): Promise<StoreDb> {
   const { DatabaseSync } = await loadSqliteDriver();
-  return openConnection(dbPath, mode, DatabaseSync, timeout);
+  return openConnection(dbPath, mode, DatabaseSync, timeout, options);
+}
+
+/** `dbPath` as a SQLite URI path: every segment percent-encoded, so `%`, `?`
+ * and `#` in a store path are addressed literally. */
+function sqliteUriPath(dbPath: string): string {
+  return resolve(dbPath).split(sep).map(encodeURIComponent).join("/");
+}
+
+/**
+ * A SQLite `mode=rw` URI addressing `dbPath`: an existing database opens, a
+ * missing one refuses instead of being created.
+ */
+function existingOnlyUri(dbPath: string): string {
+  return `file:${sqliteUriPath(dbPath)}?mode=rw`;
 }
 
 /** SQLite's own file header is 100 bytes: bytes 0–15 are its format magic and
@@ -357,7 +395,7 @@ const WAL_FILE_FORMAT_VERSION = 2;
  * retired file route, and it runs before any existence check, header probe or
  * driver open.
  */
-function assertAbsentOrRegularStoreFile(dbPath: string): void {
+export function assertAbsentOrRegularStoreFile(dbPath: string): void {
   let stats: Stats | undefined;
   let examineError: unknown;
   try {
@@ -433,22 +471,7 @@ function isWalFormatDatabase(header: Buffer, bytes: number): boolean {
  */
 function ensureJournalForRead(dbPath: string): void {
   if (existsSync(`${dbPath}-wal`)) return;
-  const header = Buffer.alloc(DATABASE_HEADER_BYTES);
-  let bytes: number;
-  try {
-    const source = openSync(dbPath, "r");
-    try {
-      bytes = fstatSync(source).size;
-      if (readSync(source, header, 0, header.length, 0) < header.length) return;
-    } finally {
-      closeSync(source);
-    }
-  } catch {
-    // Not a readable store file: the open below reports its own failure, exactly
-    // as it did before this shape check existed.
-    return;
-  }
-  if (!isWalFormatDatabase(header, bytes)) return;
+  if (!walShapedStoreFile(dbPath)) return;
   let journal: number;
   try {
     journal = openSync(`${dbPath}-wal`, "wx");
@@ -458,6 +481,24 @@ function ensureJournalForRead(dbPath: string): void {
     return;
   }
   closeSync(journal);
+}
+
+/** Whether the file's own header says WAL, read WITHOUT creating anything. */
+export function walShapedStoreFile(dbPath: string): boolean {
+  const header = Buffer.alloc(DATABASE_HEADER_BYTES);
+  try {
+    const source = openSync(dbPath, "r");
+    try {
+      const bytes = fstatSync(source).size;
+      if (readSync(source, header, 0, header.length, 0) < header.length) return false;
+      return isWalFormatDatabase(header, bytes);
+    } finally {
+      closeSync(source);
+    }
+  } catch {
+    // Not a readable store file: the open reports its own failure.
+    return false;
+  }
 }
 
 /**
@@ -470,6 +511,7 @@ function openConnection(
   mode: "read" | "write",
   DatabaseSync: SqliteModule["DatabaseSync"],
   timeout = DEFAULT_BUSY_TIMEOUT_MS,
+  options: StoreConnectOptions = {},
 ): StoreDb {
   // node:sqlite rejects an explicit `undefined` options argument - open
   // writers without a second argument, readers with the read-only option.
@@ -481,7 +523,10 @@ function openConnection(
     // back before the read open (see the helpers).
     assertAbsentOrRegularStoreFile(dbPath);
     if (mode === "read") ensureJournalForRead(dbPath);
-    db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
+    db =
+      mode === "read"
+        ? new DatabaseSync(dbPath, { readOnly: true })
+        : new DatabaseSync(options.noCreate === true ? existingOnlyUri(dbPath) : dbPath);
   } catch (error) {
     if (mode === "read" && isRawCantOpen(error)) throw error;
     refuseOpenFailure(error, dbPath, timeout);
@@ -498,8 +543,10 @@ function openConnection(
         fail("query_only pragma did not hold");
       }
     } else {
-      const wal = db.prepare("pragma journal_mode=wal").get() as { journal_mode?: string } | undefined;
-      if (wal?.journal_mode !== "wal") fail("WAL journal mode was not applied");
+      if (options.keepJournalMode !== true) {
+        const wal = db.prepare("pragma journal_mode=wal").get() as { journal_mode?: string } | undefined;
+        if (wal?.journal_mode !== "wal") fail("WAL journal mode was not applied");
+      }
       db.exec("pragma synchronous=FULL");
       if ((db.prepare("pragma synchronous").get() as { synchronous?: number } | undefined)?.synchronous !== 2) {
         fail("synchronous=FULL was not applied");
@@ -1932,16 +1979,16 @@ export function migrationChecksum(migration: Migration): string {
   return createHash("sha256").update(migration.sql, "utf8").digest("hex");
 }
 
-function nowRfc3339(): string {
+export function nowRfc3339(): string {
   return new Date().toISOString();
 }
 
-type AppliedMigration = { version: number; name: string; checksum: string };
+export type AppliedMigration = { version: number; name: string; checksum: string };
 
 /** Read applied migration rows. A missing table is only tolerable while
  * creating a fresh store; readers of an existing database treat it as
  * corruption. */
-function readAppliedMigrations(db: StoreDb, tolerateMissingTable: boolean): AppliedMigration[] {
+export function readAppliedMigrations(db: StoreDb, tolerateMissingTable: boolean): AppliedMigration[] {
   const present = db
     .prepare("select count(*) as n from sqlite_master where type='table' and name='schema_version'")
     .get() as { n?: number } | undefined;
@@ -1976,14 +2023,14 @@ function readAppliedMigrations(db: StoreDb, tolerateMissingTable: boolean): Appl
  * and are never compared - "same version id, different SQL" is a build
  * mismatch caught by CI, not a runtime gate.
  */
-function validateAppliedMigrations(applied: AppliedMigration[]): number {
+export function validateAppliedMigrations(applied: AppliedMigration[], migrations: readonly Migration[] = MIGRATIONS): number {
   if (applied.length === 0) {
     throw new StoreError("store.corrupt", "The store database exists but no migrations are recorded");
   }
   let max = 0;
   for (let i = 0; i < applied.length; i++) {
     const row = applied[i];
-    const compiled = MIGRATIONS.find((m) => m.version === row.version);
+    const compiled = migrations.find((m) => m.version === row.version);
     if (!compiled) {
       // The three facts are distinct and all belong in the refusal. The row's
       // own version is the FIRST the build cannot interpret; the store's schema
@@ -1995,7 +2042,7 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
       let highestApplied = 0;
       for (const candidate of applied) if (candidate.version > highestApplied) highestApplied = candidate.version;
       let supportedMax = 0;
-      for (const migration of MIGRATIONS) if (migration.version > supportedMax) supportedMax = migration.version;
+      for (const migration of migrations) if (migration.version > supportedMax) supportedMax = migration.version;
       throw new StoreError(
         "store.schema-unsupported",
         `The store's highest applied schema version is ${highestApplied}, this build supports versions 1..${supportedMax}, ` +
@@ -2341,7 +2388,7 @@ function isRawCantOpen(error: unknown): boolean {
   return error !== null && typeof error === "object" && "errcode" in error && error.errcode === 14;
 }
 
-function isTransientReadOpenFailure(error: unknown, dbPath: string): boolean {
+export function isTransientReadOpenFailure(error: unknown, dbPath: string): boolean {
   if (error instanceof StoreError) return false;
   if (!isRawCantOpen(error)) return false;
   return existsSync(dbPath);
@@ -2352,11 +2399,11 @@ function isTransientReadOpenFailure(error: unknown, dbPath: string): boolean {
  * store pays nothing for it. This is a deliberate bounded workaround for the
  * Bun 1.4.0 `node:sqlite` collection-timed cleanup defect: it removes once the
  * runtime quiesces a closed handle's sidecars at close. */
-const READ_OPEN_ATTEMPTS = 5;
+export const READ_OPEN_ATTEMPTS = 5;
 /** Delay before the next read-open attempt. The observed window closes on the
  * runtime's next collection, which the retry's own allocation and this yield
  * reach; the whole budget stays in the low tens of milliseconds. */
-const READ_OPEN_BACKOFF_MS = 5;
+export const READ_OPEN_BACKOFF_MS = 5;
 
 /** The probe's reused read-only connection: the store file it belongs to. */
 type ProbeConnection = { dbPath: string; dev: number; ino: number; db: StoreDb };
@@ -2708,7 +2755,7 @@ async function openStoreOnce(dbPath: string, mode: "read" | "write", timeout: nu
  * create cannot unlink the store another process may already have published or
  * be reading, and a stale staging file is inert scratch that no code reads.
  */
-function removeStagingFiles(stagingPath: string): void {
+export function removeStagingFiles(stagingPath: string): void {
   for (const suffix of ["", "-journal", "-wal", "-shm"]) {
     try {
       unlinkSync(stagingPath + suffix);
@@ -2720,7 +2767,7 @@ function removeStagingFiles(stagingPath: string): void {
 
 /** The operating system's own classification of a failed step, preserved
  * verbatim so the operator diagnoses the filesystem, not a store. */
-function publicationCause(error: unknown): string {
+export function publicationCause(error: unknown): string {
   const causeCode =
     error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
   const message = error instanceof Error ? error.message : String(error);
@@ -2761,7 +2808,7 @@ function publicationRefusal(step: string, error: unknown, dbPath: string): Store
  * for one), the operating system's own error is preserved and disclosed as the
  * failed barrier - never swallowed into a durable success claim.
  */
-function syncDirectoryEntry(dir: string): void {
+export function syncDirectoryEntry(dir: string): void {
   const fd = openSync(dir, "r");
   try {
     fsyncSync(fd);
