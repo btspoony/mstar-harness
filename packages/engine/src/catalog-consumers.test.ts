@@ -387,6 +387,22 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
     expect(report.violations.some((violation) => violation.code === "collaboration.not-initialized")).toBe(true);
   });
 
+  test("catalog discovery: a staged collaboration scope defers registration instead of failing scaffold", async () => {
+    const { root, harness } = workspace("scaffold-scope-staged-");
+    await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
+    await expect(scaffoldHarness(root)).resolves.toBe(harness);
+    // The optional registration is still owed to activation; it was not faked.
+    await expect(getCatalog({ harnessDir: harness }, { kind: "project", id: "_default" })).rejects.toMatchObject({
+      code: "collaboration.not-active",
+    });
+  });
+
+  test("catalog discovery: an invalid collaboration mode is refused, never deferred", async () => {
+    const { root } = workspace("scaffold-scope-invalid-");
+    writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=bogus\n");
+    await expect(scaffoldHarness(root)).rejects.toMatchObject({ code: "collaboration.mode-invalid" });
+  });
+
   test("catalog discovery: the registration gate is answered from the ACTIVE store, not a file view", async () => {
     const { harness, context } = await withStore("routing-active-");
     // A workflow the ACTIVE store knows with NO pending journal operation: the
