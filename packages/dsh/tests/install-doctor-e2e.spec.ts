@@ -36,7 +36,7 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
@@ -124,9 +124,12 @@ function runDsh(dshHome: string, args: string[], timeoutMs = 120_000): string {
   return stdout
 }
 
-/** Run the REAL CLI `init --target dsh` (plan 001 surface) as a subprocess. */
+/** Run the REAL CLI `init --target dsh` (plan 001 surface) as a subprocess.
+ * `--no-global-cli` is the CLI's no-network opt-out: without it the version
+ * decision follows the published latest, so every add targets a release this
+ * checkout's engine may not carry. */
 async function runCliInit(dshHome: string, extraArgs: string[] = [], timeoutMs = 300_000): Promise<string> {
-  const proc = Bun.spawnSync([process.execPath, 'run', CLI_ENTRY, 'init', '--target', 'dsh', ...extraArgs], {
+  const proc = Bun.spawnSync([process.execPath, 'run', CLI_ENTRY, 'init', '--target', 'dsh', '--no-global-cli', ...extraArgs], {
     cwd: cliCwd,
     env: dshEnv(dshHome),
     stdout: 'pipe',
@@ -137,11 +140,6 @@ async function runCliInit(dshHome: string, extraArgs: string[] = [], timeoutMs =
   if (proc.exitCode !== 0) {
     throw new Error(`mstar-harness init --target dsh failed (${proc.exitCode}): ${stdout}\n${proc.stderr.toString()}`)
   }
-  // No post-init pin here: the drift-repair cell asserts the PUBLISHED CLI's
-  // repair behavior (4.8.2), which a repo-pinned 4.8.1 CLI does not perform.
-  // The npm-lag boot mismatch is recorded as an environment residual in the
-  // task report (published plugin imports engine exports this branch's dist
-  // does not carry: `decideThreadGate`).
   return stdout
 }
 
@@ -194,25 +192,20 @@ function sameSubagentCorridor(mstarPkgDir: string): boolean {
   return peers(mstarPkgDir)?.['@deepseek-ai/dsh-subagent'] === peers(packageRoot)?.['@deepseek-ai/dsh-subagent']
 }
 
-/** Read the `version` field of a package.json (Task 1 pattern). */
-async function readVersion(pkgJsonPath: string): Promise<string> {
-  const parsed: unknown = JSON.parse(await readFile(pkgJsonPath, 'utf8'))
-  if (typeof parsed !== 'object' || parsed === null || !('version' in parsed) || typeof parsed.version !== 'string') {
-    throw new Error(`package.json at ${pkgJsonPath} carries no string version field`)
-  }
-  return parsed.version
-}
-
 /** Single-instance host copy of the INSTALLED mstar artifact (Task 1
  * pattern): a real-directory copy under `<repo>/node_modules/.mstar-e2e/` so
  * the dist's bare imports walk up to the repo `node_modules` — the same
  * physical instances the test process loaded. The cordis cross-check pins
- * the invariant for THIS copy. Returns the copy root (parent of `dsh/`). */
+ * the invariant for THIS copy. Returns the copy root (parent of `dsh/`).
+ * Resolve the link first: a `link:` profile install is a symlink, which a
+ * verbatim recursive copy would leave dangling at the new root. The base is
+ * the repo root, not the package root, because the source itself is the
+ * repo's own package on a `link:` install. */
 async function hostCopyInstalledMstar(dshHome: string): Promise<string> {
-  const root = join(packageRoot, 'node_modules/.mstar-e2e', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+  const root = join(REPO_ROOT, 'node_modules/.mstar-e2e', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
   const copy = join(root, 'dsh')
   await mkdir(copy, { recursive: true })
-  await cp(installedMstarDir(dshHome), copy, { recursive: true })
+  await cp(realpathSync(installedMstarDir(dshHome)), copy, { recursive: true })
   const hostCordis = Bun.resolveSync('@deepseek-ai/cordis', import.meta.dir)
   const mstarCordis = Bun.resolveSync('@deepseek-ai/cordis', join(copy, 'dist/index.js'))
   expect(mstarCordis).toBe(hostCordis)
@@ -264,36 +257,23 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
     // --- Setup: temp DSH_HOME; CELL-1 install form: `--no-fallbacks`
     // (the mstar row only — the fallbacks row is uninstalled). ---
     dshHome = await mkdtemp(join(tmpdir(), 'dsh-doctor-home-'))
+    // Local artifact pin (Task 1 deviation, reused): the dsh-side boots below
+    // resolve THIS worktree's engine dist (single-instance cordis), so the
+    // profile installs the checkout's own package instead of the registry
+    // release the CLI would resolve. Pre-seeding it also keeps every init's
+    // version decision on the manifest version: the mstar row is already
+    // present at it, so the inits below only add the fallbacks row.
+    {
+      runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', join(REPO_ROOT, 'packages/dsh')], 300_000)
+      // Post-pin dump probe (fix wave S-002 belt-and-suspenders): the local
+      // add must not duplicate the mstar loader row (the --no-fallbacks shape
+      // keeps exactly one row).
+      const pinnedDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
+      expect((pinnedDump.match(/name: '@mstar-harness\/dsh'/g) ?? []).length, 'exactly one mstar loader row after the local install').toBe(1)
+    }
     const initNoFallbacks = await runCliInit(dshHome, ['--no-fallbacks'])
     for (const line of initNoFallbacks.split('\n').filter((line) => line.trim() !== '')) console.log(`install-doctor-e2e: cli(no-fallbacks) | ${line}`)
 
-    // Version/surface pin (Task 1 deviation, reused): the dsh CLI writes the
-    // profile dependency as `^2.2.0`; pnpm's minimumReleaseAge gate can land
-    // the default add on a seeds-less version. The doctor reads loader rows
-    // only, but the dsh-side boots exercise the bundled gates — pin the
-    // repo-shipped version. UNCONDITIONAL: the boot resolves the local
-    // worktree's engine dist (single-instance cordis), and a published plugin
-    // newer than this branch (npm lag) imports engine exports this dist does
-    // not carry (`decideThreadGate`).
-    {
-      const repoVersion = await readVersion(join(packageRoot, 'package.json'))
-      if (!hasShippedSurface(installedMstarDir(dshHome))) {
-        console.log(`install-doctor-e2e: default add lacks the shipped surface (native role-preset channel) — re-adding pinned @${repoVersion} (Task 1 deviation)`)
-      } else {
-        const installedVersion = await readVersion(join(installedMstarDir(dshHome), 'package.json'))
-        if (installedVersion !== repoVersion) {
-          console.log(`install-doctor-e2e: installed @${installedVersion} is newer than this branch's engine — re-adding pinned @${repoVersion} (npm lag; the boot resolves the local engine dist)`)
-        }
-      }
-      if (await readVersion(join(installedMstarDir(dshHome), 'package.json')) !== repoVersion) {
-        runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', `${MSTAR_SPEC}@${repoVersion}`], 300_000)
-      }
-      // Post-pin dump probe (fix wave S-002 belt-and-suspenders): the
-      // re-add must not duplicate the mstar loader row (the --no-fallbacks
-      // shape keeps exactly one row).
-      const pinnedDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
-      expect((pinnedDump.match(/name: '@mstar-harness\/dsh'/g) ?? []).length, 'exactly one mstar loader row after pinned re-add').toBe(1)
-    }
     // Vintage arm (Task 1 pattern): the cell-1 preset-selection assertion
     // below runs only against an artifact that carries the ported channel —
     // a published artifact still on the removed per-start persona slot does
