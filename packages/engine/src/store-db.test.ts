@@ -35,9 +35,11 @@ import {
   compareVersions,
   initializeStore,
   openStore,
+  readAppliedMigrations,
   readStoreAuthority,
   SettlementAttestationNeeded,
   upgradeStore,
+  validateAppliedMigrations,
   type StoreContext,
 } from "./store-db.js";
 import { withRawRead } from "./store-file-probe.js";
@@ -1980,5 +1982,124 @@ describe("migration 18 - the run lease", () => {
       { direction: "push", run_id: "run-1", holder_pid: 42 },
     ]);
     db.close();
+  });
+});
+
+describe("migration 20 - the cutover fence preserves catalog pins", () => {
+  test("a schema-19 store with existing pins upgrades without losing them and refuses an old reader", async () => {
+    const dir = mkdtempSync(join(ROOT, "cutover-pins-upgrade-"));
+    // A store written by the pre-cutover schema, its catalog pins populated
+    // BEFORE the upgrade.
+    const before = historicalStore(dir, 19);
+    before.prepare(
+      "insert into catalog_entities(kind,id,title,root_kind,relative_path,lifecycle,revision,registered_at,updated_at)" +
+        " values ('plan','plan-pin','Pinned plan','plans','plan-pin.md','active',4,'2026-11-01T00:00:00.000Z','2026-11-01T00:00:00.000Z')",
+    ).run();
+    before.prepare(
+      "insert into catalog_entities(kind,id,title,root_kind,relative_path,lifecycle,revision,registered_at,updated_at)" +
+        " values ('iteration','iteration-pin','Pinned iteration','iterations','iteration-pin/compass.md','active',2,'2026-11-01T00:00:00.000Z','2026-11-01T00:00:00.000Z')",
+    ).run();
+    const insertPin = before.prepare(
+      "insert into catalog_execution_bindings(workflow_id,catalog_kind,catalog_id,workflow_root_kind,workflow_relative_path," +
+        "catalog_revision,input_hash,pin_json,operation_id) values (?,?,?,?,?,?,?,?,?)",
+    );
+    insertPin.run("wf-plan", "plan", "plan-pin", "plans", "plan-pin.md", 4, "hash-plan", '{"pin":"plan"}', "op-plan");
+    insertPin.run(
+      "wf-iteration",
+      "iteration",
+      "iteration-pin",
+      "iterations",
+      "iteration-pin/compass.md",
+      2,
+      "hash-iteration",
+      '{"pin":"iteration"}',
+      "op-iteration",
+    );
+    const pinColumns = [
+      "workflow_id",
+      "catalog_kind",
+      "catalog_id",
+      "workflow_root_kind",
+      "workflow_relative_path",
+      "catalog_revision",
+      "input_hash",
+      "pin_json",
+      "operation_id",
+    ];
+    const pinsBefore = before
+      .prepare(`select ${pinColumns.join(", ")} from catalog_execution_bindings order by workflow_id`)
+      .all();
+    expect(pinsBefore).toHaveLength(2);
+    // The pre-cutover pin still carries its cross-domain catalog foreign key
+    // (one composite key, reported as one row per column).
+    expect(
+      (before.prepare("pragma foreign_key_list(catalog_execution_bindings)").all() as Array<{
+        table?: unknown;
+        from?: unknown;
+        to?: unknown;
+      }>).map((key) => [key.table, key.from, key.to]),
+    ).toEqual([
+      ["catalog_entities", "catalog_kind", "kind"],
+      ["catalog_entities", "catalog_id", "id"],
+    ]);
+    before.close();
+
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+
+    const upgraded = await openStore({ harnessDir: dir }, "read");
+    try {
+      const { db } = upgraded;
+      expect(upgraded.schemaVersion).toBe(MIGRATIONS.length);
+      // Same columns, same rows, same values: the pin is untouched.
+      expect(
+        (db.prepare("pragma table_info(catalog_execution_bindings)").all() as Array<{ name?: unknown }>).map(
+          (column) => column.name,
+        ),
+      ).toEqual(pinColumns);
+      expect(
+        db.prepare(`select ${pinColumns.join(", ")} from catalog_execution_bindings order by workflow_id`).all(),
+      ).toEqual(pinsBefore);
+      // The portable catalog identity (now living in the collaboration lane) is
+      // untouched by the migration that detaches the pin's foreign key.
+      expect(db.prepare("select kind, id, revision from catalog_entities order by kind").all()).toEqual([
+        { kind: "iteration", id: "iteration-pin", revision: 2 },
+        { kind: "plan", id: "plan-pin", revision: 4 },
+      ]);
+      // The cross-domain constraint is gone and no row violates anything else.
+      expect(db.prepare("pragma foreign_key_list(catalog_execution_bindings)").all()).toEqual([]);
+      expect(db.prepare("pragma foreign_key_check").all()).toEqual([]);
+      // The fence ledger arrives empty: a store that never ran the cutover
+      // reports no fence at all.
+      expect(db.prepare("select count(*) as n from collaboration_cutover").get()).toEqual({ n: 0 });
+
+      // An OLD reader - the pre-cutover migration prefix - refuses this file
+      // instead of reopening it with the pin's foreign key assumed.
+      let oldReader: { code?: string; details?: Record<string, unknown> } = {};
+      try {
+        validateAppliedMigrations(readAppliedMigrations(db, false), MIGRATIONS.slice(0, -1));
+      } catch (error) {
+        const typed = error as { code?: string; details?: Record<string, unknown> };
+        oldReader = { code: typed.code, details: typed.details };
+      }
+      expect(oldReader.code).toBe("store.schema-unsupported");
+      expect(oldReader.details).toMatchObject({
+        storeSchemaVersion: MIGRATIONS.length,
+        supportedSchemaMax: MIGRATIONS.length - 1,
+        firstUnsupportedMigration: MIGRATIONS.length,
+      });
+    } finally {
+      upgraded.close();
+    }
+
+    // The ordinary open path still refuses a damaged applied set as designed.
+    const tampered = new DatabaseSync(join(dir, "store.db"));
+    try {
+      tampered.exec("delete from schema_version where version = 10");
+    } finally {
+      tampered.close();
+    }
+    await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({ code: "store.schema-drift" });
+
+    rmSync(dir, { recursive: true, force: true });
   });
 });
