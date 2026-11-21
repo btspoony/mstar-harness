@@ -45,11 +45,14 @@ const failure = (error: unknown): CommandEnvelope<never> => {
     });
   }
   const { code, details, recovery } = engineErrorFacts(error);
-  if (code === undefined) return { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message };
+  if (code === undefined) return {
+    version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message,
+    recovery: "Correct the reported condition, then rerun the gate. Run mstar pr merge-gate --pr <n>.",
+  };
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
     details: details ?? {},
-    recovery: recovery ?? "Correct the reported condition, then rerun the gate.",
+    recovery: recovery ?? "Correct the reported condition, then rerun the gate. Run mstar pr merge-gate --pr <n>.",
   });
 };
 

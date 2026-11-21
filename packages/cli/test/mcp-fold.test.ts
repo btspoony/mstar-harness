@@ -21,8 +21,12 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * example must carry every field the tool REQUIRES (`"action":"schema"`), and a
  * family that publishes an identity selector also publishes the per-action
  * `x-mstar-selectors` index a host-side injector reads.
+ *
+ * Re-taken for the `pr` family: the §5.3a merge gate is published as its own
+ * tool rather than folded into `mstar_pr_review`, so a pre-merge check does not
+ * read as a review action (measured 33_935 at that change).
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 33_797;
+const PUBLISHED_SURFACE_CEILING_CHARS = 33_935;
 
 type PublishedTool = Readonly<{
   name: string;
