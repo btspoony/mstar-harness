@@ -46,7 +46,7 @@ export type { RoadmapValidation } from "./roadmap-content.js";
 export { ROADMAP_STATUSES };
 import { isPlainObject } from "./coordination-write.js";
 import { createHash } from "node:crypto";
-import { openStore, readStoreAuthority, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
 import {
   openCollaborationStore,
   withCollaborationWrite,
@@ -57,6 +57,7 @@ import {
   validateResidual,
   type ResidualEntry,
 } from "./status.js";
+import { readCollaborationObservation, type CompleteCollaborationObservation } from "./issue.js";
 
 /** Roadmap file name inside `projects/<id>/`: legacy layout reference and transport candidate, never a live writer target. */
 export const PROJECT_ROADMAP_FILE = "roadmap.md";
@@ -287,18 +288,7 @@ export async function observePlanFindings(context: StoreContext, planId: string)
     // the rows it was evaluated against come from the same instant.
     db.exec("begin");
     try {
-      const asOf = new Date().toISOString();
-      const meta = db
-        .prepare("select revision, catalog_revision from collaboration_meta where id = 1")
-        .get() as { revision?: unknown; catalog_revision?: unknown } | undefined;
-      const revision = meta?.revision;
-      const catalogRevision = meta?.catalog_revision;
-      if (typeof revision !== "number" || typeof catalogRevision !== "number") {
-        throw new StoreError(
-          "collaboration.unreadable",
-          "The collaboration authority has no readable revision counters; the findings observation cannot be established.",
-        );
-      }
+      const observation = readCollaborationObservation(handle, { kind: "plan", key: planId });
       const rows = db
         .prepare(
           "select issues.id as id, issues.severity as severity from issues " +
@@ -307,17 +297,7 @@ export async function observePlanFindings(context: StoreContext, planId: string)
         )
         .all(planId) as Array<{ id: string; severity: string }>;
       return {
-        scope: { kind: "plan", key: planId },
-        completeness: "complete",
-        asOf,
-        authority: {
-          repoKey: handle.authority.repoKey,
-          mode: handle.authority.mode,
-          storeId: handle.authority.storeId,
-          epoch: handle.authority.epoch,
-        },
-        revision,
-        catalogRevision,
+        ...observation,
         open: rows.map((row) => ({ id: row.id, severity: normalizeSeverity(row.severity) as Severity })),
       };
     } finally {
@@ -586,19 +566,34 @@ function bindingRow(db: StoreDb, projectId: string): ProjectBinding | null {
  * `linear.binding-absent` (plan Task 5 read path). Read-only: no projection
  * refresh, no mutation, so a dashboard or import entry can ask it freely.
  */
-export async function readProjectBinding(context: StoreContext, projectId: string): Promise<ProjectBindingRead> {
+export async function readProjectBinding(
+  context: StoreContext,
+  projectId: string,
+): Promise<ProjectBindingRead & { collaboration: CompleteCollaborationObservation }> {
   if (typeof projectId !== "string" || projectId.trim() === "") {
     throw new BindingError("linear.binding-invalid", "A non-empty project id is required.");
   }
   const handle = await openCollaborationStore(context, "read");
   try {
-    const binding = bindingRow(handle.db, projectId.trim());
-    if (binding !== null) return { kind: "bound", binding };
+    const db = handle.db;
+    db.exec("begin");
+    const collaboration = readCollaborationObservation(handle, { kind: "project", key: projectId.trim() });
+    const binding = bindingRow(db, projectId.trim());
+    db.exec("commit");
+    if (binding !== null) return { kind: "bound", binding, collaboration };
     return {
       kind: "absent",
       code: "linear.binding-absent",
       message: `Project ${projectId.trim()} mirrors no external project yet. Bind one with \`mstar project bind --project ${projectId.trim()} --provider linear --remote-project <name-or-id> --operation <id>\`.`,
+      collaboration,
     };
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }

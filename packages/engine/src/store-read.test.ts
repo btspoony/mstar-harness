@@ -872,7 +872,11 @@ describe("issue views", () => {
 
     const full = await withStoreRead(context, queryDashboard("issues"));
     const domain = await listIssues(context, {});
-    expect(full.data).toEqual(domain);
+    // The domain reader attaches the observation of its own read; the dashboard
+    // DTO keeps the page shape and the envelope carries that observation.
+    const { collaboration: domainEvidence, ...domainPage } = domain;
+    expect(full.data).toEqual(domainPage);
+    expect(domainEvidence.completeness).toBe("complete");
     // Severity rank desc, then last real activity desc with a null date last.
     expect(full.data.items.map((item) => item.id)).toEqual(["I-000001", "I-000002", "I-000003", "I-000004", "I-000006"]);
 
@@ -911,7 +915,10 @@ describe("issue views", () => {
       db.prepare("insert into provenance(issue_id, kind, target, source_hash, origin) values ('I-000001', 'capture', 'audit/x.md', 'hash', 'unscoped')").run();
     });
     const envelope = await withStoreRead(context, queryDashboard("issue-detail", { id: "I-000001" }));
-    expect(envelope.data).toEqual(await getIssue(context, "I-000001"));
+    const direct = await getIssue(context, "I-000001");
+    const { collaboration: detailEvidence, ...directDetail } = direct;
+    expect(envelope.data).toEqual(directDetail);
+    expect(detailEvidence.completeness).toBe("complete");
     expect(envelope.data.occurrences).toHaveLength(1);
     await expect(withStoreRead(context, queryDashboard("issue-detail", { id: "I-999999" }))).rejects.toMatchObject({
       code: "issue.not-found",

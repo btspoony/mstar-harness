@@ -211,7 +211,12 @@ describe("readDashboardView over a real store", () => {
       id: "I-000001",
     });
     const detail: IssueDetail = envelope.data as IssueDetail;
-    expect(detail).toEqual(await getIssue(context, "I-000001"));
+    // The domain reader also stamps its own observation; the dashboard DTO keeps
+    // the detail shape and the envelope carries that observation.
+    const direct = await getIssue(context, "I-000001");
+    const { collaboration: detailEvidence, ...directDetail } = direct;
+    expect(detail).toEqual(directDetail);
+    expect(detailEvidence.completeness).toBe("complete");
     expect(typeof envelope.storeRevision).toBe("number");
     expect(envelope.catalogRevision).toBe(0);
   });

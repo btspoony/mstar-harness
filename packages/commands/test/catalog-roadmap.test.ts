@@ -2,17 +2,20 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
-import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getMilestoneCommandDefinitions } from "../src/families/milestone.js";
 import {
+  ensureCollaborationAuthority,
   initializeCollaborationStore,
   initializeStore,
+  readCollaborationAuthority,
   registerCatalogEntity,
   resolveCollaborationLocation,
+  writeCollaborationBinding,
 } from "@mstar-harness/engine";
 import { getCatalogCommandDefinitions, getRoadmapCommandDefinitions } from "../src/index.js";
+import { getProjectCommandDefinitions } from "../src/families/project.js";
 import { failure as catalogFailure } from "../src/families/catalog.js";
 import { failure as roadmapFailure } from "../src/families/roadmap.js";
 
@@ -45,6 +48,7 @@ function invocation(cwd: string): InvocationContext {
 
 const catalog = Object.fromEntries(getCatalogCommandDefinitions().map((definition) => [definition.id, definition]));
 const roadmap = Object.fromEntries(getRoadmapCommandDefinitions().map((definition) => [definition.id, definition]));
+const project = Object.fromEntries(getProjectCommandDefinitions().map((definition) => [definition.id, definition]));
 const markdown = (title: string) => `---\nproject_id: proj\ntitle: ${JSON.stringify(title)}\nstatus: active\ncreated_at: 2026-09-26\n---\n\n## Direction\n\nReviewed roadmap content.\n`;
 
 /** A synthetic checkout whose origin names the collaboration repository. */
@@ -60,21 +64,13 @@ function checkout(name: string, originSlug = name): { cwd: string; harness: stri
 }
 
 /** The private staged record flipped to active: this plan ships no public activator. */
-function activate(harness: string): void {
-  const db = new DatabaseSync(resolveCollaborationLocation({ harnessDir: harness }).dbPath);
-  try {
-    db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
-  } finally {
-    db.close();
-  }
-}
-
 async function activeFixture(name: string): Promise<{ cwd: string; harness: string }> {
   const { cwd, harness } = checkout(name);
   const store = await initializeStore({ harnessDir: harness });
   store.close();
-  await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
-  activate(harness);
+  // The supported bootstrap records this checkout's binding as well as publishing
+  // the lane; a bare state flip leaves every write refusing `stale-binding`.
+  await ensureCollaborationAuthority({ harnessDir: harness });
   await registerCatalogEntity({ harnessDir: harness }, {
     kind: "project", id: "proj", title: "Project", rootKind: "projects", relativePath: "proj",
   }, { operationId: `${name}-project`, actor: "test" });
@@ -176,6 +172,9 @@ describe("catalog and roadmap command families", () => {
     // catalog content and no execution store reads the same logical rows: the
     // project location resolves against THIS checkout and is disclosed absent.
     const clone = checkout("catalog-read-data-clone", "catalog-read-data");
+    // Reading a live authority requires this checkout's own recorded binding; a
+    // bare clone is a foreign checkout, never an implicit reader.
+    writeCollaborationBinding({ harnessDir: clone.harness }, await readCollaborationAuthority({ harnessDir: harness }));
     const cloneList = await catalog["catalog.list"]!.execute({ harness: clone.harness, kind: "project" }, invocation(clone.cwd));
     expect(cloneList.status).toBe("ok");
     const cloneShow = await catalog["catalog.show"]!.execute({ harness: clone.harness, kind: "project", id: "proj" }, invocation(clone.cwd));
@@ -507,6 +506,77 @@ describe("catalog and roadmap command families", () => {
     expect(shown.status).toBe("ok");
     if (shown.status === "ok") {
       expect(shown.data.content.frontmatter.title).toBe(title);
+    }
+  });
+
+  test("collaboration command evidence: catalog, roadmap export and project show share their read's observation", async () => {
+    const { cwd, harness } = await activeFixture("command-evidence");
+    type Evidence = { scope: { kind: string; key: string }; completeness: string; asOf: string; revision: number };
+    // The command envelope's `data`/`details` are open records; narrow once here
+    // instead of asserting a fabricated shape at each read site.
+    const observation = (container: unknown): Evidence => {
+      if (container === null || typeof container !== "object" || !("collaboration" in container)) {
+        throw new Error("the command output carries no collaboration observation");
+      }
+      const value = container.collaboration;
+      if (value === null || typeof value !== "object") throw new Error("malformed collaboration observation");
+      if (!("scope" in value) || value.scope === null || typeof value.scope !== "object") throw new Error("missing collaboration scope");
+      const scope = value.scope;
+      if (
+        !("completeness" in value) || typeof value.completeness !== "string" ||
+        !("asOf" in value) || typeof value.asOf !== "string" ||
+        !("revision" in value) || typeof value.revision !== "number" ||
+        !("kind" in scope) || typeof scope.kind !== "string" ||
+        !("key" in scope) || typeof scope.key !== "string"
+      ) {
+        throw new Error("incomplete collaboration observation");
+      }
+      expect(value.completeness).toBe("complete");
+      expect(Number.isNaN(Date.parse(value.asOf))).toBe(false);
+      return { scope: { kind: scope.kind, key: scope.key }, completeness: value.completeness, asOf: value.asOf, revision: value.revision };
+    };
+
+    const listed = await catalog["catalog.list"]!.execute({ harness }, invocation(cwd));
+    expect(listed.status).toBe("ok");
+    if (listed.status === "ok") {
+      const evidence = observation(listed.data);
+      expect(evidence.scope.kind).toBe("query");
+      expect(evidence.scope.key.startsWith("catalog:")).toBe(true);
+    }
+
+    const shownCatalog = await catalog["catalog.show"]!.execute({ kind: "project", id: "proj", harness }, invocation(cwd));
+    expect(shownCatalog.status).toBe("ok");
+    if (shownCatalog.status === "ok") {
+      expect(observation(shownCatalog.data).scope).toEqual({ kind: "query", key: "catalog:project:proj" });
+    }
+
+    const exported = await roadmap["roadmap.export"]!.execute({ project: "proj", format: "json", harness }, invocation(cwd));
+    expect(exported.status).toBe("ok");
+    if (exported.status === "ok") {
+      const evidence = observation(exported.data);
+      // The export's counters and its evidence come from the same read; the
+      // roadmap view is project-scoped.
+      if (exported.data === null || typeof exported.data !== "object" || !("storeRevision" in exported.data) || typeof exported.data.storeRevision !== "number") {
+        throw new Error("roadmap export carries no storeRevision");
+      }
+      expect(evidence.revision).toBe(exported.data.storeRevision);
+      expect(evidence.scope).toEqual({ kind: "project", key: "proj" });
+    }
+
+    const binding = await project["project.show"]!.execute({ project: "proj", harness }, invocation(cwd));
+    expect(binding.status).toBe("ok");
+    if (binding.status === "ok") {
+      expect(observation(binding.data).scope).toEqual({ kind: "project", key: "proj" });
+      // A named absence keeps its own keys AND the observation of the read.
+      expect(binding.data).toMatchObject({ kind: "absent", code: "linear.binding-absent" });
+    }
+
+    const missing = await roadmap["roadmap.export"]!.execute({ project: "not-registered", format: "json", harness }, invocation(cwd));
+    expect(missing).toMatchObject({ status: "refused", code: "roadmap.project-not-found" });
+    if (missing.status !== "ok") {
+      // No fabricated record: the refusal names its own code and carries the
+      // complete observation the read established.
+      expect(observation(missing.details).scope).toEqual({ kind: "project", key: "not-registered" });
     }
   });
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test } from "bun:test";
-import { MIGRATIONS, encodeExecutionSessionRef, initializeStore } from "@mstar-harness/engine";
+import { MIGRATIONS, encodeExecutionSessionRef, ensureCollaborationAuthority, initializeStore } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import { workflowCloseRecovery } from "../src/families/status.js";
 import type { InvocationContext } from "../src/types.js";
@@ -131,10 +131,56 @@ describe("status command family", () => {
   test("reads tech-debt rollup data from the issue store", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "status-tech-debt-"));
     try {
+      execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
+      writeFileSync(path.join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${dir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
+      await ensureCollaborationAuthority({ harnessDir: dir });
       const store = await initializeStore({ harnessDir: dir });
       store.close();
       const result = await statusDefinition("status.tech-debt").execute({ harness: dir }, context(dir));
       expect(result).toMatchObject({ status: "ok", code: "status.ok", data: { total_open: 0, by_severity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 }, by_project: {} } });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("collaboration command evidence: tech-debt reports its rollup's scope, revision and snapshot time", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "status-tech-debt-evidence-"));
+    try {
+      // Issue authority is the repository's collaboration lane, so the fixture
+      // needs a real checkout identity before a store can be created at all.
+      execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
+      writeFileSync(path.join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${dir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
+      await ensureCollaborationAuthority({ harnessDir: dir });
+      const store = await initializeStore({ harnessDir: dir });
+      store.close();
+      const result = await statusDefinition("status.tech-debt").execute({ harness: dir }, context(dir));
+      expect(result).toMatchObject({ status: "ok", code: "status.ok", data: { total_open: 0, by_severity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 }, by_project: {} } });
+      if (result.status !== "ok") return;
+      const data = result.data as {
+        collaboration?: { scope?: { kind?: string; key?: string }; completeness?: string; asOf?: string; revision?: number };
+      };
+      expect(data.collaboration).toMatchObject({
+        scope: { kind: "query", key: "open-issues:*" },
+        completeness: "complete",
+        revision: 0,
+      });
+      expect(Number.isNaN(Date.parse(String(data.collaboration?.asOf)))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("collaboration command evidence: an execution-only status view never queries collaboration", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "status-execution-only-"));
+    try {
+      // A checkout with no origin and no [collaboration] identity: if this view
+      // touched collaboration it could not answer at all.
+      execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
+      mkdirSync(path.join(dir, ".mstar"), { recursive: true });
+      const store = await initializeStore({ harnessDir: path.join(dir, ".mstar") });
+      store.close();
+      const result = await statusDefinition("status.validate").execute({}, context(dir));
+      expect(result.status).toBe("ok");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

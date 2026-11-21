@@ -12,7 +12,8 @@
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
 import { openCollaborationStore, withCollaborationWrite, type CollaborationStoreHandle } from "./collaboration-store.js";
-import { MIGRATIONS, type StoreContext, type StoreDb } from "./store-db.js";
+import { MIGRATIONS, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
+import type { CollaborationObservation, CollaborationScope } from "./project.js";
 
 
 /**
@@ -1113,6 +1114,52 @@ const LAST_ACTIVITY_SQL = `(select max(ts) from (
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
 ))`;
 
+/** The complete arm of a collaboration observation: the only arm an in-domain read builds. */
+export type CompleteCollaborationObservation = Extract<CollaborationObservation, { completeness: "complete" }>;
+
+/**
+ * The complete observation of one domain read: the scope, the authority and the
+ * revision counters read INSIDE the caller's own open handle, so the evidence a
+ * consumer receives and the rows it stamps are one snapshot. It lives here
+ * rather than in `project.ts` so `project.ts` and `catalog.ts` can share it
+ * without adding a runtime module cycle (`project -> status -> issue`).
+ */
+export function readCollaborationObservation(
+  handle: CollaborationStoreHandle,
+  scope: CollaborationScope,
+): CompleteCollaborationObservation {
+  const asOf = new Date().toISOString();
+  const meta = handle.db.prepare("select revision, catalog_revision from collaboration_meta where id = 1").get() as
+    | { revision?: unknown; catalog_revision?: unknown }
+    | undefined;
+  const revision = meta?.revision;
+  const catalogRevision = meta?.catalog_revision;
+  if (typeof revision !== "number" || typeof catalogRevision !== "number") {
+    throw new StoreError(
+      "collaboration.unreadable",
+      "The collaboration authority has no readable revision counters; this read cannot state the snapshot it answered at.",
+    );
+  }
+  const { repoKey, mode, storeId, epoch } = handle.authority;
+  return { scope, completeness: "complete", asOf, authority: { repoKey, mode, storeId, epoch }, revision, catalogRevision };
+}
+
+/** The canonical scope key of one issue page: the filters with the applied bounds. */
+function issuePageScope(filter: IssueFilter, limit: number, offset: number): CollaborationScope {
+  return {
+    kind: "query",
+    key: `issues:${JSON.stringify({
+      projectId: filter.projectId ?? null,
+      disposition: filter.disposition ?? "open",
+      kind: filter.kind ?? null,
+      severity: filter.severity ?? null,
+      query: filter.query ?? null,
+      limit,
+      offset,
+    })}`,
+  };
+}
+
 function bindFilter(filter: IssueFilter): { where: string; params: unknown[] } {
   const clauses: string[] = [];
   const params: unknown[] = [];
@@ -1148,7 +1195,10 @@ function bindFilter(filter: IssueFilter): { where: string; params: unknown[] } {
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 
-export async function listIssues(context: StoreContext, filter: IssueFilter): Promise<IssuePage> {
+export async function listIssues(
+  context: StoreContext,
+  filter: IssueFilter,
+): Promise<IssuePage & { collaboration: CompleteCollaborationObservation }> {
   const limit = filter.limit ?? 50;
   const offset = filter.offset ?? 0;
   if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(offset) || offset < 0) {
@@ -1158,10 +1208,12 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
   const handle = await openCollaborationStore(context, "read");
   try {
     const db = handle.db;
+    db.exec("begin");
     // The collaboration lane owns issue read authority: a staged or foreign
     // store never reaches this point, and no legacy schema gate applies — the
     // lane is created complete.
     assertIssueStoreActive(db);
+    const collaboration = readCollaborationObservation(handle, issuePageScope(filter, limit, offset));
     const storeRevision = readMeta(db).revision;
     const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
     const spanRow = db
@@ -1191,6 +1243,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
       milestoneId?: string | null;
       lastActivity: string | null;
     }>;
+    db.exec("commit");
     return {
       items: rows.map((row) => ({
         id: row.id,
@@ -1207,19 +1260,32 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
       total: totalRow.n,
       projectCount: spanRow.n,
       storeRevision,
+      collaboration,
     };
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }
 }
 
-export async function getIssue(context: StoreContext, id: string): Promise<IssueDetail> {
+export async function getIssue(
+  context: StoreContext,
+  id: string,
+): Promise<IssueDetail & { collaboration: CompleteCollaborationObservation }> {
   const handle = await openCollaborationStore(context, "read");
   try {
     const db = handle.db;
+    db.exec("begin");
     // Same authority and same gate as listIssues: the collaboration lane keeps
     // its complete shape, so no legacy per-table schema probe applies.
     assertIssueStoreActive(db);
+    const collaboration = readCollaborationObservation(handle, { kind: "query", key: `issue:${id}` });
     const issue = db
       .prepare(
         `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, milestone_id, provider, external_id, url, identity_key from issues where id = ?`,
@@ -1404,7 +1470,15 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       relations,
       provenance,
       projectMoves,
+      collaboration,
     };
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }
