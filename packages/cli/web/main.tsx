@@ -34,6 +34,7 @@ import {
   MS_PANE_HEAD_CLASS,
   MS_THEME_ATTRIBUTE,
   Nav,
+  Notice,
   Overview,
   ProjectDetail,
   Projects,
@@ -93,8 +94,10 @@ import {
 import {
   readWorkflowDetail,
   readWorkflows,
+  workflowDetailCatalogNotice,
   workflowDetailCopy,
   workflowDetailOutcome,
+  workflowsCatalogNotice,
   workflowsCopy,
   workflowsOutcome,
   type WorkflowDetailOutcome,
@@ -464,19 +467,28 @@ function WorkflowsDestination(props: { address: Address }) {
     );
   }
 
+  // The rows are execution data and stay; an unavailable catalog association is
+  // stated above them instead of leaving its join cell to read as a healthy `—`.
+  const catalogNotice = workflowsCatalogNotice(outcome, copy);
+
   return (
-    <Workflows
-      model={outcome.model}
-      // The head's closing segment reads the envelope's own revision, which the model does
-      // not carry: it is a fact about the read, not about a workflow.
-      {...(raw !== null && raw.status === "ready" ? { storeRevision: raw.envelope.storeRevision } : {})}
-      filters={filters}
-      onFiltersChange={setFilters}
-      copy={workflowsCopy(copy)}
-      onOpen={(id) => {
-        navigate({ name: "workflow", id }, props.address.query, "push");
-      }}
-    />
+    <>
+      {catalogNotice === null ? null : <Notice lead={catalogNotice.lead} reason={catalogNotice.reason} />}
+      <Workflows
+        model={outcome.model}
+        // The head's closing segment reads the envelope's own revision, which the model does
+        // not carry: it is a fact about the read, not about a workflow.
+        {...(raw !== null && raw.status === "ready" && raw.envelope.storeRevision !== null
+          ? { storeRevision: raw.envelope.storeRevision }
+          : {})}
+        filters={filters}
+        onFiltersChange={setFilters}
+        copy={workflowsCopy(copy)}
+        onOpen={(id) => {
+          navigate({ name: "workflow", id }, props.address.query, "push");
+        }}
+      />
+    </>
   );
 }
 
@@ -510,15 +522,22 @@ function WorkflowDetailDestination(props: { id: string }) {
     );
   }
 
+  // The execution record stays; an unavailable catalog association is stated
+  // above it, exactly as the list states the same optional gap.
+  const catalogNotice = workflowDetailCatalogNotice(outcome, copy);
+
   return (
-    <WorkflowDetail
-      model={outcome.model}
-      copy={workflowDetailCopy(copy)}
-      onBack={() => {
-        const target = detailReturnTarget(parseRoute(window.location.hash));
-        if (target !== null) navigate(target.route, target.query, "push");
-      }}
-    />
+    <>
+      {catalogNotice === null ? null : <Notice lead={catalogNotice.lead} reason={catalogNotice.reason} />}
+      <WorkflowDetail
+        model={outcome.model}
+        copy={workflowDetailCopy(copy)}
+        onBack={() => {
+          const target = detailReturnTarget(parseRoute(window.location.hash));
+          if (target !== null) navigate(target.route, target.query, "push");
+        }}
+      />
+    </>
   );
 }
 
@@ -843,9 +862,12 @@ function Shell(props: {
           },
         }
       : storeOutcome;
-  const revision = storeOutcome.kind === "ready" ? storeOutcome.revision : null;
+  // The footer's two facts are the page's own read, not a side read: the model
+  // downgrades an incomplete collaboration observation, so a suppressed count or
+  // revision is suppressed here too.
+  const revision = pageOutcome.kind === "ready" ? pageOutcome.revision : null;
   // The prototype's footer opens with the open-issue count, then the store revision.
-  const residuals = storeOutcome.kind === "ready" ? storeOutcome.model.residuals : null;
+  const residuals = pageOutcome.kind === "ready" ? pageOutcome.model.residuals : null;
   const openIssues = residuals !== null && residuals.kind === "populated" ? residuals.value.total : null;
 
   useEffect(() => {

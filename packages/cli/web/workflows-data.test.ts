@@ -10,21 +10,24 @@ import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReadEnvelope, WorkflowDTO, WorkflowListDTO } from "@mstar-harness/engine";
-import { WorkflowDetail, Workflows, copyFor, workflowDetailModel } from "@mstar-harness/ui";
+import { WorkflowDetail, Workflows, copyFor, workflowDetailModel, Notice } from "@mstar-harness/ui";
 
 import { ABSENT_PROJECTION } from "./absent-projection";
 import {
   WORKFLOWS_PATH,
   readWorkflowDetail,
   readWorkflows,
+  workflowDetailCatalogNotice,
   workflowDetailCopy,
   workflowDetailOutcome,
   workflowDetailPath,
+  workflowsCatalogNotice,
   workflowsCopy,
   workflowsOutcome,
 } from "./workflows-data";
 
 const projection = {
+  observed: true,
   generation: 7,
   freshness: "current" as const,
   builtAt: "2026-10-25T05:00:00.000Z",
@@ -54,6 +57,8 @@ const listEnvelope = (items: WorkflowDTO[], total: number, generation: number | 
   storeRevision: 1224,
   catalogRevision: 9,
   projection: { ...projection, generation },
+  collaboration: null,
+  execution: null,
 });
 
 const renderList = (items: WorkflowDTO[], total: number, generation: number | null = 7): string => {
@@ -83,6 +88,78 @@ describe("the list read", () => {
     const html = renderList([], 0, null);
     expect(html).toContain('data-ms-absence="unavailable"');
     expect(html).not.toContain('data-ms-absence="empty"');
+  });
+
+  test("an unavailable optional catalog does not fail the workflow list", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify({
+          ...listEnvelope([row()], 1),
+          collaboration: {
+            scope: { kind: "query", key: "workflows" },
+            completeness: "unavailable",
+            asOf: null,
+            authority: null,
+            code: "collaboration.not-initialized",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readWorkflows(gapped);
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+    // The rows are execution data; the optional catalog association is disclosed,
+    // not fatal, and no collaboration counter is claimed.
+    expect(result.envelope.data.items.map((item) => item.id)).toContain("issue-project-move");
+    expect(result.envelope.collaboration?.completeness).toBe("unavailable");
+    const outcome = workflowsOutcome(result);
+    expect(outcome.kind).toBe("ready");
+    if (outcome.kind !== "ready") return;
+    expect(outcome.catalogNotice).toEqual({ completeness: "unavailable", code: "collaboration.not-initialized" });
+  });
+
+  test("the optional catalog gap is stated above the execution rows, not hidden", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify({
+          ...listEnvelope([row()], 1),
+          collaboration: {
+            scope: { kind: "query", key: "workflows" },
+            completeness: "unavailable",
+            asOf: null,
+            authority: null,
+            code: "collaboration.not-initialized",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readWorkflows(gapped);
+    if (result.status !== "ready") throw new Error("expected a ready list");
+    const outcome = workflowsOutcome(result);
+    if (outcome.kind !== "ready") throw new Error("expected a ready outcome");
+    const notice = workflowsCatalogNotice(outcome, copyFor("en"));
+    expect(notice).not.toBeNull();
+    if (notice === null) return;
+    expect(notice.reason).toContain("collaboration.not-initialized");
+    // The host's composition: a warning notice above the same screen's rows.
+    const html = renderToStaticMarkup(
+      createElement(
+        "div",
+        null,
+        createElement(Notice, { lead: notice.lead, reason: notice.reason }),
+        createElement(Workflows, { model: outcome.model, copy: workflowsCopy(copyFor("en")) }),
+      ),
+    );
+    expect(html).toContain('data-ms-notice-tone="warning"');
+    expect(html).toContain("collaboration.not-initialized");
+    expect(html).toContain("issue-project-move");
+  });
+
+  test("a complete observation states no catalog gap", () => {
+    const outcome = workflowsOutcome({ status: "ready", envelope: listEnvelope([row()], 1) });
+    if (outcome.kind !== "ready") throw new Error("expected a ready outcome");
+    expect(outcome.catalogNotice).toBeNull();
+    expect(workflowsCatalogNotice(outcome, copyFor("en"))).toBeNull();
   });
 
   test("truncation is disclosed from the store's total, not the item count", () => {
@@ -168,6 +245,62 @@ describe("the detail read", () => {
     expect(outcome.model.kind).toBe("absent");
     // The one shape every detail pair uses for "there is no record here".
     expect(workflowDetailModel({ data: null, projection: ABSENT_PROJECTION }).kind).toBe("absent");
+  });
+
+  test("a detail catalog gap is stated above the preserved execution record", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify({
+          data: row(),
+          storeRevision: 1224,
+          catalogRevision: 9,
+          projection,
+          collaboration: {
+            scope: { kind: "query", key: "workflow:issue-project-move" },
+            completeness: "unavailable",
+            asOf: null,
+            authority: null,
+            code: "collaboration.not-initialized",
+          },
+          execution: { asOf: "2026-11-21T00:00:00.000Z", storeId: "store-a", epoch: 1, revision: 4 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readWorkflowDetail(gapped, "issue-project-move");
+    if (result.status !== "ready") throw new Error("expected a ready detail");
+    const outcome = workflowDetailOutcome(result);
+    if (outcome.kind !== "ready") throw new Error("expected a ready outcome");
+    expect(outcome.catalogNotice).toEqual({ completeness: "unavailable", code: "collaboration.not-initialized" });
+    const notice = workflowDetailCatalogNotice(outcome, copyFor("en"));
+    expect(notice).not.toBeNull();
+    if (notice === null) return;
+    expect(notice.reason).toContain("collaboration.not-initialized");
+    const html = renderToStaticMarkup(
+      createElement(
+        "div",
+        null,
+        createElement(Notice, { lead: notice.lead, reason: notice.reason }),
+        createElement(WorkflowDetail, { model: outcome.model, copy: workflowDetailCopy(copyFor("en")) }),
+      ),
+    );
+    // The gap is stated and the execution record is preserved.
+    expect(html).toContain('data-ms-notice-tone="warning"');
+    expect(html).toContain("collaboration.not-initialized");
+    expect(html).toContain("issue-project-move");
+  });
+
+  test("a complete detail states no catalog gap", async () => {
+    const complete = (async () =>
+      new Response(
+        JSON.stringify({ data: row(), storeRevision: 1224, catalogRevision: 9, projection, collaboration: null, execution: null }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readWorkflowDetail(complete, "issue-project-move");
+    if (result.status !== "ready") throw new Error("expected a ready detail");
+    const outcome = workflowDetailOutcome(result);
+    if (outcome.kind !== "ready") throw new Error("expected a ready outcome");
+    expect(outcome.catalogNotice).toBeNull();
+    expect(workflowDetailCatalogNotice(outcome, copyFor("en"))).toBeNull();
   });
 
   test("every other refusal is a failure, not an absence", async () => {

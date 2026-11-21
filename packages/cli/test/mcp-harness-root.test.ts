@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import * as nodeOs from "node:os";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -6,7 +7,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
-import { captureIssue, initializeStore, openStore } from "@mstar-harness/engine";
+import { captureIssue, ensureCollaborationAuthority, initializeStore, openStore } from "@mstar-harness/engine";
 import { getCommandDefinitions, getCommandSchemas, type CommandEnvelope } from "@mstar-harness/commands";
 import { mapParserError } from "../src/command-adapter";
 import { registerMcpCommand } from "../src/mcp/command";
@@ -25,6 +26,16 @@ const roots: string[] = [];
  */
 const AMBIENT_CWD = process.cwd();
 const AMBIENT_HARNESS_DIR = process.env.MSTAR_HARNESS_DIR;
+/** The user-level collaboration lane is resolved through HOME; isolate it. */
+const LANE_HOME = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-home-"));
+const AMBIENT_HOME = process.env.HOME;
+process.env.HOME = LANE_HOME;
+// In-process resolution uses the OS homedir, not $HOME: isolate it too.
+let laneHomeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  laneHomeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => LANE_HOME);
+});
+let repoSequence = 0;
 
 afterEach(() => {
   if (process.cwd() !== AMBIENT_CWD) process.chdir(AMBIENT_CWD);
@@ -33,18 +44,36 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+afterAll(() => {
+  laneHomeSpy?.mockRestore();
+  if (AMBIENT_HOME === undefined) delete process.env.HOME;
+  else process.env.HOME = AMBIENT_HOME;
+  rmSync(LANE_HOME, { recursive: true, force: true });
+});
+
 /** why: A real Git main worktree: the resolver admits a `harness` selector only when
  * it is the fixed `.mstar` under the checkout `git worktree list` names first,
  * so every harness fixture below is a genuine repository. The path is
  * realpath'd so the returned paths compare verbatim against engine output on
- * symlinked tmpdirs.
+ * symlinked tmpdirs. The checkout also declares its collaboration identity:
+ * issue/catalog authority lives in the lane, which is scoped by the repository.
  */
 function gitMainWorktree(parent: string, name: string): string {
   const repo = path.join(parent, name);
   mkdirSync(path.join(repo, ".mstar"), { recursive: true });
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
   execFileSync("git", ["-c", "user.email=fixture@example.invalid", "-c", "user.name=fixture", "commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: repo });
+  writeFileSync(path.join(repo, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${repoSequence++}\n`);
   return realpathSync(repo);
+}
+
+/**
+ * why: Both authorities, exactly as `store init` leaves them: the collaboration
+ * lane owns issue/catalog authority, the execution store owns execution/host.
+ */
+async function initializeHarness(harness: string): Promise<void> {
+  await ensureCollaborationAuthority({ harnessDir: harness });
+  (await initializeStore({ harnessDir: harness })).close();
 }
 
 /** why: An initialized harness inside a real Git main worktree and an invocation
@@ -58,7 +87,7 @@ async function harnessOutsideCwd(): Promise<{ harness: string; cwd: string }> {
   const harness = path.join(gitMainWorktree(root, "control"), ".mstar");
   const cwd = path.join(root, "plain-cwd");
   mkdirSync(cwd, { recursive: true });
-  (await initializeStore({ harnessDir: harness })).close();
+  await initializeHarness(harness);
   return { harness, cwd };
 }
 
@@ -74,7 +103,7 @@ async function competingCwdHarness(): Promise<{ harness: string; cwd: string }> 
   const harness = path.join(gitMainWorktree(root, "control"), ".mstar");
   const cwd = path.join(root, "workspace");
   mkdirSync(path.join(cwd, ".mstar"), { recursive: true });
-  (await initializeStore({ harnessDir: harness })).close();
+  await initializeHarness(harness);
   return { harness, cwd };
 }
 
@@ -173,7 +202,7 @@ async function competingAuthorityRoots(): Promise<{ named: string; cwd: string }
   const named = path.join(gitMainWorktree(root, "control"), ".mstar");
   const cwd = path.join(root, "workspace");
   mkdirSync(path.join(cwd, ".mstar"), { recursive: true });
-  (await initializeStore({ harnessDir: named })).close();
+  await initializeHarness(named);
   await captureIssue({ harnessDir: named }, { ...CAPTURE_INPUT }, { operationId: "mcp-harness-root-capture", actor: "project-manager" });
   return { named, cwd };
 }
@@ -799,8 +828,8 @@ async function twoInitializedHarnesses(): Promise<{ named: string; other: string
   roots.push(root);
   const named = path.join(gitMainWorktree(root, "named"), ".mstar");
   const other = path.join(gitMainWorktree(root, "other"), ".mstar");
-  (await initializeStore({ harnessDir: named })).close();
-  (await initializeStore({ harnessDir: other })).close();
+  await initializeHarness(named);
+  await initializeHarness(other);
   await captureIssue({ harnessDir: named }, { ...CAPTURE_INPUT }, { operationId: "mcp-harness-root-selector", actor: "project-manager" });
   return { named, other };
 }
@@ -813,7 +842,7 @@ async function relativeRootWorkspace(): Promise<{ base: string; harness: string;
   const base = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
   roots.push(base);
   const harness = path.join(gitMainWorktree(base, "x"), ".mstar");
-  (await initializeStore({ harnessDir: harness })).close();
+  await initializeHarness(harness);
   await captureIssue({ harnessDir: harness }, { ...CAPTURE_INPUT }, { operationId: "mcp-harness-root-relative", actor: "project-manager" });
   return { base, harness, selector: path.join("x", ".mstar") };
 }
@@ -869,6 +898,8 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "status.findings-cleanup": "root", "status.tech-debt": "root", "status.validate": "root",
   "status.workflow-close": "root", "store.activate": "root", "store.backup": "root",
   "store.execution.export": "none", "store.execution.restore": "none", "store.execution.restore-preview": "none",
+  "store.collaboration.activate": "none", "store.collaboration.apply": "none",
+  "store.collaboration.plan": "none", "store.collaboration.restore": "none", "store.collaboration.adopt": "root",
   "store.init": "root", "store.migrate": "root", "store.retire": "root",
   "store.upgrade": "root", "workflow-note.append": "root", "workflow-note.coverage": "root",
   "workflow.adopt-terminal": "root", "workflow.compass-ref": "root", "workflow.delivery-anchors": "root", "workflow.evidence": "root",
@@ -939,6 +970,12 @@ const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record
   "store.execution.export": null,
   "store.execution.restore": null,
   "store.execution.restore-preview": null,
+  // Every collaboration verb takes an ABSOLUTE operation target and manifest
+  // path, so no path it reads resolves against the invocation directory.
+  "store.collaboration.activate": null,
+  "store.collaboration.apply": null,
+  "store.collaboration.plan": null,
+  "store.collaboration.restore": null,
   "worktree.qc-alignment": { args: { files: ["qc1.md", "qc2.md"] }, subject: "the assignment file" },
 };
 
@@ -1527,12 +1564,11 @@ describe("MCP control-root admission class", () => {
   test("an absolute harness B from a host launched in A touches only B", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
     roots.push(root);
-    const launch = path.join(root, "A");
+    const launch = gitMainWorktree(root, "A");
     const launchHarness = path.join(launch, ".mstar");
-    mkdirSync(launchHarness, { recursive: true });
-    (await initializeStore({ harnessDir: launchHarness })).close();
+    await initializeHarness(launchHarness);
     const harnessB = path.join(gitMainWorktree(root, "B"), ".mstar");
-    (await initializeStore({ harnessDir: harnessB })).close();
+    await initializeHarness(harnessB);
     const previousCwd = process.cwd();
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
     delete process.env.MSTAR_HARNESS_DIR;
@@ -1571,9 +1607,8 @@ describe("MCP control-root admission class", () => {
     // only in the WAL. This pins that contract: reading is invisible to it.
     const root = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-"));
     roots.push(root);
-    const harness = path.join(root, ".mstar");
-    mkdirSync(harness, { recursive: true });
-    (await initializeStore({ harnessDir: harness })).close();
+    const harness = path.join(gitMainWorktree(root, "read-only-control"), ".mstar");
+    await initializeHarness(harness);
     const before = await storeRowCounts(harness);
     const handle = await openStore({ harnessDir: harness }, "read");
     handle.close();
@@ -1734,6 +1769,9 @@ function twoGitWorkspaces(): { rootA: string; rootB: string; harnessA: string; h
     mkdirSync(path.join(repo, ".mstar"), { recursive: true });
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
     execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
+    // The checkout declares its collaboration identity: issue/catalog authority
+    // lives in the lane, which is scoped by the repository.
+    writeFileSync(path.join(repo, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${repoSequence++}\n`);
     return realpathSync(repo);
   };
   const rootA = make("repo-a");
@@ -1823,7 +1861,7 @@ describe("MCP per-call root selectors and operation targets", () => {
 
   test("an unpinned connection refuses to resolve paths from the host checkout by default", async () => {
     const fixture = twoGitWorkspaces();
-    (await initializeStore({ harnessDir: fixture.harnessA })).close();
+    await initializeHarness(fixture.harnessA);
     const previousCwd = process.cwd();
     const previousHarness = process.env.MSTAR_HARNESS_DIR;
     delete process.env.MSTAR_HARNESS_DIR;

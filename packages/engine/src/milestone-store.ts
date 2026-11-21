@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
+import { withCollaborationWrite } from "./collaboration-store.js";
+import type { StoreContext, StoreDb } from "./store-db.js";
 import { TERMINAL_DISPOSITIONS, type Disposition } from "./issue.js";
 import type { StoreReadQuery } from "./store-read.js";
 
@@ -13,13 +14,12 @@ export type MilestoneAssignment = { projectId: string; milestoneId: string | nul
 export type MilestoneIssueDTO = { id: string; title: string; acceptance: string; disposition: Disposition; revision: number };
 export type MilestoneRead = { projectId: string; milestones: ProjectMilestoneDTO[]; issues: Array<MilestoneIssueDTO & { milestoneId: string }>; unassignedIssues: number };
 
-type MilestoneErrorCode = "milestone.schema-outdated" | "store.not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.project-mismatch" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "store.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.empty" | "milestone.not-empty";
+type MilestoneErrorCode = "milestone.schema-outdated" | "store.not-active" | "milestone.project-not-found" | "milestone.not-found" | "milestone.project-mismatch" | "milestone.invalid-input" | "milestone.revision-conflict" | "milestone.operation-conflict" | "store.operation-conflict" | "milestone.invalid-transition" | "milestone.open-issues" | "milestone.not-empty";
 export class MilestoneError extends Error { readonly code: MilestoneErrorCode; constructor(code: MilestoneErrorCode, message: string) { super(`[${code}] ${message}`); this.name = "MilestoneError"; this.code = code; } }
 const fail = (code: MilestoneErrorCode, message: string): never => { throw new MilestoneError(code, message); };
 function guard(db: StoreDb): void {
-  const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
-  if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7) fail("milestone.schema-outdated", 'Milestones require schema 7; run "mstar store upgrade --operator <name>" first.');
-  if (readStoreAuthority(db).authorityState !== "active") fail("store.not-active", "Milestone access requires an active store.");
+  const row = db.prepare("select authority_state from collaboration_meta where id = 1").get() as { authority_state?: unknown } | undefined;
+  if (row?.authority_state !== "active") fail("store.not-active", "Milestone access requires an active collaboration authority.");
 }
 /**
  * Every terminal disposition that is retired WITHOUT being resolved — the
@@ -41,7 +41,7 @@ function validTarget(target: unknown): target is string | null {
 function validName(name: unknown): name is string { return typeof name === "string" && name.trim().length > 0; }
 function validOrdinal(ordinal: unknown): ordinal is number { return typeof ordinal === "number" && Number.isSafeInteger(ordinal) && ordinal >= 0; }
 function write<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
-  return openStore(context, "write").then(handle => { try { handle.db.exec("begin immediate"); try { const result = fn(handle.db); handle.db.exec("commit"); return result; } catch (error) { try { handle.db.exec("rollback"); } catch {} throw error; } } finally { handle.close(); } });
+  return withCollaborationWrite(context, (handle) => fn(handle.db));
 }
 function requestHash(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: MilestonePatch | MilestoneAdd, mutation: MilestoneMutation, adding: boolean): MilestoneReceipt {
@@ -50,10 +50,10 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
   if (patch.name !== undefined && !validName(patch.name)) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
   const normalizedPatch = { ...patch, ...(patch.name === undefined ? {} : { name: patch.name.trim() }) };
   const hash = requestHash({ domain: "milestone", action: adding ? "add" : "update", projectId, milestoneId: adding ? null : milestoneId, patch: normalizedPatch, expectedStoreRevision: mutation.expectedStoreRevision });
-  const prior = db.prepare("select request_hash, result_json from store_operations where operation_id=?").get(mutation.operationId) as { request_hash: string; result_json: string } | undefined;
+  const prior = db.prepare("select request_hash, result_json from collaboration_operations where key_space='standalone' and operation_id=?").get(mutation.operationId) as { request_hash: string; result_json: string } | undefined;
   if (prior) { if (prior.request_hash !== hash) fail("store.operation-conflict", "operationId was reused for a different request."); return JSON.parse(prior.result_json) as MilestoneReceipt; }
   project(db, projectId);
-  const store = db.prepare("select revision from store_meta where id=1").get() as { revision: number };
+  const store = db.prepare("select revision from collaboration_meta where id=1").get() as { revision: number };
   if (store.revision !== mutation.expectedStoreRevision) fail("milestone.revision-conflict", "Store revision changed since it was observed.");
   if (adding ? !validName(patch.name) || !validOrdinal(patch.ordinal) || !validTarget(patch.target) : (patch.name !== undefined && !validName(patch.name)) || (patch.target !== undefined && !validTarget(patch.target)) || (patch.ordinal !== undefined && !validOrdinal(patch.ordinal))) fail("milestone.invalid-input", "Name, target date, or ordinal is invalid.");
   const now = new Date().toISOString();
@@ -73,8 +73,10 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
     const transitions: Record<ProjectMilestoneStatus, ProjectMilestoneStatus[]> = { planned:["planned","active","dropped"], active:["active","planned","delivered","dropped"], delivered:["delivered","active"], dropped:["dropped","active"] };
     if (!transitions[row.status].includes(nextStatus)) fail("milestone.invalid-transition", `Cannot transition ${row.status} to ${nextStatus}.`);
     if (nextStatus === "delivered") {
-      const counts = db.prepare("select count(*) as total, sum(case when disposition='open' then 1 else 0 end) as open from issues where project_id=? and milestone_id=?").get(projectId, milestoneId) as { total:number; open:number|null };
-      if (!counts.total) fail("milestone.empty", "An empty milestone cannot be delivered.");
+      // Contract §Gates: a complete observation that proves zero open issues
+      // passes — including a milestone that links none; any open row keeps the
+      // refusal. Missing/unavailable authority refuses before this point.
+      const counts = db.prepare("select sum(case when disposition='open' then 1 else 0 end) as open from issues where project_id=? and milestone_id=?").get(projectId, milestoneId) as { open: number | null };
       if (counts.open) fail("milestone.open-issues", "A milestone with open issues cannot be delivered.");
     }
     const name = update.name === undefined ? row.name : update.name.trim();
@@ -84,10 +86,10 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
     revision = row.revision + (changed ? 1 : 0);
     if (changed) db.prepare("update project_milestones set name=?,target=?,ordinal=?,status=?,revision=?,updated_at=? where milestone_id=? and project_id=?").run(name,target,ordinal,nextStatus,revision,now,milestoneId,projectId);
   }
-  if (changed) db.prepare("update store_meta set revision=revision+1 where id=1").run();
-  const current = db.prepare("select revision from store_meta where id=1").get() as {revision:number};
+  if (changed) db.prepare("update collaboration_meta set revision=revision+1 where id=1").run();
+  const current = db.prepare("select revision from collaboration_meta where id=1").get() as {revision:number};
   const receipt: MilestoneReceipt = { projectId, milestoneId, revision, storeRevision: current.revision, changed };
-  db.prepare("insert into store_operations(operation_id,request_hash,result_json,committed_at) values(?,?,?,?)").run(mutation.operationId,hash,JSON.stringify(receipt),now);
+  db.prepare("insert into collaboration_operations(key_space,operation_id,request_hash,result_json,committed_at) values('standalone',?,?,?,?)").run(mutation.operationId,hash,JSON.stringify(receipt),now);
   return receipt;
 }
 export function addMilestone(context: StoreContext, input: MilestoneAdd, mutation: MilestoneMutation): Promise<MilestoneReceipt> { return write(context, db => mutate(db,input.projectId,"",input,mutation,true)); }
@@ -101,13 +103,13 @@ export function removeMilestone(context: StoreContext, projectId: string, milest
     guard(db);
     if (!mutation || typeof mutation.operationId !== "string" || !mutation.operationId.trim() || !Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) fail("milestone.invalid-input", "A non-empty operationId and non-negative expected store revision are required.");
     const hash = requestHash({ domain: "milestone", action: "remove", projectId, milestoneId, patch: null, expectedStoreRevision: mutation.expectedStoreRevision });
-    const prior = db.prepare("select request_hash, result_json from store_operations where operation_id=?").get(mutation.operationId) as { request_hash: string; result_json: string } | undefined;
+    const prior = db.prepare("select request_hash, result_json from collaboration_operations where key_space='standalone' and operation_id=?").get(mutation.operationId) as { request_hash: string; result_json: string } | undefined;
     if (prior) { if (prior.request_hash !== hash) fail("store.operation-conflict", "operationId was reused for a different request."); return JSON.parse(prior.result_json) as MilestoneReceipt; }
     project(db, projectId);
     // The same CAS every milestone writer takes (mutate): a removal judged
     // against a store revision that has moved is refused, never landed on a
     // newer snapshot than the one the operator reviewed.
-    const store = db.prepare("select revision from store_meta where id=1").get() as { revision: number };
+    const store = db.prepare("select revision from collaboration_meta where id=1").get() as { revision: number };
     if (store.revision !== mutation.expectedStoreRevision) fail("milestone.revision-conflict", "Store revision changed since it was observed.");
     const row = db.prepare("select milestone_id, project_id, revision from project_milestones where milestone_id=? and project_id=?").get(milestoneId, projectId) as { milestone_id: string; project_id: string; revision: number } | undefined;
     if (!row) fail("milestone.not-found", `Milestone ${milestoneId} does not exist in project ${projectId}.`);
@@ -121,10 +123,10 @@ export function removeMilestone(context: StoreContext, projectId: string, milest
     }
     const now = new Date().toISOString();
     db.prepare("delete from project_milestones where milestone_id=? and project_id=?").run(milestoneId, projectId);
-    db.prepare("update store_meta set revision=revision+1 where id=1").run();
-    const current = db.prepare("select revision from store_meta where id=1").get() as { revision: number };
+    db.prepare("update collaboration_meta set revision=revision+1 where id=1").run();
+    const current = db.prepare("select revision from collaboration_meta where id=1").get() as { revision: number };
     const receipt: MilestoneReceipt = { projectId, milestoneId, revision: (row as { revision: number }).revision, storeRevision: current.revision, changed: true };
-    db.prepare("insert into store_operations(operation_id,request_hash,result_json,committed_at) values(?,?,?,?)").run(mutation.operationId,hash,JSON.stringify(receipt),now);
+    db.prepare("insert into collaboration_operations(key_space,operation_id,request_hash,result_json,committed_at) values('standalone',?,?,?,?)").run(mutation.operationId,hash,JSON.stringify(receipt),now);
     return receipt;
   });
 }
@@ -143,4 +145,4 @@ export function readMilestonesOn(db: StoreDb, projectId: string, milestoneId?: s
   const unassigned = db.prepare("select count(*) as count from issues where project_id=? and milestone_id is null").get(projectId) as {count:number};
   return { projectId, milestones, issues, unassignedIssues: unassigned.count };
 }
-export function queryMilestones(projectId: string, milestoneId?: string): StoreReadQuery<MilestoneRead> { return { view: milestoneId ? "milestone-status" : "milestones", needsProjection: false, run: handle => readMilestonesOn(handle.db,projectId,milestoneId) }; }
+export function queryMilestones(projectId: string, milestoneId?: string): StoreReadQuery<MilestoneRead> { return { view: milestoneId ? "milestone-status" : "milestones", needsProjection: false, collaboration: { scope: { kind: "milestone", key: milestoneId === undefined ? projectId : `${projectId}:${milestoneId}` }, required: true }, execution: "not-requested", run: sources => { if (sources.collaboration === null) throw new MilestoneError("store.not-active","This milestone read requires the collaboration authority, which was not opened for this request."); return { data: readMilestonesOn(sources.collaboration.db,projectId,milestoneId) }; } }; }

@@ -1,6 +1,7 @@
-import { expect, test } from "bun:test";
+import { expect, beforeAll, afterAll, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -24,6 +25,29 @@ const atOrAboveRuntime = `${floorMajor + 1}.0.0`;
 /** Injected below-floor runtime: the floor major minus one, minor/patch zeroed. */
 const belowFloorRuntime = `${floorMajor - 1}.0.0`;
 
+
+/** The user-level collaboration lane is resolved through `homedir`; isolate it. */
+const LANE_HOME = mkdtempSync(join(tmpdir(), "mstar-store-command-home-"));
+let laneHomeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  laneHomeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => LANE_HOME);
+});
+afterAll(() => {
+  laneHomeSpy?.mockRestore();
+  rmSync(LANE_HOME, { recursive: true, force: true });
+});
+
+let repoSequence = 0;
+
+/**
+ * Give a fixture root its repository identity: these store verbs need the
+ * collaboration scope (`store.upgrade` establishes the lane before it imports),
+ * so a GIT ORIGINLESS fixture declares one explicitly.
+ */
+function identify(root: string): void {
+  if (!existsSync(join(root, ".git"))) execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${repoSequence++}\n`);
+}
 
 function legacyWorkspace(harness: string): void {
   const workflowId = "upgrade-fixture-workflow";
@@ -89,6 +113,7 @@ test("store.upgrade discovers the canonical project harness and imports its lega
   const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-command-"));
   try {
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    identify(root);
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
     legacyWorkspace(harness);
@@ -195,6 +220,7 @@ test("default registration removes only staged protocol faces and keeps independ
 test("a held retired schema-8 claim refuses without mutation and settles on the same public command's attested retry", async () => {
   const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-retired-claim-"));
   try {
+    identify(root);
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
     const workflowId = "retired-claim-workflow";
@@ -406,6 +432,29 @@ test("a held retired schema-8 claim refuses without mutation and settles on the 
     } finally {
       store.close();
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a report destination is create-only: an existing file is never truncated, even by the read-only plan verb", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-report-"));
+  try {
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    legacyWorkspace(harness);
+    const destination = join(root, "operator-file.json");
+    writeFileSync(destination, "operator bytes\n");
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.migrate");
+    if (definition === undefined) throw new Error("missing store.migrate definition");
+    const result = await definition.execute(definition.input.parse({ harness, out: destination }), invocation(root));
+    // The PREVIEW ran; only its report could not be published, and that is
+    // disclosed instead of the preview's own outcome.
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected the preview to succeed");
+    expect(result.data).toMatchObject({ manifestFile: null, reportError: { code: "store.report-not-published" } });
+    expect(readFileSync(destination, "utf8")).toBe("operator bytes\n");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -17,7 +17,7 @@
  * - root active routing stays JSON authority: the catalog never decides which
  *   workflow is active.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
@@ -35,13 +35,26 @@ import { createFsStore, setArtifactStore } from "./store.js";
 import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { findRegisteredWorkflow, validateStatus } from "./status.js";
 import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, readCollaborationAuthority } from "./collaboration-store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
+import { execFileSync } from "node:child_process";
+import * as nodeOs from "node:os";
+import { DatabaseSync } from "node:sqlite";
+import { beforeAll, spyOn } from "bun:test";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-catalog-consumers-"));
+const HOME = join(ROOT, "home");
+mkdirSync(HOME);
+let homeSpy: { mockRestore(): void } | undefined;
 const WORKFLOW_ID = "wf-consumers";
 const PLAN_ID = "plan-consumers";
 
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
 afterAll(() => {
+  homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 afterEach(() => {
@@ -49,23 +62,54 @@ afterEach(() => {
 });
 
 /**
- * A fresh workspace with a real `.mstar` harness marker. The store context
+ * A fresh workspace with a real `.mstar` harness marker inside a synthetic
+ * checkout whose origin names the collaboration repository. The store context
  * selects that harness directly, including when it owns a plans/ child.
  */
-function workspace(name: string): { root: string; harness: string; context: StoreContext } {
-  const root = mkdtempSync(join(ROOT, name));
+function workspace(name: string, originSlug = name): { root: string; harness: string; context: StoreContext } {
+  const root = realpathSync(mkdtempSync(join(ROOT, name)));
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${originSlug}.git`], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   setArtifactStore(createFsStore(harness));
   return { root, harness, context: { harnessDir: harness } };
 }
 
-/** One initialized (active) store with the harness artifact store pinned. */
-async function withStore(name: string): Promise<{ root: string; harness: string; context: StoreContext }> {
-  const fixture = workspace(name);
+/** The private staged record flipped to active: this plan ships no public activator. */
+function activate(context: StoreContext): void {
+  const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  try {
+    db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
+  } finally {
+    db.close();
+  }
+}
+
+/** One initialized (active) store on both lanes with the harness artifact store pinned. */
+async function withStore(name: string, originSlug = name): Promise<{ root: string; harness: string; context: StoreContext }> {
+  const fixture = workspace(name, originSlug);
   const handle = await initializeStore(fixture.context);
   handle.close();
+  await initializeCollaborationStore(resolveCollaborationLocation(fixture.context));
+  activate(fixture.context);
   return fixture;
+}
+
+/** The execution-owned registration pin a clone must never rebind. */
+async function cloneBinding(context: StoreContext): Promise<Record<string, unknown> | undefined> {
+  const handle = await openStore(context, "read");
+  try {
+    return handle.db
+      .prepare(
+        "select workflow_id, catalog_kind, catalog_id, workflow_root_kind, workflow_relative_path, catalog_revision, input_hash, pin_json, operation_id " +
+          "from catalog_execution_bindings where workflow_id = 'wf-clone'",
+      )
+      .get() as Record<string, unknown> | undefined;
+  } finally {
+    handle.close();
+  }
 }
 
 /** The pin-read input for one plan row, pinned to this fixture's store context. */
@@ -93,17 +137,15 @@ function planRow(overrides: Record<string, unknown> = {}, metadata: Record<strin
 /** The pin the authorized `prepare` records for a row: the current catalog identity. */
 async function pinFor(context: StoreContext, row: unknown, planId = PLAN_ID): Promise<CatalogExecutionPin> {
   const detail = await getCatalog(context, { kind: "plan", id: planId });
-  const handle = await openStore(context, "read");
-  try {
-    return {
-      store_id: handle.storeId,
-      entity_revision: detail.entity.revision,
-      document_hash: executionInputHash(row, planId),
-      relation_hash: "0".repeat(64),
-    };
-  } finally {
-    handle.close();
-  }
+  // The catalog identity is owned by the collaboration lane after the cutover;
+  // the pin names that store, not the execution one.
+  const authority = await readCollaborationAuthority(context);
+  return {
+    store_id: authority.storeId,
+    entity_revision: detail.entity.revision,
+    document_hash: executionInputHash(row, planId),
+    relation_hash: "0".repeat(64),
+  };
 }
 
 /** The exact row shape an execution consumer reads: the pin lives in metadata. */
@@ -249,7 +291,24 @@ describe("catalog pin \u2014 a prepared execution keeps its frozen input", () =>
     const report = await readCatalogCompleteness(context);
     expect(report.ok).toBe(false);
     expect(report.gaps).toEqual([]);
-    expect(report.violations.some((violation) => violation.code === "store.not-initialized")).toBe(true);
+    expect(report.violations.some((violation) => violation.code === "collaboration.not-initialized")).toBe(true);
+  });
+
+  test("catalog pin: a workspace with no collaboration identity keeps the recorded pin and discloses store-absent", async () => {
+    // No Git repository and no repository_id: there is no collaboration scope to
+    // read. Pin consumption must not refuse or clear the recorded lineage.
+    const harness = mkdtempSync(join(ROOT, "pin-no-identity-"));
+    const pin = {
+      store_id: "store-unknown",
+      entity_revision: 1,
+      document_hash: executionInputHash(planRow(), PLAN_ID),
+      relation_hash: "0".repeat(64),
+    };
+    const state = await readExecutionCatalogPin(pinRead({ harnessDir: harness }, pinnedRow(planRow(), pin)));
+    expect(state.store).toBe("absent");
+    expect(state.source).toBe("row");
+    expect(state.pin).toEqual(pin);
+    expect(state.conflict).toBeNull();
   });
 });
 
@@ -312,13 +371,7 @@ describe("catalog discovery \u2014 the completeness query over store.db", () => 
 
 describe("catalog consumers \u2014 scaffold and execution routing boundaries", () => {
   test("catalog discovery: scaffold registers the project directory, idempotently, without roadmap content", async () => {
-    const root = mkdtempSync(join(ROOT, "scaffold-catalog-"));
-    const harness = join(root, ".mstar");
-    const context: StoreContext = { harnessDir: harness };
-    mkdirSync(harness, { recursive: true });
-    setArtifactStore(createFsStore(harness));
-    const handle = await initializeStore(context);
-    handle.close();
+    const { root, harness, context } = await withStore("scaffold-catalog-");
 
     expect(await scaffoldHarness(root)).toBe(harness);
     const created = await getCatalog(context, { kind: "project", id: "_default" });
@@ -331,13 +384,7 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
   });
 
   test("catalog discovery: existing scaffold-location identity and content are not relocated", async () => {
-    const root = mkdtempSync(join(ROOT, "scaffold-existing-catalog-"));
-    const harness = join(root, ".mstar");
-    const context: StoreContext = { harnessDir: harness };
-    mkdirSync(harness, { recursive: true });
-    setArtifactStore(createFsStore(harness));
-    const handle = await initializeStore(context);
-    handle.close();
+    const { root, harness, context } = await withStore("scaffold-existing-catalog-");
     const roadmapPath = join(harness, "projects", "_default", "roadmap.md");
     mkdirSync(join(harness, "projects", "_default"), { recursive: true });
     writeFileSync(roadmapPath, "# Existing authority\n");
@@ -361,14 +408,116 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
   });
 
   test("catalog discovery: scaffold leaves catalog registration to the store lifecycle when no store exists", async () => {
-    const root = mkdtempSync(join(ROOT, "scaffold-no-store-"));
-    setArtifactStore(createFsStore(join(root, ".mstar")));
+    const { root } = workspace("scaffold-no-store-");
     const harness = await scaffoldHarness(root);
     expect(existsSync(join(harness, "projects", "_default"))).toBe(true);
     expect(existsSync(join(harness, "projects", "_default", "roadmap.md"))).toBe(false);
     const report = await readCatalogCompleteness({ harnessDir: harness }, ["projects"]);
     expect(report.ok).toBe(false);
-    expect(report.violations.some((violation) => violation.code === "store.not-initialized")).toBe(true);
+    expect(report.violations.some((violation) => violation.code === "collaboration.not-initialized")).toBe(true);
+  });
+
+  test("catalog discovery: a staged collaboration scope defers registration instead of failing scaffold", async () => {
+    const { root, harness } = workspace("scaffold-scope-staged-");
+    await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
+    await expect(scaffoldHarness(root)).resolves.toBe(harness);
+    // The optional registration is still owed to activation; it was not faked.
+    await expect(getCatalog({ harnessDir: harness }, { kind: "project", id: "_default" })).rejects.toMatchObject({
+      code: "collaboration.not-active",
+    });
+  });
+
+  test("catalog discovery: an invalid collaboration mode is refused, never deferred", async () => {
+    const { root } = workspace("scaffold-scope-invalid-");
+    writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=bogus\n");
+    await expect(scaffoldHarness(root)).rejects.toMatchObject({ code: "collaboration.mode-invalid" });
+  });
+
+  test("catalog discovery: a replacement clone reads the logical plan location without inventing or rebinding it", async () => {
+    // Source clone: a collaboration catalog row plus the execution-owned pin
+    // that freezes the same logical locator.
+    const source = await withStore("clone-source", "shared-plan-repo");
+    mkdirSync(join(source.harness, "plans"), { recursive: true });
+    writeFileSync(
+      join(source.harness, "plans", "plan-clone.md"),
+      "---\nplan_id: plan-clone\n---\n\n# Registered Plan\n\nBody.\n",
+    );
+    await registerCatalogEntity(
+      source.context,
+      { kind: "plan", id: "plan-clone", title: "Registered Plan", rootKind: "plans", relativePath: "plan-clone.md" },
+      op("clone-register-plan"),
+    );
+    const execution = await openStore(source.context, "write");
+    try {
+      execution.db
+        .prepare(
+          "insert into catalog_execution_bindings(workflow_id, catalog_kind, catalog_id, workflow_root_kind, workflow_relative_path, catalog_revision, input_hash, pin_json, operation_id) " +
+            "values ('wf-clone', 'plan', 'plan-clone', 'harness', 'workflows/wf-clone', 1, ?, ?, 'clone-binding')",
+        )
+        .run(
+          "0".repeat(64),
+          JSON.stringify({ kind: "plan", id: "plan-clone", rootKind: "plans", relativePath: "plan-clone.md" }),
+        );
+    } finally {
+      execution.close();
+    }
+    const pinBefore = await cloneBinding(source.context);
+
+    // Replacement checkout: same repository identity, no local plan file and
+    // no execution store of its own.
+    const replacement = workspace("clone-replacement", "shared-plan-repo");
+    expect(existsSync(join(replacement.harness, "store.db"))).toBe(false);
+    expect(existsSync(join(replacement.harness, "plans", "plan-clone.md"))).toBe(false);
+
+    const read = await getCatalog(replacement.context, { kind: "plan", id: "plan-clone" });
+    expect(read.entity).toMatchObject({ rootKind: "plans", relativePath: "plan-clone.md", present: false });
+    // The logical reference resolves against THIS checkout; the registered
+    // path is never rewritten to the source checkout or an absolute locator.
+    expect(read.entity.absolutePath).toBe(join(replacement.harness, "plans", "plan-clone.md"));
+
+    // Discovery checks this checkout's files only: a missing local artifact is
+    // disclosed as absent, never invented as a registered location or a gap.
+    const report = await readCatalogCompleteness(replacement.context, ["plans"]);
+    expect(report).toMatchObject({ ok: true, gaps: [] });
+    expect(report.registered).toBe(1);
+
+    // Registration keeps the identity: identical replay is a no-op, a new path
+    // for the same id is a duplicate refusal, and a different id at that
+    // location attaches to the existing row instead of minting another one.
+    const replayed = await registerCatalogEntity(
+      replacement.context,
+      { kind: "plan", id: "plan-clone", title: "Registered Plan", rootKind: "plans", relativePath: "plan-clone.md" },
+      op("clone-replay"),
+    );
+    expect(replayed).toMatchObject({ kind: "plan", id: "plan-clone", revision: 1 });
+    await expect(
+      registerCatalogEntity(
+        replacement.context,
+        { kind: "plan", id: "plan-clone", title: "Moved", rootKind: "plans", relativePath: "elsewhere.md" },
+        op("clone-relocate"),
+      ),
+    ).rejects.toMatchObject({ code: "catalog.duplicate" });
+    const attached = await registerCatalogEntity(
+      replacement.context,
+      { kind: "plan", id: "plan-other", title: "Other id", rootKind: "plans", relativePath: "plan-clone.md" },
+      op("clone-attach"),
+    );
+    expect(attached).toMatchObject({ kind: "plan", id: "plan-clone", revision: 1 });
+    await expect(getCatalog(replacement.context, { kind: "plan", id: "plan-other" })).rejects.toMatchObject({
+      code: "catalog.not-found",
+    });
+    expect((await getCatalog(replacement.context, { kind: "plan", id: "plan-clone" })).entity).toMatchObject({
+      title: "Registered Plan",
+      rootKind: "plans",
+      relativePath: "plan-clone.md",
+      revision: 1,
+      present: false,
+    });
+
+    // Catalog traffic created no execution store here, and the source
+    // execution pin is byte-identical.
+    expect(existsSync(join(replacement.harness, "store.db"))).toBe(false);
+    expect(await cloneBinding(source.context)).toEqual(pinBefore);
   });
 
   test("catalog discovery: the registration gate is answered from the ACTIVE store, not a file view", async () => {

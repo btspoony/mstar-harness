@@ -1,23 +1,48 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import * as nodeOs from "node:os";
 import { join } from "node:path";
-import { initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
+import {
+  ensureCollaborationAuthority,
+  initializeStore,
+  openCollaborationStore,
+  registerCatalogEntity,
+  withCollaborationWrite,
+} from "@mstar-harness/engine";
 import { executeCommand } from "../src/index.js";
 import { getMilestoneCommandDefinitions } from "../src/families/milestone.js";
 import type { InvocationContext } from "../src/types.js";
 
+/** Collaboration lanes created here live under a private home, never the operator's. */
+const HOME_ROOT = mkdtempSync(join(tmpdir(), "commands-milestone-home-"));
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME_ROOT);
+});
+
 const root = mkdtempSync(join(tmpdir(), "commands-milestone-"));
-afterAll(() => rmSync(root,{recursive:true,force:true}));
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(root, { recursive: true, force: true });
+  rmSync(HOME_ROOT, { recursive: true, force: true });
+});
 function invocation(cwd:string): InvocationContext { return { cwd,controlRoot:null,versions:{engine:null,cli:null,plugin:null,host:null,platform:null},signal:new AbortController().signal,effects:{spawnProcess:async()=>({exitCode:0,stdout:"",stderr:""})} } as InvocationContext; }
+/**
+ * A checkout that owns its collaboration lane: milestone authority is the
+ * repository lane, so a fixture without an identity has no store at all.
+ */
+async function laneFixture(cwd: string, harness: string): Promise<void> {
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(join(cwd, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${cwd.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
+  mkdirSync(harness, { recursive: true });
+  await ensureCollaborationAuthority({ harnessDir: harness });
+  (await initializeStore({ harnessDir: harness })).close();
+}
 test("milestone commands use store revision CAS with replay", async () => {
  const cwd=join(root,"fixture"), harness=join(cwd,".mstar");
- // why: The harness root is fixed at the Git main worktree's `.mstar`, so cwd-based
- // store discovery needs a real repo even for an unborn branch.
- mkdirSync(cwd,{recursive:true}); execFileSync("git",["init","-q","-b","main"],{cwd});
- mkdirSync(harness,{recursive:true});
- const store=await initializeStore({harnessDir:harness}); store.close();
+ mkdirSync(cwd,{recursive:true}); await laneFixture(cwd,harness);
  await registerCatalogEntity({harnessDir:harness},{kind:"project",id:"proj",title:"Project",rootKind:"projects",relativePath:"proj"},{operationId:"project",actor:"test"});
  const call=(id:string,input:unknown)=>executeCommand(id,input,invocation(cwd));
  const base={project:"proj",name:"First",ordinal:0,expectStore:1,operation:"add-1"};
@@ -32,9 +57,7 @@ test("name-only update leaves target optional and false clearTarget does not sel
  const cwd = join(root, "update-patch");
  const harness = join(cwd, ".mstar");
  mkdirSync(cwd, { recursive: true });
- execFileSync("git", ["init", "-q", "-b", "main"], { cwd });
- mkdirSync(harness, { recursive: true });
- (await initializeStore({ harnessDir: harness })).close();
+ await laneFixture(cwd, harness);
  await registerCatalogEntity(
   { harnessDir: harness },
   { kind: "project", id: "proj-update", title: "Project", rootKind: "projects", relativePath: "proj" },
@@ -65,8 +88,8 @@ test("name-only update leaves target optional and false clearTarget does not sel
  }
 });
 test("shared admission distinguishes zero, false, and true selectors at real milestone consumers", async () => {
- const cwd=join(root,"shared-admission"), harness=join(cwd,".mstar"); mkdirSync(harness,{recursive:true});
- (await initializeStore({harnessDir:harness})).close();
+ const cwd=join(root,"shared-admission"), harness=join(cwd,".mstar"); mkdirSync(cwd,{recursive:true});
+ await laneFixture(cwd,harness);
  await registerCatalogEntity(
   {harnessDir:harness},
   {kind:"project",id:"proj-admission",title:"Project",rootKind:"projects",relativePath:"proj"},
@@ -118,13 +141,15 @@ test("milestone assignment authorizes by the actor seat and the revision CAS wit
  if(definition===undefined) throw new Error("milestone.assign has no command definition");
  expect(definition.cli.options.map((option)=>option.key)).not.toContain("sessionId");
  expect(definition.requirements.filter((row)=>row.name==="sessionRef")).toEqual([]);
- const cwd=join(root,"active-assignment"), harness=join(cwd,".mstar"); mkdirSync(harness,{recursive:true});
- const store=await initializeStore({harnessDir:harness});
+ const cwd=join(root,"active-assignment"), harness=join(cwd,".mstar"); mkdirSync(cwd,{recursive:true});
+ await laneFixture(cwd,harness);
  await registerCatalogEntity({harnessDir:harness},{kind:"project",id:"proj-active",title:"Project",rootKind:"projects",relativePath:"proj-active"},{operationId:"project-active",actor:"test"});
- store.db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values('I-000506','proj-active','Smoke issue','bug','high','impact','acceptance','now','now','I-000506')").run();
+ await withCollaborationWrite({harnessDir:harness},(handle)=>{
+  handle.db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values('I-000506','proj-active','Smoke issue','bug','high','impact','acceptance','now','now','I-000506')").run();
+ });
  const added=await executeCommand("milestone.add",{project:"proj-active",name:"Active milestone",ordinal:0,expectStore:1,operation:"add-active",harness},invocation(cwd));
  expect(added.status,JSON.stringify(added)).toBe("ok");
- if(added.status!=="ok"){store.close();return;}
+ if(added.status!=="ok") return;
  const milestone=added.data as {milestoneId:string;storeRevision:number};
  // One frozen request: the replay below must re-present the revisions the first attempt was judged against.
  const request={project:"proj-active",issue:"I-000506",id:milestone.milestoneId,reason:"I-000506 acceptance",expectIssue:1,expectStore:milestone.storeRevision,operation:"assign-active",actor:"project-manager",harness};
@@ -137,10 +162,25 @@ test("milestone assignment authorizes by the actor seat and the revision CAS wit
  expect(staleStore).toMatchObject({status:"refused",code:"milestone.revision-conflict"});
  const first=await assign({});
  expect(first.status,JSON.stringify(first)).toBe("ok");
- if(first.status!=="ok"){store.close();return;}
+ if(first.status!=="ok") return;
  expect(first.data).toMatchObject({issueId:"I-000506",revision:2,created:false});
- expect(store.db.prepare("select milestone_id from issues where id='I-000506'").get()).toEqual({milestone_id:milestone.milestoneId});
+ const lane=await openCollaborationStore({harnessDir:harness},"read");
+ try{
+  expect(lane.db.prepare("select milestone_id from issues where id='I-000506'").get()).toEqual({milestone_id:milestone.milestoneId});
+ }finally{ lane.close(); }
  expect(await assign({})).toEqual(first);
- store.close();
+});
+test("collaboration command evidence: milestone list carries its project's lane observation", async () => {
+ const cwd=join(root,"evidence"), harness=join(cwd,".mstar");
+ mkdirSync(cwd,{recursive:true}); await laneFixture(cwd,harness);
+ await registerCatalogEntity({harnessDir:harness},{kind:"project",id:"proj-evidence",title:"Project",rootKind:"projects",relativePath:"proj-evidence"},{operationId:"project-evidence",actor:"test"});
+ const listed=await executeCommand("milestone.list",{project:"proj-evidence",harness},invocation(cwd));
+ expect(listed.status).toBe("ok");
+ if(listed.status!=="ok") return;
+ const read=listed.data as { milestones: unknown[]; collaboration: { scope:{kind:string;key:string};completeness:string;asOf:string } };
+ // The list is one project-scoped lane read; the envelope's evidence names the
+ // same scope and instant it answered with.
+ expect(read.collaboration).toMatchObject({ scope:{kind:"milestone",key:"proj-evidence"}, completeness:"complete" });
+ expect(Number.isNaN(Date.parse(read.collaboration.asOf))).toBe(false);
 });
 

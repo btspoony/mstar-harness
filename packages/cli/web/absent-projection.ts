@@ -13,6 +13,7 @@
  */
 import type { ReadProjection } from "@mstar-harness/engine";
 export const ABSENT_PROJECTION = {
+  observed: true,
   generation: 1,
   freshness: "current" as const,
   builtAt: null,

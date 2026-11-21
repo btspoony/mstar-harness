@@ -1,21 +1,39 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import path from "node:path";
-import { initializeStore, ISSUE_ACTION_NAMES, openStore } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, ISSUE_ACTION_NAMES, openStore, registerCatalogEntity } from "@mstar-harness/engine";
 import { admitCommandInput, executeCommand, getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import { failure as milestoneFailure } from "../src/families/milestone.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
 import { z } from "zod";
 
+/**
+ * Every collaboration lane this file creates belongs under a private home: a
+ * test never writes into the operator's `~/.mstar/repos`.
+ */
+const HOME_ROOT = mkdtempSync(path.join(nodeOs.tmpdir(), "commands-issue-home-"));
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME_ROOT);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(HOME_ROOT, { recursive: true, force: true });
+});
+
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 async function testContext(): Promise<InvocationContext> {
-  const root = mkdtempSync(path.join(os.tmpdir(), "commands-issue-"));
+  const root = mkdtempSync(path.join(nodeOs.tmpdir(), "commands-issue-"));
   roots.push(root);
   const harness = path.join(root, ".mstar");
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(path.join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   mkdirSync(harness, { recursive: true });
+  await ensureCollaborationAuthority({ harnessDir: harness });
   await (await initializeStore({ harnessDir: harness })).close();
   const effects: CommandEffects = {
     async readInput() { return ""; },
@@ -415,6 +433,35 @@ describe("issue command family", () => {
     if (exported.status === "ok") expect(exported.data).toMatchObject({ id, title: "Finding" });
   });
 
+  test("collaboration command evidence: list and show carry the read's own observation", async () => {
+    const context = await testContext();
+    const added = await definition("issue.add").execute({ payload: capture(), operationId: "capture-evidence", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const { issueId } = added.data as { issueId: string };
+
+    const listed = await definition("issue.list").execute({}, context);
+    expect(listed.status).toBe("ok");
+    if (listed.status !== "ok") return;
+    const page = listed.data as {
+      storeRevision: number;
+      collaboration: { scope: { kind: string; key: string }; completeness: string; asOf: string; revision: number };
+    };
+    // The observation is the same read's evidence: its revision IS the page's
+    // reported revision, and it names the normalized filter set it answered.
+    expect(page.collaboration.completeness).toBe("complete");
+    expect(page.collaboration.revision).toBe(page.storeRevision);
+    expect(page.collaboration.scope.kind).toBe("query");
+    expect(page.collaboration.scope.key.startsWith("issues:")).toBe(true);
+    expect(Number.isNaN(Date.parse(page.collaboration.asOf))).toBe(false);
+
+    const shown = await definition("issue.show").execute({ id: issueId }, context);
+    expect(shown.status).toBe("ok");
+    if (shown.status !== "ok") return;
+    const detail = shown.data as { collaboration: { scope: { kind: string; key: string }; revision: number } };
+    expect(detail.collaboration).toMatchObject({ scope: { kind: "query", key: `issue:${issueId}` }, revision: page.storeRevision });
+  });
+
   test("actor-only disposition closes an issue without session authority", async () => {
     const context = await testContext();
     const added = await definition("issue.add").execute({ payload: capture(), operationId: "capture-2", actor: "project-manager" }, context);
@@ -708,14 +755,11 @@ describe("issue command family", () => {
     const seed = added.data as { issueId: string; revision: number };
     const harnessDir = context.controlRoot;
     if (harnessDir === null) throw new Error("test context must provide an isolated harness");
-    const store = await openStore({ harnessDir }, "write");
-    try {
-      store.db.prepare(
-        "insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project','proj-b','Project B','projects','proj-b/roadmap.md','now','now')",
-      ).run();
-    } finally {
-      store.close();
-    }
+    // The move's target project is a catalog row, and catalog authority is the
+    // collaboration lane — never the execution store's legacy tables.
+    await registerCatalogEntity({ harnessDir }, {
+      kind: "project", id: "proj-b", title: "Project B", rootKind: "projects", relativePath: "proj-b",
+    }, { operationId: "move-project-b", actor: "project-manager" });
 
     const command = definition("issue.move");
     expect(command.input.safeParse({
@@ -725,9 +769,11 @@ describe("issue command family", () => {
     expect(command.requirements).toContainEqual(expect.objectContaining({ name: "expectStore", route: "cli", required: true }));
 
     const beforeMove = await issueState(context);
-    if (beforeMove.storeMetaRevision === null) throw new Error("the seeded store reports no revision");
+    const beforePage = await definition("issue.list").execute({}, context);
+    if (beforePage.status !== "ok") throw new Error("the seeded store answered no issue page");
+    const beforeRevision = (beforePage.data as { storeRevision: number }).storeRevision;
     const stale = await command.execute({
-      id: seed.issueId, expect: seed.revision, expectStore: beforeMove.storeMetaRevision - 1,
+      id: seed.issueId, expect: seed.revision, expectStore: beforeRevision - 1,
       actor: "project-manager", operationId: "move-stale-store",
       payload: { projectId: "proj-b", reason: "stale store view" },
     }, context);
@@ -735,7 +781,7 @@ describe("issue command family", () => {
     expect(await issueState(context)).toEqual(beforeMove);
 
     const moved = await command.execute({
-      id: seed.issueId, expect: seed.revision, expectStore: beforeMove.storeMetaRevision,
+      id: seed.issueId, expect: seed.revision, expectStore: beforeRevision,
       actor: "project-manager", operationId: "move-public",
       payload: { projectId: "proj-b", reason: "belongs to b" },
     }, context);
@@ -748,9 +794,11 @@ describe("issue command family", () => {
     expect(shown).toMatchObject({ status: "ok", data: { projectId: "proj-b", milestoneId: null } });
 
     const afterMove = await issueState(context);
-    if (afterMove.storeMetaRevision === null) throw new Error("the moved store reports no revision");
+    const afterPage = await definition("issue.list").execute({}, context);
+    if (afterPage.status !== "ok") throw new Error("the moved store answered no issue page");
+    const afterRevision = (afterPage.data as { storeRevision: number }).storeRevision;
     const refused = await command.execute({
-      id: seed.issueId, expect: seed.revision + 1, expectStore: afterMove.storeMetaRevision,
+      id: seed.issueId, expect: seed.revision + 1, expectStore: afterRevision,
       actor: "project-manager", operationId: "move-absent",
       payload: { projectId: "proj-absent", reason: "typo" },
     }, context);

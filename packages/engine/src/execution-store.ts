@@ -41,6 +41,7 @@ import {
   ExecutionPinConflictError,
   executionInputHash,
   executionInputSelection,
+  readCatalogPlanSelection,
   type CatalogExecutionPin,
 } from "./coordination.js";
 import {
@@ -74,10 +75,12 @@ import {
 } from "./store-activation.js";
 import { provisionRecoveryDocument } from "./activation-provisioning.js";
 import {
+  MIGRATIONS,
   openStore,
   readStoreAuthority,
   StoreError,
   storeDbPath,
+  tableNamesOn,
   type ExecutionMeta,
   type StoreContext,
   type StoreDb,
@@ -126,6 +129,9 @@ export type ExecutionErrorCode =
   // caller branches on the exact refusal instead of parsing the message.
   | "workflow.reopen-completed"
   | "workflow.reopen-not-terminal"
+  // A composite cross-store operation whose collaboration effect is committed
+  // while its execution finalization is still outstanding (`collaboration-operations.ts`).
+  | "collaboration.operation-partial"
   | "store.not-active"
   | "store.stale-epoch";
 
@@ -1705,6 +1711,9 @@ export async function initializeExecutionAuthority(context: StoreContext): Promi
     tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
     assertNoLegacyExecutionSources(context);
     tx.db.prepare("delete from execution_operations where epoch < ?").run(tx.epoch + 1);
+    tx.db
+      .prepare("delete from execution_collaboration_intents where execution_epoch < ?")
+      .run(tx.epoch + 1);
   });
   return readExecutionState(context);
 }
@@ -1751,6 +1760,14 @@ export type ResolvedCreation = {
   snapshot: WorkflowSnapshot;
   plans: ResolvedCreationPlan[];
 };
+
+/**
+ * The catalog evidence a creation's pins are verified against: the collaboration
+ * catalog's own identity and the plan ids it held when the caller read it BEFORE
+ * the execution write transaction. A pin names a collaboration row, so the
+ * execution writer never queries its own (catalog-free) database for it.
+ */
+export type CreationCatalogSelection = Readonly<{ storeId: string | null; planIds: readonly string[] }>;
 
 /** The single carrier of all caller-input refusals (§5 retains `coordination.*`). */
 function invalidInput(detail: string): CoordinationError {
@@ -2081,24 +2098,22 @@ function assertWorkflowIdentityIsNew(db: StoreDb, workflowId: string): void {
  * is history rather than a disagreement to refuse.
  */
 function assertSelectedCatalogEntities(
-  db: StoreDb,
-  storeId: string,
+  catalog: CreationCatalogSelection,
   workflowId: string,
   plans: readonly ResolvedCreationPlan[],
 ): void {
-  const entity = db.prepare("select revision from catalog_entities where kind = 'plan' and id = ?");
   for (const plan of plans) {
     const { pin } = plan;
     if (pin === null) continue;
     const details = { workflow_id: workflowId, plan_id: plan.planId, pin };
-    if (pin.store_id !== storeId) {
+    if (catalog.storeId === null || pin.store_id !== catalog.storeId) {
       throw new ExecutionPinConflictError(
-        `plan ${plan.planId} selects catalog store ${pin.store_id}, which is not this store (${storeId}) \u2014 a foreign ` +
-          `selection is never sealed as this store's frozen input`,
+        `plan ${plan.planId} selects catalog store ${pin.store_id}, which is not the repository's collaboration catalog ` +
+          `(${catalog.storeId ?? "unavailable"}) \u2014 a foreign selection is never sealed as this repository's frozen input`,
         details,
       );
     }
-    if (entity.get(plan.planId) === undefined) {
+    if (!catalog.planIds.includes(plan.planId)) {
       throw new ExecutionPinConflictError(
         `plan ${plan.planId} is pinned to catalog plan entity ${plan.planId} at revision ${pin.entity_revision}, but the ` +
           `catalog does not hold that entity. Creation binds existing catalog identities and never fabricates one; ` +
@@ -2170,10 +2185,10 @@ function writeCreatedWorkflow(
  */
 export function writeExecutionCreation(
   tx: ExecutionTransaction,
-  input: { caller: ExecutionCaller; creation: ResolvedCreation; now: string },
+  input: { caller: ExecutionCaller; creation: ResolvedCreation; catalog: CreationCatalogSelection; now: string },
 ): void {
   assertWorkflowIdentityIsNew(tx.db, input.creation.workflowId);
-  assertSelectedCatalogEntities(tx.db, tx.storeId, input.creation.workflowId, input.creation.plans);
+  assertSelectedCatalogEntities(input.catalog, input.creation.workflowId, input.creation.plans);
   writeCreatedWorkflow(tx.db, {
     workflowId: input.creation.workflowId,
     entry: input.creation.entry,
@@ -2495,6 +2510,41 @@ export async function createExecutionWorkflow(
   const creation = resolveCreateWorkflow(context.caller, input?.entry, input?.snapshot, input?.operationId);
   const operationId = input.operationId;
   const requestHash = createWorkflowRequestHash(context.caller, creation, input.expected);
+  // A committed operation replays FIRST, under the current execution identity:
+  // a lost response must still answer from its receipt even when the
+  // collaboration lane has since become unavailable, and a different payload on
+  // the same id is a conflict rather than a second creation.
+  const replay = await withExecutionTransaction(context, (tx) => {
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; domain creation requires an active authority. ` +
+        `A staged store is inspectable only through migration diagnostics.`,
+    );
+    const recorded = readCommittedOperation(tx.db, tx.epoch, operationId);
+    if (recorded === null) return null;
+    if (recorded.requestHash !== requestHash) {
+      throw new ExecutionError(
+        "execution.operation-conflict",
+        `operation id ${JSON.stringify(operationId)} is already committed on this store epoch for a different request ` +
+          `(kind, scope, expected token, caller or payload). An operation id is an idempotency key, not a reusable ` +
+          `slot \u2014 retry the committed request unchanged or use a new id. Nothing was created.`,
+      );
+    }
+    return {
+      ...readCommittedReceipt<ExecutionState>(recorded, tx, operationId, creation.workflowId, { kind: "root", key: [] }),
+      operationId,
+      replayed: true,
+    };
+  });
+  if (replay !== null) return replay;
+  // A pin names a collaboration catalog row, so the evidence is read on that
+  // lane BEFORE the execution write transaction opens: no cross-file read ever
+  // runs inside it, and an unreadable catalog refuses the pinned creation.
+  const pinnedPlanIds = [...new Set(creation.plans.filter((plan) => plan.pin !== null).map((plan) => plan.planId))];
+  const catalog: CreationCatalogSelection =
+    pinnedPlanIds.length === 0
+      ? { storeId: null, planIds: [] }
+      : await readCatalogPlanSelection(context.harnessDir, pinnedPlanIds);
   return withExecutionTransaction(context, (tx) => {
     assertActiveExecutionAuthority(
       tx,
@@ -2531,7 +2581,7 @@ export async function createExecutionWorkflow(
     });
 
     const now = new Date().toISOString();
-    writeExecutionCreation(tx, { caller: context.caller, creation, now });
+    writeExecutionCreation(tx, { caller: context.caller, creation, catalog, now });
 
     const meta = readExecutionMetaRow(tx.db);
     const store: StoreIdentity = { storeId: tx.storeId, epoch: tx.epoch };
@@ -3293,6 +3343,7 @@ export function writePlanOperationReceipt(
     planId: string;
     receipt: ExecutionRead<unknown>;
     now: string;
+    allowReservedIntent?: true;
   },
 ): void {
   writeOperationReceipt(tx, input);
@@ -3311,6 +3362,28 @@ function receiptFacts(receipt: ExecutionRead<unknown>): Record<string, unknown> 
     ...(receipt.reason === undefined ? {} : { reason: receipt.reason }),
     ...(receipt.holder_live_warning === undefined ? {} : { holder_live_warning: receipt.holder_live_warning }),
   };
+}
+
+/**
+ * The composite reservation ledger this receipt writer must consult, classified
+ * by the store's OWN recorded migration history:
+ *
+ * - `present`: the ledger exists and the reservation probe runs.
+ * - `pre-intent`: the store's recorded schema predates the ledger's migration, so
+ *   no reservation capability exists yet. This is the supported window in which
+ *   the version-9 normalizer writes receipts — a ledger that does not exist
+ *   reserves nothing.
+ * - `drift`: the store RECORDS the ledger's migration but the table is missing.
+ *   Skipping the probe there would let a receipt commit an operation a pending
+ *   composite already reserved, so the writer refuses instead of failing open.
+ */
+function reservationLedgerState(db: StoreDb): "present" | "pre-intent" | "drift" {
+  if (tableNamesOn(db).has("execution_collaboration_intents")) return "present";
+  const ledgerVersion = MIGRATIONS.find((migration) => migration.name === "execution-collaboration-intents")?.version;
+  if (ledgerVersion === undefined) return "pre-intent";
+  const row = db.prepare("select max(version) as n from schema_version").get();
+  const recorded = row !== null && typeof row === "object" && "n" in row && typeof row.n === "number" ? row.n : 0;
+  return recorded >= ledgerVersion ? "drift" : "pre-intent";
 }
 
 /**
@@ -3337,8 +3410,55 @@ export function writeOperationReceipt(
     receipt: ExecutionRead<unknown>;
     now: string;
     slim?: true;
+    /**
+     * The admitted composite's own finalization: its reservation is the row this
+     * write completes, so it is the one writer allowed while that id is pending.
+     */
+    allowReservedIntent?: true;
   },
 ): void {
+  // §3.1 the operation-id namespace is ONE namespace across both execution
+  // ledgers. A different writer may not commit an id a pending composite reserved
+  // (or already declined): the effect's receipt would otherwise be unreachable
+  // and a same-id retry would read this unrelated receipt instead.
+  //
+  // The reservation ledger arrives with its own migration, and a schema-8 store's
+  // version-9 normalizer writes receipts BEFORE that migration runs: a ledger
+  // that does not exist yet reserves nothing. A store that RECORDS the ledger's
+  // migration without carrying it is drift, and the writer refuses rather than
+  // committing an id a lost reservation may already own.
+  const ledger = reservationLedgerState(tx.db);
+  if (ledger === "drift") {
+    throw new StoreError(
+      "store.schema-drift",
+      "This store records the composite reservation migration but its ledger execution_collaboration_intents is missing, so a " +
+        "pending reservation cannot be checked; refusing the operation rather than committing an id a reservation may own. " +
+        "Nothing was written.",
+    );
+  }
+  if (input.allowReservedIntent !== true && ledger === "present") {
+    const pending = tx.db
+      .prepare(
+        "select kind from execution_collaboration_intents where execution_store_id = ? and execution_epoch = ? " +
+          "and operation_id = ? and phase != 'confirmed'",
+      )
+      .get(tx.storeId, tx.epoch, input.operationId) as { kind?: unknown } | undefined;
+    if (pending !== undefined) {
+      throw new ExecutionError(
+        "execution.operation-conflict",
+        `operation id ${JSON.stringify(input.operationId)} is reserved by pending composite operation ` +
+          `(${typeof pending.kind === "string" ? pending.kind : "composite"}); another writer may not commit that id. ` +
+          `Nothing was written.`,
+        {
+          operation_id: input.operationId,
+          reserved_kind: typeof pending.kind === "string" ? pending.kind : null,
+          recovery:
+            "Resume the pending composite with the same --operation id and payload (or let its deterministic refusal be " +
+            "recorded), then retry this operation; use a new operation id for the new effect.",
+        },
+      );
+    }
+  }
   tx.db
     .prepare(
       "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +

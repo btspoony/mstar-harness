@@ -1,7 +1,8 @@
 /**
  * `host-gate-paths` — the single-sourced gate path glue every host write gate
  * used to hand-copy (issue #442): the landing-path resolver and the
- * case-folded issue/catalog authority naming sets.
+ * authority-naming sets for the two runtime-owned databases (the execution
+ * store at a harness root and the reserved collaboration filename).
  *
  * The copies had drifted. opencode-v1, omp, dsh and the ZCode hook resolved
  * ONE symlink hop (realpath, else a single `readlinkSync`), while opencode-v2
@@ -25,9 +26,15 @@ import { basename, dirname, relative, resolve } from "node:path";
 import { isHarnessRootDir, type HarnessDocKind } from "./gates.js";
 import { resolveProjectDir, resolveWorkflowDir } from "./path.js";
 
-/** The issue/catalog authority database and its WAL sidecars, directly at a
- * harness root. */
-export const STORE_AUTHORITY_FILES: readonly string[] = ["store.db", "store.db-wal", "store.db-shm"];
+/** The issue/catalog authority database and its SQLite sidecars, directly at a
+ * harness root. The rollback journal is included: it is the same bytes under
+ * the same names. */
+export const STORE_AUTHORITY_FILES: readonly string[] = [
+  "store.db",
+  "store.db-wal",
+  "store.db-shm",
+  "store.db-journal",
+];
 
 /** The same authority names case-folded — the match never hinges on byte case
  * (FW-3). */
@@ -114,13 +121,30 @@ export function landedPathOf(filePath: string): string {
   }
 }
 
-/** True when `target` (absolute) IS the authority database (or a WAL sidecar)
- * sitting directly at a harness root: the runtime's own store location for a
- * harness root is `<harness root>/store.db`, and hand-writing those bytes is
- * never a supported operation — hard vs soft, staged vs active, alias or not,
- * all the same. */
+/** The user-level collaboration database and its SQLite sidecars. The name is a
+ * RESERVED authority filename everywhere — not only inside the user-level
+ * namespace — so a copy can never be hand-written under any path, alias or
+ * checkout. An unrelated same-named file is denied as the accepted fail-closed
+ * trade-off. */
+const COLLABORATION_AUTHORITY_NAMES: readonly string[] = [
+  "collaboration.db",
+  "collaboration.db-wal",
+  "collaboration.db-shm",
+  "collaboration.db-journal",
+];
+
+/** True when `target` (absolute) IS runtime-owned database bytes: the execution
+ * authority database (or a SQLite sidecar) sitting directly at a harness root —
+ * the runtime's own store location for a harness root is `<harness root>/store.db`
+ * — or a file carrying the reserved collaboration authority name anywhere.
+ * Hand-writing either is never a supported operation — hard vs soft, staged vs
+ * active, alias or not, all the same.
+ *
+ * Path classification only: no database is opened or probed. */
 export function isStoreAuthorityTarget(target: string): boolean {
-  if (!isStoreAuthorityName(basename(target))) return false;
+  const name = basename(target).toLowerCase();
+  if (COLLABORATION_AUTHORITY_NAMES.includes(name)) return true;
+  if (!isStoreAuthorityName(name)) return false;
   return isHarnessRootDir(dirname(target));
 }
 

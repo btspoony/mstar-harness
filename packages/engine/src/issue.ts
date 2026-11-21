@@ -1,14 +1,25 @@
 /**
  * issue.ts — capture, occurrences, reads, and authorized disposition (plan C2/C3).
  *
- * In-process domain verbs on the C1 store boundary. Dedup is source /
+ * In-process domain verbs on the collaboration authority. Every read and write
+ * names the repository's collaboration store, never the execution store: the
+ * issue ledger, its revision and its operation receipts live in one lane, so an
+ * execution revision can never stand in as a collaboration CAS. Dedup is source /
  * root-cause / acceptance (`identity_key`), never title. Observation
  * identity lives in `occurrence_key`. Unknown semantic identity refuses
  * `issue.ambiguous-identity` instead of guessing a merge.
  */
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
-import { MIGRATIONS, openStore, readStoreAuthority, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import {
+  openCollaborationStore,
+  readCollaborationObservation,
+  withCollaborationWrite,
+  type CollaborationScope,
+  type CollaborationStoreHandle,
+  type CompleteCollaborationObservation,
+} from "./collaboration-store.js";
+import { MIGRATIONS, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
 
 
 /**
@@ -568,12 +579,19 @@ function parseEvidence(json: string): string[] {
 function requestHash(kind: string, payload: unknown): string {
   return sha256(`${kind}\n${JSON.stringify(payload)}`);
 }
+/**
+ * The collaboration record this module's verbs run on. The execution store's
+ * `store_meta` is a different lane: its revision is never a collaboration CAS,
+ * so a handle from that lane is a refusal here rather than a silent read.
+ */
 function readMeta(db: StoreDb): { authorityState: string; revision: number } {
-  const row = readStoreAuthority(db);
-  if (typeof row.authorityState !== "string" || typeof row.revision !== "number") {
-    throw new IssueError("store.not-active", "store_meta is missing; the store cannot accept issue mutations");
+  const row = db.prepare("select authority_state, revision from collaboration_meta where id = 1").get() as
+    | { authority_state?: unknown; revision?: unknown }
+    | undefined;
+  if (typeof row?.authority_state !== "string" || typeof row.revision !== "number") {
+    throw new IssueError("store.not-active", "collaboration_meta is missing; the store cannot accept issue mutations");
   }
-  return { authorityState: row.authorityState, revision: row.revision };
+  return { authorityState: row.authority_state, revision: row.revision };
 }
 
 /**
@@ -594,7 +612,7 @@ export function assertIssueStoreActive(db: StoreDb): void {
 }
 
 /**
- * §3.1 the shared store revision of the transaction a caller already owns. A
+ * The collaboration revision of the transaction a caller already owns. A
  * composed caller (the DB coordination route) reads it after its own single
  * advance has run, and hands it to every composed helper so each receipt reports
  * the revision the transaction commits at instead of the helper advancing the
@@ -605,8 +623,8 @@ export function storeRevisionOn(db: StoreDb): number {
 }
 
 function bumpStoreRevision(db: StoreDb): number {
-  db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-  const row = db.prepare("select revision from store_meta where id = 1").get() as { revision: number };
+  db.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
+  const row = db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number };
   return row.revision;
 }
 
@@ -631,9 +649,14 @@ function lookupOperation(db: StoreDb, operationId: string): { request_hash: stri
   if (typeof operationId !== "string" || operationId.trim() === "") {
     throw new IssueError("issue.invalid-operation-id", "operationId must be a non-empty string");
   }
-  return db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(operationId) as
-    | { request_hash: string; result_json: string }
-    | undefined;
+  // The standalone namespace is shared by every collaboration domain that does
+  // not compose across stores, so a receipt this verb did not write still
+  // refuses an id reused for a different payload.
+  return db
+    .prepare(
+      "select request_hash, result_json from collaboration_operations where key_space = 'standalone' and operation_id = ?",
+    )
+    .get(operationId) as { request_hash: string; result_json: string } | undefined;
 }
 
 function replayOrConflict(existing: { request_hash: string; result_json: string }, hash: string): IssueReceipt {
@@ -647,12 +670,10 @@ function replayOrConflict(existing: { request_hash: string; result_json: string 
 }
 
 function recordOperation(db: StoreDb, operationId: string, hash: string, receipt: IssueReceipt, at: string): void {
-  db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)").run(
-    operationId,
-    hash,
-    JSON.stringify(receipt),
-    at,
-  );
+  db.prepare(
+    "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at)" +
+      " values ('standalone', ?, ?, ?, ?)",
+  ).run(operationId, hash, JSON.stringify(receipt), at);
 }
 
 type OccurrenceColumns = {
@@ -780,7 +801,6 @@ export function assertIssueProvenanceSchema(db: StoreDb): void {
 }
 
 function insertCaptureProvenance(db: StoreDb, issueId: string, cols: OccurrenceColumns): void {
-  assertIssueProvenanceSchema(db);
   db.prepare(
     "insert into provenance(issue_id, kind, target, source_hash, origin) values (?, ?, ?, ?, 'unscoped')",
   ).run(issueId, "capture", cols.sourceIdentity, sha256(cols.occurrenceKey));
@@ -811,33 +831,18 @@ export type ComposedTransactionRevision = {
 export type AuthorizedIssueMutation = MutationContext;
 
 /**
- * The transaction of ONE public issue mutation: this transport opens the store,
- * asserts the store precondition, opens the transaction, and calls the SAME
- * handle-taking body the DB coordination route calls inside the transaction it
- * already owns. A body never opens a store or a transaction of its own, so
- * composing issue work into a caller's transaction is possible without a
- * nested `BEGIN`; called publicly, each verb is still exactly one transaction.
+ * The transaction of ONE public issue mutation: the collaboration writer admits
+ * the store, opens `BEGIN IMMEDIATE`, re-verifies the binding and active state
+ * under the writer lock, and commits — so neither a payload nor an earlier
+ * handle authorizes a write. The body then receives the same handle-taking shape
+ * the DB coordination route composes into its own transaction; it never opens a
+ * store or a transaction of its own.
  */
-async function withWrite<T>(context: StoreContext, fn: (handle: StoreHandle) => T): Promise<T> {
-  const handle = await openStore(context, "write");
-  try {
+async function withWrite<T>(context: StoreContext, fn: (handle: CollaborationStoreHandle) => T): Promise<T> {
+  return withCollaborationWrite(context, (handle) => {
     assertIssueStoreActive(handle.db);
-    handle.db.exec("begin immediate");
-    try {
-      const result = fn(handle);
-      handle.db.exec("commit");
-      return result;
-    } catch (error) {
-      try {
-        handle.db.exec("rollback");
-      } catch {
-        // nothing committed
-      }
-      throw error;
-    }
-  } finally {
-    handle.close();
-  }
+    return fn(handle);
+  });
 }
 
 function issueVocabularyError(field: "kind" | "severity", value: unknown): IssueError {
@@ -1115,6 +1120,22 @@ const LAST_ACTIVITY_SQL = `(select max(ts) from (
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
 ))`;
 
+/** The canonical scope key of one issue page: the filters with the applied bounds. */
+function issuePageScope(filter: IssueFilter, limit: number, offset: number): CollaborationScope {
+  return {
+    kind: "query",
+    key: `issues:${JSON.stringify({
+      projectId: filter.projectId ?? null,
+      disposition: filter.disposition ?? "open",
+      kind: filter.kind ?? null,
+      severity: filter.severity ?? null,
+      query: filter.query ?? null,
+      limit,
+      offset,
+    })}`,
+  };
+}
+
 function bindFilter(filter: IssueFilter): { where: string; params: unknown[] } {
   const clauses: string[] = [];
   const params: unknown[] = [];
@@ -1150,23 +1171,28 @@ function bindFilter(filter: IssueFilter): { where: string; params: unknown[] } {
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 
-export async function listIssues(context: StoreContext, filter: IssueFilter): Promise<IssuePage> {
+export async function listIssues(
+  context: StoreContext,
+  filter: IssueFilter,
+): Promise<IssuePage & { collaboration: CompleteCollaborationObservation }> {
   const limit = filter.limit ?? 50;
   const offset = filter.offset ?? 0;
   if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(offset) || offset < 0) {
     throw new IssueError("issue.scope-refused", "limit must be 1..200 and offset must be nonnegative");
   }
   const { where, params } = bindFilter(filter);
-  const handle = await openStore(context, "read");
+  const handle = await openCollaborationStore(context, "read");
   try {
     const db = handle.db;
-    // FW-6: a staged import is not read authority (apply≠activate) — the read
-    // verbs refuse `store.not-active` exactly like the mutations; staged data
-    // is inspectable through the migration surface (manifest/receipt), never
-    // as queryable issues.
+    db.exec("begin");
+    // The collaboration lane owns issue read authority: a staged or foreign
+    // store never reaches this point, and no legacy schema gate applies — the
+    // lane is created complete.
     assertIssueStoreActive(db);
-    const hasMilestones = handle.schemaVersion >= 7;
-    const storeRevision = readMeta(db).revision;
+    const collaboration = readCollaborationObservation(handle, issuePageScope(filter, limit, offset));
+    // The page revision is the observation's own counter: no second query of
+    // the same row can disagree with the proof it publishes.
+    const storeRevision = collaboration.revision;
     const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
     const spanRow = db
       .prepare(`select count(distinct project_id) as n from issues ${where}`)
@@ -1179,7 +1205,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
     const rows = db
       .prepare(
         `select issues.id, issues.project_id as projectId, issues.title, issues.kind, issues.severity, issues.disposition,
-                issues.registered_at as registeredAt, issues.revision${hasMilestones ? ", issues.milestone_id as milestoneId" : ""},
+                issues.registered_at as registeredAt, issues.revision, issues.milestone_id as milestoneId,
                 (${LAST_ACTIVITY_SQL}) as lastActivity
          from issues ${where} ${order} limit ? offset ?`,
       )
@@ -1195,6 +1221,7 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
       milestoneId?: string | null;
       lastActivity: string | null;
     }>;
+    db.exec("commit");
     return {
       items: rows.map((row) => ({
         id: row.id,
@@ -1211,27 +1238,35 @@ export async function listIssues(context: StoreContext, filter: IssueFilter): Pr
       total: totalRow.n,
       projectCount: spanRow.n,
       storeRevision,
+      collaboration,
     };
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }
 }
 
-export async function getIssue(context: StoreContext, id: string): Promise<IssueDetail> {
-  const handle = await openStore(context, "read");
+export async function getIssue(
+  context: StoreContext,
+  id: string,
+): Promise<IssueDetail & { collaboration: CompleteCollaborationObservation }> {
+  const handle = await openCollaborationStore(context, "read");
   try {
     const db = handle.db;
-    assertIssueProvenanceSchema(db);
-    // FW-6: same stage gate as listIssues — a staged store is refused, never
-    // served as read authority.
+    db.exec("begin");
+    // Same authority and same gate as listIssues: the collaboration lane keeps
+    // its complete shape, so no legacy per-table schema probe applies.
     assertIssueStoreActive(db);
-    // The project-move table arrives with migration 13; an older store keeps
-    // reading (empty history) exactly like the milestone column above it.
-    const hasProjectMoves = handle.schemaVersion >= 13;
-    const milestoneSelect = handle.schemaVersion >= 7 ? ", milestone_id" : "";
+    const collaboration = readCollaborationObservation(handle, { kind: "query", key: `issue:${id}` });
     const issue = db
       .prepare(
-        `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision${milestoneSelect}, provider, external_id, url, identity_key from issues where id = ?`,
+        `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, milestone_id, provider, external_id, url, identity_key from issues where id = ?`,
       )
       .get(id) as
       | {
@@ -1365,29 +1400,27 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       importedAt: row.imported_at,
     }));
 
-    const projectMoves = hasProjectMoves
-      ? (
-          db
-            .prepare(
-              "select from_project_id, to_project_id, actor, reason, occurred_at, issue_revision from issue_project_moves where issue_id = ? order by id asc",
-            )
-            .all(id) as Array<{
-            from_project_id: string;
-            to_project_id: string;
-            actor: string;
-            reason: string;
-            occurred_at: string;
-            issue_revision: number;
-          }>
-        ).map((row) => ({
-          fromProject: row.from_project_id,
-          toProject: row.to_project_id,
-          actor: row.actor,
-          reason: row.reason,
-          occurredAt: row.occurred_at,
-          issueRevision: row.issue_revision,
-        }))
-      : [];
+    const projectMoves = (
+      db
+        .prepare(
+          "select from_project_id, to_project_id, actor, reason, occurred_at, issue_revision from issue_project_moves where issue_id = ? order by id asc",
+        )
+        .all(id) as Array<{
+        from_project_id: string;
+        to_project_id: string;
+        actor: string;
+        reason: string;
+        occurred_at: string;
+        issue_revision: number;
+      }>
+    ).map((row) => ({
+      fromProject: row.from_project_id,
+      toProject: row.to_project_id,
+      actor: row.actor,
+      reason: row.reason,
+      occurredAt: row.occurred_at,
+      issueRevision: row.issue_revision,
+    }));
 
     return {
       id: issue.id,
@@ -1415,7 +1448,15 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       relations,
       provenance,
       projectMoves,
+      collaboration,
     };
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }
@@ -1553,7 +1594,6 @@ function obsoleteRefusal(message: string): IssueError {
 }
 
 function linkedPlanTargets(db: StoreDb, issueId: string): string[] {
-  assertIssueProvenanceSchema(db);
   const rows = db
     .prepare("select distinct target from provenance where issue_id = ? and kind = 'plan' and origin = 'scoped' order by target")
     .all(issueId) as Array<{ target: string }>;
@@ -1650,7 +1690,6 @@ export async function triageIssue(
  * reads through the transaction it already owns.
  */
 export function assertIssueLinkedToPlanOn(db: StoreDb, issueId: string, planId: string): void {
-  assertIssueProvenanceSchema(db);
   const linked = db
     .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ? and origin = 'scoped'")
     .get(issueId, planId) as { ok: number } | undefined;
@@ -1849,12 +1888,6 @@ export function moveIssueOn(
   if (!Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) {
     throw new IssueError("issue.scope-refused", "expectedStoreRevision is required for a project move");
   }
-  const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
-  if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 13) {
-    throw refusalWithDetails("issue.schema-outdated", 'Project moves require schema 13; run "mstar store upgrade --operator <name>" first.', {
-      recovery: 'Run `mstar store upgrade --operator <name>` against the selected harness, then rerun the same move.',
-    });
-  }
   const hash = requestHash("moveIssue", {
     issueId,
     projectId,
@@ -2017,10 +2050,6 @@ export async function assignIssueMilestone(
   });
   return withWrite(context, (handle) => {
     const db = handle.db;
-    const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
-    if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7) {
-      throw new IssueError("milestone.schema-outdated", 'Milestone assignment requires schema 7; run "mstar store upgrade --operator <name>" first.');
-    }
     const existing = lookupOperation(db, mutation.operationId);
     if (existing) return replayOrConflict(existing, hash);
     const issue = db.prepare("select project_id, revision, milestone_id from issues where id=?").get(issueId) as
@@ -2136,7 +2165,6 @@ function linkIssueOnWithOrigin(
   } else {
     const target = requireNonblank("target", link.target);
     const sourceHash = sha256(lengthDelimited([link.kind, target]));
-    assertIssueProvenanceSchema(db);
     const existing = db
       .prepare("select 1 as ok from provenance where issue_id = ? and kind = ? and target = ? and origin = ?")
       .get(issueId, link.kind, target, origin) as { ok: number } | undefined;

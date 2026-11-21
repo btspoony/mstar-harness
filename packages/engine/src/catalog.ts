@@ -36,7 +36,14 @@ import {
   resolveTrackedResultDir,
 } from "./path.js";
 import { mainWorktreeRoot, realpathNearest } from "./git-probe.js";
-import { openStore, readStoreAuthority, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
+import {
+  openCollaborationStore,
+  readCollaborationObservation,
+  withCollaborationWrite,
+  type CollaborationScope,
+  type CompleteCollaborationObservation,
+} from "./collaboration-store.js";
+import { type StoreContext, type StoreDb, storeDbPath } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
 // Vocabulary (contract §2)
@@ -733,11 +740,13 @@ export type ComposedStoreRevision = {
  * — one reader for both transports.
  */
 export function readCatalogStoreVersionsOn(db: StoreDb): CatalogStoreVersions {
-  const row = readStoreAuthority(db);
-  if (typeof row.authorityState !== "string" || typeof row.revision !== "number" || typeof row.catalogRevision !== "number") {
-    throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept catalog mutations. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.");
+  const row = db
+    .prepare("select authority_state, revision, catalog_revision from collaboration_meta where id = 1")
+    .get() as { authority_state?: unknown; revision?: unknown; catalog_revision?: unknown } | undefined;
+  if (typeof row?.authority_state !== "string" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
+    throw new CatalogError("store.not-active", "collaboration_meta is missing; the catalog requires the repository's collaboration authority. Run mstar store init (fresh scope) or the reviewed collaboration apply/activate sequence, then retry.");
   }
-  return { storeRevision: row.revision, catalogRevision: row.catalogRevision, authorityState: row.authorityState };
+  return { storeRevision: row.revision, catalogRevision: row.catalog_revision, authorityState: row.authority_state };
 }
 
 function assertCatalogActive(db: StoreDb): void {
@@ -759,10 +768,10 @@ function assertCatalogActive(db: StoreDb): void {
  */
 function bumpCatalogRevisions(db: StoreDb, composed?: ComposedStoreRevision): CatalogStoreVersions {
   if (composed !== undefined) {
-    db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+    db.prepare("update collaboration_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
     return { ...readCatalogStoreVersionsOn(db), storeRevision: composed.committedStoreRevision };
   }
-  db.prepare("update store_meta set revision = revision + 1, catalog_revision = catalog_revision + 1 where id = 1").run();
+  db.prepare("update collaboration_meta set revision = revision + 1, catalog_revision = catalog_revision + 1 where id = 1").run();
   return readCatalogStoreVersionsOn(db);
 }
 
@@ -816,24 +825,7 @@ function receiptOf(row: EntityRow, storeRevision: number): CatalogReceipt {
 }
 
 async function withCatalogWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
-  const handle = await openStore(context, "write");
-  try {
-    handle.db.exec("begin immediate");
-    try {
-      const result = fn(handle.db);
-      handle.db.exec("commit");
-      return result;
-    } catch (error) {
-      try {
-        handle.db.exec("rollback");
-      } catch {
-        // nothing committed
-      }
-      throw error;
-    }
-  } finally {
-    handle.close();
-  }
+  return withCollaborationWrite(context, (handle) => fn(handle.db));
 }
 
 // ---------------------------------------------------------------------------
@@ -1186,12 +1178,31 @@ function bindCatalogFilter(filter: CatalogFilter | undefined): { where: string; 
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 
+/** The canonical scope key of one catalog page: the filters with the applied bounds. */
+function catalogPageScope(filter: CatalogFilter, limit: number, offset: number): CollaborationScope {
+  return {
+    kind: "query",
+    key: `catalog:${JSON.stringify({
+      kind: filter.kind ?? null,
+      documentKind: filter.documentKind ?? null,
+      lifecycle: filter.lifecycle ?? null,
+      projectId: filter.projectId ?? null,
+      iterationId: filter.iterationId ?? null,
+      limit,
+      offset,
+    })}`,
+  };
+}
+
 /**
  * List catalog rows with their incident links. `lifecycle` is unfiltered
  * unless asked (retention is explicit: archived/superseded rows stay
  * registered), ordering is the contract §6 deterministic kind/title/id.
  */
-export async function listCatalog(context: StoreContext, filter: CatalogFilter = {}): Promise<CatalogPage> {
+export async function listCatalog(
+  context: StoreContext,
+  filter: CatalogFilter = {},
+): Promise<CatalogPage & { collaboration: CompleteCollaborationObservation }> {
   const limit = filter.limit ?? 50;
   const offset = filter.offset ?? 0;
   if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(offset) || offset < 0) {
@@ -1199,9 +1210,11 @@ export async function listCatalog(context: StoreContext, filter: CatalogFilter =
   }
   const { where, params } = bindCatalogFilter(filter);
   const roots = catalogRoots(context);
-  const handle = await openStore(context, "read");
+  const handle = await openCollaborationStore(context, "read");
   try {
     const db = handle.db;
+    db.exec("begin");
+    const collaboration = readCollaborationObservation(handle, catalogPageScope(filter, limit, offset));
     const storeRevision = readCatalogStoreVersionsOn(db).storeRevision;
     const total = db.prepare(`select count(*) as n from catalog_entities ${where}`).get(...params) as { n: number };
     const rows = db
@@ -1210,33 +1223,64 @@ export async function listCatalog(context: StoreContext, filter: CatalogFilter =
           `order by catalog_entities.kind asc, catalog_entities.title asc, catalog_entities.id asc limit ? offset ?`,
       )
       .all(...params, limit, offset) as EntityRow[];
+    // The page's incident links belong to the same snapshot as its rows, total
+    // and revision: read them inside this transaction, before it commits.
+    const links = incidentLinks(
+      db,
+      rows.map((row) => ({ kind: row.kind, id: row.id })),
+    );
+    db.exec("commit");
     return {
       items: rows.map((row) => toCatalogEntity(row, roots)),
-      links: incidentLinks(
-        db,
-        rows.map((row) => ({ kind: row.kind, id: row.id })),
-      ),
+      links,
       total: total.n,
       storeRevision,
+      collaboration,
     };
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }
 }
 
 /** One catalog row with every link incident to it. */
-export async function getCatalog(context: StoreContext, key: CatalogKey): Promise<CatalogDetail> {
+export async function getCatalog(
+  context: StoreContext,
+  key: CatalogKey,
+): Promise<CatalogDetail & { collaboration: CompleteCollaborationObservation }> {
   const target = requireKey("key", key);
   const roots = catalogRoots(context);
-  const handle = await openStore(context, "read");
+  const handle = await openCollaborationStore(context, "read");
   try {
-    const row = readEntity(handle.db, target.kind, target.id);
+    const db = handle.db;
+    db.exec("begin");
+    const collaboration = readCollaborationObservation(handle, {
+      kind: "query",
+      key: `catalog:${target.kind}:${target.id}`,
+    });
+    const row = readEntity(db, target.kind, target.id);
     if (!row) throw new CatalogError("catalog.not-found", `${target.kind} ${target.id} is not registered`);
-    return {
+    const detail = {
       entity: toCatalogEntity(row, roots),
-      links: incidentLinks(handle.db, [target]),
-      storeRevision: readCatalogStoreVersionsOn(handle.db).storeRevision,
+      links: incidentLinks(db, [target]),
+      storeRevision: readCatalogStoreVersionsOn(db).storeRevision,
+      collaboration,
     };
+    db.exec("commit");
+    return detail;
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }

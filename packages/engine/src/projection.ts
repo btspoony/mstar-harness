@@ -36,6 +36,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { openCollaborationStore } from "./collaboration-store.js";
 import { catalogRootDir, type CatalogLifecycle, type CatalogRootKind } from "./catalog.js";
 import { isPlainObject } from "./coordination-write.js";
 import { parseCompassFrontmatterText, validateCompassFrontmatter } from "./iteration.js";
@@ -153,11 +154,16 @@ export type ProjectionRows = {
  * A validated read of the whole source set, taken outside any transaction.
  * `blocked` means at least one source problem makes this capture unpublishable;
  * `rows` then holds only the sources that were read cleanly.
+ *
+ * The two revisions are carried INDEPENDENTLY: `executionRevision` is the
+ * execution store's own counter, and `catalogRevision` belongs to the
+ * collaboration store (null when that optional input was unreadable). Neither
+ * is a shared cross-file stamp.
  */
 export type ProjectionCapture = {
   formatVersion: number;
-  catalogRevision: number;
-  storeRevision?: number | null;
+  catalogRevision: number | null;
+  executionRevision: number | null;
   sources: ProjectionSourceDigest[];
   rows: ProjectionRows;
   diagnostics: SourceDiagnostic[];
@@ -271,7 +277,9 @@ function asCatalogLifecycle(value: unknown): CatalogLifecycle {
 }
 
 type CatalogInputs = {
-  catalogRevision: number;
+  catalogRevision: number | null;
+  /** The execution revision the bindings were read at (same transaction). */
+  executionRevision: number | null;
   bindings: Array<{ workflowId: string; rootKind: CatalogRootKind; relativePath: string }>;
   compassDocs: Array<{
     iterationId: string;
@@ -281,113 +289,173 @@ type CatalogInputs = {
     rootKind: CatalogRootKind;
     relativePath: string;
   }>;
+  /** Set when the collaboration catalog could not be read at all. */
+  unavailable: { code: string; message: string } | null;
 };
 
 type CatalogDocumentRow = { id: string; rootKind: CatalogRootKind; relativePath: string; documentKind: string; lifecycle: string; revision: number };
 
+/** A refusal's stable code (the capture reports it, never a guess). */
+function catalogRefusalCode(error: unknown): string {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const { code } = error;
+    if (typeof code === "string" && code !== "") return code;
+  }
+  return "collaboration.unreadable";
+}
+
 /**
- * The catalog side of a capture: ONE read-only connection for the current
- * revision, committed execution bindings and linked compass documents. These
- * are plain projection SELECTs over catalog tables; every catalog WRITE stays
- * on the catalog domain verbs, and
- * this module never mutates a catalog row.
+ * The catalog side of a capture, composed from its two owning sources: the
+ * portable catalog rows/revision live in the collaboration store, while the
+ * checkout-specific execution bindings stay in the execution store. Each is
+ * read once, on its own connection; no cross-file SQL and no transaction spans
+ * the two. A collaboration catalog that cannot be read is reported as
+ * unavailable so the capture blocks instead of publishing guessed rows.
  */
 async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> {
+  const empty: CatalogInputs = { catalogRevision: null, executionRevision: null, bindings: [], compassDocs: [], unavailable: null };
+
+  let collaboration: { catalogRevision: number; documents: CatalogDocumentRow[]; links: Array<Record<string, unknown>>; owners: Array<Record<string, unknown>> };
+  try {
+    const handle = await openCollaborationStore(context, "read");
+    try {
+      const db = handle.db;
+      // One source-local snapshot: the revision and every catalog row this
+      // capture renders come from the same instant, so a competing catalog
+      // write cannot pair old rows with a newer revision.
+      db.exec("begin deferred");
+      const meta = db.prepare("select catalog_revision from collaboration_meta where id = 1").get() as
+        | { catalog_revision?: unknown }
+        | undefined;
+      if (typeof meta?.catalog_revision !== "number") {
+        return { ...empty, unavailable: { code: "collaboration.unreadable", message: "collaboration authority has no readable catalog revision" } };
+      }
+      const documents = (
+        db
+          .prepare(
+            "select id, root_kind, relative_path, document_kind, lifecycle, revision from catalog_entities " +
+              "where kind = 'document' and document_kind = 'compass'",
+          )
+          .all() as Array<Record<string, unknown>>
+      ).flatMap((row) => {
+        const id = text(row.id);
+        const rootKind = asCatalogRootKind(row.root_kind);
+        const relativePath = text(row.relative_path);
+        const documentKind = text(row.document_kind);
+        if (id === null || rootKind === null || relativePath === null || documentKind === null) return [];
+        return [
+          {
+            id,
+            rootKind,
+            relativePath,
+            documentKind,
+            lifecycle: text(row.lifecycle) ?? "active",
+            revision: typeof row.revision === "number" ? row.revision : 0,
+          } satisfies CatalogDocumentRow,
+        ];
+      });
+      const links = db
+        .prepare("select from_kind, from_id, to_kind, to_id from catalog_links where relation = 'documents'")
+        .all() as Array<Record<string, unknown>>;
+      const owners = db
+        .prepare("select id, lifecycle from catalog_entities where kind = 'iteration'")
+        .all() as Array<Record<string, unknown>>;
+      db.exec("commit");
+      collaboration = { catalogRevision: meta.catalog_revision, documents, links, owners };
+    } finally {
+      handle.close();
+    }
+  } catch (error) {
+    const code = catalogRefusalCode(error);
+    return { ...empty, unavailable: { code, message: `collaboration catalog unavailable (${code})` } };
+  }
+
+  const executionFacts = await readExecutionBindings(context);
+  const bindings = executionFacts.bindings;
+  const byId = new Map(collaboration.documents.map((doc) => [doc.id, doc]));
+  const pick = (ownerId: string): CatalogDocumentRow | null => {
+    const candidates = collaboration.links
+      .filter(
+        (link) =>
+          link.from_kind === "iteration" &&
+          link.from_id === ownerId &&
+          link.to_kind === "document" &&
+          typeof link.to_id === "string",
+      )
+      .map((link) => byId.get(link.to_id as string))
+      .filter((doc): doc is CatalogDocumentRow => doc !== undefined)
+      .sort((a, b) => {
+        if (a.lifecycle !== b.lifecycle) return a.lifecycle === "active" ? -1 : 1;
+        if (a.revision !== b.revision) return b.revision - a.revision;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
+    return candidates[0] ?? null;
+  };
+
+  const compassDocs: CatalogInputs["compassDocs"] = [];
+  for (const owner of collaboration.owners) {
+    const ownerId = text(owner.id);
+    if (ownerId === null) continue;
+    const doc = pick(ownerId);
+    if (doc !== null) {
+      compassDocs.push({
+        iterationId: ownerId,
+        lifecycle: asCatalogLifecycle(owner.lifecycle),
+        rootKind: doc.rootKind,
+        relativePath: doc.relativePath,
+      });
+    }
+  }
+
+  return {
+    catalogRevision: collaboration.catalogRevision,
+    executionRevision: executionFacts.revision,
+    bindings,
+    compassDocs,
+    unavailable: null,
+  };
+}
+
+/**
+ * The checkout-specific bindings AND the execution revision stay in the
+ * execution store, read in ONE source-local transaction: the revision a capture
+ * reports is the revision the bindings were read at, so a binding that moves
+ * cannot be published under a newer stamp.
+ */
+async function readExecutionBindings(
+  context: StoreContext,
+): Promise<{ bindings: CatalogInputs["bindings"]; revision: number | null }> {
   const handle = await openStore(context, "read");
   try {
-    const db = handle.db;
-    const meta = db.prepare("select catalog_revision from store_meta where id = 1").get() as
-      | { catalog_revision?: unknown }
-      | undefined;
-    const catalogRevision = typeof meta?.catalog_revision === "number" ? meta.catalog_revision : 0;
-
-    const bindings = (
-      db
-        .prepare(
-          "select workflow_id, workflow_root_kind, workflow_relative_path from catalog_execution_bindings order by workflow_id asc",
-        )
-        .all() as Array<Record<string, unknown>>
-    ).flatMap((row) => {
-      const workflowId = text(row.workflow_id);
-      const rootKind = asCatalogRootKind(row.workflow_root_kind);
-      const relativePath = text(row.workflow_relative_path);
-      return workflowId !== null && rootKind !== null && relativePath !== null
-        ? [{ workflowId, rootKind, relativePath: relativePath.replace(/\/+$/, "") }]
-        : [];
-    });
-
-    // Linked compass documents: the catalog decides the paths (never README
-    // discovery). When several are linked, select active first, then newest
-    // revision, then lowest id.
-    const documents = (
-      db
-        .prepare(
-          "select id, root_kind, relative_path, document_kind, lifecycle, revision from catalog_entities " +
-            "where kind = 'document' and document_kind = 'compass'",
-        )
-        .all() as Array<Record<string, unknown>>
-    ).flatMap((row) => {
-      const id = text(row.id);
-      const rootKind = asCatalogRootKind(row.root_kind);
-      const relativePath = text(row.relative_path);
-      const documentKind = text(row.document_kind);
-      if (id === null || rootKind === null || relativePath === null || documentKind === null) return [];
-      return [
-        {
-          id,
-          rootKind,
-          relativePath,
-          documentKind,
-          lifecycle: text(row.lifecycle) ?? "active",
-          revision: typeof row.revision === "number" ? row.revision : 0,
-        } satisfies CatalogDocumentRow,
-      ];
-    });
-
-    const links = db
-      .prepare("select from_kind, from_id, to_kind, to_id from catalog_links where relation = 'documents'")
-      .all() as Array<Record<string, unknown>>;
-
-    const owners = db
-      .prepare("select id, lifecycle from catalog_entities where kind = 'iteration'")
-      .all() as Array<Record<string, unknown>>;
-
-    const byId = new Map(documents.map((doc) => [doc.id, doc]));
-    const pick = (ownerId: string): CatalogDocumentRow | null => {
-      const candidates = links
-        .filter(
-          (link) =>
-            link.from_kind === "iteration" &&
-            link.from_id === ownerId &&
-            link.to_kind === "document" &&
-            typeof link.to_id === "string",
-        )
-        .map((link) => byId.get(link.to_id as string))
-        .filter((doc): doc is CatalogDocumentRow => doc !== undefined)
-        .sort((a, b) => {
-          if (a.lifecycle !== b.lifecycle) return a.lifecycle === "active" ? -1 : 1;
-          if (a.revision !== b.revision) return b.revision - a.revision;
-          return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-        });
-      return candidates[0] ?? null;
-    };
-
-    const compassDocs: CatalogInputs["compassDocs"] = [];
-    for (const owner of owners) {
-      const ownerId = text(owner.id);
-      if (ownerId === null) continue;
-      const doc = pick(ownerId);
-      if (doc !== null) {
-        compassDocs.push({
-          iterationId: ownerId,
-          lifecycle: asCatalogLifecycle(owner.lifecycle),
-          rootKind: doc.rootKind,
-          relativePath: doc.relativePath,
-        });
+    handle.db.exec("begin deferred");
+    try {
+      const bindings = (
+        handle.db
+          .prepare(
+            "select workflow_id, workflow_root_kind, workflow_relative_path from catalog_execution_bindings order by workflow_id asc",
+          )
+          .all() as Array<Record<string, unknown>>
+      ).flatMap((row) => {
+        const workflowId = text(row.workflow_id);
+        const rootKind = asCatalogRootKind(row.workflow_root_kind);
+        const relativePath = text(row.workflow_relative_path);
+        return workflowId !== null && rootKind !== null && relativePath !== null
+          ? [{ workflowId, rootKind, relativePath: relativePath.replace(/\/+$/, "") }]
+          : [];
+      });
+      const row = handle.db.prepare("select revision from store_meta where id = 1").get() as
+        | { revision?: unknown }
+        | undefined;
+      handle.db.exec("commit");
+      return { bindings, revision: typeof row?.revision === "number" ? row.revision : null };
+    } catch (error) {
+      try {
+        handle.db.exec("rollback");
+      } catch {
+        // connection-level failure during rollback -- nothing was committed
       }
+      throw error;
     }
-
-    return { catalogRevision, bindings, compassDocs };
   } finally {
     handle.close();
   }
@@ -514,12 +582,22 @@ function safeExecutionAuthorityError(error: unknown): string {
 
 async function captureExecutionProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
   const inputs = await readCatalogInputs(context);
-  const revisionHandle = await openStore(context, "read");
-  let capturedStoreRevision: number;
-  try {
-    capturedStoreRevision = (revisionHandle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
-  } finally {
-    revisionHandle.close();
+  const capturedExecutionRevision = inputs.executionRevision;
+  if (inputs.unavailable !== null) {
+    // The collaboration catalog is a declared input: an unreadable one blocks
+    // publication with its own code instead of publishing rows whose compass
+    // membership and pins were never observed.
+    const sources: ProjectionSourceDigest[] = [];
+    return {
+      formatVersion: PROJECTION_FORMAT_VERSION,
+      catalogRevision: null,
+      executionRevision: capturedExecutionRevision,
+      sources,
+      rows: { workflows: [], plans: [], leases: [], compasses: [] },
+      diagnostics: [{ sourceKey: "catalog", reason: "inaccessible", message: inputs.unavailable.message }],
+      sourceSetHash: computeSourceSetHash(null, sources),
+      blocked: true,
+    };
   }
   let servedGraph: ExecutionState;
   try {
@@ -532,7 +610,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     return {
       formatVersion: PROJECTION_FORMAT_VERSION,
       catalogRevision: inputs.catalogRevision,
-      storeRevision: capturedStoreRevision,
+      executionRevision: capturedExecutionRevision,
       sources,
       rows,
       diagnostics: [{ sourceKey, reason: "invalid", message }],
@@ -831,7 +909,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     }
     sources.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
     const sourceSetHash = computeSourceSetHash(inputs.catalogRevision, sources);
-    return { formatVersion: PROJECTION_FORMAT_VERSION, catalogRevision: inputs.catalogRevision, storeRevision: capturedStoreRevision, sources, rows, diagnostics, sourceSetHash, blocked: diagnostics.length > 0 };
+    return { formatVersion: PROJECTION_FORMAT_VERSION, catalogRevision: inputs.catalogRevision, executionRevision: capturedExecutionRevision, sources, rows, diagnostics, sourceSetHash, blocked: diagnostics.length > 0 };
   } finally {
     handle.close();
   }
@@ -840,14 +918,19 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
 /**
  * Fingerprint (contract §5): SHA-256 over the sorted
  * `(canonical source key, existence/readability state, SHA-256 of the raw
- * bytes)` tuples, plus the projection format version and the catalog revision
- * (the catalog identity the compass paths and pin revisions came from). mtime and size are deliberately absent.
+ * bytes)` tuples, plus the projection format version and the collaboration
+ * catalog revision (the catalog identity the compass paths and pin revisions
+ * came from). mtime and size are deliberately absent.
  */
-function computeSourceSetHash(catalogRevision: number, sources: ProjectionSourceDigest[]): string {
+function computeSourceSetHash(catalogRevision: number | null, sources: ProjectionSourceDigest[]): string {
   const tuples = sources
     .map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\u0000"))
     .sort();
-  const payload = [`projection-format:${PROJECTION_FORMAT_VERSION}`, `catalog-revision:${catalogRevision}`, ...tuples].join("\n");
+  const payload = [
+    `projection-format:${PROJECTION_FORMAT_VERSION}`,
+    `catalog-revision:${catalogRevision ?? "unobserved"}`,
+    ...tuples,
+  ].join("\n");
   return createHash("sha256").update(payload, "utf8").digest("hex");
 }
 
@@ -1362,6 +1445,12 @@ function assertCaptureShape(capture: ProjectionCapture): void {
     invalid("capture must carry sources and diagnostics arrays");
   }
   if (!isPlainObject(capture.rows)) invalid("capture must carry projected rows");
+  for (const field of ["catalogRevision", "executionRevision"] as const) {
+    const value = capture[field];
+    if (value !== null && (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)) {
+      invalid(`capture.${field} must be a nonnegative integer or null`);
+    }
+  }
   if (typeof capture.sourceSetHash !== "string" || !/^[0-9a-f]{64}$/.test(capture.sourceSetHash)) {
     invalid("capture.sourceSetHash must be a SHA-256 hex digest");
   }
@@ -1386,18 +1475,48 @@ function selectWhereIn<T>(db: StoreDb, sql: (placeholders: string) => string, id
   return rows;
 }
 
+/**
+ * The collaboration catalog revision this instant, or null when the optional
+ * catalog source is unreadable. Publication compares capture.publish-order
+ * evidence separately from the execution transaction, never inside it.
+ */
+async function currentCatalogRevision(context: StoreContext): Promise<number | null> {
+  try {
+    const handle = await openCollaborationStore(context, "read");
+    try {
+      const row = handle.db.prepare("select catalog_revision from collaboration_meta where id = 1").get() as
+        | { catalog_revision?: unknown }
+        | undefined;
+      return typeof row?.catalog_revision === "number" ? row.catalog_revision : null;
+    } finally {
+      handle.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 async function attemptPublication(context: StoreContext, capture: ProjectionCapture, attempts: number): Promise<PublishAttempt> {
+  // The two source revisions are validated INDEPENDENTLY and outside any write
+  // transaction: the collaboration catalog is checked on its own connection
+  // before the execution write transaction opens (a cross-file read inside
+  // that transaction would be the mixed-handle assumption this cutover
+  // removed), and the execution revision is checked inside it.
+  // shortcut: a catalog write between this check and the execution commit can
+  // publish a projection one refresh behind; disposable projection rows are
+  // never authority and the next read re-captures. upgrade: refresh on every
+  // catalog mutation.
+  if (capture.catalogRevision !== null && (await currentCatalogRevision(context)) !== capture.catalogRevision) {
+    return { kind: "source-stale", movement: { kind: "catalog" } };
+  }
   const handle = await openStore(context, "write");
   const db = handle.db;
   try {
     assertProjectionTables(handle);
     db.exec("begin immediate");
     // Arm/authority agreement, decided INSIDE the publication transaction: a
-    // files-arm capture must not publish after the authority activated (and an
-    // authority-arm capture must not publish after a deactivation, should one
-    // ever exist). Activation bumps the store revision without touching the
-    // catalog revision, so the revision compares alone cannot catch it. A store
-    // below migration 4 has no execution_meta and cannot activate — no guard.
+    // capture must not publish after the execution authority left active.
+    // A store below migration 4 has no execution_meta and cannot activate.
     const executionMetaTable = db
       .prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'execution_meta'")
       .get() as { n?: number } | undefined;
@@ -1405,27 +1524,17 @@ async function attemptPublication(context: StoreContext, capture: ProjectionCapt
       const authorityRow = db.prepare("select authority_state from execution_meta where id = 1").get() as
         | { authority_state?: unknown }
         | undefined;
-      const authorityActive = authorityRow?.authority_state === "active";
-      if (capture.storeRevision === undefined && authorityActive) {
+      if (authorityRow?.authority_state !== "active") {
         db.exec("rollback");
-        return {
-          kind: "source-stale",
-          movement: { kind: "sources", keys: ["root:harness:execution/authority"] },
-        };
+        return { kind: "source-stale", movement: { kind: "sources", keys: ["root:harness:execution/authority"] } };
       }
     }
-    if (capture.storeRevision !== undefined) {
+    if (capture.executionRevision !== null) {
       const storeRevision = db.prepare("select revision from store_meta where id = 1").get() as { revision: number };
-      if (storeRevision.revision !== capture.storeRevision) {
+      if (storeRevision.revision !== capture.executionRevision) {
         db.exec("rollback");
         return { kind: "source-stale", movement: { kind: "sources", keys: ["root:harness:execution/store-revision"] } };
       }
-    }
-    const revisionRow = db.prepare("select catalog_revision from store_meta where id = 1").get() as { catalog_revision?: unknown } | undefined;
-    const catalogRevision = typeof revisionRow?.catalog_revision === "number" ? revisionRow.catalog_revision : 0;
-    if (catalogRevision !== capture.catalogRevision) {
-      db.exec("rollback");
-      return { kind: "source-stale", movement: { kind: "catalog" } };
     }
     const report = capture.blocked
       ? recordRetainedHealth(db, capture, null, attempts, true)

@@ -78,7 +78,7 @@ describe('mstar-engine-status — open-issue facts come from the store', () => {
     expect(payload.state).toMatchObject({ residuals: [], residualFindings: null })
     expect(payload.state?.selection).toMatchObject({ kind: 'error', code: 'store.not-initialized' })
     expect(payload.state?.storeFacts?.kind).toBe('unavailable')
-    expect(payload.state?.storeFacts?.diagnostic).toContain('store.not-initialized')
+    expect(payload.state?.storeFacts?.diagnostic).toContain('collaboration.not-initialized')
   })
 
   it('an active store with no open issue → residualFindings [] (an authoritative empty answer)', async () => {
