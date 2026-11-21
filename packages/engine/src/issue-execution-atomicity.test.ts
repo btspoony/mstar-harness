@@ -85,6 +85,7 @@ import { readExecutionCatalogPin } from "./coordination.js";
 import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 import type { WorkflowEntry } from "./status.js";
+import * as storeModule from "./store-db.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-issue-atomicity-")));
@@ -1156,6 +1157,63 @@ describe("collaboration composite residual", () => {
       }),
     );
     expect(reused.code).toBe("execution.operation-conflict");
+  });
+
+  test("a durable decline whose execution settlement fails is a partial, never the terminal refusal", async () => {
+    const fixture = await executionPlanFixture("composite-decline-unsettled");
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const outsider = await captureIssue(fixture.context, baseInput({ occurrenceKey: "outsider-unsettled" }), {
+      operationId: "seed-outsider-unsettled",
+      actor: ACTOR,
+    });
+    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
+    const closeRequest = {
+      operationId: "composite-close-unsettled",
+      session: fixture.session,
+      expected: plan.token,
+      planId: fixture.planId,
+      operation: {
+        kind: "residual-close" as const,
+        issueId: outsider.issueId,
+        disposition: "resolved" as const,
+        expectedIssueRevision: outsider.revision,
+        evidence: resolvedEvidence,
+      },
+    };
+
+    // The settlement transaction (the SECOND execution write) is made to fail:
+    // the collaboration decline is already durable, so reporting the ordinary
+    // business refusal would hide a reservation that may still be prepared.
+    const realOpen = storeModule.openStore;
+    let writes = 0;
+    const spy = spyOn(storeModule, "openStore").mockImplementation(async (ctx, mode) => {
+      if (mode === "write" && ctx.harnessDir === fixture.context.harnessDir) {
+        writes += 1;
+        if (writes === 2) throw new Error("simulated execution settlement failure");
+      }
+      return realOpen(ctx, mode);
+    });
+    let refused: { code: string; message: string; details?: unknown };
+    try {
+      refused = await refusalOf(() => mutateExecutionPlan(context, closeRequest));
+    } finally {
+      spy.mockRestore();
+    }
+    expect(refused.code).toBe("collaboration.operation-partial");
+    expect(refused.message).toContain("issue.scope-refused");
+    expect(refused.message).toContain("simulated execution settlement failure");
+    expect(refused.message).toContain("prepared");
+    expect(refused.details).toMatchObject({
+      business_cause: { code: "issue.scope-refused" },
+      settlement_error: expect.stringContaining("simulated execution settlement failure"),
+    });
+    // The reservation is still live: the honest report is a partial, and the
+    // same-identity retry settles it and then replays the recorded refusal.
+    expect(await intentPhases(fixture.context, "composite-close-unsettled")).toEqual(["prepared"]);
+    const settled = await refusalOf(() => mutateExecutionPlan(context, closeRequest));
+    expect(settled.code).toBe("issue.scope-refused");
+    expect(await intentPhases(fixture.context, "composite-close-unsettled")).toEqual(["declined"]);
+    expect((await getIssue(fixture.context, outsider.issueId)).disposition).toBe("open");
   });
 
   test("the multi-entry batch rolls back whole and keeps its child-occurrence conflict", async () => {

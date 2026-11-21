@@ -19,6 +19,11 @@ import { canonicalPath, isPathWithin, validateActivationAttestation } from "./st
 import { legacySnapshotInventory, projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
 import { SettlementAttestationNeeded, initializeStore, openStore, StoreError, storeDbPath, upgradeStore, type MigrationContext, type StoreContext, type StoreDb } from "./store-db.js";
 import { provisionActivationDocument, type ProvisionProcessFacts } from "./activation-provisioning.js";
+import {
+  noteOutstandingAcknowledgement,
+  repairCompositeAcknowledgement,
+  type CompositeKey,
+} from "./collaboration-operations.js";
 import { importDshHostStateFiles, type DshHostStateImportReport } from "./host-state-import.js";
 
 /** One registered workflow an execution-specific acknowledgement skipped importing. */
@@ -46,6 +51,13 @@ export type MinimalImportResult = {
    * discard a changed declaration silently.
    */
   inputDigest: string;
+  /**
+   * Warnings about a committed result that is not fully settled. The import
+   * commits a composite effect whose acknowledgement is a SECOND write: a lost
+   * acknowledgement is disclosed here instead of being reported as a clean
+   * success, and a same-operation replay repairs it.
+   */
+  warnings?: string[];
 };
 export type MinimalStoreUpgradeResult = MinimalImportResult & { schemaVersion: number; authorityState: "active"; dsh: DshHostStateImportReport };
 
@@ -1101,10 +1113,15 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   });
   // Receipt-first replay: a lost response answers from the ledger WITHOUT
   // touching the collaboration lane.
-  const preflight = await withExecutionTransaction(context, (tx) => readImportReceipt(tx, operationId, requestHash));
+  const preflight = await withExecutionTransaction(context, (tx) => {
+    const replayed = readImportReceipt(tx, operationId, requestHash);
+    return replayed === null
+      ? null
+      : { result: replayed, key: { executionStoreId: tx.storeId, executionEpoch: tx.epoch, operationId } };
+  });
   if (preflight !== null) {
     if (source.refusal !== undefined) conflict(source.refusal);
-    return preflight;
+    return repairImportAcknowledgement(context, preflight.key, preflight.result);
   }
   // Every deterministic admission refusal runs BEFORE the authority is promoted,
   // so a refused import never leaves an activated store behind.
@@ -1116,10 +1133,13 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   // state it was (a staged store stays staged — never an empty ACTIVE authority).
   const target = await collaborationTargetOf(context);
   const prepared = await withExecutionTransaction<
-    { kind: "replay"; result: MinimalImportResult } | { kind: "reserved"; intent: CompositeIntent }
+    | { kind: "replay"; result: MinimalImportResult; key: CompositeKey }
+    | { kind: "reserved"; intent: CompositeIntent }
   >(context, (tx) => {
     const replayed = readImportReceipt(tx, operationId, requestHash);
-    if (replayed !== null) return { kind: "replay" as const, result: replayed };
+    if (replayed !== null) {
+      return { kind: "replay" as const, result: replayed, key: { executionStoreId: tx.storeId, executionEpoch: tx.epoch, operationId } };
+    }
     // A retry after an interruption resumes the operation its FIRST attempt
     // admitted: the pending reservation is found by the reviewed identity, and
     // the recorded operation id (not this invocation's fresh one) addresses the
@@ -1148,7 +1168,7 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   });
   if (prepared.kind === "replay") {
     if (source.refusal !== undefined) conflict(source.refusal);
-    return prepared.result;
+    return repairImportAcknowledgement(context, prepared.key, prepared.result);
   }
   // The staged authority is promoted INSIDE the finalization transaction, with
   // the imported rows and the operation receipt (see `commitExecutionImport`), so

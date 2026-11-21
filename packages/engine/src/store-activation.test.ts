@@ -14,11 +14,11 @@
  */
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import * as collaborationStore from "./collaboration-store.js";
 import {
@@ -46,6 +46,7 @@ import {
   StoreActivationError,
   type ActivationAttestation,
   type ActivationReceipt,
+  type RepositoryBackupReceipt,
   type StoreActivationErrorCode,
 } from "./store-activation.js";
 import { initializeStore, MIGRATION_1_SQL, MIGRATIONS, migrationChecksum, openStore, SCHEMA_VERSION_TABLE_SQL, type StoreContext } from "./store-db.js";
@@ -1686,6 +1687,111 @@ describe("collaboration lifecycle", () => {
     expect(backupArtifacts(fixture.context)).toEqual([]);
   });
 
+  test("an unfenced legacy owner is refused before it reaches the repository lane", async () => {
+    const fixture = repoWorkspace("binding-legacy-owner-");
+    await ensureCollaborationAuthority(fixture.context);
+    const store = await initializeStore(fixture.context);
+    store.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key) " +
+          "values ('I-000001', '_default', 'Legacy owner row', 'bug', 'high', 'combined authority', 'cut over', 'now', 'now', 'legacy-owner')",
+      )
+      .run();
+    store.close();
+
+    await expect(
+      captureIssue(
+        fixture.context,
+        {
+          projectId: "_default",
+          title: "Refused by the legacy owner",
+          kind: "bug",
+          severity: "high",
+          impact: "the lane must not be reachable",
+          acceptance: "refused before I/O",
+          sourceIdentity: "qc/legacy-owner.md",
+          rootCauseKey: "legacy-owner",
+          acceptanceKey: "refused",
+          occurrenceKey: "run-legacy-owner",
+          sourceKind: "qc",
+          location: "fixture",
+          observedBehavior: "refused",
+          evidence: [],
+          discoveredAt: "2026-11-21T00:00:00.000Z",
+        },
+        { operationId: "op-legacy-owner", actor: "project-manager" },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.cutover-required" });
+    const lane = await readCollaborationStage(resolveCollaborationLocation(fixture.context), ({ db }) => ({
+      issues: db.prepare("select count(*) as n from issues").get(),
+    }));
+    expect(lane).toEqual({ issues: { n: 0 } });
+  });
+
+  test("a retargeted checkout never adopts another repository's authority", async () => {
+    const bound = repoWorkspaceWithKey("binding-retarget-a-", `fixture-retarget-a-${repoSequence++}`);
+    await ensureCollaborationAuthority(bound.context);
+    const otherId = `fixture-retarget-b-${repoSequence++}`;
+    const other = repoWorkspaceWithKey("binding-retarget-b-", otherId);
+    await ensureCollaborationAuthority(other.context);
+
+    // The bound checkout's config now names the OTHER repository.
+    writeFileSync(join(bound.checkout, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${otherId}\n`);
+    await expect(ensureCollaborationAuthority(bound.context)).rejects.toMatchObject({
+      code: "collaboration.stale-binding",
+    });
+    await expect(
+      captureIssue(
+        bound.context,
+        {
+          projectId: "_default",
+          title: "Refused after a retarget",
+          kind: "bug",
+          severity: "high",
+          impact: "a bound checkout never drifts",
+          acceptance: "refused before I/O",
+          sourceIdentity: "qc/retarget.md",
+          rootCauseKey: "retarget",
+          acceptanceKey: "refused",
+          occurrenceKey: "run-retarget",
+          sourceKind: "qc",
+          location: "fixture",
+          observedBehavior: "refused",
+          evidence: [],
+          discoveredAt: "2026-11-21T00:00:00.000Z",
+        },
+        { operationId: "op-retarget", actor: "project-manager" },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // The other repository's lane was not written by the refused checkout.
+    const lane = await readCollaborationStage(resolveCollaborationLocation(other.context), ({ db }) => ({
+      issues: db.prepare("select count(*) as n from issues").get(),
+    }));
+    expect(lane).toEqual({ issues: { n: 0 } });
+  });
+
+  test("a fresh replacement clone adopts the published lane without writing a binding on read", async () => {
+    const repoKey = `fixture-replacement-${repoSequence++}`;
+    const origin = repoWorkspaceWithKey("replacement-origin-", repoKey);
+    (await initializeStore(origin.context)).close();
+    await ensureCollaborationAuthority(origin.context);
+    await captureOne(origin, "op-origin-capture");
+
+    // A replacement clone: same repository, its own execution store, no binding.
+    const clone = repoWorkspaceWithKey("replacement-clone-", repoKey);
+    (await initializeStore(clone.context)).close();
+    await captureOne(clone, "op-clone-capture");
+
+    // The clone's capture reached the shared lane (one issue, a second occurrence).
+    const lane = await readCollaborationStage(resolveCollaborationLocation(clone.context), ({ db }) => ({
+      issues: db.prepare("select count(*) as n from issues").get(),
+      occurrences: db.prepare("select count(*) as n from occurrences").get(),
+    }));
+    expect(lane).toEqual({ issues: { n: 1 }, occurrences: { n: 2 } });
+    // Reading/adopting never writes the binding; only the authority verbs do.
+    expect(existsSync(join(clone.harness, "collaboration-binding.json"))).toBe(false);
+  });
+
   test("a reviewed file-era import stages the lane and publishes it with a single epoch bump", async () => {
     const fixture = repoWorkspace("collab-file-era-");
     writeRegister(fixture.harness, "_default", { entries: { "plan-alpha": [entry({ id: "R1", severity: "high" })] } });
@@ -1724,8 +1830,8 @@ describe("repository backup pair", () => {
     expect(receipt.version).toBe(1);
     expect(receipt.manifestPath).toBe(out);
     expect(existsSync(out)).toBe(true);
-    expect(existsSync(receipt.execution.backupPath)).toBe(true);
-    expect(existsSync(receipt.collaboration.path)).toBe(true);
+    expect(existsSync(pairImage(receipt, "execution"))).toBe(true);
+    expect(existsSync(pairImage(receipt, "collaboration"))).toBe(true);
     expect(receipt.collaboration.authority).toMatchObject({ state: "active", mode: "local" });
     // The issue lives in the collaboration half only; the execution image carries no collaboration payload.
     expect(receipt.collaboration.counts.issues).toBe(1);
@@ -1796,12 +1902,12 @@ describe("repository backup pair", () => {
     const secondOut = join(second.harness, "archived", "recovery", "pair.json");
     const secondReceipt = await backupRepositoryStores(second.context, { out: secondOut });
     const secondLive = readFileSync(resolveCollaborationLocation(second.context).dbPath);
-    writeFileSync(secondReceipt.collaboration.path, "not a database\n");
+    writeFileSync(pairImage(secondReceipt, "collaboration"), "not a database\n");
     await expect(
       restoreCollaborationBackup(second.context, secondReceipt, { operator: "ops-engineer", attestation: attestation() }),
     ).rejects.toMatchObject({ code: "collaboration.backup-incomplete" });
     expect(existsSync(secondOut)).toBe(true);
-    expect(existsSync(secondReceipt.execution.backupPath)).toBe(true);
+    expect(existsSync(pairImage(secondReceipt, "execution"))).toBe(true);
     expect(readFileSync(resolveCollaborationLocation(second.context).dbPath)).toEqual(secondLive);
   });
 
@@ -1856,7 +1962,7 @@ describe("repository backup pair", () => {
     });
     const recovered = await backupRepositoryStores(fixture.context, { out });
     expect(recovered.manifestPath).toBe(out);
-    expect(existsSync(recovered.execution.backupPath)).toBe(true);
+    expect(existsSync(pairImage(recovered, "execution"))).toBe(true);
   });
 
   test("a recorded decline never blocks a pair, and the pair restores it as settled history", async () => {
@@ -1937,7 +2043,7 @@ describe("repository backup pair", () => {
     const fixture = await pairedWorkspace("pair-restore-bad-decline-");
     const out = join(fixture.harness, "archived", "recovery", "pair.json");
     const receipt = await backupRepositoryStores(fixture.context, { out });
-    const image = new DatabaseSync(receipt.collaboration.path);
+    const image = new DatabaseSync(pairImage(receipt, "collaboration"));
     try {
       image
         .prepare(
@@ -2097,8 +2203,8 @@ describe("repository backup pair", () => {
     }
     if (published.length === 1) {
       const receipt = (published[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof backupRepositoryStores>>>).value;
-      expect(existsSync(receipt.execution.backupPath)).toBe(true);
-      expect(existsSync(receipt.collaboration.path)).toBe(true);
+      expect(existsSync(pairImage(receipt, "execution"))).toBe(true);
+      expect(existsSync(pairImage(receipt, "collaboration"))).toBe(true);
       expect(existsSync(out)).toBe(true);
     }
     expect(readdirSync(dirname(out)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
@@ -2183,5 +2289,201 @@ describe("repository backup pair", () => {
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
     expect(existsSync(myLocation.dbPath)).toBe(false);
   });
-});
 
+  test("a pair moved with its manifest restores from the operator-supplied location", async () => {
+    const fixture = await pairedWorkspace("pair-moved-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    const moved = join(fixture.harness, "archived", "moved");
+    mkdirSync(moved, { recursive: true });
+    const movedManifest = join(moved, basename(out));
+    for (const name of [basename(out), receipt.execution.backupPath, receipt.collaboration.path]) {
+      copyFileSync(join(dirname(out), name), join(moved, name));
+    }
+    rmSync(dirname(out), { recursive: true, force: true });
+    const target = resolveCollaborationLocation(fixture.context).dbPath;
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${target}${suffix}`, { force: true });
+
+    const restored = await restoreCollaborationBackup(fixture.context, receipt, {
+      operator: "ops-engineer",
+      attestation: attestation(),
+      manifestPath: movedManifest,
+    });
+    expect(restored.state).toBe("active");
+  });
+
+  test("restore refuses an image the runtime would not admit and leaves the target absent", async () => {
+    const fixture = await pairedWorkspace("pair-bad-schema-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    // Structurally intact and contiguous, but it carries a table outside the
+    // closed collaboration inventory: the runtime's own admission must refuse it
+    // BEFORE the canonical target exists.
+    const image = new DatabaseSync(pairImage(receipt, "collaboration"));
+    try {
+      image.exec("create table rogue_authority(id integer primary key)");
+    } finally {
+      image.close();
+    }
+    const target = resolveCollaborationLocation(fixture.context).dbPath;
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${target}${suffix}`, { force: true });
+
+    await expect(
+      restoreCollaborationBackup(fixture.context, receipt, { operator: "ops-engineer", attestation: attestation() }),
+    ).rejects.toMatchObject({ code: "collaboration.unreadable" });
+    expect(existsSync(target)).toBe(false);
+  });
+
+  test("restore refuses a redirected authority ancestor before staging anything", async () => {
+    const fixture = await pairedWorkspace("pair-symlink-ancestor-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    const target = resolveCollaborationLocation(fixture.context).dbPath;
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${target}${suffix}`, { force: true });
+    const storeDir = dirname(target);
+    const redirected = `${storeDir}-redirected`;
+    renameSync(storeDir, redirected);
+    mkdirSync(storeDir);
+    // An existing ancestor in the canonical storage tree is now a link: the
+    // restore must refuse it before creating a staging directory through it.
+    const { symlinkSync } = await import("node:fs");
+    rmSync(storeDir, { recursive: true, force: true });
+    symlinkSync(redirected, storeDir);
+
+    await expect(
+      restoreCollaborationBackup(fixture.context, receipt, { operator: "ops-engineer", attestation: attestation() }),
+    ).rejects.toMatchObject({ code: "collaboration.unreadable" });
+    expect(existsSync(join(redirected, "collaboration.db"))).toBe(false);
+  });
+
+  test("restoring the same recovery point twice never reuses an authority stamp", async () => {
+    const fixture = await pairedWorkspace("pair-regeneration-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    const target = resolveCollaborationLocation(fixture.context).dbPath;
+    const clear = (): void => {
+      for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${target}${suffix}`, { force: true });
+    };
+    clear();
+    const first = await restoreCollaborationBackup(fixture.context, receipt, {
+      operator: "ops-engineer",
+      attestation: attestation(),
+    });
+    // The recovered generation is lost; the ORIGINAL point is restored again.
+    clear();
+    const second = await restoreCollaborationBackup(fixture.context, receipt, {
+      operator: "ops-engineer",
+      attestation: attestation(),
+    });
+    expect(second.epoch).toBeGreaterThan(first.epoch);
+
+    // A stamp issued by the first recovery is not a stamp of the second.
+    await expect(
+      openCollaborationStore(fixture.context, "read", {
+        repoKey: second.repoKey,
+        mode: second.mode,
+        storeId: first.storeId,
+        epoch: first.epoch,
+      }),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+
+    // The recovered generation's own records died with it; the LINEAGE ledger is
+    // what remembers it, so the second recovery names generation 2 and the epoch
+    // it superseded. An older stamped input cannot replay into the new generation.
+    expect(JSON.parse(readFileSync(join(dirname(target), "restore-lineage.json"), "utf8"))).toMatchObject({ generation: 2 });
+    const handle = await openCollaborationStore(fixture.context, "read");
+    try {
+      const rows = handle.db
+        .prepare("select result_json from collaboration_operations where operation_id like 'restore:%' order by rowid")
+        .all() as Array<{ result_json: string }>;
+      expect(rows.length).toBe(1);
+      expect(JSON.parse(rows[0]!.result_json).lineage).toMatchObject({ generation: 2, previousEpoch: first.epoch });
+    } finally {
+      handle.close();
+    }
+  });
+
+  test("restore re-proves the producer's quiescent boundary", async () => {
+    // A prepared reservation in the PAIRED execution image refuses the restore.
+    const reserved = await pairedWorkspace("pair-restore-reservation-");
+    const reservedOut = join(reserved.harness, "archived", "recovery", "pair.json");
+    const reservedReceipt = await backupRepositoryStores(reserved.context, { out: reservedOut });
+    const executionImage = new DatabaseSync(pairImage(reservedReceipt, "execution"));
+    try {
+      executionImage
+        .prepare(
+          "insert into execution_collaboration_intents(execution_store_id, execution_epoch, operation_id, kind, request_hash, " +
+            "actor, expected_token, reserved_revision, target_json, frozen_payload, phase, created_at, updated_at) " +
+            "values (?, 1, 'op-pair-reservation', 'residual-add', 'hash', 'pm', 'token', 1, '{}', '{}', 'prepared', ?, ?)",
+        )
+        .run(reservedReceipt.execution.storeId, "2026-11-21T00:00:00.000Z", "2026-11-21T00:00:00.000Z");
+    } finally {
+      executionImage.close();
+    }
+    const reservedTarget = resolveCollaborationLocation(reserved.context).dbPath;
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${reservedTarget}${suffix}`, { force: true });
+    await expect(
+      restoreCollaborationBackup(reserved.context, reservedReceipt, { operator: "ops-engineer", attestation: attestation() }),
+    ).rejects.toThrow(/prepared composite/);
+    expect(existsSync(reservedTarget)).toBe(false);
+
+    // An unacknowledged effect of ANOTHER root is outstanding, not history.
+    const foreign = await pairedWorkspace("pair-restore-foreign-unack-");
+    const foreignOut = join(foreign.harness, "archived", "recovery", "pair.json");
+    const foreignReceipt = await backupRepositoryStores(foreign.context, { out: foreignOut });
+    const image = new DatabaseSync(pairImage(foreignReceipt, "collaboration"));
+    try {
+      image
+        .prepare(
+          "insert into collaboration_operations(key_space, operation_id, execution_store_id, execution_epoch, request_hash, " +
+            "result_json, collaboration_revision, catalog_revision, committed_at) " +
+            "values ('composite', 'op-foreign-unack', 'store-other', 1, 'hash', ?, 0, 0, ?)",
+        )
+        .run(JSON.stringify({ receipt: { operationId: "op-foreign-unack" }, acknowledgedAt: null }), "2026-11-21T00:00:00.000Z");
+    } finally {
+      image.close();
+    }
+    const patched = {
+      ...foreignReceipt,
+      collaboration: {
+        ...foreignReceipt.collaboration,
+        counts: {
+          ...foreignReceipt.collaboration.counts,
+          collaboration_operations: foreignReceipt.collaboration.counts.collaboration_operations + 1,
+        },
+      },
+    };
+    writeFileSync(foreignReceipt.manifestPath, `${JSON.stringify(patched, null, 2)}\n`);
+    const foreignTarget = resolveCollaborationLocation(foreign.context).dbPath;
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${foreignTarget}${suffix}`, { force: true });
+    await expect(
+      restoreCollaborationBackup(foreign.context, patched, { operator: "ops-engineer", attestation: attestation() }),
+    ).rejects.toThrow(/without its acknowledgement/);
+    expect(existsSync(foreignTarget)).toBe(false);
+  });
+
+  test("an interrupted pair publication resumes from its own verified images", async () => {
+    const fixture = await pairedWorkspace("pair-interrupted-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    // The crash window: both images are published, the manifest is not.
+    rmSync(out, { force: true });
+    expect(existsSync(pairImage(receipt, "execution"))).toBe(true);
+    expect(existsSync(pairImage(receipt, "collaboration"))).toBe(true);
+
+    const resumed = await backupRepositoryStores(fixture.context, { out });
+    expect(existsSync(out)).toBe(true);
+    expect(resumed.collaboration.authority.storeId).toBe(receipt.collaboration.authority.storeId);
+    expect(resumed.collaboration.counts).toEqual(receipt.collaboration.counts);
+
+    // A HALF attempt is refused by name instead of being guessed at.
+    const half = await pairedWorkspace("pair-half-");
+    const halfOut = join(half.harness, "archived", "recovery", "pair.json");
+    const halfReceipt = await backupRepositoryStores(half.context, { out: halfOut });
+    rmSync(halfOut, { force: true });
+    rmSync(pairImage(halfReceipt, "collaboration"), { force: true });
+    await expect(backupRepositoryStores(half.context, { out: halfOut })).rejects.toMatchObject({
+      code: "collaboration.backup-incomplete",
+    });
+  });
+});

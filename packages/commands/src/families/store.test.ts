@@ -436,3 +436,26 @@ test("a held retired schema-8 claim refuses without mutation and settles on the 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a report destination is create-only: an existing file is never truncated, even by the read-only plan verb", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-report-"));
+  try {
+    identify(root);
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    legacyWorkspace(harness);
+    const destination = join(root, "operator-file.json");
+    writeFileSync(destination, "operator bytes\n");
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.migrate");
+    if (definition === undefined) throw new Error("missing store.migrate definition");
+    const result = await definition.execute(definition.input.parse({ harness, out: destination }), invocation(root));
+    // The PREVIEW ran; only its report could not be published, and that is
+    // disclosed instead of the preview's own outcome.
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") throw new Error("expected the preview to succeed");
+    expect(result.data).toMatchObject({ manifestFile: null, reportError: { code: "store.report-not-published" } });
+    expect(readFileSync(destination, "utf8")).toBe("operator bytes\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

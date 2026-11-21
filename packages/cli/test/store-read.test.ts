@@ -8,6 +8,7 @@
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
+import * as storeDb from "@mstar-harness/engine";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -358,5 +359,31 @@ describe("dashboard views over a real store", () => {
       message: expect.stringContaining("disposition must be one of"),
     });
     expect(Object.keys(dashboardFailure(caught)).sort()).toEqual(["code", "message"]);
+  });
+
+  test("each source observation is stamped at its own snapshot, not at request time", async () => {
+    const { context } = await workspace("as-of-");
+    await seedIssue(context, "as-of row", "low");
+    const realOpen = storeDb.openStore;
+    const spy = spyOn(storeDb, "openStore").mockImplementation(async (ctx, mode) => {
+      // The execution open is slow: the collaboration observation must NOT be
+      // backdated to a shared pre-open instant.
+      if (mode === "read") await new Promise((resolve) => setTimeout(resolve, 40));
+      return realOpen(ctx, mode);
+    });
+    let envelope;
+    const startedAt = Date.parse(new Date().toISOString());
+    try {
+      envelope = await readDashboardView({ context, view: "overview" });
+    } finally {
+      spy.mockRestore();
+    }
+    const collaborationAsOf = Date.parse(envelope.collaboration!.asOf!);
+    const executionAsOf = Date.parse(envelope.execution!.asOf as string);
+    // The shared pre-open instant the old read recorded would sit at request time;
+    // each source's own in-transaction stamp lands after its own open, so the
+    // collaboration observation carries the slow execution open's delay.
+    expect(collaborationAsOf - startedAt).toBeGreaterThanOrEqual(30);
+    expect(executionAsOf).toBeGreaterThanOrEqual(collaborationAsOf);
   });
 });

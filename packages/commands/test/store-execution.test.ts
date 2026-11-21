@@ -247,8 +247,8 @@ describe("store and execution command surface", () => {
     // One published pair: the manifest names BOTH verified images.
     expect(pair.version).toBe(1);
     expect(existsSync(manifest)).toBe(true);
-    expect(existsSync(pair.execution.backupPath)).toBe(true);
-    expect(existsSync(pair.collaboration.path)).toBe(true);
+    expect(existsSync(join(dirname(manifest), pair.execution.backupPath))).toBe(true);
+    expect(existsSync(join(dirname(manifest), pair.collaboration.path))).toBe(true);
   });
   test("backs up the explicitly selected control-root store without changing its content", async () => {
     const root = fixture("store-admin-backup");
@@ -290,8 +290,8 @@ describe("store and execution command surface", () => {
     expect(pair.collaboration.counts.issues).toBe(1);
     expect(finding.issueId).toMatch(/^I-\d+$/);
     expect(pair.execution.counts.issues).toBe(0);
-    expect(existsSync(pair.execution.backupPath)).toBe(true);
-    expect(existsSync(pair.collaboration.path)).toBe(true);
+    expect(existsSync(join(dirname(out), pair.execution.backupPath))).toBe(true);
+    expect(existsSync(join(dirname(out), pair.collaboration.path))).toBe(true);
   });
 
   test("store init refuses catalog migration inputs", async () => {
@@ -356,7 +356,8 @@ describe("store and execution command surface", () => {
     ) {
       throw new Error("the pair receipt names no execution image");
     }
-    const executionImage = executionReceipt.backupPath;
+    // The pair publishes sibling basenames; the execution verb takes an absolute path.
+    const executionImage = join(dirname(backupPath), executionReceipt.backupPath);
     await captureIssue({ harnessDir: harness }, {
       projectId: "_default",
       title: "A finding created after the recovery point",
@@ -427,7 +428,8 @@ describe("store and execution command surface", () => {
     ) {
       throw new Error("the pair receipt names no execution image");
     }
-    const executionImage = executionReceipt.backupPath;
+    // The pair publishes sibling basenames; the execution verb takes an absolute path.
+    const executionImage = join(dirname(backupPath), executionReceipt.backupPath);
     const firstPreview = join(root, "first-preview.json");
     const first = await invoke(definition("store.execution.restore-preview"), { harness, backup: executionImage, out: firstPreview }, root);
     expect(first.status).toBe("ok");

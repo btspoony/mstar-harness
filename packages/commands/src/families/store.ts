@@ -1,5 +1,5 @@
 import { activationAttestationDocumentConstraints, activationAttestationDocumentSchema } from "../activation-attestation.js";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
@@ -199,6 +199,44 @@ function outputPath(value: string | undefined, cwd: string): string | undefined 
   return value === undefined ? undefined : resolveCliPath(value, cwd);
 }
 /**
+ * Publish ONE operator report create-only, beside the operation it describes.
+ *
+ * A report is evidence, never an authority: the destination must be a NEW name,
+ * so an operator can never truncate a source, a recovery manifest or a live
+ * authority with serialized output — including from the read-only `plan` verb.
+ * A failure to publish a report never rewrites the operation's outcome: the
+ * caller keeps the committed result and discloses the reporting failure.
+ */
+function publishReport(
+  out: string | undefined,
+  value: unknown,
+): { out: string | null; reportError: { code: string; message: string } | null } {
+  if (out === undefined) return { out: null, reportError: null };
+  const target = path.resolve(out);
+  mkdirSync(path.dirname(target), { recursive: true });
+  const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    linkSync(tmp, target);
+    return { out: target, reportError: null };
+  } catch (error) {
+    const code = error !== null && typeof error === "object" && "code" in error ? String(error.code) : "";
+    return {
+      out: null,
+      reportError: {
+        code: "store.report-not-published",
+        message:
+          code === "EEXIST"
+            ? `A file already exists at ${target}; a report is create-only and never overwrites an existing file. The operation itself completed as reported.`
+            : `The report could not be published at ${target} (${error instanceof Error ? error.message : String(error)}). The operation itself completed as reported.`,
+      },
+    };
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+/**
  * The create-only default manifest below the selected harness's recovery folder.
  * The receipt discloses it, so an operator who omitted `--out` still knows
  * exactly which two images and which manifest now exist.
@@ -315,8 +353,7 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
           return ok(id, await applyStoreMigration(context, manifest));
         }
         const manifest = await planStoreMigration(context);
-        const out = outputPath(input.out, invocation.cwd);
-        if (out !== undefined) writeFileSync(out, `${JSON.stringify(manifest, null, 2)}\n`);
+        const report = publishReport(outputPath(input.out, invocation.cwd), manifest);
         return ok(id, {
           controlRoot: manifest.controlRoot,
           sourceSetDigest: manifest.sourceSetDigest,
@@ -325,7 +362,8 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
           unresolved: manifest.unresolved.length,
           catalogConflicts: manifest.catalog.conflicts.length,
           blocksApply: manifest.blocksApply,
-          manifestFile: out ?? null,
+          manifestFile: report.out,
+          reportError: report.reportError,
           nextStep: manifest.blocksApply ? "resolve the unresolved mappings / catalog conflicts in review, then re-preview" : "have the manifest reviewed, then apply with --apply --manifest <path>",
         });
       }
@@ -338,17 +376,15 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         const attestation = input.attestation === undefined ? undefined : jsonFile<ActivationAttestation>(input.attestation, "--attestation");
         const applied = await appliedReceiptFor(context, manifest);
         const receipt = await activateStore(context, applied, attestation, {}, { operator: required(input.operator, "--operator") });
-        const out = outputPath(input.out, invocation.cwd);
-        if (out !== undefined) writeFileSync(out, `${JSON.stringify(receipt, null, 2)}\n`);
-        return ok(id, { ...receipt, out: out ?? null });
+        const report = publishReport(outputPath(input.out, invocation.cwd), receipt);
+        return ok(id, { ...receipt, out: report.out, reportError: report.reportError });
       }
       case "store.retire": {
         const manifest = jsonFile<MigrationManifest>(required(input.manifest, "--manifest"), "--manifest");
         const activation = await activationReceiptFor(context, manifest);
         const receipt = await retireStoreSources(context, activation);
-        const out = outputPath(input.out, invocation.cwd);
-        if (out !== undefined) writeFileSync(out, `${JSON.stringify(receipt, null, 2)}\n`);
-        return ok(id, { ...receipt, out: out ?? null });
+        const report = publishReport(outputPath(input.out, invocation.cwd), receipt);
+        return ok(id, { ...receipt, out: report.out, reportError: report.reportError });
       }
       default: throw new Error(`unsupported store command ${id}`);
     }
@@ -373,21 +409,20 @@ async function executeCollaboration(id: string, input: StoreInput, invocation: I
   try {
     const target = absoluteFile(required(input.harness, "--harness"), "--harness");
     const context: StoreContext = { harnessDir: path.resolve(target) };
-    const out = outputPath(input.out, invocation.cwd);
-    const writeReceipt = (value: unknown): string | null => {
-      if (out === undefined) return null;
-      writeFileSync(absoluteFile(out, "--out"), `${JSON.stringify(value, null, 2)}\n`);
-      return out;
-    };
+    const out = outputPath(input.out, invocation.cwd) === undefined
+      ? undefined
+      : absoluteFile(outputPath(input.out, invocation.cwd)!, "--out");
+    const writeReceipt = (value: unknown) => publishReport(out, value);
     if (verb === "plan") {
       const manifest = await planCollaborationCutover(context);
-      const manifestFile = writeReceipt(manifest);
-      return ok(id, { ...manifest, manifestFile });
+      const report = writeReceipt(manifest);
+      return ok(id, { ...manifest, manifestFile: report.out, reportError: report.reportError });
     }
     if (verb === "apply") {
       const manifest = jsonFile<CutoverManifest>(required(input.manifest, "--manifest"), "--manifest");
       const receipt = await applyCollaborationCutover(context, manifest);
-      return ok(id, { ...receipt, receiptFile: writeReceipt(receipt) });
+      const report = writeReceipt(receipt);
+      return ok(id, { ...receipt, receiptFile: report.out, reportError: report.reportError });
     }
     if (verb === "activate") {
       requireInputs(input, ["manifest", "operator", "attestation"]);
@@ -397,7 +432,8 @@ async function executeCollaboration(id: string, input: StoreInput, invocation: I
         operator: required(input.operator, "--operator"),
         attestation,
       });
-      return ok(id, { ...receipt, receiptFile: writeReceipt(receipt) });
+      const report = writeReceipt(receipt);
+      return ok(id, { ...receipt, receiptFile: report.out, reportError: report.reportError });
     }
     if (verb === "restore") {
       requireInputs(input, ["backup", "operator", "attestation"]);
@@ -406,8 +442,12 @@ async function executeCollaboration(id: string, input: StoreInput, invocation: I
       const authority = await restoreCollaborationBackup(context, receipt, {
         operator: required(input.operator, "--operator"),
         attestation,
+        // The pair is resolved beside the manifest the OPERATOR supplied, not a
+        // recorded absolute path: a moved, intact pair restores from its new home.
+        manifestPath: absoluteFile(required(input.backup, "--backup"), "--backup"),
       });
-      return ok(id, { authority, manifestPath: receipt.manifestPath, receiptFile: writeReceipt(authority) });
+      const report = writeReceipt(authority);
+      return ok(id, { authority, manifestPath: receipt.manifestPath, receiptFile: report.out, reportError: report.reportError });
     }
     throw new SddScriptError(`unknown store collaboration verb ${verb}`, 2);
   } catch (error) {

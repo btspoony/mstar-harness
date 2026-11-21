@@ -493,9 +493,20 @@ function errorCode(error: unknown): string {
   return "store.authority-unreadable";
 }
 
-/** The projection block of a request that never opened the execution store. */
-function unobservedProjection(asOf: string): ReadProjection {
-  return { observed: false, generation: null, freshness: "unavailable", builtAt: null, checkedAt: asOf, diagnostics: [] };
+/**
+ * The projection block of a request that never opened the execution store. Its
+ * `checkedAt` is its OWN instant: projection health is a separate observation and
+ * never borrows an authority snapshot's timestamp.
+ */
+function unobservedProjection(): ReadProjection {
+  return {
+    observed: false,
+    generation: null,
+    freshness: "unavailable",
+    builtAt: null,
+    checkedAt: new Date().toISOString(),
+    diagnostics: [],
+  };
 }
 
 /**
@@ -506,8 +517,10 @@ function unobservedProjection(asOf: string): ReadProjection {
 function readCollaborationObservation(
   handle: CollaborationStoreHandle,
   scope: CollaborationScope,
-  asOf: string,
 ): CompleteObservation {
+  // The observation's instant is the moment THIS source's own transaction reads
+  // its first row: a slow open of the other authority never backdates it.
+  const asOf = new Date().toISOString();
   const row = handle.db.prepare("select revision, catalog_revision from collaboration_meta where id = 1").get() as
     | { revision?: unknown; catalog_revision?: unknown }
     | undefined;
@@ -528,7 +541,10 @@ function readCollaborationObservation(
  * execution authority is asserted here, inside the read transaction -- a
  * non-active execution store is not read authority for its own domain.
  */
-function readExecutionObservation(handle: StoreHandle, asOf: string): ExecutionObservation {
+function readExecutionObservation(handle: StoreHandle): ExecutionObservation {
+  // Same rule as the collaboration source: the execution observation is stamped
+  // when its own transaction establishes the snapshot.
+  const asOf = new Date().toISOString();
   const authority = handle.db.prepare("select authority_state from execution_meta where id = 1").get() as
     | { authority_state?: unknown }
     | undefined;
@@ -618,7 +634,6 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
   // never touched by it, and a refused refresh leaves the last good generation.
   if (query.needsProjection) await refreshProjections(context);
 
-  const asOf = new Date().toISOString();
   let collaborationHandle: CollaborationStoreHandle | null = null;
   let executionHandle: StoreHandle | null = null;
   // Both opens sit INSIDE the cleanup scope: a required execution open that
@@ -647,15 +662,15 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
     try {
       const collaboration =
         collaborationHandle !== null && scope !== null
-          ? readCollaborationObservation(collaborationHandle, scope, asOf)
+          ? readCollaborationObservation(collaborationHandle, scope)
           : null;
       const execution: ExecutionObservation | null =
         executionHandle !== null
-          ? readExecutionObservation(executionHandle, asOf)
+          ? readExecutionObservation(executionHandle)
           : executionCode === null
             ? null
             : { asOf: null, code: executionCode };
-      const projection = executionHandle === null ? unobservedProjection(asOf) : readProjectionFor(executionHandle);
+      const projection = executionHandle === null ? unobservedProjection() : readProjectionFor(executionHandle);
 
       const result = query.run({ collaboration: collaborationHandle, execution: executionHandle });
       const withGap: CollaborationObservation | null =

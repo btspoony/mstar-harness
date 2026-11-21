@@ -59,10 +59,14 @@ import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import { resolveCollaborationLocation, type CollaborationLocation, type CollaborationMode } from "./collaboration-identity.js";
 import {
   COLLABORATION_COLUMNS,
+  admitCollaborationImage,
+  assertCollaborationTargetAdmission,
   initializeCollaborationStore,
   openCollaborationStore,
   readCollaborationAuthority,
+  readCollaborationBinding,
   readCollaborationStage,
+  writeCollaborationBinding,
   writeCollaborationStage,
   type CollaborationAuthority,
 } from "./collaboration-store.js";
@@ -76,7 +80,6 @@ import {
 import { ACTIVATION_PROTOCOL_VERSION, readDeclaredNodeFloor, writeJson } from "./core.js";
 import { provisionActivationDocument, type ProvisionProcessFacts } from "./activation-provisioning.js";
 import {
-  heldCollaborationTables,
   insertMigrationPhaseRow,
   migrationManifestHash,
   readMigrationPhaseRow,
@@ -96,6 +99,7 @@ import {
   openStore,
   readCollaborationFence,
   readStoreAuthority,
+  heldCollaborationSourceTables,
   storeDbPath,
   syncDirectoryEntry,
   tableNamesOn,
@@ -1749,6 +1753,7 @@ export async function restoreCollaborationBackup(
     throw incompletePair(`A private staging directory could not be created beside ${dbPath} (${messageOf(error)}).`);
   }
   let staged = false;
+  let nextEpoch = 0;
   try {
     copyFileSync(collaborationImagePath, stagingPath);
     chmodSync(stagingPath, 0o600);
@@ -1851,6 +1856,11 @@ export async function restoreCollaborationBackup(
     }
   }
   if (!staged) throw incompletePair(`The restore did not publish ${dbPath}.`);
+  const target = { repoKey: location.repoKey, mode: location.mode, storeId: recorded.storeId, epoch: nextEpoch };
+  // This checkout now owns the restored generation; persist the binding before
+  // the final read proves it (a binding mismatch would otherwise refuse the
+  // generation this same call just published).
+  writeCollaborationBinding(context, target);
   return readCollaborationAuthority(context);
 }
 
@@ -1923,16 +1933,16 @@ function assertCausalBoundary(
           `refusal; an uninterpretable effect is never restored as history.`,
       );
     }
-    // Another root's history: acknowledged effect or recorded decline, it belongs
-    // to a checkout this restore neither replaces nor can complete.
-    if (row.executionStoreId !== execution.storeId) continue;
     if (row.state === "unacknowledged") {
+      // The producer refuses an outstanding effect from ANY root, so a restore
+      // proves the same boundary: acknowledged or declined history travels, an
+      // unconfirmed effect never does.
       throw incompletePair(
-        `The collaboration image records composite effect ${row.operationId} for the paired execution store ` +
-          `${execution.storeId} without its acknowledgement; that root's owning verb must replay it before this pair can be ` +
-          `restored over it.`,
+        `The collaboration image records composite effect ${row.operationId} (execution store ${String(row.executionStoreId)}) ` +
+          `without its acknowledgement; that root's owning verb must replay it before this pair can be restored over it.`,
       );
     }
+    if (row.executionStoreId !== execution.storeId) continue;
     if (row.executionEpoch !== null && row.executionEpoch > execution.epoch) {
       throw incompletePair(
         `The collaboration image records a composite effect from execution epoch ${row.executionEpoch}, which is AHEAD of the ` +
@@ -1974,7 +1984,7 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
     try {
       const fence = readCollaborationFence(handle.db);
       if (fence === null) {
-        const held = heldCollaborationTables(handle.db);
+        const held = heldCollaborationSourceTables(handle.db);
         if (held.length > 0) {
           throw new StoreError(
             "collaboration.cutover-required",
@@ -1989,7 +1999,10 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
     }
   }
   const authority = await initializeCollaborationStore(location);
-  if (authority.state === "active") return authority;
+  if (authority.state === "active") {
+    writeCollaborationBinding(context, authority);
+    return authority;
+  }
   return writeCollaborationStage(location, ({ db, authority: current }) => {
     if (current.state === "active") return current;
     const evidence =
@@ -2020,7 +2033,9 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
           `mstar path resolve before retrying. Nothing was written.`,
       );
     }
-    return { ...current, state: "active" as const };
+    const published = { ...current, state: "active" as const };
+    writeCollaborationBinding(context, published);
+    return published;
   });
 }
 
@@ -2775,6 +2790,12 @@ export async function activateStore(
           `${inspection.authority.storeId} epoch ${inspection.authority.epoch}; it cannot be served as this store's activation.`,
       );
     }
+    writeCollaborationBinding(context, {
+      repoKey: location.repoKey,
+      mode: location.mode,
+      storeId: published.storeId,
+      epoch: published.epoch,
+    });
     return { ...published, replayed: true };
   }
 
@@ -2944,6 +2965,16 @@ export async function activateStore(
     };
     insertMigrationPhaseRow(db, "activated", receipt.manifestHash, stored, at);
     return stored;
+  }).then((activated) => {
+    // This checkout now owns that published generation: record the binding so a
+    // later retarget or a different repository's lane cannot be reached silently.
+    writeCollaborationBinding(context, {
+      repoKey: location.repoKey,
+      mode: location.mode,
+      storeId: activated.storeId,
+      epoch: activated.epoch,
+    });
+    return activated;
   });
 }
 

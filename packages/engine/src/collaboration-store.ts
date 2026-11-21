@@ -15,7 +15,21 @@
  * state or epoch changes.
  */
 import { randomUUID } from "node:crypto";
-import { accessSync, closeSync, constants, existsSync, linkSync, lstatSync, mkdirSync, openSync, rmdirSync } from "node:fs";
+import {
+  accessSync,
+  closeSync,
+  constants,
+  existsSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -33,13 +47,16 @@ import {
   assertStoreRuntimeSupported,
   busyTimeoutMs,
   connect,
+  heldCollaborationTables,
   isBusyError,
   isTransientReadOpenFailure,
   migrationChecksum,
   nowRfc3339,
   publicationCause,
   readAppliedMigrations,
+  readCollaborationFence,
   removeStagingFiles,
+  storeDbPath,
   syncDirectoryEntry,
   validateAppliedMigrations,
   walShapedStoreFile,
@@ -1177,6 +1194,186 @@ export async function initializeCollaborationStore(location: CollaborationLocati
  * proves the store file is writable now, so a mutation-intent caller learns a
  * read-only filesystem before attempting the guarded write.
  */
+/**
+ * Prove one collaboration IMAGE at an arbitrary path with the runtime's own
+ * admission: the single supported migration and its checksum, the closed table
+ * and column inventory, the metadata singleton and the repository binding —
+ * everything `openCollaborationStore` proves, over bytes that are not yet the
+ * canonical authority. Nothing is created; a refused image never becomes a
+ * target this checkout could not open afterwards.
+ */
+export async function admitCollaborationImage(
+  location: CollaborationLocation,
+  imagePath: string,
+): Promise<CollaborationAuthority> {
+  assertStoreRuntimeSupported();
+  assertAdmittedTarget(imagePath);
+  const db = await connectAt(imagePath, "read", busyTimeoutMs());
+  try {
+    return admit(db, { ...location, dbPath: imagePath }, undefined, "any");
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Run the canonical private-path admission for this scope's target BEFORE a
+ * caller creates anything: the private, link-free storage namespace and the
+ * regular-file target are the same rules every open applies, so a restore never
+ * stages bytes through a redirected ancestor (or beside a symlinked target) that
+ * the later authority read would refuse.
+ */
+export function assertCollaborationTargetAdmission(location: CollaborationLocation): void {
+  assertStoreRuntimeSupported();
+  assertAdmittedTarget(location.dbPath);
+}
+
+// ---------------------------------------------------------------------------
+// The control checkout's binding to one collaboration authority
+// ---------------------------------------------------------------------------
+
+/**
+ * The recorded binding of ONE control checkout to the repository authority it
+ * uses: the derived scope (repository key and mode), the authority's own store
+ * identity and the epoch this checkout was last bound to. It is the local
+ * counterpart of the lane's `collaboration_meta`, persisted beside the harness
+ * so a checkout cannot be silently re-routed to another repository by an origin
+ * change, and an unfenced legacy owner is refused before any I/O.
+ */
+export type CollaborationBinding = Readonly<{
+  version: 1;
+  repoKey: string;
+  mode: CollaborationMode;
+  storeId: string;
+  epoch: number;
+  boundAt: string;
+}>;
+
+function bindingPath(context: StoreContext): string {
+  return join(context.harnessDir, "collaboration-binding.json");
+}
+
+/** The recorded binding, or `null` for a checkout that has never been bound (a replacement clone). */
+export function readCollaborationBinding(context: StoreContext): CollaborationBinding | null {
+  let text: string;
+  try {
+    text = readFileSync(bindingPath(context), "utf8");
+  } catch {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new StoreError(
+      "collaboration.unreadable",
+      `The collaboration binding at ${bindingPath(context)} is not readable JSON; the checkout cannot be proven to belong to ` +
+        `the authority it would use. Nothing was modified.`,
+    );
+  }
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    (parsed as { version?: unknown }).version !== 1 ||
+    typeof (parsed as { repoKey?: unknown }).repoKey !== "string" ||
+    ((parsed as { mode?: unknown }).mode !== "local" && (parsed as { mode?: unknown }).mode !== "mirror") ||
+    typeof (parsed as { storeId?: unknown }).storeId !== "string" ||
+    typeof (parsed as { epoch?: unknown }).epoch !== "number"
+  ) {
+    throw new StoreError(
+      "collaboration.unreadable",
+      `The collaboration binding at ${bindingPath(context)} is malformed; the checkout cannot be proven to belong to the ` +
+        `authority it would use. Nothing was modified.`,
+    );
+  }
+  const binding = parsed as CollaborationBinding;
+  return { ...binding, boundAt: typeof binding.boundAt === "string" ? binding.boundAt : "" };
+}
+
+/** Persist this checkout's binding. Atomic replace; the file carries no authority bytes. */
+export function writeCollaborationBinding(
+  context: StoreContext,
+  authority: Pick<CollaborationAuthority, "repoKey" | "mode" | "storeId" | "epoch">,
+): void {
+  const path = bindingPath(context);
+  mkdirSync(dirname(path), { recursive: true });
+  const body: CollaborationBinding = {
+    version: 1,
+    repoKey: authority.repoKey,
+    mode: authority.mode,
+    storeId: authority.storeId,
+    epoch: authority.epoch,
+    boundAt: nowRfc3339(),
+  };
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+/**
+ * Refuse before any domain I/O when this checkout cannot own the resolved
+ * authority:
+ *
+ * - an UNFENCED combined store that still holds collaboration rows is the legacy
+ *   owner: only the reviewed cutover may hand that authority on;
+ * - a recorded binding that names another repository/mode, or a DIFFERENT
+ *   authority store than the one at the resolved path, means the checkout was
+ *   retargeted (an origin or `.mstarc` change) or its lane was replaced: the verb
+ *   must re-resolve deliberately, never drift onto another repository's data.
+ *
+ * A checkout with no binding (a fresh replacement clone) is admitted and adopts
+ * the resolved authority on its first authenticated use; reading never writes the
+ * binding.
+ */
+async function assertControlBinding(
+  context: StoreContext,
+  location: CollaborationLocation,
+  authority: CollaborationAuthority,
+): Promise<void> {
+  if (existsSync(storeDbPath(context))) {
+    const legacy = await connect(storeDbPath(context), "read", busyTimeoutMs()).catch(() => undefined);
+    if (legacy !== undefined) {
+      try {
+        if (readCollaborationFence(legacy) === null) {
+          const held = heldCollaborationTables(legacy);
+          if (held.length > 0) {
+            throw new StoreError(
+              "collaboration.cutover-required",
+              `This checkout still owns a combined store with collaboration rows (${held.join(", ")}), so it is not the ` +
+                `authority's owner: move that authority with the reviewed cutover (mstar store collaboration plan, apply, then ` +
+                `activate) before using the repository lane. Nothing was read or modified.`,
+            );
+          }
+        }
+      } finally {
+        legacy.close();
+      }
+    }
+  }
+  const binding = readCollaborationBinding(context);
+  if (binding === null) return;
+  if (binding.repoKey !== location.repoKey || binding.mode !== location.mode) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This control checkout is bound to repository ${binding.repoKey} (${binding.mode}), but now resolves to ` +
+        `${location.repoKey} (${location.mode}); an origin or .mstarc retarget never re-points a bound checkout. Re-resolve ` +
+        `the scope deliberately (mstar path resolve) and start a new checkout for the other repository. Nothing was modified.`,
+    );
+  }
+  if (binding.storeId !== authority.storeId) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This control checkout was bound to authority store ${binding.storeId}, but the lane at ${location.dbPath} is store ` +
+        `${authority.storeId}. A replaced authority is adopted deliberately by its own activation or restore, never by drift; ` +
+        `inspect it with mstar path resolve. Nothing was modified.`,
+    );
+  }
+}
+
 export async function openCollaborationStore(
   context: StoreContext,
   mode: "read" | "write",

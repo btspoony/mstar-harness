@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
 import * as nodeFs from "node:fs";
-import { cpSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -4309,3 +4309,55 @@ test("collaboration legacy import replay \u2014 a staged-authority interruption 
   } finally { store.close(); }
 });
 
+test("a lost import acknowledgement is disclosed on the result and repaired by the same-operation replay", async () => {
+  const { context } = legacyWorkspace("import-ack-disclosure");
+  const first = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-import-ack" });
+  expect(first.imported).toBeGreaterThan(0);
+  expect(first.warnings ?? []).toEqual([]);
+
+  const lanePath = resolveCollaborationLocation(context).dbPath;
+  const readAck = (): string | null => {
+    const db = new DatabaseSync(lanePath);
+    try {
+      const row = db.prepare("select result_json from collaboration_operations where key_space = 'composite' order by rowid desc limit 1").get() as
+        | { result_json?: string }
+        | undefined;
+      if (typeof row?.result_json !== "string") return null;
+      const parsed = JSON.parse(row.result_json) as { acknowledgedAt?: unknown };
+      return typeof parsed.acknowledgedAt === "string" ? parsed.acknowledgedAt : null;
+    } finally {
+      db.close();
+    }
+  };
+  expect(readAck()).not.toBeNull();
+  // The supported two-transaction window: the execution half committed and the
+  // acknowledgement write was lost.
+  const clear = new DatabaseSync(lanePath);
+  try {
+    const row = clear
+      .prepare("select operation_id, result_json from collaboration_operations where key_space = 'composite' order by rowid desc limit 1")
+      .get() as { operation_id: string; result_json: string };
+    const parsed = JSON.parse(row.result_json) as Record<string, unknown>;
+    clear
+      .prepare("update collaboration_operations set result_json = ? where operation_id = ?")
+      .run(JSON.stringify({ ...parsed, acknowledgedAt: null }), row.operation_id);
+  } finally {
+    clear.close();
+  }
+
+  // A repair that cannot write (the lane is not writable) is DISCLOSED, not hidden.
+  chmodSync(lanePath, 0o400);
+  let pending: MinimalStoreUpgradeResult;
+  try {
+    pending = await importStoreMinimal({ context, operator: "operator", operationId: "op-import-ack" });
+  } finally {
+    chmodSync(lanePath, 0o600);
+  }
+  expect(pending.warnings?.join(" ")).toContain("collaboration acknowledgement pending");
+
+  // The same-operation replay repairs ONLY the acknowledgement.
+  const repaired = await importStoreMinimal({ context, operator: "operator", operationId: "op-import-ack" });
+  expect(repaired.warnings ?? []).toEqual([]);
+  expect(readAck()).not.toBeNull();
+  expect(repaired.imported).toBe(first.imported);
+});

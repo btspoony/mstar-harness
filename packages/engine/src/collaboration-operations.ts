@@ -841,22 +841,33 @@ export async function repairCompositeAcknowledgement(
   }
 }
 
-/** Carry an outstanding acknowledgement as a warning instead of a false partial business outcome. */
+/**
+ * Carry an outstanding acknowledgement as a warning instead of a false partial
+ * business outcome. Two carriers exist: the refusal envelope's `recovery.warnings`
+ * (ordinary domain verbs) and a plain `warnings` string list on a SUCCESS result
+ * such as the execution import, which has no refusal envelope of its own. A result
+ * with neither carrier is returned unchanged — the caller then learns nothing,
+ * which is why every success DTO that can commit a composite (the import) carries
+ * the list.
+ */
 function withAcknowledgementFact<T>(result: T, fact: OutstandingAcknowledgement): T {
-  if (result === null || typeof result !== "object" || !("recovery" in result)) return result;
-  const recovery = result.recovery;
-  if (recovery === null || typeof recovery !== "object" || !("warnings" in recovery)) return result;
-  const warnings = recovery.warnings;
-  if (!Array.isArray(warnings)) return result;
-  warnings.push({
-    code: "collaboration.acknowledgement-pending",
-    message: fact.repairableByReplay
-      ? `collaboration acknowledgement pending: ${fact.message}. Both business effects are committed; replaying this ` +
-        `operation with the same id repairs the acknowledgement only.`
-      : `collaboration acknowledgement unverifiable: ${fact.message}. The committed effect must be preserved; reconcile the ` +
-        `reservation and effect under the admitted authority, or settle the operation through its supported recovery/decline ` +
-        `path. Replaying this operation cannot reconstruct the effect or its acknowledgement.`,
-  });
+  if (result === null || typeof result !== "object") return result;
+  const message = fact.repairableByReplay
+    ? `collaboration acknowledgement pending: ${fact.message}. Both business effects are committed; replaying this ` +
+      `operation with the same id repairs the acknowledgement only.`
+    : `collaboration acknowledgement unverifiable: ${fact.message}. The committed effect must be preserved; reconcile the ` +
+      `reservation and effect under the admitted authority, or settle the operation through its supported recovery/decline ` +
+      `path. Replaying this operation cannot reconstruct the effect or its acknowledgement.`;
+  if ("recovery" in result) {
+    const recovery = result.recovery;
+    if (recovery !== null && typeof recovery === "object" && "warnings" in recovery && Array.isArray(recovery.warnings)) {
+      recovery.warnings.push({ code: "collaboration.acknowledgement-pending", message });
+      return result;
+    }
+  }
+  if ("warnings" in result && Array.isArray(result.warnings)) {
+    result.warnings.push(message);
+  }
   return result;
 }
 
@@ -1026,12 +1037,14 @@ export async function runCollaborationComposite<T>(
       // effect instead of declining it.
       effect = declined;
     } else {
-      await markDeclined(context, intent, declined.cause);
+      const settlement = await markDeclined(context, intent, declined.cause);
+      if (!settlement.settled) throw unsettledDeclineRefusal(intent, declined.cause, settlement.error);
       throw recordedRefusal(intent.key.operationId, declined.cause);
     }
   }
   if (effect.kind === "declined") {
-    await markDeclined(context, intent, effect.cause);
+    const settlement = await markDeclined(context, intent, effect.cause);
+    if (!settlement.settled) throw unsettledDeclineRefusal(intent, effect.cause, settlement.error);
     throw recordedRefusal(intent.key.operationId, effect.cause);
   }
   let result: T;
