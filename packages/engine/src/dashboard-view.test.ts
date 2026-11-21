@@ -264,6 +264,12 @@ describe("dashboard collaboration disclosure", () => {
     const bare = dashboardFailure(new Error("provider refused Bearer sk-live-456"));
     expect(bare.message).not.toContain("sk-live-456");
     expect(bare.message).toContain("{REDACTED}");
+    // A Digest value is a parameter list: every parameter is redacted with it.
+    const digest = dashboardFailure(
+      new Error('Authorization: Digest username="Mufasa", realm="test", nonce="abc", response="deadbeef"'),
+    );
+    for (const leaked of ["Mufasa", "test", "abc", "deadbeef"]) expect(digest.message).not.toContain(leaked);
+    expect(digest.message).toContain("Authorization: {REDACTED}");
     const keyed = dashboardFailure(new Error("transport refused token=sk-live-123"));
     expect(keyed.message).not.toContain("sk-live-123");
   });

@@ -34,6 +34,7 @@ import {
   MS_PANE_HEAD_CLASS,
   MS_THEME_ATTRIBUTE,
   Nav,
+  Notice,
   Overview,
   ProjectDetail,
   Projects,
@@ -95,6 +96,7 @@ import {
   readWorkflows,
   workflowDetailCopy,
   workflowDetailOutcome,
+  workflowsCatalogNotice,
   workflowsCopy,
   workflowsOutcome,
   type WorkflowDetailOutcome,
@@ -464,21 +466,28 @@ function WorkflowsDestination(props: { address: Address }) {
     );
   }
 
+  // The rows are execution data and stay; an unavailable catalog association is
+  // stated above them instead of leaving its join cell to read as a healthy `—`.
+  const catalogNotice = workflowsCatalogNotice(outcome, copy);
+
   return (
-    <Workflows
-      model={outcome.model}
-      // The head's closing segment reads the envelope's own revision, which the model does
-      // not carry: it is a fact about the read, not about a workflow.
-      {...(raw !== null && raw.status === "ready" && raw.envelope.storeRevision !== null
-        ? { storeRevision: raw.envelope.storeRevision }
-        : {})}
-      filters={filters}
-      onFiltersChange={setFilters}
-      copy={workflowsCopy(copy)}
-      onOpen={(id) => {
-        navigate({ name: "workflow", id }, props.address.query, "push");
-      }}
-    />
+    <>
+      {catalogNotice === null ? null : <Notice lead={catalogNotice.lead} reason={catalogNotice.reason} />}
+      <Workflows
+        model={outcome.model}
+        // The head's closing segment reads the envelope's own revision, which the model does
+        // not carry: it is a fact about the read, not about a workflow.
+        {...(raw !== null && raw.status === "ready" && raw.envelope.storeRevision !== null
+          ? { storeRevision: raw.envelope.storeRevision }
+          : {})}
+        filters={filters}
+        onFiltersChange={setFilters}
+        copy={workflowsCopy(copy)}
+        onOpen={(id) => {
+          navigate({ name: "workflow", id }, props.address.query, "push");
+        }}
+      />
+    </>
   );
 }
 

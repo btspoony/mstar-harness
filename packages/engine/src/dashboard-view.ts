@@ -192,9 +192,29 @@ const CREDENTIAL = new RegExp(
 /** A scheme-led credential that appears without a labelled key (`refused Bearer …`). */
 const AUTH_VALUE = new RegExp(`\\b${AUTH_SCHEME}\\s+(?:"[^"]*"|'[^']*'|[A-Za-z0-9._~+/=-]+)`, "g");
 
+/** One Digest parameter: `name=value`, quoted or unquoted. */
+const DIGEST_PARAM = `[A-Za-z][\\w-]*\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s,]+)`;
+
+/** A labelled Digest value: the scheme plus every comma-separated parameter it carries. */
+const DIGEST_VALUE = new RegExp(
+  `\\b(authorization)\\b(\\s*[=:]\\s*)Digest\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`,
+  "gi",
+);
+
+/** A Digest value without its label. */
+const DIGEST_BARE = new RegExp(`\\bDigest\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`, "g");
+
 function sanitizeFailureMessage(message: string): string {
   const home = homedir();
   const withoutStore = message.replace(STORE_PATH, "{STORE_DB}");
   const withoutHome = home === "" ? withoutStore : withoutStore.split(home).join("~");
-  return withoutHome.replace(CREDENTIAL, "$1$2{REDACTED}").replace(AUTH_VALUE, "$1 {REDACTED}");
+  // Digest first: its value is a comma-separated parameter list, so the generic
+  // single-token rule would leave the remaining parameters behind. The generic
+  // label rule then covers scheme-less values, and the bare scheme rules catch an
+  // authorization value that appears without its header name.
+  return withoutHome
+    .replace(DIGEST_VALUE, "$1$2{REDACTED}")
+    .replace(CREDENTIAL, "$1$2{REDACTED}")
+    .replace(DIGEST_BARE, "Digest {REDACTED}")
+    .replace(AUTH_VALUE, "$1 {REDACTED}");
 }

@@ -17,7 +17,7 @@
  */
 import type { ReadEnvelope, WorkflowDTO, WorkflowListDTO } from "@mstar-harness/engine";
 
-import { UNREACHABLE, asEnvelope, readAllListPages, refusalMessage } from "./read-envelope";
+import { UNREACHABLE, asEnvelope, collaborationGap, readAllListPages, refusalMessage } from "./read-envelope";
 
 import { ABSENT_PROJECTION } from "./absent-projection";
 import {
@@ -59,7 +59,15 @@ export function workflowDetailCopy(copy: Copy): WorkflowDetailCopy {
 /** What the list is handed. */
 export type WorkflowsOutcome =
   | { kind: "loading" }
-  | { kind: "ready"; model: WorkflowListModel }
+  | {
+      kind: "ready";
+      model: WorkflowListModel;
+      /**
+       * The optional catalog association's named gap. The rows are execution data
+       * and stay; the page must state this gap rather than draw a healthy join cell.
+       */
+      catalogNotice: { completeness: "partial" | "unavailable"; code: string } | null;
+    }
   | { kind: "failed"; message: string };
 
 /** What the detail is handed. */
@@ -134,10 +142,31 @@ export function workflowsOutcome(
           projection: result.envelope.projection,
           filters,
         }),
+        // The catalog association is optional: an explicit gap keeps this read
+        // usable, and the page states the gap instead of claiming a healthy join.
+        catalogNotice: collaborationGap(result.envelope),
       };
     case "error":
       return { kind: "failed", message: result.message };
   }
+}
+
+/**
+ * The notice that explains an optional catalog gap on the Workflows list.
+ *
+ * The execution rows are already in the model; this only supplies the host's
+ * localized lead and the store's own code, so the join column's absence is
+ * disclosed as a degradation rather than read as "nothing to link".
+ */
+export function workflowsCatalogNotice(
+  outcome: WorkflowsOutcome,
+  copy: Copy,
+): { lead: string; reason: string } | null {
+  if (outcome.kind !== "ready" || outcome.catalogNotice === null) return null;
+  return {
+    lead: copy.state.unavailable.labelWord,
+    reason: `${copy.state.unavailable.body} (${outcome.catalogNotice.code})`,
+  };
 }
 
 /** The detail outcome for a settled read. */

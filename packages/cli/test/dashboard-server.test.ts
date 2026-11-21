@@ -432,6 +432,16 @@ describe("API over a real store", () => {
     }
   });
 
+  test("a Digest authorization value is redacted with all its parameters over HTTP", async () => {
+    const header = 'x Authorization: Digest username="Mufasa", realm="test", nonce="abc", response="deadbeef"';
+    const res = await raw(new URL(`/api/issues/${encodeURIComponent(header)}`, server.url).href);
+    expect(res.status).toBe(404);
+    const body = JSON.parse(res.body) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("issue.not-found");
+    for (const leaked of ["Mufasa", "test", "abc", "deadbeef"]) expect(body.error.message).not.toContain(leaked);
+    expect(body.error.message).toContain("{REDACTED}");
+  });
+
   test("stale projection is disclosed in the envelope, never hidden", async () => {
     const { dir, context } = await workspace("stale-projection-");
     await declareWorkflow(context, "wf-stale-projection");
