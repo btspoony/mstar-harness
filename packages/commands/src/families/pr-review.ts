@@ -528,7 +528,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         if (!existsSync(file)) throw new UsageError(
           `confirmation file not found: ${file}`,
           undefined,
-          "Create the confirmation record for the waived set, or resolve every unresolved thread and rerun without the flag. Run mstar pr-review thread-gate --pr <n> --confirm <file>.",
+          "Resolve every unresolved thread and rerun without the flag, or supply the confirmation file for the waived set. Run mstar pr-review thread-gate --pr <n>.",
         );
         let raw: string;
         try { raw = readFileSync(file, "utf8"); } catch (error) {
