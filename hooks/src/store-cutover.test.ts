@@ -228,7 +228,7 @@ describe("ZCode write gate \u2014 authority paths (source entry)", () => {
     expect(run.exitCode).toBe(2);
     expect(run.stdout).toBe("");
     expect(run.stderr).toContain("project.register.retired");
-    expect(run.stderr).toContain("store.db");
+    expect(run.stderr).toContain("collaboration database");
     expect(run.stderr).toContain(AUTHORITY_LINE);
   });
 

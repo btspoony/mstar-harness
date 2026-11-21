@@ -7,6 +7,7 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-
 import {
   bindExecutionSession,
   createExecutionWorkflow,
+  ensureCollaborationAuthority,
   mutateExecutionWorkflow,
   readExecutionAuthority,
   readExecutionState,
@@ -31,6 +32,7 @@ async function activeFixture(options: { closeable?: boolean } = {}) {
   rmSync(join(fixture.harness, "workflows"), { recursive: true, force: true });
   const store = { harnessDir: fixture.harness };
   (await initializeStore(store)).close();
+  await ensureCollaborationAuthority(store);
   await registerCatalogEntity(store, { kind: "plan", id: PLAN_ID, title: PLAN_ID, rootKind: "plans", relativePath: `plans/${PLAN_ID}.md` }, { operationId: randomUUID(), actor: "phase2-orchestration-extension.test" });
   const caller: ExecutionCaller = { sessionId: "active-coordinator", role: "coordinator", workflowId: WORKFLOW_ID };
   const domain: ExecutionContext = { harnessDir: fixture.harness, caller };

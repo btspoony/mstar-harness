@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { initializeStore, readRoadmapAuthority, registerCatalogEntity, type StoreContext } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, readRoadmapAuthority, registerCatalogEntity, type StoreContext } from "@mstar-harness/engine";
+import { writeFixtureRepoId } from "./harness";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const BUNDLE = join(CLI_ROOT, "dist/mstar-harness.js");
@@ -42,11 +43,13 @@ async function fixture(name: string): Promise<{ dir: string; context: StoreConte
   // why: A real Git main worktree whose `.mstar` is the fixed harness root.
   const dir = mkdtempSync(join(ROOT, name));
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  writeFixtureRepoId(dir);
   spawnSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
   mkdirSync(join(dir, ".mstar"), { recursive: true });
   const context = { harnessDir: join(dir, ".mstar") };
   const store = await initializeStore(context);
   store.close();
+  await ensureCollaborationAuthority(context);
   await registerCatalogEntity(context, {
     kind: "project", id: "proj-roadmap", title: "Roadmap proof", rootKind: "projects", relativePath: "proj-roadmap",
   }, { operationId: `register-${name}`, actor: "roadmap-test" });

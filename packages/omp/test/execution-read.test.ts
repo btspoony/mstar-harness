@@ -42,6 +42,7 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-
 import {
   bindExecutionSession,
   createExecutionWorkflow,
+  ensureCollaborationAuthority,
   initializeStore,
   readExecutionAuthority,
   registerCatalogEntity,
@@ -149,6 +150,7 @@ function makeFixture(label: string): Fixture {
   const main = join(root, "main");
   mkdirSync(main, { recursive: true });
   git(["init", "-q", "-b", "main"], main);
+  writeFileSync(join(main, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=omp-s3-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   git(
     ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "init"],
     main,
@@ -192,6 +194,7 @@ async function seedActiveAuthority(
 ): Promise<ExecutionSessionRef | null> {
   const handle = await initializeStore({ harnessDir: fixture.harness });
   handle.close();
+  await ensureCollaborationAuthority({ harnessDir: fixture.harness });
   const initialized = await readExecutionAuthority({ harnessDir: fixture.harness });
   await registerCatalogEntity(
     { harnessDir: fixture.harness },

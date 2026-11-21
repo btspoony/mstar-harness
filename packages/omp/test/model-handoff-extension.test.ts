@@ -73,6 +73,7 @@ import {
   bindExecutionSession,
   createExecutionWorkflow,
   createFsStore,
+  ensureCollaborationAuthority,
   initializeStore,
   mutateExecutionPlan,
   readExecutionAuthority,
@@ -209,16 +210,17 @@ function buildControlRepo(
   git(["init", "-q", "-b", "main", main], root);
   git(["config", "user.email", "fixture@example.invalid"], main);
   git(["config", "user.name", "fixture"], main);
+  writeFileSync(join(main, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=omp-ext-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   writeFileSync(join(main, "README.md"), "fixture\n");
   git(["add", "README.md"], main);
   git(["commit", "-qm", "init"], main);
-  git(["remote", "add", "origin", bare], main);
-  git(["push", "-q", "-u", "origin", "main"], main);
+  git(["remote", "add", "local-remote", bare], main);
+  git(["push", "-q", "-u", "local-remote", "main"], main);
 
   const integrationBranch = "iteration/fixture";
   const integration = join(root, "integration");
   git(["worktree", "add", "-q", "-b", integrationBranch, integration], main);
-  git(["push", "-q", "-u", "origin", integrationBranch], integration);
+  git(["push", "-q", "-u", "local-remote", integrationBranch], integration);
 
   const harness = join(main, ".mstar");
   mkdirSync(join(harness, "plans"), { recursive: true });
@@ -1261,6 +1263,7 @@ async function seedBindableActiveWorkflow(
   setArtifactStore(createFsStore(harness));
   const store = await initializeStore({ harnessDir: harness });
   store.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   const initialized = await readExecutionState({ harnessDir: harness });
   const context: ExecutionContext = {
     harnessDir: harness,
@@ -1860,6 +1863,7 @@ async function seedActiveHandoffAuthority(
   setArtifactStore(createFsStore(harness));
   const store = await initializeStore({ harnessDir: harness });
   store.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   const initialized = await readExecutionState({ harnessDir: harness });
   await registerCatalogEntity(
     { harnessDir: harness },

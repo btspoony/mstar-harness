@@ -3,8 +3,8 @@ import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { assertKnowledgeCatalogCompleteness, initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
-import { runCli, withTempDir } from "./harness";
+import { assertKnowledgeCatalogCompleteness, ensureCollaborationAuthority, initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
+import { runCli, withTempDir, writeFixtureRepoId } from "./harness";
 import { cliEnvelope, violationCodes } from "./support/cli-assertions";
 import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
 
@@ -12,6 +12,7 @@ import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
  * `<main worktree>/.mstar`, never a bare temp directory). */
 function gitMainWorktree(dir: string): void {
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  writeFixtureRepoId(dir);
   execFileSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
 }
 
@@ -31,6 +32,7 @@ async function completeKnowledgeRoot(dir: string): Promise<{ root: string; harne
   writeFileSync(join(configured, "registered.md"), KNOWLEDGE_GOOD);
   const context = { harnessDir: harness };
   (await initializeStore(context)).close();
+  await ensureCollaborationAuthority(context);
   await registerCatalogEntity(context, {
     kind: "document", id: "doc-registered", title: "Registered doc", rootKind: "knowledge", relativePath: "registered.md", documentKind: "knowledge",
   }, { operationId: "fixture-catalog-complete", actor: "compound" });
@@ -78,15 +80,15 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
     });
   });
 
-  test("--knowledge-dir with a harness whose store is missing → store.not-initialized, exit 1", () => {
+  test("--knowledge-dir with a harness whose authority is missing → collaboration.not-initialized, exit 1", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       gitMainWorktree(dir);
       const doc = join(dir, "doc.md");
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const harness = join(dir, ".mstar");
       mkdirSync(harness);
-      // why: The configured root is the fixed `<dir>/.mstar`, so the missing store
-      // is the one the completeness query refuses over.
+      // why: The configured root is the fixed `<dir>/.mstar`, so the missing
+      // collaboration lane is the one the completeness query refuses over.
       const knowledgeDir = join(dir, ".agents", "knowledge");
       mkdirSync(knowledgeDir, { recursive: true });
       writeFileSync(join(knowledgeDir, "existing.md"), KNOWLEDGE_GOOD);
@@ -95,7 +97,7 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       });
       // Unavailable catalog data is never read as a complete catalog.
       expect(result.exitCode).toBe(1);
-      expect(violationCodes(result)).toContain("store.not-initialized");
+      expect(violationCodes(result)).toContain("collaboration.not-initialized");
       expect(violationCodes(result)).not.toContain("compound.index.retired");
     });
   });

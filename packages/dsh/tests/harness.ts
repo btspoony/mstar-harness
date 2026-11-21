@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import * as nodeOs from 'node:os'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import { load as parseYaml } from 'js-yaml'
@@ -36,8 +36,10 @@ import {
   ensureCollaborationAuthority,
   initializeCollaborationStore,
   initializeStore,
+  probeCollaborationAuthority,
   readExecutionState,
   registerCatalogEntity,
+  writeCollaborationBinding,
   resolveCollaborationLocation,
   withCollaborationWrite,
 } from '@mstar-harness/engine'
@@ -1080,7 +1082,23 @@ export async function seedActiveWorkflow(
     // `store init` pairs the authorities (the plan rows and the panel facts
     // below are collaboration reads).
     ensureFixtureRepo(harnessDir)
-    await ensureCollaborationAuthority({ harnessDir })
+    try {
+      await ensureCollaborationAuthority({ harnessDir })
+    } catch (error) {
+      // A second harness over the SAME repository (e.g. `<root>/completed`)
+      // meets a lane this run already published: it is not stale — bind this
+      // checkout to the live ACTIVE store instead of bootstrapping a new one.
+      const probe = await probeCollaborationAuthority({ harnessDir })
+      if (
+        error instanceof Error
+        && (error as { code?: string }).code === 'collaboration.stale-binding'
+        && probe.kind === 'active'
+      ) {
+        await writeCollaborationBinding({ harnessDir }, probe.authority)
+      } else {
+        throw error
+      }
+    }
     const read = await readExecutionState({ harnessDir })
     expected = read.token
     activeExecutionGenerations.set(harnessDir, { storeId: read.storeId, epoch: read.epoch })
@@ -1188,7 +1206,15 @@ export function gitInit(root: string): void {
  * fixtures can resolve the user-level lane (resolution names the main
  * checkout and reads its `.mstarc`). Idempotent. */
 function ensureFixtureRepo(harnessDir: string): void {
-  const root = dirname(realpathSync(harnessDir))
+  const resolved = realpathSync(harnessDir)
+  // The repository owner is the directory ABOVE a `.mstar` harness dir; a bare
+  // path passed as its own harness root owns ITSELF. Refusing the shared temp
+  // root keeps one bare-path caller from git-initializing `$TMPDIR` and
+  // poisoning every upward identity probe in the process.
+  const root = basename(resolved) === '.mstar' ? dirname(resolved) : resolved
+  if (root === realpathSync(tmpdir())) {
+    throw new Error(`fixture harness ${harnessDir} resolves to the shared temp root ${root}; pass a repo-scoped root (e.g. <projectRoot>/.mstar), not a bare temp dir`)
+  }
   gitInit(root)
   const mstarc = join(root, '.mstarc')
   if (existsSync(mstarc)) return
@@ -1198,6 +1224,10 @@ function ensureFixtureRepo(harnessDir: string): void {
     .replace(/^[^a-z0-9]+/, '')
   const repoId = `dsh-${slug}`.slice(0, 128)
   writeFileSync(mstarc, `[collaboration]\nmode=local\nrepo_id=${repoId}\n`)
+  // The declared identity is committable fixture state, not process state: a
+  // clean control root (worktree.main.tracked-changes) requires it committed.
+  execFileSync('git', ['add', '.mstarc'], { cwd: root, stdio: 'ignore' })
+  execFileSync('git', ['-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'commit', '-q', '-m', 'declare fixture collaboration identity'], { cwd: root, stdio: 'ignore' })
 }
 
 /** Initialize this checkout's authorities the way `store init` does: the
@@ -1311,6 +1341,11 @@ export async function seedHarness(harnessDir: string, files: Record<string, stri
  */
 export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-mstar-boot-'))
+  // Callers may name a not-yet-created root (the boot creates it), so the
+  // shared-temp-root refusal compares the resolved spelling, not a realpath.
+  if (resolve(root) === resolve(tmpdir()) || (existsSync(root) && realpathSync(root) === realpathSync(tmpdir()))) {
+    throw new Error(`bootApp root resolves to the shared temp root ${root}; pass a repo-scoped root, not a bare temp dir`)
+  }
   const harnessDir = join(root, '.mstar')
   await mkdir(harnessDir, { recursive: true })
   // A real repository identity: collaboration resolution needs an origin or an
@@ -1319,6 +1354,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const mstarc = join(root, '.mstarc')
   if (!existsSync(mstarc)) {
     writeFileSync(mstarc, `[config]\n\n[collaboration]\nmode=local\nrepo_id=${fixtureRepoId(root)}\n`)
+    // Identity is committable fixture state: a clean control root
+    // (worktree.main.tracked-changes) requires it committed after gitInit.
+    gitInit(root)
+    execFileSync('git', ['add', '.mstarc'], { cwd: root, stdio: 'ignore' })
+    execFileSync('git', ['-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'commit', '-q', '-m', 'declare fixture collaboration identity'], { cwd: root, stdio: 'ignore' })
   }
   // why: Canonical spelling: the resolver answers the Git-reported (realpath'd)
   // root, and the boot config must name the SAME path the D4 resolution and

@@ -28,6 +28,7 @@ import { tmpdir } from "node:os";
 import {
   ACTIVATION_PROTOCOL_VERSION,
   encodeExecutionSessionRef,
+  ensureCollaborationAuthority,
   initializeStore,
   openStore,
   readExecutionAuthority,
@@ -37,7 +38,7 @@ import {
   type ExecutionState,
   type StoreContext,
 } from "@mstar-harness/engine";
-import { CLI_ROOT, receiptStable, runCli as spawnCli, type RunResult } from "./harness";
+import { CLI_ROOT, receiptStable, runCli as spawnCli, writeFixtureRepoId, type RunResult } from "./harness";
 
 type EngineManifest = { engines?: { node?: string } };
 // Repo manifest read at runtime: no test pins the runtime floor, and
@@ -115,6 +116,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
   roots.push(root);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], {
     cwd: root,
   });
@@ -123,6 +125,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
+  await ensureCollaborationAuthority(context);
   await readExecutionAuthority(context);
   const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
   writeText(planMarkdown, `# Active workflow transport plan\n\n**plan_id:** ${PLAN_ID}\n`);

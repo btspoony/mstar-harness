@@ -34,7 +34,7 @@ import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const CLI_ROOT = resolve(TEST_DIR, "..");
@@ -84,10 +84,15 @@ async function makeActiveWorkspace(label) {
   execFileSync("git", ["-c", "user.email=t4@test", "-c", "user.name=t4", "commit", "-q", "--allow-empty", "-m", "init"], {
     cwd: root,
   });
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-mcp-id-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   const store = await initializeStore({ harnessDir: harness });
   store.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   return { root, harness };
 }
 

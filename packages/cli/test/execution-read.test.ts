@@ -47,6 +47,7 @@ import {
   bindExecutionSession,
   createExecutionWorkflow,
   encodeExecutionSessionRef,
+  ensureCollaborationAuthority,
   initializeStore,
   openStore,
   readExecutionState,
@@ -54,7 +55,7 @@ import {
   type StoreContext,
 } from "@mstar-harness/engine";
 import { readDashboardView } from "../../commands/src/dashboard/store-read";
-import { cliEnv, runCli as harnessRunCli, type RunResult } from "./harness";
+import { cliEnv, runCli as harnessRunCli, writeFixtureRepoId, type RunResult } from "./harness";
 
 const WORKFLOW_ID = "wf-execution-read";
 const PLAN_ID = "20260920-execution-read-plan";
@@ -78,6 +79,7 @@ function workspace(label: string): Fixture {
   const root = mkdtempSync(join(tmpdir(), `${label}-`));
   roots.push(root);
   execFileSync("git", ["init", "-q"], { cwd: root });
+  writeFixtureRepoId(root);
   const harnessDir = join(root, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
   return { root, harnessDir, context: { harnessDir } };
@@ -119,6 +121,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const fixture = workspace(label);
   const handle = await initializeStore(fixture.context);
   handle.close();
+  await ensureCollaborationAuthority(fixture.context);
   const initialized = await readExecutionState(fixture.context);
   await registerCatalogEntity(
     fixture.context,
@@ -483,10 +486,11 @@ describe("execution-cross-domain", () => {
     expect(
       projected !== null && typeof projected === "object" && "code" in projected ? projected.code : undefined,
     ).toBe("store.corrupt");
-    const issues = await readDashboardView({ context: fixture.context, view: "issues" }).catch((error: unknown) => error);
-    expect(issues !== null && typeof issues === "object" && "code" in issues ? issues.code : undefined).toBe(
-      "store.corrupt",
-    );
+    // The split boundary: the issues view's authority is the repository lane,
+    // which is healthy — a corrupt execution store must not fail it, and the
+    // empty answer is the lane's own genuine zero.
+    const issues = await readDashboardView({ context: fixture.context, view: "issues" });
+    expect(issues.data).toBeDefined();
 
     // The retired bytes are untouched — byte for byte: never promoted, never
     // rewritten. The snapshot, the root register and the session envelope are
