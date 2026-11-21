@@ -1139,6 +1139,11 @@ describe("pr-review command family", () => {
     // must report usage (exit 2), not an execution failure.
     const missing = await gate.execute({ pr: "42", confirm: path.join(cwd, "absent.json") }, context);
     expect(missing).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    // why: an existing but unreadable path (a directory) must name the read
+    // failure, not be reported as malformed JSON.
+    const unreadable = await gate.execute({ pr: "42", confirm: cwd }, context);
+    expect(unreadable).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(unreadable.status === "ok" ? "" : unreadable.message).toContain("cannot read the confirmation file");
     writeFileSync(confirm, "{ not json");
     const garbage = await gate.execute({ pr: "42", confirm }, context);
     expect(garbage).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });

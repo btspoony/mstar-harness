@@ -25,4 +25,4 @@ Merge is authorized by the compass `pr_merge_policy`, never by flow completeness
 
 ## Report
 
-Iteration id, plans completed, compound summary, PR link, merge-ready evidence, the recorded `pr_merge_policy` and the merge-authorization evidence that satisfied `mstar-iteration` → `references/phase-4-5-pr-delivery.md` §5.3, the §5.3a thread enumeration and its two confirmations, and post-merge close evidence (workflow `completed` + `ended_at`, root unregister, projections consistent).
+Iteration id, plans completed, compound summary, PR link, merge-ready evidence, the recorded `pr_merge_policy` and the merge-authorization evidence that satisfied `mstar-iteration` → `references/phase-4-5-pr-delivery.md` §5.3, the §5.3a thread enumeration and, when it found unresolved threads, its two confirmations, and post-merge close evidence (workflow `completed` + `ended_at`, root unregister, projections consistent).

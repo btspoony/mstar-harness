@@ -2562,7 +2562,9 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
  * cannot be replayed against a rewritten thread.
  */
 export function threadGateDigest(threads: readonly ReviewThreadFacts[]): string {
-  const payload = threads.map((thread) => [thread.id, thread.body ?? ""]).sort(([a], [b]) => String(a).localeCompare(String(b)));
+  const payload = threads
+    .map((thread) => [thread.id, thread.body ?? ""] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16);
 }
 
@@ -2605,7 +2607,7 @@ export function parseReviewThreads(payload: unknown): {
     threads,
     hasNextPage: pageInfo?.hasNextPage === true,
     endCursor: typeof pageInfo?.endCursor === "string" ? pageInfo.endCursor : null,
-    readable: connection !== null,
+    readable: Array.isArray(connection?.nodes),
     headRefOid: typeof pullRequest?.headRefOid === "string" ? pullRequest.headRefOid : null,
   };
 }

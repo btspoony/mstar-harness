@@ -584,6 +584,15 @@ describe("thread gate (\u00a75.3a)", () => {
 
   test("a payload without a thread connection is unreadable, never an empty clean page", () => {
     expect(parseReviewThreads({ data: { repository: { pullRequest: { headRefOid: "abcdef0123456" } } } })).toMatchObject({ readable: false, threads: [] });
+    expect(parseReviewThreads({ data: { repository: { pullRequest: { headRefOid: "abcdef0123456", reviewThreads: {} } } } })).toMatchObject({ readable: false, threads: [] });
+    expect(parseReviewThreads(page([]))).toMatchObject({ readable: true, threads: [] });
+  });
+
+  test("the digest is order-independent and locale-independent", () => {
+    const a = thread("T1", false, "first");
+    const b = thread("T2", false, "second");
+    expect(threadGateDigest([a, b])).toBe(threadGateDigest([b, a]));
+    expect(threadGateDigest([a, b])).not.toBe(threadGateDigest([a]));
   });
 
   test("an unresolved thread refuses the merge without a confirmation", () => {

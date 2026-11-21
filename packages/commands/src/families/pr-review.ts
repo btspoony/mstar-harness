@@ -526,8 +526,12 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       if (input.confirm !== undefined) {
         const file = abs(context.cwd, input.confirm);
         if (!existsSync(file)) throw new UsageError(`confirmation file not found: ${file}`);
+        let raw: string;
+        try { raw = readFileSync(file, "utf8"); } catch (error) {
+          throw new UsageError(`cannot read the confirmation file ${file}: ${error instanceof Error ? error.message : String(error)}`);
+        }
         let parsed: unknown;
-        try { parsed = JSON.parse(readFileSync(file, "utf8")); } catch { throw new UsageError("--confirm must contain valid JSON"); }
+        try { parsed = JSON.parse(raw); } catch { throw new UsageError(`--confirm must contain valid JSON: ${file}`); }
         const row = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed)) : null;
         if (row === null || typeof row.head !== "string" || typeof row.confirmations !== "number" || !Array.isArray(row.threads) || row.threads.some((value) => typeof value !== "string") || (row.digest !== undefined && typeof row.digest !== "string")) {
           throw new UsageError("--confirm must be a JSON object {head: string, confirmations: number, threads: string[], digest?: string}");
