@@ -390,6 +390,73 @@ export async function findingsCleanupGate(
 }
 
 /**
+ * The two named findings-evidence refusals (contract §Operator commands and
+ * refusals): the required scope was not fully proved, or the preflight
+ * observation no longer applies.
+ */
+export type FindingsEvidenceCode = "collaboration.observation-incomplete" | "collaboration.observation-stale";
+
+/**
+ * A findings decision could not be re-proved against current scope. `details`
+ * names the scope and both snapshots, so the caller repeats the same gate
+ * against current scope instead of retrying the stale one.
+ */
+export class FindingsEvidenceError extends Error {
+  readonly code: FindingsEvidenceCode;
+  readonly details: Record<string, unknown>;
+
+  constructor(code: FindingsEvidenceCode, message: string, details: Record<string, unknown> = {}) {
+    super(`[${code}] ${message}`);
+    this.name = "FindingsEvidenceError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
+/**
+ * The pre-commit applicability re-sample of one findings decision: the complete
+ * observation a gate decided on must still name the same plan scope, authority
+ * stamp and revision. The recorded evidence is untrusted input here (a stored
+ * completion record is re-read, not re-observed), so a scope this repo cannot
+ * re-observe refuses as `observation-incomplete`; a moved lane refuses as
+ * `observation-stale` and names both snapshots. The evidence itself is never
+ * rewritten — the caller repeats the same gate against current scope.
+ */
+export async function assertPlanFindingsCurrent(
+  context: StoreContext,
+  observed: FindingsObservation,
+): Promise<void> {
+  const { scope } = observed;
+  if (scope.kind !== "plan" || scope.key.trim() === "") {
+    throw new FindingsEvidenceError(
+      "collaboration.observation-incomplete",
+      `The findings evidence names ${scope.kind} scope ${JSON.stringify(scope.key)}, which this gate cannot re-observe as a plan. Repeat the gate with the plan id it was decided for.`,
+      { scope },
+    );
+  }
+  const current = await observePlanFindings(context, scope.key);
+  const { repoKey, mode, storeId, epoch } = observed.authority;
+  const authority = current.authority;
+  if (
+    authority.repoKey !== repoKey ||
+    authority.mode !== mode ||
+    authority.storeId !== storeId ||
+    authority.epoch !== epoch ||
+    current.revision !== observed.revision
+  ) {
+    throw new FindingsEvidenceError(
+      "collaboration.observation-stale",
+      "The collaboration findings observation changed after the preflight gate; repeat the same gate against current scope so it is judged against a current complete observation.",
+      {
+        plan_id: scope.key,
+        observed: { asOf: observed.asOf, authority: observed.authority, revision: observed.revision },
+        current: { asOf: current.asOf, authority: current.authority, revision: current.revision },
+      },
+    );
+  }
+}
+
+/**
  * List theme-scoped research files under `<projectDir>/references/`
  * (compass ruling 1): top-level
  * files plus files exactly one subdirectory deep; deeper nesting ignored;

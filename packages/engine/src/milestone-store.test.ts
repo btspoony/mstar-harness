@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore } from "./collaboration-store.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { addMilestone, MilestoneError, readMilestonesOn, updateMilestone } from "./milestone-store.js";
 import type { StoreContext, StoreDb } from "./store-db.js";
 
@@ -27,16 +27,22 @@ function checkout(name: string): StoreContext {
   return { harnessDir: join(repo, ".mstar") };
 }
 
-/** The private staged record flipped to active: this plan ships no public activator. */
+/** The private staged record flipped to active, plus the checkout binding the
+ * real activation writes: an ACTIVE authority is never usable unbound. */
 function activateLocation(context: StoreContext): string {
-  const dbPath = resolveCollaborationLocation(context).dbPath;
-  const handle = new DatabaseSync(dbPath);
+  const location = resolveCollaborationLocation(context);
+  const handle = new DatabaseSync(location.dbPath);
+  let authority: { storeId: string; epoch: number } | null = null;
   try {
     handle.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
+    const row = handle.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as { store_id?: unknown; authority_epoch?: unknown } | undefined;
+    if (typeof row?.store_id === "string" && typeof row.authority_epoch === "number") authority = { storeId: row.store_id, epoch: row.authority_epoch };
   } finally {
     handle.close();
   }
-  return dbPath;
+  if (authority === null) throw new Error("fixture: the staged collaboration lane records no store identity");
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId: authority.storeId, epoch: authority.epoch, binding: "active" });
+  return location.dbPath;
 }
 
 const context = checkout("milestone-store");
@@ -146,5 +152,19 @@ describe("milestone store", () => {
     expect(readMilestonesOn(db,projectId,own.milestoneId).milestones).toHaveLength(1);
     expect(() => readMilestonesOn(db,projectId,"missing-milestone")).toThrow(expect.objectContaining({code:"milestone.not-found"}));
     expect(() => readMilestonesOn(db,projectId,foreign.milestoneId)).toThrow(expect.objectContaining({code:"milestone.project-mismatch"}));
+  });
+  test("milestone store: delivery counts its open issues inside its own mutation, never from a prior read", async () => {
+    const current=revision();
+    const scheduled=await addMilestone(context,{projectId,name:"Delivery counts",target:null,ordinal:9},{operationId:crypto.randomUUID(),expectedStoreRevision:current});
+    const activated=await updateMilestone(context,projectId,scheduled.milestoneId,{status:"active"},{operationId:crypto.randomUUID(),expectedStoreRevision:scheduled.storeRevision});
+    // A rollup read is not the delivery decision: it reports zero open issues...
+    expect(readMilestonesOn(db,projectId,scheduled.milestoneId).milestones[0]).toMatchObject({openIssues:0});
+    // ...and a row written after that read, without moving the store revision,
+    // is still counted by the delivery's own collaboration transaction.
+    issue("I-MILESTONE-DELIVERY","open",scheduled.milestoneId);
+    await expect(updateMilestone(context,projectId,scheduled.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:activated.storeRevision})).rejects.toMatchObject({code:"milestone.open-issues"});
+    db.prepare("update issues set disposition='resolved' where id='I-MILESTONE-DELIVERY'").run();
+    const delivered=await updateMilestone(context,projectId,scheduled.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:activated.storeRevision});
+    expect(delivered).toMatchObject({changed:true,storeRevision:activated.storeRevision+1});
   });
 });

@@ -34,7 +34,7 @@ import { execFileSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, readCollaborationAuthority } from "./collaboration-store.js";
+import { initializeCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
 import { getIssue, listIssues, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
 import { executionInputHash } from "./coordination.js";
@@ -45,6 +45,7 @@ import { initializeStore, openStore, storeDbPath, type StoreContext, type StoreD
 import {
   queryDashboard,
   queryIssueFlow,
+  queryOpenIssueRollup,
   withStoreRead,
   type IssueFlow,
   type WorkflowDTO,
@@ -70,18 +71,36 @@ afterAll(() => {
 
 type Fixture = { dir: string; harness: string; context: StoreContext };
 
-/** The private staged collaboration record flipped to active: this plan ships
- * no public activator, so the fixture publishes the lane the same way the
- * collaboration suites do. */
+/**
+ * The private staged collaboration record flipped to active, plus the checkout
+ * binding the real activation writes: an ACTIVE authority is never usable from
+ * an unbound checkout, and this plan ships no public activator.
+ */
 function activateCollaboration(context: StoreContext): void {
-  const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  const location = resolveCollaborationLocation(context);
+  const db = new DatabaseSync(location.dbPath);
+  let authority: { storeId: string; epoch: number } | null = null;
   try {
     db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
       new Date().toISOString(),
     );
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string" && typeof row.authority_epoch === "number") {
+      authority = { storeId: row.store_id, epoch: row.authority_epoch };
+    }
   } finally {
     db.close();
   }
+  if (authority === null) throw new Error("fixture: the staged collaboration lane records no store identity");
+  writeCollaborationBinding(context, {
+    repoKey: location.repoKey,
+    mode: location.mode,
+    storeId: authority.storeId,
+    epoch: authority.epoch,
+    binding: "active",
+  });
 }
 
 /**
@@ -896,6 +915,109 @@ describe("issue views", () => {
     expect(envelope.data.occurrences).toHaveLength(1);
     await expect(withStoreRead(context, queryDashboard("issue-detail", { id: "I-999999" }))).rejects.toMatchObject({
       code: "issue.not-found",
+    });
+  });
+});
+
+describe("collaboration rollup snapshot", () => {
+  /**
+   * Twelve open issues across two projects, one retired row and a lane move: the
+   * counts, the grouping and the preview must all name one snapshot.
+   */
+  async function seededRollup(name: string): Promise<StoreContext> {
+    const { context } = await workspace(name);
+    await registerProject(context, "proj-a");
+    await registerProject(context, "proj-b");
+    await withWrite(context, (db) => {
+      for (let index = 1; index <= 12; index += 1) {
+        seedIssue(db, {
+          id: `I-${String(index).padStart(2, "0")}`,
+          title: `open ${index}`,
+          projectId: index % 3 === 0 ? "proj-b" : "proj-a",
+          severity: index % 4 === 0 ? "critical" : index % 2 === 0 ? "low" : "nit",
+          registeredAt: `2026-09-${String(10 + index).padStart(2, "0")}T00:00:00.000Z`,
+        });
+      }
+      seedIssue(db, { id: "I-RETIRED", title: "retired", disposition: "resolved", severity: "critical" });
+      db.prepare("update collaboration_meta set revision = revision + 7 where id = 1").run();
+    });
+    return context;
+  }
+
+  test("collaboration rollup snapshot: totals, grouping and the ten-row preview name one snapshot", async () => {
+    const context = await seededRollup("rollup-snapshot-");
+    const before = await withStoreRead(context, queryOpenIssueRollup());
+    if (before.storeRevision === null) throw new Error("fixture: a complete collaboration read reports its revision");
+    expect(before.data.totalOpen).toBe(12);
+    expect(before.data.bySeverity).toEqual({ critical: 3, high: 0, medium: 0, low: 3, nit: 6 });
+    expect(before.data.byProject).toEqual({ "proj-a": 8, "proj-b": 4 });
+    // The preview is the panel's bounded page in the authority's own order, and
+    // it is never the count source: 12 open rows still preview 10.
+    expect(before.data.recent.map((issue) => issue.id)).toEqual([
+      "I-12", "I-08", "I-04", "I-10", "I-06", "I-02", "I-11", "I-09", "I-07", "I-05",
+    ]);
+    expect(before.data.recent.every((issue) => issue.disposition === "open")).toBe(true);
+    // One snapshot: every aggregate over the same rows agrees with the total and
+    // with the revision the envelope reports.
+    expect(Object.values(before.data.bySeverity).reduce((sum, count) => sum + count, 0)).toBe(before.data.totalOpen);
+    expect(Object.values(before.data.byProject).reduce((sum, count) => sum + count, 0)).toBe(before.data.totalOpen);
+    expect(before.storeRevision).toBeGreaterThan(7);
+
+    // A later commit is visible only to later reads, and the lane revision moves
+    // together with every aggregate instead of a page joined across generations.
+    const writer = concurrentWriter(resolveCollaborationLocation(context).dbPath);
+    try {
+      seedIssue(writer, { id: "I-13", title: "late critical", severity: "critical", registeredAt: "2026-10-01T00:00:00.000Z" });
+      seedIssue(writer, { id: "I-14", title: "late nit", severity: "nit", registeredAt: "2026-10-02T00:00:00.000Z" });
+      writer.exec("update collaboration_meta set revision = revision + 2 where id = 1");
+    } finally {
+      writer.close();
+    }
+    const after = await withStoreRead(context, queryOpenIssueRollup());
+    expect(after.data.totalOpen).toBe(14);
+    expect(after.data.bySeverity.critical).toBe(4);
+    expect(after.data.bySeverity.nit).toBe(7);
+    expect(after.data.byProject).toEqual({ "proj-a": 10, "proj-b": 4 });
+    expect(after.data.recent).toHaveLength(10);
+    expect(after.storeRevision).toBe(before.storeRevision + 2);
+  });
+
+  test("collaboration rollup snapshot: a project scope keeps its own counts, and a legitimate zero is empty", async () => {
+    const context = await seededRollup("rollup-scope-");
+    const whole = await withStoreRead(context, queryOpenIssueRollup());
+    const scoped = await withStoreRead(context, queryOpenIssueRollup("proj-b"));
+    expect(scoped.data.totalOpen).toBe(4);
+    expect(scoped.data.byProject).toEqual({ "proj-b": 4 });
+    expect(scoped.data.recent.map((issue) => issue.projectId)).toEqual(["proj-b", "proj-b", "proj-b", "proj-b"]);
+    expect(scoped.storeRevision).toBe(whole.storeRevision);
+
+    await registerProject(context, "proj-empty");
+    const zero = await withStoreRead(context, queryOpenIssueRollup("proj-empty"));
+    expect(zero.data).toEqual({
+      totalOpen: 0,
+      bySeverity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 },
+      byProject: {},
+      recent: [],
+    });
+    // A blank project id is a request shape the contract does not define.
+    expect(() => queryOpenIssueRollup(" ")).toThrow();
+  });
+
+  test("collaboration rollup snapshot: a missing or staged lane refuses instead of totalling zero", async () => {
+    const { context: staged } = await workspace("rollup-staged-");
+    await withWrite(staged, (db) => db.exec("update collaboration_meta set authority_state = 'staged' where id = 1"));
+    await expect(withStoreRead(staged, queryOpenIssueRollup())).rejects.toMatchObject({ code: "collaboration.not-active" });
+
+    const dir = mkdtempSync(join(ROOT, "rollup-missing-"));
+    execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/rollup-missing.git"], {
+      cwd: dir,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
+    mkdirSync(join(dir, ".mstar"), { recursive: true });
+    await expect(withStoreRead({ harnessDir: join(dir, ".mstar") }, queryOpenIssueRollup())).rejects.toMatchObject({
+      code: "collaboration.not-initialized",
     });
   });
 });

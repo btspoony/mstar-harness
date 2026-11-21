@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { join } from "node:path";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore } from "./collaboration-store.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { assignIssueMilestone, closeIssue, getIssue, IssueError, listIssues, captureIssue } from "./issue.js";
 import { addMilestone, removeMilestone, readMilestonesOn as readMilestonesOnDb, updateMilestone } from "./milestone-store.js";
 import type { StoreContext, StoreDb } from "./store-db.js";
@@ -43,12 +43,22 @@ let otherMilestoneId = "";
 beforeAll(async () => {
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
   mkdirSync(harness, { recursive: true });
-  await initializeCollaborationStore(resolveCollaborationLocation(context));
-  const dbPath = resolveCollaborationLocation(context).dbPath;
-  const seeded = new DatabaseSync(dbPath);
-  seeded.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
-  seeded.close();
-  db = new DatabaseSync(dbPath);
+  const location = resolveCollaborationLocation(context);
+  await initializeCollaborationStore(location);
+  // The real activation also records this checkout's binding: an ACTIVE
+  // authority is never usable from an unbound checkout.
+  const seeded = new DatabaseSync(location.dbPath);
+  let authority: { storeId: string; epoch: number } | null = null;
+  try {
+    seeded.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
+    const row = seeded.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as { store_id?: unknown; authority_epoch?: unknown } | undefined;
+    if (typeof row?.store_id === "string" && typeof row.authority_epoch === "number") authority = { storeId: row.store_id, epoch: row.authority_epoch };
+  } finally {
+    seeded.close();
+  }
+  if (authority === null) throw new Error("fixture: the staged collaboration lane records no store identity");
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId: authority.storeId, epoch: authority.epoch, binding: "active" });
+  db = new DatabaseSync(location.dbPath);
   for (const id of [projectId, "other-project"]) db.prepare("insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project',?,?,'projects',?,'now','now')").run(id, id, `${id}/roadmap.md`);
   makeIssue("milestone-assignment-issue");
   makeIssue("milestone-membership-issue");
