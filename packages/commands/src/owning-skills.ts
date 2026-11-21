@@ -46,6 +46,7 @@ const COMMAND_OWNING_SKILL: Readonly<Record<string, string>> = {
   "plan.complete": "mstar-artifacts",
   "iteration.gate": "mstar-iteration",
   "iteration.push-cadence": "mstar-iteration",
+  "pr-review.thread-gate": "mstar-iteration",
   "iteration.register": "mstar-artifacts",
   "status.validate": "mstar-artifacts",
   "status.tech-debt": "mstar-project-governance",
