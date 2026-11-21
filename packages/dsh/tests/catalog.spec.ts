@@ -720,7 +720,7 @@ describe('compact engine-status delta — the model-row comparison key', () => {
       integrationWorktreePath: '/integration/wt',
       rowScopes: [{ planId: 'plan-a', workingBranch: 'feature/plan-a', worktreePath: '/wt/plan-a' }],
       knowledge: { docCount: 3, categories: ['conventions', 'testing'] },
-      storeFacts: { kind: 'store', projection: 'current', storeRevision: 42, diagnostic: 'a store diagnostic' },
+      storeFacts: { kind: 'store', projection: 'current', storeRevision: 42, completeness: 'complete', asOf: '2026-08-08T00:00:00.000Z', diagnostic: 'a store diagnostic' },
       direction: 'Golden direction.',
       agentFlow: {
         events: [{ ts: 1_700_000_000_000, kind: 'dispatch', agent: null, role: 'fullstack-dev', planId: 'plan-a', taskId: 'T1', taskCategory: null, verdict: 'ok', hard: false }],
@@ -766,10 +766,12 @@ describe('compact engine-status delta — the model-row comparison key', () => {
     const unavailable = copy(richPayload())
     const facts = unavailable.state?.storeFacts
     if (facts === undefined) throw new Error('expected store facts')
-    const mutable = facts as { kind: string; projection: unknown; storeRevision: unknown; diagnostic: unknown }
+    const mutable = facts as { kind: string; projection: unknown; storeRevision: unknown; completeness: unknown; asOf: unknown; diagnostic: unknown }
     mutable.kind = 'unavailable'
     mutable.projection = null
     mutable.storeRevision = null
+    mutable.completeness = 'unavailable'
+    mutable.asOf = null
     mutable.diagnostic = '[store.not-initialized] no store.db under the control root'
     const text = renderEngineStatusCatalog(unavailable)
     // ONE fixed-shape line naming the CAUSE and the RECOVERY.
