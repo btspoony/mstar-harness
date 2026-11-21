@@ -74,6 +74,7 @@ import {
   bindExecutionSession,
   createExecutionWorkflow,
   encodeExecutionSessionRef,
+  ensureCollaborationAuthority,
   initializeExecutionAuthority,
   initializeStore,
   mutateExecutionPlan,
@@ -167,10 +168,15 @@ async function makeActiveWorkspace(label) {
   execFileSync("git", ["-c", "user.email=r3@test", "-c", "user.name=r3", "commit", "-q", "--allow-empty", "-m", "init"], {
     cwd: root,
   });
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-exec-pkg-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   const store = await initializeStore({ harnessDir: harness });
   store.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   await readExecutionAuthority({ harnessDir: harness });
   return { root, harness, worktreePath: join(root, "wt-fixture"), evidencePath: join(root, "evidence.md") };
 }

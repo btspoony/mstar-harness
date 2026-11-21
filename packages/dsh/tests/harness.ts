@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import * as nodeOs from 'node:os'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import { load as parseYaml } from 'js-yaml'
@@ -1341,7 +1341,9 @@ export async function seedHarness(harnessDir: string, files: Record<string, stri
  */
 export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-mstar-boot-'))
-  if (realpathSync(root) === realpathSync(tmpdir())) {
+  // Callers may name a not-yet-created root (the boot creates it), so the
+  // shared-temp-root refusal compares the resolved spelling, not a realpath.
+  if (resolve(root) === resolve(tmpdir()) || (existsSync(root) && realpathSync(root) === realpathSync(tmpdir()))) {
     throw new Error(`bootApp root resolves to the shared temp root ${root}; pass a repo-scoped root, not a bare temp dir`)
   }
   const harnessDir = join(root, '.mstar')

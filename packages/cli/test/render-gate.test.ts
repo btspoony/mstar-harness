@@ -21,7 +21,7 @@
  * verification tool, so the gate rides it when present and steps aside when not.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -369,6 +369,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     if (!browserAvailable) console.log(SKIP_REASON);
     root = mkdtempSync(join(tmpdir(), "mstar-render-gate-"));
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-render-gate-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
     mkdirSync(join(root, ".mstar"), { recursive: true });
     const context = { harnessDir: join(root, ".mstar") };
     (await initializeStore(context)).close();

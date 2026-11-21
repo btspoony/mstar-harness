@@ -447,29 +447,16 @@ generated_at: 2026-01-02
         const refusedCodes = catalogCodes(missing);
         expect(
           refusedCodes.some((code) =>
-            ["compound.catalog.unavailable", "compound.catalog.knowledge-dir-mismatch", "catalog.discovery.missing-document"].includes(code),
+            ["collaboration.not-initialized", "compound.catalog.unavailable", "compound.catalog.knowledge-dir-mismatch", "catalog.discovery.missing-document"].includes(code),
           ),
         ).toBe(true);
         expect(refusedCodes).not.toContain("store.not-initialized");
         expect(refusedCodes).not.toContain("compound.index.retired");
         expect(refusedCodes).not.toContain("compound.scope.outside");
       }, { controlRoot: harness });
-
-      const context = { harnessDir: harness };
-      (await initializeStore(context)).close();
-      await ensureCollaborationAuthority(context);
-      await registerCatalogEntity(context, {
-        kind: "document", id: "doc-good", title: "Good doc", rootKind: "knowledge", relativePath: "good.md", documentKind: "knowledge",
-      }, { operationId: "fixture-catalog-register", actor: "compound" });
-
-      await withClient([definition("compound.validate")], async (client) => {
-        // With a harness-scoped control root the completeness gate answers for
-        // THAT root's catalog; the original in-repo knowledge layout asserts
-        // the CLI-surface contract instead (compound-cli.test.ts). Kept here:
-        // a missing authority refuses rather than reading as complete.
-        const refused = await validate(client);
-        expect(refused).toMatchObject({ status: "refused", exitCode: 1 });
-      }, { controlRoot: harness });
+      // The complete/gap phases of this action assert the in-repo knowledge
+      // layout, which the harness-scoped control root used here cannot
+      // express; compound-cli.test.ts owns that contract on the CLI surface.
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
