@@ -11158,8 +11158,9 @@ function readCollaborationBinding(context) {
 async function assertControlCheckoutScope(context, location) {
   if (existsSync16(storeDbPath(context))) {
     const legacy = await openStore(context, "read").catch((error) => {
-      if (error instanceof StoreError2 && error.code === "store.not-initialized")
+      if (error instanceof StoreError2 && (error.code === "store.not-initialized" || error.code === "store.corrupt")) {
         return;
+      }
       throw error;
     });
     if (legacy !== undefined) {
