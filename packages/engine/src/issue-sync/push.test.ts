@@ -6,11 +6,16 @@
  * provider: mstar makes no call, so the test plays the agent's side and hands
  * the engine what a Linear tool would return.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
-import { initializeStore, type StoreDb } from "../store-db.js";
+import * as nodeOs from "node:os";
+import { basename, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { resolveCollaborationLocation } from "../collaboration-identity.js";
+import { initializeCollaborationStore } from "../collaboration-store.js";
+import { busyTimeoutMs, connect, type StoreDb } from "../store-db.js";
 import type { IssueKind, Severity } from "../issue.js";
 import { acquireRun, readItem, releaseRun, type SyncItem } from "../issue-sync.js";
 import { SyncError } from "../issue-sync.js";
@@ -30,19 +35,67 @@ import {
 } from "./push.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-push-test-"));
-afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+const HOME = join(ROOT, "home");
+mkdirSync(HOME);
+
+/** The collaboration store is user-level, so the resolver's home is the fixture's. */
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
+
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(ROOT, { recursive: true, force: true });
+});
 
 const PROJECT = "p-push";
 const BINDING = "linear:" + PROJECT;
 
+/**
+ * The push ledger fixture: one ACTIVE collaboration authority, and ONE
+ * caller-owned transaction for the whole case — the same ownership the command's
+ * `withSyncWrite` holds around an `apply`. A row and its receipt therefore commit
+ * together at `close()`, exactly as in production; the per-batch advance and the
+ * failing-receipt abort are covered in `issue-sync.test.ts`.
+ */
 async function openedStore(name: string): Promise<{ db: StoreDb; harnessDir: string; close: () => void }> {
   const harnessDir = mkdtempSync(join(ROOT, name));
-  const handle = await initializeStore({ harnessDir });
-  const db = handle.db;
+  const checkoutRoot = join(harnessDir, "checkout");
+  mkdirSync(checkoutRoot, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: checkoutRoot, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["config", "user.name", "Push Test"], { cwd: checkoutRoot });
+  execFileSync("git", ["config", "user.email", "push@example.test"], { cwd: checkoutRoot });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(harnessDir)}.git`], {
+    cwd: checkoutRoot,
+  });
+  writeFileSync(join(checkoutRoot, ".mstarc"), "[collaboration]\nmode=mirror\n");
+  const location = resolveCollaborationLocation({ harnessDir, checkoutRoot });
+  await initializeCollaborationStore(location);
+  const flip = new DatabaseSync(location.dbPath);
+  try {
+    flip.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+  } finally {
+    flip.close();
+  }
+  const db = await connect(location.dbPath, "write", busyTimeoutMs(), { noCreate: true, keepJournalMode: true });
+  db.exec("begin immediate");
   db.prepare(
     "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', ?, 'Push', 'projects', ?, 'now', 'now')",
   ).run(PROJECT, PROJECT + "/roadmap.md");
-  return { db, harnessDir, close: () => handle.close() };
+  return {
+    db,
+    harnessDir,
+    close: () => {
+      try {
+        db.exec("commit");
+      } finally {
+        db.close();
+      }
+    },
+  };
 }
 
 function addIssue(
