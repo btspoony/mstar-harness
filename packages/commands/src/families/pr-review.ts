@@ -525,8 +525,9 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       let confirmation: ThreadGateConfirmation | undefined;
       if (input.confirm !== undefined) {
         const file = abs(context.cwd, input.confirm);
-        if (!existsSync(file)) throw new Error(`confirmation file not found: ${file}`);
-        const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+        if (!existsSync(file)) throw new UsageError(`confirmation file not found: ${file}`);
+        let parsed: unknown;
+        try { parsed = JSON.parse(readFileSync(file, "utf8")); } catch { throw new UsageError("--confirm must contain valid JSON"); }
         const row = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed)) : null;
         if (row === null || typeof row.head !== "string" || typeof row.confirmations !== "number" || !Array.isArray(row.threads) || row.threads.some((value) => typeof value !== "string") || (row.digest !== undefined && typeof row.digest !== "string")) {
           throw new UsageError("--confirm must be a JSON object {head: string, confirmations: number, threads: string[], digest?: string}");
@@ -542,7 +543,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
           ? `${decision.unresolved.length} unresolved review thread(s) on ${head} - merge is not authorized`
           : `the confirmation record does not authorize a merge on ${head}`,
         details: { head, total: threads.length, digest, unresolved: decision.unresolved, problems: decision.problems },
-        recovery: "Resolve every listed thread, or obtain a per-thread waiver from the user, record two confirmations in {head, confirmations: 2, threads: [<thread id>...], digest}, and rerun mstar pr-review thread-gate --pr <number> --confirm <file>.",
+        recovery: "Resolve every listed thread and rerun without --confirm; to merge with a thread still open, obtain a per-thread waiver from the user, record two confirmations in {head, confirmations: 2, threads: [<thread id>...], digest}, and rerun mstar pr-review thread-gate --pr <number> --confirm <file>.",
       });
     }
     if (verb === "worktree-cleanup") {

@@ -1135,6 +1135,14 @@ describe("pr-review command family", () => {
     expect(once).toMatchObject({ status: "refused", code: "prreview.thread-gate.confirmation-invalid" });
     expect(once.status === "ok" ? "" : JSON.stringify(once.details)).toContain("2 are required");
 
+    // why: a missing or unreadable confirmation file is caller input, so it
+    // must report usage (exit 2), not an execution failure.
+    const missing = await gate.execute({ pr: "42", confirm: path.join(cwd, "absent.json") }, context);
+    expect(missing).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    writeFileSync(confirm, "{ not json");
+    const garbage = await gate.execute({ pr: "42", confirm }, context);
+    expect(garbage).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+
     // why: a head that moves while the threads are read makes the enumeration
     // stale, so the scan refuses instead of answering for the old head.
     pageHead = "9999999999999";
