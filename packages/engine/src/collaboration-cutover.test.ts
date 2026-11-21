@@ -37,6 +37,7 @@ import {
 } from "./store-activation.js";
 import { readHarnessVersion } from "./core.js";
 import { replaceRoadmapAuthority } from "./roadmap-store.js";
+import { historicalStore } from "./store-migration-fixtures.js";
 import {
   MIGRATIONS,
   initializeStore,
@@ -159,6 +160,80 @@ function cutoverOptions(
 const ROADMAP_CONTENT =
   "---\nproject_id: p-one\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n" +
   "## Direction\n\nCutover fixture.\n\n## Goals\n\n- [ ] Parent goal\n";
+
+/**
+ * A real SCHEMA-19 combined source (the pre-cutover schema): collaboration rows,
+ * a catalog pin with its cross-domain foreign key, a recorded session and an
+ * execution row. The fence must advance it to the current schema inside its own
+ * transaction.
+ */
+function seedSchema19Source(repo: string): { context: StoreContext; storeId: string; pinColumns: string[] } {
+  const context = contextAt(repo);
+  const db = historicalStore(context.harnessDir, 19);
+  try {
+    db.exec(`
+insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at)
+values ('project', 'p-one', 'Project One', 'projects', 'p-one/roadmap.md', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at)
+values ('plan', 'plan-one', 'Plan One', 'plans', 'plan-one.md', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into catalog_entities(kind, id, title, root_kind, relative_path, document_kind, registered_at, updated_at)
+values ('document', 'doc-one', 'Doc One', 'knowledge', 'notes/one.md', 'knowledge', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into catalog_links(from_kind, from_id, relation, to_kind, to_id)
+values ('plan', 'plan-one', 'belongs-to', 'project', 'p-one');
+insert into catalog_links(from_kind, from_id, relation, to_kind, to_id)
+values ('plan', 'plan-one', 'documents', 'document', 'doc-one');
+insert into project_milestones(milestone_id, project_id, name, ordinal, created_at, updated_at)
+values ('m-one', 'p-one', 'Milestone One', 0, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into project_roadmaps(project_id, content_markdown, content_hash, revision, updated_at)
+values ('p-one', '# Roadmap', 'roadmap-hash', 1, '2026-11-21T00:00:00.000Z');
+insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, milestone_id)
+values ('I-000001', 'p-one', 'First finding', 'bug', 'high', 'open', 'It broke', 'It stays fixed', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'identity-one', 'm-one');
+insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)
+values ('I-000002', 'p-one', 'Second finding', 'risk', 'medium', 'resolved', 'Risk', 'Mitigated', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'identity-two');
+insert into occurrences(issue_id, occurrence_key, source_kind, source_identity, root_cause_key, acceptance_key, location, observed_behavior, evidence_json, discovered_at, recorded_at)
+values ('I-000001', 'occ-one', 'test', 'suite/one', 'root-one', 'accept-one', 'packages/engine', 'observed', '{}', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into issue_transitions(issue_id, from_disposition, to_disposition, actor, occurred_at, recorded_at, reason, evidence_json, issue_revision)
+values ('I-000002', 'open', 'resolved', 'tester', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'fixed', '{}', 2);
+insert into provenance(issue_id, kind, target, source_hash, origin)
+values ('I-000001', 'plan', 'plan-one', 'hash-one', 'scoped');
+insert into relations(from_issue, relation, to_issue) values ('I-000001', 'related', 'I-000002');
+insert into project_bindings(project_id, provider, workspace, team, remote_project, revision, updated_at)
+values ('p-one', 'linear', 'acme', 'ENG', 'acme/eng', 1, '2026-11-21T00:00:00.000Z');
+insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, created_at, updated_at)
+values ('op-one', 'op-hash', 'committed', '{}', '{}', '{}', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into catalog_execution_bindings(workflow_id, catalog_kind, catalog_id, workflow_root_kind, workflow_relative_path, catalog_revision, input_hash, pin_json, operation_id)
+values ('wf-one', 'plan', 'plan-one', 'plans', 'plan-one.md', 1, 'pin-hash', '{}', 'op-one');
+insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at)
+values ('wf-live', 1, 'session-one', '{}', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at)
+values ('wf-live', 'coordinator', 'session-one', 1, 1, 'active', '2026-11-21T00:00:00.000Z');
+insert into store_operations(operation_id, request_hash, result_json, committed_at)
+values ('issue-op-legacy', 'legacy-request-hash', '{"issueId":"I-000001","revision":1,"storeRevision":7,"created":true}', '2026-11-21T00:00:00.000Z');
+insert into store_operations(operation_id, request_hash, result_json, committed_at)
+values ('restore-attempt:abc', 'restore-hash', '{"recoveryVersion":1,"phase":"replaced","storeId":"restored-store","verified":{"integrity":"ok","foreignKeys":"ok","schemaVersion":19}}', '2026-11-21T00:00:02.000Z');
+update issue_counter set next_value = 3 where id = 1;
+update store_meta set revision = 7, catalog_revision = 3 where id = 1;
+`);
+    const storeId = (db.prepare("select store_id from store_meta where id = 1").get() as { store_id: string }).store_id;
+    return {
+      context,
+      storeId,
+      pinColumns: [
+        "workflow_id",
+        "catalog_kind",
+        "catalog_id",
+        "workflow_root_kind",
+        "workflow_relative_path",
+        "catalog_revision",
+        "input_hash",
+        "pin_json",
+        "operation_id",
+      ],
+    };
+  } finally {
+    db.close();
+  }
+}
 
 /**
  * One populated combined source: a project, a plan, a document and their link,
@@ -1319,5 +1394,132 @@ values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds"
     const replanned = await planCollaborationCutover(source.context);
     expect(replanned.counts.store_operations).toBe(3);
     expect(replanned.manifestId).toBe(manifest.manifestId);
+  });
+
+  test("the fence advances a schema-19 source and preserves pins, history and execution rows", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-schema19.git");
+    const source = seedSchema19Source(repo);
+    const location = locationAt(repo);
+    const manifest = await planCollaborationCutover(source.context);
+    expect(manifest.source).toMatchObject({ storeId: source.storeId, epoch: 1, schemaVersion: 19, revision: 7, catalogRevision: 3 });
+
+    const pinQuery = `select ${source.pinColumns.join(", ")} from catalog_execution_bindings order by workflow_id`;
+    const before = await openStore(source.context, "read");
+    const pinsBefore = before.db.prepare(pinQuery).all();
+    const pinsForeignKeysBefore = before.db.prepare("pragma foreign_key_list(catalog_execution_bindings)").all();
+    const authorityBefore = readStoreAuthority(before.db);
+    const executionBefore = before.execution;
+    const historyBefore = before.db
+      .prepare("select id, disposition, revision from issues order by id")
+      .all() as Array<{ id: string; disposition: string; revision: number }>;
+    before.close();
+    expect(pinsBefore).toHaveLength(1);
+    expect(pinsForeignKeysBefore).toHaveLength(2);
+
+    expect((await applyCollaborationCutover(source.context, manifest)).phase).toBe("verified");
+    const receipt = await activateCollaborationCutover(
+      source.context,
+      manifest,
+      cutoverOptions(source.context, manifest.source),
+    );
+    expect(receipt.phase).toBe("active");
+    expect(receipt.source.schemaVersion).toBe(19);
+
+    // The source advanced through migration 20 inside the fence transaction.
+    const after = await openStore(source.context, "read");
+    try {
+      const schema = after.db.prepare("select max(version) as v from schema_version").get() as { v?: unknown };
+      expect(schema.v).toBe(MIGRATIONS.length);
+      expect(readCollaborationFence(after.db)).toMatchObject({
+        manifestId: manifest.manifestId,
+        sourceSchemaVersion: 19,
+        sourceRevision: 7,
+        sourceCatalogRevision: 3,
+      });
+      // The pin is untouched; only its cross-domain foreign key is gone.
+      expect(after.db.prepare(pinQuery).all()).toEqual(pinsBefore);
+      expect(after.db.prepare("pragma foreign_key_list(catalog_execution_bindings)").all()).toEqual([]);
+      expect(after.db.prepare("pragma foreign_key_check").all()).toEqual([]);
+      // Execution rows, tokens and epoch are not rewritten by extraction.
+      expect(readStoreAuthority(after.db)).toEqual(authorityBefore);
+      expect(after.execution).toEqual(executionBefore);
+      // The moved collaboration tables are gone from the source.
+      expect(() => after.db.prepare("select count(*) as n from issues").get()).toThrow();
+    } finally {
+      after.close();
+    }
+
+    // The target holds exactly the reviewed history and the preserved receipts.
+    const staged = await stagedRows(location);
+    expect(staged.authority).toMatchObject({ state: "active", revision: 7, catalogRevision: 3 });
+    expect(staged.rows.issues!.map((row) => ({ id: row.id, disposition: row.disposition, revision: row.revision }))).toEqual(
+      historyBefore,
+    );
+    expect(staged.rows.issue_transitions).toHaveLength(1);
+    expect(staged.rows.project_bindings![0]?.remote_project).toBe("acme/eng");
+    expect((await cutoverState(location)).receipts.map((row) => row.operation_id)).toEqual(["issue-op-legacy"]);
+  });
+
+  test("a failed fence rolls the schema-19 source back and publishes nothing", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-schema19-rollback.git");
+    const source = seedSchema19Source(repo);
+    const location = locationAt(repo);
+    const manifest = await planCollaborationCutover(source.context);
+    await applyCollaborationCutover(source.context, manifest);
+
+    const pinQuery = `select ${source.pinColumns.join(", ")} from catalog_execution_bindings order by workflow_id`;
+    const before = await openStore(source.context, "read");
+    const pinsBefore = before.db.prepare(pinQuery).all();
+    const issuesBefore = before.db.prepare("select id, disposition from issues order by id").all() as Array<{
+      id: string;
+      disposition: string;
+    }>;
+    before.close();
+
+    // A child table the fence does not move keeps a foreign key into `issues`,
+    // so the final `drop table issues` inside the fence transaction violates it
+    // AFTER the schema advance, the fence row and the earlier drops.
+    const blocker = new DatabaseSync(join(source.context.harnessDir, "store.db"));
+    try {
+      blocker.exec(
+        "create table issue_notes(id integer primary key, issue_id text not null references issues(id));" +
+          "insert into issue_notes(issue_id) values ('I-000001')",
+      );
+    } finally {
+      blocker.close();
+    }
+
+    await expect(
+      activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source)),
+    ).rejects.toMatchObject({ code: "store.corrupt" });
+
+    // The source is readable, still at schema 19, with every row and the pin's
+    // foreign key intact and no fence evidence.
+    const restored = await openStore(source.context, "read");
+    try {
+      const schema = restored.db.prepare("select max(version) as v from schema_version").get() as { v?: unknown };
+      expect(schema.v).toBe(19);
+      expect(readCollaborationFence(restored.db)).toBeNull();
+      expect(restored.db.prepare(pinQuery).all()).toEqual(pinsBefore);
+      expect(restored.db.prepare("pragma foreign_key_list(catalog_execution_bindings)").all()).toHaveLength(2);
+      expect(restored.db.prepare("select id, disposition from issues order by id").all()).toEqual(issuesBefore);
+    } finally {
+      restored.close();
+    }
+    // No partial target publication: the target is still the verified stage.
+    const staged = await cutoverState(location);
+    expect(staged.authority.state).toBe("staged");
+    expect(staged.publications).toEqual([{ manifest_id: manifest.manifestId, phase: "verified" }]);
+
+    // Removing the blocking fact lets the same activation resume and fence.
+    const unblocked = new DatabaseSync(join(source.context.harnessDir, "store.db"));
+    try {
+      unblocked.exec("drop table issue_notes");
+    } finally {
+      unblocked.close();
+    }
+    expect(
+      (await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).phase,
+    ).toBe("active");
   });
 });

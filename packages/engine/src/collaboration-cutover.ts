@@ -1861,7 +1861,17 @@ async function fenceSource(prepared: Prepared, backupPath: string): Promise<Coll
       } catch {
         // nothing committed either way
       }
-      throw error;
+      if (error instanceof StoreError) throw error;
+      // A SQLite-level failure inside the fence transaction (a damaged source,
+      // a rogue constraint) is not a named refusal of its own: report it as a
+      // rolled-back, unchanged source so the operator sees what actually
+      // happened instead of a raw driver error.
+      throw new StoreError(
+        "store.corrupt",
+        `The collaboration fence transaction failed and rolled back (${error instanceof Error ? error.message : String(error)}). ` +
+          `The combined source is unchanged and no target publication was made; fix the source's integrity and rerun ` +
+          `the same activation.`,
+      );
     }
   } finally {
     handle.close();
