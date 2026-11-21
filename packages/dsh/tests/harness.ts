@@ -99,8 +99,16 @@ export interface FakeJobSnapshot extends JobDoneSnapshot {
  * write the real home. One home per test process, removed on exit.
  */
 const FIXTURE_HOME = mkdtempSync(join(tmpdir(), 'dsh-mstar-home-'))
-spyOn(nodeOs, 'homedir').mockImplementation(() => FIXTURE_HOME)
-process.on('exit', () => rmSync(FIXTURE_HOME, { recursive: true, force: true }))
+let fixtureHomeSpy: { mockRestore(): void } | undefined
+beforeAll(() => {
+  fixtureHomeSpy = spyOn(nodeOs, 'homedir').mockImplementation(() => FIXTURE_HOME)
+})
+afterAll(() => {
+  // Restore the shared module's homedir: a leaked spy would point every later
+  // test file at this (deleted) directory and make the suite order-dependent.
+  fixtureHomeSpy?.mockRestore()
+  rmSync(FIXTURE_HOME, { recursive: true, force: true })
+})
 
 /** One repository identity per fixture root (its temp basename is unique). */
 function fixtureRepoId(root: string): string {

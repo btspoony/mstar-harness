@@ -26,7 +26,7 @@
  *    `detectStoreRuntime`: the Bun global first, never Bun's emulated
  *    `process.versions.node`).
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
@@ -59,10 +59,18 @@ afterEach(() => {
 
 const projects: string[] = [];
 
-/** Isolated user home for the collaboration lane; removed when the file ends. */
+/** Isolated user home for the collaboration lane; restored when the file ends. */
 const FIXTURE_HOME = mkdtempSync(join(tmpdir(), "opencode-g4b-home-"));
-spyOn(nodeOs, "homedir").mockImplementation(() => FIXTURE_HOME);
-process.on("exit", () => rmSync(FIXTURE_HOME, { recursive: true, force: true }));
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => FIXTURE_HOME);
+});
+afterAll(() => {
+  // A leaked spy would redirect every later test file at this deleted
+  // directory and make the suite order-dependent.
+  homeSpy?.mockRestore();
+  rmSync(FIXTURE_HOME, { recursive: true, force: true });
+});
 
 afterEach(() => {
   for (const project of projects.splice(0)) rmSync(project, { recursive: true, force: true });

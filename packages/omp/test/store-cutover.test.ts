@@ -22,7 +22,7 @@
  *    never Bun's emulated `process.versions.node`): the injected below-floor
  *    case pins the actionable Node floor of the same code path.
  */
-import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
@@ -64,16 +64,22 @@ const roots: string[] = [];
 
 /**
  * Isolated user home for the collaboration lane (its store lives under
- * `<home>/.mstar/repos/...`); one per test process, removed on exit.
+ * `<home>/.mstar/repos/...`); one per test process, restored on exit.
  */
 const FIXTURE_HOME = mkdtempSync(join(tmpdir(), "omp-g4b-home-"));
-spyOn(nodeOs, "homedir").mockImplementation(() => FIXTURE_HOME);
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => FIXTURE_HOME);
+});
 
 afterEach(() => {
   hookRuntimeProbe.info = realHookProbeInfo;
 });
 
 afterAll(() => {
+  // Restore before removing the directory: a leaked spy would redirect every
+  // later test file at a deleted temp home.
+  homeSpy?.mockRestore();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   rmSync(FIXTURE_HOME, { recursive: true, force: true });
 });

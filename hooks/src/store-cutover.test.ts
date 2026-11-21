@@ -53,9 +53,10 @@ const roots: string[] = [];
 
 /** Isolated user home for the collaboration lane (the child inherits it). */
 const FIXTURE_HOME = mkdtempSync(join(tmpdir(), "wgate-g4b-home-"));
-spyOn(nodeOs, "homedir").mockImplementation(() => FIXTURE_HOME);
+let homeSpy: { mockRestore(): void } | undefined;
 
 beforeAll(async () => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => FIXTURE_HOME);
   await buildZcodeHooks(); // regenerate the committed artifact (deterministic)
 });
 
@@ -63,6 +64,9 @@ afterAll(() => {
   // The suite rebuilds the tracked bundles in `beforeAll`; put the committed
   // bytes back so a green run does not leave the worktree dirty.
   for (const [path, bytes] of COMMITTED_BUNDLES) writeFileSync(path, bytes);
+  // Restore the shared module's homedir before removing its target: a leaked
+  // spy would make every later test file depend on this deleted directory.
+  homeSpy?.mockRestore();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   rmSync(FIXTURE_HOME, { recursive: true, force: true });
 });
