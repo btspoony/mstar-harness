@@ -6,7 +6,7 @@
  * accumulated, one per ported pair. One implementation, so a stricter check lands
  * in one place instead of five.
  */
-import type { ReadEnvelope } from "@mstar-harness/engine";
+import type { CollaborationScope, ReadEnvelope } from "@mstar-harness/engine";
 
 /**
  * The envelope a JSON body is, or `null` when it is not one. The source
@@ -82,13 +82,29 @@ export async function readAllListPages<T extends ListPayload>(
 }
 
 /**
- * Every source fact that must agree for two pages to be one list: the
- * collaboration observation (authority identity/epoch, completeness, scope,
- * revision, catalog revision and gap code) and the execution observation
- * (identity/epoch/revision), beside the projection generation. Numeric
- * counters alone cannot tell a restored or replaced authority apart.
+ * The engine's paged collaboration key ends with `:<limit>:<offset>` (contract
+ * §Read/Completeness: the snapshot scope names the page). The LOGICAL scope is
+ * that key without its page bounds — the filter set two pages of one list
+ * share. A key that does not carry the page we asked for is left untouched.
  */
-function sourceStamp(envelope: ReadEnvelope<unknown>): string {
+function logicalScope(scope: CollaborationScope, offset: number): CollaborationScope {
+  const bounds = /:(\d+):(\d+)$/.exec(scope.key);
+  if (bounds === null) return scope;
+  const limit = Number(bounds[1]);
+  const pageOffset = Number(bounds[2]);
+  if (!Number.isSafeInteger(limit) || !Number.isSafeInteger(pageOffset) || pageOffset !== offset) return scope;
+  return { kind: scope.kind, key: scope.key.slice(0, bounds.index) };
+}
+
+/**
+ * Every source fact that must agree for two pages to be one list: the
+ * collaboration observation (authority identity/epoch, completeness, LOGICAL
+ * scope, revision, catalog revision and gap code) and the execution observation
+ * (identity/epoch/revision), beside the projection generation. Numeric counters
+ * alone cannot tell a restored or replaced authority apart, and page bounds are
+ * deliberately excluded: they differ by construction across a list's pages.
+ */
+function sourceStamp(envelope: ReadEnvelope<unknown>, offset: number): string {
   const { collaboration, execution, projection, storeRevision, catalogRevision } = envelope;
   return JSON.stringify({
     // The top-level counters stay part of the comparison: they are the
@@ -100,10 +116,10 @@ function sourceStamp(envelope: ReadEnvelope<unknown>): string {
       collaboration === null
         ? null
         : collaboration.completeness === "unavailable"
-          ? { completeness: collaboration.completeness, scope: collaboration.scope, code: collaboration.code }
+          ? { completeness: collaboration.completeness, scope: logicalScope(collaboration.scope, offset), code: collaboration.code }
           : {
               completeness: collaboration.completeness,
-              scope: collaboration.scope,
+              scope: logicalScope(collaboration.scope, offset),
               authority: collaboration.authority,
               revision: collaboration.revision,
               catalogRevision: collaboration.catalogRevision,
@@ -120,8 +136,8 @@ function sourceStamp(envelope: ReadEnvelope<unknown>): string {
 }
 
 /** The version members that make two pages the same source observations. */
-function sameStoreState(a: ReadEnvelope<unknown>, b: ReadEnvelope<unknown>): boolean {
-  return sourceStamp(a) === sourceStamp(b);
+function sameStoreState(a: ReadEnvelope<unknown>, b: ReadEnvelope<unknown>, aOffset: number, bOffset: number): boolean {
+  return sourceStamp(a, aOffset) === sourceStamp(b, bOffset);
 }
 
 /**
@@ -159,6 +175,7 @@ async function readAllListPagesOnce<T extends ListPayload>(
   try {
     const rows: unknown[] = [];
     let first: ReadEnvelope<ListPayload> | null = null;
+    let firstOffset = 0;
     let total = 0;
     for (let offset = 0; ; ) {
       const response = await fetchImpl(path(offset), {
@@ -177,8 +194,10 @@ async function readAllListPagesOnce<T extends ListPayload>(
       }
       const partial = partialRefusal(envelope);
       if (partial !== null) return { status: "error", message: partial };
-      if (first === null) first = envelope;
-      else if (!sameStoreState(first, envelope)) return { status: "mixed" };
+      if (first === null) {
+        first = envelope;
+        firstOffset = offset;
+      } else if (!sameStoreState(first, envelope, firstOffset, offset)) return { status: "mixed" };
       rows.push(...page.items);
       total = page.total;
       // A short (or empty) page is the end even when `total` disagrees; a page's offset
