@@ -9,6 +9,7 @@ import { appendOccurrence, captureIssue, computeIdentityKey, getIssue, IssueErro
 import { registerCatalogEntity } from "./catalog.js";
 import { addMilestone, updateMilestone } from "./milestone-store.js";
 import { ensureCollaborationAuthority } from "./store-activation.js";
+import { historicalStore } from "./store-migration-fixtures.js";
 import { initializeStore, MIGRATIONS, openStore, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "issue-move-"));
@@ -117,7 +118,7 @@ describe("issue project move", () => {
     });
     expect(revision()).toBe(before + 1);
     const storedReceipt = db
-      .prepare("select result_json from store_operations where operation_id = ?")
+      .prepare("select result_json from collaboration_operations where operation_id = ?")
       .get("move-succeeds") as { result_json: string };
     expect(JSON.parse(storedReceipt.result_json)).toMatchObject({
       issueId: movedIssue.issueId,
@@ -307,21 +308,11 @@ describe("issue project move", () => {
   test("a schema-12 store gains the empty project-move ledger on upgrade and keeps its issues", async () => {
     const legacy: StoreContext = { harnessDir: join(root, "v12-harness") };
     mkdirSync(legacy.harnessDir, { recursive: true });
-    const legacyHandle = await initializeStore(legacy);
-    legacyHandle.db.prepare(
+    const legacyHandle = historicalStore(legacy.harnessDir, 12);
+    legacyHandle.prepare(
       "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key) " +
         "values('I-900001', 'legacy-project', 'Legacy finding', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', 'legacy-identity')",
     ).run();
-    legacyHandle.db.exec("drop table issue_project_moves");
-    legacyHandle.db.exec("alter table projection_compasses drop column plans_json");
-    // Rewind to a schema-12 store: drop every object introduced by migration 13
-    // and later, then remove those rows from schema_version. Keeping this list in
-    // step with the migration tail is the cost of a hand-built legacy fixture.
-    legacyHandle.db.exec("drop table if exists issue_sync_state");
-    legacyHandle.db.exec("drop table if exists sync_cursor");
-    legacyHandle.db.exec("drop table if exists project_bindings");
-    legacyHandle.db.exec("drop table if exists sync_runs");
-    legacyHandle.db.prepare("delete from schema_version where version >= 13").run();
     legacyHandle.close();
 
     expect(await upgradeStore(legacy)).toEqual({ schemaVersion: MIGRATIONS.length });
@@ -366,7 +357,7 @@ describe("issue project move", () => {
     expect(receipt.revision).toBe(issue.revision + 1);
     expect(receipt.clearedMilestoneId).toBe(dropped.milestoneId);
     const stored = db
-      .prepare("select result_json from store_operations where operation_id = ?")
+      .prepare("select result_json from collaboration_operations where operation_id = ?")
       .get("move-dropped-milestone") as { result_json: string };
     expect(JSON.parse(stored.result_json)).toMatchObject({
       fromProject: projectA,

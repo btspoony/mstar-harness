@@ -27,7 +27,7 @@ import {
 } from "./catalog-import.js";
 import { getCatalog, listCatalog, registerCatalogEntity } from "./catalog.js";
 import { ensureCollaborationAuthority } from "./store-activation.js";
-import { openCollaborationStore } from "./collaboration-store.js";
+import { openCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-catalog-import-"));
@@ -503,11 +503,15 @@ describe("catalog export and portability", () => {
     expect(detail.entity.present).toBe(true);
     expect(imported.unknowns.some((unknown) => unknown.code === "source-missing" && unknown.key === "specs:extra.md")).toBe(true);
 
-    // No workflow session, no execution binding, no root registration.
-    const reader = await openStore(clone.context, "read");
-    const bindings = reader.db.prepare("select count(*) as n from catalog_execution_bindings").get() as { n: number };
-    const workflows = reader.db.prepare("select count(*) as n from catalog_operations where phase <> 'committed'").get() as { n: number };
-    reader.close();
+    // No workflow session, no execution binding, no root registration. The pin
+    // table stayed execution-side at the cutover; the import journal is
+    // collaboration data.
+    const execution = await openStore(clone.context, "read");
+    const bindings = execution.db.prepare("select count(*) as n from catalog_execution_bindings").get() as { n: number };
+    execution.close();
+    const journal = await openCollaborationStore(clone.context, "read");
+    const workflows = journal.db.prepare("select count(*) as n from catalog_operations where phase <> 'committed'").get() as { n: number };
+    journal.close();
     expect(bindings.n).toBe(0);
     expect(workflows.n).toBe(0);
     expect(readdirSync(clone.harness)).not.toContain("workflows");
@@ -643,12 +647,9 @@ describe("partial import explicitness (RV-3)", () => {
 
     // The obstruction moves out of the way (fixture-level removal), then the
     // SAME reviewed plan is re-run with the SAME operationId.
-    const handle = await openStore(fixture.context, "write");
-    try {
-      handle.db.prepare("delete from catalog_entities where kind = 'document' and id = 'doc-guard'").run();
-    } finally {
-      handle.close();
-    }
+    await withCollaborationWrite(fixture.context, (lane) => {
+      lane.db.prepare("delete from catalog_entities where kind = 'document' and id = 'doc-guard'").run();
+    });
     const retried = await importCatalog(fixture.context, plan, { operationId: "imp-partial", actor: "project-manager" });
     expect(retried.entities.map((receipt) => receipt.id).sort()).toEqual(["20260918-alpha", "doc-contract", "doc-guard"]);
     expect(retried.entities.every((receipt) => receipt.revision === 1)).toBe(true); // replayed, not re-written
