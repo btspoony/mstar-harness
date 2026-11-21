@@ -2675,11 +2675,10 @@ describe("control-checkout binding states", () => {
     return fixture;
   }
 
-  test("an interrupted activation leaves a claimed binding that the next supported verb finalizes", async () => {
-    const fixture = await boundWorkspace("binding-claimed-");
+  test("an attempt-scoped claim is ignored by ordinary readers until it is finalized", async () => {
+    const fixture = await boundWorkspace("binding-claim-ignored-");
     const location = resolveCollaborationLocation(fixture.context);
     const live = await readCollaborationStage(location, ({ authority }) => authority);
-    // The state a crash between the claim and the publication commit leaves.
     writeFileSync(
       join(fixture.harness, "collaboration-binding.json"),
       `${JSON.stringify(
@@ -2688,23 +2687,44 @@ describe("control-checkout binding states", () => {
         2,
       )}\n`,
     );
-    // A claimed binding for the LIVE store is not a foreign checkout: reads work.
-    expect((await readCollaborationAuthority(fixture.context)).storeId).toBe(live.storeId);
-    // The supported bootstrap finalizes the claim to an active binding.
+    // A claim is attempt evidence, not this checkout's binding: a reader treats it
+    // as absent (and an ACTIVE authority with no binding is stale, never fresh).
+    await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // The supported bootstrap finalizes the claim.
     await ensureCollaborationAuthority(fixture.context);
     expect(readCollaborationBinding(fixture.context)).toMatchObject({ state: "active", storeId: live.storeId });
   });
 
-  test("a malformed binding over a live authority is stale, never a fresh clone", async () => {
-    const fixture = await boundWorkspace("binding-unreadable-");
-    writeFileSync(join(fixture.harness, "collaboration-binding.json"), "{not json");
-    await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
-    await expect(ensureCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
-    // The explicit recovery: remove/repair the damaged file, then adopt through the
-    // supported path — never by reading it as an unbound clone.
-    rmSync(join(fixture.harness, "collaboration-binding.json"), { force: true });
-    const adopted = await ensureCollaborationAuthority(fixture.context);
-    expect(readCollaborationBinding(fixture.context)).toMatchObject({ state: "active", storeId: adopted.storeId });
+  test("a refused activation restores this checkout's previous binding exactly", async () => {
+    const fixture = await stagedFixture("activation-claim-rollback-");
+    const location = resolveCollaborationLocation(fixture.context);
+    // A pre-existing, legitimate binding for the STAGED generation (what the
+    // checkout held before this attempt).
+    const staged = await readCollaborationStage(location, ({ authority }) => authority);
+    writeFileSync(
+      join(fixture.harness, "collaboration-binding.json"),
+      `${JSON.stringify(
+        { version: 2, state: "active", repoKey: location.repoKey, mode: location.mode, storeId: staged.storeId, epoch: staged.epoch, boundAt: "2026-11-21T00:00:00.000Z" },
+        null,
+        2,
+      )}\n`,
+    );
+    const before = readFileSync(join(fixture.harness, "collaboration-binding.json"));
+    // The activation is refused INSIDE the flip (a register appears after the
+    // inspection pass), i.e. after the claim would have been written.
+    await expect(
+      activateStore(fixture.context, fixture.apply, attestation(), {
+        afterStage(stage) {
+          if (stage === "inspection") {
+            // A NEW register appears after the reviewed apply: the barrier's source
+            // fence must refuse the activation.
+            writeRegister(fixture.harness, "late-project", { entries: { "plan-late": [entry({ id: "L1" })] } });
+          }
+        },
+      }),
+    ).rejects.toMatchObject({ code: "store.migration-source-changed" });
+    // The prior binding is restored byte-for-byte; no foreign claim survives.
+    expect(readFileSync(join(fixture.harness, "collaboration-binding.json"))).toEqual(before);
   });
 
   test("an active authority with no binding is refused until the supported init adopts it", async () => {
@@ -2737,10 +2757,15 @@ describe("pair attempt ownership and restore repair", () => {
     rmSync(out, { force: true });
     rmSync(pairImage(receipt, "collaboration"), { force: true });
 
+    const survivorStats = statSync(pairImage(receipt, "execution"));
     const resumed = await backupRepositoryStores(fixture.context, { out });
     expect(existsSync(out)).toBe(true);
-    // The surviving image is REUSED byte-for-byte, never re-copied.
+    // The surviving image is REUSED byte-for-byte: same bytes, same inode and the
+    // same mtime prove the resume never re-copied or overwrote it.
     expect(readFileSync(pairImage(resumed, "execution")).equals(verifiedExecution)).toBe(true);
+    const afterStats = statSync(pairImage(resumed, "execution"));
+    expect(afterStats.ino).toBe(survivorStats.ino);
+    expect(afterStats.mtimeMs).toBe(survivorStats.mtimeMs);
     expect(existsSync(pairImage(resumed, "collaboration"))).toBe(true);
     // The credential is scratch: the manifest is the commit.
     expect(existsSync(`${out}.pair-attempt.json`)).toBe(false);
@@ -2794,7 +2819,11 @@ describe("pair attempt ownership and restore repair", () => {
     } finally {
       spy.mockRestore();
     }
-    expect(firstFailure).toBeInstanceOf(Error);
+    expect(firstFailure).toMatchObject({ code: "collaboration.operation-partial" });
+    expect((firstFailure as { details?: unknown }).details).toMatchObject({
+      phase: "published",
+      authority: expect.objectContaining({ path: target }),
+    });
     expect(existsSync(target)).toBe(true);
 
     // The SAME request finishes: the published generation is recognised by its own

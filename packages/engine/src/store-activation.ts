@@ -61,6 +61,7 @@ import {
   COLLABORATION_COLUMNS,
   admitCollaborationImage,
   adoptResolvedBinding,
+  beginBindingClaim,
   assertCollaborationTargetAdmission,
   assertControlCheckoutScope,
   initializeCollaborationStore,
@@ -1594,6 +1595,20 @@ async function resumeInterruptedPair(
   for (const side of [claim.execution, claim.collaboration]) {
     const path = side === claim.execution ? paths.executionImagePath : paths.collaborationImagePath;
     if (!existsSync(path)) continue;
+    // A present-but-not-an-image side is an interrupted link, not a missing side:
+    // re-copying over it would silently replace unverified bytes.
+    let stats: ReturnType<typeof statSync>;
+    try {
+      stats = statSync(path);
+    } catch (error) {
+      throw incompletePair(`The pair attempt's image ${path} cannot be inspected (${messageOf(error)}); nothing was published.`);
+    }
+    if (!stats.isFile() || stats.size === 0) {
+      throw incompletePair(
+        `The pair attempt's image ${path} is not a complete regular file, so this attempt never verified it; re-copying over it ` +
+          `would adopt unverified bytes. Remove it and retry, or pass --out <path> naming a new destination. Nothing was published.`,
+      );
+    }
     // The existing image must BE the attempt's verified bytes: it is reused
     // unchanged, never re-copied, so its replacement cannot slip in here.
     if (sha256Bytes(readFileSync(path)) !== side.sha256) {
@@ -2107,11 +2122,31 @@ export async function restoreCollaborationBackup(
   }
   if (!staged) throw incompletePair(`The restore did not publish ${dbPath}.`);
   const target = { repoKey: location.repoKey, mode: location.mode, storeId: newStoreId, epoch: nextEpoch, binding: "active" as const };
-  // This checkout now owns the restored generation; persist the binding before
-  // the final read proves it (a binding mismatch would otherwise refuse the
-  // generation this same call just published).
-  writeCollaborationBinding(context, target);
-  return readCollaborationAuthority(context);
+  try {
+    // This checkout now owns the restored generation; persist the binding before
+    // the final read proves it (a binding mismatch would otherwise refuse the
+    // generation this same call just published).
+    writeCollaborationBinding(context, target);
+    return await readCollaborationAuthority(context);
+  } catch (error) {
+    // The database IS published: name the partial and how to finish it, never a
+    // generic failure that hides the published authority.
+    throw new StoreError(
+      "collaboration.operation-partial",
+      `The collaboration authority was PUBLISHED at ${dbPath} (store ${newStoreId}, epoch ${nextEpoch}) but the post-publication ` +
+        `step failed (${messageOf(error)}), so this checkout is not bound to it yet. Re-run the SAME restore command: it ` +
+        `recognises this request's published generation by its image digest, repairs the binding and returns the authority; ` +
+        `the database is already in place and is never overwritten.`,
+      {
+        phase: "published",
+        authority: { storeId: newStoreId, epoch: nextEpoch, repoKey: location.repoKey, mode: location.mode, path: dbPath },
+        failure: messageOf(error),
+        recovery:
+          "Re-run the same restore command (same --backup manifest and operator): it repairs the binding for the already " +
+          "published generation and returns that authority.",
+      },
+    );
+  }
 }
 
 /**
@@ -3113,16 +3148,16 @@ export async function activateStore(
   // has no execution store and therefore nothing to stop.
   const stoppedSessions = await activeExecutionSessions(context);
 
-  // The checkout CLAIMS this generation BEFORE the publication commits: an
-  // interruption from here on leaves evidence (a `claimed` binding for that store
-  // and epoch), so the checkout is never mistaken for a fresh clone that may
-  // adopt whatever authority it finds. The publication below finalizes it.
-  writeCollaborationBinding(context, {
+  // Authorization is settled BEFORE any binding write: the supplied document (or
+  // the operator preflight) validated above, the receipt/manifest generation and
+  // the source set were checked in the inspection pass. Only then does the
+  // checkout CLAIM the generation it is about to publish — and a refusal rolls the
+  // claim back to this checkout's previous binding exactly.
+  const rollbackClaim = beginBindingClaim(context, {
     repoKey: location.repoKey,
     mode: location.mode,
     storeId: meta.storeId,
     epoch: meta.epoch + 1,
-    binding: "claimed",
   });
 
   // The publication is ONE lane transaction: the state/epoch flip, the
@@ -3239,6 +3274,11 @@ export async function activateStore(
       binding: "active",
     });
     return activated;
+  }).catch((error: unknown) => {
+    // Nothing was published: the checkout keeps the binding it had before this
+    // attempt, so a refused activation never leaves a foreign claim behind.
+    rollbackClaim();
+    throw error;
   });
 }
 

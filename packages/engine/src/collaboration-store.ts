@@ -1370,6 +1370,40 @@ export function adoptResolvedBinding(
 }
 
 /**
+ * Write this attempt's CLAIM and return the rollback that restores the checkout's
+ * previous binding byte-for-byte. Ordinary readers ignore a `claimed` binding, so
+ * a refused activation cannot leave a foreign binding that a normal verb accepts;
+ * a crash leaves only the attempt-scoped claim, which the supported verb finalizes
+ * or the rollback path removes.
+ */
+export function beginBindingClaim(
+  context: StoreContext,
+  authority: Pick<CollaborationAuthority, "repoKey" | "mode" | "storeId" | "epoch">,
+): () => void {
+  const path = bindingPath(context);
+  let prior: string | null = null;
+  try {
+    prior = readFileSync(path, "utf8");
+  } catch {
+    prior = null;
+  }
+  writeCollaborationBinding(context, { ...authority, binding: "claimed" });
+  return () => {
+    try {
+      if (prior === null) {
+        rmSync(path, { force: true });
+      } else {
+        writeFileSync(path, prior, { mode: 0o600 });
+      }
+      syncDirectoryEntry(dirname(path));
+    } catch {
+      // Restoring the prior binding is best-effort evidence hygiene; the claim is
+      // already ignored by ordinary readers either way.
+    }
+  };
+}
+
+/**
  * Refuse when THIS checkout cannot own the resolved authority, regardless of what
  * the lane currently holds: an unfenced combined store with collaboration rows is
  * the legacy owner, and a recorded binding that names another repository/mode was
@@ -1399,7 +1433,8 @@ export async function assertControlCheckoutScope(context: StoreContext, location
     }
   }
   const binding = readCollaborationBinding(context);
-  if (binding === null) return;
+  // A claim is attempt-scoped evidence, not this checkout's binding: readers ignore it.
+  if (binding === null || binding.state !== "active") return;
   if (binding.repoKey !== location.repoKey || binding.mode !== location.mode) {
     throw new StoreError(
       "collaboration.stale-binding",
@@ -1431,7 +1466,10 @@ async function assertControlBinding(
   authority: CollaborationAuthority,
 ): Promise<void> {
   await assertControlCheckoutScope(context, location);
-  const binding = readCollaborationBinding(context);
+  const recorded = readCollaborationBinding(context);
+  // Only a finalized binding speaks for this checkout; a claim belongs to the
+  // activation attempt that wrote it and is ignored here.
+  const binding = recorded !== null && recorded.state === "active" ? recorded : null;
   if (binding === null) {
     // A LIVE authority with no recorded binding is NOT a fresh clone: it may be a
     // switched checkout or a lost/interrupted binding write, and silently adopting

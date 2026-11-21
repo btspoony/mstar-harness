@@ -36,6 +36,7 @@ import {
   COLLABORATION_CUTOVER_TABLES,
   initializeCollaborationStore,
   readCollaborationStage,
+  beginBindingClaim,
   writeCollaborationBinding,
   writeCollaborationStage,
   type CollaborationAuthority,
@@ -2044,19 +2045,32 @@ export async function activateCollaborationCutover(
   manifest: CutoverManifest,
   options: CutoverActivationOptions,
 ): Promise<CutoverReceipt> {
-  // The checkout CLAIMS the target generation before the publication commit: an
-  // interruption leaves a `claimed` binding naming that store and epoch, so the
-  // source never looks like a fresh clone that may adopt another authority.
+  // Authorization is validated BEFORE any binding write, then the checkout claims
+  // the target generation: a refusal restores the previous binding exactly, and an
+  // interruption leaves only an attempt-scoped claim that readers ignore.
+  validateActivationAttestation(options.attestation);
   const location = resolveCollaborationLocation(context);
   const before = await readCollaborationStage(location, ({ authority }) => authority);
-  writeCollaborationBinding(context, {
+  if (before.repoKey !== location.repoKey || before.mode !== location.mode) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `The staged target at ${location.dbPath} belongs to repository ${before.repoKey} (${before.mode}), not this checkout's ` +
+        `${location.repoKey} (${location.mode}); the activation is refused before any binding is written.`,
+    );
+  }
+  const rollbackClaim = beginBindingClaim(context, {
     repoKey: location.repoKey,
     mode: location.mode,
     storeId: before.storeId,
     epoch: before.epoch + 1,
-    binding: "claimed",
   });
-  const receipt = await withCollaborationCutoverLock(context, () => activateUnderCutoverLock(context, manifest, options));
+  let receipt: CutoverReceipt;
+  try {
+    receipt = await withCollaborationCutoverLock(context, () => activateUnderCutoverLock(context, manifest, options));
+  } catch (error) {
+    rollbackClaim();
+    throw error;
+  }
   // A successful ACTIVE publication (fresh or replayed) makes this checkout the
   // owner of that generation: the control binding is recorded before the verb
   // returns, so a later origin/config retarget refuses instead of drifting onto

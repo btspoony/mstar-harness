@@ -91,6 +91,7 @@ export type StoreErrorCode =
   // database, and a trusted repository/mode/store-id/epoch that does not match.
   | "collaboration.not-initialized"
   | "collaboration.not-active"
+  | "collaboration.operation-partial"
   | "collaboration.unreadable"
   | "collaboration.stale-binding"
   // The one-way authority cutover (collaboration-cutover.ts): a combined or
