@@ -61,6 +61,7 @@ import {
   COLLABORATION_COLUMNS,
   admitCollaborationImage,
   assertCollaborationTargetAdmission,
+  assertControlCheckoutScope,
   initializeCollaborationStore,
   openCollaborationStore,
   readCollaborationAuthority,
@@ -1326,21 +1327,23 @@ export async function backupRepositoryStores(
         `overwriting a recorded recovery point.`,
     );
   }
-  // The manifest is the pair's ONLY discoverable commit. Two image names with no
-  // manifest are an interrupted attempt (or a competitor still copying), never a
-  // published backup: resume it by verifying those exact bytes, refuse a half
-  // pair by name, and never guess.
+  // The manifest is the pair's ONLY discoverable commit. Image names without a
+  // manifest are an interrupted attempt, never a published backup — and only the
+  // attempt's OWN durable claim makes them one pair: two independently valid
+  // images (a stale execution image beside a fresh collaboration image, or two
+  // hand-assembled siblings) are never blessed as a mixed-time pair.
+  const claimPath = `${manifestPath}.pair-attempt.json`;
   if (existsSync(executionImagePath) || existsSync(collaborationImagePath)) {
-    if (!existsSync(executionImagePath) || !existsSync(collaborationImagePath)) {
-      const missing = existsSync(executionImagePath) ? collaborationImagePath : executionImagePath;
+    if (!existsSync(claimPath)) {
       throw incompletePair(
-        `An interrupted pair left an image at ${existsSync(executionImagePath) ? executionImagePath : collaborationImagePath} ` +
-          `without ${missing} and without a manifest. Nothing is published by that half attempt; remove the orphan image or ` +
-          `pass --out <path> naming a new destination.`,
+        `Image names exist at ${executionImagePath} / ${collaborationImagePath} without a manifest and without this attempt's ` +
+          `durable pair claim, so they never belonged to one verified snapshot window. Remove them or pass --out <path> ` +
+          `naming a new destination; nothing was published.`,
       );
     }
     return resumeInterruptedPair(context, location, {
       manifestPath,
+      claimPath,
       executionImagePath,
       collaborationImagePath,
     });
@@ -1434,6 +1437,32 @@ export async function backupRepositoryStores(
     assertNoPreparedCompositeOnImage(privateExecutionImage);
     await assertNoPreparedCompositeLive(context);
 
+    // The attempt's durable evidence comes FIRST: both image digests and the
+    // generation each was verified at, published create-only before either link.
+    // An interruption from here on resumes only THESE bytes.
+    const claim: PairAttemptClaim = {
+      version: 1,
+      attempt,
+      takenAt: new Date().toISOString(),
+      execution: {
+        name: basename(executionImagePath),
+        sha256: sha256Bytes(readFileSync(privateExecutionImage)),
+        storeId: execution!.storeId,
+        epoch: execution!.epoch,
+        revision: execution!.revision,
+        catalogRevision: execution!.catalogRevision,
+      },
+      collaboration: {
+        name: basename(collaborationImagePath),
+        sha256: sha256Bytes(readFileSync(privateCollaborationImage)),
+        storeId: collaborationInspection!.authority.storeId,
+        epoch: collaborationInspection!.authority.epoch,
+        revision: collaborationInspection!.authority.revision,
+        catalogRevision: collaborationInspection!.authority.catalogRevision,
+      },
+    };
+    publishPairClaim(claimPath, claim);
+
     // Publish both images create-only: a link either creates this attempt's name
     // or fails, so a competitor's image is never overwritten or adopted.
     linkSync(privateExecutionImage, executionImagePath);
@@ -1441,6 +1470,9 @@ export async function backupRepositoryStores(
     linkSync(privateCollaborationImage, collaborationImagePath);
     linked.push(collaborationImagePath);
   } catch (error) {
+    // Nothing of this attempt survives as resumable evidence: without a linked
+    // image the claim would describe bytes that never existed.
+    if (linked.length === 0) rmSync(claimPath, { force: true });
     for (const path of [...privatePaths, ...linked]) rmSync(path, { force: true });
     for (const path of privatePaths) {
       rmSync(`${path}-wal`, { force: true });
@@ -1466,6 +1498,7 @@ export async function backupRepositoryStores(
     collaboration: collaborationImage,
   };
   publishPairManifest(manifestPath, receipt);
+  rmSync(claimPath, { force: true });
   return receipt;
 }
 
@@ -1480,8 +1513,61 @@ export async function backupRepositoryStores(
 async function resumeInterruptedPair(
   context: StoreContext,
   location: CollaborationLocation,
-  paths: { manifestPath: string; executionImagePath: string; collaborationImagePath: string },
+  paths: { manifestPath: string; claimPath: string; executionImagePath: string; collaborationImagePath: string },
 ): Promise<RepositoryBackupReceipt> {
+  const claim = requirePairAttemptClaim(paths.claimPath);
+  if (claim.execution.name !== basename(paths.executionImagePath) || claim.collaboration.name !== basename(paths.collaborationImagePath)) {
+    throw incompletePair(
+      `The pair attempt at ${paths.claimPath} names ${claim.execution.name} / ${claim.collaboration.name}, not this ` +
+        `destination's images; nothing was published.`,
+    );
+  }
+  // Each surviving image must BE the claimed bytes: a later, independently valid
+  // snapshot (a mixed-time pair) never inherits this attempt's evidence.
+  for (const side of [claim.execution, claim.collaboration]) {
+    const path = side === claim.execution ? paths.executionImagePath : paths.collaborationImagePath;
+    if (!existsSync(path)) continue;
+    if (sha256Bytes(readFileSync(path)) !== side.sha256) {
+      throw incompletePair(
+        `The image at ${path} is not the one this attempt copied (its bytes differ from the recorded attempt), so the two ` +
+          `names never shared a verified snapshot window. Remove the images or pass --out <path> naming a new destination; ` +
+          `nothing was published.`,
+      );
+    }
+  }
+  // A missing side is copied again ONLY at the generation the attempt recorded:
+  // an authority that moved on is a new generation, not a resume.
+  if (!existsSync(paths.executionImagePath)) {
+    const copy = await backupStore(context, { out: paths.executionImagePath });
+    if (
+      copy.storeId !== claim.execution.storeId ||
+      copy.epoch !== claim.execution.epoch ||
+      copy.revision !== claim.execution.revision ||
+      copy.catalogRevision !== claim.execution.catalogRevision
+    ) {
+      throw incompletePair(
+        `The execution authority is no longer the generation this interrupted attempt recorded (store ${claim.execution.storeId} ` +
+          `epoch ${claim.execution.epoch} revision ${claim.execution.revision}); its missing image cannot be re-created as ` +
+          `that attempt. Pass --out <path> naming a new destination.`,
+      );
+    }
+  }
+  if (!existsSync(paths.collaborationImagePath)) {
+    await writeCollaborationImage(location.dbPath, paths.collaborationImagePath);
+    const inspection = await inspectCollaborationImage(paths.collaborationImagePath, location);
+    if (
+      inspection.authority.storeId !== claim.collaboration.storeId ||
+      inspection.authority.epoch !== claim.collaboration.epoch ||
+      inspection.authority.revision !== claim.collaboration.revision ||
+      inspection.authority.catalogRevision !== claim.collaboration.catalogRevision
+    ) {
+      rmSync(paths.collaborationImagePath, { force: true });
+      throw incompletePair(
+        `The collaboration authority is no longer the generation this interrupted attempt recorded; its missing image ` +
+          `cannot be re-created as that attempt. Pass --out <path> naming a new destination.`,
+      );
+    }
+  }
   const executionCopy = await inspectBackupCopy(paths.executionImagePath).catch((error: unknown) => {
     throw incompletePair(
       `The interrupted pair's execution image ${paths.executionImagePath} cannot be verified (${messageOf(error)}); nothing ` +
@@ -1520,7 +1606,75 @@ async function resumeInterruptedPair(
     },
   };
   publishPairManifest(paths.manifestPath, receipt);
+  rmSync(paths.claimPath, { force: true });
   return receipt;
+}
+
+/**
+ * The durable evidence of ONE pair attempt: both image digests and the exact
+ * generation each was copied from. It is written create-only before either image
+ * is linked, so a resumed pair can only ever be the bytes this attempt verified
+ * together — never two independently valid images of different times.
+ */
+type PairAttemptClaim = {
+  version: 1;
+  attempt: string;
+  takenAt: string;
+  execution: { name: string; sha256: string; storeId: string; epoch: number; revision: number; catalogRevision: number };
+  collaboration: { name: string; sha256: string; storeId: string; epoch: number; revision: number; catalogRevision: number };
+};
+
+function publishPairClaim(path: string, claim: PairAttemptClaim): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(claim, null, 2)}\n`, "utf8");
+    linkSync(tmp, path);
+  } catch (error) {
+    if (error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+      throw incompletePair(
+        `Another attempt already claims the pair destination ${path}; inspect it before retrying, or pass --out <path> ` +
+          `naming a new destination.`,
+      );
+    }
+    throw incompletePair(`The pair attempt evidence could not be recorded at ${path} (${messageOf(error)}).`);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+function requirePairAttemptClaim(path: string): PairAttemptClaim {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw incompletePair(`The pair attempt evidence at ${path} cannot be read (${messageOf(error)}); nothing was published.`);
+  }
+  const isSide = (value: unknown): value is PairAttemptClaim["execution"] => {
+    if (value === null || typeof value !== "object") return false;
+    const side = value as Record<string, unknown>;
+    return (
+      typeof side.name === "string" &&
+      typeof side.sha256 === "string" &&
+      /^[0-9a-f]{64}$/.test(side.sha256) &&
+      typeof side.storeId === "string" &&
+      typeof side.epoch === "number" &&
+      typeof side.revision === "number" &&
+      typeof side.catalogRevision === "number"
+    );
+  };
+  const record = parsed as Record<string, unknown> | null;
+  if (
+    record === null ||
+    typeof record !== "object" ||
+    record.version !== 1 ||
+    typeof record.attempt !== "string" ||
+    !isSide(record.execution) ||
+    !isSide(record.collaboration)
+  ) {
+    throw incompletePair(`The pair attempt evidence at ${path} is malformed; nothing was published.`);
+  }
+  return record as PairAttemptClaim;
 }
 
 /**
@@ -1647,9 +1801,12 @@ export async function restoreCollaborationBackup(
 ): Promise<CollaborationAuthority> {
   const supplied = requireRepositoryBackupReceipt(receipt);
   const location = resolveCollaborationLocation(context);
-  // The canonical target's own admission comes FIRST: a redirected storage
-  // ancestor or a symlinked target is refused before any staging directory, byte
-  // copy or link exists on that path.
+  // Two pre-publication guards come FIRST: the addressed CHECKOUT must be able to
+  // own this authority (no unfenced legacy owner, no retargeted binding), and the
+  // canonical target must pass its private-path admission. Both refuse before a
+  // staging directory, byte copy or link exists — a restore never publishes an
+  // authority its own checkout would then refuse.
+  await assertControlCheckoutScope(context, location);
   assertCollaborationTargetAdmission(location);
 
   // The pair is addressed by the manifest the OPERATOR supplied: its directory is
@@ -1754,6 +1911,7 @@ export async function restoreCollaborationBackup(
   }
   let staged = false;
   let nextEpoch = 0;
+  let newStoreId = "";
   try {
     copyFileSync(collaborationImagePath, stagingPath);
     chmodSync(stagingPath, 0o600);
@@ -1781,16 +1939,22 @@ export async function restoreCollaborationBackup(
     // cannot re-issue a stamp an earlier recovery already handed out.
     const lineage = allocateRecoveryGeneration(dir, recorded.storeId, recorded.epoch);
     nextEpoch = lineage.epoch;
+    // A recovery point never re-issues a prior generation's stamp: the restored
+    // authority takes a NEW store id, so losing this directory and its lineage
+    // ledger cannot make an earlier recovery's (storeId, epoch) valid again. The
+    // source identity stays explicit lineage, and every issue/catalog row keeps
+    // its own id.
+    newStoreId = randomUUID();
     const db = await connect(stagingPath, "write", busyTimeoutMs(), { keepJournalMode: true });
     try {
       db.exec("begin immediate");
       try {
         const flipped = db
           .prepare(
-            "update collaboration_meta set authority_state = 'active', authority_epoch = ?, activated_at = ? " +
+            "update collaboration_meta set authority_state = 'active', store_id = ?, authority_epoch = ?, activated_at = ? " +
               "where id = 1 and store_id = ? and repository_key = ? and mode = ? and authority_epoch = ?",
           )
-          .run(nextEpoch, restoredAt, recorded.storeId, location.repoKey, location.mode, recorded.epoch) as { changes?: number };
+          .run(newStoreId, nextEpoch, restoredAt, recorded.storeId, location.repoKey, location.mode, recorded.epoch) as { changes?: number };
         if (Number(flipped?.changes) !== 1) {
           throw incompletePair(
             `The verified collaboration image changed between its inspection and the restore transaction (identity, ` +
@@ -1809,7 +1973,7 @@ export async function restoreCollaborationBackup(
             imageSha256: imageSha,
             restoredFrom: { storeId: recorded.storeId, epoch: recorded.epoch, revision: recorded.revision },
             lineage: { generation: lineage.generation, previousEpoch: lineage.previousEpoch },
-            authority: { storeId: recorded.storeId, epoch: nextEpoch, repoKey: location.repoKey, mode: location.mode },
+            authority: { storeId: newStoreId, epoch: nextEpoch, repoKey: location.repoKey, mode: location.mode },
             operator,
             executionImage: { path: basename(executionImagePath), storeId: supplied.execution.storeId, epoch: supplied.execution.epoch },
             restoredAt,
@@ -1856,7 +2020,7 @@ export async function restoreCollaborationBackup(
     }
   }
   if (!staged) throw incompletePair(`The restore did not publish ${dbPath}.`);
-  const target = { repoKey: location.repoKey, mode: location.mode, storeId: recorded.storeId, epoch: nextEpoch };
+  const target = { repoKey: location.repoKey, mode: location.mode, storeId: newStoreId, epoch: nextEpoch };
   // This checkout now owns the restored generation; persist the binding before
   // the final read proves it (a binding mismatch would otherwise refuse the
   // generation this same call just published).

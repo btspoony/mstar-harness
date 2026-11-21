@@ -1315,25 +1315,14 @@ export function writeCollaborationBinding(
 }
 
 /**
- * Refuse before any domain I/O when this checkout cannot own the resolved
- * authority:
- *
- * - an UNFENCED combined store that still holds collaboration rows is the legacy
- *   owner: only the reviewed cutover may hand that authority on;
- * - a recorded binding that names another repository/mode, or a DIFFERENT
- *   authority store than the one at the resolved path, means the checkout was
- *   retargeted (an origin or `.mstarc` change) or its lane was replaced: the verb
- *   must re-resolve deliberately, never drift onto another repository's data.
- *
- * A checkout with no binding (a fresh replacement clone) is admitted and adopts
- * the resolved authority on its first authenticated use; reading never writes the
- * binding.
+ * Refuse when THIS checkout cannot own the resolved authority, regardless of what
+ * the lane currently holds: an unfenced combined store with collaboration rows is
+ * the legacy owner, and a recorded binding that names another repository/mode was
+ * retargeted. This is the pre-publication half — a restore runs it before it
+ * stages, links or binds anything, so it never publishes an authority the
+ * addressed checkout would then refuse.
  */
-async function assertControlBinding(
-  context: StoreContext,
-  location: CollaborationLocation,
-  authority: CollaborationAuthority,
-): Promise<void> {
+export async function assertControlCheckoutScope(context: StoreContext, location: CollaborationLocation): Promise<void> {
   if (existsSync(storeDbPath(context))) {
     const legacy = await connect(storeDbPath(context), "read", busyTimeoutMs()).catch(() => undefined);
     if (legacy !== undefined) {
@@ -1364,6 +1353,31 @@ async function assertControlBinding(
         `the scope deliberately (mstar path resolve) and start a new checkout for the other repository. Nothing was modified.`,
     );
   }
+}
+
+/**
+ * Refuse before any domain I/O when this checkout cannot own the resolved
+ * authority:
+ *
+ * - an UNFENCED combined store that still holds collaboration rows is the legacy
+ *   owner: only the reviewed cutover may hand that authority on;
+ * - a recorded binding that names another repository/mode, or a DIFFERENT
+ *   authority store than the one at the resolved path, means the checkout was
+ *   retargeted (an origin or `.mstarc` change) or its lane was replaced: the verb
+ *   must re-resolve deliberately, never drift onto another repository's data.
+ *
+ * A checkout with no binding (a fresh replacement clone) is admitted and adopts
+ * the resolved authority on its first authenticated use; reading never writes the
+ * binding.
+ */
+async function assertControlBinding(
+  context: StoreContext,
+  location: CollaborationLocation,
+  authority: CollaborationAuthority,
+): Promise<void> {
+  await assertControlCheckoutScope(context, location);
+  const binding = readCollaborationBinding(context);
+  if (binding === null) return;
   if (binding.storeId !== authority.storeId) {
     throw new StoreError(
       "collaboration.stale-binding",

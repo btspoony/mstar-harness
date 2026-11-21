@@ -36,6 +36,7 @@ import {
   COLLABORATION_CUTOVER_TABLES,
   initializeCollaborationStore,
   readCollaborationStage,
+  writeCollaborationBinding,
   writeCollaborationStage,
   type CollaborationAuthority,
   type CollaborationStamp,
@@ -2043,7 +2044,20 @@ export async function activateCollaborationCutover(
   manifest: CutoverManifest,
   options: CutoverActivationOptions,
 ): Promise<CutoverReceipt> {
-  return withCollaborationCutoverLock(context, () => activateUnderCutoverLock(context, manifest, options));
+  const receipt = await withCollaborationCutoverLock(context, () => activateUnderCutoverLock(context, manifest, options));
+  // A successful ACTIVE publication (fresh or replayed) makes this checkout the
+  // owner of that generation: the control binding is recorded before the verb
+  // returns, so a later origin/config retarget refuses instead of drifting onto
+  // another repository's lane. A fence-only outcome publishes nothing.
+  if (receipt.phase === "active") {
+    writeCollaborationBinding(context, {
+      repoKey: receipt.target.repoKey,
+      mode: receipt.target.mode,
+      storeId: receipt.target.storeId,
+      epoch: receipt.target.epoch,
+    });
+  }
+  return receipt;
 }
 
 async function activateUnderCutoverLock(

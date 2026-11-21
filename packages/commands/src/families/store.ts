@@ -213,9 +213,13 @@ function publishReport(
 ): { out: string | null; reportError: { code: string; message: string } | null } {
   if (out === undefined) return { out: null, reportError: null };
   const target = path.resolve(out);
-  mkdirSync(path.dirname(target), { recursive: true });
-  const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${randomUUID()}.tmp`);
+  // EVERY step — directory creation, the private write, the create-only link and
+  // the cleanup — sits inside this report-only boundary: a committed operation's
+  // outcome is never replaced by a report failure, not even by its own cleanup.
+  let tmp: string | null = null;
   try {
+    mkdirSync(path.dirname(target), { recursive: true });
+    tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${randomUUID()}.tmp`);
     writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     linkSync(tmp, target);
     return { out: target, reportError: null };
@@ -232,7 +236,13 @@ function publishReport(
       },
     };
   } finally {
-    rmSync(tmp, { force: true });
+    if (tmp !== null) {
+      try {
+        rmSync(tmp, { force: true });
+      } catch {
+        // cleanup is best-effort scratch removal; it never decides the outcome
+      }
+    }
   }
 }
 

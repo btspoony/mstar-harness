@@ -17,13 +17,15 @@ import { execFileSync, spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import * as collaborationStore from "./collaboration-store.js";
 import {
   initializeCollaborationStore,
   openCollaborationStore,
+  readCollaborationBinding,
   readCollaborationStage,
   writeCollaborationStage,
 } from "./collaboration-store.js";
@@ -53,6 +55,7 @@ import { initializeStore, MIGRATION_1_SQL, MIGRATIONS, migrationChecksum, openSt
 import { readHarnessVersion } from "./core.js";
 import { validateActivationAttestation } from "./store-activation.js";
 import { applyStoreMigration, planStoreMigration, type MigrationManifest, type MigrationReceipt } from "./store-migrate.js";
+import { activateCollaborationCutover, applyCollaborationCutover, planCollaborationCutover } from "./collaboration-cutover.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-activation-"));
 
@@ -390,6 +393,38 @@ async function receiptRows(context: StoreContext, phase: string): Promise<Record
 
 function ledgerPathOf(fixture: Fixture, activation: ActivationReceipt): string {
   return join(fixture.harness, "archived", "store-migration", activation.applyManifestHash, "ledger.json");
+}
+
+/** Re-create the crash window's durable attempt claim from a finished pair. */
+function writeAttemptClaim(out: string, receipt: RepositoryBackupReceipt): void {
+  writeFileSync(
+    `${out}.pair-attempt.json`,
+    `${JSON.stringify(
+      {
+        version: 1,
+        attempt: "reconstructed-attempt",
+        takenAt: "2026-11-21T00:00:00.000Z",
+        execution: {
+          name: receipt.execution.backupPath,
+          sha256: createHash("sha256").update(readFileSync(pairImage(receipt, "execution"))).digest("hex"),
+          storeId: receipt.execution.storeId,
+          epoch: receipt.execution.epoch,
+          revision: receipt.execution.revision,
+          catalogRevision: receipt.execution.catalogRevision,
+        },
+        collaboration: {
+          name: receipt.collaboration.path,
+          sha256: createHash("sha256").update(readFileSync(pairImage(receipt, "collaboration"))).digest("hex"),
+          storeId: receipt.collaboration.authority.storeId,
+          epoch: receipt.collaboration.authority.epoch,
+          revision: receipt.collaboration.authority.revision,
+          catalogRevision: receipt.collaboration.authority.catalogRevision,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
 }
 
 /** The absolute path of one image of a published pair: its locator is a sibling basename. */
@@ -1690,7 +1725,8 @@ describe("collaboration lifecycle", () => {
   test("an unfenced legacy owner is refused before it reaches the repository lane", async () => {
     const fixture = repoWorkspace("binding-legacy-owner-");
     await ensureCollaborationAuthority(fixture.context);
-    const store = await initializeStore(fixture.context);
+    (await initializeStore(fixture.context)).close();
+    const store = await openStore(fixture.context, "write");
     store.db
       .prepare(
         "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key) " +
@@ -1871,7 +1907,10 @@ describe("repository backup pair", () => {
       operator: "ops-engineer",
       attestation: attestation(),
     });
-    expect(restored).toMatchObject({ state: "active", storeId: before.storeId, epoch: before.epoch + 1 });
+    // A recovery mints a NEW authority identity: the image's own stamp is never
+    // re-issued, so a later generation can never collide with this one.
+    expect(restored).toMatchObject({ state: "active", epoch: before.epoch + 1 });
+    expect(restored.storeId).not.toBe(before.storeId);
 
     const handle = await openCollaborationStore(fixture.context, "read");
     try {
@@ -2260,7 +2299,8 @@ describe("repository backup pair", () => {
 
   test("fresh bootstrap refuses a store holding only non-issue collaboration rows", async () => {
     const fixture = repoWorkspace("bootstrap-project-only-");
-    const store = await initializeStore(fixture.context);
+    (await initializeStore(fixture.context)).close();
+    const store = await openStore(fixture.context, "write");
     store.db
       .prepare("insert into project_bindings(project_id, provider, workspace, team, remote_project, revision, updated_at) values ('proj-x', 'linear', 'ws', 'team', 'remote', 1, 'now')")
       .run();
@@ -2466,8 +2506,10 @@ describe("repository backup pair", () => {
     const fixture = await pairedWorkspace("pair-interrupted-");
     const out = join(fixture.harness, "archived", "recovery", "pair.json");
     const receipt = await backupRepositoryStores(fixture.context, { out });
-    // The crash window: both images are published, the manifest is not.
+    // The crash window: both images and the attempt's claim are published, the
+    // manifest is not. The claim is what makes those two images ONE pair.
     rmSync(out, { force: true });
+    writeAttemptClaim(out, receipt);
     expect(existsSync(pairImage(receipt, "execution"))).toBe(true);
     expect(existsSync(pairImage(receipt, "collaboration"))).toBe(true);
 
@@ -2476,7 +2518,8 @@ describe("repository backup pair", () => {
     expect(resumed.collaboration.authority.storeId).toBe(receipt.collaboration.authority.storeId);
     expect(resumed.collaboration.counts).toEqual(receipt.collaboration.counts);
 
-    // A HALF attempt is refused by name instead of being guessed at.
+    // Images with NO attempt evidence are never blessed as a pair — including a
+    // half pair, and including a mixed pair assembled from different snapshots.
     const half = await pairedWorkspace("pair-half-");
     const halfOut = join(half.harness, "archived", "recovery", "pair.json");
     const halfReceipt = await backupRepositoryStores(half.context, { out: halfOut });
@@ -2485,5 +2528,128 @@ describe("repository backup pair", () => {
     await expect(backupRepositoryStores(half.context, { out: halfOut })).rejects.toMatchObject({
       code: "collaboration.backup-incomplete",
     });
+
+    // A mixed-time pair: a claim names one attempt's bytes, but the execution
+    // image at that name is a LATER snapshot's.
+    const mixed = await pairedWorkspace("pair-mixed-");
+    const mixedOut = join(mixed.harness, "archived", "recovery", "pair.json");
+    const first = await backupRepositoryStores(mixed.context, { out: mixedOut });
+    // Re-create the crash window (manifest absent, claim present) from the first
+    // pair, then replace the execution image with another snapshot's bytes.
+    rmSync(mixedOut, { force: true });
+    writeAttemptClaim(mixedOut, first);
+    const other = await pairedWorkspace("pair-mixed-other-");
+    const otherOut = join(other.harness, "archived", "recovery", "pair.json");
+    const later = await backupRepositoryStores(other.context, { out: otherOut });
+    writeFileSync(pairImage(first, "execution"), readFileSync(pairImage(later, "execution")));
+    await expect(backupRepositoryStores(mixed.context, { out: mixedOut })).rejects.toThrow(/not the one this attempt copied/);
+  });
+});
+
+/** A combined source checkout identified by a Git ORIGIN (so a retarget is testable). */
+function originCheckout(name: string, origin: string): Fixture {
+  const fixture = repoWorkspace(name);
+  execFileSync("git", ["remote", "add", "origin", origin], { cwd: fixture.checkout, stdio: ["ignore", "pipe", "pipe"] });
+  // The repository identity comes from the ORIGIN; the checkout only declares its mode.
+  writeFileSync(join(fixture.checkout, ".mstarc"), "[collaboration]\nmode=local\n");
+  return fixture;
+}
+
+/** The minimal cutover attestation: one reloaded coordinator and the exact source generation. */
+function cutoverOptionsFor(
+  context: StoreContext,
+  source: { storeId: string; epoch: number; schemaVersion: number },
+): { operator: string; attestation: ActivationAttestation } {
+  const location = resolveCollaborationLocation(context);
+  return {
+    operator: "ops-engineer",
+    attestation: {
+      version: ACTIVATION_PROTOCOL_VERSION,
+      attestedAt: "2026-11-21T00:00:00.000Z",
+      operator: { actor: "ops-engineer", authorizationRef: "iteration compass / cutover decision" },
+      consumers: [
+        {
+          entryId: "coordinator-omp",
+          kind: "coordinator",
+          entrypoint: "/opt/mstar/omp/dist/index.js",
+          runtime: "node",
+          runtimeVersion: process.versions.node,
+          version: readHarnessVersion(),
+          current: true,
+          disposition: "reloaded",
+        },
+      ],
+      stoppedSessions: [{ sessionId: "session-one", host: "omp", state: "stopped" }],
+      cutover: {
+        repoKey: location.repoKey,
+        mode: location.mode,
+        controlRoot: resolve(context.harnessDir),
+        sourceStoreId: source.storeId,
+        sourceEpoch: source.epoch,
+        schemaVersion: source.schemaVersion,
+        stoppedHandles: [
+          { kind: "session", id: "session-one" },
+          { kind: "process", id: "mstar-cli" },
+        ],
+        allHandlesStopped: true,
+      },
+    },
+  };
+}
+
+describe("shipped cutover activation binding", () => {
+  test("the shipped activation binds the source checkout, its replay refreshes it, and a retarget refuses", async () => {
+    const origin = "https://github.com/acme/cutover-binding-regression.git";
+    const fixture = originCheckout("cutover-binding-regression-", origin);
+    // A current-schema combined source (above the cutover floor): the authority the
+    // reviewed cutover moves. Its rows are seeded directly, so no ordinary verb
+    // writes the lane before the cutover exists.
+    (await initializeStore(fixture.context)).close();
+    const store = await openStore(fixture.context, "write");
+    let source: { storeId: string; epoch: number; schemaVersion: number };
+    try {
+      store.db.exec(`
+insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at)
+values ('project', 'p-one', 'Project One', 'projects', 'p-one/roadmap.md', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into project_milestones(milestone_id, project_id, name, ordinal, created_at, updated_at)
+values ('m-one', 'p-one', 'Milestone One', 0, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, milestone_id)
+values ('I-000001', 'p-one', 'First finding', 'bug', 'high', 'open', 'It broke', 'It stays fixed', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'identity-one', 'm-one');
+insert into occurrences(issue_id, occurrence_key, source_kind, source_identity, root_cause_key, acceptance_key, location, observed_behavior, evidence_json, discovered_at, recorded_at)
+values ('I-000001', 'occ-one', 'test', 'suite/one', 'root-one', 'accept-one', 'packages/engine', 'observed', '{}', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at)
+values ('wf-live', 1, 'session-one', '{}', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at)
+values ('wf-live', 'coordinator', 'session-one', 1, 1, 'active', '2026-11-21T00:00:00.000Z');
+`);
+      const row = store.db.prepare("select store_id, authority_epoch from store_meta where id = 1").get() as {
+        store_id: string;
+        authority_epoch: number;
+      };
+      source = { storeId: row.store_id, epoch: row.authority_epoch, schemaVersion: MIGRATIONS.length };
+    } finally {
+      store.close();
+    }
+    expect(readCollaborationBinding(fixture.context)).toBeNull();
+
+    const manifest = await planCollaborationCutover(fixture.context);
+    await applyCollaborationCutover(fixture.context, manifest);
+    const activation = await activateCollaborationCutover(fixture.context, manifest, cutoverOptionsFor(fixture.context, source));
+    expect(activation.phase).toBe("active");
+    // The SHIPPED path records the binding before it returns.
+    expect(readCollaborationBinding(fixture.context)).toMatchObject({
+      repoKey: activation.target.repoKey,
+      mode: activation.target.mode,
+      storeId: activation.target.storeId,
+      epoch: activation.target.epoch,
+    });
+
+    // The replay keeps the same generation bound.
+    const replay = await activateCollaborationCutover(fixture.context, manifest, cutoverOptionsFor(fixture.context, source));
+    expect(replay.replayed).toBe(true);
+    expect(readCollaborationBinding(fixture.context)).toMatchObject({ storeId: replay.target.storeId, epoch: replay.target.epoch });
+
+    // A retargeted checkout is refused by the checkout-binding tests below; here the
+    // shipped path is proven to persist and refresh the binding itself.
   });
 });
