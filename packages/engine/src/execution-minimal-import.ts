@@ -989,11 +989,15 @@ function commitExecutionImport(
   }
   for (const row of admission.importable) writeImportedExecutionWorkflow(tx, row);
   const now = new Date().toISOString();
-  // The ONE execution-revision advance of this accepted import. The staged
-  // authority's promotion (before the composite) advances nothing, so a resumed
-  // finalization spends the same single advance an uninterrupted run would — an
-  // interruption can never make the token/revision move twice.
-  if (admission.importable.length > 0) {
+  // Promotion and the imported rows are ONE transaction: an ACTIVE authority is
+  // therefore never observable without them. Exactly one execution-revision
+  // advance happens either way — the promotion's own, or the rows' — so an
+  // interrupted retry produces the same token an uninterrupted run would.
+  if (tx.execution.authorityState !== "active") {
+    const execution = tx.db.prepare("update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, activated_at = ? where id = 1 and revision = ?")
+      .run(source.rootDoc.updated_at, now, tx.execution.revision) as { changes?: unknown };
+    if (Number(execution.changes) !== 1) throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun `store upgrade` to enumerate current files.");
+  } else if (admission.importable.length > 0) {
     const execution = tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1 and revision = ?")
       .run(source.rootDoc.updated_at, tx.execution.revision) as { changes?: unknown };
     if (Number(execution.changes) !== 1) throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun `store upgrade` to enumerate current files.");
@@ -1128,22 +1132,9 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     if (source.refusal !== undefined) conflict(source.refusal);
     return prepared.result;
   }
-  // The import IS the operation that activates a staged execution authority,
-  // while the composite's finalization requires an active one — so the promotion
-  // happens AFTER the lane was validated and the intent reserved, and it advances
-  // NOTHING (the finalization owns the operation's one revision advance).
-  // Promotion is idempotent (`staged` only). If it fails, the reservation and the
-  // staged state both stay exactly as they are: the same verb resumes and retries
-  // the promotion, and no empty ACTIVE authority can ever be left behind.
-  await withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState === "active") return;
-    tx.db
-      .prepare(
-        "update execution_meta set authority_state = 'active', root_updated_at = ?, activated_at = ? " +
-          "where id = 1 and authority_state = 'staged'",
-      )
-      .run(source.rootDoc.updated_at, new Date().toISOString());
-  });
+  // The staged authority is promoted INSIDE the finalization transaction, with
+  // the imported rows and the operation receipt (see `commitExecutionImport`), so
+  // a caller can never observe an ACTIVE store that holds no imported workflow.
   return runCollaborationComposite<MinimalImportResult>(context, prepared.intent, {
     apply(handle) {
       // The legacy execution import carries NO catalog delta: its collaboration

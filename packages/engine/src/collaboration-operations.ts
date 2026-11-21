@@ -895,11 +895,18 @@ async function finalizeComposite<T>(
   finalize: CollaborationCompositeEffects<T>["finalize"],
 ): Promise<T> {
   return withExecutionTransaction(context, (tx) => {
-    assertActiveExecutionAuthority(
-      tx,
-      `the execution authority is ${tx.execution.authorityState}; a composite operation requires an active authority. ` +
-        `No execution delta was committed.`,
-    );
+    // The minimal import is the ONE composite whose execution half PROMOTES a
+    // staged authority together with the imported rows, so no interruption can
+    // expose an ACTIVE store that holds no imported workflow. It re-asserts the
+    // promotion itself inside its finalization transaction; every other kind
+    // keeps the active-authority requirement.
+    if (intent.kind !== "execution-import") {
+      assertActiveExecutionAuthority(
+        tx,
+        `the execution authority is ${tx.execution.authorityState}; a composite operation requires an active authority. ` +
+          `No execution delta was committed.`,
+      );
+    }
     assertIntentGeneration(tx, intent);
     const row = readIntent(tx.db, intent.key);
     if (row === null) {

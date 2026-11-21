@@ -4211,6 +4211,68 @@ test("collaboration legacy import replay \u2014 a refused lane never leaves an e
   } finally { after.close(); }
 });
 
+test("collaboration legacy import replay \u2014 an interrupted import never exposes an ACTIVE store without its imported workflows", async () => {
+  const { context } = legacyWorkspace("legacy-import-no-empty-active");
+  const workflowId = "wf-legacy-import-no-empty-active";
+  await collaborationLane(context);
+  const seed = await initializeStore(context);
+  seed.close();
+  // A reviewed-but-unpromoted execution store: staged, empty.
+  const staged = await openStore(context, "write");
+  try {
+    staged.db.prepare("update execution_meta set authority_state = 'staged', revision = 1, activated_at = null where id = 1").run();
+  } finally { staged.close(); }
+
+  const imported = await importLegacyExecution({ context, operator: "operator", operationId: "op-no-empty-active" });
+  expect(imported).toMatchObject({ imported: 1, importedIds: [workflowId] });
+  const done = await readExecutionState(context);
+  expect(done.data.workflows.map((workflow) => workflow.state.id)).toEqual([workflowId]);
+  const doneStore = await openStore(context, "read");
+  try {
+    expect(doneStore.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "active" });
+  } finally { doneStore.close(); }
+
+  // Recreate the interruption boundary "effect committed, finalization never
+  // ran": the promotion and the rows are gone together, the authority is staged
+  // again, and the reservation is pending. Nothing can observe ACTIVE here.
+  const surgery = await openStore(context, "write");
+  try {
+    surgery.db.prepare("delete from execution_sessions where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_inputs where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_plans where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_registry where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_workflows where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from store_operations where operation_id = ?").run("op-no-empty-active");
+    surgery.db.prepare("update execution_collaboration_intents set phase = 'prepared', receipt_json = null where operation_id = ?").run("op-no-empty-active");
+    surgery.db.prepare("update execution_meta set authority_state = 'staged', revision = 1, activated_at = null where id = 1").run();
+  } finally { surgery.close(); }
+
+  // The observable state of the interruption itself: staged and empty — never an
+  // ACTIVE workflow list without the imported row.
+  // The observable state of the interruption itself: the ordinary execution read
+  // refuses a staged store outright, so no caller can see an ACTIVE workflow list
+  // without the imported row.
+  await expect(readExecutionState(context)).rejects.toMatchObject({ code: "execution.not-active" });
+  const midStore = await openStore(context, "read");
+  try {
+    expect(midStore.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "staged" });
+    expect(midStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(midStore.db.prepare("select phase from execution_collaboration_intents where operation_id = ?").get("op-no-empty-active")).toEqual({ phase: "prepared" });
+  } finally { midStore.close(); }
+
+  // The resumed run promotes and imports in ONE step, and reproduces the
+  // uninterrupted token.
+  const resumed = await importLegacyExecution({ context, operator: "operator", operationId: "op-no-empty-active-retry" });
+  expect(resumed).toEqual(imported);
+  const after = await readExecutionState(context);
+  expect(after.token).toEqual(done.token);
+  expect(after.data.workflows.map((workflow) => workflow.state.id)).toEqual([workflowId]);
+  const afterStore = await openStore(context, "read");
+  try {
+    expect(afterStore.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "active" });
+  } finally { afterStore.close(); }
+});
+
 test("collaboration legacy import replay \u2014 a staged-authority interruption spends the execution revision exactly once", async () => {
   const { context } = legacyWorkspace("legacy-import-staged-interrupt");
   const workflowId = "wf-legacy-import-staged-interrupt";
