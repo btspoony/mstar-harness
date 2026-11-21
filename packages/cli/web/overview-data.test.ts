@@ -217,6 +217,64 @@ describe("outcome 2 — one degraded member still renders the page", () => {
   });
 });
 
+describe("dashboard collaboration disclosure", () => {
+  /** A healthy payload with a distinctive residual count the disclosure must suppress. */
+  const counts = healthy({
+    residuals: { state: "read", data: { open: 4242, bySeverity: { critical: 0, high: 0, medium: 0, low: 0, nit: 4242 } } },
+  });
+
+  const observation = (
+    completeness: "complete" | "partial" | "unavailable",
+  ): ReadEnvelope<OverviewDTO>["collaboration"] => {
+    const scope = { kind: "query" as const, key: "overview:*" };
+    if (completeness === "unavailable") {
+      return { scope, completeness, asOf: null, authority: null, code: "collaboration.not-initialized" };
+    }
+    const base = {
+      scope,
+      completeness,
+      asOf: "2026-11-21T00:00:00.000Z",
+      authority: { repoKey: "github.com/acme/repo", mode: "local" as const, storeId: "store-a", epoch: 1 },
+      revision: 3,
+      catalogRevision: 1,
+    };
+    return completeness === "partial" ? { ...base, code: "catalog.discovery.missing-plan" } : base;
+  };
+
+  test("a partial observation does not render its count as healthy", () => {
+    const partial = { ...envelope(counts), collaboration: observation("partial") };
+    const outcome = overviewOutcome({ status: "ready", envelope: partial });
+    expect(outcome.kind).toBe("ready");
+    if (outcome.kind !== "ready") return;
+    if (outcome.model.residuals.kind !== "unavailable") throw new Error("expected unavailable residuals");
+    expect(outcome.model.residuals.reason).toContain("catalog.discovery.missing-plan");
+    // Projection-backed execution data stays usable.
+    expect(outcome.model.workflows.kind).toBe("populated");
+    const html = render(overviewFromEnvelope(partial));
+    expect(html).not.toContain("4242");
+    expect(html).toContain('data-ms-absence="unavailable"');
+  });
+
+  test("an unavailable observation claims no revision", () => {
+    const unavailable = { ...envelope(counts), storeRevision: null, collaboration: observation("unavailable") };
+    const outcome = overviewOutcome({ status: "ready", envelope: unavailable });
+    expect(outcome.kind).toBe("ready");
+    if (outcome.kind !== "ready") return;
+    expect(outcome.revision).toBeNull();
+    if (outcome.model.residuals.kind !== "unavailable") throw new Error("expected unavailable residuals");
+    expect(outcome.model.residuals.reason).toContain("collaboration.not-initialized");
+    expect(render(overviewFromEnvelope(unavailable))).not.toContain("4242");
+  });
+
+  test("a complete observation still renders its counts", () => {
+    const complete = { ...envelope(counts), collaboration: observation("complete") };
+    const model = overviewFromEnvelope(complete);
+    expect(model.residuals.kind).toBe("populated");
+    if (model.residuals.kind !== "populated") return;
+    expect(model.residuals.value.total).toBe(4242);
+  });
+});
+
 describe("outcome 3 — a whole-read failure mounts no page", () => {
   test("the outcome is failed and carries the message", () => {
     const outcome = overviewOutcome({ status: "error", message: "the store is not active" });

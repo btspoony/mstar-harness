@@ -7,7 +7,7 @@
  * validation implementation. Every case runs the layer against the real store
  * boundary; nothing is mocked.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,11 +20,11 @@ import { createExecutionWorkflow, readExecutionState } from "./execution-store.j
 import { captureIssue, getIssue, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_SEVERITIES } from "./issue.js";
 import { addMilestone } from "./milestone-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, readCollaborationAuthority } from "./collaboration-store.js";
+import { initializeCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
 import { initializeStore, openStore } from "./store-db.js";
 import { queryDashboard, withStoreRead } from "./store-read.js";
 import type { CatalogEntityInput, CatalogOperation } from "./catalog.js";
-import type { IssueDetail } from "./issue.js";
+import type { IssueDetail, IssuePage } from "./issue.js";
 import type { MilestoneRead } from "./milestone-store.js";
 import type { StoreContext } from "./store-db.js";
 import type {
@@ -36,6 +36,7 @@ import type {
   OverviewDTO,
   OverviewMember,
   ReadEnvelope,
+  WorkflowListDTO,
 } from "./store-read.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dashboard-view-"));
@@ -66,15 +67,33 @@ async function workspace(name: string): Promise<StoreContext> {
   const handle = await initializeStore(context);
   handle.close();
   await initializeCollaborationStore(resolveCollaborationLocation(context));
-  const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  activateCollaboration(context);
+  return context;
+}
+
+/**
+ * Publish the staged collaboration lane AND this checkout's binding -- the two
+ * records the real activation writes. An ACTIVE authority is never usable from
+ * an unbound checkout, so a fixture that flips only the lane is refused.
+ */
+function activateCollaboration(context: StoreContext): void {
+  const location = resolveCollaborationLocation(context);
+  const lane = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
   try {
-    lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
-      new Date().toISOString(),
-    );
+    lane
+      .prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1")
+      .run(new Date().toISOString());
+    const row = lane.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
   } finally {
     lane.close();
   }
-  return context;
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 
 describe("dashboardFilters refusals", () => {
@@ -209,6 +228,71 @@ describe("readDashboardView over a real store", () => {
     mkdirSync(harness, { recursive: true });
     const failure = await readDashboardView({ context: { harnessDir: harness }, view: "issues" }).catch((error: unknown) => error);
     expect(dashboardFailure(failure)).toMatchObject({ code: "collaboration.not-initialized" });
+  });
+});
+
+describe("dashboard collaboration disclosure", () => {
+  /** Remove the workspace's collaboration authority: an unavailable source, not an empty one. */
+  function removeCollaboration(context: StoreContext): void {
+    unlinkSync(resolveCollaborationLocation(context).dbPath);
+  }
+
+  test("a pure collaboration view refuses when its authority is missing", async () => {
+    const context = await workspace("disclosure-pure-");
+    removeCollaboration(context);
+    const failure = await readDashboardView({ context, view: "issues" }).catch((error: unknown) => error);
+    const typed = dashboardFailure(failure);
+    // A typed non-success, never a 404-shaped or zero-row answer.
+    expect(typed.code).toBe("collaboration.not-initialized");
+    // The refusal keeps the recovery path and drops the user's home and store file.
+    expect(typed.message).toContain("mstar store init");
+    expect(typed.message).not.toContain(TEST_HOME);
+    expect(typed.message).not.toMatch(/\.db\b/);
+  });
+
+  test("a credential-shaped value in a refusal is redacted", () => {
+    const typed = dashboardFailure(new Error("transport refused token=sk-live-123 for the provider"));
+    expect(typed.message).not.toContain("sk-live-123");
+    expect(typed.message).toContain("{REDACTED}");
+  });
+
+  test("an execution-only list keeps its rows and discloses the optional gap", async () => {
+    const context = await workspace("disclosure-optional-");
+    await createPlanWorkflow(context, "p-disclosure", "Todo");
+    // A generation is published first, as it would be on a healthy checkout; the
+    // later unavailable catalog must not turn those rows into an empty success.
+    const published = await readDashboardView({ context, view: "workflows" });
+    expect((published.data as WorkflowListDTO).items.map((item) => item.id)).toContain("p-disclosure");
+    removeCollaboration(context);
+    const envelope = await readDashboardView({ context, view: "workflows" });
+    const list = envelope.data as WorkflowListDTO;
+    // Previously usable execution data stays; only the unavailable optional
+    // catalog association is disclosed, and no collaboration counter is claimed.
+    expect(list.items.map((item) => item.id)).toContain("p-disclosure");
+    expect(envelope.collaboration).toMatchObject({
+      completeness: "unavailable",
+      code: "collaboration.not-initialized",
+    });
+    expect(envelope.storeRevision).toBeNull();
+    expect(envelope.catalogRevision).toBeNull();
+    expect(envelope.execution).not.toBeNull();
+  });
+
+  test("the mixed overview refuses rather than reporting placeholder totals", async () => {
+    const context = await workspace("disclosure-mixed-");
+    removeCollaboration(context);
+    const failure = await readDashboardView({ context, view: "overview" }).catch((error: unknown) => error);
+    expect(dashboardFailure(failure).code).toBe("collaboration.not-initialized");
+  });
+
+  test("a complete observation may legitimately report zero", async () => {
+    const context = await workspace("disclosure-zero-");
+    const envelope = await readDashboardView({ context, view: "issues" });
+    const page = envelope.data as IssuePage;
+    expect(page.items).toEqual([]);
+    expect(page.total).toBe(0);
+    expect(envelope.collaboration?.completeness).toBe("complete");
+    expect(typeof envelope.storeRevision).toBe("number");
   });
 });
 

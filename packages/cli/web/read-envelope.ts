@@ -100,9 +100,10 @@ function logicalScope(scope: CollaborationScope, offset: number): CollaborationS
  * Every source fact that must agree for two pages to be one list: the
  * collaboration observation (authority identity/epoch, completeness, LOGICAL
  * scope, revision, catalog revision and gap code) and the execution observation
- * (identity/epoch/revision), beside the projection generation. Numeric counters
- * alone cannot tell a restored or replaced authority apart, and page bounds are
- * deliberately excluded: they differ by construction across a list's pages.
+ * (identity/epoch/revision), beside the projection generation and its health.
+ * Numeric counters alone cannot tell a restored or replaced authority apart, and
+ * page bounds are deliberately excluded: they differ by construction across a
+ * list's pages.
  */
 function sourceStamp(envelope: ReadEnvelope<unknown>, offset: number): string {
   const { collaboration, execution, projection, storeRevision, catalogRevision } = envelope;
@@ -131,7 +132,10 @@ function sourceStamp(envelope: ReadEnvelope<unknown>, offset: number): string {
         : execution.asOf === null
           ? { asOf: null, code: execution.code }
           : { storeId: execution.storeId, epoch: execution.epoch, revision: execution.revision },
-    projection: { observed: projection.observed, generation: projection.generation },
+    // Health is part of the disclosure, not decoration: a page read while the
+    // projection was still current must not be joined with one read after it
+    // went stale, or the assembled list would state the first page's freshness.
+    projection: { observed: projection.observed, generation: projection.generation, freshness: projection.freshness },
   });
 }
 

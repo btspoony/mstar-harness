@@ -845,9 +845,12 @@ function Shell(props: {
           },
         }
       : storeOutcome;
-  const revision = storeOutcome.kind === "ready" ? storeOutcome.revision : null;
+  // The footer's two facts are the page's own read, not a side read: the model
+  // downgrades an incomplete collaboration observation, so a suppressed count or
+  // revision is suppressed here too.
+  const revision = pageOutcome.kind === "ready" ? pageOutcome.revision : null;
   // The prototype's footer opens with the open-issue count, then the store revision.
-  const residuals = storeOutcome.kind === "ready" ? storeOutcome.model.residuals : null;
+  const residuals = pageOutcome.kind === "ready" ? pageOutcome.model.residuals : null;
   const openIssues = residuals !== null && residuals.kind === "populated" ? residuals.value.total : null;
 
   useEffect(() => {

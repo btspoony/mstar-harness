@@ -14,6 +14,7 @@
  * Execution route: projection-backed views are served through the engine's
  * read boundary, which refreshes their projection from the current authority.
  */
+import { homedir } from "node:os";
 import { SddScriptError } from "./sdd.js";
 import { queryDashboard, withStoreRead, type StoreReadQuery } from "./store-read.js";
 import {
@@ -163,12 +164,28 @@ export async function readDashboardView(input: {
 /**
  * Structured failure for an API response: the frozen refusal code, the engine's
  * usage class, or an internal fallback -- never a raw payload or credential.
+ * The message is sanitized here because every transport (HTTP, panel) publishes
+ * it: user HOME, a SQLite store path and a credential-shaped value never leave
+ * the process, while the recovery prose stays.
  */
 export function dashboardFailure(error: unknown): { code: string; message: string } {
-  if (error instanceof SddScriptError) return { code: "usage", message: error.message };
+  if (error instanceof SddScriptError) return { code: "usage", message: sanitizeFailureMessage(error.message) };
   const code = (error as { code?: unknown })?.code;
   if (typeof code === "string" && code !== "") {
-    return { code, message: error instanceof Error ? error.message : String(error) };
+    return { code, message: sanitizeFailureMessage(error instanceof Error ? error.message : String(error)) };
   }
-  return { code: "internal-error", message: error instanceof Error ? error.message : String(error) };
+  return { code: "internal-error", message: sanitizeFailureMessage(error instanceof Error ? error.message : String(error)) };
+}
+
+/** A filesystem SQLite path, with its optional journal sidecar. */
+const STORE_PATH = /(?:[A-Za-z]:)?[\\/][^\s"'`,;:)\]}]*(?:\.db)(?:-(?:wal|shm|journal))?/g;
+
+/** A credential-shaped key and its value, in prose or in a query string. */
+const CREDENTIAL = /\b(token|secret|credential|password|passphrase|api[-_]?key|authorization)\b(\s*[=:]\s*)(?:"[^"]*"|'[^']*'|\S+)/gi;
+
+function sanitizeFailureMessage(message: string): string {
+  const home = homedir();
+  const withoutStore = message.replace(STORE_PATH, "{STORE_DB}");
+  const withoutHome = home === "" ? withoutStore : withoutStore.split(home).join("~");
+  return withoutHome.replace(CREDENTIAL, "$1$2{REDACTED}");
 }
