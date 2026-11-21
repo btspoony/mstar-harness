@@ -3209,6 +3209,30 @@ describe("pair attempt ownership and restore repair", () => {
     expect(existsSync(`${out}.execution.db`)).toBe(false);
   });
 
+  test("a private image outside the pair directory is never adopted even with a matching name and digest", async () => {
+    const fixture = await pairFixture("attempt-foreign-dir-private-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    writeAttemptClaim(out, receipt);
+    const claimPath = `${out}.pair-attempt.json`;
+    const claim = JSON.parse(readFileSync(claimPath, "utf8")) as { collaboration: { privatePath: string; name: string } };
+    // Same basename AND same bytes, but in ANOTHER directory: not this attempt's
+    // scratch, so it must never be adopted or unlinked.
+    const elsewhere = join(fixture.harness, "archived", "elsewhere");
+    mkdirSync(elsewhere, { recursive: true });
+    const twin = join(elsewhere, basename(claim.collaboration.privatePath));
+    copyFileSync(pairImage(receipt, "collaboration"), twin);
+    const twinBytes = readFileSync(twin);
+    claim.collaboration.privatePath = twin;
+    writeFileSync(claimPath, `${JSON.stringify(claim, null, 2)}\n`);
+    rmSync(out, { force: true });
+    rmSync(pairImage(receipt, "collaboration"), { force: true });
+
+    await expect(backupRepositoryStores(fixture.context, { out })).rejects.toThrow(/cannot be completed/);
+    expect(readFileSync(twin).equals(twinBytes)).toBe(true);
+    expect(existsSync(pairImage(receipt, "collaboration"))).toBe(false);
+  });
+
   test("a resume never unlinks or adopts an unowned private path", async () => {
     const fixture = await pairFixture("attempt-unowned-private-");
     const out = join(fixture.harness, "archived", "recovery", "pair.json");
@@ -3347,6 +3371,45 @@ describe("explicit adoption verb", () => {
     });
   });
 
+  test("a replacement clone adopts an ordinary store-init lane by its creation receipt", async () => {
+    const repoKey = `fixture-adopt-init-${repoSequence++}`;
+    const origin = repoWorkspaceWithKey("adopt-init-origin-", repoKey);
+    (await initializeStore(origin.context)).close();
+    const created = await ensureCollaborationAuthority(origin.context);
+    const clone = repoWorkspaceWithKey("adopt-init-clone-", repoKey);
+    (await initializeStore(clone.context)).close();
+    await expect(openCollaborationStore(clone.context, "read")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+
+    const adoption = await adoptCollaborationBinding(clone.context, { expectStoreId: created.storeId });
+    expect(adoption.adopted).toBe(true);
+    expect(adoption.lineage).toMatchObject({ kind: "creation", storeId: created.storeId, epoch: created.epoch });
+    expect(readCollaborationBinding(clone.context)).toMatchObject({ state: "active", storeId: created.storeId });
+  });
+
+  test("a restored lane is adoptable by its restore receipt lineage", async () => {
+    const origin = await activatedWorkspace("adopt-restored-lane-");
+    // A pair needs both authorities: the file-era fixture starts without an
+    // execution store.
+    (await initializeStore(origin.fixture.context)).close();
+    const out = join(origin.fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(origin.fixture.context, { out });
+    const target = resolveCollaborationLocation(origin.fixture.context).dbPath;
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${target}${suffix}`, { force: true });
+    const restored = await restoreCollaborationBackup(origin.fixture.context, receipt, {
+      operator: "ops-engineer",
+      attestation: attestation(),
+    });
+
+    // A replacement clone of the same repository adopts the RESTORED generation.
+    const repoId = repoIdOf(origin.fixture);
+    const clone = repoWorkspaceWithKey("adopt-restored-clone-", repoId);
+    (await initializeStore(clone.context)).close();
+    const adoption = await adoptCollaborationBinding(clone.context, { expectStoreId: restored.storeId });
+    expect(adoption.adopted).toBe(true);
+    expect(adoption.lineage).toMatchObject({ kind: "restore", storeId: restored.storeId, epoch: restored.epoch });
+    expect(readCollaborationBinding(clone.context)).toMatchObject({ storeId: restored.storeId, epoch: restored.epoch });
+  });
+
   test("adoption is idempotent and never overwrites a binding", async () => {
     const { fixture } = await activatedWorkspace("adopt-idempotent-");
     const repoKey = repoIdOf(fixture);
@@ -3394,17 +3457,18 @@ describe("explicit adoption verb", () => {
     });
     await expect(adoptCollaborationBinding(clone.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
 
-    // Ambiguous lineage: TWO different recorded generations (the real one and a
-    // foreign publication) make the provenance unadoptable.
-    await writeCollaborationStage(location, ({ db, authority }) => {
-      db.prepare(
-        "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
-          "values ('standalone', 'migration:activated:ambiguous-real', 'hash', ?, ?)",
-      ).run(JSON.stringify({ storeId: authority.storeId, epoch: authority.epoch }), "2026-11-21T00:00:00.000Z");
-      db.prepare(
-        "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
-          "values ('standalone', 'migration:activated:ambiguous', 'hash', ?, ?)",
-      ).run(JSON.stringify({ storeId: "another-store", epoch: 9 }), "2026-11-21T00:00:00.000Z");
+    // Ambiguous lineage: the live generation is UNNAMED while the lane carries
+    // publications for two other generations.
+    await writeCollaborationStage(location, ({ db }) => {
+      for (const [operationId, storeId, epoch] of [
+        ["migration:activated:ambiguous-a", "another-store", 9],
+        ["migration:activated:ambiguous-b", "third-store", 4],
+      ] as const) {
+        db.prepare(
+          "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
+            "values ('standalone', ?, 'hash', ?, ?)",
+        ).run(operationId, JSON.stringify({ storeId, epoch }), "2026-11-21T00:00:00.000Z");
+      }
     });
     await expect(adoptCollaborationBinding(clone.context)).rejects.toThrow(/ambiguous/);
     expect(existsSync(join(clone.harness, "collaboration-binding.json"))).toBe(false);

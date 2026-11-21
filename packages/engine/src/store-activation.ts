@@ -1658,7 +1658,7 @@ async function resumeInterruptedPair(
     [claim.collaboration, paths.collaborationImagePath, "collaboration"],
   ] as const) {
     if (existsSync(path)) continue;
-    if (!reusePrivateImage(side, path, claim.attempt)) {
+    if (!reusePrivateImage(side, path, claim.attempt, dirname(paths.executionImagePath))) {
       throw incompletePair(
         `The interrupted attempt's ${what} image ${path} is missing and its own retained verified image ` +
         `(${side.privatePath}) is gone, so the attempt cannot be completed. A pair is never re-copied from the live ` +
@@ -1668,8 +1668,9 @@ async function resumeInterruptedPair(
   }
   // Only THIS attempt's owned scratch is removed; an unowned path (a hand-edited
   // credential, another attempt's file) is never unlinked.
+  const pairDir = dirname(paths.executionImagePath);
   for (const side of [claim.execution, claim.collaboration]) {
-    if (ownsPrivateImage(side, claim.attempt)) rmSync(side.privatePath, { force: true });
+    if (ownsPrivateImage(side, claim.attempt, pairDir)) rmSync(side.privatePath, { force: true });
   }
   const executionCopy = await inspectBackupCopy(paths.executionImagePath).catch((error: unknown) => {
     throw incompletePair(
@@ -1750,8 +1751,17 @@ type PairAttemptClaim = {
  * credential recorded. Anything else is an unowned path: it is never reused and
  * never unlinked.
  */
-function ownsPrivateImage(side: PairAttemptClaim["execution"], attempt: string): boolean {
+function ownsPrivateImage(side: PairAttemptClaim["execution"], attempt: string, pairDir: string): boolean {
   if (basename(side.privatePath) !== `.${side.name}.${attempt}.tmp`) return false;
+  // The PARENT must be the pair's own directory (realpath-compared, so a symlinked
+  // temp root is still the same place): a same-named, same-digest file elsewhere is
+  // not this attempt's scratch and is never adopted or unlinked.
+  if (dirname(side.privatePath) !== pairDir) return false;
+  try {
+    if (realpathSync(dirname(side.privatePath)) !== realpathSync(pairDir)) return false;
+  } catch {
+    return false;
+  }
   if (!existsSync(side.privatePath)) return false;
   let stats: ReturnType<typeof statSync>;
   try {
@@ -1767,8 +1777,13 @@ function ownsPrivateImage(side: PairAttemptClaim["execution"], attempt: string):
  * Link the attempt's OWNED retained private image into the public name (same
  * inode — never a re-copy). An unowned path is not evidence and is left alone.
  */
-function reusePrivateImage(side: PairAttemptClaim["execution"], publicPath: string, attempt: string): boolean {
-  if (!ownsPrivateImage(side, attempt)) return false;
+function reusePrivateImage(
+  side: PairAttemptClaim["execution"],
+  publicPath: string,
+  attempt: string,
+  pairDir: string,
+): boolean {
+  if (!ownsPrivateImage(side, attempt, pairDir)) return false;
   if (!existsSync(side.privatePath)) return false;
   let stats: ReturnType<typeof statSync>;
   try {
@@ -2430,6 +2445,26 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
           `mstar path resolve before retrying. Nothing was written.`,
       );
     }
+    // The fresh-creation receipt: durable lane evidence that THIS verb created the
+    // authority at that generation, so a replacement clone can adopt an ordinary
+    // lane by its recorded provenance. It is lane data, never a mutable binding.
+    db.prepare(
+      "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
+        "values ('standalone', ?, ?, ?, ?)",
+    ).run(
+      `creation:${current.storeId}:${current.epoch}`,
+      current.storeId,
+      JSON.stringify({
+        version: 1,
+        producer: "store-init",
+        storeId: current.storeId,
+        epoch: current.epoch,
+        repoKey: location.repoKey,
+        mode: location.mode,
+        createdAt: at,
+      }),
+      at,
+    );
     return { ...current, state: "active" as const };
   });
   // This checkout CREATED that fresh generation (no authority pre-existed), so it

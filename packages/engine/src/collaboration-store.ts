@@ -1428,54 +1428,13 @@ export function beginBindingClaim(
 }
 
 /**
- * Prove an interrupted claim against the LANE before promoting it: the authority
- * must be ACTIVE at exactly the claimed generation, and the lane must record the
- * publication that produced it — an active cutover publication or a file-era
- * activation phase row naming that store and epoch. `store init` therefore cannot
- * promote a claim that no authorized publication backs.
- */
-function claimProvenByLane(db: StoreDb, authority: CollaborationAuthority, claim: BindingClaim): boolean {
-  if (authority.state !== "active") return false;
-  if (authority.storeId !== claim.storeId || authority.epoch !== claim.epoch) return false;
-  const tables = tableNamesOn(db);
-  if (tables.has("cutover_publications")) {
-    const publication = db
-      .prepare(
-        "select target_store_id, target_epoch from cutover_publications where phase = 'active' " +
-          "and target_store_id = ? and target_epoch = ? limit 1",
-      )
-      .get(claim.storeId, claim.epoch) as Record<string, unknown> | undefined;
-    if (publication !== undefined) return true;
-  }
-  if (tables.has("collaboration_operations")) {
-    const rows = db
-      .prepare(
-        "select result_json from collaboration_operations where key_space = 'standalone' and operation_id like 'migration:activated:%'",
-      )
-      .all() as Array<{ result_json?: unknown }>;
-    for (const row of rows) {
-      if (typeof row.result_json !== "string") continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(row.result_json);
-      } catch {
-        continue;
-      }
-      if (parsed === null || typeof parsed !== "object") continue;
-      const record = parsed as Record<string, unknown>;
-      if (record.storeId === claim.storeId && record.epoch === claim.epoch) return true;
-    }
-  }
-  return false;
-}
-
-/**
  * One recorded publication behind the live authority: the cutover's active
- * publication row or the file-era activation phase row, with the generation it
- * names.
+ * publication row, the file-era activation phase row, the restore receipt row, or
+ * the fresh-creation receipt of an ordinary `store init` lane — each with the
+ * generation it names. This is durable lane data, never a mutable binding.
  */
 type RecordedLineage = Readonly<{
-  kind: "cutover" | "activation";
+  kind: "cutover" | "activation" | "restore" | "creation";
   operationId: string;
   storeId: string;
   epoch: number;
@@ -1502,7 +1461,8 @@ function recordedLineage(db: StoreDb): RecordedLineage[] {
   if (tables.has("collaboration_operations")) {
     const rows = db
       .prepare(
-        "select operation_id, result_json from collaboration_operations where key_space = 'standalone' and operation_id like 'migration:activated:%'",
+        "select operation_id, result_json from collaboration_operations where key_space = 'standalone' and " +
+          "(operation_id like 'migration:activated:%' or operation_id like 'restore:%' or operation_id like 'creation:%')",
       )
       .all() as Array<Record<string, unknown>>;
     for (const row of rows) {
@@ -1515,8 +1475,22 @@ function recordedLineage(db: StoreDb): RecordedLineage[] {
       }
       if (parsed === null || typeof parsed !== "object") continue;
       const record = parsed as Record<string, unknown>;
+      if (row.operation_id.startsWith("restore:")) {
+        // A restore names its authority under `authority` (receipt document v2).
+        const authority = record.authority;
+        if (authority === null || typeof authority !== "object") continue;
+        const restored = authority as Record<string, unknown>;
+        if (typeof restored.storeId !== "string" || typeof restored.epoch !== "number") continue;
+        lineage.push({ kind: "restore", operationId: row.operation_id, storeId: restored.storeId, epoch: restored.epoch });
+        continue;
+      }
       if (typeof record.storeId !== "string" || typeof record.epoch !== "number") continue;
-      lineage.push({ kind: "activation", operationId: row.operation_id, storeId: record.storeId, epoch: record.epoch });
+      lineage.push({
+        kind: row.operation_id.startsWith("creation:") ? "creation" : "activation",
+        operationId: row.operation_id,
+        storeId: record.storeId,
+        epoch: record.epoch,
+      });
     }
   }
   return lineage;
@@ -1581,16 +1555,26 @@ export async function adoptCollaborationBinding(
         `adoption refuses rather than binding the wrong generation. Nothing was written.`,
     );
   }
-  const distinct = [...new Set(snapshot.lineage.map((entry) => `${entry.storeId}:${entry.epoch}`))];
-  if (distinct.length > 1) {
-    throw new StoreError(
-      "collaboration.stale-binding",
-      `The lane at ${location.dbPath} records more than one publication generation (${distinct.join(", ")}), so its ` +
-        `provenance is ambiguous and no checkout is bound to it by adoption. Inspect it with mstar path resolve. Nothing was written.`,
-    );
-  }
-  const proven = snapshot.lineage.find((entry) => entry.storeId === authority.storeId && entry.epoch === authority.epoch);
+  // Lineage is keyed by generation: records for the LIVE generation corroborate
+  // each other (an activation later restored, then adopted, still names one live
+  // authority), while records for EARLIER generations are superseded history, not
+  // ambiguity. Ambiguity is a lane whose live generation is unnamed but whose
+  // history claims several different generations.
+  const kindPriority = ["restore", "activation", "creation", "cutover"] as const;
+  const live = snapshot.lineage
+    .filter((entry) => entry.storeId === authority.storeId && entry.epoch === authority.epoch)
+    .sort((a, b) => kindPriority.indexOf(a.kind) - kindPriority.indexOf(b.kind));
+  const proven = live[0];
   if (proven === undefined) {
+    const generations = [...new Set(snapshot.lineage.map((entry) => `${entry.storeId}:${entry.epoch}`))];
+    if (generations.length > 1) {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `The lane at ${location.dbPath} records publications for more than one generation (${generations.join(", ")}) but ` +
+          `none of them is the live store ${authority.storeId} epoch ${authority.epoch}, so its provenance is ambiguous and ` +
+          `no checkout adopts it. Inspect it with mstar path resolve. Nothing was written.`,
+      );
+    }
     throw new StoreError(
       "collaboration.stale-binding",
       `The ACTIVE authority at ${location.dbPath} (store ${authority.storeId}, epoch ${authority.epoch}) has no recorded ` +
