@@ -2571,9 +2571,9 @@ export function threadGateDigest(threads: readonly ReviewThreadFacts[]): string 
 /**
  * Read one GraphQL page of `repository.pullRequest.reviewThreads` into thread
  * facts. A node without a string `id` is skipped — a gate must never invent an
- * identity it cannot name back to the user. `readable` is false when the
- * response carries no thread connection at all, so an empty answer from a
- * malformed payload can never read as "nothing to review".
+ * identity it cannot name back to the user. `readable` is false when the page
+ * carries no `nodes` array — a missing connection and a truncated connection
+ * are both unreadable, so neither can read as "nothing to review".
  */
 export function parseReviewThreads(payload: unknown): {
   threads: ReviewThreadFacts[];

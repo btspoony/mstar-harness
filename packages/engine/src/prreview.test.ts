@@ -588,7 +588,9 @@ describe("thread gate (\u00a75.3a)", () => {
     expect(parseReviewThreads(page([]))).toMatchObject({ readable: true, threads: [] });
   });
 
-  test("the digest is order-independent and locale-independent", () => {
+  test("the digest is a relation over its input, not a pinned value", () => {
+    // why: asserting the RELATION (same set in any order; a different set
+    // differs) never pins a hash literal, which the maintenance rules forbid.
     const a = thread("T1", false, "first");
     const b = thread("T2", false, "second");
     expect(threadGateDigest([a, b])).toBe(threadGateDigest([b, a]));

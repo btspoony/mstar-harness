@@ -509,7 +509,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         const response = await spawn(context, argv);
         if (response.exitCode !== 0 || response.signal !== null) return unavailable(response.stderr || "gh api graphql failed");
         const pageResult = parseReviewThreads(JSON.parse(response.stdout));
-        if (!pageResult.readable) return unavailable("reviewThreads response carried no thread connection");
+        if (!pageResult.readable) return unavailable("reviewThreads response carried no readable thread page (missing connection or nodes array)");
         if (pageResult.headRefOid === null) return unavailable("reviewThreads response carried no headRefOid");
         // why: threads are read across several requests, so a head that moves
         // mid-scan makes the enumeration — and any waiver bound to it — stale.
@@ -528,10 +528,20 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
         if (!existsSync(file)) throw new UsageError(`confirmation file not found: ${file}`);
         let raw: string;
         try { raw = readFileSync(file, "utf8"); } catch (error) {
-          throw new UsageError(`cannot read the confirmation file ${file}: ${error instanceof Error ? error.message : String(error)}`);
+          throw new UsageError(
+            `cannot read the confirmation file ${file}: ${error instanceof Error ? error.message : String(error)}`,
+            undefined,
+            "Pass a readable confirmation file. Run mstar pr-review thread-gate --pr <n> --confirm <file>.",
+          );
         }
         let parsed: unknown;
-        try { parsed = JSON.parse(raw); } catch { throw new UsageError(`--confirm must contain valid JSON: ${file}`); }
+        try { parsed = JSON.parse(raw); } catch {
+          throw new UsageError(
+            `--confirm must contain valid JSON: ${file}`,
+            undefined,
+            "Fix the confirmation record. Run mstar pr-review thread-gate --pr <n> --confirm <file>.",
+          );
+        }
         const row = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed)) : null;
         if (row === null || typeof row.head !== "string" || typeof row.confirmations !== "number" || !Array.isArray(row.threads) || row.threads.some((value) => typeof value !== "string") || (row.digest !== undefined && typeof row.digest !== "string")) {
           throw new UsageError("--confirm must be a JSON object {head: string, confirmations: number, threads: string[], digest?: string}");

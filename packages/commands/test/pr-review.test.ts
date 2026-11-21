@@ -1144,6 +1144,7 @@ describe("pr-review command family", () => {
     const unreadable = await gate.execute({ pr: "42", confirm: cwd }, context);
     expect(unreadable).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect(unreadable.status === "ok" ? "" : unreadable.message).toContain("cannot read the confirmation file");
+    expect(unreadable.status === "ok" ? "" : JSON.stringify(unreadable)).toContain("mstar pr-review thread-gate --pr <n> --confirm <file>");
     writeFileSync(confirm, "{ not json");
     const garbage = await gate.execute({ pr: "42", confirm }, context);
     expect(garbage).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
