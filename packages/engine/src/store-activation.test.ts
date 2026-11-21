@@ -2119,7 +2119,7 @@ describe("collaboration lifecycle", () => {
       .run();
     store.close();
     damageExecutionMeta(fixture);
-    const bindingBefore = readFileSync(join(fixture.harness, "collaboration-binding.json"));
+    const bindingBefore = readCollaborationBinding(fixture.context);
 
     // The execution lane's own admission rejects the store…
     await expect(openStore(fixture.context, "read")).rejects.toMatchObject({ code: "store.corrupt" });
@@ -2127,11 +2127,65 @@ describe("collaboration lifecycle", () => {
     await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.cutover-required" });
     await expect(adoptCollaborationBinding(fixture.context)).rejects.toMatchObject({ code: "collaboration.cutover-required" });
     // Neither refusal changed this checkout's binding or the destination lane.
-    expect(readFileSync(join(fixture.harness, "collaboration-binding.json"))).toEqual(bindingBefore);
+    expect(readCollaborationBinding(fixture.context)).toEqual(bindingBefore);
     const lane = await readCollaborationStage(resolveCollaborationLocation(fixture.context), ({ db }) => ({
       issues: db.prepare("select count(*) as n from issues").get(),
     }));
     expect(lane).toEqual({ issues: { n: 0 } });
+  });
+
+  test("a dangling store.db is a present store, never an absent one", async () => {
+    const fixture = repoWorkspace("collab-dangling-execution-store-");
+    await ensureCollaborationAuthority(fixture.context);
+    const bound = readCollaborationBinding(fixture.context);
+    symlinkSync(join(fixture.root, "no-such-store.db"), join(fixture.harness, "store.db"));
+    // The link names nothing, so an existence check that follows it sees "absent";
+    // the execution domain classifies the PATH as an existing store it cannot read.
+    await expect(openStore(fixture.context, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    // A bound checkout leaves that verdict to the execution domain…
+    expect((await readCollaborationAuthority(fixture.context)).state).toBe("active");
+    expect(readCollaborationBinding(fixture.context)).toEqual(bound);
+
+    // …an unbound checkout cannot rule the shape out as a hidden legacy owner.
+    rmSync(join(fixture.harness, "collaboration-binding.json"), { force: true });
+    await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
+    await expect(adoptCollaborationBinding(fixture.context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
+    expect(readCollaborationBinding(fixture.context)).toBeNull();
+  });
+
+  test("a non-regular store.db is a present store, never an absent one", async () => {
+    const fixture = repoWorkspace("collab-directory-execution-store-");
+    await ensureCollaborationAuthority(fixture.context);
+    rmSync(join(fixture.harness, "collaboration-binding.json"), { force: true });
+    mkdirSync(join(fixture.harness, "store.db"));
+    await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
+    await expect(adoptCollaborationBinding(fixture.context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
+    expect(readCollaborationBinding(fixture.context)).toBeNull();
+  });
+
+  test("a count that fails after held rows were observed admits nothing, even when bound", async () => {
+    const fixture = repoWorkspace("collab-held-then-query-error-");
+    await ensureCollaborationAuthority(fixture.context);
+    const store = await initializeStore(fixture.context);
+    try {
+      store.db
+        .prepare(
+          "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key) " +
+            "values ('I-000001', '_default', 'Held row', 'bug', 'high', 'combined authority', 'cut over', 'now', 'now', 'held-then-error')",
+        )
+        .run();
+      // `issues` reports a held row first; the allocator the count pass reads LAST
+      // no longer answers as that rule expects, so the pass ends in a raw error.
+      store.db.exec("drop table issue_counter; create table issue_counter(id integer primary key, retired integer)");
+    } finally {
+      store.close();
+    }
+    const bound = readCollaborationBinding(fixture.context);
+    // The binding proves adoption of the LANE, never these rows: the observed
+    // held row is the verdict even though the count pass then failed.
+    await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.cutover-required" });
+    await expect(adoptCollaborationBinding(fixture.context)).rejects.toMatchObject({ code: "collaboration.cutover-required" });
+    expect(readCollaborationBinding(fixture.context)).toEqual(bound);
   });
 
   test("an absent or row-free execution store leaves the collaboration lane usable", async () => {

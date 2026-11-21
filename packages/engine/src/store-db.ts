@@ -2362,9 +2362,14 @@ const COLLABORATION_AUTHORITY_TABLES: readonly string[] = COLLABORATION_HELD_TAB
   (table) => table !== "catalog_operations",
 );
 
-/** Every collaboration AUTHORITY table this store still holds rows for, in listing order. */
-export function heldCollaborationTables(db: StoreDb): string[] {
-  return heldTablesAmong(db, COLLABORATION_AUTHORITY_TABLES);
+/**
+ * Every collaboration AUTHORITY table this store still holds rows for, in
+ * listing order. `onHeld` reports each table the moment its row count proves it
+ * is held, so a caller's inspection cannot lose an observation it already made
+ * when a later count in the same pass throws.
+ */
+export function heldCollaborationTables(db: StoreDb, onHeld?: (table: string) => void): string[] {
+  return heldTablesAmong(db, COLLABORATION_AUTHORITY_TABLES, onHeld);
 }
 
 /** Every collaboration-owned table (authority AND journal) this store still holds rows for. */
@@ -2372,13 +2377,20 @@ export function heldCollaborationSourceTables(db: StoreDb): string[] {
   return heldTablesAmong(db, COLLABORATION_HELD_TABLES);
 }
 
-function heldTablesAmong(db: StoreDb, tablesWanted: readonly string[]): string[] {
+function heldTablesAmong(
+  db: StoreDb,
+  tablesWanted: readonly string[],
+  onHeld?: (table: string) => void,
+): string[] {
   const tables = tableNamesOn(db);
   const held: string[] = [];
   for (const table of tablesWanted) {
     if (!tables.has(table)) continue;
     const row = db.prepare(`select count(*) as n from ${table}`).get();
-    if (row !== null && typeof row === "object" && "n" in row && typeof row.n === "number" && row.n > 0) held.push(table);
+    if (row !== null && typeof row === "object" && "n" in row && typeof row.n === "number" && row.n > 0) {
+      held.push(table);
+      onHeld?.(table);
+    }
   }
   if (tables.has("issue_counter")) {
     const allocator = db.prepare("select next_value from issue_counter where id = 1").get();
@@ -2390,6 +2402,7 @@ function heldTablesAmong(db: StoreDb, tablesWanted: readonly string[]): string[]
       allocator.next_value > 1
     ) {
       held.push("issue_counter");
+      onHeld?.("issue_counter");
     }
   }
   return held;

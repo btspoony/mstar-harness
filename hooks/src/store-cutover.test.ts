@@ -112,6 +112,12 @@ function corruptCollaboration(harness: string): void {
   mkdirSync(dbPath, { recursive: true });
 }
 
+/** Unreadable EXECUTION store: bytes no SQLite connection opens. */
+function corruptExecution(harness: string): void {
+  for (const suffix of ["", "-wal", "-shm"]) rmSync(join(harness, `store.db${suffix}`), { force: true });
+  writeFileSync(join(harness, "store.db"), "not a sqlite database\n");
+}
+
 interface RunResult {
   exitCode: number;
   stdout: string;
@@ -437,6 +443,29 @@ describe("ZCode write gate \u2014 committed bundle under native node", () => {
     expect(lines(run)[1]!.startsWith("[high] store.authority-unavailable: ")).toBe(true);
     expect(run.stderr).toContain("collaboration.not-initialized");
     expect(lines(run)[2]).toBe(AUTHORITY_LINE);
+  });
+
+  test("bundle: a bound checkout leaves a corrupt execution store to the execution domain", async () => {
+    const fixture = makeHarness("bundle-bound-corrupt", "hard");
+    // The REAL adopted pair: `ensureCollaborationAuthority` records this
+    // checkout's binding, so the lane is owned and the execution file is not a
+    // possible legacy owner.
+    await seedActiveStore(fixture.harness);
+    corruptExecution(fixture.harness);
+
+    // The coordination-document route surfaces the execution store's own
+    // refusal, and never the legacy-owner probe's collaboration code.
+    const status = runGate("node", HOOK_BUNDLE, writeEvent(join(fixture.harness, "status.json"), BAD_JSON));
+    expect(status.exitCode).toBe(2);
+    expect(status.stderr).toContain("store.corrupt");
+    expect(status.stderr).not.toContain("collaboration.unreadable");
+
+    // The register route is decided by the adopted lane, not by the execution
+    // file: the retired register keeps its own code in the committed bundle.
+    const register = runGate("node", HOOK_BUNDLE, writeEvent(fixture.register, VALID_REGISTER));
+    expect(register.exitCode).toBe(2);
+    expect(register.stderr).toContain("project.register.retired");
+    expect(register.stderr).not.toContain("collaboration.unreadable");
   });
 
   test("active store bundle refuses the retired status route through the authority", async () => {

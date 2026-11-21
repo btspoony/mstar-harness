@@ -9892,23 +9892,26 @@ function validateAppliedMigrations(applied, migrations = MIGRATIONS) {
   }
   return max;
 }
-function heldCollaborationTables(db) {
-  return heldTablesAmong(db, COLLABORATION_AUTHORITY_TABLES);
+function heldCollaborationTables(db, onHeld) {
+  return heldTablesAmong(db, COLLABORATION_AUTHORITY_TABLES, onHeld);
 }
-function heldTablesAmong(db, tablesWanted) {
+function heldTablesAmong(db, tablesWanted, onHeld) {
   const tables = tableNamesOn2(db);
   const held = [];
   for (const table of tablesWanted) {
     if (!tables.has(table))
       continue;
     const row = db.prepare(`select count(*) as n from ${table}`).get();
-    if (row !== null && typeof row === "object" && "n" in row && typeof row.n === "number" && row.n > 0)
+    if (row !== null && typeof row === "object" && "n" in row && typeof row.n === "number" && row.n > 0) {
       held.push(table);
+      onHeld?.(table);
+    }
   }
   if (tables.has("issue_counter")) {
     const allocator = db.prepare("select next_value from issue_counter where id = 1").get();
     if (allocator !== null && typeof allocator === "object" && "next_value" in allocator && typeof allocator.next_value === "number" && allocator.next_value > 1) {
       held.push("issue_counter");
+      onHeld?.("issue_counter");
     }
   }
   return held;
@@ -11158,20 +11161,41 @@ function readCollaborationBinding(context) {
 function executionProbeRefusal(dbPath, error) {
   return new StoreError2("collaboration.unreadable", `The execution store at ${dbPath} exists but cannot be inspected, so it cannot be proven to hold no legacy ` + `collaboration rows: ${error instanceof Error ? error.message : String(error)} Repair that store ` + `(mstar store upgrade) or move its authority with the reviewed cutover before using the repository lane. ` + `Nothing was read or modified.`);
 }
-async function assertNoLegacyCollaborationOwner(context) {
+function executionStorePresence(dbPath) {
+  try {
+    return lstatSync9(dbPath).isFile() ? "regular" : "unusable";
+  } catch (error) {
+    if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT")
+      return "absent";
+    return "unusable";
+  }
+}
+function legacyOwnerRefusal(held, cause) {
+  return new StoreError2("collaboration.cutover-required", `This checkout still owns a combined store with collaboration rows (${held.join(", ")}), so it is not the ` + `authority's owner: move that authority with the reviewed cutover (mstar store collaboration plan, apply, then ` + `activate) before using the repository lane.` + (cause === undefined ? " Nothing was read or modified." : ` The remaining inspection then failed (${cause}); nothing was modified.`));
+}
+async function assertNoLegacyCollaborationOwner(context, ownershipProven) {
   const dbPath = storeDbPath(context);
-  if (!existsSync16(dbPath))
+  const presence = executionStorePresence(dbPath);
+  if (presence === "absent")
     return;
+  if (presence === "unusable") {
+    if (ownershipProven)
+      return;
+    throw executionProbeRefusal(dbPath, "the store path is not a readable regular store file");
+  }
   let probe;
   try {
     probe = await connectAt(dbPath, "read", busyTimeoutMs());
   } catch (error) {
-    if (!existsSync16(dbPath))
+    if (executionStorePresence(dbPath) === "absent")
       return;
     if (error instanceof StoreError2 && error.code === "store.busy")
       throw error;
+    if (ownershipProven)
+      return;
     throw executionProbeRefusal(dbPath, error);
   }
+  const observed = [];
   try {
     try {
       validateAppliedMigrations(readAppliedMigrations(probe, false));
@@ -11182,31 +11206,38 @@ async function assertNoLegacyCollaborationOwner(context) {
     }
     if (readCollaborationFence(probe) !== null)
       return;
-    const held = heldCollaborationTables(probe);
+    const held = heldCollaborationTables(probe, (table) => observed.push(table));
     if (held.length === 0)
       return;
-    throw new StoreError2("collaboration.cutover-required", `This checkout still owns a combined store with collaboration rows (${held.join(", ")}), so it is not the ` + `authority's owner: move that authority with the reviewed cutover (mstar store collaboration plan, apply, then ` + `activate) before using the repository lane. Nothing was read or modified.`);
+    throw legacyOwnerRefusal(held);
   } catch (error) {
     if (error instanceof StoreError2)
       throw error;
+    if (observed.length > 0)
+      throw legacyOwnerRefusal(observed, `${error instanceof Error ? error.message : String(error)}`);
+    if (ownershipProven)
+      return;
     throw executionProbeRefusal(dbPath, error);
   } finally {
     probe.close();
   }
 }
-async function assertControlCheckoutScope(context, location) {
-  await assertNoLegacyCollaborationOwner(context);
+function assertBoundScope(context, location) {
   const binding = readCollaborationBinding(context);
   if (binding === null || binding.state !== "active")
-    return;
+    return null;
   if (binding.repoKey !== location.repoKey || binding.mode !== location.mode) {
     throw new StoreError2("collaboration.stale-binding", `This control checkout is bound to repository ${binding.repoKey} (${binding.mode}), but now resolves to ` + `${location.repoKey} (${location.mode}); an origin or .mstarc retarget never re-points a bound checkout. Re-resolve ` + `the scope deliberately (mstar path resolve) and start a new checkout for the other repository. Nothing was modified.`);
   }
+  return binding;
+}
+async function checkoutScopeBinding(context, location) {
+  const binding = assertBoundScope(context, location);
+  await assertNoLegacyCollaborationOwner(context, binding !== null);
+  return binding;
 }
 async function assertControlBinding(context, location, authority, requirement) {
-  await assertControlCheckoutScope(context, location);
-  const recorded = readCollaborationBinding(context);
-  const binding = recorded !== null && recorded.state === "active" ? recorded : null;
+  const binding = await checkoutScopeBinding(context, location);
   if (binding === null) {
     if (requirement === "read")
       return;

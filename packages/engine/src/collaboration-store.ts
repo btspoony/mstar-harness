@@ -1682,6 +1682,37 @@ function executionProbeRefusal(dbPath: string, error: unknown): StoreError {
 }
 
 /**
+ * The execution store path's shape, as `store-db`'s own open discriminates it:
+ * only a genuinely missing entry is "no store". A path that cannot be examined,
+ * a directory or any other non-regular entry — including a dangling symlink,
+ * which `existsSync` would follow to "absent" — is a PRESENT store that cannot
+ * be read, never an absent one.
+ */
+function executionStorePresence(dbPath: string): "absent" | "regular" | "unusable" {
+  try {
+    return lstatSync(dbPath).isFile() ? "regular" : "unusable";
+  } catch (error) {
+    // A path that cannot even be examined is an existing-but-unreadable store.
+    if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") return "absent";
+    return "unusable";
+  }
+}
+
+/**
+ * The legacy-owner refusal for a store whose held collaboration rows were READ,
+ * optionally after the rest of the inspection failed.
+ */
+function legacyOwnerRefusal(held: readonly string[], cause?: string): StoreError {
+  return new StoreError(
+    "collaboration.cutover-required",
+    `This checkout still owns a combined store with collaboration rows (${held.join(", ")}), so it is not the ` +
+      `authority's owner: move that authority with the reviewed cutover (mstar store collaboration plan, apply, then ` +
+      `activate) before using the repository lane.` +
+      (cause === undefined ? " Nothing was read or modified." : ` The remaining inspection then failed (${cause}); nothing was modified.`),
+  );
+}
+
+/**
  * Refuse a legacy collaboration owner: a combined store at the execution path
  * that still holds collaboration rows and records no fence.
  *
@@ -1693,14 +1724,23 @@ function executionProbeRefusal(dbPath: string, error: unknown): StoreError {
  *
  * `ownershipProven` says this checkout's finalized binding already names the
  * resolved repository and mode. Such a checkout was ADOPTED, so it is not a
- * legacy owner: an execution file it cannot inspect at all proves nothing and
- * is left to the execution domain (whose own `store.corrupt`/`store.busy` is
- * the actionable answer) instead of becoming a collaboration refusal. Readable
- * legacy rows are still refused — the binding never licenses a bypass.
+ * legacy owner: a file that cannot be opened at all proves nothing and is left
+ * to the execution domain (whose own `store.corrupt`/`store.busy` is the
+ * actionable answer) instead of becoming a collaboration refusal. That
+ * exemption NEVER covers an observation: the moment a held row is read, the
+ * rows win — a later failure in the same pass refuses instead of admitting.
  */
 async function assertNoLegacyCollaborationOwner(context: StoreContext, ownershipProven: boolean): Promise<void> {
   const dbPath = storeDbPath(context);
-  if (!existsSync(dbPath)) return;
+  const presence = executionStorePresence(dbPath);
+  if (presence === "absent") return;
+  if (presence === "unusable") {
+    // A present-but-unreadable path is `store.corrupt` in the execution domain;
+    // an adopted checkout leaves that verdict to it, an unbound one cannot rule
+    // the shape out as a hidden legacy owner.
+    if (ownershipProven) return;
+    throw executionProbeRefusal(dbPath, "the store path is not a readable regular store file");
+  }
   let probe: StoreDb;
   try {
     // The same bounded read-open retry the execution lane uses: a same-process
@@ -1708,13 +1748,16 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext, ownership
     // an intact store.
     probe = await connectAt(dbPath, "read", busyTimeoutMs());
   } catch (error) {
-    // Vanished after the existence check: nothing local to inspect.
-    if (!existsSync(dbPath)) return;
+    // Vanished between the classification and the open: nothing local to inspect.
+    if (executionStorePresence(dbPath) === "absent") return;
     // Bounded contention is transient and keeps its own retryable refusal.
     if (error instanceof StoreError && error.code === "store.busy") throw error;
     if (ownershipProven) return;
     throw executionProbeRefusal(dbPath, error);
   }
+  // The held tables read SO FAR: once one is observed, nothing that follows can
+  // admit this lane, whatever the binding says.
+  const observed: string[] = [];
   try {
     // A store recorded by another build is a verdict this probe must not guess
     // around: a newer/unknown chain means the collaboration layout is not this
@@ -1731,17 +1774,16 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext, ownership
       }
     }
     if (readCollaborationFence(probe) !== null) return;
-    const held = heldCollaborationTables(probe);
+    const held = heldCollaborationTables(probe, (table) => observed.push(table));
     if (held.length === 0) return;
-    throw new StoreError(
-      "collaboration.cutover-required",
-      `This checkout still owns a combined store with collaboration rows (${held.join(", ")}), so it is not the ` +
-        `authority's owner: move that authority with the reviewed cutover (mstar store collaboration plan, apply, then ` +
-        `activate) before using the repository lane. Nothing was read or modified.`,
-    );
+    throw legacyOwnerRefusal(held);
   } catch (error) {
-    // A lazy driver may only reject the header when the first statement runs.
+    // A typed verdict (schema/corrupt/fence/cutover) is already the answer.
     if (error instanceof StoreError) throw error;
+    // An observation already made is not undone by a later failure: the rows
+    // were readable, so this is the legacy owner the cutover must move.
+    if (observed.length > 0) throw legacyOwnerRefusal(observed, `${error instanceof Error ? error.message : String(error)}`);
+    // A lazy driver may reject the header only when the first statement runs.
     if (ownershipProven) return;
     throw executionProbeRefusal(dbPath, error);
   } finally {
