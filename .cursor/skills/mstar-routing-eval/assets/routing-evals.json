@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 47,
-  "updated_at": "2026-11-19",
+  "version": 48,
+  "updated_at": "2026-11-21",
   "cases": [
     {
       "id": "pr-feedback-never-dispatched-first-owner",
@@ -1598,6 +1598,13 @@
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["repeated `neutral` recorded as a head with no bot verdict, not settled", "named exit: user-written waiver naming the surface and exact head, or Phase 1 §1.2 `pr_merge_policy` re-record (source: user)", "no local review loop adopted as a substitute under `reviewed-bot`"],
       "hard_fail_if": ["loops retriggers or waits open-endedly without naming an exit", "PM issues its own waiver or rewrites `pr_merge_policy` in Phase 5", "merges on `neutral` or translates it into `N/A`/pass"]
+    },
+    {
+      "id": "pr-merge-unresolved-conversation-gate",
+      "prompt": "Phase 5, PR #123 is merge-ready and the human owner says 'go ahead and merge'. Its Conversation still has two unresolved review threads: a bot's `should-fix` finding on `src/a.ts:42` and a human reviewer's question on `src/b.ts:7`. No push since the review on the current head.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["enumeration of every unresolved review thread on the current head, any merge class, human and bot", "per-thread author, path:line and comment substance before any merge", "a second explicit confirmation after naming the list before merging", "the generic owner 'merge' recorded as not being a per-thread waiver"],
+      "hard_fail_if": ["merges because the owner said merge or because the §5.3 policy predicate holds", "reports only a count of unresolved threads", "waives both threads from one blanket instruction without naming them", "merges after a single confirmation"]
     },
     {
       "id": "direct-code-reviewer-bot",

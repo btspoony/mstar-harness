@@ -129,15 +129,15 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 - [ ] PR mergeable（无 blocking merge conflicts）
 - [ ] All **required** CI checks green on latest head
 - [ ] **Review path + external AI review** settled on the latest head — `reviewed-auto`: a settled, posted `ship it` from `mstar-pr-loop`; `reviewed-bot`: the attached bot's review reached its own passing bar on that head (mstar-inspector `success`, Greptile 5/5 — never `N/A`, never `failure`/`neutral`, never in progress); on an empty increment only a marker-publishing bot inherits — the head's own check carries an inherited result from an ancestor whose content equals this head (§5.1b) — while a marker-less bot has no inheritance path and must settle through its own check on this head; `owner-gated`: none of these is the gate — the human approval below is, while an attached bot still counts as the external surface. **Whenever a bot is attached, §5.3's per-bot passing bar applies under every policy** — `reviewed-auto` and `owner-gated` included: that bot reached its own passing bar on this head exactly as §5.3's row requires (mstar-inspector `success`, Greptile 5/5 — a marker-less bot's bar is its own scored threshold read from an artifact bound to this head; an unbound score is unsettled), with no blocking finding unresolved; a merely non-failing check, the local `ship it`, or the owner's approval never substitutes for it. Record `N/A — no bot attached` only when no bot is attached; a user-written waiver names the surface, finding/score and exact head — §5.1b, §5.3; a repeated `neutral` has no finding or score to waive, so no waiver authorizes it
-- [ ] All review threads **resolved**（或用户书面 waive 特定 thread）；`reviewed-bot` 下整体 comment 中的每条 finding 已 addressed 或书面 waive（成文的 omitted findings 同样适用）
+- [ ] All review threads **resolved**（或用户逐条书面 waive 特定 thread）；`reviewed-bot` 下整体 comment 中的每条 finding 已 addressed 或书面 waive（成文的 omitted findings 同样适用）。该项同时是 §5.3a 的输入：归在 checklist 不免除 merge 前的独立枚举与两次确认
 - [ ] §5.1 review comment + resolve 已覆盖本轮所有 addressed feedback
 - [ ] Host todo `phase-5-pr-merge-ready` 可勾选
-- [ ] **Merge authorization** — satisfied per §5.3
+- [ ] **Merge authorization** — satisfied per §5.3, and §5.3a passed (no unresolved thread, or each named and confirmed twice)
 - [ ] PR **merge** 完成后进入 **Phase 6**：追加 todo `phase-6-post-merge-close`，执行 post-merge close（`references/phase-6-post-merge-close.md` §6.1–§6.4）
 
 ### 5.3 Merge authorization（HARD）
 
-**Merge 是独立的授权动作**：merge-ready、required CI 全绿、QC Approve、review `ship it` **各自单独出现时都不构成** merge 授权。授权只在 `pr_merge_policy` 对应下表**完整**谓词成立时才存在——`reviewed-auto` 要求 settled + 已 posted + `head` 等于当前 PR head 三者同时满足；`reviewed-bot` 要求挂载 bot 在该 head 上的最新 review 已达其自身门；`owner-gated` 只认下表定义的**人类 owner** 书面批准。
+**Merge 是独立的授权动作**：merge-ready、required CI 全绿、QC Approve、review `ship it` **各自单独出现时都不构成** merge 授权。授权只在 `pr_merge_policy` 对应下表**完整**谓词成立**且 §5.3a 通过**时才存在——`reviewed-auto` 要求 settled + 已 posted + `head` 等于当前 PR head 三者同时满足；`reviewed-bot` 要求挂载 bot 在该 head 上的最新 review 已达其自身门；`owner-gated` 只认下表定义的**人类 owner** 书面批准。
 
 |`pr_merge_policy`|Merge 授权来源|
 |---|---|
@@ -150,6 +150,16 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 - **`owner-gated` 未满足 → hard stop**：给出 PR 链接 + merge-ready 证据后**等待**；**人类 owner**（操作者/用户，**不是** coordinator 席位）书面批准前不得 merge，任何自动化证据（mergeable / CI 绿 / QC Approve / `ship it`）都不能替代。恢复路径：人类 owner 书面批准当前 PR head，或**重新进入 Phase 1 的 §1.2 流程**——加载 `mstar-iteration` → `references/phase-1-prepare.md`，按其「必须与用户显式确认，绝不默认」规则与用户重新确认后改动 compass 记录的 policy，新增 `## Decisions` 行记 `source: user`，并刷新 Phase 4 步骤 5 写入 PR 正文的 policy 行。PM **不得**在 Phase 5 就地改写。
 - **`pr_merge_policy` 缺失 → STOP**：**绝不**推断默认值。恢复路径：**重新进入 Phase 1 的 §1.2 流程**——加载 `mstar-iteration` → `references/phase-1-prepare.md`，按其「必须与用户显式确认，绝不默认」规则与用户确认该字段，写入 compass frontmatter 并在 `## Decisions` 记 `source: user`。
 
+### 5.3a Unresolved conversation gate（HARD — 先于 head 对账，独立于 `pr_merge_policy`）
+
+- **枚举**：merge 前必须针对**当前** PR 枚举全部 review thread（人类与 bot 都算，**不按 merge class 过滤**），查询形状见 `mstar-audit/references/pr-review.md` § Thread lifecycle 的 `reviewThreads` GraphQL；`isResolved: false` 的每一条都是未解决项，`isOutdated` 不豁免。
+- **门**：未解决项 > 0 时**不得 merge**——owner 批准、`ship it`、CI 绿、§5.3 谓词成立都不能替代本 gate；本 gate 不因 thread 被归在 §5.2 第 3 项而免检。
+- **清单**：PM 必须逐条列出 `author.login`、`path:line`、首条评论要点（bot 报告有 merge class 时一并给出），不得只报数量或以「有些评论」概括。
+- **两次确认**：展示清单后发出**第一次**明确询问「是否确认合并」；用户确认后，PM 必须复述同一清单与当前 head 并发起**第二次**确认，之后才可执行 merge。两次确认之间发生 push、新 thread 或清单变化 → 前一次确认作废，重新枚举并重走两次确认。
+- **waive 粒度**：笼统的「合并」「可以了」不构成 waive；waive 必须逐条点名（thread id 或 `path:line` + 作者），且点名的是**该 thread**——只点名 head 或 surface 的 waive 不适用本 gate。
+- **恢复路径**：修复后 resolve（或由 reviewer/bot 自行 resolve）即通过；用户逐条书面 waive 且经上述两次确认亦通过——两者之外没有第三种出路。
+- **`owner-gated`**：owner 自行 merge 时 PM 无法拦截，但 PM **不得**把未解决项记为 resolved，也不得在 Phase 6 关闭前丢弃该清单；由 PM 执行的 merge（含 owner 书面批准后的执行）一律先过本 gate。
+
 **Merge 前的 head 对账（可执行，不是谓词的复述）**：执行 merge 的前一步，取 `gh pr view <n> --json headRefOid`，与该 policy 的授权证据绑定的 head 逐字比较：
 
 - `reviewed-auto` → 授权报告的 `head`。
@@ -159,4 +169,4 @@ When both babysit/`*-babysit` and greploop apply: **babysit/`*-babysit` first**�
 - 相等 → 授权成立，可以 merge。
 - 不等 → **授权已失效**。授权之后任何 push 都作废它，包括 doc-only 的 changelog 补齐、allowlist 增删、注释修正——"delta 很小"不是理由，因为小 delta 同样会引入不准确的断言。此时合法出路按 policy：`reviewed-auto` / `owner-gated` 下取**新 head** 的完整结论，或对该 head 做一次**窄 delta ack**（同一席位签发，记录 `reviewed_head`、新 head、delta 的文件范围、以及"是否仍维持原结论"；delta ack 不是新 review，只在 delta 不触及代码/测试/配置/生成产物时可用，且必须写明被确认的 delta 范围）；`reviewed-bot` 下**没有** delta ack——bot 只能对自己的 head 出结论，出路只有等它对该新 head 产出 review，或按其文档化重触发后取其结论。
 
-**谁执行 merge**：`reviewed-auto` 与 `reviewed-bot` 下，§5.3 授权谓词成立后由 **PM** 执行 merge；`owner-gated` 下，**人类 owner** 可自行 merge，或书面批准后由 PM 执行。三种 policy 都只在 §5.3 满足后才 merge；verified merge 之后进入 **Phase 6** —— merge 不是生命周期终点。
+**谁执行 merge**：`reviewed-auto` 与 `reviewed-bot` 下，§5.3 授权谓词成立**且 §5.3a 通过**后由 **PM** 执行 merge；`owner-gated` 下，**人类 owner** 可自行 merge，或书面批准后由 PM 执行（PM 执行前同样先过 §5.3a）。三种 policy 都只在 §5.3 满足且 §5.3a 通过后才 merge；verified merge 之后进入 **Phase 6** —— merge 不是生命周期终点。
