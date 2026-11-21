@@ -649,6 +649,16 @@ describe("collaboration store", () => {
     retained.close();
     expect(receipts(location.dbPath)).toEqual([]);
 
+    // The bump is a NEW generation: this checkout is only admitted once it is
+    // re-bound to the epoch the lane now records (as an activation/restore does).
+    writeCollaborationBinding(context, {
+      repoKey: authority.repoKey,
+      mode: authority.mode,
+      storeId: authority.storeId,
+      epoch: authority.epoch + 1,
+      binding: "active",
+    });
+
     // The guarded transaction's writer is closed when the call returns.
     let escaped: CollaborationStoreHandle | undefined;
     await withCollaborationWrite(

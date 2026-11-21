@@ -55,7 +55,6 @@ import {
   publicationCause,
   readAppliedMigrations,
   readCollaborationFence,
-  openStore,
   removeStagingFiles,
   storeDbPath,
   syncDirectoryEntry,
@@ -1671,6 +1670,77 @@ export async function adoptCollaborationBinding(
   };
 }
 
+/** The fail-closed refusal of a present execution store this probe cannot read. */
+function executionProbeRefusal(dbPath: string, error: unknown): StoreError {
+  return new StoreError(
+    "collaboration.unreadable",
+    `The execution store at ${dbPath} exists but cannot be inspected, so it cannot be proven to hold no legacy ` +
+      `collaboration rows: ${error instanceof Error ? error.message : String(error)} Repair that store ` +
+      `(mstar store upgrade) or move its authority with the reviewed cutover before using the repository lane. ` +
+      `Nothing was read or modified.`,
+  );
+}
+
+/**
+ * Refuse a legacy collaboration owner: a combined store at the execution path
+ * that still holds collaboration rows and records no fence.
+ *
+ * The execution lane is a SEPARATE domain, so this inspects the file directly
+ * instead of admitting it: `openStore` refuses a damaged `execution_meta` or
+ * schema ledger as `store.corrupt` before any table is visible, which would
+ * hide a readable legacy owner's collaboration rows. A genuinely absent file
+ * has no local rows to inspect; an existing file this probe cannot inspect
+ * proves nothing and fails closed.
+ */
+async function assertNoLegacyCollaborationOwner(context: StoreContext): Promise<void> {
+  const dbPath = storeDbPath(context);
+  if (!existsSync(dbPath)) return;
+  let probe: StoreDb;
+  try {
+    // The same bounded read-open retry the execution lane uses: a same-process
+    // writer's deferred sidecar cleanup reports a transient SQLITE_CANTOPEN for
+    // an intact store.
+    probe = await connectAt(dbPath, "read", busyTimeoutMs());
+  } catch (error) {
+    // Vanished after the existence check: nothing local to inspect.
+    if (!existsSync(dbPath)) return;
+    // Bounded contention is transient and keeps its own retryable refusal.
+    if (error instanceof StoreError && error.code === "store.busy") throw error;
+    throw executionProbeRefusal(dbPath, error);
+  }
+  try {
+    // A store recorded by another build is a verdict this probe must not guess
+    // around: a newer/unknown chain means the collaboration layout is not this
+    // build's to interpret, so its own upgrade refusal stands. A merely damaged
+    // ledger says nothing about the rows, which the fence and counts still decide.
+    try {
+      validateAppliedMigrations(readAppliedMigrations(probe, false));
+    } catch (error) {
+      if (
+        error instanceof StoreError &&
+        (error.code === "store.schema-unsupported" || error.code === "store.schema-drift")
+      ) {
+        throw error;
+      }
+    }
+    if (readCollaborationFence(probe) !== null) return;
+    const held = heldCollaborationTables(probe);
+    if (held.length === 0) return;
+    throw new StoreError(
+      "collaboration.cutover-required",
+      `This checkout still owns a combined store with collaboration rows (${held.join(", ")}), so it is not the ` +
+        `authority's owner: move that authority with the reviewed cutover (mstar store collaboration plan, apply, then ` +
+        `activate) before using the repository lane. Nothing was read or modified.`,
+    );
+  } catch (error) {
+    // A lazy driver may only reject the header when the first statement runs.
+    if (error instanceof StoreError) throw error;
+    throw executionProbeRefusal(dbPath, error);
+  } finally {
+    probe.close();
+  }
+}
+
 /**
  * Refuse when THIS checkout cannot own the resolved authority, regardless of what
  * the lane currently holds: an unfenced combined store with collaboration rows is
@@ -1680,40 +1750,7 @@ export async function adoptCollaborationBinding(
  * addressed checkout would then refuse.
  */
 export async function assertControlCheckoutScope(context: StoreContext, location: CollaborationLocation): Promise<void> {
-  if (existsSync(storeDbPath(context))) {
-    // Use the retrying read open: a same-process writer's deferred sidecar
-    // cleanup can report a transient SQLITE_CANTOPEN for an intact store, and
-    // silently skipping the fence would admit a legacy owner.
-    const legacy = await openStore(context, "read").catch((error: unknown) => {
-      // The execution lane is a separate domain: a missing or corrupt execution
-      // store never makes the collaboration lane unusable. Only an opened store
-      // with collaboration rows can prove a legacy owner.
-      if (
-        error instanceof StoreError &&
-        (error.code === "store.not-initialized" || error.code === "store.corrupt")
-      ) {
-        return undefined;
-      }
-      throw error;
-    });
-    if (legacy !== undefined) {
-      try {
-        if (readCollaborationFence(legacy.db) === null) {
-          const held = heldCollaborationTables(legacy.db);
-          if (held.length > 0) {
-            throw new StoreError(
-              "collaboration.cutover-required",
-              `This checkout still owns a combined store with collaboration rows (${held.join(", ")}), so it is not the ` +
-                `authority's owner: move that authority with the reviewed cutover (mstar store collaboration plan, apply, then ` +
-                `activate) before using the repository lane. Nothing was read or modified.`,
-            );
-          }
-        }
-      } finally {
-        legacy.close();
-      }
-    }
-  }
+  await assertNoLegacyCollaborationOwner(context);
   const binding = readCollaborationBinding(context);
   // A claim is attempt-scoped evidence, not this checkout's binding: readers ignore it.
   if (binding === null || binding.state !== "active") return;
@@ -1733,19 +1770,20 @@ export async function assertControlCheckoutScope(context: StoreContext, location
  *
  * - an UNFENCED combined store that still holds collaboration rows is the legacy
  *   owner: only the reviewed cutover may hand that authority on;
- * - a recorded binding that names another repository/mode, or a DIFFERENT
- *   authority store than the one at the resolved path, means the checkout was
- *   retargeted (an origin or `.mstarc` change) or its lane was replaced: the verb
- *   must re-resolve deliberately, never drift onto another repository's data.
+ * - a recorded binding that names another repository/mode, store or epoch than
+ *   the one at the resolved path means the checkout was retargeted (an origin or
+ *   `.mstarc` change) or its lane was replaced by another generation: the verb
+ *   must re-resolve or adopt deliberately, never drift onto another's data.
  *
- * A checkout with no binding (a fresh replacement clone) is admitted and adopts
- * the resolved authority on its first authenticated use; reading never writes the
- * binding.
+ * A read from a checkout with no finalized binding (a fresh replacement clone)
+ * is admitted and records nothing; a WRITE additionally requires a binding, so an
+ * unbound checkout adopts the resolved authority first.
  */
 async function assertControlBinding(
   context: StoreContext,
   location: CollaborationLocation,
   authority: CollaborationAuthority,
+  requirement: "read" | "write",
 ): Promise<void> {
   await assertControlCheckoutScope(context, location);
   const recorded = readCollaborationBinding(context);
@@ -1753,27 +1791,31 @@ async function assertControlBinding(
   // activation attempt that wrote it and is ignored here.
   const binding = recorded !== null && recorded.state === "active" ? recorded : null;
   if (binding === null) {
+    if (requirement === "read") return;
     // A LIVE authority with no recorded binding is NOT a fresh clone: it may be a
     // switched checkout or a lost/interrupted binding write, and silently adopting
     // it would let one repository's verbs reach another's data.
-    if (authority.state === "active") {
-      throw new StoreError(
-        "collaboration.stale-binding",
-        `This checkout holds no collaboration binding for the ACTIVE authority store ${authority.storeId} at ` +
-          `${location.dbPath}, so it cannot be proven to own it. Acquire it with the supported adoption verb: ` +
-          `mstar store collaboration adopt --harness ${context.harnessDir} --expect-store ${authority.storeId} ` +
-          `(or re-run the activation/restore that published this generation). store init never adopts an active authority, ` +
-          `so it is not the recovery. Nothing was modified.`,
-      );
-    }
-    return;
-  }
-  if (binding.storeId !== authority.storeId) {
     throw new StoreError(
       "collaboration.stale-binding",
-      `This control checkout was bound to authority store ${binding.storeId}, but the lane at ${location.dbPath} is store ` +
-        `${authority.storeId}. A replaced authority is adopted deliberately by its own activation or restore, never by drift; ` +
-        `inspect it with mstar path resolve. Nothing was modified.`,
+      `This checkout holds no collaboration binding for the ACTIVE authority store ${authority.storeId} at ` +
+        `${location.dbPath}, so it cannot be proven to own it. Acquire it with the supported adoption verb: ` +
+        `mstar store collaboration adopt --harness ${context.harnessDir} --expect-store ${authority.storeId} ` +
+        `(or re-run the activation/restore that published this generation). store init never adopts an active authority, ` +
+        `so it is not the recovery. Nothing was modified.`,
+    );
+  }
+  if (
+    binding.repoKey !== location.repoKey ||
+    binding.mode !== location.mode ||
+    binding.storeId !== authority.storeId ||
+    binding.epoch !== authority.epoch
+  ) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This control checkout was bound to repository ${binding.repoKey} (${binding.mode}) store ${binding.storeId} epoch ` +
+        `${String(binding.epoch)}, but the lane at ${location.dbPath} is repository ${authority.repoKey} (${authority.mode}) ` +
+        `store ${authority.storeId} epoch ${String(authority.epoch)}. A replaced authority is adopted deliberately by its own ` +
+        `activation, restore or "store collaboration adopt", never by drift; inspect it with mstar path resolve. Nothing was modified.`,
     );
   }
 }
@@ -1794,11 +1836,10 @@ export async function openCollaborationStore(
   }
   const handle = await openAdmission(location, "active", expected, busyTimeoutMs());
   try {
-    // A read only proves this checkout is not a retargeted/foreign owner; a
-    // replacement clone with no binding may read and adopts on its first write.
-    // A write additionally proves the binding before any handle escapes.
-    await assertControlCheckoutScope(context, location);
-    if (mode === "write") await assertControlBinding(context, location, handle.authority);
+    // ONE comparison for both modes: a bound checkout proves the same repository,
+    // mode, store and epoch, and only an UNBOUND read (a replacement clone) is
+    // admitted without it — reading never writes the binding.
+    await assertControlBinding(context, location, handle.authority, mode);
   } catch (error) {
     handle.close();
     throw error;
@@ -1824,8 +1865,10 @@ function probeRefusal(error: unknown): { code: string; message: string } {
 
 /**
  * The collaboration lane's authority probe for host gates: it reads ONLY this
- * lane, so the execution store can be absent, staged or corrupt without
- * changing the verdict. Classification comes from ONE admission call's typed
+ * lane, so the execution store may be absent, staged, or damaged in its
+ * execution metadata without changing the verdict. An execution store that
+ * cannot be inspected at all is `unavailable`: it cannot be proven innocent of
+ * legacy collaboration rows. Classification comes from ONE admission call's typed
  * refusal — `collaboration.not-initialized` is `absent`,
  * `collaboration.not-active` is `staged`, and every other cause (identity,
  * mode, runtime, a rejected storage path, corrupt bytes, a stale binding) is
@@ -1978,7 +2021,7 @@ export async function withCollaborationWrite<T>(
   try {
     const admitted = admit(probe, location, expected, "active");
     // The binding is proved on the same refusing read, before a writer exists.
-    await assertControlBinding(context, location, admitted);
+    await assertControlBinding(context, location, admitted, "write");
   } finally {
     probe.close();
   }

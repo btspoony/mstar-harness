@@ -2093,6 +2093,79 @@ describe("collaboration lifecycle", () => {
   });
 
 
+  /**
+   * Damage the execution metadata `openStore` admits on, leaving the file
+   * readable: the execution lane refuses `store.corrupt` while every table is
+   * still inspectable, which is exactly the shape that must not hide legacy rows.
+   */
+  function damageExecutionMeta(fixture: Fixture): void {
+    const db = new DatabaseSync(join(fixture.harness, "store.db"));
+    try {
+      db.prepare("delete from execution_meta where id = 1").run();
+    } finally {
+      db.close();
+    }
+  }
+
+  test("a readable legacy owner is still refused when its execution metadata is damaged", async () => {
+    const fixture = repoWorkspace("collab-legacy-damaged-meta-");
+    await ensureCollaborationAuthority(fixture.context);
+    const store = await initializeStore(fixture.context);
+    store.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key) " +
+          "values ('I-000001', '_default', 'Legacy owner row', 'bug', 'high', 'combined authority', 'cut over', 'now', 'now', 'legacy-owner')",
+      )
+      .run();
+    store.close();
+    damageExecutionMeta(fixture);
+    const bindingBefore = readFileSync(join(fixture.harness, "collaboration-binding.json"));
+
+    // The execution lane's own admission rejects the store…
+    await expect(openStore(fixture.context, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    // …and that must not hide its readable collaboration rows from the lane.
+    await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.cutover-required" });
+    await expect(adoptCollaborationBinding(fixture.context)).rejects.toMatchObject({ code: "collaboration.cutover-required" });
+    // Neither refusal changed this checkout's binding or the destination lane.
+    expect(readFileSync(join(fixture.harness, "collaboration-binding.json"))).toEqual(bindingBefore);
+    const lane = await readCollaborationStage(resolveCollaborationLocation(fixture.context), ({ db }) => ({
+      issues: db.prepare("select count(*) as n from issues").get(),
+    }));
+    expect(lane).toEqual({ issues: { n: 0 } });
+  });
+
+  test("an absent or row-free execution store leaves the collaboration lane usable", async () => {
+    // Genuinely absent execution store: nothing local to inspect.
+    const absent = repoWorkspace("collab-no-execution-store-");
+    await ensureCollaborationAuthority(absent.context);
+    expect(existsSync(join(absent.harness, "store.db"))).toBe(false);
+    expect((await readCollaborationAuthority(absent.context)).state).toBe("active");
+
+    // A damaged execution store that holds no collaboration rows proves independence.
+    const damaged = repoWorkspace("collab-damaged-empty-execution-");
+    await ensureCollaborationAuthority(damaged.context);
+    (await initializeStore(damaged.context)).close();
+    damageExecutionMeta(damaged);
+    await expect(openStore(damaged.context, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    expect((await readCollaborationAuthority(damaged.context)).state).toBe("active");
+    await captureOne(damaged, "op-damaged-empty-execution");
+    const lane = await readCollaborationStage(resolveCollaborationLocation(damaged.context), ({ db }) => ({
+      issues: db.prepare("select count(*) as n from issues").get(),
+    }));
+    expect(lane).toEqual({ issues: { n: 1 } });
+  });
+
+  test("an execution store that cannot be inspected refuses instead of reading as empty", async () => {
+    const fixture = repoWorkspace("collab-uninspectable-execution-");
+    await ensureCollaborationAuthority(fixture.context);
+    const live = readCollaborationBinding(fixture.context);
+    writeFileSync(join(fixture.harness, "store.db"), "not a sqlite database\n");
+    await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
+    await expect(adoptCollaborationBinding(fixture.context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
+    // The lane and this checkout's binding were not touched by the refused probe.
+    expect(readCollaborationBinding(fixture.context)).toEqual(live);
+  });
+
   test("a reviewed file-era import stages the lane and publishes it with a single epoch bump", async () => {
     const fixture = repoWorkspace("collab-file-era-");
     writeRegister(fixture.harness, "_default", { entries: { "plan-alpha": [entry({ id: "R1", severity: "high" })] } });
@@ -3009,6 +3082,68 @@ describe("control-checkout binding states", () => {
     expect(existsSync(join(fixture.harness, "collaboration-binding.claim.json"))).toBe(false);
   });
 
+  test("an unbound checkout reads without recording a binding, and its write still refuses", async () => {
+    const fixture = await boundWorkspace("binding-unbound-read-");
+    const location = resolveCollaborationLocation(fixture.context);
+    const live = await readCollaborationStage(location, ({ authority }) => authority);
+    rmSync(join(fixture.harness, "collaboration-binding.json"), { force: true });
+
+    const handle = await openCollaborationStore(fixture.context, "read");
+    try {
+      expect(handle.authority).toMatchObject({ storeId: live.storeId, epoch: live.epoch });
+    } finally {
+      handle.close();
+    }
+    // Reading is not adopting: a replacement clone stays unbound until a write
+    // proves it through the supported adoption route.
+    expect(readCollaborationBinding(fixture.context)).toBeNull();
+    expect(existsSync(join(fixture.harness, "collaboration-binding.json"))).toBe(false);
+    await expect(openCollaborationStore(fixture.context, "write")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+  });
+
+  test("a bound checkout refuses a replacement generation published at the same key and mode", async () => {
+    const fixture = await boundWorkspace("binding-replacement-generation-");
+    const location = resolveCollaborationLocation(fixture.context);
+    const bound = readCollaborationBinding(fixture.context)!;
+    const rewrite = (column: "store_id" | "authority_epoch", value: string | number): void => {
+      const db = new DatabaseSync(location.dbPath);
+      try {
+        db.prepare(`update collaboration_meta set ${column} = ? where id = 1`).run(value);
+      } finally {
+        db.close();
+      }
+    };
+
+    // A restore publishes a fresh store id at this repository's own key and mode.
+    rewrite("store_id", "00000000-0000-4000-8000-000000000001");
+    await expect(openCollaborationStore(fixture.context, "read")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // The same store with a bumped epoch is also a different generation.
+    rewrite("store_id", bound.storeId);
+    rewrite("authority_epoch", bound.epoch + 1);
+    await expect(openCollaborationStore(fixture.context, "read")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    await expect(openCollaborationStore(fixture.context, "write")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // A refused read never rewrites the checkout's own binding.
+    expect(readCollaborationBinding(fixture.context)).toEqual(bound);
+  });
+
+  test("a retargeted checkout cannot read the other repository's lane either", async () => {
+    const repoA = `fixture-read-retarget-a-${repoSequence++}`;
+    const a = repoWorkspaceWithKey("read-retarget-a-", repoA);
+    (await initializeStore(a.context)).close();
+    await ensureCollaborationAuthority(a.context);
+    const bound = readCollaborationBinding(a.context)!;
+    const repoB = `fixture-read-retarget-b-${repoSequence++}`;
+    const b = repoWorkspaceWithKey("read-retarget-b-", repoB);
+    (await initializeStore(b.context)).close();
+    await ensureCollaborationAuthority(b.context);
+
+    writeFileSync(join(a.checkout, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${repoB}\n`);
+    await expect(readCollaborationAuthority(a.context)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    await expect(openCollaborationStore(a.context, "write")).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    // A's binding still names A's repository.
+    expect(readCollaborationBinding(a.context)).toEqual(bound);
+  });
 });
 
 describe("switch safety", () => {

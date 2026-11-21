@@ -1537,6 +1537,43 @@ describe("collaboration composite residual", () => {
     expect(detailsOf(refused)).toMatchObject({ phase: "prepared", cause_code: "collaboration.stale-binding" });
     expect(await issueFacts(fixture.context)).toMatchObject({ issues: 0, composite: 0 });
   });
+
+  test("an unbound checkout refuses a residual write before any reservation", async () => {
+    const fixture = await executionPlanFixture("composite-unbound");
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
+    // The lane is active; only THIS checkout's binding is missing.
+    rmSync(join(fixture.context.harnessDir, "collaboration-binding.json"), { force: true });
+    const beforeExecution = await executionFacts(fixture.context);
+
+    const refused = await refusalOf(() =>
+      mutateExecutionPlan(context, {
+        operationId: "composite-unbound-1",
+        session: fixture.session,
+        expected: plan.token,
+        planId: fixture.planId,
+        operation: { kind: "residual-add", entries: [baseInput({ occurrenceKey: "unbound-1" })] },
+      }),
+    );
+    // The binding is proved BEFORE the execution reservation exists, so the refusal
+    // is the binding itself and not a partial operation.
+    expect(refused.code).toBe("collaboration.stale-binding");
+    expect(await executionFacts(fixture.context)).toEqual(beforeExecution);
+    expect(await intentPhases(fixture.context, "composite-unbound-1")).toEqual([]);
+    expect(await readExecutionPlan(context, fixture.session, fixture.planId).then((read) => read.token)).toBe(plan.token);
+
+    // Nothing excluded the plan row: once bound, a residual write proceeds.
+    activate(fixture.context);
+    const accepted = await mutateExecutionPlan(context, {
+      operationId: "composite-unbound-2",
+      session: fixture.session,
+      expected: plan.token,
+      planId: fixture.planId,
+      operation: { kind: "residual-add", entries: [baseInput({ occurrenceKey: "unbound-2" })] },
+    });
+    expect(accepted.replayed).toBe(false);
+    expect(await issueFacts(fixture.context)).toMatchObject({ issues: 1, occurrences: 1 });
+  });
 });
 
 /* ------------------------------------------------------------------------ *

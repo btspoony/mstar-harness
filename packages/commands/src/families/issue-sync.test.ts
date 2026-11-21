@@ -840,8 +840,18 @@ describe("mirror stale run", () => {
     const pending = await run("pending", {}, f.context);
     // A verified restore publishes a new epoch; a run from the previous generation
     // names an authority that no longer exists.
+    const live = await readCollaborationAuthority({ harnessDir: f.harnessDir });
     await withCollaborationWrite({ harnessDir: f.harnessDir }, ({ db }) => {
       db.prepare("update collaboration_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
+    });
+    // The restore also re-binds the checkout it published for, so the lane stays
+    // readable and the RUN's own generation proof is what refuses it.
+    writeCollaborationBinding({ harnessDir: f.harnessDir }, {
+      repoKey: live.repoKey,
+      mode: live.mode,
+      storeId: live.storeId,
+      epoch: live.epoch + 1,
+      binding: "active",
     });
     const stale = await run(
       "apply",
