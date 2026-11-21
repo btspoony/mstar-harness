@@ -1027,7 +1027,7 @@ async function liveLaneOperations(context: StoreContext): Promise<LaneOperation[
       operationId: String(row.operation_id),
       executionStoreId: typeof row.execution_store_id === "string" ? row.execution_store_id : null,
       executionEpoch: typeof row.execution_epoch === "number" ? row.execution_epoch : null,
-      acknowledged: acknowledgementOf(row),
+      state: effectStateOf(row),
     })),
   );
 }
@@ -1142,7 +1142,7 @@ async function inspectCollaborationImage(path: string, expected: Readonly<{ repo
       operationId: String(row.operation_id),
       executionStoreId: typeof row.execution_store_id === "string" ? row.execution_store_id : null,
       executionEpoch: typeof row.execution_epoch === "number" ? row.execution_epoch : null,
-      acknowledged: acknowledgementOf(row),
+      state: effectStateOf(row),
     }));
     return {
       authority: {
