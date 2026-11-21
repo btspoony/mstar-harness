@@ -1470,6 +1470,174 @@ function claimProvenByLane(db: StoreDb, authority: CollaborationAuthority, claim
 }
 
 /**
+ * One recorded publication behind the live authority: the cutover's active
+ * publication row or the file-era activation phase row, with the generation it
+ * names.
+ */
+type RecordedLineage = Readonly<{
+  kind: "cutover" | "activation";
+  operationId: string;
+  storeId: string;
+  epoch: number;
+}>;
+
+function recordedLineage(db: StoreDb): RecordedLineage[] {
+  const lineage: RecordedLineage[] = [];
+  const tables = tableNamesOn(db);
+  if (tables.has("cutover_publications")) {
+    for (const row of db
+      .prepare(
+        "select manifest_id, target_store_id, target_epoch from cutover_publications where phase = 'active'",
+      )
+      .all() as Array<Record<string, unknown>>) {
+      if (typeof row.manifest_id !== "string" || typeof row.target_store_id !== "string" || typeof row.target_epoch !== "number") continue;
+      lineage.push({
+        kind: "cutover",
+        operationId: `cutover:${row.manifest_id}`,
+        storeId: row.target_store_id,
+        epoch: row.target_epoch,
+      });
+    }
+  }
+  if (tables.has("collaboration_operations")) {
+    const rows = db
+      .prepare(
+        "select operation_id, result_json from collaboration_operations where key_space = 'standalone' and operation_id like 'migration:activated:%'",
+      )
+      .all() as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      if (typeof row.operation_id !== "string" || typeof row.result_json !== "string") continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(row.result_json);
+      } catch {
+        continue;
+      }
+      if (parsed === null || typeof parsed !== "object") continue;
+      const record = parsed as Record<string, unknown>;
+      if (typeof record.storeId !== "string" || typeof record.epoch !== "number") continue;
+      lineage.push({ kind: "activation", operationId: row.operation_id, storeId: record.storeId, epoch: record.epoch });
+    }
+  }
+  return lineage;
+}
+
+/** The outcome of the explicit adoption verb: the served authority and the binding it records. */
+export type CollaborationAdoption = Readonly<{
+  version: 1;
+  adopted: boolean;
+  authority: CollaborationAuthority;
+  binding: CollaborationBinding;
+  lineage: RecordedLineage;
+}>;
+
+/**
+ * `store collaboration adopt` — the ONLY supported way a replacement clone (or any
+ * other bound-less checkout) acquires an existing ACTIVE authority's binding.
+ *
+ * It mutates NO collaboration data: it reads the canonical scope, the lane's
+ * metadata and the lane's recorded publication lineage (cutover publication or
+ * file-era activation phase row), and writes nothing but this checkout's binding.
+ * A unique lineage matching the live store AND epoch may bind; a missing,
+ * ambiguous or mismatched lineage, a foreign checkout, a staged authority, or an
+ * expectation that disagrees with the live store refuses WITHOUT writing or
+ * overwriting anything. A recorded claim is never promoted unless it names exactly
+ * that proven generation. Repeating the verb against the same binding is
+ * idempotent.
+ */
+export async function adoptCollaborationBinding(
+  context: StoreContext,
+  options: { expectStoreId?: string } = {},
+): Promise<CollaborationAdoption> {
+  const location = resolveCollaborationLocation(context);
+  // Foreign checkout / legacy owner: the scope's authority is not this checkout's
+  // to adopt while it still owns a combined source.
+  await assertControlCheckoutScope(context, location);
+  const binding = readCollaborationBinding(context);
+  if (binding !== null && binding.repoKey !== location.repoKey) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This checkout is bound to repository ${binding.repoKey} (${binding.mode}), not the resolved ${location.repoKey} ` +
+        `(${location.mode}); a retargeted checkout is never re-bound by adoption. Nothing was written.`,
+    );
+  }
+
+  const snapshot = await readCollaborationStage(location, ({ db, authority }) => ({
+    authority,
+    lineage: authority.state === "active" ? recordedLineage(db) : [],
+  }));
+  const authority = snapshot.authority;
+  if (authority.state !== "active") {
+    throw new StoreError(
+      "collaboration.not-active",
+      `The collaboration authority at ${location.dbPath} is ${authority.state}; adoption binds a checkout to an ACTIVE ` +
+        `authority only. Publish it with its recorded activation first. Nothing was written.`,
+    );
+  }
+  if (options.expectStoreId !== undefined && options.expectStoreId !== authority.storeId) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `The live authority at ${location.dbPath} is store ${authority.storeId}, not the expected ${options.expectStoreId}; ` +
+        `adoption refuses rather than binding the wrong generation. Nothing was written.`,
+    );
+  }
+  const distinct = [...new Set(snapshot.lineage.map((entry) => `${entry.storeId}:${entry.epoch}`))];
+  if (distinct.length > 1) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `The lane at ${location.dbPath} records more than one publication generation (${distinct.join(", ")}), so its ` +
+        `provenance is ambiguous and no checkout is bound to it by adoption. Inspect it with mstar path resolve. Nothing was written.`,
+    );
+  }
+  const proven = snapshot.lineage.find((entry) => entry.storeId === authority.storeId && entry.epoch === authority.epoch);
+  if (proven === undefined) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `The ACTIVE authority at ${location.dbPath} (store ${authority.storeId}, epoch ${authority.epoch}) has no recorded ` +
+        `publication lineage naming that exact generation, so no checkout can adopt it. Re-run the activation that published ` +
+        `it. Nothing was written.`,
+    );
+  }
+  // A recorded claim may be cleared only when it names the proven generation; a
+  // mismatched claim is never promoted or silently replaced.
+  const claim = readBindingClaim(context);
+  if (claim !== null && (claim.storeId !== authority.storeId || claim.epoch !== authority.epoch)) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `An interrupted claim in this checkout names store ${claim.storeId} epoch ${claim.epoch}, which is not the proven ` +
+        `generation ${authority.storeId} epoch ${authority.epoch}; the claim is never promoted or replaced by adoption. ` +
+        `Finish that attempt or remove the claim deliberately. Nothing was written.`,
+    );
+  }
+  if (binding !== null && binding.state === "active") {
+    if (binding.storeId !== authority.storeId) {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `This checkout is already bound to authority store ${binding.storeId}, not the live ${authority.storeId}; adoption ` +
+          `never overwrites a binding. Inspect the checkout with mstar path resolve. Nothing was written.`,
+      );
+    }
+    if (claim !== null) clearBindingClaim(context);
+    return { version: 1, adopted: false, authority, binding, lineage: proven };
+  }
+  writeCollaborationBinding(context, {
+    repoKey: location.repoKey,
+    mode: location.mode,
+    storeId: authority.storeId,
+    epoch: authority.epoch,
+    binding: "active",
+  });
+  if (claim !== null) clearBindingClaim(context);
+  return {
+    version: 1,
+    adopted: true,
+    authority,
+    binding: { version: 2, state: "active", repoKey: location.repoKey, mode: location.mode, storeId: authority.storeId, epoch: authority.epoch, boundAt: "" },
+    lineage: proven,
+  };
+}
+
+/**
  * Refuse when THIS checkout cannot own the resolved authority, regardless of what
  * the lane currently holds: an unfenced combined store with collaboration rows is
  * the legacy owner, and a recorded binding that names another repository/mode was

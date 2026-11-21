@@ -91,12 +91,21 @@ export type { CollaborationIdentityCode, CollaborationLocation, CollaborationMod
 export { CollaborationIdentityError, resolveCollaborationLocation } from "./collaboration-identity.js";
 // The collaboration lane's own store: independent staged schema, create-only
 // publication and active-only handles. No execution table or method.
-export type { CollaborationAuthority, CollaborationStamp, CollaborationStoreHandle } from "./collaboration-store.js";
+export type {
+  CollaborationAdoption,
+  CollaborationAuthority,
+  CollaborationBinding,
+  CollaborationStamp,
+  CollaborationStoreHandle,
+} from "./collaboration-store.js";
 export {
+  adoptCollaborationBinding,
   initializeCollaborationStore,
   openCollaborationStore,
   readCollaborationAuthority,
+  readCollaborationBinding,
   withCollaborationWrite,
+  writeCollaborationBinding,
 } from "./collaboration-store.js";
 // The one-way authority cutover: reviewed manifest, verified staged copy,
 // activation claim, durable source fence, guarded publication and replay.

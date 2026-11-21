@@ -18,6 +18,7 @@ import {
   planCollaborationCutover,
   planStoreMigration,
   resolveProcessHarnessDir,
+  adoptCollaborationBinding,
   restoreCollaborationBackup,
   retireStoreSources,
   upgradeStoreMinimal,
@@ -55,6 +56,7 @@ const inputSchema = z.object({
   attestation: z.string().optional(),
   out: z.string().optional(),
   backup: z.string().optional(),
+  expectStore: z.string().optional(),
   operator: z.string().optional(),
   ackSkipDsh: z.array(z.string()).optional(),
   ackSkipWorkflow: z.array(z.string()).optional(),
@@ -63,12 +65,13 @@ const inputSchema = z.object({
 });
 type StoreInput = z.infer<typeof inputSchema>;
 const verbs = ["init", "upgrade", "migrate", "backup", "activate", "retire"] as const;
-const collaborationVerbs = ["plan", "apply", "activate", "restore"] as const;
+const collaborationVerbs = ["plan", "apply", "activate", "restore", "adopt"] as const;
 
 /** The one flag table both store families publish. */
 const optionFlags: Record<keyof StoreInput, string> = {
   harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <absolute-json>", out: "--out <path>",
   backup: "--backup <path>",
+  expectStore: "--expect-store <store-id>",
   operator: "--operator <name>",
   ackSkipDsh: "--ack-skip-dsh <selector...>",
   ackSkipWorkflow: "--ack-skip-workflow <id...>",
@@ -445,6 +448,16 @@ async function executeCollaboration(id: string, input: StoreInput, invocation: I
       const report = writeReceipt(receipt);
       return ok(id, { ...receipt, receiptFile: report.out, reportError: report.reportError });
     }
+    if (verb === "adopt") {
+      // The explicit adoption verb: binds THIS checkout to an already ACTIVE
+      // authority whose recorded lineage proves the exact live generation. It
+      // mutates no collaboration data.
+      const adoption = await adoptCollaborationBinding(context, {
+        ...(input.expectStore === undefined ? {} : { expectStoreId: required(input.expectStore, "--expect-store") }),
+      });
+      const report = writeReceipt(adoption);
+      return ok(id, { ...adoption, receiptFile: report.out, reportError: report.reportError });
+    }
     if (verb === "restore") {
       requireInputs(input, ["backup", "operator", "attestation"]);
       const receipt = jsonFile<RepositoryBackupReceipt>(input.backup!, "--backup");
@@ -472,6 +485,7 @@ function collaborationDefinition(verb: (typeof collaborationVerbs)[number]): Com
     apply: ["harness", "manifest", "out"],
     activate: ["harness", "manifest", "operator", "attestation", "out"],
     restore: ["harness", "backup", "operator", "attestation", "out"],
+    adopt: ["harness", "expectStore", "out"],
   };
   const optionKeys = optionsByVerb[verb];
   const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
@@ -484,6 +498,7 @@ function collaborationDefinition(verb: (typeof collaborationVerbs)[number]): Com
     operator: "the invoking operator, recorded as the approving actor of this activation or restore",
     attestation: "absolute path to the operator's full ActivationAttestation JSON (a collaboration fence additionally requires its cutover block)",
     out: "optional absolute path for the receipt or manifest this verb writes",
+    expectStore: "optional store id this adoption must match (refuses any other live authority)",
   };
   const options = optionKeys.map((key) => ({
     key,
@@ -496,6 +511,7 @@ function collaborationDefinition(verb: (typeof collaborationVerbs)[number]): Com
     apply: "Stage and verify the reviewed manifest in the canonical collaboration target. An identical staged receipt is reused; a target that progressed past verification is never restaged.",
     activate: "Publish the verified target for this exact manifest after the operator's stop evidence: this resumes its own durable fence or replays its already committed activation, and never republishes another source's authority.",
     restore: "Restore the collaboration image of a verified pair into an ABSENT canonical target, create-only, with a bumped collaboration epoch and a recorded restore receipt. Never overwrites, quarantines or deletes an existing authority.",
+    adopt: "Bind THIS checkout to an already published authority whose recorded lineage proves the exact live store and epoch. Mutates no collaboration data; refuses a missing, ambiguous or mismatched lineage and never overwrites a binding.",
   };
   return {
     id,

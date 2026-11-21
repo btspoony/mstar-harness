@@ -100,10 +100,11 @@ async function storeSnapshot(harnessDir: string): Promise<{ revision: number; ep
 }
 
 describe("store and execution command surface", () => {
-  test("registers six surviving store verbs, the four collaboration lifecycle verbs and three independent execution utilities", () => {
+  test("registers six surviving store verbs, the five collaboration operator verbs and three independent execution utilities", () => {
     expect(getStoreCommandDefinitions().map(({ id }) => id)).toEqual([
       "store.init", "store.upgrade", "store.migrate", "store.backup", "store.activate", "store.retire",
       "store.collaboration.plan", "store.collaboration.apply", "store.collaboration.activate", "store.collaboration.restore",
+      "store.collaboration.adopt",
     ]);
     expect(getExecutionCommandDefinitions().map(({ id }) => id)).toEqual([
       "store.execution.restore-preview", "store.execution.restore", "store.execution.export",
