@@ -37,6 +37,7 @@ import { findMstarc, loadMstarc, MSTARC_FILE, type MstarcConfig, type MstarcStri
 import { _DEFAULT_PROJECT } from "./project.js";
 import { getArtifactStore } from "./store.js";
 import { StoreError, type StoreContext } from "./store-db.js";
+import { CollaborationIdentityError } from "./collaboration-identity.js";
 
 /**
  * Options for `resolveHarnessDir`.
@@ -959,9 +960,7 @@ async function registerScaffoldCatalog(harnessDir: string): Promise<void> {
   } catch (error) {
     if (error instanceof CatalogError && error.code === "catalog.not-found") {
       // Continue to first registration.
-    } else if (error instanceof StoreError && error.code === "store.not-initialized") {
-      return;
-    } else if (error instanceof CatalogError && error.code === "store.not-active") {
+    } else if (catalogRegistrationUnavailable(error)) {
       return;
     } else {
       throw error;
@@ -981,10 +980,29 @@ async function registerScaffoldCatalog(harnessDir: string): Promise<void> {
       operation,
     );
   } catch (error) {
-    if (error instanceof StoreError && error.code === "store.not-initialized") return;
-    if (error instanceof CatalogError && error.code === "store.not-active") return;
+    if (catalogRegistrationUnavailable(error)) return;
     throw error;
   }
+}
+
+/**
+ * Catalog writes live on the per-repository collaboration authority, so a
+ * checkout whose scope has no resolvable origin or no active store yet has
+ * nothing to register into: scaffold creates the harness and leaves the
+ * catalog row to the store lifecycle. Only those harmless absence states defer
+ * — an invalid/unsupported mode, an unreadable or misplaced config, or any
+ * other actionable identity refusal must surface, and a real catalog verb's
+ * refusal is never relaxed.
+ */
+function catalogRegistrationUnavailable(error: unknown): boolean {
+  if (error instanceof CollaborationIdentityError && error.code === "collaboration.repo-identity-unresolved") return true;
+  if (
+    error instanceof StoreError &&
+    (error.code === "collaboration.not-initialized" || error.code === "collaboration.not-active" || error.code === "store.not-initialized")
+  ) {
+    return true;
+  }
+  return error instanceof CatalogError && error.code === "store.not-active";
 }
 
 

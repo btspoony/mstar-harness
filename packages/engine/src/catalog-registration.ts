@@ -106,6 +106,12 @@ export type CatalogExecutionReceipt = {
   catalogRevision: number;
   /** Retained on historical journal receipts; ACTIVE registration returns false. */
   recovered: boolean;
+  /**
+   * Scoped warnings of a REPLAY, when the committed collaboration effect's
+   * acknowledgement could not be confirmed. Both business effects are committed
+   * either way; the warning names what a replay can (or cannot) repair.
+   */
+  recovery?: { warnings: Array<{ code: string; message: string }> };
 };
 
 
@@ -858,17 +864,23 @@ export function bindingInputOf(plan: CatalogExecutionPlan): CatalogExecutionBind
  * The committed `catalog_execution_bindings` row records the workflow's
  * association against the revision the ACTIVE transaction published. A
  * different operation cannot replace an existing binding.
+ *
+ * `catalogId` is the id the catalog effect COMMITTED for the binding entity, not
+ * the reviewed delta's spelling: a registration may attach to an existing row at
+ * the reviewed location (whose id differs), and the pin must name the row that
+ * holds it.
  */
 export function writeBinding(
   db: StoreDb,
   plan: CatalogExecutionPlan,
+  catalogId: string,
   bindingInput: CatalogExecutionBindingInput,
   catalogRevision: number,
 ): void {
   const binding = plan.request.delta.binding;
   const row = db
     .prepare("select operation_id, catalog_revision, input_hash from catalog_execution_bindings where workflow_id = ? and catalog_kind = ? and catalog_id = ?")
-    .get(plan.workflowId, binding.catalogKind, binding.catalogId) as
+    .get(plan.workflowId, binding.catalogKind, catalogId) as
     | { operation_id?: unknown; catalog_revision?: unknown; input_hash?: unknown }
     | undefined;
   const pin = stableJson(bindingInput);
@@ -877,14 +889,14 @@ export function writeBinding(
     if (row.operation_id !== plan.request.operationId) {
       throw new CatalogRegistrationError(
         "catalog.reconcile-conflict",
-        `workflow ${JSON.stringify(plan.workflowId)} is already bound to ${binding.catalogKind} ${JSON.stringify(binding.catalogId)} ` +
+        `workflow ${JSON.stringify(plan.workflowId)} is already bound to ${binding.catalogKind} ${JSON.stringify(catalogId)} ` +
           `by operation ${JSON.stringify(String(row.operation_id))}; this operation cannot replace that binding. Inspect the existing workflow and catalog binding, and use a new workflow id for a distinct registration.`,
       );
     }
     // Idempotent replay of this operation's own binding.
     db.prepare(
       "update catalog_execution_bindings set catalog_revision = ?, input_hash = ?, pin_json = ? where workflow_id = ? and catalog_kind = ? and catalog_id = ?",
-    ).run(catalogRevision, inputHash, pin, plan.workflowId, binding.catalogKind, binding.catalogId);
+    ).run(catalogRevision, inputHash, pin, plan.workflowId, binding.catalogKind, catalogId);
     return;
   }
   db.prepare(
@@ -893,7 +905,7 @@ export function writeBinding(
   ).run(
     plan.workflowId,
     binding.catalogKind,
-    binding.catalogId,
+    catalogId,
     `workflows/${plan.workflowId}`,
     catalogRevision,
     inputHash,
@@ -991,13 +1003,11 @@ export function assertCatalogExecutionCommittedOn(db: StoreDb, workflowId: strin
 }
 
 /**
- * Async handle-taking gate. Its remaining callers are OUTSIDE this change's
- * Files list — `coordination.ts:871` (the retained prepare/bind registration
- * gate) and `packages/dsh/src/gates/workflow-selection.ts:869` — so the wrapper
- * and those callers are handed to T21 with the terminal veto sweep rather than
- * cut here (T6 owns only this module's own fixtures).
+ * Async handle-taking gate. Its remaining caller is OUTSIDE this change's Files
+ * list — `packages/dsh/src/gates/workflow-selection.ts` — so the wrapper stays
+ * for that boundary rather than being cut here.
  */
-// T21: coordination.ts prepare/bind gate + dsh workflow-selection gate still call this wrapper.
+// T21: dsh workflow-selection gate still calls this wrapper.
 export async function assertCatalogExecutionCommitted(context: StoreContext, workflowId: string): Promise<void> {
   const handle = await openStore(context, "read");
   try {

@@ -1042,7 +1042,7 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
     return {
       source: {
         kind: 'store',
-        projection: envelope.projection.freshness,
+        projection: envelope.projection.observed ? envelope.projection.freshness : null,
         storeRevision: envelope.storeRevision,
         diagnostic: storeProjectionDiagnostic(envelope.projection, items.length, envelope.data.total),
       },
@@ -1075,7 +1075,7 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
  */
 function storeProjectionDiagnostic(projection: ReadProjection, counted: number, total: number): string | null {
   const parts: string[] = []
-  if (projection.freshness !== 'current') {
+  if (projection.observed && projection.freshness !== 'current') {
     const sources = projection.diagnostics.map((diagnostic) => diagnostic.sourceKey).join(', ')
     parts.push(`projection ${projection.freshness}${sources === '' ? '' : ` (${sources})`} — issue rows stay authoritative`)
   }

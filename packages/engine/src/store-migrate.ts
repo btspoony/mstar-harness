@@ -25,13 +25,20 @@
  *   buckets are distinct rows, a duplicate id within ONE bucket is a refused
  *   source, and a synthetic backlog bucket name stays provenance — never a
  *   fabricated plan.
+ * - The staged apply writes the COLLABORATION LANE only. Issue/catalog
+ *   authority is the lane's (Tasks 2/5/7); the reviewed import is one staged
+ *   lane generation plus one `migration:<phase>:<manifest-hash>` receipt row
+ *   per phase, so a legacy filesystem workspace never needs — and never gets —
+ *   a second combined store holding the same rows.
  */
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import { join, resolve } from "node:path";
 import { discoverCatalog, type CatalogImportPlan } from "./catalog-import.js";
 import { catalogRootDir } from "./catalog.js";
-import { initializeStore, openStore, storeDbPath, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, readCollaborationStage, writeCollaborationStage } from "./collaboration-store.js";
+import { heldCollaborationSourceTables, openStore, readCollaborationFence, storeDbPath, tableNamesOn, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
 import { computeIdentityKey, type Disposition, type IssueKind, type Severity } from "./issue.js";
 import { isOpenResidual, normalizeSeverity } from "./status.js";
 
@@ -515,10 +522,27 @@ function migrationSourceIdentity(tuple: string, project: string, bucket: string,
   return `${tuple}|${project}|${bucket}|${entryId}`;
 }
 
+/**
+ * Canonical JSON for the manifest hash: keys are sorted, so a reviewed manifest
+ * that is re-serialized (a formatter, an editor, a round trip through a file)
+ * keeps the SAME address. Array order is preserved — it is reviewed data.
+ */
+function canonicalManifestJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalManifestJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalManifestJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 /** Canonical hash of a manifest: every field a reviewer saw, without the derived `blocksApply`. */
 export function migrationManifestHash(manifest: MigrationManifest): string {
   const { blocksApply: _blocksApply, ...rest } = manifest;
-  return sha256Bytes(Buffer.from(JSON.stringify(rest), "utf8"));
+  return sha256Bytes(Buffer.from(canonicalManifestJson(rest), "utf8"));
 }
 
 /** One persistent source→issue ID assignment recorded in the receipt (§3/§7). */
@@ -527,9 +551,8 @@ export type MigrationIdMapping = {
   issueId: string;
 };
 
-/** The receipt of a completed staged apply (§7 `migration_receipts`). */
+/** The receipt of a completed staged apply (§7, recorded as a lane row). */
 export type MigrationReceipt = {
-  receiptId: number;
   manifestHash: string;
   phase: "applied";
   /** True when an identical manifest replayed the recorded receipt without writes. */
@@ -557,28 +580,94 @@ export type MigrationReceipt = {
   appliedAt: string;
 };
 
-type StoredReceipt = {
-  id: number;
-  manifest_hash: string;
-  mapping_json: string;
-  source_counts_json: string;
-  applied_at: string;
-};
+/**
+ * The three phases one reviewed import records, each as its OWN standalone
+ * `collaboration_operations` row. The lane schema is a closed v1 inventory, so
+ * the receipt ledger is the lane's existing operation ledger rather than a new
+ * migration table.
+ */
+export type MigrationPhase = "applied" | "activated" | "retired";
 
-function readReceipts(db: StoreDb): StoredReceipt[] {
-  return db
-    .prepare("select id, manifest_hash, mapping_json, source_counts_json, applied_at from migration_receipts order by id")
-    .all() as StoredReceipt[];
+/** The lane operation id of one phase of one reviewed import. */
+export function migrationPhaseOperationId(phase: MigrationPhase, manifestHash: string): string {
+  return `migration:${phase}:${manifestHash}`;
 }
 
-function receiptOfStored(stored: StoredReceipt, replayed: boolean): MigrationReceipt {
-  // mapping_json carries the full assigned mapping: issue-classified rows
-  // with their allocated ids, history/excluded rows with an empty issueId.
-  const storedMapping = JSON.parse(stored.mapping_json) as MigrationMappingWithId[];
-  const counts = JSON.parse(stored.source_counts_json) as MigrationReceipt["counts"];
+/** One recorded phase row; `rowid` is its commit order in the lane. */
+export type MigrationPhaseRow = { resultJson: string; committedAt: string; rowid: number };
+
+const PHASE_ROW_COLUMNS = "result_json, committed_at, rowid";
+
+/** Narrow one driver row of `PHASE_ROW_COLUMNS`; a malformed row is a corrupt lane. */
+function phaseRowOf(row: unknown): MigrationPhaseRow | undefined {
+  if (row === undefined) return undefined;
+  if (row === null || typeof row !== "object") {
+    throw new StoreError("store.corrupt", "a collaboration operation row is not readable; the migration receipt cannot be trusted");
+  }
+  if (!("result_json" in row) || !("committed_at" in row) || !("rowid" in row)) {
+    throw new StoreError("store.corrupt", "a collaboration operation row is missing its receipt columns");
+  }
+  const { result_json: resultJson, committed_at: committedAt, rowid } = row;
+  if (typeof resultJson !== "string" || typeof committedAt !== "string" || typeof rowid !== "number") {
+    throw new StoreError("store.corrupt", "a collaboration operation row carries a malformed receipt; the migration receipt cannot be trusted");
+  }
+  return { resultJson, committedAt, rowid };
+}
+
+/** The recorded `phase` row of one reviewed import, addressed by its manifest hash. */
+export function readMigrationPhaseRow(db: StoreDb, phase: MigrationPhase, manifestHash: string): MigrationPhaseRow | undefined {
+  return phaseRowOf(
+    db.prepare(`select ${PHASE_ROW_COLUMNS} from collaboration_operations where operation_id = ?`)
+      .get(migrationPhaseOperationId(phase, manifestHash)),
+  );
+}
+
+/** Every recorded row of one phase, in the order the lane committed them. */
+export function readMigrationPhaseRows(db: StoreDb, phase: MigrationPhase): MigrationPhaseRow[] {
+  const rows = db
+    .prepare(`select ${PHASE_ROW_COLUMNS} from collaboration_operations where operation_id like ? order by rowid`)
+    .all(`migration:${phase}:%`);
+  return rows.map((row) => phaseRowOf(row)!);
+}
+
+/**
+ * Record one phase row inside the caller's lane transaction. The lane's unique
+ * operation index is the whole replay guard: an operation id that already
+ * exists — this import's own replay, or an unrelated operation that happens to
+ * carry a `migration:*` id — is refused by name instead of being adopted.
+ */
+export function insertMigrationPhaseRow(db: StoreDb, phase: MigrationPhase, manifestHash: string, result: unknown, at: string): void {
+  const operationId = migrationPhaseOperationId(phase, manifestHash);
+  const occupied = db.prepare("select key_space from collaboration_operations where operation_id = ?").get(operationId);
+  if (occupied !== undefined) {
+    const keySpace = occupied !== null && typeof occupied === "object" && "key_space" in occupied ? String(occupied.key_space) : "unknown";
+    throw new StoreMigrationError(
+      "store.migration-manifest-invalid",
+      `the collaboration lane already records the operation id ${operationId} (${keySpace} key space); ` +
+        `refusing to adopt another operation's ${phase} receipt. Nothing was written.`,
+    );
+  }
+  db.prepare(
+    "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
+      "values ('standalone', ?, ?, ?, ?)",
+  ).run(operationId, manifestHash, JSON.stringify(result), at);
+}
+
+/** The stored document of one applied phase: the manifest, the mapping and the counts. */
+export type StoredApply = {
+  manifest: MigrationManifest;
+  mapping: MigrationMappingWithId[];
+  counts: MigrationReceipt["counts"];
+};
+
+/** The receipt projection of one recorded applied phase. */
+export function receiptOfStoredApply(stored: StoredApply, manifestHash: string, committedAt: string, replayed: boolean): MigrationReceipt {
+  // The stored mapping carries the full assignment: issue-classified rows with
+  // their allocated ids, history/excluded rows with an empty issueId.
+  const storedMapping = stored.mapping;
+  const counts = stored.counts;
   return {
-    receiptId: stored.id,
-    manifestHash: stored.manifest_hash,
+    manifestHash,
     phase: "applied",
     replayed,
     issueIds: storedMapping
@@ -609,7 +698,7 @@ function receiptOfStored(stored: StoredReceipt, replayed: boolean): MigrationRec
       storeRevision: counts.storeRevision,
     },
     storeRevision: counts.storeRevision,
-    appliedAt: stored.applied_at,
+    appliedAt: committedAt,
   };
 }
 
@@ -636,100 +725,92 @@ async function assertSourcesUnchanged(context: StoreContext, manifest: Migration
 }
 
 function readCounter(db: StoreDb): number {
-  const row = db.prepare("select next_value from issue_counter where id = 1").get() as { next_value?: number } | undefined;
-  if (typeof row?.next_value !== "number") {
+  const row = db.prepare("select next_value from issue_counter where id = 1").get();
+  if (row === null || typeof row !== "object" || !("next_value" in row) || typeof row.next_value !== "number") {
     throw new StoreError("store.corrupt", "issue_counter is missing; the store cannot allocate issue IDs");
   }
   return row.next_value;
 }
 
-/**
- * Open the store for the staged apply, creating the staged database when the
- * legacy workspace has none. The create-only initializer refuses legacy
- * workspaces (§2), so the migration apply is the ONLY path that gives one a
- * store — created through C1's schema primitive and immediately held in
- * `staged` state (§1: import is not activation; a staged store is read-only
- * to ordinary domain verbs).
- *
- * Crash safety: the create and the demotion cannot share one transaction
- * across C1's primitive, so a crash between them would leave an ACTIVE EMPTY
- * store. The next apply detects exactly that artifact — an active store with
- * no issues, occurrences, transitions, provenance, catalog rows, operations
- * or receipts in a workspace that provably holds legacy registers (this
- * function only runs under apply's source precondition) — recovers it to
- * staged, and proceeds. An active store holding ANY data is a live store and
- * still refuses `store.migration-active-store`.
- */
-async function ensureStagedStore(context: StoreContext): Promise<StoreHandle> {
-  if (!existsSync(storeDbPath(context))) {
-    const created = await initializeStore(context);
-    created.close();
+/** One integer `count(*) as n` of the given SQL; a malformed result is a corrupt lane. */
+function countOf(db: StoreDb, sql: string): number {
+  const row = db.prepare(sql).get();
+  if (row === null || typeof row !== "object" || !("n" in row) || typeof row.n !== "number") {
+    throw new StoreError("store.corrupt", `the collaboration lane could not be counted (${sql})`);
   }
-  const handle = await openStore(context, "write");
+  return row.n;
+}
+
+/** The lane's own revision; the staged apply advances it once per published import. */
+function readLaneRevision(db: StoreDb): number {
+  const row = db.prepare("select revision from collaboration_meta where id = 1").get();
+  if (row === null || typeof row !== "object" || !("revision" in row) || typeof row.revision !== "number") {
+    throw new StoreError("store.corrupt", "collaboration_meta is missing; the staged lane revision cannot be read");
+  }
+  return row.revision;
+}
+
+/**
+ * Refuse when the checkout's execution store is still the collaboration
+ * authority. The reviewed import never writes it — fenced or not — because a
+ * second authority holding the same rows is exactly what the cutover removed.
+ */
+async function assertNotCombinedSource(context: StoreContext): Promise<void> {
+  if (!existsSync(storeDbPath(context))) return;
+  const handle = await openStore(context, "read");
   try {
-    const meta = handle.db.prepare("select authority_state from store_meta where id = 1").get() as
-      | { authority_state?: string }
-      | undefined;
-    if (meta?.authority_state !== "staged") {
-      const empty = isSemanticallyEmptyStore(handle.db);
-      if (meta?.authority_state === "active" && empty) {
-        // The crashed create+demote artifact: an active store that has never
-        // held a single domain row, in a workspace that only a migration
-        // apply would be writing against. Recover it truthfully to staged.
-        handle.db.exec("begin immediate");
-        try {
-          handle.db.exec("update store_meta set authority_state = 'staged', activated_at = NULL where id = 1");
-          handle.db.exec("commit");
-        } catch (error) {
-          try {
-            handle.db.exec("rollback");
-          } catch {
-            // nothing committed either way
-          }
-          throw error;
-        }
-      } else {
-        throw new StoreMigrationError(
-          "store.migration-active-store",
-          meta?.authority_state === "active"
-            ? "the store is active and already holds data; a live active store cannot be overwritten by reimporting a manifest. Nothing was written."
-            : "the store is not staged; nothing was written.",
-        );
-      }
+    const fence = readCollaborationFence(handle.db);
+    if (fence !== null) {
+      throw new StoreError(
+        "collaboration.cutover-conflict",
+        `This combined store was already cut over (manifest ${fence.manifestId}, fenced at ${fence.fencedAt}), so a ` +
+          `file-era register import cannot write collaboration rows into it. The pre-cutover rows remain readable in ` +
+          `the verified image at ${fence.backupPath}. Nothing was written.`,
+      );
     }
-    return handle;
-  } catch (error) {
-    try {
-      handle.close();
-    } catch {
-      // already closed on a connection-level failure
+    const held = heldCollaborationSourceTables(handle.db);
+    if (held.length > 0) {
+      throw new StoreError(
+        "collaboration.cutover-required",
+        `This store still owns collaboration rows (${held.join(", ")}), so it is a combined source: a file-era ` +
+          `register import would create a second collaboration authority beside it. Nothing was written.`,
+      );
     }
-    throw error;
+  } finally {
+    handle.close();
   }
 }
 
 /**
- * True when the store carries no domain row at all — the shape of the store
- * the migration create path leaves behind if it crashes before the demotion.
+ * Open the collaboration lane the reviewed import stages into, creating the
+ * staged lane when the checkout has none. This is the ONLY path that stages
+ * collaboration data for a legacy filesystem workspace: the lane's own
+ * initializer creates it `staged`, an already published lane refuses (an import
+ * is never a second activation), and a lane staged by the reviewed CUTOVER
+ * refuses — its target belongs to that manifest, not to a file-era import.
  */
-function isSemanticallyEmptyStore(db: StoreDb): boolean {
-  const tables = [
-    "issues",
-    "occurrences",
-    "issue_transitions",
-    "provenance",
-    "relations",
-    "catalog_entities",
-    "catalog_links",
-    "catalog_operations",
-    "migration_receipts",
-    "store_operations",
-  ];
-  for (const table of tables) {
-    const row = db.prepare(`select count(*) as n from ${table}`).get() as { n?: number } | undefined;
-    if (row?.n !== 0) return false;
+async function openStagedLane(context: StoreContext): Promise<CollaborationLocation> {
+  const location = resolveCollaborationLocation(context);
+  if (!existsSync(location.dbPath)) await initializeCollaborationStore(location);
+  const staged = await readCollaborationStage(location, ({ db, authority }) => ({
+    authority,
+    publications: countOf(db, "select count(*) as n from cutover_publications"),
+  }));
+  if (staged.authority.state !== "staged") {
+    throw new StoreMigrationError(
+      "store.migration-active-store",
+      `the collaboration authority at ${location.dbPath} is already ${staged.authority.state}; a live published authority ` +
+        `cannot be overwritten by reimporting a manifest. Nothing was written.`,
+    );
   }
-  return true;
+  if (Number(staged.publications) > 0) {
+    throw new StoreError(
+      "collaboration.cutover-conflict",
+      `the collaboration authority at ${location.dbPath} is staged by the reviewed CUTOVER (${String(staged.publications)} ` +
+        `publication record(s)); its target is that manifest's, not a file-era register import's. Nothing was written.`,
+    );
+  }
+  return location;
 }
 
 function allocateIssueId(db: StoreDb): string {
@@ -952,15 +1033,15 @@ function applyCatalogEntities(db: StoreDb, plan: CatalogImportPlan, at: string):
  * `applyStoreMigration(context, manifest)` — the reviewed staged apply (§7).
  *
  * Requires a fully resolved manifest (no unresolved mapping, no catalog
- * conflict) and unchanged sources (byte hashes AND the source set). The
- * issue import, the catalog import and the receipt commit in ONE database
- * transaction; an identical manifest repeats as a replay returning the
- * recorded IDs; a changed manifest reconciles migration-owned data through
- * the stable legacy tuple, and a row removed from the sources refuses
- * instead of being deleted. A legacy workspace without a store gets one
- * created here in `staged` state; an existing ACTIVE store refuses a
- * reimport, and ordinary issue/catalog mutations refuse a staged
- * store elsewhere. Legacy register files are never written.
+ * conflict) and unchanged sources (byte hashes AND the source set). The issue
+ * import, the catalog import and the applied phase receipt commit in ONE
+ * collaboration-lane transaction; an identical manifest repeats as a replay
+ * returning the recorded IDs; a changed manifest reconciles migration-owned
+ * data through the stable legacy tuple, and a row removed from the sources
+ * refuses instead of being deleted. The checkout's execution store is never
+ * written: a combined source that still owns collaboration rows refuses with
+ * the cutover route, and an already published lane refuses as a second
+ * activation. Legacy register files are never written.
  */
 export async function applyStoreMigration(
   context: StoreContext,
@@ -1006,22 +1087,24 @@ export async function applyStoreMigration(
 
   const manifestHash = migrationManifestHash(manifest);
   const at = new Date().toISOString();
-  const handle: StoreHandle = await ensureStagedStore(context);
-  try {
-    const meta = handle.db.prepare("select authority_state from store_meta where id = 1").get() as
-      | { authority_state?: string }
-      | undefined;
-    if (meta?.authority_state !== "staged") {
+  await assertNotCombinedSource(context);
+  const location = await openStagedLane(context);
+  // ONE lane transaction: the imported rows, the catalog half, the revision
+  // bump and the applied phase receipt commit together or not at all.
+  return writeCollaborationStage(location, ({ db, authority }) => {
+    if (authority.state !== "staged") {
       throw new StoreMigrationError(
         "store.migration-active-store",
-        "the store is not staged; a live active store cannot be overwritten by reimporting a manifest. Nothing was written.",
+        "the collaboration authority is not staged; a live published authority cannot be overwritten by reimporting a manifest. Nothing was written.",
       );
     }
 
     const rows: ImportRow[] = manifest.mappings.map(parseImportRow);
-    const priorReceipts = readReceipts(handle.db);
-    const prior = priorReceipts.at(-1);
-    const priorMapping: MigrationMappingWithId[] = prior ? (JSON.parse(prior.mapping_json) as MigrationMappingWithId[]) : [];
+    const priorApplications = readMigrationPhaseRows(db, "applied");
+    const priorStored = priorApplications.at(-1);
+    const priorMapping: MigrationMappingWithId[] = priorStored
+      ? (JSON.parse(priorStored.resultJson) as StoredApply).mapping
+      : [];
     const priorByTuple = new Map(priorMapping.map((entry) => [tupleKeyOf(entry.source), entry]));
 
     // Reconciliation gate: a row the previous receipt imported but the
@@ -1038,172 +1121,149 @@ export async function applyStoreMigration(
       );
     }
 
-    handle.db.exec("begin immediate");
-    try {
-      const existingReceipt = handle.db
-        .prepare("select id, manifest_hash, mapping_json, source_counts_json, applied_at from migration_receipts where manifest_hash = ?")
-        .get(manifestHash) as StoredReceipt | undefined;
-      if (existingReceipt) {
-        // Identical manifest repeat: identical IDs, no writes (§7).
-        handle.db.exec("commit");
-        return receiptOfStored(existingReceipt, true);
-      }
-
-      const assignments: MigrationMappingWithId[] = [];
-      let created = 0;
-      let updated = 0;
-
-      for (const [index, row] of rows.entries()) {
-        // Test-owned injection: fires at the TOP of the row's turn, before the
-        // addressed row is processed and INSIDE the import transaction, so a
-        // throw proves the whole batch rolled back — no test-runner env var
-        // selects it.
-        hooks.beforeRow?.(index);
-        // History/excluded rows are recorded on the receipt verbatim WITHOUT
-        // allocating an issue (§3, FW-2). An imported issue is never demoted
-        // by a re-review: a prior ISSUE tuple that the re-reviewed manifest
-        // reclassifies refuses instead of deleting migration-owned rows.
-        if (row.mapping.classification !== "issue") {
-          const priorEntry = priorByTuple.get(row.tuple);
-          if (priorEntry !== undefined && priorEntry.issueId !== "") {
-            throw new StoreMigrationError(
-              "store.migration-manifest-invalid",
-              `entry ${JSON.stringify(row.mapping.source.entryId)} (${row.mapping.source.registerPath} bucket ${JSON.stringify(row.mapping.source.bucket)}) ` +
-                `was imported as issue ${priorEntry.issueId} but the re-reviewed manifest classifies it ${row.mapping.classification}; ` +
-                "an imported issue is never demoted by a re-review \u2014 restore its issue classification or remove the row from the sources with an explicit reviewed disposition. Nothing was written.",
-            );
-          }
-          assignments.push({ ...row.mapping, issueId: "" });
-          continue;
-        }
-        const priorEntry = priorByTuple.get(row.tuple);
-        if (priorEntry) {
-          if (priorEntry.issueId === "") {
-            // Prior history/excluded tuple, now reviewed as an issue: no id
-            // was ever allocated for it, so it takes a fresh allocation.
-            const issueId = allocateIssueId(handle.db);
-            const result = insertMigratedIssue(handle.db, row, issueId, at);
-            if (result === "created") created += 1;
-            assignments.push({ ...row.mapping, issueId });
-            continue;
-          }
-          // The tuple already owns an issue ID: reconcile the migration-owned
-          // columns only when the re-reviewed record differs; the ID and any
-          // non-migration data are never touched.
-          if (priorEntry.legacyJson !== row.mapping.legacyJson) {
-            reconcileMigratedIssue(handle.db, row, priorEntry.issueId, at);
-            updated += 1;
-          }
-          assignments.push({ ...row.mapping, issueId: priorEntry.issueId });
-          continue;
-        }
-        // Fresh tuple: identical-manifest first allocation uses the manifest's
-        // deterministic proposal (§3 sorted order); a later added tuple on a
-        // store with prior migration data allocates from the counter.
-        const issueId = priorReceipts.length === 0 ? row.mapping.proposedIssueId : allocateIssueId(handle.db);
-        const result = insertMigratedIssue(handle.db, row, issueId, at);
-        if (result === "created") created += 1;
-        assignments.push({ ...row.mapping, issueId });
-      }
-
-      const catalog = applyCatalogEntities(handle.db, manifest.catalog, at);
-
-      // Keep the counter ahead of any deterministic first allocation (issue
-      // rows only — history/excluded rows never allocate an id).
-      const issueAssignments = assignments.filter((entry) => entry.classification === "issue");
-      if (priorReceipts.length === 0) {
-        const maxAllocated = issueAssignments.reduce((max, entry) => Math.max(max, Number.parseInt(entry.issueId.slice(2), 10)), 0);
-        if (maxAllocated + 1 > readCounter(handle.db)) {
-          handle.db.prepare("update issue_counter set next_value = ? where id = 1").run(maxAllocated + 1);
-        }
-      }
-
-      // One store revision bump per published apply; the catalog revision
-      // advances only when the import actually created catalog rows (§2).
-      if (catalog.createdEntities > 0 || catalog.createdLinks > 0) {
-        handle.db.prepare("update store_meta set revision = revision + 1, catalog_revision = catalog_revision + 1 where id = 1").run();
-      } else {
-        handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-      }
-      const storeRevision = (handle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
-
-      const openCount = issueAssignments.filter((entry) => entry.disposition === "open").length;
-      const historyCount = assignments.filter((entry) => entry.classification === "history").length;
-      const excludedCount = assignments.filter((entry) => entry.classification === "excluded").length;
-      const counts: MigrationReceipt["counts"] = {
-        issues: issueAssignments.length,
-        open: openCount,
-        closed: issueAssignments.length - openCount,
-        history: historyCount,
-        excluded: excludedCount,
-        catalogEntities: catalog.entities.length,
-        catalogLinks: catalog.createdLinks,
-        created,
-        updated,
-        storeRevision,
-      };
-
-      // One receipt row carries the manifest, the persistent ID mapping and
-      // the source counts (§7) — same transaction as the rows above.
-      const receiptResult = handle.db
-        .prepare(
-          "insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at) " +
-            "values (?, 'applied', ?, ?, ?, ?)",
-        )
-        .run(manifestHash, JSON.stringify(manifest), JSON.stringify(assignments), JSON.stringify(counts), at);
-      const receiptId = Number((receiptResult as { lastInsertRowid: number | bigint }).lastInsertRowid);
-
-      // Journal the catalog half as one committed operation (§2 journal).
-      const catalogOpId = `migration:${manifestHash.slice(0, 24)}`;
-      handle.db
-        .prepare(
-          "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
-            "values (?, ?, 'committed', ?, ?, ?, ?, ?, ?)",
-        )
-        .run(
-          catalogOpId,
-          manifestHash,
-          JSON.stringify({ mutation: "applyStoreMigration", entities: catalog.createdEntities, links: catalog.createdLinks }),
-          JSON.stringify({}),
-          JSON.stringify({}),
-          JSON.stringify({ receiptId }),
-          at,
-          at,
-        );
-
-      handle.db.exec("commit");
-      return {
-        receiptId,
-        manifestHash,
-        phase: "applied",
-        replayed: false,
-        issueIds: assignments
-          .filter((entry) => entry.classification === "issue")
-          .map((entry) => ({ source: entry.source, issueId: entry.issueId })),
-        historyRows: assignments
-          .filter(
-            (entry): entry is MigrationMappingWithId & { classification: "history" | "excluded" } =>
-              entry.classification === "history" || entry.classification === "excluded",
-          )
-          .map((entry) => ({
-            source: entry.source,
-            classification: entry.classification,
-            rationale: entry.rationale ?? "",
-            legacyJson: entry.legacyJson,
-          })),
-        counts,
-        storeRevision,
-        appliedAt: at,
-      };
-    } catch (error) {
-      try {
-        handle.db.exec("rollback");
-      } catch {
-        // nothing committed either way
-      }
-      throw error;
+    // Identical manifest repeat: the recorded phase row IS the receipt, and no
+    // row is written (§7).
+    const existing = readMigrationPhaseRow(db, "applied", manifestHash);
+    if (existing !== undefined) {
+      return receiptOfStoredApply(JSON.parse(existing.resultJson) as StoredApply, manifestHash, existing.committedAt, true);
     }
-  } finally {
-    handle.close();
-  }
+
+    const assignments: MigrationMappingWithId[] = [];
+    let created = 0;
+    let updated = 0;
+
+    for (const [index, row] of rows.entries()) {
+      // Test-owned injection: fires at the TOP of the row's turn, before the
+      // addressed row is processed and INSIDE the import transaction, so a
+      // throw proves the whole batch rolled back — no test-runner env var
+      // selects it.
+      hooks.beforeRow?.(index);
+      // History/excluded rows are recorded on the receipt verbatim WITHOUT
+      // allocating an issue (§3, FW-2). An imported issue is never demoted
+      // by a re-review: a prior ISSUE tuple that the re-reviewed manifest
+      // reclassifies refuses instead of deleting migration-owned rows.
+      if (row.mapping.classification !== "issue") {
+        const priorEntry = priorByTuple.get(row.tuple);
+        if (priorEntry !== undefined && priorEntry.issueId !== "") {
+          throw new StoreMigrationError(
+            "store.migration-manifest-invalid",
+            `entry ${JSON.stringify(row.mapping.source.entryId)} (${row.mapping.source.registerPath} bucket ${JSON.stringify(row.mapping.source.bucket)}) ` +
+              `was imported as issue ${priorEntry.issueId} but the re-reviewed manifest classifies it ${row.mapping.classification}; ` +
+              "an imported issue is never demoted by a re-review \u2014 restore its issue classification or remove the row from the sources with an explicit reviewed disposition. Nothing was written.",
+          );
+        }
+        assignments.push({ ...row.mapping, issueId: "" });
+        continue;
+      }
+      const priorEntry = priorByTuple.get(row.tuple);
+      if (priorEntry) {
+        if (priorEntry.issueId === "") {
+          // Prior history/excluded tuple, now reviewed as an issue: no id
+          // was ever allocated for it, so it takes a fresh allocation.
+          const issueId = allocateIssueId(db);
+          const result = insertMigratedIssue(db, row, issueId, at);
+          if (result === "created") created += 1;
+          assignments.push({ ...row.mapping, issueId });
+          continue;
+        }
+        // The tuple already owns an issue ID: reconcile the migration-owned
+        // columns only when the re-reviewed record differs; the ID and any
+        // non-migration data are never touched.
+        if (priorEntry.legacyJson !== row.mapping.legacyJson) {
+          reconcileMigratedIssue(db, row, priorEntry.issueId, at);
+          updated += 1;
+        }
+        assignments.push({ ...row.mapping, issueId: priorEntry.issueId });
+        continue;
+      }
+      // Fresh tuple: identical-manifest first allocation uses the manifest's
+      // deterministic proposal (§3 sorted order); a later added tuple on a
+      // store with prior migration data allocates from the counter.
+      const issueId = priorApplications.length === 0 ? row.mapping.proposedIssueId : allocateIssueId(db);
+      const result = insertMigratedIssue(db, row, issueId, at);
+      if (result === "created") created += 1;
+      assignments.push({ ...row.mapping, issueId });
+    }
+
+    const catalog = applyCatalogEntities(db, manifest.catalog, at);
+
+    // Keep the counter ahead of any deterministic first allocation (issue
+    // rows only — history/excluded rows never allocate an id).
+    const issueAssignments = assignments.filter((entry) => entry.classification === "issue");
+    if (priorApplications.length === 0) {
+      const maxAllocated = issueAssignments.reduce((max, entry) => Math.max(max, Number.parseInt(entry.issueId.slice(2), 10)), 0);
+      if (maxAllocated + 1 > readCounter(db)) {
+        db.prepare("update issue_counter set next_value = ? where id = 1").run(maxAllocated + 1);
+      }
+    }
+
+    // One lane revision bump per published apply; the catalog revision
+    // advances only when the import actually created catalog rows (§2).
+    if (catalog.createdEntities > 0 || catalog.createdLinks > 0) {
+      db.prepare("update collaboration_meta set revision = revision + 1, catalog_revision = catalog_revision + 1 where id = 1").run();
+    } else {
+      db.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
+    }
+    const storeRevision = readLaneRevision(db);
+
+    const openCount = issueAssignments.filter((entry) => entry.disposition === "open").length;
+    const historyCount = assignments.filter((entry) => entry.classification === "history").length;
+    const excludedCount = assignments.filter((entry) => entry.classification === "excluded").length;
+    const counts: MigrationReceipt["counts"] = {
+      issues: issueAssignments.length,
+      open: openCount,
+      closed: issueAssignments.length - openCount,
+      history: historyCount,
+      excluded: excludedCount,
+      catalogEntities: catalog.entities.length,
+      catalogLinks: catalog.createdLinks,
+      created,
+      updated,
+      storeRevision,
+    };
+
+    // One phase row carries the reviewed manifest, the persistent ID mapping
+    // and the source counts (§7) — same transaction as the rows above.
+    const stored: StoredApply = { manifest, mapping: assignments, counts };
+    insertMigrationPhaseRow(db, "applied", manifestHash, stored, at);
+
+    // Journal the catalog half as one committed operation (§2 journal).
+    const catalogOpId = `migration:${manifestHash.slice(0, 24)}`;
+    db.prepare(
+      "insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) " +
+        "values (?, ?, 'committed', ?, ?, ?, ?, ?, ?)",
+    ).run(
+      catalogOpId,
+      manifestHash,
+      JSON.stringify({ mutation: "applyStoreMigration", entities: catalog.createdEntities, links: catalog.createdLinks }),
+      JSON.stringify({}),
+      JSON.stringify({}),
+      JSON.stringify({ manifestHash }),
+      at,
+      at,
+    );
+
+    return {
+      manifestHash,
+      phase: "applied",
+      replayed: false,
+      issueIds: assignments
+        .filter((entry) => entry.classification === "issue")
+        .map((entry) => ({ source: entry.source, issueId: entry.issueId })),
+      historyRows: assignments
+        .filter(
+          (entry): entry is MigrationMappingWithId & { classification: "history" | "excluded" } =>
+            entry.classification === "history" || entry.classification === "excluded",
+        )
+        .map((entry) => ({
+          source: entry.source,
+          classification: entry.classification,
+          rationale: entry.rationale ?? "",
+          legacyJson: entry.legacyJson,
+        })),
+      counts,
+      storeRevision,
+      appliedAt: at,
+    };
+  });
 }

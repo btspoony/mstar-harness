@@ -246,7 +246,7 @@ function refusalOf(error: unknown): { code: string; message: string } {
 /** What the issue store says about a register target. */
 type AuthorityRoute =
   | { kind: "legacy" }
-  | { kind: "retired"; storeRevision: number }
+  | { kind: "retired"; storeRevision: number | null }
   | { kind: "unavailable"; code: string; message: string };
 
 /** The authority answers from the ACTIVE store: the runtime floor is asserted on
@@ -305,11 +305,11 @@ function storeDirectWriteRefusal(targetPath: string, log: StatusLogger): GateRes
   );
 }
 
-function registerRetiredRefusal(storeRevision: number, log: StatusLogger): GateResult {
+function registerRetiredRefusal(storeRevision: number | null, log: StatusLogger): GateResult {
   return authorityRefusal(
     REGISTER_RETIRED_CODE,
     "project registers are retired migration history — the issue store ({HARNESS_DIR}/store.db, revision " +
-      `${storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
+      `${storeRevision === null ? "unobserved" : storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
       "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused",
     log,
   );

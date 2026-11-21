@@ -91,8 +91,24 @@ export type StoreErrorCode =
   // database, and a trusted repository/mode/store-id/epoch that does not match.
   | "collaboration.not-initialized"
   | "collaboration.not-active"
+  | "collaboration.operation-partial"
   | "collaboration.unreadable"
-  | "collaboration.stale-binding";
+  | "collaboration.stale-binding"
+  // The one-way authority cutover (collaboration-cutover.ts): a combined or
+  // partially cut store is not runtime authority, a competing source/mode/
+  // manifest cannot win by force, pending catalog or mirror work must be
+  // settled first, and a fence without a verified recovery point never runs.
+  | "collaboration.cutover-required"
+  | "collaboration.cutover-conflict"
+  | "collaboration.cutover-not-quiescent"
+  // The fence's own durable boundary failed: a failed commit or an incomplete
+  // rollback leaves the persisted state UNCONFIRMED, so the operator must
+  // inspect it instead of retrying as if nothing happened.
+  | "collaboration.cutover-unconfirmed"
+  | "collaboration.backup-incomplete"
+  // The cutover activation input: an activation needs a named operator whose
+  // own attestation document is the one supplied.
+  | "store.attestation-invalid";
 
 /** Typed refusal with an actionable, stable code and optional machine facts. */
 export class StoreError extends Error {
@@ -1928,6 +1944,105 @@ drop table issue_project_moves_v19_stage;
 drop table issue_sync_state_v19_stage;
 `;
 
+/**
+ * Migration 20 - the collaboration cutover fence, in two parts.
+ *
+ * It detaches the execution-side catalog pin (`catalog_execution_bindings`)
+ * from the portable catalog identity: the pin rows are copied verbatim into a
+ * table of the same shape WITHOUT the foreign key, because catalog entities
+ * move to the per-repository collaboration database and SQLite cannot express
+ * that reference across files. Nothing about a pin's value, revision, hash or
+ * operation id changes; only the constraint that cannot hold after the move is
+ * gone. The cutover resolves pinned `(kind, id)` logically.
+ *
+ * It creates the single-row fence ledger (`collaboration_cutover`) that records
+ * a completed extraction: manifest identity, the exact source generation, the
+ * target stamp and the retained verified recovery point. A fresh store carries
+ * an empty ledger; the fence writes its one row in the cutover transaction, and
+ * that row is what tells a completed fence apart from a store that never held
+ * collaboration rows. Recording this version is also the durable schema
+ * advance: a binary built before the cutover refuses the fenced file as
+ * `store.schema-unsupported` instead of reopening the moved tables.
+ */
+export const MIGRATION_20_SQL = `
+create table catalog_execution_bindings_v20_stage as select * from catalog_execution_bindings;
+drop table catalog_execution_bindings;
+create table catalog_execution_bindings(
+  workflow_id text not null,
+  catalog_kind text not null check (catalog_kind in ('iteration','plan')),
+  catalog_id text not null,
+  workflow_root_kind text not null check (workflow_root_kind in ('repository','harness','plans','iterations','specs','knowledge','projects')),
+  workflow_relative_path text not null,
+  catalog_revision integer not null,
+  input_hash text not null,
+  pin_json text not null,
+  operation_id text not null,
+  primary key (workflow_id, catalog_kind, catalog_id)
+);
+insert into catalog_execution_bindings select * from catalog_execution_bindings_v20_stage;
+drop table catalog_execution_bindings_v20_stage;
+create table if not exists collaboration_cutover(
+  id integer primary key check (id = 1),
+  manifest_id text not null,
+  manifest_digest text not null,
+  source_store_id text not null,
+  source_epoch integer not null,
+  source_schema_version integer not null,
+  source_revision integer not null,
+  source_catalog_revision integer not null,
+  target_store_id text not null,
+  target_epoch integer not null,
+  backup_path text not null,
+  fenced_at text not null
+);
+`;
+
+/**
+ * Migration 21 - the composite reservation ledger.
+ *
+ * One cross-store composite (residual add/close, registration, minimal import)
+ * cannot be one transaction across the two databases, so the admitted execution
+ * operation reserves the execution facts it will finalize and correlates them
+ * with the collaboration effect it is about to commit. This table is that
+ * reservation: the `prepared` row (scoped to the addressed plan row or workflow)
+ * is the exclusion every conflicting execution writer checks, the frozen
+ * payload/target/token are what a resume must match, and the phase records how
+ * far the operation provably got (`prepared`, `declined` with its durable
+ * deterministic cause, or `confirmed` after the execution delta committed).
+ *
+ * The partial unique index is the reservation itself: at most ONE pending
+ * composite per addressed plan row in this execution generation. A declined or
+ * confirmed row releases the plan; a failed attempt never deletes another
+ * attempt's live reservation.
+ */
+export const MIGRATION_21_SQL = `
+create table execution_collaboration_intents(
+  execution_store_id text not null,
+  execution_epoch integer not null check (execution_epoch > 0),
+  operation_id text not null,
+  kind text not null check (kind in ('residual-add','residual-close','execution-register','execution-import')),
+  request_hash text not null,
+  workflow_id text,
+  plan_id text,
+  actor text not null,
+  expected_token text not null,
+  reserved_revision integer not null check (reserved_revision > 0),
+  target_json text not null,
+  frozen_payload text not null,
+  phase text not null check (phase in ('prepared','declined','confirmed')),
+  receipt_json text,
+  cause_code text,
+  cause_message text,
+  cause_details_json text,
+  created_at text not null,
+  updated_at text not null,
+  primary key (execution_store_id, execution_epoch, operation_id)
+);
+create unique index execution_collaboration_intents_pending_plan
+  on execution_collaboration_intents(execution_epoch, workflow_id, plan_id)
+  where phase = 'prepared' and plan_id is not null;
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry - append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -1949,6 +2064,8 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 17, name: "sync-push-ledger", sql: MIGRATION_17_SQL },
   { version: 18, name: "sync-run-lease", sql: MIGRATION_18_SQL },
   { version: 19, name: "issue-obsolete-disposition", sql: MIGRATION_19_SQL },
+  { version: 20, name: "collaboration-cutover-fence", sql: MIGRATION_20_SQL },
+  { version: 21, name: "execution-collaboration-intents", sql: MIGRATION_21_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
@@ -2179,6 +2296,158 @@ export function readStoreAuthority(db: StoreDb): StoreAuthorityRead {
     storeId: row?.store_id,
     epoch: row?.authority_epoch,
     missing: row === undefined,
+  };
+}
+
+/**
+ * A completed collaboration cutover, as the combined store records it: the
+ * exact manifest it was fenced for, the source generation that was extracted,
+ * the target stamp it was published to and the retained verified recovery
+ * point. The row's presence is the difference between "this store never held
+ * collaboration rows" and "the collaboration rows moved out of this store".
+ */
+export type CollaborationFence = Readonly<{
+  manifestId: string;
+  manifestDigest: string;
+  sourceStoreId: string;
+  sourceEpoch: number;
+  sourceSchemaVersion: number;
+  sourceRevision: number;
+  sourceCatalogRevision: number;
+  targetStoreId: string;
+  targetEpoch: number;
+  backupPath: string;
+  fencedAt: string;
+}>;
+
+/**
+ * The store's collaboration-owned tables. A store that still holds rows in any
+ * of them owns its issue/catalog authority the pre-cutover way, and a file-era
+ * import or fresh bootstrap would mint a SECOND authority beside it. The fence
+ * drops exactly these tables, so a fenced store has nothing to refuse by row
+ * count — its own refusal comes first, and names the retained pre-fence image.
+ *
+ * `issue_counter` is the allocator: a pristine store always carries its
+ * singleton row, so only a MOVED allocator counts as held authority.
+ *
+ * This lives here — the one module every store layer imports — so the bootstrap,
+ * the file-era import and the runtime binding check share ONE rule without an
+ * import cycle.
+ */
+const COLLABORATION_HELD_TABLES: readonly string[] = [
+  "issues",
+  "occurrences",
+  "relations",
+  "provenance",
+  "issue_transitions",
+  "issue_project_moves",
+  "issue_sync_state",
+  "sync_cursor",
+  "sync_runs",
+  "project_bindings",
+  "project_roadmaps",
+  "project_milestones",
+  "catalog_entities",
+  "catalog_links",
+  "catalog_operations",
+];
+
+/**
+ * The subset that carries DOMAIN AUTHORITY: every collaboration-owned table
+ * except the catalog registration journal. A journal row is pending execution
+ * state a supported verb reconciles; by itself it never makes a checkout the
+ * issue/catalog authority, so a runtime lane read must not be refused for it.
+ */
+const COLLABORATION_AUTHORITY_TABLES: readonly string[] = COLLABORATION_HELD_TABLES.filter(
+  (table) => table !== "catalog_operations",
+);
+
+/** Every collaboration AUTHORITY table this store still holds rows for, in listing order. */
+export function heldCollaborationTables(db: StoreDb): string[] {
+  return heldTablesAmong(db, COLLABORATION_AUTHORITY_TABLES);
+}
+
+/** Every collaboration-owned table (authority AND journal) this store still holds rows for. */
+export function heldCollaborationSourceTables(db: StoreDb): string[] {
+  return heldTablesAmong(db, COLLABORATION_HELD_TABLES);
+}
+
+function heldTablesAmong(db: StoreDb, tablesWanted: readonly string[]): string[] {
+  const tables = tableNamesOn(db);
+  const held: string[] = [];
+  for (const table of tablesWanted) {
+    if (!tables.has(table)) continue;
+    const row = db.prepare(`select count(*) as n from ${table}`).get();
+    if (row !== null && typeof row === "object" && "n" in row && typeof row.n === "number" && row.n > 0) held.push(table);
+  }
+  if (tables.has("issue_counter")) {
+    const allocator = db.prepare("select next_value from issue_counter where id = 1").get();
+    if (
+      allocator !== null &&
+      typeof allocator === "object" &&
+      "next_value" in allocator &&
+      typeof allocator.next_value === "number" &&
+      allocator.next_value > 1
+    ) {
+      held.push("issue_counter");
+    }
+  }
+  return held;
+}
+
+/**
+ * Read the fence ledger of an existing store: `null` when the file never held a
+ * cutover (including a store migrated only to an earlier schema, which has no
+ * ledger table at all), the one recorded fence otherwise. A ledger row that
+ * cannot be read as the declared shape is corrupt evidence, never an absent
+ * fence: a caller must not treat a damaged fence as permission to write.
+ */
+export function readCollaborationFence(db: StoreDb): CollaborationFence | null {
+  const present = db
+    .prepare("select count(*) as n from sqlite_master where type='table' and name='collaboration_cutover'")
+    .get() as { n?: number } | undefined;
+  if (!present?.n) return null;
+  const row = db
+    .prepare(
+      "select manifest_id, manifest_digest, source_store_id, source_epoch, source_schema_version, " +
+        "source_revision, source_catalog_revision, target_store_id, target_epoch, backup_path, fenced_at " +
+        "from collaboration_cutover where id = 1",
+    )
+    .get() as Record<string, unknown> | undefined;
+  if (row === undefined) return null;
+  const text = (value: unknown): value is string => typeof value === "string" && value !== "";
+  const count = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value);
+  if (
+    !text(row.manifest_id) ||
+    !text(row.manifest_digest) ||
+    !text(row.source_store_id) ||
+    !count(row.source_epoch) ||
+    !count(row.source_schema_version) ||
+    !count(row.source_revision) ||
+    !count(row.source_catalog_revision) ||
+    !text(row.target_store_id) ||
+    !count(row.target_epoch) ||
+    !text(row.backup_path) ||
+    !text(row.fenced_at)
+  ) {
+    throw new StoreError(
+      "store.corrupt",
+      "collaboration_cutover holds a malformed fence record; the cutover evidence cannot be verified. Nothing was " +
+        "modified; recover the store from its verified pre-fence backup.",
+    );
+  }
+  return {
+    manifestId: row.manifest_id,
+    manifestDigest: row.manifest_digest,
+    sourceStoreId: row.source_store_id,
+    sourceEpoch: row.source_epoch,
+    sourceSchemaVersion: row.source_schema_version,
+    sourceRevision: row.source_revision,
+    sourceCatalogRevision: row.source_catalog_revision,
+    targetStoreId: row.target_store_id,
+    targetEpoch: row.target_epoch,
+    backupPath: row.backup_path,
+    fencedAt: row.fenced_at,
   };
 }
 
@@ -2747,6 +3016,20 @@ async function openStoreOnce(dbPath: string, mode: "read" | "write", timeout: nu
     db.close();
     throw error;
   }
+}
+
+/**
+ * The table names ONE connection can actually see.
+ *
+ * A recorded schema version is not a table inventory: the collaboration
+ * cutover's fence drops the moved collaboration tables while keeping the
+ * schema version, so a reader that derives "which tables exist" from the
+ * version alone asks for tables a fenced store no longer has. Every reader that
+ * enumerates tables judges presence from the connection itself.
+ */
+export function tableNamesOn(db: StoreDb): ReadonlySet<string> {
+  const rows = db.prepare("select name from sqlite_master where type = 'table'").all() as Array<{ name?: unknown }>;
+  return new Set(rows.map((row) => String(row.name)));
 }
 
 /**

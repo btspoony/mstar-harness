@@ -1,9 +1,17 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getMilestoneCommandDefinitions } from "../src/families/milestone.js";
-import { initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
+import {
+  initializeCollaborationStore,
+  initializeStore,
+  registerCatalogEntity,
+  resolveCollaborationLocation,
+} from "@mstar-harness/engine";
 import { getCatalogCommandDefinitions, getRoadmapCommandDefinitions } from "../src/index.js";
 import { failure as catalogFailure } from "../src/families/catalog.js";
 import { failure as roadmapFailure } from "../src/families/roadmap.js";
@@ -11,7 +19,16 @@ import { failure as roadmapFailure } from "../src/families/roadmap.js";
 import type { InvocationContext } from "../src/types.js";
 
 const root = mkdtempSync(join(tmpdir(), "commands-catalog-roadmap-"));
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+const home = join(root, "home");
+mkdirSync(home);
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => home);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(root, { recursive: true, force: true });
+});
 
 function invocation(cwd: string): InvocationContext {
   return {
@@ -30,12 +47,34 @@ const catalog = Object.fromEntries(getCatalogCommandDefinitions().map((definitio
 const roadmap = Object.fromEntries(getRoadmapCommandDefinitions().map((definition) => [definition.id, definition]));
 const markdown = (title: string) => `---\nproject_id: proj\ntitle: ${JSON.stringify(title)}\nstatus: active\ncreated_at: 2026-09-26\n---\n\n## Direction\n\nReviewed roadmap content.\n`;
 
-async function activeFixture(name: string): Promise<{ cwd: string; harness: string }> {
+/** A synthetic checkout whose origin names the collaboration repository. */
+function checkout(name: string, originSlug = name): { cwd: string; harness: string } {
   const cwd = join(root, name);
+  mkdirSync(cwd, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${originSlug}.git`], { cwd, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(join(cwd, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(cwd, ".mstar");
   mkdirSync(harness, { recursive: true });
+  return { cwd, harness };
+}
+
+/** The private staged record flipped to active: this plan ships no public activator. */
+function activate(harness: string): void {
+  const db = new DatabaseSync(resolveCollaborationLocation({ harnessDir: harness }).dbPath);
+  try {
+    db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
+  } finally {
+    db.close();
+  }
+}
+
+async function activeFixture(name: string): Promise<{ cwd: string; harness: string }> {
+  const { cwd, harness } = checkout(name);
   const store = await initializeStore({ harnessDir: harness });
   store.close();
+  await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
+  activate(harness);
   await registerCatalogEntity({ harnessDir: harness }, {
     kind: "project", id: "proj", title: "Project", rootKind: "projects", relativePath: "proj",
   }, { operationId: `${name}-project`, actor: "test" });
@@ -68,28 +107,23 @@ describe("catalog and roadmap command families", () => {
   });
 
   test("catalog queries refuse an inactive store rather than returning an empty catalog", async () => {
-    const cwd = join(root, "inactive");
-    mkdirSync(join(cwd, ".mstar"), { recursive: true });
-    const result = await catalog["catalog.list"]!.execute({ harness: join(cwd, ".mstar") }, invocation(cwd));
+    const { cwd, harness } = checkout("inactive");
+    const result = await catalog["catalog.list"]!.execute({ harness }, invocation(cwd));
     expect(result.status).toBe("refused");
-    expect(result.code).toMatch(/^store\.(not-initialized|not-active)$/);
+    expect(result.code).toBe("collaboration.not-initialized");
   });
-  test("inactive catalog mutation exposes the store activation recovery", async () => {
-    const cwd = join(root, "inactive-mutation");
-    const harness = join(cwd, ".mstar");
-    mkdirSync(harness, { recursive: true });
-    const store = await initializeStore({ harnessDir: harness });
-    store.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
-    store.close();
+  test("inactive catalog mutation exposes the collaboration activation recovery", async () => {
+    const { cwd, harness } = checkout("inactive-mutation");
+    // The lane exists but is staged: ordinary catalog traffic is refused at
+    // admission and the recovery is the reviewed activation sequence.
+    await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
     const result = await catalog["catalog.register"]!.execute({
       harness, kind: "document", id: "doc", title: "Doc", rootKind: "specs", path: "doc.md",
       operationId: "inactive-register", actor: "test",
     }, invocation(cwd));
     expect(result.status).toBe("refused");
-    expect(result.code).toBe("store.not-active");
-    expect(result.message).toContain("store upgrade --operator <name>");
-    expect(result.message).toContain("store activate --manifest <migration.json> --attestation <file.json>");
-    expect(result.message).toContain("then retry");
+    expect(result.code).toBe("collaboration.not-active");
+    expect(result.message).toContain("apply/activate");
   });
 
 
@@ -137,6 +171,26 @@ describe("catalog and roadmap command families", () => {
     if (listed.status === "ok") expect(JSON.stringify(listed.data)).toContain("proj");
     if (shown.status === "ok") expect(JSON.stringify(shown.data)).toContain("Project");
     if (exported.status === "ok") expect(JSON.stringify(exported.data)).toContain("proj");
+
+    // A replacement clone with the same repository identity but no local
+    // catalog content and no execution store reads the same logical rows: the
+    // project location resolves against THIS checkout and is disclosed absent.
+    const clone = checkout("catalog-read-data-clone", "catalog-read-data");
+    const cloneList = await catalog["catalog.list"]!.execute({ harness: clone.harness, kind: "project" }, invocation(clone.cwd));
+    expect(cloneList.status).toBe("ok");
+    const cloneShow = await catalog["catalog.show"]!.execute({ harness: clone.harness, kind: "project", id: "proj" }, invocation(clone.cwd));
+    expect(cloneShow.status).toBe("ok");
+    if (cloneShow.status === "ok") {
+      expect(cloneShow.data).toMatchObject({ entity: { relativePath: "proj", present: false } });
+    }
+    // A sparse plan registration whose document is missing here is a named
+    // refusal; it never mints or rebinds the registered execution location.
+    const missingPlan = await catalog["catalog.register"]!.execute({
+      harness: clone.harness, kind: "plan", file: join(clone.harness, "plans", "plan-missing.md"), operationId: "clone-plan", actor: "test",
+    }, invocation(clone.cwd));
+    expect(missingPlan.status).toBe("refused");
+    expect(missingPlan.code).toBe("plan-path.not-a-file");
+    expect(existsSync(join(clone.harness, "store.db"))).toBe(false);
   });
 
   test("sparse catalog register derives a plan row's identity, title and location from its document", async () => {

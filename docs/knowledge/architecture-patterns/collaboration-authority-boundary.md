@@ -4,7 +4,7 @@ date: 2026-11-21
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
-plan_id: 20261121-collab-identity-store
+plan_id: <plan-id>
 applies_when:
   - "adding or changing the collaboration database, its repository identity, or its authority lifecycle"
   - "routing issue, project, milestone, roadmap, catalog, or mirror reads and writes out of the execution store"

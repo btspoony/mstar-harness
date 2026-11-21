@@ -25,6 +25,7 @@ import {
 } from "./workflows-data";
 
 const projection = {
+  observed: true,
   generation: 7,
   freshness: "current" as const,
   builtAt: "2026-10-25T05:00:00.000Z",
@@ -54,6 +55,8 @@ const listEnvelope = (items: WorkflowDTO[], total: number, generation: number | 
   storeRevision: 1224,
   catalogRevision: 9,
   projection: { ...projection, generation },
+  collaboration: null,
+  execution: null,
 });
 
 const renderList = (items: WorkflowDTO[], total: number, generation: number | null = 7): string => {

@@ -31,6 +31,7 @@ import {
 import { DEFAULT_ISSUE_FILTERS, DISPOSITIONS, ISSUE_KINDS, SEVERITIES } from "@mstar-harness/ui";
 
 const projection = {
+  observed: true,
   generation: 7,
   freshness: "current" as const,
   builtAt: "2026-10-25T05:00:00.000Z",
@@ -57,6 +58,8 @@ const listEnvelope = (items: IssuePage["items"], total = items.length, projectio
   storeRevision: 1224,
   catalogRevision: 9,
   projection: projectionBlock,
+  collaboration: null,
+  execution: null,
 });
 
 const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({

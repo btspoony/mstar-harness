@@ -8,14 +8,19 @@
  * boundary; nothing is mocked.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
+import { DatabaseSync } from "node:sqlite";
+import { execFileSync } from "node:child_process";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { MAX_DASHBOARD_SEARCH_LENGTH, dashboardFailure, dashboardFilters, readDashboardView } from "./dashboard-view.js";
 import { catalogRootDir, linkCatalogEntities, registerCatalogEntity } from "./catalog.js";
 import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
 import { captureIssue, getIssue, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_SEVERITIES } from "./issue.js";
 import { addMilestone } from "./milestone-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, readCollaborationAuthority } from "./collaboration-store.js";
 import { initializeStore, openStore } from "./store-db.js";
 import { queryDashboard, withStoreRead } from "./store-read.js";
 import type { CatalogEntityInput, CatalogOperation } from "./catalog.js";
@@ -34,18 +39,41 @@ import type {
 } from "./store-read.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dashboard-view-"));
+const TEST_HOME = join(ROOT, "home");
+mkdirSync(TEST_HOME, { recursive: true });
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => TEST_HOME);
+});
 const RECORDED_AT = "2026-10-22T00:00:00.000Z";
 
 afterAll(() => {
+  homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 
 async function workspace(name: string): Promise<StoreContext> {
-  const harness = join(mkdtempSync(join(ROOT, name)), ".mstar");
+  const dir = mkdtempSync(join(ROOT, name));
+  execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`], {
+    cwd: dir,
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
+  const harness = join(dir, ".mstar");
   mkdirSync(harness, { recursive: true });
   const context: StoreContext = { harnessDir: harness };
   const handle = await initializeStore(context);
   handle.close();
+  await initializeCollaborationStore(resolveCollaborationLocation(context));
+  const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  try {
+    lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+  } finally {
+    lane.close();
+  }
   return context;
 }
 
@@ -170,9 +198,17 @@ describe("readDashboardView over a real store", () => {
   });
 
   test("surfaces a store refusal through dashboardFailure", async () => {
-    const harness = join(mkdtempSync(join(ROOT, "uninitialized-")), ".mstar");
+    const dir = mkdtempSync(join(ROOT, "uninitialized-"));
+    execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/uninitialized.git"], {
+      cwd: dir,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
+    const harness = join(dir, ".mstar");
+    mkdirSync(harness, { recursive: true });
     const failure = await readDashboardView({ context: { harnessDir: harness }, view: "issues" }).catch((error: unknown) => error);
-    expect(dashboardFailure(failure)).toMatchObject({ code: "store.not-initialized" });
+    expect(dashboardFailure(failure)).toMatchObject({ code: "collaboration.not-initialized" });
   });
 });
 
@@ -304,13 +340,9 @@ function readMember<T>(member: OverviewMember<T>): T {
   return member.data;
 }
 
+/** The CAS revision the milestone verbs guard on: the collaboration counter. */
 async function storeRevision(context: StoreContext): Promise<number> {
-  const handle = await openStore(context, "read");
-  try {
-    return (handle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
-  } finally {
-    handle.close();
-  }
+  return (await readCollaborationAuthority(context)).revision;
 }
 
 /** One plan workflow per gate case: the plan row's workflow id is the plan id. */
@@ -789,20 +821,24 @@ describe("overview read model", () => {
       operation("register-proj-a"),
     );
     // Remove the one table the milestone member reads; every other reader is
-    // untouched, so only `milestones` may answer `unavailable`.
-    const handle = await openStore(context, "write");
+    // untouched, so only `milestones` may answer `unavailable`. The project is
+    // removed from the catalog, which the milestone grouping resolves against;
+    // the other members keep reading their own rows.
+    const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
     try {
-      handle.db.exec("drop table project_milestones");
-      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+      lane.exec("delete from catalog_entities where kind = 'project' and id = 'proj-a'");
+      lane.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
     } finally {
-      handle.close();
+      lane.close();
     }
 
     const overview = (await readDashboardView({ context, view: "overview", params: { project: "proj-a" } }))
       .data as OverviewDTO;
     expect(overview.milestones.state).toBe("unavailable");
     // The reason is the store's own message, not a rewritten one.
-    expect(overview.milestones.state === "unavailable" ? overview.milestones.reason : "").toContain("project_milestones");
+    expect(overview.milestones.state === "unavailable" ? overview.milestones.reason : "").toContain(
+      "Project proj-a does not exist",
+    );
     for (const member of [overview.workflows, overview.residuals, overview.latestIteration, overview.issueFlow] as const) {
       expect(member.state).toBe("read");
     }

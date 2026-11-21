@@ -25,6 +25,7 @@ import {
 } from "./iterations-data";
 
 const projection = {
+  observed: true,
   generation: 7,
   freshness: "current" as const,
   builtAt: "2026-10-25T05:00:00.000Z",
@@ -70,6 +71,8 @@ const listEnvelope = (
   storeRevision: 1224,
   catalogRevision: 9,
   projection: { ...projection, generation },
+  collaboration: null,
+  execution: null,
 });
 
 const renderList = (

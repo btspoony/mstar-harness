@@ -27,6 +27,7 @@ import {
 } from "./overview-data";
 
 const projection = {
+  observed: true,
   generation: 7,
   freshness: "current" as const,
   builtAt: "2026-10-25T05:00:00.000Z",
@@ -110,6 +111,8 @@ const envelope = (data: OverviewDTO = healthy(), projectionBlock = projection): 
   storeRevision: 1224,
   catalogRevision: 9,
   projection: projectionBlock,
+  collaboration: null,
+  execution: null,
 });
 
 /**

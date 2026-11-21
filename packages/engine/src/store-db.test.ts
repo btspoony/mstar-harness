@@ -11,8 +11,9 @@
  * databases are removed after the run.
  */
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import * as nodeFs from "node:fs";
+import * as nodeOs from "node:os";
 import { chmodSync, copyFileSync, existsSync, fstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +21,9 @@ import { DatabaseSync } from "node:sqlite";
 import { applyStoreMigration, planStoreMigration } from "./store-migrate.js";
 import { historicalStore } from "./store-migration-fixtures.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
-import { backupStore } from "./store-activation.js";
+import { ACTIVATION_PROTOCOL_VERSION, activateStore, backupStore, ensureCollaborationAuthority } from "./store-activation.js";
+import { readCollaborationStage } from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import {
   MIGRATION_15_SQL,
   MIGRATION_16_SQL,
@@ -35,9 +38,11 @@ import {
   compareVersions,
   initializeStore,
   openStore,
+  readAppliedMigrations,
   readStoreAuthority,
   SettlementAttestationNeeded,
   upgradeStore,
+  validateAppliedMigrations,
   type StoreContext,
 } from "./store-db.js";
 import { withRawRead } from "./store-file-probe.js";
@@ -53,7 +58,14 @@ const BUNDLE = join(ROOT, "dist", "store-test-runtime.mjs");
 const NODE_BIN = process.env.MSTAR_TEST_NODE_BIN ?? "node";
 let bundleError = "";
 
+/** The user-level collaboration lane is resolved through `homedir`; isolate it. */
+const LANE_HOME = join(ROOT, "lane-home");
+mkdirSync(LANE_HOME, { recursive: true });
+let retiredClaimSequence = 0;
+let laneHomeSpy: { mockRestore(): void } | undefined;
+
 beforeAll(() => {
+  laneHomeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => LANE_HOME);
   mkdirSync(join(ROOT, "dist"), { recursive: true });
   copyFileSync(join(import.meta.dir, "..", "package.json"), join(ROOT, "package.json"));
   const built = spawnSync(
@@ -65,6 +77,7 @@ beforeAll(() => {
 }, 60_000);
 
 afterAll(() => {
+  laneHomeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 
@@ -1511,13 +1524,13 @@ describe("store-db publication makes the canonical directory entry durable", () 
     expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
   }, 60_000);
 
-  test("a public upgrade of a STAGED store stops before import, reports no activation, and completes once the barrier clears", async () => {
-    // A REAL non-active store with work still pending: the migration apply
-    // stages the legacy register rows, so issue/catalog authority is `staged`
-    // and the public upgrade still has to import and activate. The barrier runs
-    // in `upgradeStore`, BEFORE the wrapper's import, so this is exactly the
-    // window the diagnostic must not overstate.
+  test("a public upgrade never publishes a staged file-era import, and completes once it is activated", async () => {
+    // A file-era checkout: legacy registers are the issue authority, the
+    // reviewed apply stages the LANE, and nothing has published it yet. The
+    // execution upgrade must neither write that lane nor claim its activation.
     const dir = mkdtempSync(join(ROOT, "barrier-staged-legacy-"));
+    execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+    writeFileSync(join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${retiredClaimSequence++}\n`);
     const harnessDir = join(dir, ".mstar");
     const projectsDir = join(harnessDir, "projects", "_default");
     mkdirSync(projectsDir, { recursive: true });
@@ -1543,68 +1556,54 @@ describe("store-db publication makes the canonical directory entry durable", () 
         },
       }),
     );
-    const context = { harnessDir };
-    await applyStoreMigration(context, await planStoreMigration(context));
-    const authorityState = async (): Promise<string> => {
-      const opened = await openStore(context, "read");
-      try {
-        const row = opened.db.prepare("select authority_state from store_meta where id = 1").get();
-        return row !== null && typeof row === "object" && "authority_state" in row ? String(row.authority_state) : "";
-      } finally {
-        opened.close();
-      }
-    };
-    expect(await authorityState()).toBe("staged");
+    const context: StoreContext = { harnessDir, checkoutRoot: dir };
+    const applied = await applyStoreMigration(context, await planStoreMigration(context));
+    const laneState = async (): Promise<{ state: string; issues: unknown[] }> =>
+      readCollaborationStage(resolveCollaborationLocation(context), ({ db, authority }) => ({
+        state: authority.state,
+        issues: db.prepare("select id, title from issues order by id").all(),
+      }));
+    expect((await laneState()).state).toBe("staged");
     const sourceBytes = readFileSync(join(projectsDir, "residuals.json"));
-    const before = await openStore(context, "read");
-    let expectedIssues: unknown[];
-    try {
-      expectedIssues = before.db.prepare("select * from issues order by id").all();
-      expect(expectedIssues).toContainEqual(expect.objectContaining({ title: "Staged legacy residual", severity: "high" }));
-    } finally {
-      before.close();
-    }
+    const stagedIssues = (await laneState()).issues;
+    expect(stagedIssues).toContainEqual(expect.objectContaining({ title: "Staged legacy residual" }));
+    // No execution store was created by the import.
+    expect(existsSync(join(harnessDir, "store.db"))).toBe(false);
 
-    const instrument = failDirectoryBarriers();
-    let refusal: unknown;
-    try {
-      refusal = await upgradeStoreMinimal({ context, operator: "fixture-operator", operationId: "staged-barrier-fail" }).then(
-        () => null,
-        (error) => error,
-      );
-    } finally {
-      instrument.restore();
-    }
-    expect(refusal).toMatchObject({
-      code: "store.publication-barrier-failed",
-      details: { path: join(harnessDir, "store.db"), published: true, barrier: "upgrade" },
-    });
-    const message = refusal instanceof Error ? refusal.message : "";
-    expect(message).toMatch(/EIO|simulated directory fsync failure/);
-    expect(message).toContain("--harness");
-    // F1's product evidence, not prose: this boundary performed no activation,
-    // so the real authority stays staged and the staged rows are untouched.
-    expect(await authorityState()).toBe("staged");
-    const staged = await openStore(context, "read");
-    try {
-      expect(staged.db.prepare("select * from issues order by id").all()).toEqual(expectedIssues);
-    } finally {
-      staged.close();
-    }
-    // The staged legacy source bytes are preserved.
+    // The execution upgrade refuses the unpublished lane by name and writes
+    // nothing at all.
+    const refusal = await upgradeStoreMinimal({ context, operator: "fixture-operator", operationId: "staged-authority-upgrade" }).then(
+      () => null,
+      (error) => error,
+    );
+    expect(refusal).toMatchObject({ code: "collaboration.not-active" });
+    expect((await laneState()).state).toBe("staged");
     expect(readFileSync(join(projectsDir, "residuals.json"))).toEqual(sourceBytes);
 
-    // Once the barrier condition clears, the SAME public entry really finishes:
-    // the authority activates and the staged rows stay exactly as they were.
-    const result = await upgradeStoreMinimal({ context, operator: "fixture-operator", operationId: "staged-barrier-retry" });
+    // Once the reviewed activation publishes it, the SAME public entry really
+    // finishes — and the staged rows it now owns are exactly as imported.
+    await activateStore(context, applied, {
+      version: ACTIVATION_PROTOCOL_VERSION,
+      attestedAt: "2026-10-04T00:00:00Z",
+      operator: { actor: "fixture-operator", authorizationRef: "store-db fixture" },
+      consumers: [
+        {
+          entryId: "coordinator-fixture",
+          kind: "coordinator",
+          entrypoint: "/opt/mstar/coordinator/dist/mstar-harness.js",
+          runtime: "node",
+          runtimeVersion: SETTLEMENT_FACTS.runtimeVersion,
+          version: "0.0.0-synthetic",
+          current: true,
+          disposition: "reloaded",
+        },
+      ],
+      stoppedSessions: [],
+    });
+    expect((await laneState()).state).toBe("active");
+    const result = await upgradeStoreMinimal({ context, operator: "fixture-operator", operationId: "staged-authority-upgrade-retry" });
     expect(result.authorityState).toBe("active");
-    expect(await authorityState()).toBe("active");
-    const activated = await openStore(context, "read");
-    try {
-      expect(activated.db.prepare("select * from issues order by id").all()).toEqual(expectedIssues);
-    } finally {
-      activated.close();
-    }
+    expect((await laneState()).issues).toEqual(stagedIssues);
     expect(readFileSync(join(projectsDir, "residuals.json"))).toEqual(sourceBytes);
   }, 60_000);
 });
@@ -1671,6 +1670,11 @@ function retiredClaimStore(
   claims: ReadonlyArray<{ workflowId: string; holder: string; claimedAt?: string }>,
 ): { context: StoreContext; workflowIds: string[] } {
   const dir = mkdtempSync(join(ROOT, `retired-claims-${name}-`));
+  // The settlement runs through `store.upgrade`, which owns the checkout's
+  // collaboration authority too: the fixture is a real origin-less checkout.
+  execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+  writeFileSync(join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${retiredClaimSequence++}\n`);
+  const context: StoreContext = { harnessDir: dir, checkoutRoot: dir };
   const db = new DatabaseSync(join(dir, "store.db"));
   try {
     db.exec("pragma foreign_keys=on");
@@ -1706,7 +1710,7 @@ function retiredClaimStore(
   } finally {
     db.close();
   }
-  return { context: { harnessDir: dir }, workflowIds: claims.map((claim) => claim.workflowId) };
+  return { context, workflowIds: claims.map((claim) => claim.workflowId) };
 }
 
 /** One settled claim's tombstone JSON, read through a fresh read-only handle. */
@@ -1731,6 +1735,7 @@ describe("retired plan-PM claim settlement", () => {
       { workflowId: "wf-settlement-two-a", holder: "holder-two" },
       { workflowId: "wf-settlement-two-b", holder: "holder-two" },
     ]);
+    await ensureCollaborationAuthority(context);
     // The settlement names one stop row per HOLDER in sorted order: the two
     // claims holder-two left behind are ONE attested holder.
     const signal = await upgradeStore(context, { operator: "operator", raiseSettlementSignal: true }).catch((error: unknown) => error);
@@ -1758,6 +1763,7 @@ describe("retired plan-PM claim settlement", () => {
     const { context, workflowIds } = retiredClaimStore("clock", [
       { workflowId: "wf-settlement-clock", holder: "holder-clock", claimedAt },
     ]);
+    await ensureCollaborationAuthority(context);
     // Ambient time cannot cover the claim the upgrade generated its own
     // document for: the named cause and recovery are unchanged.
     await expect(
@@ -1980,5 +1986,124 @@ describe("migration 18 - the run lease", () => {
       { direction: "push", run_id: "run-1", holder_pid: 42 },
     ]);
     db.close();
+  });
+});
+
+describe("migration 20 - the cutover fence preserves catalog pins", () => {
+  test("a schema-19 store with existing pins upgrades without losing them and refuses an old reader", async () => {
+    const dir = mkdtempSync(join(ROOT, "cutover-pins-upgrade-"));
+    // A store written by the pre-cutover schema, its catalog pins populated
+    // BEFORE the upgrade.
+    const before = historicalStore(dir, 19);
+    before.prepare(
+      "insert into catalog_entities(kind,id,title,root_kind,relative_path,lifecycle,revision,registered_at,updated_at)" +
+        " values ('plan','plan-pin','Pinned plan','plans','plan-pin.md','active',4,'2026-11-01T00:00:00.000Z','2026-11-01T00:00:00.000Z')",
+    ).run();
+    before.prepare(
+      "insert into catalog_entities(kind,id,title,root_kind,relative_path,lifecycle,revision,registered_at,updated_at)" +
+        " values ('iteration','iteration-pin','Pinned iteration','iterations','iteration-pin/compass.md','active',2,'2026-11-01T00:00:00.000Z','2026-11-01T00:00:00.000Z')",
+    ).run();
+    const insertPin = before.prepare(
+      "insert into catalog_execution_bindings(workflow_id,catalog_kind,catalog_id,workflow_root_kind,workflow_relative_path," +
+        "catalog_revision,input_hash,pin_json,operation_id) values (?,?,?,?,?,?,?,?,?)",
+    );
+    insertPin.run("wf-plan", "plan", "plan-pin", "plans", "plan-pin.md", 4, "hash-plan", '{"pin":"plan"}', "op-plan");
+    insertPin.run(
+      "wf-iteration",
+      "iteration",
+      "iteration-pin",
+      "iterations",
+      "iteration-pin/compass.md",
+      2,
+      "hash-iteration",
+      '{"pin":"iteration"}',
+      "op-iteration",
+    );
+    const pinColumns = [
+      "workflow_id",
+      "catalog_kind",
+      "catalog_id",
+      "workflow_root_kind",
+      "workflow_relative_path",
+      "catalog_revision",
+      "input_hash",
+      "pin_json",
+      "operation_id",
+    ];
+    const pinsBefore = before
+      .prepare(`select ${pinColumns.join(", ")} from catalog_execution_bindings order by workflow_id`)
+      .all();
+    expect(pinsBefore).toHaveLength(2);
+    // The pre-cutover pin still carries its cross-domain catalog foreign key
+    // (one composite key, reported as one row per column).
+    expect(
+      (before.prepare("pragma foreign_key_list(catalog_execution_bindings)").all() as Array<{
+        table?: unknown;
+        from?: unknown;
+        to?: unknown;
+      }>).map((key) => [key.table, key.from, key.to]),
+    ).toEqual([
+      ["catalog_entities", "catalog_kind", "kind"],
+      ["catalog_entities", "catalog_id", "id"],
+    ]);
+    before.close();
+
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
+
+    const upgraded = await openStore({ harnessDir: dir }, "read");
+    try {
+      const { db } = upgraded;
+      expect(upgraded.schemaVersion).toBe(MIGRATIONS.length);
+      // Same columns, same rows, same values: the pin is untouched.
+      expect(
+        (db.prepare("pragma table_info(catalog_execution_bindings)").all() as Array<{ name?: unknown }>).map(
+          (column) => column.name,
+        ),
+      ).toEqual(pinColumns);
+      expect(
+        db.prepare(`select ${pinColumns.join(", ")} from catalog_execution_bindings order by workflow_id`).all(),
+      ).toEqual(pinsBefore);
+      // The portable catalog identity (now living in the collaboration lane) is
+      // untouched by the migration that detaches the pin's foreign key.
+      expect(db.prepare("select kind, id, revision from catalog_entities order by kind").all()).toEqual([
+        { kind: "iteration", id: "iteration-pin", revision: 2 },
+        { kind: "plan", id: "plan-pin", revision: 4 },
+      ]);
+      // The cross-domain constraint is gone and no row violates anything else.
+      expect(db.prepare("pragma foreign_key_list(catalog_execution_bindings)").all()).toEqual([]);
+      expect(db.prepare("pragma foreign_key_check").all()).toEqual([]);
+      // The fence ledger arrives empty: a store that never ran the cutover
+      // reports no fence at all.
+      expect(db.prepare("select count(*) as n from collaboration_cutover").get()).toEqual({ n: 0 });
+
+      // An OLD reader - the pre-cutover migration prefix - refuses this file
+      // instead of reopening it with the pin's foreign key assumed.
+      let oldReader: { code?: string; details?: Record<string, unknown> } = {};
+      try {
+        validateAppliedMigrations(readAppliedMigrations(db, false), MIGRATIONS.slice(0, -1));
+      } catch (error) {
+        const typed = error as { code?: string; details?: Record<string, unknown> };
+        oldReader = { code: typed.code, details: typed.details };
+      }
+      expect(oldReader.code).toBe("store.schema-unsupported");
+      expect(oldReader.details).toMatchObject({
+        storeSchemaVersion: MIGRATIONS.length,
+        supportedSchemaMax: MIGRATIONS.length - 1,
+        firstUnsupportedMigration: MIGRATIONS.length,
+      });
+    } finally {
+      upgraded.close();
+    }
+
+    // The ordinary open path still refuses a damaged applied set as designed.
+    const tampered = new DatabaseSync(join(dir, "store.db"));
+    try {
+      tampered.exec("delete from schema_version where version = 10");
+    } finally {
+      tampered.close();
+    }
+    await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({ code: "store.schema-drift" });
+
+    rmSync(dir, { recursive: true, force: true });
   });
 });

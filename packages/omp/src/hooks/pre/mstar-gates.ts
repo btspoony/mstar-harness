@@ -115,7 +115,7 @@ function refusalOf(error: unknown): { code: string; message: string } {
  * store refuses; no document-backed fallback is admitted.
  */
 type AuthorityRoute =
-  | { kind: "retired"; storeRevision: number }
+  | { kind: "retired"; storeRevision: number | null }
   | { kind: "unavailable"; code: string; message: string };
 
 async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
@@ -173,11 +173,11 @@ function storeDirectWriteRefusal(rawPath: string): { block: true; reason: string
   );
 }
 
-function registerRetiredRefusal(storeRevision: number): { block: true; reason: string } {
+function registerRetiredRefusal(storeRevision: number | null): { block: true; reason: string } {
   return authorityRefusal(
     REGISTER_RETIRED_CODE,
     "project registers are retired migration history — the issue store ({HARNESS_DIR}/store.db, revision " +
-      `${storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
+      `${storeRevision === null ? "unobserved" : storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
       "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused",
   );
 }
