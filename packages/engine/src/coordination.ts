@@ -731,6 +731,13 @@ export type CatalogFacts = {
   storeId: string | null;
   revision: number | null;
   relation_hash: string | null;
+  /**
+   * The source stores whose VERIFIED, active cutover publication targets this
+   * collaboration store and epoch (contract §Cutover state machine / §Security:
+   * lineage is an explicit publication, never inferred from a matching id).
+   * Empty when no catalog is active.
+   */
+  lineage: readonly string[];
 };
 
 /**
@@ -795,21 +802,21 @@ export async function readCatalogFacts(harnessRoot: string, planId: string): Pro
     handle = await openCollaborationStore(context, "read");
   } catch (error) {
     if (error instanceof StoreError && error.code === "collaboration.not-initialized") {
-      return { store: "absent", storeId: null, revision: null, relation_hash: null };
+      return { store: "absent", storeId: null, revision: null, relation_hash: null, lineage: [] };
     }
     if (error instanceof StoreError && error.code === "collaboration.not-active") {
-      return { store: "inactive", storeId: null, revision: null, relation_hash: null };
+      return { store: "inactive", storeId: null, revision: null, relation_hash: null, lineage: [] };
     }
     // A workspace with no resolvable repository identity has no collaboration
     // scope at all — the same harmless absence `path.ts` tolerates. A mode or
     // config refusal is a real misconfiguration and still propagates.
     if (error instanceof CollaborationIdentityError && error.code === "collaboration.repo-identity-unresolved") {
-      return { store: "absent", storeId: null, revision: null, relation_hash: null };
+      return { store: "absent", storeId: null, revision: null, relation_hash: null, lineage: [] };
     }
     throw error;
   }
   try {
-    return catalogFactsOn(handle.db, handle.authority.storeId, planId);
+    return catalogFactsOn(handle.db, handle.authority.storeId, handle.authority.epoch, planId);
   } finally {
     handle.close();
   }
@@ -817,10 +824,17 @@ export async function readCatalogFacts(harnessRoot: string, planId: string): Pro
 
 /**
  * The catalog facts through a collaboration connection the caller already
- * admitted as ACTIVE: the row revision and the relation hash the execution
- * selection copies. No execution table is read here.
+ * admitted as ACTIVE: the row revision, the relation hash, and the VERIFIED
+ * lineage of this exact store+epoch (an active cutover publication whose target
+ * is this store/epoch names the source stores it migrated). No execution table
+ * is read here, and a matching id is never accepted as lineage on its own.
  */
-export function catalogFactsOn(db: StoreDb, storeId: string, planId: string): CatalogFacts {
+export function catalogFactsOn(
+  db: StoreDb,
+  storeId: string,
+  epoch: number,
+  planId: string,
+): CatalogFacts {
   const entity = db
     .prepare("select revision, root_kind, relative_path from catalog_entities where kind = 'plan' and id = ?")
     .get(planId) as { revision?: unknown } | undefined;
@@ -840,11 +854,20 @@ export function catalogFactsOn(db: StoreDb, storeId: string, planId: string): Ca
       "utf8",
     )
     .digest("hex");
+  const lineage = db
+    .prepare(
+      "select distinct source_store_id from cutover_publications " +
+        "where phase = 'active' and target_store_id = ? and target_epoch = ?",
+    )
+    .all(storeId, epoch) as Array<{ source_store_id?: unknown }>;
   return {
     store: "active",
     storeId,
     revision: typeof entity?.revision === "number" ? entity.revision : null,
     relation_hash: relationHash,
+    lineage: lineage
+      .map((row) => row.source_store_id)
+      .filter((value): value is string => typeof value === "string"),
   };
 }
 

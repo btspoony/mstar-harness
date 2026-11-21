@@ -79,6 +79,8 @@ import {
   setCompleteWitnessGapForTest,
 } from "./execution-coordination.js";
 import { resolveSddDir } from "./path.js";
+import { registerCatalogEntity } from "./catalog.js";
+import type { CatalogExecutionPin } from "./coordination.js";
 import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 import type { WorkflowEntry } from "./status.js";
@@ -1478,6 +1480,7 @@ async function completionFixture(
   planContext: ExecutionContext;
   session: ExecutionSessionRef;
   planId: string;
+  worktreePath: string;
   token: () => Promise<ExecutionToken>;
   complete: (operationId: string) => Promise<ExecutionReceipt<ExecutionPlanView>>;
 }> {
@@ -1559,6 +1562,7 @@ async function completionFixture(
     planContext,
     session,
     planId: COMPLETION_PLAN,
+    worktreePath,
     token,
     complete: async (operationId: string) =>
       completeExecutionPlan(planContext, {

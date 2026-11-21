@@ -799,6 +799,15 @@ export async function prepareExecutionPlan(
   assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "config"], "prepare operation");
   const inputs = readPrepareInputs(resolved.call);
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
+  // §4.1/§4.2 RECEIPT-FIRST: an exact retry of a committed prepare is served
+  // from the execution ledger before any collaboration read, so a retry still
+  // replays when the collaboration store became unavailable or unreadable after
+  // the first attempt. Only a first attempt reads catalog facts.
+  const replayed = await readPlanOperationReplayBeforeProof<ExecutionPlanView>(context, resolved.read, {
+    operationId: resolved.call.operationId,
+    requestHash,
+  });
+  if (replayed !== null) return replayed;
   // The catalog facts come from their own (collaboration) source, before the
   // execution transaction: freezing the observed revision is an observed
   // selection, never a cross-file atomic claim. A missing/staged catalog keeps
@@ -902,17 +911,29 @@ function writePreparedConfig(
   // lane's own row. Neither is read through the other's connection.
   const catalogActive = catalogFacts.store === "active" && catalogFacts.storeId !== null;
   if (catalogActive && sealed.pin !== null) {
-    // A new pin names the collaboration store that owns the catalog; a
-    // historical pin names the combined store this execution row kept as its
-    // own identity. Any third identity is foreign and refuses.
-    if (sealed.pin.store_id !== catalogFacts.storeId && sealed.pin.store_id !== tx.storeId) {
+    // A new pin names the collaboration store that owns the catalog.
+    const namesCurrentCatalog = sealed.pin.store_id === catalogFacts.storeId;
+    // A historical pin names the combined store this execution row kept as its
+    // own identity. Accepting it requires the VERIFIED migration lineage — an
+    // active cutover publication for this exact catalog store+epoch whose
+    // source is this source store. Id equality alone proves nothing, and a
+    // changed prepare must never rebind onto an unrelated active catalog.
+    const provenMigrationSource =
+      sealed.pin.store_id === tx.storeId && catalogFacts.lineage.includes(tx.storeId);
+    if (!namesCurrentCatalog && !provenMigrationSource) {
       throw new ExecutionPinConflictError(
-        `plan ${planId}'s recorded catalog identity belongs to another store`,
-        { workflow_id: workflowId, plan_id: planId, store_id: catalogFacts.storeId },
+        `plan ${planId}'s recorded catalog identity cannot be proven as the migration source of the active catalog`,
+        {
+          workflow_id: workflowId,
+          plan_id: planId,
+          pin_store_id: sealed.pin.store_id,
+          catalog_store_id: catalogFacts.storeId,
+          verified_source_stores: [...catalogFacts.lineage],
+        },
       );
     }
   }
-  const pin = catalogActive
+  const selected = catalogActive
     ? selectCatalogPinOn(
         { ...catalogFacts, binding: bindingFactsOn(tx.db, workflowId, planId) },
         sealed.inputHash,
@@ -920,6 +941,15 @@ function writePreparedConfig(
     // No readable catalog: prepare preserves the recorded pin instead of
     // clearing lineage it cannot verify.
     : sealed.pin;
+  // An active catalog that no longer holds the plan must disclose the missing
+  // identity as a conflict, never silently delete the sealed selection.
+  if (catalogActive && selected === null && sealed.pin !== null) {
+    throw new ExecutionPinConflictError(
+      `plan ${planId} is pinned to catalog store ${sealed.pin.store_id}, but the active catalog no longer holds that plan entity`,
+      { workflow_id: workflowId, plan_id: planId, pin: sealed.pin, catalog_store_id: catalogFacts.storeId },
+    );
+  }
+  const pin = selected;
   const metadata: Record<string, unknown> = { ...storedMetadata };
   if (nextWorktree !== undefined) metadata.worktree_path = nextWorktree;
   if (nextBranch !== undefined) metadata.working_branch = nextBranch;
