@@ -1625,9 +1625,9 @@ async function resumeInterruptedPair(
     if (!existsSync(path)) continue;
     // A present-but-not-an-image side is an interrupted link, not a missing side:
     // re-copying over it would silently replace unverified bytes.
-    let stats: ReturnType<typeof statSync>;
+    let stats: ReturnType<typeof lstatSync>;
     try {
-      stats = statSync(path);
+      stats = lstatSync(path);
     } catch (error) {
       throw incompletePair(`The pair attempt's image ${path} cannot be inspected (${messageOf(error)}); nothing was published.`);
     }
@@ -1762,10 +1762,12 @@ function ownsPrivateImage(side: PairAttemptClaim["execution"], attempt: string, 
   } catch {
     return false;
   }
-  if (!existsSync(side.privatePath)) return false;
-  let stats: ReturnType<typeof statSync>;
+  let stats: ReturnType<typeof lstatSync>;
   try {
-    stats = statSync(side.privatePath);
+    // lstat, not stat: a symlink (even one whose target has the right shape, digest
+    // and parent) is not this attempt's regular scratch image and is never reused
+    // or unlinked — a backup must never depend on an external link.
+    stats = lstatSync(side.privatePath);
   } catch {
     return false;
   }
@@ -2409,10 +2411,10 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
     throw new StoreError(
       "collaboration.stale-binding",
       `This checkout holds no finalized binding for the ACTIVE collaboration authority store ${authority.storeId} at ` +
-        `${location.dbPath}, and store init never adopts an active authority. Acquire the binding through the verb that ` +
-        `published it: mstar store collaboration activate --manifest <cutover-manifest> --operator <name> (reviewed cutover) ` +
-        `or mstar store activate --manifest <applied-manifest> --operator <name> (file-era import), or restore its verified ` +
-        `pair. Nothing was adopted or changed.`,
+        `${location.dbPath}, and store init never adopts an active authority. Acquire it with the supported adoption verb: ` +
+        `mstar store collaboration adopt --harness ${context.harnessDir} --expect-store ${authority.storeId} (it verifies the ` +
+        `recorded publication lineage), or re-run the activation/restore that published this generation. Nothing was adopted ` +
+        `or changed.`,
     );
   }
   const published = await writeCollaborationStage(location, ({ db, authority: current }) => {

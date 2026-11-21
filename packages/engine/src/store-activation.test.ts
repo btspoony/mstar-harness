@@ -14,7 +14,7 @@
  */
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -1812,6 +1812,9 @@ describe("collaboration lifecycle", () => {
     expect(lane).toEqual({ issues: { n: 0 } });
   });
 
+
+
+
   test("an unbound clone refuses store init on every attempt and never adopts an active authority", async () => {
     const repoKey = `fixture-replacement-${repoSequence++}`;
     const origin = repoWorkspaceWithKey("replacement-origin-", repoKey);
@@ -3009,6 +3012,20 @@ describe("control-checkout binding states", () => {
 });
 
 describe("switch safety", () => {
+  test("the unbound-checkout refusal names the supported adoption verb", async () => {
+    const fixture = await boundWorkspace("binding-refusal-text-");
+    const location = resolveCollaborationLocation(fixture.context);
+    const live = await readCollaborationStage(location, ({ authority }) => authority);
+    rmSync(join(fixture.harness, "collaboration-binding.json"), { force: true });
+    const error = (await openCollaborationStore(fixture.context, "read").then(
+      () => null,
+      (failure: unknown) => failure as { code?: string; message: string },
+    ));
+    expect(error?.code).toBe("collaboration.stale-binding");
+    expect(error!.message).toContain("store collaboration adopt --harness");
+    expect(error!.message).toContain(`--expect-store ${live.storeId}`);
+    expect(error!.message).not.toContain("store init (adopts");
+  });
   /** A checkout with both authorities and its binding recorded by the creating verb. */
   async function boundWorkspace(name: string): Promise<Fixture> {
     const fixture = repoWorkspace(name);
@@ -3062,6 +3079,29 @@ describe("switch safety", () => {
 });
 
 describe("pair attempt ownership and restore repair", () => {
+  test("a symlinked private image is never adopted or unlinked", async () => {
+    const fixture = await pairFixture("attempt-symlink-private-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    writeAttemptClaim(out, receipt);
+    const claimPath = `${out}.pair-attempt.json`;
+    const claim = JSON.parse(readFileSync(claimPath, "utf8")) as { collaboration: { privatePath: string } };
+    // A symlink at the EXACT private name, pointing at a file with the right digest:
+    // shape, parent and bytes all look valid, but it is not a regular file.
+    const target = `${claim.collaboration.privatePath}.target`;
+    copyFileSync(pairImage(receipt, "collaboration"), target);
+    symlinkSync(target, claim.collaboration.privatePath);
+    writeFileSync(claimPath, `${JSON.stringify(claim, null, 2)}\n`);
+    const targetBytes = readFileSync(target);
+    rmSync(out, { force: true });
+    rmSync(pairImage(receipt, "collaboration"), { force: true });
+
+    await expect(backupRepositoryStores(fixture.context, { out })).rejects.toThrow(/cannot be completed/);
+    // The link is untouched (still a symlink) and its target is byte-identical.
+    expect(lstatSync(claim.collaboration.privatePath).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target).equals(targetBytes)).toBe(true);
+    expect(existsSync(pairImage(receipt, "collaboration"))).toBe(false);
+  });
   async function pairFixture(name: string): Promise<Fixture> {
     const fixture = repoWorkspace(name);
     (await initializeStore(fixture.context)).close();

@@ -1696,9 +1696,10 @@ async function assertControlBinding(
       throw new StoreError(
         "collaboration.stale-binding",
         `This checkout holds no collaboration binding for the ACTIVE authority store ${authority.storeId} at ` +
-          `${location.dbPath}, so it cannot be proven to own it. Acquire the binding through the supported path \u2014 ` +
-          `mstar store init (adopts an active authority for this checkout) or the activation that publishes it \u2014 never by ` +
-          `reading it as a fresh clone. Nothing was modified.`,
+          `${location.dbPath}, so it cannot be proven to own it. Acquire it with the supported adoption verb: ` +
+          `mstar store collaboration adopt --harness ${context.harnessDir} --expect-store ${authority.storeId} ` +
+          `(or re-run the activation/restore that published this generation). store init never adopts an active authority, ` +
+          `so it is not the recovery. Nothing was modified.`,
       );
     }
     return;

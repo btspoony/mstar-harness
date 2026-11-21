@@ -123,7 +123,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
                     : code === "collaboration.not-initialized"
                       ? "This checkout has no collaboration authority yet: run mstar store init for a fresh scope, mstar store upgrade --operator <name> for file-era execution state, or mstar store collaboration restore --backup <abs-manifest> for a verified pair."
                       : code === "collaboration.unreadable" || code === "collaboration.stale-binding"
-                        ? "Resolve the scope again with mstar path resolve, correct the configured origin or .mstarc mode, then retry; never retarget a bound checkout by editing its mode."
+                        ? "Resolve the scope again with mstar path resolve and correct the configured origin or .mstarc mode; a checkout that must bind an already published authority uses mstar store collaboration adopt --harness <abs> --expect-store <store-id> (never store init), and a bound checkout is never retargeted by editing its mode."
                         : code === "store.upgrade-attestation-missing"
           // A held retired claim needs stop evidence at or after the claim instant.
           ? "Rerun the same upgrade with an explicit document whose attestedAt is at or after the claim instant: mstar store upgrade --operator <name> --attestation <absolute-json>."
