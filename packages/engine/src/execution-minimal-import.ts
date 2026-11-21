@@ -6,7 +6,15 @@ import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { rowPlanId, validatePlanRow, validateStatusV2, validateWorkflowEntry, type StatusV2Doc, type WorkflowEntry } from "./status.js";
 import { validateWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 import { CompassSkipError, convertLegacyV1Tree, DeliveryDeclarationError, MIGRATE_STATUS_FILE, type DeliveryLiftDeclarations, type LegacyV1Conversion } from "./migrate.js";
-import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
+import { ExecutionError, assertOperationId, executionRootTokenOf, suppliedCatalogPin, withExecutionTransaction, type ExecutionTransaction } from "./execution-store.js";
+import { readCatalogStoreVersionsOn } from "./catalog.js";
+import {
+  reserveCompositeIntent,
+  runCollaborationComposite,
+  type CollaborationEffectReceipt,
+  type CompositeIntent,
+} from "./collaboration-operations.js";
+import { readCollaborationAuthority, type CollaborationStamp } from "./collaboration-store.js";
 import { canonicalPath, isPathWithin, validateActivationAttestation } from "./store-activation.js";
 import { legacySnapshotInventory, projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
 import { SettlementAttestationNeeded, initializeStore, openStore, StoreError, storeDbPath, upgradeStore, type MigrationContext, type StoreContext, type StoreDb } from "./store-db.js";
@@ -493,7 +501,20 @@ function discoverV1(
   return { rootDoc: { version: 2, updated_at: legacy.updatedAt, workflows: entries }, rows, sourceDigest, skipped, skippedWorkflowAcknowledgements, refusedSourceIds, ...(refusal === undefined ? {} : { refusal }) };
 }
 
-function discover(context: StoreContext, operator: string, acknowledgedSkips: readonly string[], acknowledgedWorkflowSkips: ReadonlySet<string>, declarations: DeliveryLiftDeclarations, acknowledgedCompassSkips: ReadonlySet<string>): { root: string; rootDoc: StatusV2Doc; rows: Source[]; skipped: MinimalImportResult["skipped"]; skippedWorkflowAcknowledgements: MinimalWorkflowSkip[]; sourceDigest: string; dispositions: string[]; refusedSourceIds: ReadonlySet<string>; refusal?: string } {
+/** One legacy workspace this run read: its root document, convertible workflows and refusal facts. */
+type DiscoveredSource = Readonly<{
+  root: string;
+  rootDoc: StatusV2Doc;
+  rows: Source[];
+  skipped: MinimalImportResult["skipped"];
+  skippedWorkflowAcknowledgements: MinimalWorkflowSkip[];
+  sourceDigest: string;
+  dispositions: string[];
+  refusedSourceIds: ReadonlySet<string>;
+  refusal?: string;
+}>;
+
+function discover(context: StoreContext, operator: string, acknowledgedSkips: readonly string[], acknowledgedWorkflowSkips: ReadonlySet<string>, declarations: DeliveryLiftDeclarations, acknowledgedCompassSkips: ReadonlySet<string>): DiscoveredSource {
   const root = rootOf(context);
   const statusPath = join(root, "status.json");
   const skipped: MinimalImportResult["skipped"] = [];
@@ -808,6 +829,204 @@ function discover(context: StoreContext, operator: string, acknowledgedSkips: re
 }
 
 
+/**
+ * The deterministic half of one legacy import, evaluated inside the execution
+ * transaction that admits it: which sources collide, which collisions the
+ * operator acknowledged or this store's own receipts prove, and every caller
+ * refusal. Nothing is written and no collaboration lane is touched, so it runs
+ * both at admission (where a refusal must leave no reservation behind) and at
+ * finalization (where the same frozen identity must produce the same answer).
+ */
+function admitExecutionImport(
+  tx: ExecutionTransaction,
+  source: DiscoveredSource,
+  conversionInput: { digest: string; carriesInput: boolean },
+  workflowSkips: ReadonlySet<string>,
+): Readonly<{ importable: Source[]; result: MinimalImportResult }> {
+  const existing = new Set((tx.db.prepare("select workflow_id from execution_workflows").all() as Array<{ workflow_id: string }>).map(({ workflow_id }) => workflow_id));
+  // A recognized legacy source whose id the native authority already holds is
+  // a COLLISION: this run never overwrites, deletes or silently omits the
+  // existing native workflow, and it never guesses a prior import from a
+  // matching id/type/date/header either. The operator's explicit
+  // `--ack-skip-workflow <id>` acknowledges exactly that lost IMPORT; without
+  // it the collision refuses before any execution row commits. A genuine
+  // same-operation replay already returned its retained receipt, so a
+  // receipt — not a heuristic — is the only thing that skips this decision.
+  const collidingIds = new Set(source.rows.filter((row) => existing.has(row.id)).map(({ id }) => id));
+  // The ONE additional thing that may skip this decision beside the caller's
+  // own operation receipt: the store's retained import receipts for the
+  // EXACT source bytes this run is reading. A colliding id those receipts
+  // already list as imported is a PROVEN replay — the native authority holds
+  // it because this same input was imported before, not because an unrelated
+  // workflow happens to share the id. Anything else still refuses.
+  const replayProof = provenReplayIds(tx.db, source.sourceDigest, conversionInput.digest, conversionInput.carriesInput);
+  const provenIds = new Set([...replayProof.proven].filter((id) => collidingIds.has(id)));
+  // Same bytes, but a receipt that never recorded THIS run's declaration set:
+  // the refusal names that gap instead of implying the source bytes went
+  // missing.
+  const inputUnprovenIds = new Set([...replayProof.inputUnproven].filter((id) => collidingIds.has(id)));
+  const importable = source.rows.filter((row) => !collidingIds.has(row.id));
+  const acknowledgedCollisions = source.rows
+    .filter((row) => collidingIds.has(row.id) && !provenIds.has(row.id) && workflowSkips.has(row.id))
+    .map((row) => ({ id: row.id, path: relative(source.root, row.dir).split(/[\\/]+/).join("/") }));
+  // The acknowledgement vocabulary is exactly the sources THIS run refuses:
+  // the registered sources the preflight classified by lstat before any target
+  // access (a linked source, or a non-directory path), plus the recognized ids
+  // colliding in this transaction. An acknowledgement naming anything else
+  // would silently drop a source this run would otherwise import, so it is
+  // caller input (usage), not a skip. An acknowledgement naming a PROVEN-replay
+  // collision is accepted (it names a real collision whose import did not
+  // happen) and simply reports the proven disposition instead of a loss.
+  const unmatchedWorkflowSkips = [...workflowSkips]
+    .filter((id) => !source.refusedSourceIds.has(id) && !collidingIds.has(id));
+  if (unmatchedWorkflowSkips.length > 0) {
+    throw new WorkflowSkipError(
+      `--ack-skip-workflow ${unmatchedWorkflowSkips.join(" ")} matched no workflow source this run refuses \u2014 neither a registered source that is not a real in-root directory (a linked source or a non-directory path) nor a recognized legacy source whose id the native execution authority already holds. ` +
+        `Skipping an unrefused source would silently drop a workflow this run would otherwise import \u2014 pass only the original workflow ids named by the refusal, or omit --ack-skip-workflow entirely.`,
+    );
+  }
+  if (source.refusal !== undefined) conflict(source.refusal);
+  const refusedCollisions = [...collidingIds].filter((id) => !workflowSkips.has(id) && !provenIds.has(id));
+  if (refusedCollisions.length > 0) {
+    // A run that carries --delivery/--ack-skip-compass can collide with a
+    // receipt for these exact bytes that proves only the BYTES were read. Such
+    // a receipt cannot prove the declaration set it committed rows from, so
+    // treating the id as a replay would discard the declaration the caller is
+    // asking for. Say only that: the receipt's silence is not evidence about
+    // the earlier run.
+    const unconsumedInput = conversionInput.carriesInput && refusedCollisions.some((id) => inputUnprovenIds.has(id))
+      ? ` This run carries conversion-shaping input (--delivery/--ack-skip-compass), and the retained import receipt(s) for these exact source bytes record no matching input digest, so they do not prove the earlier import consumed THIS input; this run therefore does not treat the id as a proven replay and leaves the native rows unchanged.`
+      : "";
+    conflict(
+      `the retained legacy source${refusedCollisions.length === 1 ? "" : "s"} for ${refusedCollisions.map((id) => JSON.stringify(id)).join(", ")} already ${refusedCollisions.length === 1 ? "exists" : "exist"} in the native execution authority; an upgrade never overwrites, deletes or silently omits an existing native workflow.${unconsumedInput} ` +
+        `Rerun store upgrade with \`--ack-skip-workflow ${refusedCollisions.join(" ")}\` to keep the native authority and skip ONLY ${refusedCollisions.length === 1 ? "that legacy IMPORT" : "those legacy IMPORTs"} (the loss is reported in the receipt). ` +
+        `No execution import was committed; schema initialization or normalization may already have committed. Legacy source bytes remain unchanged.`,
+    );
+  }
+  const importedIds = importable.map((row) => row.id);
+  const skipped = [...source.skipped];
+  const dispositions: string[] = [...source.dispositions];
+  for (const row of importable) {
+    for (const plan of row.plans) {
+      if (plan.droppedLease) dispositions.push(`workflow ${row.id} plan ${plan.id}: legacy per-plan execution lease dropped on import; the row imports as Blocked and the coordinator continues it through ordinary plan operations`);
+      if (plan.droppedSession) dispositions.push(`workflow ${row.id} plan ${plan.id}: legacy plan-PM session binding dropped on import; that seat no longer exists`);
+    }
+    if (row.snapshot.integration_merge_lease !== undefined) {
+      dispositions.push(`workflow ${row.id}: integration merge lease dropped on import; the coordinator re-establishes serial integration ownership through the ordinary completion operation`);
+    }
+  }
+  for (const entry of acknowledgedCollisions) {
+    skipped.push({
+      path: entry.path,
+      reason: `legacy source for workflow ${entry.id} skipped by --ack-skip-workflow; the native execution authority already holds that id, so its native rows were kept and its legacy IMPORT was skipped`,
+    });
+    dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the native execution authority already holds that id, so this run kept the native workflow/plan rows, coordination, header and revisions unchanged and imported nothing from the retained legacy source at ${entry.path}. The legacy bytes remain in place and the native progress stays authoritative even if that source body was later edited \u2014 this is import disposal, not deletion, and no prior import or resumption is inferred.`);
+  }
+  // A proven replay is NOT an acknowledged loss: the store's own retained
+  // import receipt for THESE exact source bytes AND this run's input already
+  // lists the id, so the native authority holds it because this input was
+  // imported before. It is reported as the ordinary already-current outcome,
+  // never as a skipped or lost import, and it needs no acknowledgement.
+  for (const row of source.rows.filter((entry) => provenIds.has(entry.id))) {
+    const path = relative(source.root, row.dir).split(/[\\/]+/).join("/");
+    // An acknowledgement on a PROVEN collision is honoured (it names a real
+    // collision) but it disposed of nothing: no loss is fabricated for an
+    // import that demonstrably already happened, and the receipt says so
+    // instead of leaving the operator's own input unreported.
+    const acknowledged = workflowSkips.has(row.id)
+      ? " The --ack-skip-workflow acknowledgement this run also carried was unnecessary for that id and disposed of no import."
+      : "";
+    // The input digest is named only when this run carried input, so a
+    // declaration-free repeat over an older receipt keeps its established
+    // wording (that receipt proves the bytes, which is all that run needs).
+    const shaped = conversionInput.carriesInput
+      ? ` It also recorded input digest ${conversionInput.digest} for the delivery declarations and compass acknowledgements this run carries.`
+      : "";
+    dispositions.push(`workflow ${row.id}: proven replay \u2014 this store's own retained import receipt for source digest ${source.sourceDigest} already imported this id, so the native execution authority already holds it from an import of these exact source bytes at ${path}.${shaped} This run imported nothing for it and kept the native workflow/plan rows, coordination, header and revisions unchanged; the legacy bytes remain in place.${acknowledged}`);
+  }
+  skipped.sort((a, b) => a.path.localeCompare(b.path));
+  for (const entry of source.skippedWorkflowAcknowledgements) {
+    dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the operator acknowledged discarding this registered legacy execution source, so no workflow or plan row was imported for it. The refused source path was not read or followed (the per-item skip above names it and its exact cause) and its bytes remain in place \u2014 this is import disposal, not deletion, and no resumption is fabricated.`);
+  }
+  // The report shape mirrors the DSH importer's existing vocabulary: a run
+  // that commits rows is an `upgraded` import; a run that commits none but
+  // proves at least one replay reports the already-current state as
+  // `nothing-to-import` instead of claiming an upgrade that did not happen.
+  return {
+    importable,
+    result: {
+      verdict: importable.length === 0 && provenIds.size > 0 ? "nothing-to-import" : "upgraded",
+      imported: importable.length,
+      importedIds,
+      skipped,
+      dispositions,
+      sourceDigest: source.sourceDigest,
+      inputDigest: conversionInput.digest,
+    },
+  };
+}
+
+/**
+ * The execution half of one admitted import, in ONE execution transaction:
+ * write the imported workflows, activate the execution authority for the
+ * reviewed legacy bytes and record the operation receipt. The collaboration
+ * lane is confirmed before this runs, never activated here.
+ */
+function commitExecutionImport(
+  tx: ExecutionTransaction,
+  input: {
+    source: DiscoveredSource;
+    admission: Readonly<{ importable: Source[]; result: MinimalImportResult }>;
+    operationId: string;
+    requestHash: string;
+    /** True when the admission transaction already activated this authority. */
+    activatedAtAdmission: boolean;
+    effect: CollaborationEffectReceipt;
+  },
+): MinimalImportResult {
+  const { source, admission } = input;
+  const storeAuthority = tx.db.prepare("select authority_state from store_meta where id = 1").get() as { authority_state?: unknown } | undefined;
+  if (storeAuthority?.authority_state !== "active" && storeAuthority?.authority_state !== "staged") {
+    throw new ExecutionError("store.not-active", `issue/catalog authority is ${String(storeAuthority?.authority_state ?? "missing")}; resolve the store state, then rerun \`store upgrade\`.`);
+  }
+  for (const row of admission.importable) writeImportedExecutionWorkflow(tx, row);
+  const now = new Date().toISOString();
+  // The admission already spent this operation's one execution-revision advance
+  // on the activation; only an import into an ALREADY active authority advances
+  // it here, so one accepted import still advances the root revision once.
+  if (!input.activatedAtAdmission && admission.importable.length > 0) {
+    const execution = tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1 and revision = ?")
+      .run(source.rootDoc.updated_at, tx.execution.revision) as { changes?: unknown };
+    if (Number(execution.changes) !== 1) throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun `store upgrade` to enumerate current files.");
+  }
+  if (storeAuthority.authority_state === "staged") {
+    const store = tx.db.prepare("update store_meta set authority_state = 'active', revision = revision + 1, activated_at = ? where id = 1 and authority_state = 'staged' and authority_epoch = ?")
+      .run(now, tx.epoch) as { changes?: unknown };
+    if (Number(store.changes) !== 1) throw new ExecutionError("store.stale-epoch", "store epoch changed during import; rerun `store upgrade` against the current store.");
+  } else if (admission.importable.length > 0) {
+    tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+  }
+  tx.db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)").run(
+    input.operationId,
+    input.requestHash,
+    JSON.stringify(admission.result),
+    now,
+  );
+  return admission.result;
+}
+
+/** The receipt one committed import recorded for this exact request, or null. */
+function readImportReceipt(
+  tx: ExecutionTransaction,
+  operationId: string,
+  requestHash: string,
+): MinimalImportResult | null {
+  const prior = tx.db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(operationId) as { request_hash?: unknown; result_json?: unknown } | undefined;
+  if (prior === undefined) return null;
+  if (prior.request_hash !== requestHash) throw new ExecutionError("execution.operation-conflict", `operationId ${operationId} was already used for a different store upgrade request.`);
+  return JSON.parse(String(prior.result_json)) as MinimalImportResult;
+}
+
 export async function importExecutionMinimal(input: { context: StoreContext; operator: string; operationId: string; acknowledgedSkips?: readonly string[]; acknowledgedWorkflowSkips?: readonly string[]; acknowledgedCompassSkips?: readonly string[]; deliveryDeclarations?: DeliveryLiftDeclarations }): Promise<MinimalImportResult> {
   const { context, operator, operationId } = input;
   if (!isNonEmptyString(operator) || operator.trim() === "") throw new ExecutionError("execution.migration-conflict", "operator is required; rerun `store upgrade --operator <name>`.");
@@ -838,154 +1057,108 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     // operationId across changed legacy bytes conflicts instead of replaying.
     sourceDigest: source.sourceDigest,
   })).digest("hex");
-  return withExecutionTransaction(context, (tx) => {
-    const prior = tx.db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(operationId) as { request_hash?: unknown; result_json?: unknown } | undefined;
-    if (prior !== undefined) {
-      if (prior.request_hash !== requestHash) throw new ExecutionError("execution.operation-conflict", `operationId ${operationId} was already used for a different store upgrade request.`);
-      if (source.refusal !== undefined) conflict(source.refusal);
-      return JSON.parse(String(prior.result_json)) as MinimalImportResult;
-    }
-    const existing = new Set((tx.db.prepare("select workflow_id from execution_workflows").all() as Array<{ workflow_id: string }>).map(({ workflow_id }) => workflow_id));
-    // A recognized legacy source whose id the native authority already holds is
-    // a COLLISION: this run never overwrites, deletes or silently omits the
-    // existing native workflow, and it never guesses a prior import from a
-    // matching id/type/date/header either. The operator's explicit
-    // `--ack-skip-workflow <id>` acknowledges exactly that lost IMPORT; without
-    // it the collision refuses before any execution row commits. A genuine
-    // same-operation replay already returned its retained receipt above, so a
-    // receipt — not a heuristic — is the only thing that skips this decision.
-    const collidingIds = new Set(source.rows.filter((row) => existing.has(row.id)).map(({ id }) => id));
-    // The ONE additional thing that may skip this decision beside the caller's
-    // own operation receipt above: the store's retained import receipts for the
-    // EXACT source bytes this run is reading. A colliding id those receipts
-    // already list as imported is a PROVEN replay — the native authority holds
-    // it because this same input was imported before, not because an unrelated
-    // workflow happens to share the id. Anything else still refuses.
-    const replayProof = provenReplayIds(tx.db, source.sourceDigest, conversionInput.digest, conversionInput.carriesInput);
-    const provenIds = new Set([...replayProof.proven].filter((id) => collidingIds.has(id)));
-    // Same bytes, but a receipt that never recorded THIS run's declaration set:
-    // the refusal names that gap instead of implying the source bytes went
-    // missing.
-    const inputUnprovenIds = new Set([...replayProof.inputUnproven].filter((id) => collidingIds.has(id)));
-    const importable = source.rows.filter((row) => !collidingIds.has(row.id));
-    const acknowledgedCollisions = source.rows
-      .filter((row) => collidingIds.has(row.id) && !provenIds.has(row.id) && workflowSkips.has(row.id))
-      .map((row) => ({ id: row.id, path: relative(source.root, row.dir).split(/[\\/]+/).join("/") }));
-    // The acknowledgement vocabulary is exactly the sources THIS run refuses:
-    // the registered sources the preflight classified by lstat before any target
-    // access (a linked source, or a non-directory path), plus the recognized ids
-    // colliding in this transaction. An acknowledgement naming anything else
-    // would silently drop a source this run would otherwise import, so it is
-    // caller input (usage), not a skip. An acknowledgement naming a PROVEN-replay
-    // collision is accepted (it names a real collision whose import did not
-    // happen) and simply reports the proven disposition instead of a loss.
-    const unmatchedWorkflowSkips = [...workflowSkips]
-      .filter((id) => !source.refusedSourceIds.has(id) && !collidingIds.has(id));
-    if (unmatchedWorkflowSkips.length > 0) {
-      throw new WorkflowSkipError(
-        `--ack-skip-workflow ${unmatchedWorkflowSkips.join(" ")} matched no workflow source this run refuses \u2014 neither a registered source that is not a real in-root directory (a linked source or a non-directory path) nor a recognized legacy source whose id the native execution authority already holds. ` +
-          `Skipping an unrefused source would silently drop a workflow this run would otherwise import \u2014 pass only the original workflow ids named by the refusal, or omit --ack-skip-workflow entirely.`,
-      );
-    }
+  // The reviewed identity a retry finds, independent of the fresh operation id
+  // an operator's CLI mints per invocation: the legacy bytes actually read and
+  // the conversion-shaping input this run carries.
+  const frozenPayload = JSON.stringify({ sourceDigest: source.sourceDigest, inputDigest: conversionInput.digest, operator });
+  // Receipt-first replay: a lost response answers from the ledger WITHOUT
+  // touching the collaboration lane.
+  const preflight = await withExecutionTransaction(context, (tx) => readImportReceipt(tx, operationId, requestHash));
+  if (preflight !== null) {
     if (source.refusal !== undefined) conflict(source.refusal);
-    const refusedCollisions = [...collidingIds].filter((id) => !workflowSkips.has(id) && !provenIds.has(id));
-    if (refusedCollisions.length > 0) {
-      // A run that carries --delivery/--ack-skip-compass can collide with a
-      // receipt for these exact bytes that proves only the BYTES were read. Such
-      // a receipt cannot prove the declaration set it committed rows from, so
-      // treating the id as a replay would discard the declaration the caller is
-      // asking for. Say only that: the receipt's silence is not evidence about
-      // the earlier run.
-      const unconsumedInput = conversionInput.carriesInput && refusedCollisions.some((id) => inputUnprovenIds.has(id))
-        ? ` This run carries conversion-shaping input (--delivery/--ack-skip-compass), and the retained import receipt(s) for these exact source bytes record no matching input digest, so they do not prove the earlier import consumed THIS input; this run therefore does not treat the id as a proven replay and leaves the native rows unchanged.`
-        : "";
-      conflict(
-        `the retained legacy source${refusedCollisions.length === 1 ? "" : "s"} for ${refusedCollisions.map((id) => JSON.stringify(id)).join(", ")} already ${refusedCollisions.length === 1 ? "exists" : "exist"} in the native execution authority; an upgrade never overwrites, deletes or silently omits an existing native workflow.${unconsumedInput} ` +
-          `Rerun store upgrade with \`--ack-skip-workflow ${refusedCollisions.join(" ")}\` to keep the native authority and skip ONLY ${refusedCollisions.length === 1 ? "that legacy IMPORT" : "those legacy IMPORTs"} (the loss is reported in the receipt). ` +
-          `No execution import was committed; schema initialization or normalization may already have committed. Legacy source bytes remain unchanged.`,
-      );
-    }
-    let imported = 0;
-    const importedIds: string[] = [];
-    const skipped = [...source.skipped];
-    const dispositions: string[] = [...source.dispositions];
-    for (const row of importable) {
-      writeImportedExecutionWorkflow(tx, row);
-      imported++;
-      importedIds.push(row.id);
-      for (const plan of row.plans) {
-        if (plan.droppedLease) dispositions.push(`workflow ${row.id} plan ${plan.id}: legacy per-plan execution lease dropped on import; the row imports as Blocked and the coordinator continues it through ordinary plan operations`);
-        if (plan.droppedSession) dispositions.push(`workflow ${row.id} plan ${plan.id}: legacy plan-PM session binding dropped on import; that seat no longer exists`);
+    return preflight;
+  }
+  const target = await collaborationTargetOf(context);
+  const prepared = await withExecutionTransaction<
+    { kind: "replay"; result: MinimalImportResult } | { kind: "reserved"; intent: CompositeIntent; activated: boolean }
+  >(context, (tx) => {
+    const replayed = readImportReceipt(tx, operationId, requestHash);
+    if (replayed !== null) return { kind: "replay" as const, result: replayed };
+    // A retry after an interruption resumes the operation its FIRST attempt
+    // admitted: the pending reservation is found by the reviewed identity, and
+    // the recorded operation id (not this invocation's fresh one) addresses the
+    // effect and its receipt.
+    const pending = tx.db
+      .prepare(
+        "select operation_id, request_hash from execution_collaboration_intents where execution_epoch = ? and " +
+          "kind = 'execution-import' and phase = 'prepared' and frozen_payload = ?",
+      )
+      .get(tx.epoch, frozenPayload) as { operation_id?: unknown; request_hash?: unknown } | undefined;
+    const pendingId = typeof pending?.operation_id === "string" ? pending.operation_id : null;
+    // Every deterministic refusal is evaluated BEFORE the reservation exists, so
+    // a refused import leaves no pending composite behind to settle.
+    admitExecutionImport(tx, source, conversionInput, workflowSkips);
+    // This import IS the operation that activates a staged execution authority,
+    // while the frame's finalization requires an active one. The activation
+    // therefore commits WITH the reservation: an interruption leaves an ACTIVE
+    // execution authority plus the pending reservation this same verb resumes,
+    // never an import reported as successful. It advances the revision once, as
+    // activation always has, and the finalization then commits the rows without
+    // a second advance.
+    const activated = tx.execution.authorityState !== "active";
+    if (activated) {
+      const execution = tx.db
+        .prepare(
+          "update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, " +
+            "activated_at = ? where id = 1 and revision = ?",
+        )
+        .run(source.rootDoc.updated_at, new Date().toISOString(), tx.execution.revision) as { changes?: unknown };
+      if (Number(execution.changes) !== 1) {
+        throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun `store upgrade` to enumerate current files.");
       }
-      if (row.snapshot.integration_merge_lease !== undefined) {
-        dispositions.push(`workflow ${row.id}: integration merge lease dropped on import; the coordinator re-establishes serial integration ownership through the ordinary completion operation`);
-      }
     }
-    for (const entry of acknowledgedCollisions) {
-      skipped.push({
-        path: entry.path,
-        reason: `legacy source for workflow ${entry.id} skipped by --ack-skip-workflow; the native execution authority already holds that id, so its native rows were kept and its legacy IMPORT was skipped`,
-      });
-      dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the native execution authority already holds that id, so this run kept the native workflow/plan rows, coordination, header and revisions unchanged and imported nothing from the retained legacy source at ${entry.path}. The legacy bytes remain in place and the native progress stays authoritative even if that source body was later edited \u2014 this is import disposal, not deletion, and no prior import or resumption is inferred.`);
-    }
-    // A proven replay is NOT an acknowledged loss: the store's own retained
-    // import receipt for THESE exact source bytes AND this run's input already
-    // lists the id, so the native authority holds it because this input was
-    // imported before. It is reported as the ordinary already-current outcome,
-    // never as a skipped or lost import, and it needs no acknowledgement.
-    for (const row of source.rows.filter((entry) => provenIds.has(entry.id))) {
-      const path = relative(source.root, row.dir).split(/[\\/]+/).join("/");
-      // An acknowledgement on a PROVEN collision is honoured (it names a real
-      // collision) but it disposed of nothing: no loss is fabricated for an
-      // import that demonstrably already happened, and the receipt says so
-      // instead of leaving the operator's own input unreported.
-      const acknowledged = workflowSkips.has(row.id)
-        ? " The --ack-skip-workflow acknowledgement this run also carried was unnecessary for that id and disposed of no import."
-        : "";
-      // The input digest is named only when this run carried input, so a
-      // declaration-free repeat over an older receipt keeps its established
-      // wording (that receipt proves the bytes, which is all that run needs).
-      const shaped = conversionInput.carriesInput
-        ? ` It also recorded input digest ${conversionInput.digest} for the delivery declarations and compass acknowledgements this run carries.`
-        : "";
-      dispositions.push(`workflow ${row.id}: proven replay \u2014 this store's own retained import receipt for source digest ${source.sourceDigest} already imported this id, so the native execution authority already holds it from an import of these exact source bytes at ${path}.${shaped} This run imported nothing for it and kept the native workflow/plan rows, coordination, header and revisions unchanged; the legacy bytes remain in place.${acknowledged}`);
-    }
-    skipped.sort((a, b) => a.path.localeCompare(b.path));
-    for (const entry of source.skippedWorkflowAcknowledgements) {
-      dispositions.push(`workflow ${entry.id}: skipped by --ack-skip-workflow; the operator acknowledged discarding this registered legacy execution source, so no workflow or plan row was imported for it. The refused source path was not read or followed (the per-item skip above names it and its exact cause) and its bytes remain in place \u2014 this is import disposal, not deletion, and no resumption is fabricated.`);
-    }
-    const storeAuthority = tx.db.prepare("select authority_state from store_meta where id = 1").get() as { authority_state?: unknown } | undefined;
-    if (storeAuthority?.authority_state !== "active" && storeAuthority?.authority_state !== "staged") {
-      throw new ExecutionError("store.not-active", `issue/catalog authority is ${String(storeAuthority?.authority_state ?? "missing")}; resolve the store state, then rerun \`store upgrade\`.`);
-    }
-    const now = new Date().toISOString();
-    if (tx.execution.authorityState !== "active") {
-      const execution = tx.db.prepare("update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, activated_at = ? where id = 1 and revision = ?")
-        .run(source.rootDoc.updated_at, now, tx.execution.revision) as { changes?: unknown };
-      if (Number(execution.changes) !== 1) throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun `store upgrade` to enumerate current files.");
-    } else if (imported > 0) {
-      const execution = tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1 and revision = ?")
-        .run(source.rootDoc.updated_at, tx.execution.revision) as { changes?: unknown };
-      if (Number(execution.changes) !== 1) throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun `store upgrade` to enumerate current files.");
-    }
-    if (storeAuthority.authority_state === "staged") {
-      const store = tx.db.prepare("update store_meta set authority_state = 'active', revision = revision + 1, activated_at = ? where id = 1 and authority_state = 'staged' and authority_epoch = ?")
-        .run(now, tx.epoch) as { changes?: unknown };
-      if (Number(store.changes) !== 1) throw new ExecutionError("store.stale-epoch", "store epoch changed during import; rerun `store upgrade` against the current store.");
-    } else if (imported > 0) {
-      tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-    }
-    // The report shape mirrors the DSH importer's existing vocabulary: a run
-    // that commits rows is an `upgraded` import; a run that commits none but
-    // proves at least one replay reports the already-current state as
-    // `nothing-to-import` instead of claiming an upgrade that did not happen.
-    const result: MinimalImportResult = {
-      verdict: imported === 0 && provenIds.size > 0 ? "nothing-to-import" : "upgraded",
-      imported, importedIds, skipped, dispositions, sourceDigest: source.sourceDigest, inputDigest: conversionInput.digest,
+    const intent: CompositeIntent = {
+      key: { executionStoreId: tx.storeId, executionEpoch: tx.epoch, operationId: pendingId ?? operationId },
+      kind: "execution-import",
+      requestHash: typeof pending?.request_hash === "string" ? pending.request_hash : requestHash,
+      target,
+      // The import addresses no plan row: its execution facts are the store's
+      // own authority rows, serialized by the execution transaction itself.
+      scope: { workflowId: null, planId: null },
+      actor: operator,
+      expectedExecution: executionRootTokenOf(tx),
+      frozenPayload,
     };
-    tx.db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)").run(operationId, requestHash, JSON.stringify(result), new Date().toISOString());
-    return result;
+    const reservation = reserveCompositeIntent(tx, intent, { revision: tx.execution.revision });
+    return { kind: "reserved" as const, intent: { ...intent, requestHash: reservation.requestHash }, activated };
   });
+  if (prepared.kind === "replay") {
+    if (source.refusal !== undefined) conflict(source.refusal);
+    return prepared.result;
+  }
+  return runCollaborationComposite<MinimalImportResult>(context, prepared.intent, {
+    apply(handle) {
+      // The legacy execution import carries NO catalog delta: its collaboration
+      // half is the CONFIRMATION that this repository's lane is the addressed,
+      // already-active issue/catalog authority. A missing or staged lane is
+      // refused by the writer's own admission, so this never activates one.
+      const versions = readCatalogStoreVersionsOn(handle.db);
+      return JSON.stringify({
+        lane: "active",
+        repoKey: handle.authority.repoKey,
+        mode: handle.authority.mode,
+        storeId: handle.authority.storeId,
+        epoch: handle.authority.epoch,
+        revision: versions.storeRevision,
+        catalogRevision: versions.catalogRevision,
+      });
+    },
+    finalize: (tx, effect) =>
+      commitExecutionImport(tx, {
+        source,
+        admission: admitExecutionImport(tx, source, conversionInput, workflowSkips),
+        operationId: prepared.intent.key.operationId,
+        requestHash: prepared.intent.requestHash,
+        activatedAtAdmission: prepared.activated,
+        effect,
+      }),
+  });
+}
+
+/** The frozen collaboration target stamp of this repository's ACTIVE lane. */
+async function collaborationTargetOf(context: StoreContext): Promise<CollaborationStamp> {
+  const authority = await readCollaborationAuthority(context);
+  return { repoKey: authority.repoKey, mode: authority.mode, storeId: authority.storeId, epoch: authority.epoch };
 }
 
 export async function upgradeStoreMinimal(input: {

@@ -90,7 +90,7 @@ import {
   resolveWorkflowDir,
 } from "./path.js";
 import { findingsCleanupGate, _DEFAULT_PROJECT } from "./project.js";
-import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
+import { assertCatalogExecutionCommittedOn } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
 import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
@@ -746,7 +746,11 @@ async function assertWorkflowRegistrationCommitted(harnessRoot: string, workflow
     throw error;
   }
   try {
-    await assertCatalogExecutionCommitted(context, workflowId);
+    // The registry visibility and the pending legacy journal are the execution
+    // store's own rows: judge them on the handle this reader already holds
+    // instead of opening a second connection (the catalog itself is read from
+    // its own source, never through this handle).
+    assertCatalogExecutionCommittedOn(handle.db, workflowId);
   } catch (error) {
     // A staged store is the pre-activation exclusion (§7), not a catalog verdict.
     if (error instanceof CatalogError && error.code === "store.not-active") return;

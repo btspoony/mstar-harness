@@ -39,8 +39,20 @@ import {
   linkCatalogEntitiesOn,
   readCatalogStoreVersionsOn,
   registerCatalogEntityOn,
+  type CatalogKey,
+  type CatalogReceipt,
   type ComposedStoreRevision,
 } from "./catalog.js";
+import {
+  advanceCollaborationRevision,
+  noteOutstandingAcknowledgement,
+  repairCompositeAcknowledgement,
+  reserveCompositeIntent,
+  runCollaborationComposite,
+  type CompositeIntent,
+  type CompositeKey,
+} from "./collaboration-operations.js";
+import { readCollaborationAuthority, type CollaborationStamp } from "./collaboration-store.js";
 import {
   assertRegisteredCompassDocument,
   assertRegisteredPlanDocuments,
@@ -53,6 +65,7 @@ import {
   workflowEntryOf,
   writeBinding,
   type CatalogExecutionCatalogDelta,
+  type CatalogExecutionPlan,
   type CatalogExecutionReceipt,
   type CatalogExecutionRequest,
   type CatalogExecutionWorkflow,
@@ -74,7 +87,9 @@ import {
   type ExecutionCaller,
   type ExecutionContext,
   type ExecutionToken,
+  type ExecutionTransaction,
 } from "./execution-store.js";
+import { StoreError } from "./store-db.js";
 import { selectSemanticFields, type SemanticSelection } from "./recovery-intent.js";
 import { createHash } from "node:crypto";
 import { derivePlanRegistration, stableJson } from "./workflow.js";
@@ -288,18 +303,44 @@ export async function commitExecutionRegistration(
   const requestHash = registrationRequestHash(context.caller, identity);
   const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
 
-  return withExecutionTransaction(context, (tx) => {
+  // §4.1 semantic replay first, BEFORE the collaboration lane is touched: the
+  // retry of the same reviewed intent must not be judged by a CAS — or a
+  // catalog expectation — its own first attempt already advanced, and a lost
+  // response must still be answered when that lane is unavailable.
+  const preflight = await withExecutionTransaction(context, (tx) => {
     assertActiveExecutionAuthority(
       tx,
       `state: ${tx.execution.authorityState}; registration requires the active execution authority. ` +
         `Upgrade required: mstar store upgrade --operator <name>.`,
     );
-    // §4.1 semantic replay first: the retry of the same reviewed intent must not
-    // be judged by a CAS — or a catalog expectation — its own first attempt
-    // already advanced, whatever tokens the caller re-read after the lost
-    // response. Only the CURRENT epoch's committed receipt replays, so an
-    // authority that changed generation under this call is re-resolved instead
-    // of being served (or written to) under a generation that no longer exists.
+    return readOperationReplay<CatalogExecutionReceipt>(tx, {
+      operationId: identity.operationId,
+      requestHash,
+      legacyRequestHash,
+      workflowId: identity.workflow.workflowId,
+      planId: null,
+      token: { kind: "root", key: [] },
+    });
+  });
+  if (preflight !== null) {
+    return noteOutstandingAcknowledgement(
+      preflight.data,
+      await repairCompositeAcknowledgement(context, {
+        executionStoreId: preflight.storeId,
+        executionEpoch: preflight.epoch,
+        operationId: identity.operationId,
+      }),
+    );
+  }
+
+  // The witness preflight: a registration publishes the reviewed delta into the
+  // repository's collaboration lane, so that lane must be the ACTIVE one this
+  // operation freezes as its target.
+  const target = await collaborationStamp(context);
+  const prepared = await withExecutionTransaction(context, (tx) => {
+    // Only the CURRENT epoch's committed receipt replays, so an authority that
+    // changed generation under this call is re-resolved instead of being served
+    // (or written to) under a generation that no longer exists.
     const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
       operationId: identity.operationId,
       requestHash,
@@ -308,7 +349,7 @@ export async function commitExecutionRegistration(
       planId: null,
       token: { kind: "root", key: [] },
     });
-    if (replayed !== null) return replayed.data;
+    if (replayed !== null) return { kind: "replay" as const, receipt: replayed };
 
     // §3.1 only a NEW registration normalizes the pointers (canonical stored
     // form, containment) and proves the reviewed documents: the committed
@@ -333,80 +374,205 @@ export async function commitExecutionRegistration(
       revision: tx.execution.revision,
     });
 
-    // §7 the reviewed catalog expectation, read on THIS transaction's handle so
-    // no concurrent catalog write can move it between this check and the
-    // publish below.
-    const versions = readCatalogStoreVersionsOn(tx.db);
-    if (versions.catalogRevision !== plan.request.expectedCatalogRevision) {
-      throw new CatalogError(
-        "catalog.revision-conflict",
-        `the reviewed delta expects catalog revision ${plan.request.expectedCatalogRevision}, but the store is at ` +
-          `${versions.catalogRevision}; nothing was registered.`,
-      );
-    }
-
     // A legacy operation still in flight must be settled explicitly before this
-    // ACTIVE transaction can register; it never adopts legacy journal state.
+    // registration can commit; it never adopts legacy journal state.
     const pending = pendingRegistrationOf(tx.db, plan.workflowId);
     if (pending !== null) refusePendingRegistration(plan.workflowId, pending);
 
-    const now = new Date().toISOString();
-    writeExecutionCreation(tx, { caller: context.caller, creation, now });
-    // §3.1 the ONE shared store revision this accepted multi-domain transaction
-    // advances has already run inside the creation write above, so each reviewed
-    // catalog row JOINS it: the delta's row count never moves
-    // `store_meta.revision`, while the catalog revision keeps advancing once per
-    // published row (that counter is the catalog domain's own).
-    const composed: ComposedStoreRevision = { committedStoreRevision: readCatalogStoreVersionsOn(tx.db).storeRevision };
-
-    for (const [index, entity] of plan.request.delta.entities.entries()) {
-      registerCatalogEntityOn(
-        tx.db,
-        context,
-        entity,
-        {
-          operationId: `${operationId}:entity:${index}`,
-          actor: plan.request.actor,
-        },
-        composed,
-      );
-    }
-    for (const [index, link] of (plan.request.delta.links ?? []).entries()) {
-      linkCatalogEntitiesOn(
-        tx.db,
-        context,
-        link,
-        {
-          operationId: `${operationId}:link:${index}`,
-          actor: plan.request.actor,
-        },
-        composed,
+    // Create-only admission: a workflow identity another lifecycle already
+    // holds is a deterministic conflict, so it is refused BEFORE the catalog
+    // delta publishes. `writeExecutionCreation` remains the authoritative check
+    // at finalization; admitting it here is what keeps a duplicate from
+    // publishing an effect and then reporting an unresumable partial. The
+    // wording is kept identical to that guard deliberately.
+    // simplify: a second copy of the create-only guard until execution-store's
+    // `assertWorkflowIdentityIsNew` is exported for composing verbs.
+    const existing = tx.db
+      .prepare("select revision from execution_workflows where workflow_id = ?")
+      .get(plan.workflowId) as { revision?: unknown } | undefined;
+    if (existing !== undefined) {
+      throw new ExecutionError(
+        "execution.not-empty",
+        `execution_workflows already holds workflow ${plan.workflowId} (revision ${String(existing.revision)}). A workflow ` +
+          `identity is create-only: re-creating it never restores registry membership, resets revisions or rewrites its ` +
+          `rows. Nothing was created.`,
       );
     }
 
-    // The binding is written against the revision the delta just published: it
-    // is registration history plus the pin the plan readers consume, never a
-    // pointer that a later catalog edit may move.
-    const published = readCatalogStoreVersionsOn(tx.db);
-    writeBinding(tx.db, plan, bindingInputOf(plan), published.catalogRevision);
-
-    const receipt: CatalogExecutionReceipt = {
-      operationId,
-      workflowId: plan.workflowId,
-      catalogRevision: published.catalogRevision,
-      // ACTIVE creation and catalog publication committed in this transaction.
-      recovered: false,
-    };
-    writeOperationReceipt(tx, {
-      operationId,
+    const key: CompositeKey = { executionStoreId: tx.storeId, executionEpoch: tx.epoch, operationId };
+    // The reviewed catalog expectation is a transport constraint, not business
+    // intent: a resumed reservation keeps the value its FIRST attempt admitted,
+    // so an interruption that already published the delta still resumes under
+    // the revision the delta was reviewed against.
+    const expectedCatalogRevision = frozenCatalogExpectation(tx, key) ?? plan.request.expectedCatalogRevision;
+    const intent: CompositeIntent = {
+      key,
+      kind: "execution-register",
       requestHash,
-      workflowId: plan.workflowId,
-      planId: null,
-      now,
-      receipt: { data: receipt, token: executionRootTokenOf(tx), storeId: tx.storeId, epoch: tx.epoch },
-    });
-    return receipt;
+      target,
+      scope: { workflowId: plan.workflowId, planId: null },
+      actor: plan.request.actor,
+      expectedExecution: executionRootTokenOf(tx),
+      // The frozen payload IS the resume identity: the reviewed workflow, its
+      // delta and the catalog revision they were reviewed against. A changed
+      // document or expectation cannot reinterpret a pending registration.
+      frozenPayload: stableJson({
+        operationId,
+        actor: plan.request.actor,
+        workflow: plan.request.workflow,
+        delta: plan.request.delta,
+        expectedCatalogRevision,
+      }),
+    };
+    // The reservation spends none of the execution facts: the creation is
+    // create-only and commits at finalization.
+    const reservation = reserveCompositeIntent(tx, intent, { revision: tx.execution.revision });
+    return {
+      kind: "reserved" as const,
+      intent: { ...intent, requestHash: reservation.requestHash },
+      plan,
+      creation,
+      expectedCatalogRevision,
+    };
   });
+  if (prepared.kind === "replay") {
+    return noteOutstandingAcknowledgement(
+      prepared.receipt.data,
+      await repairCompositeAcknowledgement(context, {
+        executionStoreId: prepared.receipt.storeId,
+        executionEpoch: prepared.receipt.epoch,
+        operationId: identity.operationId,
+      }),
+    );
+  }
+
+  const { plan, creation, expectedCatalogRevision } = prepared;
+  return runCollaborationComposite<CatalogExecutionReceipt>(context, prepared.intent, {
+    apply(handle) {
+      // §7 the reviewed catalog expectation, re-read under the writer lock so no
+      // concurrent catalog write can move it between the review and the publish.
+      const before = readCatalogStoreVersionsOn(handle.db);
+      if (before.catalogRevision !== expectedCatalogRevision) {
+        throw new CatalogError(
+          "catalog.revision-conflict",
+          `the reviewed delta expects catalog revision ${expectedCatalogRevision}, but the collaboration catalog is at ` +
+            `${before.catalogRevision}; nothing was registered.`,
+        );
+      }
+      // §3.1 ONE collaboration revision advance for the whole effect transaction:
+      // every published row joins it instead of moving the counter again.
+      const composed: ComposedStoreRevision = { committedStoreRevision: advanceCollaborationRevision(handle) };
+      const entities: PublishedRegistrationEntity[] = [];
+      for (const [index, entity] of plan.request.delta.entities.entries()) {
+        const receipt = registerCatalogEntityOn(
+          handle.db,
+          context,
+          entity,
+          { operationId: `${plan.request.operationId}:entity:${index}`, actor: plan.request.actor },
+          composed,
+        );
+        entities.push({
+          reviewed: { kind: entity.kind, id: entity.id },
+          published: { kind: receipt.kind, id: receipt.id, revision: receipt.revision },
+        });
+      }
+      for (const [index, link] of (plan.request.delta.links ?? []).entries()) {
+        linkCatalogEntitiesOn(
+          handle.db,
+          context,
+          link,
+          { operationId: `${plan.request.operationId}:link:${index}`, actor: plan.request.actor },
+          composed,
+        );
+      }
+      // The reviewed catalog EFFECT facts the execution half must pin: the exact
+      // committed catalog revision and the row each reviewed entity resolved to
+      // (a location collision attaches to an existing id instead of a new one).
+      return stableJson({ catalogRevision: readCatalogStoreVersionsOn(handle.db).catalogRevision, entities });
+    },
+    finalize(tx, receipt) {
+      const facts = registrationEffectFacts(receipt.facts);
+      const binding = plan.request.delta.binding;
+      const bound = facts.entities.find(
+        (entity) => entity.reviewed.kind === binding.catalogKind && entity.reviewed.id === binding.catalogId,
+      );
+      if (bound === undefined) {
+        throw new StoreError(
+          "store.corrupt",
+          `the committed catalog effect of registration ${JSON.stringify(prepared.intent.key.operationId)} carries no ` +
+            `published row for its binding entity ${binding.catalogKind} ${JSON.stringify(binding.catalogId)}; the binding is ` +
+            `not written from a guessed identity.`,
+        );
+      }
+      const now = new Date().toISOString();
+      writeExecutionCreation(tx, { caller: context.caller, creation, now });
+      // The binding records the row the catalog effect COMMITTED, pinned to the
+      // exact catalog revision in that receipt — never a later re-read state.
+      writeBinding(
+        tx.db,
+        plan,
+        bound.published.id,
+        { ...bindingInputOf(plan), id: bound.published.id },
+        receipt.catalogRevision,
+      );
+      const result: CatalogExecutionReceipt = {
+        operationId: plan.request.operationId,
+        workflowId: plan.workflowId,
+        catalogRevision: receipt.catalogRevision,
+        recovered: false,
+      };
+      writeOperationReceipt(tx, {
+        operationId: plan.request.operationId,
+        requestHash: prepared.intent.requestHash,
+        workflowId: plan.workflowId,
+        planId: null,
+        now,
+        receipt: { data: result, token: executionRootTokenOf(tx), storeId: tx.storeId, epoch: tx.epoch },
+        allowReservedIntent: true,
+      });
+      return result;
+    },
+  });
+}
+
+/** One reviewed catalog entity and the catalog row the effect committed for it. */
+type PublishedRegistrationEntity = Readonly<{
+  reviewed: CatalogKey;
+  published: Readonly<{ kind: string; id: string; revision: number }>;
+}>;
+
+/** The recorded catalog expectation of a pending reservation, or null for a new admission. */
+function frozenCatalogExpectation(tx: ExecutionTransaction, key: CompositeKey): number | null {
+  const row = tx.db
+    .prepare(
+      "select frozen_payload from execution_collaboration_intents where execution_store_id = ? and execution_epoch = ? " +
+        "and operation_id = ? and phase = 'prepared'",
+    )
+    .get(key.executionStoreId, key.executionEpoch, key.operationId) as { frozen_payload?: unknown } | undefined;
+  if (typeof row?.frozen_payload !== "string") return null;
+  try {
+    const parsed: unknown = JSON.parse(row.frozen_payload);
+    return isPlainObject(parsed) && typeof parsed.expectedCatalogRevision === "number"
+      ? parsed.expectedCatalogRevision
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The committed catalog effect facts a finalization pins, validated before use. */
+function registrationEffectFacts(facts: string): { catalogRevision: number; entities: PublishedRegistrationEntity[] } {
+  const parsed: unknown = JSON.parse(facts);
+  if (!isPlainObject(parsed) || typeof parsed.catalogRevision !== "number" || !Array.isArray(parsed.entities)) {
+    throw new StoreError("store.corrupt", "the committed registration effect carries no readable catalog facts");
+  }
+  return parsed as unknown as { catalogRevision: number; entities: PublishedRegistrationEntity[] };
+}
+
+/** The frozen collaboration target stamp of this repository's ACTIVE lane. */
+async function collaborationStamp(context: ExecutionContext): Promise<CollaborationStamp> {
+  const authority = await readCollaborationAuthority(context);
+  return { repoKey: authority.repoKey, mode: authority.mode, storeId: authority.storeId, epoch: authority.epoch };
 }
 
 /**
@@ -481,9 +647,10 @@ function catalogDeltaFor(workflow: CatalogExecutionWorkflow): CatalogExecutionCa
   };
 }
 /**
- * Register a shipped workflow on the ACTIVE store. Expectations are read from
- * one transaction so the root token and catalog revision describe one snapshot;
- * commitExecutionRegistration rechecks both under its own atomic write.
+ * Register a shipped workflow on the ACTIVE store. The reviewed catalog
+ * revision is read from the repository's ACTIVE collaboration lane (the catalog
+ * moved there), the root token from one execution transaction, and
+ * `commitExecutionRegistration` rechecks both under its own composite.
  *
  * §4.1 the recorded receipt is resolved BEFORE the optional supplied
  * expectations are enforced: an identical retry after a lost response
@@ -549,76 +716,83 @@ export async function registerShippedCatalogExecution(
   // id keeps its single lookup plus the legacy fingerprints.
   const legacyOperationIds =
     input.operationId === undefined ? legacyDerivedOperationIds(input.actor, identity) : [];
-  const resolved = await withExecutionTransaction<
-    { replayed: CatalogExecutionReceipt } | { expected: ExecutionToken; catalogRevision: number }
-  >(context, (tx) => {
-    const expected = executionRootTokenOf(tx);
-    // §4.1 resolve the recorded receipt FIRST: a retry that re-presents the
-    // constraints its own first attempt advanced must replay through
-    // `readOperationReplay` (the one idempotency rule) instead of being judged
-    // stale before the lookup. Only a genuinely new attempt is constrained.
-    const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
-      operationId: identity.operationId,
-      requestHash,
-      legacyRequestHash: replayHashes,
-      workflowId: identity.workflow.workflowId,
-      planId: null,
-      token: { kind: "root", key: [] },
-    });
-    if (replayed !== null) return { replayed: replayed.data };
-    for (const legacyOperationId of legacyOperationIds) {
-      // A previous release addressed this same intent by a derived id this
-      // version no longer computes: its receipt replays here instead of the
-      // retry being judged a NEW registration (which would refuse
-      // `execution.not-empty`).
-      const legacyReplayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
-        operationId: legacyOperationId,
+  const replay = await withExecutionTransaction<{ replayed: CatalogExecutionReceipt } | { expected: ExecutionToken }>(
+    context,
+    (tx) => {
+      const expected = executionRootTokenOf(tx);
+      // §4.1 resolve the recorded receipt FIRST: a retry that re-presents the
+      // constraints its own first attempt advanced must replay through
+      // `readOperationReplay` (the one idempotency rule) instead of being judged
+      // stale before the lookup. Only a genuinely new attempt is constrained.
+      const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
+        operationId: identity.operationId,
         requestHash,
         legacyRequestHash: replayHashes,
         workflowId: identity.workflow.workflowId,
         planId: null,
         token: { kind: "root", key: [] },
       });
-      if (legacyReplayed !== null) return { replayed: legacyReplayed.data };
-    }
-    // A NEW shipped registration normalizes the pointers (canonical stored
-    // form, containment) and proves its reviewed documents here; the replayed
-    // operation id above already proved them and keeps its receipt (I-000868,
-    // PR #578).
-    const canonical = resolveCatalogExecutionPlan(context, request);
-    assertRegisteredCompassDocument(canonical.request.workflow);
-    assertRegisteredPlanDocuments(canonical.request.workflow);
-    const versions = readCatalogStoreVersionsOn(tx.db);
-    if (input.expected !== undefined) {
-      // The ADDRESS half keeps its own precise refusal; the REVISION half is
-      // compared below so this seam can name the recovery for a stale root
-      // expectation instead of the bare shared message.
-      assertExecutionToken(input.expected, {
-        kind: "root",
-        storeId: tx.storeId,
-        epoch: tx.epoch,
-        key: [],
-      });
-      if (input.expected !== expected) {
-        throw new ExecutionError(
-          "execution.stale-token",
-          "the supplied root expectation is not this store's current execution token. Re-read the current root token " +
-            "with `mstar status validate` (output field data.token) and retry with it; an operation id already committed " +
-            "for this intent replays instead of being refused.",
-        );
+      if (replayed !== null) return { replayed: replayed.data };
+      for (const legacyOperationId of legacyOperationIds) {
+        // A previous release addressed this same intent by a derived id this
+        // version no longer computes: its receipt replays here instead of the
+        // retry being judged a NEW registration (which would refuse
+        // `execution.not-empty`).
+        const legacyReplayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
+          operationId: legacyOperationId,
+          requestHash,
+          legacyRequestHash: replayHashes,
+          workflowId: identity.workflow.workflowId,
+          planId: null,
+          token: { kind: "root", key: [] },
+        });
+        if (legacyReplayed !== null) return { replayed: legacyReplayed.data };
       }
-    }
-    if (input.expectedCatalogRevision !== undefined && input.expectedCatalogRevision !== versions.catalogRevision) {
-      throw new CatalogError(
-        "catalog.revision-conflict",
-        `the supplied catalog expectation is ${input.expectedCatalogRevision}, but the store is at ` +
-          `${versions.catalogRevision}. Read the current store and catalog revisions (the ACTIVE catalog-revisions read), ` +
-          "or omit the catalog expectation on the shipped registration so it derives the current revision, then retry.",
-      );
-    }
-    return { expected, catalogRevision: versions.catalogRevision };
+      // A NEW shipped registration normalizes the pointers (canonical stored
+      // form, containment) and proves its reviewed documents here; the replayed
+      // operation id above already proved them and keeps its receipt (I-000868,
+      // PR #578).
+      const canonical = resolveCatalogExecutionPlan(context, request);
+      assertRegisteredCompassDocument(canonical.request.workflow);
+      assertRegisteredPlanDocuments(canonical.request.workflow);
+      if (input.expected !== undefined) {
+        // The ADDRESS half keeps its own precise refusal; the REVISION half is
+        // compared below so this seam can name the recovery for a stale root
+        // expectation instead of the bare shared message.
+        assertExecutionToken(input.expected, {
+          kind: "root",
+          storeId: tx.storeId,
+          epoch: tx.epoch,
+          key: [],
+        });
+        if (input.expected !== expected) {
+          throw new ExecutionError(
+            "execution.stale-token",
+            "the supplied root expectation is not this store's current execution token. Re-read the current root token " +
+              "with `mstar status validate` (output field data.token) and retry with it; an operation id already committed " +
+              "for this intent replays instead of being refused.",
+          );
+        }
+      }
+      return { expected };
+    },
+  );
+  if ("replayed" in replay) return replay.replayed;
+  // The reviewed catalog revision belongs to the repository's ACTIVE
+  // collaboration lane, not to this execution store: a NEW attempt pins the
+  // revision it is reviewed against, and the published delta then joins it.
+  const authority = await readCollaborationAuthority(context);
+  if (input.expectedCatalogRevision !== undefined && input.expectedCatalogRevision !== authority.catalogRevision) {
+    throw new CatalogError(
+      "catalog.revision-conflict",
+      `the supplied catalog expectation is ${input.expectedCatalogRevision}, but the collaboration catalog is at ` +
+        `${authority.catalogRevision}. Read the current store and catalog revisions (the ACTIVE catalog-revisions read), ` +
+        "or omit the catalog expectation on the shipped registration so it derives the current revision, then retry.",
+    );
+  }
+  return commitExecutionRegistration(context, {
+    ...request,
+    expectedCatalogRevision: authority.catalogRevision,
+    expected: replay.expected,
   });
-  if ("replayed" in resolved) return resolved.replayed;
-  request.expectedCatalogRevision = resolved.catalogRevision;
-  return commitExecutionRegistration(context, { ...request, expected: resolved.expected });
 }
