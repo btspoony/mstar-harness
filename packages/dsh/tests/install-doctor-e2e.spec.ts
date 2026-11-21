@@ -125,7 +125,7 @@ function runDsh(dshHome: string, args: string[], timeoutMs = 120_000): string {
 }
 
 /** Run the REAL CLI `init --target dsh` (plan 001 surface) as a subprocess. */
-function runCliInit(dshHome: string, extraArgs: string[] = [], timeoutMs = 300_000): string {
+async function runCliInit(dshHome: string, extraArgs: string[] = [], timeoutMs = 300_000): Promise<string> {
   const proc = Bun.spawnSync([process.execPath, 'run', CLI_ENTRY, 'init', '--target', 'dsh', ...extraArgs], {
     cwd: cliCwd,
     env: dshEnv(dshHome),
