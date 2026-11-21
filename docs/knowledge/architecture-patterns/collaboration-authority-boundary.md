@@ -110,6 +110,30 @@ copy of the same authority, and a host write gate cannot protect only the execut
   and keyed composition; required sources refuse, optional sources disclose absence, and neither null revision nor
   stale projection becomes zero or success. Timestamp each source at its own snapshot, not before either open.
 
+## Consumer and host integrity
+
+- **Expose the source that produced the data.** A successful domain read attaches its collaboration observation;
+  a refusal carries the same causes, scope and supported recovery in `details`, never a fake empty object or a
+  second probe. Execution-only status must not read collaboration.
+- **Dashboard/HTTP:** a missing required source is a typed service-unavailable response, not 404 or zero. An
+  optional catalog gap keeps usable execution data but renders a warning, never healthy collaboration. Error bodies
+  scrub credentials case-insensitively, including unlabelled and mixed-case Bearer/Basic/Token/Digest values.
+  Multi-page assembly compares source identity/epoch/revision plus projection freshness, excluding page offset;
+  it restarts/refuses on an incompatible observation and reports the assembled bounds honestly.
+- **Findings and aggregates:** a completion gate re-reads a complete plan-scoped observation, rejects incomplete or
+  stale evidence, and keeps policy thresholds unchanged. An open-issue rollup is one source-local aggregate with
+  distinct repository vs project scope proofs; the preview is a bounded row set, not the count source. A milestone
+  with a complete zero-issue observation may deliver; an unavailable/staged observation must refuse, not treat zero
+  as success.
+- **Host authority is an independent probe.** Missing, staged or unreadable collaboration never authorizes a legacy
+  register write and never makes a path check depend on a business read. The probe distinguishes a genuinely absent
+  store from a rejected storage path (symlink/permission/canonical-private failure) and gives the correct recovery.
+  dsh and the host gates consume the same probe; dsh aggregate facts disclose completeness and `asOf`, not
+  projection health as authority.
+- **Explicit mode is part of the install.** A repository's own `.mstarc` must declare `[collaboration] mode=...`;
+  without it the repository's store verbs refuse `collaboration.mode-required`. Test fixtures must isolate
+  `homedir`/HOME and restore spies before deleting their temp roots; never write test lanes under a real user HOME.
+
 ## Why This Matters
 
 The failure modes are silent: a second writable copy, a stale sandbox writing after cutover, a physical alias
