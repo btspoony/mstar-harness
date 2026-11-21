@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -150,23 +151,46 @@ function projectIterationSkillLinkPath(skillName: string) {
   return path.join(resolveProjectRoot(), ".agents", "skills", skillName, "SKILL.md");
 }
 
-/** Refuse before linking anything: a checkout that predates a command would
- * otherwise get a dangling project link and a success report. An absent
+/** why: a spaced checkout path must stay one copy-paste argument. */
+function quotePath(value: string) {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function commandTrackedInHead(skillName: string) {
+  try {
+    execFileSync("git", ["-C", HARNESS_REPO_PATH, "cat-file", "-e", `HEAD:commands/${skillName}.md`], { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Refuse before linking anything: a checkout that predates a command, or one
+ * whose working tree lost a tracked command file, would otherwise get a dangling
+ * project link and a success report. Each state gets its own recovery. An absent
  * checkout is the pre-clone dry run, where init stages the clone itself.
  * why: a dangling link reports success while the iteration skill never resolves. */
-function assertIterationCommandSources() {
-  if (!fs.existsSync(HARNESS_REPO_PATH)) return;
-  const missing = CODEX_PROJECT_COMMAND_NAMES.map(iterationCommandSourcePath).filter((source) => !fs.existsSync(source));
-  if (!missing.length) return;
-  throw new Error(
-    `Missing Codex project command sources: ${missing.join(", ")}. The local harness checkout at ${HARNESS_REPO_PATH} predates them. ` +
-      `Refresh it (\`git -C ${HARNESS_REPO_PATH} pull --ff-only\`) then retry: init --target codex --scope project.`,
-  );
+function assertIterationCommandSources(dryRun: boolean) {
+  if (!fs.existsSync(HARNESS_REPO_PATH)) return [];
+  const missing = CODEX_PROJECT_COMMAND_NAMES.filter((name) => !fs.existsSync(iterationCommandSourcePath(name)));
+  if (!missing.length) return [];
+  const repo = quotePath(HARNESS_REPO_PATH);
+  const absent = missing.filter((name) => !commandTrackedInHead(name)).map((name) => quotePath(iterationCommandSourcePath(name)));
+  const deleted = missing.filter(commandTrackedInHead).map((name) => `commands/${name}.md`);
+  const recovery = [
+    absent.length ? `The checkout at ${repo} does not have ${absent.join(", ")} in HEAD; refresh it with \`git -C ${repo} pull --ff-only\`.` : "",
+    deleted.length ? `The checkout at ${repo} has ${deleted.map(quotePath).join(", ")} in HEAD but not in the working tree; run \`git -C ${repo} restore -- ${deleted.map(quotePath).join(" ")}\`.` : "",
+  ].filter(Boolean).join(" ");
+  const refusal =
+    `Missing Codex project command sources: ${missing.map((name) => quotePath(iterationCommandSourcePath(name))).join(", ")}. ` +
+    `${recovery} Then retry: init --target codex --scope project.`;
+  // why: a dry run links nothing, so previewing this refusal must not fail it.
+  if (!dryRun) throw new Error(refusal);
+  return [`Would refuse: ${refusal}`];
 }
 
 function ensureIterationSkillLinks(dryRun: boolean) {
-  assertIterationCommandSources();
-  const notes: string[] = [];
+  const notes: string[] = assertIterationCommandSources(dryRun);
   for (const skillName of CODEX_PROJECT_COMMAND_NAMES) {
     const source = iterationCommandSourcePath(skillName);
     const linkPath = projectIterationSkillLinkPath(skillName);

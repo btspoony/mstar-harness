@@ -23,9 +23,9 @@ Do not spawn dev or QC roles unless the Assignment explicitly says \`Delegation:
 """
 `;
 
-function fixture() {
+function fixture(prefix = "codex-agent-test-") {
   fs.mkdirSync(path.resolve(".tmp"), { recursive: true });
-  const root = fs.mkdtempSync(path.resolve(".tmp/codex-agent-test-"));
+  const root = fs.mkdtempSync(path.resolve(".tmp", prefix));
   const source = path.join(root, ".mstar/harness");
   fs.mkdirSync(source, { recursive: true });
   const initialized = Bun.spawnSync(["git", "-C", source, "init", "--quiet"], { stdout: "pipe", stderr: "pipe" });
@@ -249,14 +249,52 @@ describe("Codex regular agent installation", () => {
       const link = path.join(f.root, "project", ".agents", "skills", "codebase-comment-cleanup", "SKILL.md");
       fs.unlinkSync(missing);
       const refused = run(f.root, "project");
-      expect(refused.failure).toContain(`Missing Codex project command sources: ${missing}`);
-      expect(refused.failure).toContain("predates");
-      expect(refused.failure).toContain(`git -C ${f.source} pull --ff-only`);
+      expect(refused.failure).toContain(`Missing Codex project command sources: '${missing}'`);
+      expect(refused.failure).toContain("does not have");
+      expect(refused.failure).toContain(`git -C '${f.source}' pull --ff-only`);
+      expect(refused.failure).not.toContain("restore");
       expect(refused.failure).toContain("init --target codex --scope project");
+      expect(fs.existsSync(link)).toBe(false);
+      const preview = run(f.root, "project", false, true);
+      expect(preview.failure).toBeUndefined();
+      expect(preview.notes.join(" ")).toContain(`Would refuse: Missing Codex project command sources: '${missing}'`);
       expect(fs.existsSync(link)).toBe(false);
       fs.writeFileSync(missing, "command");
       expect(run(f.root, "project").failure).toBeUndefined();
       expect(fs.realpathSync(link)).toBe(missing);
+    } finally { f.cleanup(); }
+  });
+  test("project: quotes a spaced checkout path as one copy-paste argument", () => {
+    const f = fixture("codex agent test-");
+    try {
+      expect(f.source).toContain(" ");
+      const missing = path.join(f.source, "commands", "codebase-comment-cleanup.md");
+      fs.unlinkSync(missing);
+      const refused = run(f.root, "project");
+      expect(refused.failure).toContain(`git -C '${f.source}' pull --ff-only`);
+      const parser = Bun.spawnSync(["/bin/sh", "-c", `set -- '${f.source}' pull --ff-only; printf '%s' "$1"`], { stdout: "pipe", stderr: "pipe" });
+      expect(parser.stdout.toString()).toBe(f.source);
+      fs.writeFileSync(missing, "command");
+      expect(run(f.root, "project").failure).toBeUndefined();
+      expect(fs.realpathSync(path.join(f.root, "project", ".agents", "skills", "codebase-comment-cleanup", "SKILL.md"))).toBe(missing);
+    } finally { f.cleanup(); }
+  });
+  test("project: restores a tracked command deleted from the working tree instead of pulling", () => {
+    const f = fixture();
+    try {
+      const relative = "commands/codebase-comment-cleanup.md";
+      const tracked = path.join(f.source, relative);
+      const git = (...args: string[]) => Bun.spawnSync(["git", "-C", f.source, "-c", "user.email=t@t", "-c", "user.name=t", ...args], { stdout: "pipe", stderr: "pipe" });
+      expect(git("add", relative).exitCode).toBe(0);
+      expect(git("commit", "--quiet", "-m", "track").exitCode).toBe(0);
+      fs.unlinkSync(tracked);
+      const refused = run(f.root, "project");
+      expect(refused.failure).toContain(`Missing Codex project command sources: '${tracked}'`);
+      expect(refused.failure).toContain(`git -C '${f.source}' restore -- '${relative}'`);
+      expect(refused.failure).not.toContain("pull");
+      expect(git("restore", "--", relative).exitCode).toBe(0);
+      expect(fs.readFileSync(tracked, "utf8")).toBe("command");
+      expect(run(f.root, "project").failure).toBeUndefined();
     } finally { f.cleanup(); }
   });
 });
