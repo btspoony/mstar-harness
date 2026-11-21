@@ -1089,21 +1089,9 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   await withExecutionTransaction(context, (tx) => {
     admitExecutionImport(tx, source, conversionInput, workflowSkips);
   });
-  // The legacy import IS the operation that activates a staged execution
-  // authority, while the composite's finalization requires an active one. The
-  // promotion therefore commits in its own transaction and advances NOTHING: the
-  // finalization owns the operation's ONE execution-revision advance, so an
-  // interruption before it — at any boundary — leaves a retry that still spends
-  // that advance exactly once. Promotion is idempotent (`staged` only).
-  await withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState === "active") return;
-    tx.db
-      .prepare(
-        "update execution_meta set authority_state = 'active', root_updated_at = ?, activated_at = ? " +
-          "where id = 1 and authority_state = 'staged'",
-      )
-      .run(source.rootDoc.updated_at, new Date().toISOString());
-  });
+  // The collaboration lane is validated BEFORE anything is promoted or reserved:
+  // a missing or staged lane refuses here, leaving the execution authority in the
+  // state it was (a staged store stays staged — never an empty ACTIVE authority).
   const target = await collaborationTargetOf(context);
   const prepared = await withExecutionTransaction<
     { kind: "replay"; result: MinimalImportResult } | { kind: "reserved"; intent: CompositeIntent }
@@ -1140,6 +1128,22 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     if (source.refusal !== undefined) conflict(source.refusal);
     return prepared.result;
   }
+  // The import IS the operation that activates a staged execution authority,
+  // while the composite's finalization requires an active one — so the promotion
+  // happens AFTER the lane was validated and the intent reserved, and it advances
+  // NOTHING (the finalization owns the operation's one revision advance).
+  // Promotion is idempotent (`staged` only). If it fails, the reservation and the
+  // staged state both stay exactly as they are: the same verb resumes and retries
+  // the promotion, and no empty ACTIVE authority can ever be left behind.
+  await withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState === "active") return;
+    tx.db
+      .prepare(
+        "update execution_meta set authority_state = 'active', root_updated_at = ?, activated_at = ? " +
+          "where id = 1 and authority_state = 'staged'",
+      )
+      .run(source.rootDoc.updated_at, new Date().toISOString());
+  });
   return runCollaborationComposite<MinimalImportResult>(context, prepared.intent, {
     apply(handle) {
       // The legacy execution import carries NO catalog delta: its collaboration

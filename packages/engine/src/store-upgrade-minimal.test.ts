@@ -8,7 +8,7 @@ import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE, consultDeliveryEvidence, type WorkflowSnapshot } from "./workflow.js";
-import { upgradeStoreMinimal as importStoreMinimal, type MinimalStoreUpgradeResult } from "./execution-minimal-import.js";
+import { upgradeStoreMinimal as importStoreMinimal, importExecutionMinimal as importLegacyExecution, type MinimalStoreUpgradeResult } from "./execution-minimal-import.js";
 import { initializeCollaborationStore } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { bindExecutionSession, createExecutionWorkflow, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
@@ -4165,6 +4165,50 @@ test("collaboration legacy import replay \u2014 a retry with a different workflo
     { operation_id: "op-import-skips-a" },
     { operation_id: "op-import-skips-c" },
   ]);
+});
+
+test("collaboration legacy import replay \u2014 a refused lane never leaves an empty active execution authority", async () => {
+  const { context } = legacyWorkspace("legacy-import-lane-refusal");
+  await collaborationLane(context);
+  const seed = await initializeStore(context);
+  seed.close();
+  // A STAGED execution authority and a STAGED collaboration lane: the shape of a
+  // reviewed file-era import that has not been authorized yet. Nothing about the
+  // execution store may be promoted while the lane is refused.
+  const stagedStore = await openStore(context, "write");
+  try {
+    stagedStore.db.prepare("update execution_meta set authority_state = 'staged', activated_at = null where id = 1").run();
+  } finally { stagedStore.close(); }
+  const lane = resolveCollaborationLocation(context);
+  const stagedLane = new DatabaseSync(lane.dbPath);
+  try { stagedLane.prepare("update collaboration_meta set authority_state = 'staged' where id = 1").run(); } finally { stagedLane.close(); }
+
+  const refused = await importLegacyExecution({ context, operator: "operator", operationId: "op-lane-refusal" })
+    .catch((error: Error & { code?: string }) => error);
+  expect(refused).toMatchObject({ code: "collaboration.not-active" });
+  const store = await openStore(context, "read");
+  try {
+    // The staged store stayed staged and unadvanced, with no reservation and no
+    // imported row: the lane is validated before anything is promoted.
+    expect(store.db.prepare("select authority_state, revision, activated_at from execution_meta where id = 1").get())
+      .toEqual({ authority_state: "staged", revision: 1, activated_at: null });
+    expect(store.db.prepare("select count(*) as n from execution_collaboration_intents").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from store_operations").get()).toEqual({ n: 0 });
+  } finally { store.close(); }
+
+  // Reactivating the reviewed lane lets the SAME verb complete: the promotion
+  // and the single revision advance happen only on this accepted run.
+  const activeLane = new DatabaseSync(lane.dbPath);
+  try { activeLane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run("2026-10-04T00:00:00.000Z"); } finally { activeLane.close(); }
+  expect(await importLegacyExecution({ context, operator: "operator", operationId: "op-lane-refusal-2" }))
+    .toMatchObject({ verdict: "upgraded", imported: 1 });
+  const after = await openStore(context, "read");
+  try {
+    expect(after.db.prepare("select authority_state, revision from execution_meta where id = 1").get())
+      .toEqual({ authority_state: "active", revision: 2 });
+    expect(after.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
+  } finally { after.close(); }
 });
 
 test("collaboration legacy import replay \u2014 a staged-authority interruption spends the execution revision exactly once", async () => {
