@@ -82,7 +82,6 @@ import {
   resolveTokenFreshness,
   semanticRequestHash,
   serializeExecutionValue,
-  parseExecutionToken,
   withExecutionTransaction,
   writeExecutionInputPin,
   writePlanCoordinationRow,
@@ -118,6 +117,8 @@ import { canonicalizeNearestExisting } from "./path.js";
 import { openCollaborationStore, type CollaborationStamp, type CollaborationStoreHandle } from "./collaboration-store.js";
 import {
   advanceCollaborationRevision,
+  assertNoPendingCompositeReservation,
+  repairCompositeAcknowledgement,
   reserveCompositeIntent,
   runCollaborationComposite,
   type CollaborationEffectReceipt,
@@ -598,6 +599,17 @@ function withExecutionPlanOperation<T>(
     );
     assertRunningWorkflow(witness);
     if (!freshness.current) throw stalePlanRowRefusal(witness, freshness, request.operation.kind);
+    // §3.1 a composite operation may have RESERVED this row for the facts it will
+    // finalize in another store. While that reservation is pending, no other
+    // writer may advance the row: it would invalidate the facts the admitted
+    // composite froze and leave a committed collaboration effect unfinalizable.
+    // The composite's own reservation is recorded by its own verb, which never
+    // reaches this frame.
+    assertNoPendingCompositeReservation(tx, {
+      workflowId: witness.workflowId,
+      planId: witness.planId,
+      operationId: request.operationId,
+    });
     // §4.1 the verb's own preflight — prepare's admission and actual-checkout
     // validation, completion's captured-witness comparison — runs HERE, after the
     // witness, the receipt conflict, the freshness and the running-lifecycle
@@ -1144,15 +1156,14 @@ type ResidualComposite = {
 /**
  * §3.1 the refusal of a composite whose collaboration effect is committed while
  * its execution finalization can no longer apply the admitted reservation. The
- * effect is NEVER undone or re-applied; the caller reissues the same verb with
- * the same operation id against the current plan token, which replays the
- * recorded effect and commits the missing execution delta.
+ * effect is NEVER undone or re-applied; the same verb and operation id re-admit
+ * against the current row (the reservation refreshes) and replay the effect.
  */
 function residualPartialRefusal(input: {
   intent: CompositeIntent;
   kind: ResidualComposite["kind"];
   witness: ExecutionPlanWitness;
-  reservedRevision: number | null;
+  reservedRevision: number;
   cause: string;
   receipt: CollaborationEffectReceipt;
 }): ExecutionError {
@@ -1161,8 +1172,9 @@ function residualPartialRefusal(input: {
     "collaboration.operation-partial",
     `The collaboration effect of operation ${JSON.stringify(input.intent.key.operationId)} is committed ` +
       `(collaboration revision ${input.receipt.collaborationRevision}), but its execution finalization is withheld: ` +
-      `${input.cause}. Do not re-run a different operation id. Reissue ${verb} with the same --operation id and the same ` +
-      `payload against the plan token this read returns; the recorded effect replays and only the execution delta is committed.`,
+      `${input.cause}. Do not re-run a different operation id. Re-read the plan row and reissue ${verb} with the same ` +
+      `--operation id and the same payload; the reservation refreshes and the recorded effect replays, so only the ` +
+      `execution delta is committed.`,
     {
       operation_id: input.intent.key.operationId,
       phase: "collaboration-confirmed",
@@ -1175,7 +1187,7 @@ function residualPartialRefusal(input: {
       recovery:
         `Re-read this plan row with mstar plan show --workflow ${input.witness.workflowId} --plan ${input.witness.planId}, ` +
         `then reissue ${verb} with the same --operation id and payload. The committed collaboration effect is never ` +
-        `re-applied, and no second issue is allocated.`,
+        `re-applied, no second issue is allocated, and the reservation refresh is recorded.`,
     },
   );
 }
@@ -1185,7 +1197,8 @@ function residualPartialRefusal(input: {
  * caller's token, freeze the payload and record the reservation in the SAME
  * execution transaction. A committed receipt is served BEFORE the CAS (an
  * identical retry never re-evaluates a token the first attempt already spent),
- * while a recorded reservation only resumes for the exact frozen intent.
+ * while a recorded reservation resumes for the exact frozen intent and refreshes
+ * the revision it addresses.
  */
 async function runResidualComposite(
   context: ExecutionContext,
@@ -1205,7 +1218,13 @@ async function runResidualComposite(
       workflowId: witness.workflowId,
       planId: witness.planId,
     });
-    if (replay !== null) return { kind: "replay" as const, receipt: replay };
+    if (replay !== null) {
+      return {
+        kind: "replay" as const,
+        receipt: replay,
+        key: { executionStoreId: tx.storeId, executionEpoch: tx.epoch, operationId: resolved.call.operationId },
+      };
+    }
     const freshness = resolveTokenFreshness(
       resolved.call.expected,
       {
@@ -1229,32 +1248,43 @@ async function runResidualComposite(
       expectedExecution: resolved.call.expected ?? witness.token,
       frozenPayload: composite.freeze(witness),
     };
-    reserveCompositeIntent(tx, intent);
-    return { kind: "reserved" as const, intent };
+    // The reservation does NOT advance the row: it excludes every conflicting
+    // writer (`assertNoPendingCompositeReservation`), so the admitted snapshot
+    // stays current and the finalization spends the same token once.
+    const reservation = reserveCompositeIntent(tx, intent, { revision: witness.revision });
+    return { kind: "reserved" as const, intent, reservedRevision: reservation.reservedRevision };
   });
-  if (prepared.kind === "replay") return prepared.receipt;
+  if (prepared.kind === "replay") {
+    // A failed acknowledgement is metadata: repair it on replay, never by
+    // repeating either business effect. Outside the read transaction above, so
+    // no two write transactions nest.
+    await repairCompositeAcknowledgement(context, prepared.key);
+    return prepared.receipt;
+  }
   return runCollaborationComposite<ExecutionReceipt<ExecutionPlanView>>(context, prepared.intent, {
     apply: composite.apply,
-    finalize: (tx, receipt) => finalizeResidualComposite(tx, resolved, prepared.intent, composite.kind, receipt),
+    finalize: (tx, receipt) =>
+      finalizeResidualComposite(tx, resolved, prepared.intent, prepared.reservedRevision, composite.kind, receipt),
   });
 }
 
 /**
  * §3.1 the finalization of one residual composite: require the admitted
- * reservation (plan CAS, addressed scope and actor evidence are the SAME facts
- * the prepare froze), advance the plan row once, and hand back the committed
- * read. A moved reservation refuses `collaboration.operation-partial` instead of
- * applying the execution delta on top of a state the caller never admitted.
+ * reservation (the row's reserved revision, addressed scope and actor evidence
+ * are the SAME facts the prepare froze), advance the row exactly once, and
+ * record the domain receipt in the same transaction. A moved reservation refuses
+ * `collaboration.operation-partial` instead of applying the execution delta on
+ * top of a state the caller never admitted.
  */
 function finalizeResidualComposite(
   tx: ExecutionTransaction,
   resolved: ResolvedPlanOperation<ResidualAddOperation | ResidualCloseOperation>,
   intent: CompositeIntent,
+  reservedRevision: number,
   kind: ResidualComposite["kind"],
   receipt: CollaborationEffectReceipt,
 ): ExecutionReceipt<ExecutionPlanView> {
   const witness = readExecutionPlanWitness(tx, resolved.read);
-  const reservedRevision = parseExecutionToken(intent.expectedExecution).revision;
   const cause =
     reservedRevision !== witness.revision
       ? `the plan row moved from the reserved revision ${reservedRevision} to ${witness.revision}`
@@ -1269,15 +1299,22 @@ function finalizeResidualComposite(
   advancePlanOperationRevisions(tx, { workflowId: witness.workflowId, now: at });
   advancePlanRowRevision(tx, witness);
   const committed = readExecutionPlanWitness(tx, resolved.read);
-  return {
+  const recovery = appliedRecovery(witness, kind);
+  const read: ExecutionRead<ExecutionPlanView> = {
     data: committed.view,
     token: committed.token,
     storeId: tx.storeId,
     epoch: tx.epoch,
-    operationId: intent.key.operationId,
-    replayed: false,
-    recovery: appliedRecovery(witness, kind),
   };
+  writePlanOperationReceipt(tx, {
+    operationId: intent.key.operationId,
+    requestHash: intent.requestHash,
+    workflowId: witness.workflowId,
+    planId: witness.planId,
+    receipt: { ...read, operationRecovery: recovery },
+    now: at,
+  });
+  return { ...read, operationId: intent.key.operationId, replayed: false, recovery };
 }
 
 /**

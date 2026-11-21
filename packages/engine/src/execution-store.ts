@@ -1708,6 +1708,9 @@ export async function initializeExecutionAuthority(context: StoreContext): Promi
     tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1").run();
     assertNoLegacyExecutionSources(context);
     tx.db.prepare("delete from execution_operations where epoch < ?").run(tx.epoch + 1);
+    tx.db
+      .prepare("delete from execution_collaboration_intents where execution_epoch < ?")
+      .run(tx.epoch + 1);
   });
   return readExecutionState(context);
 }
@@ -3203,20 +3206,6 @@ export async function readWorkflowOperationReplayBeforeProof<T>(
 }
 
 /**
- * The pending-reservation marker of a composite operation (`collaboration-operations.ts`).
- * It shares this ledger so one operation id owns exactly one row from admission to
- * committed receipt; every replay reader must treat it as not-yet-committed.
- */
-export function isPreparedCompositeMarker(resultJson: string): boolean {
-  try {
-    const parsed: unknown = JSON.parse(resultJson);
-    return isPlainObject(parsed) && isPlainObject(parsed.composite) && parsed.composite.phase === "prepared";
-  } catch {
-    return false;
-  }
-}
-
-/**
  * §3.1 the same replay for ANY addressed record: the committed receipt of one
  * operation id, or `null` for a first attempt. `token` names the address the
  * receipt must carry — a plan, a session, the workflow header — so a receipt
@@ -3296,12 +3285,6 @@ export function readOperationReplay<T>(
       },
     );
   }
-  // A composite operation records its reservation in this same ledger before its
-  // collaboration effect commits (see collaboration-operations.ts). A pending
-  // reservation is NOT a committed receipt: the owning verb resumes it, so its
-  // recorded-intent row must never be served as a replay. The fingerprint above
-  // still refused an id reused for a different payload.
-  if (isPreparedCompositeMarker(recorded.resultJson)) return null;
   const receipt = readCommittedReceipt<T>(recorded, tx, input.operationId, input.workflowId, input.token);
   return { ...receipt, operationId: input.operationId, replayed: true };
 }

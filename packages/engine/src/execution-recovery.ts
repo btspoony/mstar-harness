@@ -295,6 +295,9 @@ const EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION =
 /** The migration that recorded Dsh ledger legacy provenance columns. */
 const DSH_LEGACY_PROVENANCE_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "dsh-ledger-legacy-provenance")?.version ?? Number.POSITIVE_INFINITY;
+/** The migration that introduced the composite reservation ledger. */
+const EXECUTION_INTENTS_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "execution-collaboration-intents")?.version ?? Number.POSITIVE_INFINITY;
 
 /** §4.3: the canonical control harness root that owns this context's store. */
 function controlRootOf(context: StoreContext): string {
@@ -371,7 +374,7 @@ type AuthorityTable = {
   /** The row's own authority revision column, when the table carries one. */
   revisionColumn?: string;
   /** True when the table only exists once its introducing migration applied. */
-  requires?: "catalog" | "execution" | "roadmap" | "milestone" | "projectMoves" | "host" | "syncLedger";
+  requires?: "catalog" | "execution" | "executionIntents" | "roadmap" | "milestone" | "projectMoves" | "host" | "syncLedger";
 };
 
 function text(row: Record<string, unknown>, column: string): string {
@@ -663,6 +666,34 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
   },
   {
     domain: "execution",
+    table: "execution_collaboration_intents",
+    columns: [
+      "execution_store_id",
+      "execution_epoch",
+      "operation_id",
+      "kind",
+      "request_hash",
+      "workflow_id",
+      "plan_id",
+      "actor",
+      "expected_token",
+      "reserved_revision",
+      "target_json",
+      "frozen_payload",
+      "phase",
+      "receipt_json",
+      "cause_code",
+      "cause_message",
+      "cause_details_json",
+      "created_at",
+      "updated_at",
+    ],
+    orderBy: "execution_epoch, operation_id",
+    key: (row) => `composite:${text(row, "execution_epoch")}/${text(row, "operation_id")}`,
+    requires: "executionIntents",
+  },
+  {
+    domain: "execution",
     table: "execution_migrations",
     columns: [
       "manifest_id",
@@ -778,6 +809,7 @@ const REPLACEMENT_ORDER: readonly string[] = [
   "execution_integration_leases",
   "execution_inputs",
   "execution_operations",
+  "execution_collaboration_intents",
   "execution_migrations",
   "dsh_ledger_events",
   "dsh_accepted_identities",
@@ -814,6 +846,8 @@ type TableAvailability = {
   catalog: boolean;
   execution: boolean;
   executionCoverage: boolean;
+  /** The composite reservation ledger exists from its introducing migration. */
+  executionIntents: boolean;
   roadmap: boolean;
   milestone: boolean;
   projectMoves: boolean;
@@ -840,6 +874,7 @@ function availabilityOf(schemaVersion: number): TableAvailability {
     catalog: schemaVersion >= CATALOG_MIGRATION_VERSION,
     execution: schemaVersion >= EXECUTION_MIGRATION_VERSION,
     executionCoverage: schemaVersion >= EXECUTION_COVERAGE_MIGRATION_VERSION,
+    executionIntents: schemaVersion >= EXECUTION_INTENTS_MIGRATION_VERSION,
     roadmap: schemaVersion >= ROADMAP_MIGRATION_VERSION,
     milestone: schemaVersion >= MILESTONE_MIGRATION_VERSION,
     syncPendingTarget: schemaVersion >= SYNC_PENDING_TARGET_MIGRATION_VERSION,
@@ -856,6 +891,7 @@ function availabilityOf(schemaVersion: number): TableAvailability {
 function available(table: AuthorityTable, availability: TableAvailability): boolean {
   if (table.requires === "catalog") return availability.catalog;
   if (table.requires === "execution") return availability.execution;
+  if (table.requires === "executionIntents") return availability.executionIntents;
   if (table.requires === "roadmap") return availability.roadmap;
   if (table.requires === "milestone") return availability.milestone;
   if (table.requires === "projectMoves") return availability.projectMoves;

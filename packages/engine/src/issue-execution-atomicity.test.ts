@@ -1,31 +1,44 @@
 /**
  * issue-execution-atomicity — the handle-taking issue bodies and the composite
- * frame that composes them across the two authorities.
+ * reservation frame that composes them across the two authorities.
  *
  * Run with
- * `bun test packages/engine/src/issue-execution-atomicity.test.ts -t 'collaboration composite residual|residual-add|residual-close'`.
+ * `bun test packages/engine/src/issue-execution-atomicity.test.ts -t 'collaboration composite residual'`.
  *
  * The combined store is gone: issue rows live in the collaboration lane, plan
  * rows and operation receipts in the execution lane. The composer cases below
- * still drive the SAME bodies the public issue verbs run, on a handle the CALLER
- * owns, to prove each body is atomic inside one transaction. The composite cases
- * drive the admitted residual verbs, whose three phases (execution prepare,
- * collaboration effect, execution finalize) are correlated by a durable intent
- * and effect receipt.
+ * drive the SAME bodies the public issue verbs run, on a handle the CALLER owns,
+ * to prove each body is atomic inside one transaction. The composite cases drive
+ * the admitted residual verbs and the frame's crash/interleaving boundaries,
+ * where a durable reservation excludes conflicting execution writers and a
+ * committed collaboration effect is resumed instead of applied twice.
  *
- * Every fixture is its own temporary control root and user home: no case reads
- * or writes this checkout's `store.db` or the operator's real home.
+ * Every fixture is its own temporary control root AND its own user home: the
+ * `homedir` spy below is a real spy on the live module binding, every resolved
+ * collaboration database is asserted to live inside the temp root before it is
+ * created, and no case reads or writes this checkout's `store.db` or the
+ * operator's real `~/.mstar`.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as nodeOs from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
-import { runCollaborationComposite, type CompositeIntent } from "./collaboration-operations.js";
+import {
+  initializeCollaborationStore,
+  openCollaborationStore,
+  withCollaborationWrite,
+  type CollaborationStamp,
+} from "./collaboration-store.js";
+import {
+  repairCompositeAcknowledgement,
+  reserveCompositeIntent,
+  runCollaborationComposite,
+  type CompositeIntent,
+} from "./collaboration-operations.js";
 import {
   assertIssueStoreActive,
   captureIssue,
@@ -39,7 +52,6 @@ import {
   listIssues,
   type CaptureInput,
   type ClosureEvidence,
-  type IssueError,
 } from "./issue.js";
 import {
   bindExecutionSession,
@@ -47,10 +59,11 @@ import {
   parseExecutionToken,
   readExecutionPlan,
   readExecutionState,
+  withExecutionTransaction,
   type ExecutionCaller,
   type ExecutionSessionRef,
 } from "./execution-store.js";
-import { deriveResidualEntries, mutateExecutionPlan } from "./execution-coordination.js";
+import { deriveResidualEntries, mutateExecutionPlan, progressExecutionPlan } from "./execution-coordination.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 import type { WorkflowEntry } from "./status.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
@@ -60,25 +73,19 @@ const HOME = join(ROOT, "home");
 mkdirSync(HOME);
 
 /**
- * The collaboration store is user-level, so the resolver's home must be this
- * fixture and never the operator's. One spy serves the whole file.
+ * The collaboration store is user-level, so `homedir` must resolve into this
+ * fixture and never to the operator's real home. This is the same live-binding
+ * spy the issue suite uses; the resolved database path is asserted below before
+ * anything is created.
  */
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
-  homeSpy = spyOnHomedir();
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
 });
 afterAll(() => {
   homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
-
-function spyOnHomedir(): { mockRestore(): void } {
-  // A static import would run before the spy is installed; bun's spyOn wraps the
-  // live namespace binding the store entry points read.
-  return (nodeOs as unknown as { homedir: { mockImplementation?(fn: () => string): { mockRestore(): void } } }).homedir?.mockImplementation?.(
-    () => HOME,
-  ) ?? { mockRestore() {} };
-}
 
 const ACTOR = "project-manager";
 
@@ -102,6 +109,19 @@ function checkout(name: string): { root: string; harnessDir: string; context: St
   return { root, harnessDir, context: { harnessDir, checkoutRoot: root } };
 }
 
+/**
+ * The fixture's collaboration location, refused loudly if the resolver escaped
+ * the temporary home. This is the isolation guarantee: a broken `homedir` spy
+ * fails the case instead of creating a database in the operator's storage.
+ */
+function collaborationLocation(context: StoreContext) {
+  const location = resolveCollaborationLocation(context);
+  if (!location.dbPath.startsWith(`${ROOT}${sep}`)) {
+    throw new Error(`fixture: resolved collaboration store ${location.dbPath} is outside the temporary root ${ROOT}`);
+  }
+  return location;
+}
+
 /** Flip a staged collaboration record to active: this plan ships no public activator. */
 function activate(dbPath: string): void {
   const db = new DatabaseSync(dbPath);
@@ -118,8 +138,8 @@ function activate(dbPath: string): void {
 async function activeStore(name: string): Promise<StoreContext> {
   const fixture = checkout(name);
   (await initializeStore(fixture.context)).close();
-  await initializeCollaborationStore(resolveCollaborationLocation(fixture.context));
-  activate(resolveCollaborationLocation(fixture.context).dbPath);
+  await initializeCollaborationStore(collaborationLocation(fixture.context));
+  activate(collaborationLocation(fixture.context).dbPath);
   return fixture.context;
 }
 
@@ -137,8 +157,8 @@ async function executionPlanFixture(
   const { root: repoRoot, harnessDir } = fixture;
   const context: StoreContext = fixture.context;
   (await initializeStore(context)).close();
-  await initializeCollaborationStore(resolveCollaborationLocation(context));
-  if ((options.collaboration ?? "active") === "active") activate(resolveCollaborationLocation(context).dbPath);
+  await initializeCollaborationStore(collaborationLocation(context));
+  if ((options.collaboration ?? "active") === "active") activate(collaborationLocation(context).dbPath);
   const initialized = await readExecutionState(context);
   const workflowId = "wf-issue-batch";
   const planId = "plan-issue-batch";
@@ -216,7 +236,7 @@ function baseInput(overrides: Partial<CaptureInput> = {}): CaptureInput {
 
 /** One caller-owned collaboration transaction, exactly as the effect phase owns it. */
 function inTransaction<T>(context: StoreContext, body: (db: StoreDb) => T): T {
-  const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+  const db = new DatabaseSync(collaborationLocation(context).dbPath);
   // node:sqlite's typed statements are the same engine StoreDb wraps; a raw
   // connection is what lets this test roll a composed effect back by hand.
   const handle = db as unknown as StoreDb;
@@ -246,6 +266,7 @@ type IssueFacts = {
   transitions: number;
   standalone: number;
   composite: number;
+  declined: number;
 };
 
 function issueFacts(context: StoreContext): Promise<IssueFacts> {
@@ -256,11 +277,10 @@ function issueFacts(context: StoreContext): Promise<IssueFacts> {
       revision: number;
       catalog_revision: number;
     };
-    const operations = db.prepare("select key_space, count(*) as n from collaboration_operations group by key_space").all() as Array<{
+    const operations = db.prepare("select key_space, result_json from collaboration_operations").all() as Array<{
       key_space: string;
-      n: number;
+      result_json: string;
     }>;
-    const bySpace = (space: string): number => operations.find((row) => row.key_space === space)?.n ?? 0;
     return {
       revision: meta.revision,
       catalogRevision: meta.catalog_revision,
@@ -268,28 +288,43 @@ function issueFacts(context: StoreContext): Promise<IssueFacts> {
       occurrences: count("occurrences"),
       provenance: count("provenance"),
       transitions: count("issue_transitions"),
-      standalone: bySpace("standalone"),
-      composite: bySpace("composite"),
+      standalone: operations.filter((row) => row.key_space === "standalone").length,
+      composite: operations.filter((row) => row.key_space === "composite").length,
+      declined: operations.filter((row) => row.result_json.includes('"declined"')).length,
     };
   });
 }
 
-/** Everything the execution authority holds about operations and its own revisions. */
-async function executionFacts(context: StoreContext): Promise<{ storeRevision: number; operations: number }> {
+/** Everything the execution authority holds about operations, intents and its own counters. */
+async function executionFacts(context: StoreContext): Promise<{ storeRevision: number; operations: number; intents: number }> {
   const handle = await openStore(context, "read");
   try {
+    const count = (sql: string): number => (handle.db.prepare(sql).get() as { n: number }).n;
     return {
       // The counter every accepted plan operation advances once (the execution
       // frame's own revision is the root/header identity, not a per-operation one).
       storeRevision: (handle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision,
-      operations: (handle.db.prepare("select count(*) as n from execution_operations").get() as { n: number }).n,
+      operations: count("select count(*) as n from execution_operations"),
+      intents: count("select count(*) as n from execution_collaboration_intents"),
     };
   } finally {
     handle.close();
   }
 }
 
-/** One raw execution write, used only to simulate a lost finalization. */
+/** The phases of every recorded reservation for one operation id. */
+async function intentPhases(context: StoreContext, operationId: string): Promise<string[]> {
+  const handle = await openStore(context, "read");
+  try {
+    return (handle.db
+      .prepare("select phase from execution_collaboration_intents where operation_id = ? order by created_at")
+      .all(operationId) as Array<{ phase: string }>).map((row) => row.phase);
+  } finally {
+    handle.close();
+  }
+}
+
+/** One raw execution write, used to simulate a writer outside the composite frame. */
 async function inExecutionWrite<T>(context: StoreContext, body: (db: StoreDb) => T): Promise<T> {
   const handle = await openStore(context, "write");
   try {
@@ -307,6 +342,21 @@ async function inExecutionWrite<T>(context: StoreContext, body: (db: StoreDb) =>
   }
 }
 
+/** The frozen collaboration target of the active fixture, as the verb would read it. */
+async function collaborationStamp(context: StoreContext): Promise<CollaborationStamp> {
+  const handle = await openCollaborationStore(context, "read");
+  try {
+    return {
+      repoKey: handle.authority.repoKey,
+      mode: handle.authority.mode,
+      storeId: handle.authority.storeId,
+      epoch: handle.authority.epoch,
+    };
+  } finally {
+    handle.close();
+  }
+}
+
 async function refusalOf(work: () => Promise<unknown>): Promise<{ code: string; message: string; details?: unknown }> {
   try {
     await work();
@@ -314,6 +364,11 @@ async function refusalOf(work: () => Promise<unknown>): Promise<{ code: string; 
   } catch (error) {
     return error as { code: string; message: string; details?: unknown };
   }
+}
+
+function detailsOf(refusal: { details?: unknown }): Record<string, unknown> {
+  if (refusal.details === null || typeof refusal.details !== "object") throw new Error("refusal carries no details");
+  return refusal.details as Record<string, unknown>;
 }
 
 const resolvedEvidence: ClosureEvidence = { reason: "fixed", references: ["p-1"], alignmentRef: "qa-gate:accepted" };
@@ -586,7 +641,7 @@ describe("execution-issue-atomicity: the composers of one collaboration effect",
 
     // A staged collaboration store refuses the composed route exactly where it
     // refuses the public one, before any body runs.
-    const dbPath = resolveCollaborationLocation(context).dbPath;
+    const dbPath = collaborationLocation(context).dbPath;
     const db = new DatabaseSync(dbPath);
     try {
       db.prepare("update collaboration_meta set authority_state = 'staged' where id = 1").run();
@@ -645,12 +700,13 @@ describe("collaboration composite residual", () => {
     expect(after.standalone).toBe(before.standalone + 2);
     expect(after.composite).toBe(before.composite + 1);
 
-    // The execution lane advanced its own counters exactly once and holds the one
-    // committed operation receipt; the collaboration revision is a separate
-    // namespace.
+    // The execution lane advanced its own counter exactly once, holds one
+    // committed operation receipt and one CONFIRMED reservation.
     const afterExecution = await executionFacts(fixture.context);
     expect(afterExecution.storeRevision).toBe(beforeExecution.storeRevision + 1);
     expect(afterExecution.operations).toBe(beforeExecution.operations + 1);
+    expect(afterExecution.intents).toBe(beforeExecution.intents + 1);
+    expect(await intentPhases(fixture.context, "composite-add-1")).toEqual(["confirmed"]);
 
     const issues = await listIssues(fixture.context, {});
     expect(issues.total).toBe(1);
@@ -674,7 +730,7 @@ describe("collaboration composite residual", () => {
     const after = await issueFacts(fixture.context);
     const afterExecution = await executionFacts(fixture.context);
 
-    // The same operation id with the SAME stale token: the recorded receipt is
+    // The same operation id with the SAME spent token: the recorded receipt is
     // served before the CAS the first attempt already spent.
     const replay = await mutateExecutionPlan(context, request);
     expect(replay.replayed).toBe(true);
@@ -683,137 +739,250 @@ describe("collaboration composite residual", () => {
     expect(await executionFacts(fixture.context)).toEqual(afterExecution);
   });
 
-  test("an interruption after the collaboration effect resumes from its receipt without allocating another issue", async () => {
-    const fixture = await executionPlanFixture("composite-interrupted");
-    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
-    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
-    const request = {
-      operationId: "composite-interrupted-1",
-      session: fixture.session,
-      expected: plan.token,
-      planId: fixture.planId,
-      operation: { kind: "residual-add" as const, entries: [baseInput({ occurrenceKey: "interrupted-1" })] },
-    };
-    await mutateExecutionPlan(context, request);
-    const committed = await issueFacts(fixture.context);
-
-    // A lost execution acknowledgement: the collaboration receipt survives, the
-    // single operation row is gone, and the caller never saw the success.
-    await inExecutionWrite(fixture.context, (db) => {
-      db.prepare("delete from execution_operations where operation_id = ?").run("composite-interrupted-1");
-    });
-    const current = await readExecutionPlan(context, fixture.session, fixture.planId);
-    const resumed = await mutateExecutionPlan(context, { ...request, expected: current.token });
-
-    expect(resumed.replayed).toBe(false);
-    const after = await issueFacts(fixture.context);
-    // The effect is NOT applied twice: same issue, same occurrence, same
-    // composite receipt; only the execution delta and its receipt were committed.
-    expect(after.issues).toBe(committed.issues);
-    expect(after.occurrences).toBe(committed.occurrences);
-    expect(after.composite).toBe(committed.composite);
-    expect(after.standalone).toBe(committed.standalone);
-    expect((await listIssues(fixture.context, {})).total).toBe(1);
-  });
-
-  test("the same operation id with a different payload refuses before applying", async () => {
-    const fixture = await executionPlanFixture("composite-conflict");
-    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
-    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
-    await mutateExecutionPlan(context, {
-      operationId: "composite-conflict-1",
-      session: fixture.session,
-      expected: plan.token,
-      planId: fixture.planId,
-      operation: { kind: "residual-add", entries: [baseInput({ occurrenceKey: "conflict-1" })] },
-    });
-    const before = await issueFacts(fixture.context);
-    const beforeExecution = await executionFacts(fixture.context);
-
-    const refused = await refusalOf(() =>
-      mutateExecutionPlan(context, {
-        operationId: "composite-conflict-1",
-        session: fixture.session,
-        expected: plan.token,
-        planId: fixture.planId,
-        operation: { kind: "residual-add", entries: [baseInput({ occurrenceKey: "conflict-2" })] },
-      }),
-    );
-    expect(refused.code).toBe("execution.operation-conflict");
-    expect(await issueFacts(fixture.context)).toEqual(before);
-    expect(await executionFacts(fixture.context)).toEqual(beforeExecution);
-  });
-
-  test("a concurrent same-id attempt applies the effect exactly once", async () => {
-    const fixture = await executionPlanFixture("composite-concurrent");
-    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
-    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
-    const request = {
-      operationId: "composite-concurrent-1",
-      session: fixture.session,
-      expected: plan.token,
-      planId: fixture.planId,
-      operation: { kind: "residual-add" as const, entries: [baseInput({ occurrenceKey: "concurrent-1" })] },
-    };
-    const [first, second] = await Promise.all([mutateExecutionPlan(context, request), mutateExecutionPlan(context, request)]);
-    expect([first.replayed, second.replayed].sort()).toEqual([false, true]);
-    expect(first.token).toBe(second.token);
-
-    const after = await issueFacts(fixture.context);
-    expect(after.issues).toBe(1);
-    expect(after.occurrences).toBe(1);
-    expect(after.composite).toBe(1);
-    expect((await listIssues(fixture.context, {})).total).toBe(1);
-  });
-
-  test("an unavailable collaboration authority refuses before any reservation and never reports success", async () => {
-    const fixture = await executionPlanFixture("composite-unavailable", { collaboration: "staged" });
-    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
-    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
-    const beforeExecution = await executionFacts(fixture.context);
-
-    const refused = await refusalOf(() =>
-      mutateExecutionPlan(context, {
-        operationId: "composite-unavailable-1",
-        session: fixture.session,
-        expected: plan.token,
-        planId: fixture.planId,
-        operation: { kind: "residual-add", entries: [baseInput({ occurrenceKey: "unavailable-1" })] },
-      }),
-    );
-    expect(refused.code).toBe("collaboration.not-active");
-    expect(await executionFacts(fixture.context)).toEqual(beforeExecution);
-    expect(parseExecutionToken((await readExecutionPlan(context, fixture.session, fixture.planId)).token).revision).toBe(
-      parseExecutionToken(plan.token).revision,
-    );
-  });
-
-  test("a wrong collaboration binding refuses before the effect runs", async () => {
-    const fixture = await executionPlanFixture("composite-binding");
+  test("both crash boundaries resume from the durable reservation without repeating the effect", async () => {
+    const fixture = await executionPlanFixture("composite-resumed");
     const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
     const state = await readExecutionState(context);
-    const intent: CompositeIntent = {
-      key: { executionStoreId: state.storeId, executionEpoch: state.epoch, operationId: "composite-binding-1" },
+    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
+    const revision = parseExecutionToken(plan.token).revision;
+    const target = await collaborationStamp(fixture.context);
+    const synthetic = (operationId: string): CompositeIntent => ({
+      key: { executionStoreId: state.storeId, executionEpoch: state.epoch, operationId },
       kind: "residual-add",
-      requestHash: "forged-fingerprint",
-      target: { repoKey: "github/acme/other", mode: "local", storeId: "00000000-0000-4000-8000-000000000000", epoch: 1 },
+      requestHash: `hash-${operationId}`,
+      target,
       scope: { workflowId: fixture.workflowId, planId: fixture.planId },
       actor: ACTOR,
-      expectedExecution: state.token,
-      frozenPayload: "{}",
-    };
-    const refused = await refusalOf(() =>
-      runCollaborationComposite(context, intent, {
-        apply: () => "never applied",
-        finalize: () => "never finalized",
+      expectedExecution: plan.token,
+      frozenPayload: JSON.stringify({ plan: fixture.planId }),
+    });
+
+    // Crash BEFORE the effect ran: the reservation is prepared, nothing else.
+    const beforeApply = synthetic("composite-before-apply");
+    const reserved = await withExecutionTransaction(context, (tx) =>
+      reserveCompositeIntent(tx, beforeApply, { revision }),
+    );
+    expect(reserved).toMatchObject({ outcome: "reserved", reservedRevision: revision });
+    let applies = 0;
+    const first = await runCollaborationComposite<{ applies: number; revision: number }>(context, beforeApply, {
+      apply: () => {
+        applies += 1;
+        return JSON.stringify({ applied: true });
+      },
+      finalize: (_tx, receipt) => ({ applies, revision: receipt.collaborationRevision }),
+    });
+    expect(first.applies).toBe(1);
+    expect(await intentPhases(fixture.context, "composite-before-apply")).toEqual(["confirmed"]);
+
+    // Crash AFTER the effect committed but BEFORE the execution delta: the frame
+    // reports the committed phase and the reservation stays prepared.
+    const afterApply = synthetic("composite-after-apply");
+    await withExecutionTransaction(context, (tx) => reserveCompositeIntent(tx, afterApply, { revision }));
+    let effectApplications = 0;
+    const interrupted = await refusalOf(() =>
+      runCollaborationComposite<string>(context, afterApply, {
+        apply: () => {
+          effectApplications += 1;
+          return JSON.stringify({ applied: true });
+        },
+        finalize: () => {
+          throw new Error("simulated process loss");
+        },
       }),
     );
-    expect(refused.code).toBe("collaboration.stale-binding");
-    expect(await issueFacts(fixture.context)).toMatchObject({ issues: 0, composite: 0 });
+    expect(interrupted.code).toBe("collaboration.operation-partial");
+    expect(detailsOf(interrupted)).toMatchObject({ phase: "collaboration-confirmed", operation_id: "composite-after-apply" });
+    expect(effectApplications).toBe(1);
+    expect(await intentPhases(fixture.context, "composite-after-apply")).toEqual(["prepared"]);
+
+    // The same reservation, reissued: the effect receipt is replayed (not applied
+    // again) and only the execution delta is committed.
+    const resumed = await runCollaborationComposite<string>(context, afterApply, {
+      apply: () => {
+        effectApplications += 1;
+        return JSON.stringify({ applied: true });
+      },
+      finalize: () => "finalized",
+    });
+    expect(resumed).toBe("finalized");
+    expect(effectApplications).toBe(1);
+    expect(await intentPhases(fixture.context, "composite-after-apply")).toEqual(["confirmed"]);
   });
 
-  test("a deterministic refusal inside the effect releases the reservation so the corrected retry is admitted", async () => {
-    const fixture = await executionPlanFixture("composite-deterministic");
+  test("a transient failure keeps the reservation and blocks conflicting writers until it resumes", async () => {
+    const fixture = await executionPlanFixture("composite-transient");
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const state = await readExecutionState(context);
+    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
+    const intent: CompositeIntent = {
+      key: { executionStoreId: state.storeId, executionEpoch: state.epoch, operationId: "composite-transient-1" },
+      kind: "residual-add",
+      requestHash: "hash-transient",
+      target: await collaborationStamp(fixture.context),
+      scope: { workflowId: fixture.workflowId, planId: fixture.planId },
+      actor: ACTOR,
+      expectedExecution: plan.token,
+      frozenPayload: JSON.stringify({ plan: fixture.planId }),
+    };
+    await withExecutionTransaction(context, (tx) =>
+      reserveCompositeIntent(tx, intent, { revision: parseExecutionToken(plan.token).revision }),
+    );
+
+    const transient = await refusalOf(() =>
+      runCollaborationComposite<string>(context, intent, {
+        apply: () => {
+          throw Object.assign(new Error("the collaboration store is locked"), { code: "store.busy" });
+        },
+        finalize: () => "never",
+      }),
+    );
+    expect(transient.code).toBe("collaboration.operation-partial");
+    expect(detailsOf(transient)).toMatchObject({ phase: "prepared", operation_id: "composite-transient-1" });
+    expect(await intentPhases(fixture.context, "composite-transient-1")).toEqual(["prepared"]);
+
+    // The reservation still excludes the row: a plain plan writer refuses.
+    const blocked = await refusalOf(() =>
+      progressExecutionPlan(context, {
+        operationId: "progress-while-reserved",
+        session: fixture.session,
+        expected: plan.token,
+        planId: fixture.planId,
+        operation: { kind: "progress", progress: { status: "InProgress", summary: "blocked", evidence_paths: [] } },
+      }),
+    );
+    expect(blocked.code).toBe("collaboration.operation-partial");
+    expect(detailsOf(blocked)).toMatchObject({ phase: "prepared", operation_id: "composite-transient-1" });
+    expect(await readExecutionPlan(context, fixture.session, fixture.planId).then((read) => read.token)).toBe(plan.token);
+
+    // Once the transient cause is gone the SAME intent resumes and completes.
+    const completed = await runCollaborationComposite<string>(context, intent, {
+      apply: () => JSON.stringify({ applied: true }),
+      finalize: () => "completed",
+    });
+    expect(completed).toBe("completed");
+    expect(await intentPhases(fixture.context, "composite-transient-1")).toEqual(["confirmed"]);
+  });
+
+  test("a reservation is refreshed when the addressed row moves, and released by its completion", async () => {
+    const fixture = await executionPlanFixture("composite-refresh");
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const state = await readExecutionState(context);
+    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
+    const revision = parseExecutionToken(plan.token).revision;
+    const target = await collaborationStamp(fixture.context);
+    const intent: CompositeIntent = {
+      key: { executionStoreId: state.storeId, executionEpoch: state.epoch, operationId: "composite-refresh-1" },
+      kind: "residual-add",
+      requestHash: "hash-refresh",
+      target,
+      scope: { workflowId: fixture.workflowId, planId: fixture.planId },
+      actor: ACTOR,
+      expectedExecution: plan.token,
+      frozenPayload: JSON.stringify({ plan: fixture.planId }),
+    };
+    await withExecutionTransaction(context, (tx) => reserveCompositeIntent(tx, intent, { revision }));
+
+    // A second composite on the same row refuses at prepare, naming the pending id.
+    const secondComposite = await refusalOf(() =>
+      mutateExecutionPlan(context, {
+        operationId: "composite-refresh-other",
+        session: fixture.session,
+        expected: plan.token,
+        planId: fixture.planId,
+        operation: { kind: "residual-add", entries: [baseInput({ occurrenceKey: "refresh-other" })] },
+      }),
+    );
+    expect(secondComposite.code).toBe("collaboration.operation-partial");
+    expect(detailsOf(secondComposite)).toMatchObject({ operation_id: "composite-refresh-1", phase: "prepared" });
+
+    // A writer outside the composite frame moves the row (a bypass). The retry
+    // refreshes the reservation instead of stranding the committed effect.
+    await inExecutionWrite(fixture.context, (db) => {
+      db.prepare("update execution_plans set revision = revision + 1 where workflow_id = ? and plan_id = ?").run(
+        fixture.workflowId,
+        fixture.planId,
+      );
+    });
+    const moved = parseExecutionToken((await readExecutionPlan(context, fixture.session, fixture.planId)).token).revision;
+    const refreshed = await withExecutionTransaction(context, (tx) =>
+      reserveCompositeIntent(tx, intent, { revision: moved }),
+    );
+    expect(refreshed).toMatchObject({ outcome: "resume", reservedRevision: moved });
+
+    // Completion releases the row: a real residual verb then proceeds.
+    const completed = await runCollaborationComposite<string>(context, intent, {
+      apply: () => JSON.stringify({ applied: true }),
+      finalize: () => "completed",
+    });
+    expect(completed).toBe("completed");
+    const accepted = await mutateExecutionPlan(context, {
+      operationId: "composite-refresh-real",
+      session: fixture.session,
+      expected: (await readExecutionPlan(context, fixture.session, fixture.planId)).token,
+      planId: fixture.planId,
+      operation: { kind: "residual-add", entries: [baseInput({ occurrenceKey: "refresh-real" })] },
+    });
+    expect(accepted.replayed).toBe(false);
+    expect((await listIssues(fixture.context, {})).total).toBe(1);
+  });
+
+  test("a failed acknowledgement is repaired by a replay without repeating the effect", async () => {
+    const fixture = await executionPlanFixture("composite-ack");
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
+    const request = {
+      operationId: "composite-ack-1",
+      session: fixture.session,
+      expected: plan.token,
+      planId: fixture.planId,
+      operation: { kind: "residual-add" as const, entries: [baseInput({ occurrenceKey: "ack-1" })] },
+    };
+    await mutateExecutionPlan(context, request);
+    const before = await issueFacts(fixture.context);
+
+    const setAcknowledgement = (value: string | null): Promise<void> =>
+      withCollaborationWrite(fixture.context, (handle) => {
+        const row = handle.db
+          .prepare("select result_json from collaboration_operations where key_space = 'composite' and operation_id = ?")
+          .get("composite-ack-1") as { result_json: string };
+        const parsed = JSON.parse(row.result_json) as { receipt: unknown; acknowledgedAt: string | null };
+        parsed.acknowledgedAt = value;
+        handle.db
+          .prepare("update collaboration_operations set result_json = ? where key_space = 'composite' and operation_id = ?")
+          .run(JSON.stringify(parsed), "composite-ack-1");
+      });
+    const acknowledgement = (): Promise<string | null> =>
+      withCollaborationWrite(fixture.context, (handle) => {
+        const row = handle.db
+          .prepare("select result_json from collaboration_operations where key_space = 'composite' and operation_id = ?")
+          .get("composite-ack-1") as { result_json: string };
+        return (JSON.parse(row.result_json) as { acknowledgedAt: string | null }).acknowledgedAt;
+      });
+
+    // A lost acknowledgement: the effect receipt is durable but unacknowledged.
+    await setAcknowledgement(null);
+    expect(await acknowledgement()).toBeNull();
+
+    // The direct repair path (used when the caller already knows the key).
+    await repairCompositeAcknowledgement(fixture.context, {
+      executionStoreId: (await readExecutionState(fixture.context)).storeId,
+      executionEpoch: (await readExecutionState(fixture.context)).epoch,
+      operationId: "composite-ack-1",
+    });
+    expect(await acknowledgement()).not.toBeNull();
+
+    // A replay of the same operation repairs it too, without repeating either
+    // business effect.
+    await setAcknowledgement(null);
+    expect(await acknowledgement()).toBeNull();
+    const replay = await mutateExecutionPlan(context, request);
+    expect(replay.replayed).toBe(true);
+    expect(await issueFacts(fixture.context)).toEqual(before);
+    expect(await acknowledgement()).not.toBeNull();
+  });
+
+  test("a deterministic refusal is declined durably and cannot later apply", async () => {
+    const fixture = await executionPlanFixture("composite-declined");
     const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
     // An issue that is NOT linked to this plan: closing it refuses scope.
     const outsider = await captureIssue(fixture.context, baseInput({ occurrenceKey: "outsider" }), {
@@ -838,27 +1007,144 @@ describe("collaboration composite residual", () => {
 
     const refused = await refusalOf(() => mutateExecutionPlan(context, closeRequest));
     expect(refused.code).toBe("issue.scope-refused");
-    expect(await issueFacts(fixture.context)).toEqual(before);
+    // Nothing applied; the decline is durable on BOTH sides.
+    expect(await issueFacts(fixture.context)).toMatchObject({
+      issues: before.issues,
+      occurrences: before.occurrences,
+      provenance: before.provenance,
+      transitions: before.transitions,
+      composite: before.composite + 1,
+      declined: before.declined + 1,
+    });
+    expect(await intentPhases(fixture.context, "composite-close-1")).toEqual(["declined"]);
 
-    // The same operation id is reusable because nothing was applied: the caller
-    // corrected the payload (the finding is now linked to this plan) and the
-    // reservation was released with the refusal, exactly as the one-transaction
-    // route behaved.
-    const linked = await mutateExecutionPlan(context, {
-      operationId: "composite-add-linked",
-      session: fixture.session,
-      expected: plan.token,
-      planId: fixture.planId,
-      operation: { kind: "residual-add", entries: [baseInput({ occurrenceKey: "linked-close" })] },
+    // The identical retry replays the recorded refusal instead of applying it.
+    const replayed = await refusalOf(() => mutateExecutionPlan(context, closeRequest));
+    expect(replayed.code).toBe("issue.scope-refused");
+    expect(detailsOf(replayed)).toMatchObject({ phase: "declined", operation_id: "composite-close-1" });
+    expect((await getIssue(fixture.context, outsider.issueId)).disposition).toBe("open");
+
+    // The same id with a different payload is a different intent: refused.
+    const reused = await refusalOf(() =>
+      mutateExecutionPlan(context, {
+        ...closeRequest,
+        operation: { ...closeRequest.operation, expectedIssueRevision: outsider.revision + 1 },
+      }),
+    );
+    expect(reused.code).toBe("execution.operation-conflict");
+  });
+
+  test("the multi-entry batch rolls back whole and keeps its child-occurrence conflict", async () => {
+    const fixture = await executionPlanFixture("composite-child-conflict");
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const before = await issueFacts(fixture.context);
+    const beforeExecution = await executionFacts(fixture.context);
+    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
+    const conflictingEntries = [
+      baseInput({ occurrenceKey: "batch-shared-event" }),
+      baseInput({ occurrenceKey: "batch-shared-event", observedBehavior: "different observation reuses the same event key" }),
+    ];
+    const callBatch = (operationId: string, entries: CaptureInput[]) =>
+      mutateExecutionPlan(context, {
+        operationId,
+        session: fixture.session,
+        expected: plan.token,
+        planId: fixture.planId,
+        operation: { kind: "residual-add", entries },
+      });
+    const expectedConflict = {
+      entryIndex: 1,
+      entryPath: "entries[1].occurrenceKey",
+      childOperation: "capture",
+      childOperationIdOrigin: "session + plan + entry occurrenceKey",
+      causeCode: "store.operation-conflict",
+    };
+    const firstConflict = await refusalOf(() => callBatch("outer-batch-first", conflictingEntries));
+    expect(firstConflict.code).toBe("store.operation-conflict");
+    expect(detailsOf(firstConflict)).toMatchObject(expectedConflict);
+    // The child ids derive from session + plan + occurrenceKey, so a second
+    // batch under a different outer id hits the same conflict.
+    const secondConflict = await refusalOf(() => callBatch("outer-batch-second", conflictingEntries));
+    expect(secondConflict.code).toBe("store.operation-conflict");
+    expect(detailsOf(secondConflict)).toMatchObject(expectedConflict);
+
+    // The whole effect rolled back: no issue, occurrence or plan-link rows, the
+    // plan token untouched, and no success receipt.
+    const after = await issueFacts(fixture.context);
+    expect(after).toMatchObject({
+      issues: before.issues,
+      occurrences: before.occurrences,
+      provenance: before.provenance,
+      transitions: before.transitions,
+      revision: before.revision,
+      // Each refusal left its durable decline; neither left an effect.
+      declined: before.declined + 2,
     });
-    const refreshed = await getIssue(fixture.context, outsider.issueId);
-    expect(refreshed.provenance.some((entry) => entry.kind === "plan" && entry.target === fixture.planId)).toBe(true);
-    const closed = await mutateExecutionPlan(context, {
-      ...closeRequest,
-      expected: linked.token,
-      operation: { ...closeRequest.operation, expectedIssueRevision: refreshed.revision },
+    expect(await readExecutionPlan(context, fixture.session, fixture.planId).then((read) => read.token)).toBe(plan.token);
+    const afterExecution = await executionFacts(fixture.context);
+    expect(afterExecution.operations).toBe(beforeExecution.operations);
+
+    const corrected = await callBatch("outer-batch-corrected", [
+      baseInput({ occurrenceKey: "batch-event-1" }),
+      baseInput({ occurrenceKey: "batch-event-2", observedBehavior: "a distinct observation with its own event key" }),
+    ]);
+    expect(corrected.replayed).toBe(false);
+    const issues = await listIssues(fixture.context, {});
+    expect(issues.total).toBe(1);
+    expect((await getIssue(fixture.context, issues.items[0]!.id)).occurrences.map(({ occurrenceKey }) => occurrenceKey)).toEqual([
+      "batch-event-1", "batch-event-2",
+    ]);
+    expect(await issueFacts(fixture.context)).toMatchObject({
+      issues: 1,
+      occurrences: 2,
+      standalone: before.standalone + 4,
     });
-    expect(closed.replayed).toBe(false);
-    expect((await getIssue(fixture.context, outsider.issueId)).disposition).toBe("resolved");
+  });
+
+  test("an unavailable collaboration authority refuses before any reservation and never reports success", async () => {
+    const fixture = await executionPlanFixture("composite-unavailable", { collaboration: "staged" });
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const plan = await readExecutionPlan(context, fixture.session, fixture.planId);
+    const beforeExecution = await executionFacts(fixture.context);
+
+    const refused = await refusalOf(() =>
+      mutateExecutionPlan(context, {
+        operationId: "composite-unavailable-1",
+        session: fixture.session,
+        expected: plan.token,
+        planId: fixture.planId,
+        operation: { kind: "residual-add", entries: [baseInput({ occurrenceKey: "unavailable-1" })] },
+      }),
+    );
+    expect(refused.code).toBe("collaboration.not-active");
+    expect(await executionFacts(fixture.context)).toEqual(beforeExecution);
+    expect(await readExecutionPlan(context, fixture.session, fixture.planId).then((read) => read.token)).toBe(plan.token);
+  });
+
+  test("a wrong collaboration binding refuses before the effect runs", async () => {
+    const fixture = await executionPlanFixture("composite-binding");
+    const context = { harnessDir: fixture.context.harnessDir, caller: fixture.caller };
+    const state = await readExecutionState(context);
+    const intent: CompositeIntent = {
+      key: { executionStoreId: state.storeId, executionEpoch: state.epoch, operationId: "composite-binding-1" },
+      kind: "residual-add",
+      requestHash: "forged-fingerprint",
+      target: { repoKey: "github/acme/other", mode: "local", storeId: "00000000-0000-4000-8000-000000000000", epoch: 1 },
+      scope: { workflowId: fixture.workflowId, planId: fixture.planId },
+      actor: ACTOR,
+      expectedExecution: state.token,
+      frozenPayload: "{}",
+    };
+    const refused = await refusalOf(() =>
+      runCollaborationComposite(context, intent, {
+        apply: () => "never applied",
+        finalize: () => "never finalized",
+      }),
+    );
+    // An unavailable/foreign authority is uncertain work, not a decision about
+    // the request: the frame reports the prepared phase with the binding cause.
+    expect(refused.code).toBe("collaboration.operation-partial");
+    expect(detailsOf(refused)).toMatchObject({ phase: "prepared", cause_code: "collaboration.stale-binding" });
+    expect(await issueFacts(fixture.context)).toMatchObject({ issues: 0, composite: 0 });
   });
 });

@@ -1996,6 +1996,52 @@ create table if not exists collaboration_cutover(
 );
 `;
 
+/**
+ * Migration 21 - the composite reservation ledger.
+ *
+ * One cross-store composite (residual add/close, registration, minimal import)
+ * cannot be one transaction across the two databases, so the admitted execution
+ * operation reserves the execution facts it will finalize and correlates them
+ * with the collaboration effect it is about to commit. This table is that
+ * reservation: the `prepared` row (scoped to the addressed plan row or workflow)
+ * is the exclusion every conflicting execution writer checks, the frozen
+ * payload/target/token are what a resume must match, and the phase records how
+ * far the operation provably got (`prepared`, `declined` with its durable
+ * deterministic cause, or `confirmed` after the execution delta committed).
+ *
+ * The partial unique index is the reservation itself: at most ONE pending
+ * composite per addressed plan row in this execution generation. A declined or
+ * confirmed row releases the plan; a failed attempt never deletes another
+ * attempt's live reservation.
+ */
+export const MIGRATION_21_SQL = `
+create table execution_collaboration_intents(
+  execution_store_id text not null,
+  execution_epoch integer not null check (execution_epoch > 0),
+  operation_id text not null,
+  kind text not null check (kind in ('residual-add','residual-close','execution-register','execution-import')),
+  request_hash text not null,
+  workflow_id text,
+  plan_id text,
+  actor text not null,
+  expected_token text not null,
+  reserved_revision integer not null check (reserved_revision > 0),
+  target_json text not null,
+  frozen_payload text not null,
+  phase text not null check (phase in ('prepared','declined','confirmed')),
+  receipt_json text,
+  cause_code text,
+  cause_message text,
+  cause_details_json text,
+  created_at text not null,
+  updated_at text not null,
+  primary key (execution_store_id, execution_epoch, operation_id)
+);
+create unique index execution_collaboration_intents_pending_plan
+  on execution_collaboration_intents(execution_epoch, workflow_id, plan_id)
+  where phase = 'prepared' and plan_id is not null;
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry - append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -2018,6 +2064,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 18, name: "sync-run-lease", sql: MIGRATION_18_SQL },
   { version: 19, name: "issue-obsolete-disposition", sql: MIGRATION_19_SQL },
   { version: 20, name: "collaboration-cutover-fence", sql: MIGRATION_20_SQL },
+  { version: 21, name: "execution-collaboration-intents", sql: MIGRATION_21_SQL },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 

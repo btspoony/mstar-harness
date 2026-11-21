@@ -16,12 +16,15 @@
  * checksums such a store actually carries, so a mutated applied migration
  * makes the upgrade refuse exactly as it would in a real workspace.
  */
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as nodeOs from "node:os";
+import { join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { initializeCollaborationStore } from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { assertExecutionSessionCurrent, resumeExecutionSession } from "./execution-session.js";
 import { registerCatalogEntity, updateCatalogEntity } from "./catalog.js";
 import { ExecutionPinConflictError, executionInputHash, type CatalogExecutionPin } from "./coordination.js";
@@ -64,9 +67,24 @@ import {
   type StoreDb,
 } from "./store-db.js";
 import type { WorkflowSnapshot } from "./workflow.js";
+import { backupStore } from "./store-activation.js";
+import { previewExecutionRestore } from "./execution-recovery.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-store-"));
+
+/**
+ * The collaboration lane is user-level. Every fixture resolves `homedir` into
+ * this temporary root; the guard in `collaborationLocationOf` refuses an escape
+ * before a database is created in the operator's storage.
+ */
+const HOME = join(ROOT, "home");
+mkdirSync(HOME);
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
 afterAll(() => {
+  homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 
@@ -118,7 +136,31 @@ function rawDb(path: string): StoreDb {
 }
 
 function controlRoot(label: string): StoreContext {
-  return { harnessDir: mkdtempSync(join(ROOT, `${label}-`)) };
+  const root = realpathSync(mkdtempSync(join(ROOT, `${label}-`)));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root, stdio: "ignore" });
+  execFileSync(
+    "git",
+    ["-c", "user.email=fixture@example.test", "-c", "user.name=fixture", "commit", "-q", "--allow-empty", "-m", "fixture"],
+    { cwd: root, stdio: "ignore" },
+  );
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${label}.git`], { cwd: root, stdio: "ignore" });
+  writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=local\n");
+  const harnessDir = join(root, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  return { harnessDir, checkoutRoot: root };
+}
+
+/**
+ * The collaboration lane this fixture's catalog writes address. The store is
+ * user-level, so the module-level `homedir` spy above must resolve inside the
+ * temporary root; this guard fails the case instead of writing to the real home.
+ */
+function collaborationLocationOf(context: StoreContext) {
+  const location = resolveCollaborationLocation(context);
+  if (!location.dbPath.startsWith(`${ROOT}${sep}`)) {
+    throw new Error(`fixture: resolved collaboration store ${location.dbPath} is outside the temporary root ${ROOT}`);
+  }
+  return location;
 }
 
 function storePath(context: StoreContext): string {
@@ -179,6 +221,15 @@ async function freshStore(label: string): Promise<{ context: StoreContext; epoch
   const context = controlRoot(label);
   const handle = await initializeStore(context);
   try {
+    // The catalog writes these suites register live in the collaboration lane.
+    const location = collaborationLocationOf(context);
+    await initializeCollaborationStore(location);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(TS);
+    } finally {
+      db.close();
+    }
     return { context, epoch: handle.epoch };
   } finally {
     handle.close();
@@ -2847,11 +2898,21 @@ async function completedLegacyPlan(label: string, options: { omitReviewBase?: bo
 }> {
   const repoRoot = realpathSync(mkdtempSync(join(ROOT, `${label}-`)));
   legacyGit(repoRoot, ["init", "-q", "-b", "main"]);
+  legacyGit(repoRoot, ["remote", "add", "origin", `https://github.com/acme/${label}.git`]);
+  writeFileSync(join(repoRoot, ".mstarc"), "[collaboration]\nmode=local\n");
   writeFileSync(join(repoRoot, "base.txt"), "base\n");
   legacyCommit(repoRoot, "init");
-  const context: StoreContext = { harnessDir: join(repoRoot, ".mstar") };
+  const context: StoreContext = { harnessDir: join(repoRoot, ".mstar"), checkoutRoot: repoRoot };
   mkdirSync(context.harnessDir, { recursive: true });
   (await initializeStore(context)).close();
+  const location = collaborationLocationOf(context);
+  await initializeCollaborationStore(location);
+  const collaborationDb = new DatabaseSync(location.dbPath);
+  try {
+    collaborationDb.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(TS);
+  } finally {
+    collaborationDb.close();
+  }
   const initialized = await readExecutionState(context);
   await registerCatalogEntity(
     context,
@@ -3021,5 +3082,100 @@ describe("execution-domain: the optional review_base of a completed row", () => 
     // The refusal edited nothing: correcting that one value serves the row again.
     rewriteStoredReviewBase(fixture.context, LEGACY_PLAN, "null");
     expect((await storedCompletion(fixture.context))?.review_base).toBeNull();
+  });
+});
+
+describe("execution-composite-intents: the reservation ledger", () => {
+  /** One reservation row; `phase` decides whether it still holds the plan. */
+  const reservation = (
+    db: StoreDb,
+    epoch: number,
+    input: { operationId: string; planId: string; phase: "prepared" | "declined" | "confirmed" },
+  ): void => {
+    db.prepare(
+      "insert into execution_collaboration_intents(execution_store_id, execution_epoch, operation_id, kind, request_hash, " +
+        "workflow_id, plan_id, actor, expected_token, reserved_revision, target_json, frozen_payload, phase, created_at, updated_at) " +
+        "values ('store-1', ?, ?, 'residual-add', ?, 'wf-1', ?, 'project-manager', 'token', 1, '{}', '{}', ?, ?, ?)",
+    ).run(
+      epoch,
+      input.operationId,
+      `hash-${input.operationId}`,
+      input.planId,
+      input.phase,
+      TS,
+      TS,
+    );
+  };
+
+  test("migration 21 carries the ledger and one PENDING reservation per plan row", async () => {
+    const { context, epoch } = await freshStore("composite-intents");
+    const db = rawDb(storePath(context));
+    try {
+      expect(
+        scalar(db, "select count(*) as n from sqlite_master where type = 'table' and name = 'execution_collaboration_intents'"),
+      ).toBe(1);
+      expect(
+        scalar(db, "select count(*) as n from sqlite_master where type = 'index' and name = 'execution_collaboration_intents_pending_plan'"),
+      ).toBe(1);
+      seedExecutionGraph(db);
+
+      reservation(db, epoch, { operationId: "op-a", planId: "p-1", phase: "prepared" });
+      // A second PENDING reservation on the same addressed row is the exclusion.
+      expect(() => reservation(db, epoch, { operationId: "op-b", planId: "p-1", phase: "prepared" })).toThrow(/UNIQUE|unique/);
+      // A declined or confirmed row released the plan, and another plan row is
+      // independently reservable.
+      reservation(db, epoch, { operationId: "op-c", planId: "p-1", phase: "declined" });
+      reservation(db, epoch, { operationId: "op-d", planId: "p-1", phase: "confirmed" });
+      reservation(db, epoch, { operationId: "op-e", planId: "p-2", phase: "prepared" });
+      expect(scalar(db, "select count(*) as n from execution_collaboration_intents")).toBe(4);
+      // The phase vocabulary is closed at the storage boundary.
+      expect(() =>
+        db
+          .prepare("update execution_collaboration_intents set phase = 'abandoned' where operation_id = 'op-a'")
+          .run(),
+      ).toThrow(/CHECK|check/);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("the reservation is keyed by execution generation, so another epoch never adopts it", async () => {
+    const { context, epoch } = await freshStore("composite-intents-epoch");
+    const db = rawDb(storePath(context));
+    try {
+      seedExecutionGraph(db);
+      reservation(db, epoch, { operationId: "op-a", planId: "p-1", phase: "prepared" });
+      // The same operation id in the NEXT generation is a different reservation.
+      reservation(db, epoch + 1, { operationId: "op-a", planId: "p-1", phase: "prepared" });
+      expect(
+        scalar(db, "select count(*) as n from execution_collaboration_intents where operation_id = 'op-a'"),
+      ).toBe(2);
+      expect(
+        scalar(db, "select count(*) as n from execution_collaboration_intents where execution_epoch = " + epoch),
+      ).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("the reservation ledger is part of the whole-store loss inventory", async () => {
+    const { context, epoch } = await freshStore("composite-inventory");
+    const backup = await backupStore(context, { out: join(context.harnessDir, "recovery", "composite.db") });
+    // A reservation recorded AFTER the recovery point must appear as a lost row,
+    // which is only possible when the inventory reads this table and its
+    // FK-safe replacement position.
+    const db = rawDb(storePath(context));
+    try {
+      seedExecutionGraph(db);
+      reservation(db, epoch, { operationId: "op-inventory", planId: "p-1", phase: "prepared" });
+    } finally {
+      db.close();
+    }
+    const preview = await previewExecutionRestore(context, backup.backupPath);
+    expect(preview.authorityDifferences).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ domain: "execution", key: `composite:${epoch}/op-inventory`, backupRevision: null }),
+      ]),
+    );
   });
 });
