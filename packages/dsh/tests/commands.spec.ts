@@ -88,6 +88,13 @@ function repoCommands(): string[] | undefined {
 
 const mirrorDir = packagedCommandsDir()
 
+/** why: the mirror is a bundle-assets sync product (gitignored), so an absent
+ * mirror skips the parity case — printed ALWAYS, never a silent green. */
+const mirrorSkipReason = mirrorDir === undefined
+  ? 'bundled-commands parity: SKIPPED — harness-commands mirror not synced (run `bun run bundle-assets` in packages/dsh)'
+  : undefined
+if (mirrorSkipReason !== undefined) console.log(mirrorSkipReason)
+
 /** why: the mirror is the product's own inventory, so a package-scoped
  * checkout asserts parity and steering against it instead of passing vacuously. */
 function mirrorCommandNames(dir: string): string[] {
@@ -124,6 +131,9 @@ describe('bundled mstar commands (omp parity)', () => {
     // why: a package-scoped checkout has no sibling repo `commands/`, so the
     // mirror it ships is the expected inventory and the loop still runs.
     const expected = repoCommands() ?? mirrorCommandNames(mirrorDir!)
+    // why: an empty inventory is a broken fixture, not a pass — the parity
+    // compare and the steering loop would both go vacuous.
+    expect(expected.length, `bundled command inventory is empty: harness-commands mirror ${mirrorDir} holds no Markdown`).toBeGreaterThan(0)
     booted = await bootApp()
     const { agent, steered } = fakeAgent()
     expect(booted.ctx.commands.list(agent).map((descriptor) => descriptor.name)).toEqual(expected)

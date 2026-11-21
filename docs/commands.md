@@ -155,7 +155,7 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 /codebase-comment-cleanup [path|subsystem] [dry-run]
 ```
 
-**Purpose** — triage every code comment into four outcomes: a tautology or a stale comment is deleted, an excusing comment is corrected in the change or its defect captured per `mstar-project-governance` § Issue capture and then deleted, a decision record moves into `{ADR_DIR}` and leaves at most one contract pointer, and anything else must take a declared shape or go. The pass closes on the measured `unclassified-comment net change`, never an estimate.
+**Purpose** — triage every code comment into four outcomes: a tautology or a stale comment is deleted; an Excuse is a confirmed defect, so it is captured per `mstar-project-governance` § Issue capture whether or not the fix lands here; the code is then corrected in this change when the correction fits, otherwise the fix stays with the captured issue; the excusing comment is deleted after that, and a failed capture keeps it; a decision record moves into `{ADR_DIR}` and leaves at most one contract pointer, and anything else must take a declared shape or go. The pass closes on the measured `unclassified-comment net change`, never an estimate.
 
 **When** — the comment corpus itself is the problem: a stale or noisy codebase, or a cleanup pass before the ratchet hardens. `/codebase-audit` surveys the code rather than its comments, and `/amazing-test-audit` audits the test surface.
 
