@@ -1206,7 +1206,15 @@ export function gitInit(root: string): void {
  * fixtures can resolve the user-level lane (resolution names the main
  * checkout and reads its `.mstarc`). Idempotent. */
 function ensureFixtureRepo(harnessDir: string): void {
-  const root = dirname(realpathSync(harnessDir))
+  const resolved = realpathSync(harnessDir)
+  // The repository owner is the directory ABOVE a `.mstar` harness dir; a bare
+  // path passed as its own harness root owns ITSELF. Refusing the shared temp
+  // root keeps one bare-path caller from git-initializing `$TMPDIR` and
+  // poisoning every upward identity probe in the process.
+  const root = basename(resolved) === '.mstar' ? dirname(resolved) : resolved
+  if (root === realpathSync(tmpdir())) {
+    throw new Error(`fixture harness ${harnessDir} resolves to the shared temp root ${root}; pass a repo-scoped root (e.g. <projectRoot>/.mstar), not a bare temp dir`)
+  }
   gitInit(root)
   const mstarc = join(root, '.mstarc')
   if (existsSync(mstarc)) return
@@ -1333,6 +1341,9 @@ export async function seedHarness(harnessDir: string, files: Record<string, stri
  */
 export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-mstar-boot-'))
+  if (realpathSync(root) === realpathSync(tmpdir())) {
+    throw new Error(`bootApp root resolves to the shared temp root ${root}; pass a repo-scoped root, not a bare temp dir`)
+  }
   const harnessDir = join(root, '.mstar')
   await mkdir(harnessDir, { recursive: true })
   // A real repository identity: collaboration resolution needs an origin or an
