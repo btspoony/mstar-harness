@@ -11,9 +11,12 @@
  *
  * The commands service resolve from the npm registry* ; the registrations are deferred with
  * `ctx.inject(['commands'], …)` so the plugin boots without the service.
+ *
+ * why: the parity surface must follow the repo, so a command shipped in
+ * `commands/` is covered here without editing this file.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { existsSync, renameSync } from 'node:fs'
+import { existsSync, readdirSync, renameSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
@@ -69,8 +72,11 @@ function bootErrorRecords(booted: BootResult): BootLogRecord[] {
   return (logger?.buffer ?? []).filter((record) => record.type === 'error')
 }
 
-/** Every shipped mstar slash command (repo-root `commands/` mirror). */
-const MSTAR_COMMANDS = ['iteration-start', 'iteration-drive', 'iteration-loop', 'codebase-audit', 'codebase-comment-cleanup', 'amazing-pr-review', 'amazing-test-audit', 'amazing-e2e-check'] as const
+/** why: derived from the repo mirror, so a newly shipped command needs no edit here. */
+const MSTAR_COMMANDS = readdirSync(fileURLToPath(new URL('../../../commands', import.meta.url)))
+  .filter((file) => file.endsWith('.md'))
+  .map((file) => file.replace(/\.md$/, ''))
+  .sort()
 
 /** A minimal fake receiving agent capturing steered messages. */
 function fakeAgent(): { agent: Agent; steered: UserMessage[] } {
@@ -102,6 +108,7 @@ describe('bundled mstar commands (omp parity)', () => {
     if (dir === undefined) return
     booted = await bootApp()
     const { agent, steered } = fakeAgent()
+    expect(booted.ctx.commands.list(agent).map((descriptor) => descriptor.name)).toEqual(MSTAR_COMMANDS)
     for (const name of MSTAR_COMMANDS) {
       const result = await booted.ctx.commands.execute(agent, `/${name}`, [], new AbortController().signal)
       expect(result?.result.kind).toBe('success')

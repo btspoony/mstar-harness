@@ -10,7 +10,7 @@ A comment is an input to the next change: whoever edits the line reads it before
 
 ## Triage
 
-A comment corpus is cleaned by classifying it, not by banning it: a **Tautology** (Substitute) and a **Stale** comment (Drift) are deleted, an **Excuse** (License) is deleted together with the code it excused, or else stays while its captured defect is tracked, per `mstar-project-governance` § Issue capture, and a **Decision Record** moves its rationale into `{ADR_DIR}` and leaves one contract pointer. Whatever survives must carry a shape from § MUST. A full pass, its batch and ratchet rules, and its measurement → **`references/comment-cleanup.md`**.
+A comment corpus is cleaned by classifying it, not by banning it: a **Tautology** (Substitute) and a **Stale** comment (Drift) are deleted, an **Excuse** (License) is corrected in the code when the correction fits this change, and otherwise captured per `mstar-project-governance` § Issue capture and deleted only once that capture succeeds — a failed capture keeps the comment; a **Decision Record** moves its rationale into `{ADR_DIR}` and leaves one contract pointer. Whatever survives must carry a shape from § MUST. A full pass, its batch and ratchet rules, and its measurement → **`references/comment-cleanup.md`**.
 
 ## MUST
 

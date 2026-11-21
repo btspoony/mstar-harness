@@ -11,7 +11,7 @@ Information preservation comes before any class judgement: a comment carrying so
 | Class | Our failure mode | Test | Action |
 |---|---|---|---|
 | Tautology | Substitute | The comment restates what the code, its signature or its types already say | Delete |
-| Excuse | License | The comment, or a bare label on it (`simplify:`, `temporary`, `TODO`), is read as permission to repeat a hacky implementation, so the pattern spreads | Two separate branches: correct the code when the correction fits this change; capture the defect per `mstar-project-governance` § Issue capture, which owns the capture rule and the verb and judges capture whether or not the fix lands here — capture is never the deferred branch. No deletion lands before that capture succeeded, and a failed capture keeps the comment. Any issue is cited in the PR body or the plan, never as an in-comment `issue <n>` pointer: local IDs are `I-…` and the lint pointer does not match them |
+| Excuse | License | The comment, or a bare label on it (`simplify:`, `temporary`, `TODO`), is read as permission to repeat a hacky implementation, so the pattern spreads | Correct the code when the correction fits this change; otherwise capture the defect per `mstar-project-governance` § Issue capture and only then delete the comment; a failed capture keeps it. The cited section owns the capture rule and the verb and judges capture whether or not the fix lands here — capture is never the deferred branch. Any issue is cited in the PR body or the plan, never as an in-comment `issue <n>` pointer: local IDs are `I-…` and the lint pointer does not match them |
 | Stale | Drift | The comment points at a path, symbol, option or behaviour that no longer exists at HEAD, or contradicts what the edited line now does | Delete; correct it only when the contract moved and the code is right |
 | Decision Record | MAY History / contract pointer | A choice among real alternatives whose rationale no code, test or existing doc reconstructs, and which a future contributor must confront before reintroducing the bypass | Move the rationale into `{ADR_DIR}/{bucket}/{class}/yyyy-mm-dd-topic.md` per `mstar-doc-corpus/references/adr.md`, then leave one contract pointer line or delete the comment |
 
@@ -24,7 +24,7 @@ Every surviving comment that took no class must still take a shape declared unde
 ## Order of operations
 
 1. **Write the home first.** Copy the rationale into the ADR, or capture the defect per `mstar-project-governance` § Issue capture; that section judges capture whether the fix lands in this change or later, so capture is never the deferred branch of a correction. The record is written in this change (or an earlier one) and lands with the change — the ADR header is `# ADR: <title>` plus `Status: <state> — <why>`. An `implemented/` record written by the same change is valid and needs no `proposed/` ancestor; `proposed/` is only for a not-yet-implemented decision that must outlive the current plan or iteration (→ `adr.md` § Proposed or implemented); an already recorded decision is updated or superseded, never duplicated.
-2. **Delete second.** Delete the comment; when the class was Excuse, correct the code in the same change where the correction fits it, and carry the captured-issue citation for whatever the change does not fix in the PR body or plan, not in the comment.
+2. **Delete second.** Delete the comment only once its home exists: when the class was Excuse, correct the code in the same change where the correction fits it, and where it does not, step 1's capture must have succeeded first — a failed capture keeps the comment. Carry the captured-issue citation for whatever the change does not fix in the PR body or plan, not in the comment.
 3. **Verify third.** `mstar lint <file> --diff-base <ref>` — one target per run — must report the changed lines clean before the batch is called done.
 
 - **Never** delete a Decision Record whose home does not yet exist: the rationale is lost the moment the line goes, and HEAD cannot recover it.
@@ -34,19 +34,21 @@ Every surviving comment that took no class must still take a shape declared unde
 
 One bounded batch per PR — one subsystem or one path — because a diff that touches the whole repository cannot be reviewed line by line and its ratchet result is unreadable; a stale corpus this size is a series of passes, not one.
 
-Within a batch, only the lines the change already edits are in play: an untouched comment in a touched file is corpus, and the pass does not sweep it up as a side effect.
+A batch edits the comments inside its chosen path or subsystem and needs no prior diff to start: it may begin on a clean branch, and the ratchet runs afterwards on the batch's own changed lines. Comments outside the selected scope are not swept in — the rest of the corpus is the next batch's work, not a side effect of this one.
 
 The corpus is advisory, the change is not: `mstar lint <file> --diff-base <ref>` fails every comment the change adds or modifies that carries no shape, so a new comment arrives in a declared shape or does not arrive at all — and because the ratchet reads the changed lines, no bulk rewrite is implied. A newly created code file must be visible in the diff — tracked, or intent-to-add — before a clean ratchet result is accepted; otherwise the file is skipped and the result proves nothing about it.
 
 ## Measurement
 
-Before the pass, record the whole-tree bound gate on the same checkout — `mstar lint packages --type code` and `mstar lint scripts --type code` — reading the `unclassified comments: <n>` count each prints on stderr; after the pass, run the same two commands again.
+Before the pass, record the whole-tree bound gate on the same checkout. This repository measures with its two canonical commands — `mstar lint packages --type code` and `mstar lint scripts --type code` — reading the `unclassified comments: <n>` count each prints on stderr; after the pass, run the same two commands again. Another project measures its own configured code roots, or the selected target (`mstar lint <dir> --type code`). A scope the linter cannot count is reported `unmeasured` with the reason instead of a fabricated figure, and the close-out never requires a number it cannot read.
 
-Those two commands are the whole measurable surface: the gate reads code files selected by extension, hash-dialect `.py`/`.sh`/`.rb` included, so a Markdown document or a code file outside the `packages/` and `scripts/` roots the gate walks never appears in the count and stays a review-only finding. `mstar lint` takes one target, so a narrower batch is measured per file or per directory — `mstar lint <file> --diff-base <ref>` for the ratchet, `mstar lint <dir> --type code` for a subtree.
+The walked roots are the whole measurable surface: the gate reads code files selected by extension, hash-dialect `.py`/`.sh`/`.rb` included, so a Markdown document or a code file outside them never appears in the count and stays a review-only finding. `mstar lint` takes one target, so a narrower batch is measured per file or per directory — `mstar lint <file> --diff-base <ref>` for the ratchet, `mstar lint <dir> --type code` for a subtree.
 
 The per-root difference between the two runs is the `unclassified-comment net change`, reported per root and summed, each number quoted with the command and the commit it was taken on; the PR states them side by side rather than one net figure. The number mixes deletions with reclassification, so it is not a deletion count.
 
 Never estimate the saving from the diff size or from a sample of files — the counter is the measurement, and a claimed number that was not read off a run is a defect in the report.
+
+This repository's CI holds a per-root floor (the values live in `.github/workflows/ci.yml`); the floor detects a detector or collector regression, not a cleanup target. A genuine cleanup that pushes a root below its floor lowers that floor in the same change and records the new baseline in `comments.md` § Gate steps and range; otherwise CI reports the cleanup as a collapse.
 
 ## Why no blanket ban
 
@@ -58,4 +60,4 @@ The equivalent already ships — the bound gate fails an unbounded marker anywhe
 
 - Rewording or reflowing a comment until it passes the gate while the false, stale or excusing content stays; that converts a finding into a survivor.
 - Touching another repository's comment policy, or the vocabulary and shapes `comments.md` owns; this pass consumes both.
-- Changing the gate thresholds, the per-root floors, or the ratchet's range.
+- Changing the gate thresholds or the ratchet's range, or lowering a per-root floor other than when a genuine cleanup has pushed a root below it.

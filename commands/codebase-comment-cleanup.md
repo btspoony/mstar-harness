@@ -22,4 +22,4 @@ Execute **`mstar-coding-behavior` → `references/comment-cleanup.md`** end to e
 
 ## Close-out
 
-Report the measured `unclassified-comment net change`: `mstar lint packages --type code` and `mstar lint scripts --type code` before and after, per root and summed, each number with the command and commit it was read on. Never estimate.
+Report the measured `unclassified-comment net change`: `mstar lint packages --type code` and `mstar lint scripts --type code` before and after, per root and summed, each number with the command and commit it was read on. Never estimate. Those two roots are this repository's canonical counts; another project measures its own code roots with the same command. A scope the linter cannot count — no code extension, an unreadable path — is reported `unmeasured` with the reason, never as a number and never as a blocker inferred from nothing.

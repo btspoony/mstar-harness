@@ -307,6 +307,8 @@ function parseCommandMarkdown(content: string): { name: string; description: str
 }
 
 /**
+ * why: the command surface is the product contract, so it is read from the
+ * shipped mirror markdown rather than listed in code.
  * Register the bundled mstar commands (`harness-commands/*.md`, synced from
  * the repo root by `bundle-assets`; gitignored) on `ctx.commands` — the
  * omp/opencode slash-command parity surface. Each command handler steers the
@@ -752,6 +754,7 @@ export function apply(ctx: Context, config: Config): void {
   // Catalog-invalidation hook: the real harnessDir → cache-key reverse-map
   // closure is created + bound alongside the catalog cache below (see the catalog section comment).
 
+  // why: omp/opencode slash-command parity must come from one bundled registration surface.
   // Bundled mstar commands — the omp/opencode slash-command parity surface,
   // registered from `harness-commands/` when the commands service exists.
   registerMstarCommands(ctx)

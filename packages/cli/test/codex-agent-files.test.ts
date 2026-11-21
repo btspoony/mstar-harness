@@ -242,4 +242,21 @@ describe("Codex regular agent installation", () => {
       } finally { f.cleanup(); }
     });
   }
+  test("project: refuses to link a command the harness checkout predates", () => {
+    const f = fixture();
+    try {
+      const missing = path.join(f.source, "commands", "codebase-comment-cleanup.md");
+      const link = path.join(f.root, "project", ".agents", "skills", "codebase-comment-cleanup", "SKILL.md");
+      fs.unlinkSync(missing);
+      const refused = run(f.root, "project");
+      expect(refused.failure).toContain(`Missing Codex project command sources: ${missing}`);
+      expect(refused.failure).toContain("predates");
+      expect(refused.failure).toContain(`git -C ${f.source} pull --ff-only`);
+      expect(refused.failure).toContain("init --target codex --scope project");
+      expect(fs.existsSync(link)).toBe(false);
+      fs.writeFileSync(missing, "command");
+      expect(run(f.root, "project").failure).toBeUndefined();
+      expect(fs.realpathSync(link)).toBe(missing);
+    } finally { f.cleanup(); }
+  });
 });

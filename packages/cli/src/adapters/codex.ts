@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -149,7 +150,22 @@ function projectIterationSkillLinkPath(skillName: string) {
   return path.join(resolveProjectRoot(), ".agents", "skills", skillName, "SKILL.md");
 }
 
+/** Refuse before linking anything: a checkout that predates a command would
+ * otherwise get a dangling project link and a success report. An absent
+ * checkout is the pre-clone dry run, where init stages the clone itself.
+ * why: a dangling link reports success while the iteration skill never resolves. */
+function assertIterationCommandSources() {
+  if (!fs.existsSync(HARNESS_REPO_PATH)) return;
+  const missing = CODEX_PROJECT_COMMAND_NAMES.map(iterationCommandSourcePath).filter((source) => !fs.existsSync(source));
+  if (!missing.length) return;
+  throw new Error(
+    `Missing Codex project command sources: ${missing.join(", ")}. The local harness checkout at ${HARNESS_REPO_PATH} predates them. ` +
+      `Refresh it (\`git -C ${HARNESS_REPO_PATH} pull --ff-only\`) then retry: init --target codex --scope project.`,
+  );
+}
+
 function ensureIterationSkillLinks(dryRun: boolean) {
+  assertIterationCommandSources();
   const notes: string[] = [];
   for (const skillName of CODEX_PROJECT_COMMAND_NAMES) {
     const source = iterationCommandSourcePath(skillName);
