@@ -460,10 +460,13 @@
 /* The pager sits INSIDE `.panel-foot`, which already carries the prototype's single
    `6px 12px` and its hairline (`prototype.html`, `.panel-foot` — one footer row, the controls
    pushed right by `margin-left: auto`). Both rules carried their own padding and border,
-   so a paged list drew a double gutter and two hairlines. */
+   so a paged list drew a double gutter and two hairlines. The foot is a flex row, so the
+   pager also needs a share of it: a shrink-wrapped flex item leaves the auto margin
+   below with no free space and the controls huddle at the leading edge. */
 .panel-foot > .pager {
   padding: 0;
   border-block-start: 0;
+  flex: 1 1 auto;
 }
 
 .panel-foot > .pager > :last-child {
