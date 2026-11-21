@@ -525,7 +525,11 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       let confirmation: ThreadGateConfirmation | undefined;
       if (input.confirm !== undefined) {
         const file = abs(context.cwd, input.confirm);
-        if (!existsSync(file)) throw new UsageError(`confirmation file not found: ${file}`);
+        if (!existsSync(file)) throw new UsageError(
+          `confirmation file not found: ${file}`,
+          undefined,
+          "Create the confirmation record, or rerun without --confirm once every thread is resolved. Run mstar pr-review thread-gate --pr <n> --confirm <file>.",
+        );
         let raw: string;
         try { raw = readFileSync(file, "utf8"); } catch (error) {
           throw new UsageError(
