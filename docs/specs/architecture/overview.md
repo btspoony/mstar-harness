@@ -2,7 +2,7 @@
 
 ## Scope
 
-This page describes the monorepo's current package layout and the fixed layer chain a harness operation travels. It states which component owns which responsibility and where authority sits; the rationale behind those choices lives in `docs/adr/`, and the details of the state authority live in [store-authority.md](store-authority.md).
+This page describes the monorepo's current package layout and the fixed layer chain a harness operation travels. It states which component owns which responsibility and where authority sits; the rationale behind those choices lives in `docs/adr/`, the execution store is detailed in [store-authority.md](store-authority.md), and the repository's collaboration authority in [collaboration-authority.md](collaboration-authority.md).
 
 ## Current state
 
@@ -26,21 +26,21 @@ A harness operation travels through fixed layers, each with one responsibility:
 1. **Host surface.** A host (CLI, MCP client, or plugin hook) receives a user or agent action. Slash commands boot the `project-manager` role in-session; CLI verbs (`mstar workflow register`, `mstar catalog list`, `mstar plan show`, …) and MCP tools carry the same `@mstar-harness/commands` contracts — CLI and MCP are two projections of one contract set (`docs/commands.md`, `packages/cli/src/mcp/`).
 2. **Command contracts.** `packages/commands` defines the verb families, payload field schemas, and effect envelopes; `packages/cli/src/command-adapter.ts` maps a contract invocation onto engine domain calls. Contracts are the only shape hosts and clients program against.
 3. **Engine.** `packages/engine` implements the programmatic rules: path resolution and `.mstarc` reading, the SQLite store and migrations, execution authority, catalog registration and import, issues, roadmap and milestones, projections, and the workflow gates (dispatch, SDD, iteration, lint, status, worktree, PR review, QC review).
-4. **State authority.** All durable execution, catalog, issue, roadmap, and projection state lands in `{HARNESS_DIR}/store.db` on the control checkout (see [store-authority.md](store-authority.md)). Feature worktrees never hold a store.
-5. **Host gates.** Before any host-mediated write lands, the authority route classifies the target against the store, the retired project register, and the legacy fall-through (`host-gate-paths.ts`, imported by every host gate). Enforcing hosts (`dsh`, `omp`, the ZCode hook, and `opencode-v2`) hard-refuse direct store writes; the OpenCode v1 `tool.execute.before` surface is warn-only by documented contract.
+4. **State authority.** Durable execution state (workflows, plans, sessions, leases, projections, host state) lands in `{HARNESS_DIR}/store.db` on the control checkout, while issues, findings, catalog identity, projects, roadmaps and milestones land in one user-level SQLite database per canonical repository (see [store-authority.md](store-authority.md) and [collaboration-authority.md](collaboration-authority.md)). Feature worktrees never hold either authority, and a read composes a collaboration snapshot and an execution snapshot in memory rather than joining across files.
+5. **Host gates.** Before any host-mediated write lands, the authority route classifies the target against the execution store, the user-level collaboration database, the retired project register, and the legacy fall-through (`host-gate-paths.ts`, imported by every host gate). Enforcing hosts (`dsh`, `omp`, the ZCode hook, and `opencode-v2`) hard-refuse direct store writes; the OpenCode v1 `tool.execute.before` surface is warn-only by documented contract.
 6. **Agent content.** Skills, role references, and agent shells encode the judgment half — review verdicts, dispatch discipline, prose rules. They consume the engine through the documented engine-check commands but remain self-sufficient when the engine is absent.
 
 ### Process boundaries
 
-- **Three-domain write model** (`CONCEPTS.md`): process SSOT lives on the control worktree's filesystem and `store.db`; tracked results (knowledge, specs, ADR, contract homes) follow Git branches; product source changes happen only in feature worktrees. A linked worktree never bootstraps a second process SSOT.
+- **Three-domain write model** (`CONCEPTS.md`): process SSOT lives on the control worktree's filesystem, its `store.db`, and the user-level repository collaboration database; tracked results (knowledge, specs, ADR, contract homes) follow Git branches; product source changes happen only in feature worktrees. A linked worktree never bootstraps a second process SSOT.
 - **Engine vs skills.** The engine implements the machine-checkable subset (schemas, state machines, path conventions, gates); skills remain the semantic authority for both halves and cite the engine through engine-check callouts rather than depending on it at load time.
-- **Store vs documents.** Registry-shaped facts (identity, paths, kinds, lifecycle, execution state) live in store rows; document bodies live in files. README tables are prose, never registries.
+- **Store vs documents.** Registry-shaped facts (identity, paths, kinds, lifecycle, execution state) live in store rows — execution facts in `store.db`, collaboration facts in the repository database; document bodies live in files. README tables are prose, never registries.
 
 ## Invariants
 
 - **One contract set, two projections.** CLI verbs and MCP tools never diverge: both project `@mstar-harness/commands`, and a new operation lands in the contract package before any surface exposes it.
-- **A single state authority.** Durable execution, catalog, issue, roadmap, milestone, and projection state exists only in the control checkout's store; no second writer, file mirror, or worktree-local store is authoritative.
-- **Hosts never write the store directly.** Every host-mediated write passes the shared gate path glue, which classifies the target before any document judgment.
+- **Two state authorities, one owner each.** Execution state exists only in the control checkout's store, and collaboration state only in the repository's user-level database; no second writer, file mirror, cross-domain join, or worktree-local store is authoritative.
+- **Hosts never write either authority directly.** Every host-mediated write passes the shared gate path glue, which classifies the target before any document judgment.
 - **Engine and skills stay separable.** The engine owns what a program can check; skills own what requires judgment, and neither becomes a hard load-time dependency of the other.
 - **Registry-shaped facts belong to rows.** Any fact used to look something up (identity, path, kind, lifecycle, state) is a store row; prose tables are navigation.
 
@@ -49,17 +49,18 @@ A harness operation travels through fixed layers, each with one responsibility:
 | Concern | Location |
 | --- | --- |
 | Execution state | `execution_*` tables in the ACTIVE `store.db` (see [store-authority.md](store-authority.md)) |
-| Issue, catalog, roadmap, milestone, projection authority | The corresponding table domains in the same store |
+| Issue, catalog, roadmap, and milestone authority | The corresponding table domains in the repository's user-level collaboration database (see [collaboration-authority.md](collaboration-authority.md)) |
+| Projection state | `projection_*` and dsh tables in the ACTIVE `store.db` |
 | Path and layout resolution | `packages/engine/src/path.ts`, configured by `.mstarc` |
 | Command contracts and their projections | `packages/commands`, `packages/cli/src/command-adapter.ts`, `packages/cli/src/mcp/` |
 | Host write gates | `packages/engine/src/host-gate-paths.ts` plus each host's gate module |
 | Behavioral contracts | `docs/adr/` for decisions, `docs/specs/` for current state, `docs/knowledge/` for methodology |
 
-This repository's `.mstarc` pins `specs_dir=docs/specs`, `adr_dir=docs/adr`, and `knowledge_dir=docs/knowledge`, so those directories are used as declared and the candidate chains are skipped. The harness root itself is fixed at `<main worktree>/.mstar` and is not declared in `.mstarc`.
+This repository's `.mstarc` pins `specs_dir=docs/specs`, `adr_dir=docs/adr`, and `knowledge_dir=docs/knowledge`, so those directories are used as declared and the candidate chains are skipped. The harness root itself is fixed at `<main worktree>/.mstar` and is not declared in `.mstarc`. The collaboration mode is declared separately under `[collaboration] mode=local|mirror`; resolution and the operator commands are in [collaboration-authority.md](collaboration-authority.md).
 
 ## Change obligations
 
 - **New package, host plugin, skill family, or slash command** → update the repository layout in the same PR and, for a new command, `docs/commands.md`.
 - **New layer, projection, or gate in the request path** → add it to the data-flow list at its actual position and state its responsibility.
-- **New authority location or resolver** → update the authority table and the `.mstarc` pin statement here; a resolver precedence change also updates [document-corpus.md](document-corpus.md).
+- **New authority location or resolver** → update the authority table and the `.mstarc` pin statement here; a collaboration change also updates [collaboration-authority.md](collaboration-authority.md), and a resolver precedence change updates [document-corpus.md](document-corpus.md).
 - **Rationale for a structural decision** → an ADR under `docs/adr/`, linked from here; this page states only the resulting structure.
