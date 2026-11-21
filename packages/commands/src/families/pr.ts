@@ -83,6 +83,9 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
     command: id, status: "refused", code: `${id}.unavailable`, exitCode: 1, message: cause,
     recovery: "GitHub authentication and access to the requested pull request must be valid. Run mstar pr merge-gate --pr <n>.",
   });
+  // why: a truncated or paginated response is not an access failure; each such
+  // refusal builds its own literal recovery below, because the envelope's
+  // declared retry must name the action that can change that outcome.
   const view = await spawn(context, ["gh", "pr", "view", String(pr), "--json", "url,headRefOid"]);
   if (view.exitCode !== 0 || view.signal !== null) return unavailable(view.stderr || "GitHub authentication/target lookup failed");
   const parsedView: unknown = JSON.parse(view.stdout);
@@ -112,8 +115,16 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
     const response = await spawn(context, argv);
     if (response.exitCode !== 0 || response.signal !== null) return unavailable(response.stderr || "gh api graphql failed");
     const pageResult = parseReviewThreads(JSON.parse(response.stdout));
-    if (!pageResult.readable) return unavailable("reviewThreads response carried no readable thread page (missing connection or nodes array)");
-    if (pageResult.headRefOid === null) return unavailable("reviewThreads response carried no headRefOid");
+    if (!pageResult.readable) return refusalEnvelope({
+      command: id, status: "refused", code: `${id}.unreadable`, exitCode: 1,
+      message: "reviewThreads response carried no readable thread page (missing connection or nodes array)",
+      recovery: "The response was truncated rather than denied. Rerun the scan. Run mstar pr merge-gate --pr <n>.",
+    });
+    if (pageResult.headRefOid === null) return refusalEnvelope({
+      command: id, status: "refused", code: `${id}.unreadable`, exitCode: 1,
+      message: "reviewThreads response carried no headRefOid",
+      recovery: "The response was incomplete rather than denied. Rerun the scan. Run mstar pr merge-gate --pr <n>.",
+    });
     // why: threads are read across several requests, so a head that moves
     // mid-scan makes the enumeration — and any waiver bound to it — stale.
     if (pageResult.headRefOid !== head) {
@@ -126,9 +137,17 @@ async function mergeGate(input: Input, context: InvocationContext): Promise<Comm
     }
     threads.push(...pageResult.threads);
     if (!pageResult.hasNextPage) break;
-    if (pageResult.endCursor === null) return unavailable("reviewThreads reported more pages without an end cursor");
+    if (pageResult.endCursor === null) return refusalEnvelope({
+      command: id, status: "refused", code: `${id}.unreadable`, exitCode: 1,
+      message: "reviewThreads reported more pages without an end cursor",
+      recovery: "The response was incomplete rather than denied. Rerun the scan. Run mstar pr merge-gate --pr <n>.",
+    });
     after = pageResult.endCursor;
-    if (page >= maxPages - 1) return unavailable(`review thread scan exceeded ${maxPages} page(s) (${maxPages * 100} threads); rerun with a higher --max-pages`);
+    if (page >= maxPages - 1) return refusalEnvelope({
+      command: id, status: "refused", code: `${id}.unreadable`, exitCode: 1,
+      message: `review thread scan exceeded ${maxPages} page(s) (${maxPages * 100} threads); increase the page cap`,
+      recovery: "Raise the page cap for this scan. Run mstar pr merge-gate --pr <n> --max-pages <n>.",
+    });
   }
   let confirmation: ThreadGateConfirmation | undefined;
   if (input.confirm !== undefined) {
@@ -198,7 +217,7 @@ export function getPrCommandDefinitions(): readonly CommandDefinition[] {
       { name: "maxPages", ownership: "derivable" as const, route: "mcp" as const, required: false, constraint: "defaults to 50 pages (100 threads per page)" },
     ],
     effects: ["read", "validate", "process", "service"],
-    description: "Decide whether a PR may merge: enumerate every review thread on its current head and refuse while any stays unresolved, unless a confirmation record binds that head, records two confirmations, names exactly those thread ids and matches their digest. This is a merge gate, not a review action.",
+    description: "Decide the review-thread half of the merge gate: enumerate every review thread on the PR's current head and refuse while any stays unresolved, unless a confirmation record binds that head, records two confirmations, names exactly those thread ids and matches their digest. Merge authorization itself also needs the recorded policy or the owner's approval; this is not a review action.",
     async execute(raw, context) {
       const parsed = inputSchema.safeParse(raw);
       if (parsed.success) {

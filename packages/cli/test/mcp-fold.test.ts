@@ -22,11 +22,11 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  * family that publishes an identity selector also publishes the per-action
  * `x-mstar-selectors` index a host-side injector reads.
  *
- * Re-taken for the `pr` family: the §5.3a merge gate is published as its own
- * tool rather than folded into `mstar_pr_review`, so a pre-merge check does not
- * read as a review action (measured 33_935 at that change).
+ * Re-taken for the `pr` family: the §5.3a review-thread gate is published as
+ * its own tool rather than folded into `mstar_pr_review`, so a pre-merge check
+ * does not read as a review action (measured 33_954 at that change).
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 33_935;
+const PUBLISHED_SURFACE_CEILING_CHARS = 33_954;
 
 type PublishedTool = Readonly<{
   name: string;
