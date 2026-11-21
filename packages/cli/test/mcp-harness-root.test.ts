@@ -1,4 +1,5 @@
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import * as nodeOs from "node:os";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -29,6 +30,11 @@ const AMBIENT_HARNESS_DIR = process.env.MSTAR_HARNESS_DIR;
 const LANE_HOME = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-home-"));
 const AMBIENT_HOME = process.env.HOME;
 process.env.HOME = LANE_HOME;
+// In-process resolution uses the OS homedir, not $HOME: isolate it too.
+let laneHomeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  laneHomeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => LANE_HOME);
+});
 let repoSequence = 0;
 
 afterEach(() => {
@@ -39,6 +45,7 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  laneHomeSpy?.mockRestore();
   if (AMBIENT_HOME === undefined) delete process.env.HOME;
   else process.env.HOME = AMBIENT_HOME;
   rmSync(LANE_HOME, { recursive: true, force: true });

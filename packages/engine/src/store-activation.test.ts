@@ -409,7 +409,7 @@ function writeAttemptClaim(out: string, receipt: RepositoryBackupReceipt): void 
         takenAt: "2026-11-21T00:00:00.000Z",
         execution: {
           name: receipt.execution.backupPath,
-          privatePath: `${out}.execution.private.tmp`,
+          privatePath: join(dirname(out), `.${receipt.execution.backupPath}.reconstructed-attempt.tmp`),
           sha256: createHash("sha256").update(readFileSync(pairImage(receipt, "execution"))).digest("hex"),
           storeId: receipt.execution.storeId,
           epoch: receipt.execution.epoch,
@@ -418,7 +418,7 @@ function writeAttemptClaim(out: string, receipt: RepositoryBackupReceipt): void 
         },
         collaboration: {
           name: receipt.collaboration.path,
-          privatePath: `${out}.collaboration.private.tmp`,
+          privatePath: join(dirname(out), `.${receipt.collaboration.path}.reconstructed-attempt.tmp`),
           sha256: createHash("sha256").update(readFileSync(pairImage(receipt, "collaboration"))).digest("hex"),
           storeId: receipt.collaboration.authority.storeId,
           epoch: receipt.collaboration.authority.epoch,
@@ -3191,6 +3191,43 @@ describe("pair attempt ownership and restore repair", () => {
     const repaired = await restoreCollaborationBackup(fixture.context, receipt, { operator: "ops-engineer", attestation: attestation() });
     expect(repaired.state).toBe("active");
     void realWrite;
+  });
+
+
+  test("an unowned file at a canonical name is never deleted and blocks the pair", async () => {
+    const fixture = await pairFixture("attempt-unowned-canonical-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    mkdirSync(dirname(out), { recursive: true });
+    // Someone else's file already owns the canonical collaboration name.
+    writeFileSync(`${out}.collaboration.db`, "unowned canonical bytes\n");
+    await expect(backupRepositoryStores(fixture.context, { out })).rejects.toMatchObject({
+      code: "collaboration.backup-incomplete",
+    });
+    expect(readFileSync(`${out}.collaboration.db`, "utf8")).toBe("unowned canonical bytes\n");
+    expect(existsSync(out)).toBe(false);
+    expect(existsSync(`${out}.execution.db`)).toBe(false);
+  });
+
+  test("a resume never unlinks or adopts an unowned private path", async () => {
+    const fixture = await pairFixture("attempt-unowned-private-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    writeAttemptClaim(out, receipt);
+    const claimPath = `${out}.pair-attempt.json`;
+    const claim = JSON.parse(readFileSync(claimPath, "utf8")) as { collaboration: { privatePath: string; sha256: string } };
+    // The credential points at a path this attempt did NOT create (wrong scratch
+    // name): it is unowned evidence, so it is never reused, adopted or unlinked.
+    const unowned = `${out}.somebody-elses-file`;
+    copyFileSync(pairImage(receipt, "collaboration"), unowned);
+    claim.collaboration.privatePath = unowned;
+    writeFileSync(claimPath, `${JSON.stringify(claim, null, 2)}\n`);
+    rmSync(out, { force: true });
+    rmSync(pairImage(receipt, "collaboration"), { force: true });
+
+    await expect(backupRepositoryStores(fixture.context, { out })).rejects.toThrow(/cannot be completed/);
+    expect(readFileSync(unowned, "utf8").length).toBeGreaterThan(0);
+    expect(existsSync(pairImage(receipt, "collaboration"))).toBe(false);
+    expect(existsSync(out)).toBe(false);
   });
 
   test("overlapping attempts: one winner, and a loser never unlinks the winner's credential", async () => {

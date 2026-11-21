@@ -1658,7 +1658,7 @@ async function resumeInterruptedPair(
     [claim.collaboration, paths.collaborationImagePath, "collaboration"],
   ] as const) {
     if (existsSync(path)) continue;
-    if (!reusePrivateImage(side, path)) {
+    if (!reusePrivateImage(side, path, claim.attempt)) {
       throw incompletePair(
         `The interrupted attempt's ${what} image ${path} is missing and its own retained verified image ` +
         `(${side.privatePath}) is gone, so the attempt cannot be completed. A pair is never re-copied from the live ` +
@@ -1666,8 +1666,11 @@ async function resumeInterruptedPair(
       );
     }
   }
-  // Publication cleans up the attempt's scratch images.
-  for (const side of [claim.execution, claim.collaboration]) rmSync(side.privatePath, { force: true });
+  // Only THIS attempt's owned scratch is removed; an unowned path (a hand-edited
+  // credential, another attempt's file) is never unlinked.
+  for (const side of [claim.execution, claim.collaboration]) {
+    if (ownsPrivateImage(side, claim.attempt)) rmSync(side.privatePath, { force: true });
+  }
   const executionCopy = await inspectBackupCopy(paths.executionImagePath).catch((error: unknown) => {
     throw incompletePair(
       `The interrupted pair's execution image ${paths.executionImagePath} cannot be verified (${messageOf(error)}); nothing ` +
@@ -1741,11 +1744,31 @@ type PairAttemptClaim = {
 };
 
 /**
- * Reuse the attempt's retained PRIVATE image for one side: it must be the exact
- * bytes the credential names, and it is LINKED into the public name (same inode),
- * so a resume never re-copies an image the attempt already verified.
+ * Whether this attempt PROVES it owns one side's retained private image: the path
+ * must be exactly the scratch name this attempt's publication uses
+ * (`.<image>.<attempt>.tmp`) beside the pair, and its bytes must be the digest the
+ * credential recorded. Anything else is an unowned path: it is never reused and
+ * never unlinked.
  */
-function reusePrivateImage(side: PairAttemptClaim["execution"], publicPath: string): boolean {
+function ownsPrivateImage(side: PairAttemptClaim["execution"], attempt: string): boolean {
+  if (basename(side.privatePath) !== `.${side.name}.${attempt}.tmp`) return false;
+  if (!existsSync(side.privatePath)) return false;
+  let stats: ReturnType<typeof statSync>;
+  try {
+    stats = statSync(side.privatePath);
+  } catch {
+    return false;
+  }
+  if (!stats.isFile() || stats.size === 0) return false;
+  return sha256Bytes(readFileSync(side.privatePath)) === side.sha256;
+}
+
+/**
+ * Link the attempt's OWNED retained private image into the public name (same
+ * inode — never a re-copy). An unowned path is not evidence and is left alone.
+ */
+function reusePrivateImage(side: PairAttemptClaim["execution"], publicPath: string, attempt: string): boolean {
+  if (!ownsPrivateImage(side, attempt)) return false;
   if (!existsSync(side.privatePath)) return false;
   let stats: ReturnType<typeof statSync>;
   try {
