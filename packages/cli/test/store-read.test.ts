@@ -7,10 +7,12 @@
  * answers with. No mocked database exists anywhere in this proof.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
-import { applyStoreMigration, captureIssue, closeIssue, getIssue, initializeStore, listIssues, openStore, planStoreMigration, readExecutionAuthority, refreshProjections, registerCatalogEntity, replaceRoadmapAuthority, upgradeStoreMinimal, type CaptureInput, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
+import { execFileSync } from "node:child_process";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { applyStoreMigration, activateStore, captureIssue, closeIssue, ensureCollaborationAuthority, getIssue, initializeCollaborationStore, initializeStore, listIssues, openCollaborationStore, openStore, planStoreMigration, readExecutionAuthority, refreshProjections, registerCatalogEntity, replaceRoadmapAuthority, resolveCollaborationLocation, ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation, type CaptureInput, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
 import {
   dashboardFailure,
   dashboardFilters,
@@ -21,20 +23,73 @@ import {
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-read-cli-"));
 const RECORDED_AT = "2026-09-18T02:00:00.000Z";
 
+/** The user-level collaboration lane is resolved through `homedir`; isolate it. */
+const LANE_HOME = join(ROOT, "lane-home");
+mkdirSync(LANE_HOME, { recursive: true });
+let laneHomeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  laneHomeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => LANE_HOME);
+});
 afterAll(() => {
+  laneHomeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-async function workspace(name: string, initialize = true): Promise<{ dir: string; harness: string; context: StoreContext }> {
+let repoSequence = 0;
+
+/**
+ * A real checkout: issue and catalog authority is the collaboration lane, so a
+ * fixture without a repository identity has no issue store at all.
+ */
+async function workspace(name: string, initialize = true, lane = true): Promise<{ dir: string; harness: string; context: StoreContext }> {
   const dir = mkdtempSync(join(ROOT, name));
+  execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+  writeFileSync(join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${repoSequence++}\n`);
   const harness = join(dir, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const context: StoreContext = { harnessDir: harness };
+  const context: StoreContext = { harnessDir: harness, checkoutRoot: dir };
+  if (lane) await ensureCollaborationAuthority(context);
   if (initialize) {
     const handle = await initializeStore(context);
     handle.close();
   }
   return { dir, harness, context };
+}
+
+/** The lane's own revision: the issue/catalog authority the reads report. */
+async function laneRevision(context: StoreContext): Promise<number> {
+  const handle = await openCollaborationStore(context, "read");
+  try {
+    const row = handle.db.prepare("select revision from collaboration_meta where id = 1").get();
+    if (row === null || typeof row !== "object" || !("revision" in row) || typeof row.revision !== "number") {
+      throw new Error("the fixture lane records no readable collaboration_meta singleton");
+    }
+    return row.revision;
+  } finally {
+    handle.close();
+  }
+}
+
+/** A conforming installed-consumer attestation: one upgraded CLI on node. */
+function activationAttestation(): ActivationAttestation {
+  return {
+    version: ACTIVATION_PROTOCOL_VERSION,
+    attestedAt: "2026-09-18T00:00:00.000Z",
+    operator: { actor: "fixture-operator", authorizationRef: "store-read fixture" },
+    consumers: [
+      {
+        entryId: "coordinator-omp",
+        kind: "coordinator",
+        entrypoint: "/Users/op/.omp/plugins/mstar/packages/cli/dist/index.js",
+        runtime: "node",
+        runtimeVersion: "99.0.0",
+        version: "0.0.0-synthetic",
+        current: true,
+        disposition: "reloaded",
+      },
+    ],
+    stoppedSessions: [],
+  };
 }
 
 async function withWrite(context: StoreContext, fn: (db: StoreDb) => void): Promise<void> {
@@ -150,10 +205,8 @@ describe("dashboard views over a real store", () => {
     const page = envelope.data as IssuePage;
     expect(page).toEqual(await listIssues(context, {}));
     expect(page.items.map((item) => item.id)).toEqual(["I-000001", "I-000002"]);
-    const reader = await openStore(context, "read");
-    const storedRevision = (reader.db.prepare("select revision as n from store_meta where id = 1").get() as { n: number }).n;
-    reader.close();
-    expect(envelope.storeRevision).toBe(storedRevision);
+    // The reported revision is the LANE's: issue/catalog authority lives there.
+    expect(envelope.storeRevision).toBe(await laneRevision(context));
     expect(envelope.catalogRevision).toBe(0);
     expect(envelope.projection.freshness).toBe("unavailable");
 
@@ -178,8 +231,10 @@ describe("dashboard views over a real store", () => {
 
   test("issue-flow returns the dated buckets, the unknown-date counts and the current open total", async () => {
     // Missing capture dates are genuine legacy history, imported by the public
-    // migration boundary rather than forged into an active issue store.
-    const { context, harness } = await workspace("flow-", false);
+    // migration boundary rather than forged into an active issue store: a
+    // file-era checkout has no lane, the reviewed apply stages one, and the
+    // activation publishes it.
+    const { context, harness } = await workspace("flow-", false, false);
     const projectDir = join(harness, "projects", "proj-a");
     mkdirSync(projectDir, { recursive: true });
     const entry = (overrides: Record<string, unknown>) => ({
@@ -193,8 +248,8 @@ describe("dashboard views over a real store", () => {
       entry({ id: "R3", title: "retired", severity: "low", lifecycle: "wont-fix", registered_at: "2026-09-02", closed_at: "2026-09-03" }),
     ] } }));
     const manifest = await planStoreMigration(context);
-    await applyStoreMigration(context, manifest);
-    await upgradeStoreMinimal({ context, operator: "store-read-test", operationId: "activate-flow" });
+    const applied = await applyStoreMigration(context, manifest);
+    await activateStore(context, applied, activationAttestation());
 
     const envelope = await readDashboardView({ context, view: "issue-flow" });
     const flow = envelope.data as IssueFlow;
@@ -270,19 +325,22 @@ describe("dashboard views over a real store", () => {
 
     const roadmap = await readDashboardView({ context, view: "roadmap", params: { project: "proj-absent" } });
     expect(roadmap.data as RoadmapDTO | null).toBeNull();
-    expect(roadmap.projection.freshness).toBe("current");
+    // Roadmap authority is the lane's, so this view has no execution projection.
+    expect(roadmap.projection.freshness).toBe("unavailable");
   });
 
-  test("a missing or staged store fails with a structured code, never an empty page", async () => {
-    const dir = mkdtempSync(join(ROOT, "no-store-"));
-    mkdirSync(join(dir, ".mstar"), { recursive: true });
-    const failure = await readDashboardView({ context: { harnessDir: join(dir, ".mstar") }, view: "issues" }).catch((error: unknown) => error);
-    expect(dashboardFailure(failure)).toMatchObject({ code: "store.not-initialized" });
+  test("a missing or staged authority fails with a structured code, never an empty page", async () => {
+    // No repository identity at all: the scope itself cannot be resolved.
+    const identified = await workspace("no-lane-", true);
+    await rmSync(resolveCollaborationLocation(identified.context).dbPath, { force: true });
+    const uninitialized = await readDashboardView({ context: identified.context, view: "issues" }).catch((error: unknown) => error);
+    expect(dashboardFailure(uninitialized)).toMatchObject({ code: "collaboration.not-initialized" });
 
-    const { context } = await workspace("staged-");
-    await withWrite(context, (db) => db.exec("update store_meta set authority_state = 'staged' where id = 1"));
-    const staged = await readDashboardView({ context, view: "issue-flow" }).catch((error: unknown) => error);
-    expect(dashboardFailure(staged)).toMatchObject({ code: "store.not-active" });
+    // A lane that exists but was never published serves no issue page either.
+    const stagedFixture = await workspace("staged-", true, false);
+    await initializeCollaborationStore(resolveCollaborationLocation(stagedFixture.context));
+    const staged = await readDashboardView({ context: stagedFixture.context, view: "issue-flow" }).catch((error: unknown) => error);
+    expect(dashboardFailure(staged)).toMatchObject({ code: "collaboration.not-active" });
   });
 
   test("failures are reported as code/message, usage separately, and never as raw payloads", async () => {

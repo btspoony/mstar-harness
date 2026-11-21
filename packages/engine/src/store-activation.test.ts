@@ -69,14 +69,41 @@ const INDEX_TABLE = [
 ];
 const INDEX_TAIL = ["", "Security disposition: the retired table is bookkeeping; this sentence is not.", ""];
 
-type Fixture = { context: StoreContext; harness: string; root: string };
+type Fixture = { context: StoreContext; harness: string; root: string; checkout: string };
 
-/** A temp workspace with a real `.mstar` harness root and NO database. */
-function freshWorkspace(name: string): Fixture {
+/** The user-level collaboration lane is resolved through `homedir`; isolate it. */
+const COLLAB_HOME = join(ROOT, "collab-home");
+mkdirSync(COLLAB_HOME, { recursive: true });
+let collabHomeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  collabHomeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => COLLAB_HOME);
+});
+afterAll(() => {
+  collabHomeSpy?.mockRestore();
+});
+
+let repoSequence = 0;
+
+/**
+ * A synthetic checkout: a real Git main worktree, an explicit origin-less
+ * repository identity and the selected collaboration mode. Its harness is
+ * `<checkout>/.mstar`, so the lane resolves like a real operator's and the
+ * reviewed import stages the lane rather than a combined store.
+ */
+function repoWorkspace(name: string): Fixture {
   const root = mkdtempSync(join(ROOT, name));
-  const harness = join(root, ".mstar");
+  const checkout = join(root, "checkout");
+  mkdirSync(checkout, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: checkout, stdio: ["ignore", "pipe", "pipe"] });
+  writeFileSync(join(checkout, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${repoSequence++}\n`);
+  const harness = join(checkout, ".mstar");
   mkdirSync(harness, { recursive: true });
-  return { context: { harnessDir: harness }, harness, root };
+  return { context: { harnessDir: harness, checkoutRoot: checkout }, harness, root, checkout };
+}
+
+/** A temp checkout workspace with a real `.mstar` harness root and NO database. */
+function freshWorkspace(name: string): Fixture {
+  return repoWorkspace(name);
 }
 
 function write(harness: string, relativePath: string, text: string): void {
@@ -222,9 +249,9 @@ async function documentIndexFixture(
 ): Promise<Fixture & { manifest: MigrationManifest; activation: ActivationReceipt }> {
   const fixture = freshWorkspace(name);
   writeRegister(fixture.harness, "_default", { entries: { "plan-alpha": [entry({ id: "R1", severity: "critical" })] } });
-  write(join(fixture.root, ".agents"), join("knowledge", "guides", "intro.md"), "# Intro\n");
+  write(join(fixture.checkout, ".agents"), join("knowledge", "guides", "intro.md"), "# Intro\n");
   write(
-    join(fixture.root, ".agents"),
+    join(fixture.checkout, ".agents"),
     join("knowledge", "README.md"),
     [
       "# Knowledge",
@@ -307,59 +334,72 @@ function failAt(stage: "flip" | "retirement" | "section-write", completed: numbe
   return { afterStage(actual: string, count: number) { if (actual === stage && count === completed) throw new Error(message); } };
 }
 
-type MetaRow = { store_id: string; authority_state: "staged" | "active"; authority_epoch: number; revision: number };
+type MetaRow = { store_id: string; authority_state: "staged" | "active"; authority_epoch: number; revision: number; activated_at: string | null };
 
+/** The lane's own authority record — the issue/catalog authority these verbs move. */
 async function metaOf(context: StoreContext): Promise<MetaRow> {
-  const handle = await openStore(context, "read");
-  try {
-    return handle.db
-      .prepare("select store_id, authority_state, authority_epoch, revision from store_meta where id = 1")
-      .get() as MetaRow;
-  } finally {
-    handle.close();
+  const row = await readCollaborationStage(resolveCollaborationLocation(context), ({ db }) =>
+    db.prepare("select store_id, authority_state, authority_epoch, revision, activated_at from collaboration_meta where id = 1").get(),
+  );
+  if (
+    row === null ||
+    typeof row !== "object" ||
+    !("store_id" in row) ||
+    !("authority_state" in row) ||
+    !("authority_epoch" in row) ||
+    !("revision" in row)
+  ) {
+    throw new Error("the fixture lane records no readable collaboration_meta singleton");
   }
+  const { store_id: storeId, authority_state: state, authority_epoch: epoch, revision } = row;
+  const activatedAt = "activated_at" in row ? row.activated_at : null;
+  if (
+    typeof storeId !== "string" ||
+    (state !== "staged" && state !== "active") ||
+    typeof epoch !== "number" ||
+    typeof revision !== "number" ||
+    (activatedAt !== null && typeof activatedAt !== "string")
+  ) {
+    throw new Error("the fixture lane's collaboration_meta singleton is malformed");
+  }
+  return { store_id: storeId, authority_state: state, authority_epoch: epoch, revision, activated_at: activatedAt };
 }
 
+/** The lane's recorded phase rows of one phase: `{ operation_id, committed_at }`. */
 async function receiptRows(context: StoreContext, phase: string): Promise<Record<string, unknown>[]> {
-  const handle = await openStore(context, "read");
-  try {
-    return handle.db
-      .prepare("select id, manifest_hash, phase, activated_at, retired_at from migration_receipts where phase = ? order by id")
-      .all(phase) as Record<string, unknown>[];
-  } finally {
-    handle.close();
-  }
+  return readCollaborationStage(resolveCollaborationLocation(context), ({ db }) =>
+    db
+      .prepare("select operation_id, committed_at from collaboration_operations where operation_id like ? order by rowid")
+      .all(`migration:${phase}:%`) as Record<string, unknown>[],
+  );
 }
 
 function ledgerPathOf(fixture: Fixture, activation: ActivationReceipt): string {
-  return join(fixture.harness, "archived", "store-migration", String(activation.receiptId), "ledger.json");
+  return join(fixture.harness, "archived", "store-migration", activation.applyManifestHash, "ledger.json");
 }
 
 /**
- * Rewrite one receipt row's recorded digest. `migration_receipts.manifest_hash`
- * is provenance — a historical description of what was reviewed — never an
- * identity the barrier selects, vetoes or proves its target with.
+ * Rewrite the recorded body of one lane phase row, for tamper fixtures. The
+ * row's own operation id is the identity; its recorded JSON is what the verbs
+ * read, so a tampered body is exactly the untrustworthy receipt these cases
+ * pin.
  */
-async function setReceiptHash(context: StoreContext, id: number, hash: string): Promise<void> {
-  const handle = await openStore(context, "write");
-  try {
-    handle.db.prepare("update migration_receipts set manifest_hash = ? where id = ?").run(hash, id);
-  } finally {
-    handle.close();
-  }
-}
-
-/** Rewrite one receipt row's recorded JSON body, for tamper fixtures. */
-async function patchReceiptJson(context: StoreContext, id: number, patch: (stored: Record<string, unknown>) => void): Promise<void> {
-  const handle = await openStore(context, "write");
-  try {
-    const row = handle.db.prepare("select manifest_json from migration_receipts where id = ?").get(id) as { manifest_json: string };
-    const stored = JSON.parse(row.manifest_json) as Record<string, unknown>;
+async function patchPhaseRow(
+  context: StoreContext,
+  phase: string,
+  applyManifestHash: string,
+  patch: (stored: Record<string, unknown>) => void,
+): Promise<void> {
+  const operationId = `migration:${phase}:${applyManifestHash}`;
+  await writeCollaborationStage(resolveCollaborationLocation(context), ({ db }) => {
+    const row = db.prepare("select result_json from collaboration_operations where operation_id = ?").get(operationId);
+    if (row === null || typeof row !== "object" || !("result_json" in row) || typeof row.result_json !== "string") {
+      throw new Error(`the fixture lane records no ${phase} row for ${applyManifestHash}`);
+    }
+    const stored = JSON.parse(row.result_json) as Record<string, unknown>;
     patch(stored);
-    handle.db.prepare("update migration_receipts set manifest_json = ? where id = ?").run(JSON.stringify(stored), id);
-  } finally {
-    handle.close();
-  }
+    db.prepare("update collaboration_operations set result_json = ? where operation_id = ?").run(JSON.stringify(stored), operationId);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -384,11 +424,11 @@ describe("store activation barrier", () => {
     // The recorded document passes the acceptance authority, carries the hash
     // the epoch bump was committed under, and records the generated operator.
     expect(() => validateActivationAttestation(receipt.attestation)).not.toThrow();
-    // The authorizationRef names the reviewed APPLY receipt, the durable
+    // The authorizationRef names the reviewed APPLIED import, the durable
     // record this activation was authorized from.
     expect(receipt.attestation.operator).toEqual({
       actor: "ops-engineer",
-      authorizationRef: `migration-receipt:${apply.receiptId}`,
+      authorizationRef: `migration-applied:${apply.manifestHash}`,
     });
     expect(receipt.attestation.consumers).toEqual([
       {
@@ -402,17 +442,10 @@ describe("store activation barrier", () => {
         disposition: "reloaded",
       },
     ]);
-    // The stop list is exactly the active rows the epoch bump invalidated.
-    const store = await openStore(context, "read");
-    try {
-      const activeBefore = store.db
-        .prepare("select session_id from execution_sessions where state = 'active' and epoch < ?")
-        .all(receipt.epoch) as Array<{ session_id: string }>;
-      expect(receipt.attestation.stoppedSessions.map((session) => session.sessionId).sort())
-        .toEqual(activeBefore.map((row) => row.session_id).sort());
-    } finally {
-      store.close();
-    }
+    // A file-era import has no execution store, so there is no active session
+    // to stop — and that absence is reported honestly, never invented.
+    expect(existsSync(join(context.harnessDir, "store.db"))).toBe(false);
+    expect(receipt.attestation.stoppedSessions).toEqual([]);
   });
 
   test("activation without an attestation and without an operator refuses with the named recovery", async () => {
@@ -434,15 +467,10 @@ describe("store activation barrier", () => {
       processFacts: { entrypoint: "/opt/mstar/cli/dist/mstar-harness.js", runtimeVersion: atOrAboveRuntime, isBun: false },
     });
     // ONE instant: the generated document attests it and the epoch bump, the
-    // receipt and the store's own activation stamp all record it.
+    // receipt and the lane's own activation stamp all record it.
     expect(receipt.attestation.attestedAt).toBe(at);
     expect(receipt.activatedAt).toBe(at);
-    const store = await openStore(context, "read");
-    try {
-      expect(store.db.prepare("select activated_at from store_meta where id = 1").get()).toEqual({ activated_at: at });
-    } finally {
-      store.close();
-    }
+    expect((await metaOf(context)).activated_at).toBe(at);
   });
 
   test("a Bun-driven activation without an attestation refuses with the named cause and recovery", async () => {
@@ -510,7 +538,7 @@ describe("store activation barrier", () => {
   });
 
   test("activation refuses an attestation that records session credentials, and never writes them", async () => {
-    const { context, harness, apply } = await stagedFixture("activation-credentials-");
+    const { context, apply } = await stagedFixture("activation-credentials-");
     // The marker is a non-secret fixture value whose only purpose is proving activation
     // never persists credential-shaped fields. The scanner's HARDCODED_SECRET rule flags
     // any string literal bound to a token-named field, so the marker is built at runtime
@@ -525,7 +553,7 @@ describe("store activation barrier", () => {
     const error = await refusalOf("store.attestation-invalid", () => activateStore(context, apply, tainted));
     expect(error.message).toContain("sessionToken");
     expect(error.message).toContain("never session credentials");
-    expect(readFileSync(join(harness, "store.db")).includes(marker)).toBe(false);
+    expect(readFileSync(resolveCollaborationLocation(context).dbPath).includes(marker)).toBe(false);
     expect((await metaOf(context)).authority_state).toBe("staged");
   });
 
@@ -600,21 +628,20 @@ describe("store activation barrier", () => {
     expect(readFileSync(readmePath, "utf8")).toContain("| `iter-late` |");
   });
 
-  test("activation serves the current applied receipt for a reordered, re-derived reviewed manifest", async () => {
+  test("activation serves the current applied import for a reordered, re-derived reviewed manifest", async () => {
     const { context, apply, manifest } = await stagedFixture("activation-reordered-manifest-");
 
-    // The reviewer's own JSON key order changed and a provenance digest was
-    // re-derived: neither is identity. The staged store's CURRENT applied
-    // receipt is still the one this activation must serve.
-    const reordered = Object.fromEntries(Object.entries({ ...manifest, sourceSetDigest: "f".repeat(64) }).reverse());
+    // The reviewer's own JSON key order changed: the manifest hash is canonical,
+    // so key order is not identity but the same import still resolves.
+    const reordered = Object.fromEntries(Object.entries(manifest).reverse()) as unknown as MigrationManifest;
     const receipt = await activateStore(context, apply, attestation());
     expect(receipt.replayed).toBe(false);
     expect(receipt.epoch).toBe(2);
 
-    // The read-only lookup resolves through the real receipt identity, not the
-    // manifest's serialization, and replay still serves the same recorded row.
-    const served = await activationReceiptFor(context, reordered as unknown as MigrationManifest);
-    expect(served.receiptId).toBe(receipt.receiptId);
+    // The read-only lookup addresses the reviewed import, and a re-serialized
+    // copy of the same facts resolves to the same activation.
+    const served = await activationReceiptFor(context, reordered);
+    expect(served.activationHash).toBe(receipt.activationHash);
     expect(served.epoch).toBe(receipt.epoch);
 
     // A manifest that was reviewed for ANOTHER control root is refused by the
@@ -642,22 +669,21 @@ describe("store activation barrier", () => {
     expect(activation.storeId).toBe(stagedMeta.store_id);
     expect(activation.revision).toBe(stagedMeta.revision + 1);
     expect(activation.backup.counts.issues).toBe(apply.counts.issues);
-    expect(activation.backup.storeId).toBe(stagedMeta.store_id);
-    expect(activation.backup.revision).toBe(stagedMeta.revision);
+    expect(activation.backup.authority.storeId).toBe(stagedMeta.store_id);
+    expect(activation.backup.authority.revision).toBe(stagedMeta.revision);
     expect(existsSync(activation.backup.backupPath)).toBe(true);
     const live = await metaOf(context);
     expect(live.authority_state).toBe("active");
     expect(live.authority_epoch).toBe(2);
     const rows = await receiptRows(context, "activated");
     expect(rows.length).toBe(1);
-    expect(rows[0]!.id).toBe(activation.receiptId);
-    expect(rows[0]!.activated_at).toBeTruthy();
-    expect((await receiptRows(context, "applied"))[0]!.activated_at).toBeTruthy();
+    expect(rows[0]!.operation_id).toBe(`migration:activated:${apply.manifestHash}`);
+    expect(rows[0]!.committed_at).toBeTruthy();
 
     // Replay: same attestation, no second epoch bump, the recorded receipt served.
     const replay = await activateStore(context, apply, attestation());
     expect(replay.replayed).toBe(true);
-    expect(replay.receiptId).toBe(activation.receiptId);
+    expect(replay.activationHash).toBe(activation.activationHash);
     expect(replay.epoch).toBe(activation.epoch);
     expect((await metaOf(context)).authority_epoch).toBe(2);
 
@@ -666,83 +692,82 @@ describe("store activation barrier", () => {
     const changed = attestation({ stoppedSessions: [{ sessionId: "sess-old-2", host: "omp", state: "stopped" }] });
     const served = await activateStore(context, apply, changed);
     expect(served.replayed).toBe(true);
-    expect(served.receiptId).toBe(activation.receiptId);
+    expect(served.activationHash).toBe(activation.activationHash);
     expect((await metaOf(context)).authority_epoch).toBe(2);
   });
 
-  test("activation refuses a resumed stale handle from the pre-activation generation", async () => {
+  test("activation refuses a resumed handle from the pre-activation generation", async () => {
     const { context, apply } = await stagedFixture("activation-stale-handle-");
-    const beforeActivation = await currentAuthorityHandle(context);
+    const beforeActivation = await readCollaborationStage(resolveCollaborationLocation(context), ({ authority }) => authority);
     expect(beforeActivation.epoch).toBe(1);
     const activation = await activateStore(context, apply, attestation());
-    expect((await currentAuthorityHandle(context)).epoch).toBe(activation.epoch);
+    const live = await readCollaborationStage(resolveCollaborationLocation(context), ({ authority }) => authority);
+    expect([live.storeId, live.epoch]).toEqual([activation.storeId, activation.epoch]);
 
-    const staleError = await refusalOf("store.stale-epoch", () => assertAuthorityCurrent(context, beforeActivation));
+    // A receipt of the generation this publication superseded refuses by
+    // `store.stale-epoch`: it can never act on the live authority.
+    const staleReceipt = { ...activation, epoch: beforeActivation.epoch };
+    const staleError = await refusalOf("store.stale-epoch", () => retireStoreSources(context, staleReceipt));
     expect(staleError.message).toContain("generation it was admitted under has been superseded");
-    await refusalOf("store.activation-stale", () => assertAuthorityCurrent(context, { storeId: "00000000-0000-4000-8000-000000000000", epoch: 1 }));
-    // The handle of the live generation still passes.
-    await assertAuthorityCurrent(context, { storeId: activation.storeId, epoch: activation.epoch });
+    expect((await receiptRows(context, "retired")).length).toBe(0);
   });
 
-  test("activation addresses the applied receipt by its recorded id, so a drifted provenance hash is not a gate", async () => {
-    const { context, apply, manifest } = await stagedFixture("activation-hash-provenance-");
+  test("activation addresses the reviewed import by its own manifest hash, so a forged hash is never this import's", async () => {
+    const { context, apply, manifest } = await stagedFixture("activation-hash-identity-");
 
-    // The recorded digest is rewritten to a value the reviewed manifest never
-    // produced. `manifest_hash` is provenance: the barrier must still find the
-    // apply row by its own `id` and activate.
-    await setReceiptHash(context, apply.receiptId, "0".repeat(64));
+    // The reviewed manifest's canonical hash addresses the applied phase. A
+    // forged receipt carrying another hash is NOT a recorded import of this
+    // lane, and the barrier refuses instead of adopting it.
+    const forged = { ...apply, manifestHash: "f".repeat(64) };
+    const forgedError = await refusalOf("store.activation-stale", () => activateStore(context, forged, attestation()));
+    expect(forgedError.message).toContain("has no recorded apply receipt");
+    expect((await metaOf(context)).authority_state).toBe("staged");
+
     const activation = await activateStore(context, apply, attestation());
     expect(activation.replayed).toBe(false);
-    expect(activation.applyReceiptId).toBe(apply.receiptId);
+    expect(activation.applyManifestHash).toBe(apply.manifestHash);
     expect((await metaOf(context)).authority_state).toBe("active");
     expect((await receiptRows(context, "activated")).length).toBe(1);
 
-    // The read-only lookup resolves through the same real identity: a manifest
-    // whose review digests were re-derived still resolves to this activation.
-    const served = await activationReceiptFor(context, {
-      ...manifest,
-      sourceSetDigest: "e".repeat(64),
-    } as unknown as MigrationManifest);
-    expect(served.receiptId).toBe(activation.receiptId);
+    // A re-serialization that keeps every reviewed fact is still this import:
+    // the manifest hash is canonical, not serialization-sensitive.
+    const reread = JSON.parse(JSON.stringify(manifest)) as MigrationManifest;
+    const served = await activationReceiptFor(context, reread);
+    expect(served.activationHash).toBe(activation.activationHash);
 
-    // Replay with a drifted hash on the SUPPLIED receipt serves the recorded
-    // activation: identity is the row, not the digest it carries.
-    const replayed = await activateStore(context, { ...apply, manifestHash: "f".repeat(64) }, attestation());
-    expect(replayed.replayed).toBe(true);
-    expect(replayed.receiptId).toBe(activation.receiptId);
-
-    // A supplied receipt naming a row that does not exist is refused by its own
-    // identity — the real constraint — and not by any digest comparison.
-    const forged = { ...apply, receiptId: apply.receiptId + 1000 };
-    const error = await refusalOf("store.activation-stale", () => activateStore(context, forged, attestation()));
-    expect(error.message).toContain("already active under a different activation");
+    // Once published, another import's receipt is not this authority's
+    // activation: the live generation is never replaced by a new receipt.
+    const otherError = await refusalOf("store.activation-stale", () => activateStore(context, forged, attestation()));
+    expect(otherError.message).toContain("already active under a different activation");
   });
 
-  test("retirement addresses the activation by its recorded id, so a drifted provenance hash is not a gate", async () => {
-    const { context, activation } = await activatedFixture("retirement-hash-provenance-");
+  test("retirement refuses an activation hash that is not the recorded one", async () => {
+    const { context, activation } = await activatedFixture("retirement-hash-identity-");
 
-    // Both the activation row's recorded digest and the supplied receipt's
-    // `activationHash` are drifted from what the barrier recorded. Neither is
-    // identity: retirement addresses the row by its own id.
-    await setReceiptHash(context, activation.receiptId, "0".repeat(64));
+    // The activation is addressed by the reviewed import; the supplied receipt's
+    // own hash must then BE the recorded activation — a drifted hash names a
+    // different one.
     const drifted = { ...activation, activationHash: "f".repeat(64) };
-    const receipt = await retireStoreSources(context, drifted);
+    const error = await refusalOf("store.activation-stale", () => retireStoreSources(context, drifted));
+    expect(error.message).toContain("is not the one recorded for this import");
+    expect((await receiptRows(context, "retired")).length).toBe(0);
+
+    const receipt = await retireStoreSources(context, activation);
     expect(receipt.replayed).toBe(false);
-    expect(receipt.activationReceiptId).toBe(activation.receiptId);
+    expect(receipt.applyManifestHash).toBe(activation.applyManifestHash);
     expect((await receiptRows(context, "retired")).length).toBe(1);
 
-    // Replay with the drifted hash resolves the recorded retirement by the
-    // activation id and the live generation, never by a digest.
-    const replay = await retireStoreSources(context, drifted);
+    // Idempotent replay: the recorded retirement is served.
+    const replay = await retireStoreSources(context, activation);
     expect(replay.replayed).toBe(true);
-    expect(replay.receiptId).toBe(receipt.receiptId);
-    expect(replay.activationReceiptId).toBe(activation.receiptId);
+    expect(replay.retirementHash).toBe(receipt.retirementHash);
+    expect((await receiptRows(context, "retired")).length).toBe(1);
   });
 
-  test("an already-active store refuses an activation row whose recorded owner facts are another generation's", async () => {
+  test("an already-active authority refuses an activation row whose recorded owner facts are another generation's", async () => {
     const { context, manifest, activation } = await activatedFixture("activation-active-owner-");
     const apply = await appliedReceiptFor(context, manifest);
-    await patchReceiptJson(context, activation.receiptId, (stored) => {
+    await patchPhaseRow(context, "activated", activation.applyManifestHash, (stored) => {
       stored.storeId = "00000000-0000-4000-8000-000000000000";
     });
     const error = await refusalOf("store.activation-stale", () => activateStore(context, apply, attestation()));
@@ -750,36 +775,36 @@ describe("store activation barrier", () => {
     expect((await metaOf(context)).authority_state).toBe("active");
   });
 
-  test("retirement refuses a supplied activation receipt whose row id is not recorded", async () => {
-    const { context, activation } = await activatedFixture("retirement-forged-receipt-id-");
-    const forged = { ...activation, receiptId: activation.receiptId + 1000 };
+  test("retirement refuses a supplied activation receipt whose import is not recorded", async () => {
+    const { context, activation } = await activatedFixture("retirement-forged-import-");
+    const forged = { ...activation, applyManifestHash: "0".repeat(64) };
     const error = await refusalOf("store.activation-stale", () => retireStoreSources(context, forged));
-    expect(error.message).toContain("is recorded for this store");
+    expect(error.message).toContain("no activation is recorded for the reviewed import");
     expect((await receiptRows(context, "retired")).length).toBe(0);
   });
 
-  test("retirement refuses an activation receipt whose recorded owner facts do not match the live store", async () => {
+  test("retirement refuses an activation receipt whose recorded owner facts do not match the live authority", async () => {
     const { context, activation } = await activatedFixture("retirement-owner-mismatch-");
 
     // The recorded activation row is tampered to name ANOTHER store. The
-    // relation between the row and the live store is the real constraint, so
+    // relation between the row and the live authority is the real constraint, so
     // retirement refuses without touching a source.
-    await patchReceiptJson(context, activation.receiptId, (stored) => {
+    await patchPhaseRow(context, "activated", activation.applyManifestHash, (stored) => {
       stored.storeId = "00000000-0000-4000-8000-000000000000";
     });
     const foreign = await refusalOf("store.activation-stale", () => retireStoreSources(context, activation));
-    expect(foreign.message).toContain("not this store");
+    expect(foreign.message).toContain("not this authority");
     expect((await receiptRows(context, "retired")).length).toBe(0);
   });
 
-  test("retirement refuses an activation receipt that names a different apply receipt than the recorded one", async () => {
+  test("retirement refuses an activation receipt that names a different import than the recorded one", async () => {
     const { context, activation } = await activatedFixture("retirement-apply-relation-");
     // Same live generation (so the epoch guard passes), but the supplied
-    // receipt names a DIFFERENT apply receipt than the recorded activation row
+    // receipt names a DIFFERENT import than the recorded activation row
     // carries: the real relation between the two rows is what refuses.
-    const mismatched = { ...activation, applyReceiptId: activation.applyReceiptId + 500 };
+    const mismatched = { ...activation, applyManifestHash: "1".repeat(64) };
     const error = await refusalOf("store.activation-stale", () => retireStoreSources(context, mismatched));
-    expect(error.message).toContain("not this store");
+    expect(error.message).toContain("no activation is recorded for the reviewed import");
     expect((await receiptRows(context, "retired")).length).toBe(0);
   });
 
@@ -835,29 +860,31 @@ describe("store retirement", () => {
     expect(lineCount(retiredReadme)).toBe(originalLineCount - INDEX_TABLE.length);
     expect(existsSync(section.archivedPath)).toBe(true);
 
-    // The marker names the successor DB and both receipts, and never claims rollback.
+    // The marker names the successor authority and both receipts, and never
+    // claims rollback.
     const marker = readFileSync(receipt.markerPath, "utf8");
     expect(receipt.markerPath).toBe(join(receipt.archiveDir, "MARKER.md"));
     expect(marker).toContain(join(harness, "store.db"));
     expect(marker).toContain(activation.storeId);
-    expect(marker).toContain(`#${activation.receiptId}`);
-    expect(marker).toContain(`#${receipt.receiptId}`);
+    expect(marker).toContain(activation.activationHash);
+    expect(marker).toContain(receipt.retirementHash);
     expect(marker).toContain("not a post-activation rollback path");
     expect(marker).toContain("VACUUM INTO");
 
-    // Receipts: one retired row, the activation and apply rows marked retired.
+    // Receipts: one retired phase row beside the activation and apply phases.
     const retired = await receiptRows(context, "retired");
     expect(retired.length).toBe(1);
-    expect(retired[0]!.retired_at).toBeTruthy();
-    expect((await receiptRows(context, "activated"))[0]!.retired_at).toBeTruthy();
-    expect((await receiptRows(context, "applied"))[0]!.retired_at).toBeTruthy();
+    expect(retired[0]!.operation_id).toBe(`migration:retired:${activation.applyManifestHash}`);
+    expect(retired[0]!.committed_at).toBeTruthy();
+    expect((await receiptRows(context, "activated")).length).toBe(1);
+    expect((await receiptRows(context, "applied")).length).toBe(1);
     expect((await metaOf(context)).authority_epoch).toBe(activation.epoch);
 
     // Idempotent replay: the same receipt is served and the live index keeps the
     // state the first run left.
     const replay = await retireStoreSources(context, activation);
     expect(replay.replayed).toBe(true);
-    expect(replay.receiptId).toBe(receipt.receiptId);
+    expect(replay.retirementHash).toBe(receipt.retirementHash);
     expect(readFileSync(readmePath, "utf8")).not.toContain("| `iter-one` |");
     expect((await receiptRows(context, "retired")).length).toBe(1);
   });
@@ -871,12 +898,12 @@ describe("store retirement", () => {
     const ledger = JSON.parse(readFileSync(ledgerPathOf(crashed, crashed.activation), "utf8")) as {
       registers: { state: string }[];
       sections: { state: string }[];
-      retirementReceiptId: number | null;
+      retirementHash: string | null;
     };
     expect(ledger.registers.filter((item) => item.state === "verified").length).toBe(2);
     expect(ledger.registers.filter((item) => item.state !== "verified").length).toBe(2);
     expect(ledger.sections.every((item) => item.state === "pending")).toBe(true);
-    expect(ledger.retirementReceiptId).toBeNull();
+    expect(ledger.retirementHash).toBeNull();
     expect((await receiptRows(crashed.context, "retired")).length).toBe(0);
     const liveAfterCrash = PROJECTS.filter((project) => existsSync(join(crashed.harness, "projects", project, "residuals.json")));
     expect(liveAfterCrash.length).toBe(2);
@@ -936,7 +963,7 @@ describe("store retirement", () => {
 
   test("retirement excises a reviewed document row whose live reference uses an equivalent path spelling", async () => {
     const fixture = await documentIndexFixture("retirement-equivalent-path-");
-    const readmePath = join(fixture.root, ".agents", "knowledge", "README.md");
+    const readmePath = join(fixture.checkout, ".agents", "knowledge", "README.md");
     expect(readFileSync(readmePath, "utf8")).toContain("`guides//intro.md`");
 
     const induced = await retireStoreSources(fixture.context, fixture.activation, failAt("section-write", 0, "induced retirement failure after the section rewrite")).catch((error: unknown) => error);
@@ -1269,6 +1296,28 @@ describe("store backup", () => {
     expect(recordDshStatusEmission(context, "sess-host", context.harnessDir, 1, '{"sv":1}')).toMatchObject({ kind: "written" });
   }
 
+  /** The EXECUTION store's own meta rows (its backup identity), read from an open handle. */
+  function readStoreAuthorityMeta(handle: { db: { prepare(sql: string): { get(): unknown } } }): {
+    store_id: string;
+    authority_epoch: number;
+    revision: number;
+  } {
+    const row = handle.db.prepare("select store_id, authority_epoch, revision from store_meta where id = 1").get();
+    if (
+      row === null ||
+      typeof row !== "object" ||
+      !("store_id" in row) ||
+      !("authority_epoch" in row) ||
+      !("revision" in row) ||
+      typeof row.store_id !== "string" ||
+      typeof row.authority_epoch !== "number" ||
+      typeof row.revision !== "number"
+    ) {
+      throw new Error("the fixture execution store records no readable store_meta singleton");
+    }
+    return { store_id: row.store_id, authority_epoch: row.authority_epoch, revision: row.revision };
+  }
+
   /** One scalar count out of a fixture image; the SQL is this test's own. */
   function scalarCount(db: DatabaseSync, sql: string): number {
     // node:sqlite rows are untyped; the queried shape is the test's own SQL.
@@ -1276,13 +1325,18 @@ describe("store backup", () => {
     return row.n;
   }
 
-  test("backup records identity and revision and contains committed WAL-visible issue and catalog data", async () => {
+  test("backup records identity and revision and contains committed WAL-visible execution and host data", async () => {
     const fixture = freshWorkspace("backup-wal-");
     // Hold a connection open for the whole case so the committed frames stay in
     // the WAL instead of being checkpointed away by the last close.
+    // Both authorities exist, exactly as `store init` leaves them: the lane
+    // owns issue/catalog, the execution store owns execution/host.
+    await ensureCollaborationAuthority(fixture.context);
     const held = await initializeStore(fixture.context);
     try {
       write(fixture.harness, "guide.md", "# Guide\n");
+      // Issue and catalog authority is the collaboration lane; the execution
+      // image must carry neither, and the lane rows stay readable beside it.
       await captureIssue(
         fixture.context,
         {
@@ -1325,20 +1379,19 @@ describe("store backup", () => {
       expect(receipt.epoch).toBe(sourceMeta.authority_epoch);
       expect(receipt.revision).toBe(sourceMeta.revision);
       expect(receipt.authorityState).toBe("active");
-      expect(receipt.counts.issues).toBe(1);
-      expect(receipt.counts.occurrences).toBe(1);
-      expect(receipt.counts.catalogEntities).toBe(1);
+      // Execution-only: the lane holds the one issue and the one catalog row.
+      expect(receipt.counts.issues).toBe(0);
+      expect(receipt.counts.occurrences).toBe(0);
+      expect(receipt.counts.catalogEntities).toBe(0);
       expect(receipt.walPending).toBe(true);
       expect(receipt.bytes).toBeGreaterThan(0);
 
-      // The whole image is the backup: issue, catalog AND native host state.
+      // The whole image is the recovery point: the execution store's own rows
+      // and the native host state, read through the WAL.
       const copy = new DatabaseSync(target, { readOnly: true });
       try {
-        const issue = copy.prepare("select id, title from issues").get() as { id: string; title: string };
-        expect(issue.title).toBe("WAL-visible finding");
-        expect((copy.prepare("select count(*) as n from occurrences").get() as { n: number }).n).toBe(1);
-        const entity = copy.prepare("select id from catalog_entities where kind = 'document'").get() as { id: string };
-        expect(entity.id).toBe("doc-guide");
+        expect(scalarCount(copy, "select count(*) as n from issues")).toBe(0);
+        expect(scalarCount(copy, "select count(*) as n from catalog_entities")).toBe(0);
         expect(scalarCount(copy, "select count(*) as n from dsh_ledger_events")).toBe(2);
         expect(scalarCount(copy, "select count(*) as n from dsh_accepted_identities")).toBe(1);
         expect(scalarCount(copy, "select count(*) as n from dsh_scan_bounds")).toBe(1);
@@ -1356,6 +1409,11 @@ describe("store backup", () => {
       } finally {
         copy.close();
       }
+      // The lane row the capture committed is unchanged by the execution backup.
+      const lane = await readCollaborationStage(resolveCollaborationLocation(fixture.context), ({ db }) =>
+        db.prepare("select id, title from issues").get(),
+      );
+      expect(lane !== null && typeof lane === "object" && "title" in lane ? lane.title : undefined).toBe("WAL-visible finding");
 
       // The image re-verifies as its own recovery point: integrity, foreign keys
       // and this build's migration prefix all read from the copy.
@@ -1376,34 +1434,19 @@ describe("store backup", () => {
     const fixture = freshWorkspace("backup-concurrent-");
     const held = await initializeStore(fixture.context);
     try {
-      const before = await metaOf(fixture.context);
-      // A REAL second process commits issue+receipt rows continuously. The
+      const before = readStoreAuthorityMeta(held);
+      // A REAL second process commits HOST rows continuously — the execution
+      // store's own domain, since issue/catalog rows live in the lane now. The
       // backup must neither refuse the coherent copy nor describe a generation
       // the bytes do not hold — no frozen window, no filesystem mutex.
-      const issueModule = new URL("./issue.js", import.meta.url).href;
+      const hostModule = new URL("./host-state-store.js", import.meta.url).href;
       const stopPath = join(fixture.root, "writer-stop");
       const writerSource = `
-        import { captureIssue } from ${JSON.stringify(issueModule)};
+        import { appendDshLedgerRow } from ${JSON.stringify(hostModule)};
         import { existsSync } from 'node:fs';
         let commits = 0;
         for (let index = 0; index < 60 && !existsSync(process.env.WRITER_STOP!); index += 1) {
-          await captureIssue({ harnessDir: process.env.HARNESS_DIR! }, {
-            projectId: "_default",
-            title: "Concurrent writer finding " + index,
-            kind: "bug",
-            severity: "low",
-            impact: "a commit racing the backup",
-            acceptance: "the copy carries a whole generation",
-            sourceIdentity: "writer/" + index,
-            rootCauseKey: "concurrent-writer",
-            acceptanceKey: "committed",
-            occurrenceKey: "writer-" + index,
-            sourceKind: "review",
-            location: "fixture",
-            observedBehavior: "committed",
-            evidence: [],
-            discoveredAt: "2026-10-12T00:00:00.000Z",
-          }, { operationId: "op-writer-" + index, actor: "project-manager" });
+          appendDshLedgerRow({ harnessDir: process.env.HARNESS_DIR! }, "wf-concurrent", JSON.stringify({ index }), "row-" + index);
           commits += 1;
           if (commits === 3) console.log("first-commits-landed");
         }
@@ -1447,10 +1490,10 @@ describe("store backup", () => {
       // The live store after the writer stops is the upper bound of anything a
       // mid-writer copy can contain.
       const live = await openStore(fixture.context, "read");
-      let liveIssues = 0;
+      let liveRows = 0;
       let liveRevision = 0;
       try {
-        liveIssues = (live.db.prepare("select count(*) as n from issues").get() as { n: number }).n;
+        liveRows = (live.db.prepare("select count(*) as n from dsh_ledger_events").get() as { n: number }).n;
         liveRevision = (live.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
       } finally {
         live.close();
@@ -1460,23 +1503,20 @@ describe("store backup", () => {
       // actually inside the copied file.
       const image = new DatabaseSync(target, { readOnly: true });
       try {
-        const imageIssues = scalarCount(image, "select count(*) as n from issues");
-        expect(receipt.counts.issues).toBe(imageIssues);
-        expect(receipt.counts.occurrences).toBe(scalarCount(image, "select count(*) as n from occurrences"));
+        const imageRows = scalarCount(image, "select count(*) as n from dsh_ledger_events");
+        expect(receipt.counts.issues).toBe(scalarCount(image, "select count(*) as n from issues"));
+        // The execution image carries no collaboration payload at all.
+        expect(receipt.counts.issues).toBe(0);
         expect(receipt.counts.migrationReceipts).toBe(scalarCount(image, "select count(*) as n from migration_receipts"));
-        // A whole committed generation: every copied issue's capture provenance
-        // row is present with it (issue + operation + occurrence + provenance
-        // commit in one transaction), so the copy is not a torn mix.
-        expect(scalarCount(image, "select count(*) as n from provenance")).toBe(imageIssues);
         // Three writer commits landed before the copy started; the rest race it.
-        expect(imageIssues).toBeGreaterThanOrEqual(3);
-        expect(imageIssues).toBeLessThanOrEqual(liveIssues);
+        expect(imageRows).toBeGreaterThanOrEqual(3);
+        expect(imageRows).toBeLessThanOrEqual(liveRows);
         expect(receipt.revision).toBeGreaterThanOrEqual(before.revision);
         expect(receipt.revision).toBeLessThanOrEqual(liveRevision);
-        const firstWriterFinding = image
-          .prepare("select id from issues where title = ?")
-          .get("Concurrent writer finding 0") as { id: string } | undefined;
-        expect(firstWriterFinding?.id).toBeTruthy();
+        const lowestRow = image.prepare("select min(seq_rowid) as first from dsh_ledger_events").get() as { first: number | null };
+        // A whole committed generation: the copy starts at the writer's own
+        // first row, never mid-history.
+        expect(lowestRow.first).toBe(1);
       } finally {
         image.close();
       }
@@ -1512,7 +1552,7 @@ describe("store backup", () => {
 
       const target = join(fixture.harness, "archived", "backups", "markers.db");
       const receipt = await backupStore(fixture.context, { out: target });
-      expect(receipt.storeId).toBe((await metaOf(fixture.context)).store_id);
+      expect(receipt.storeId).toBe(readStoreAuthorityMeta(held).store_id);
       expect(existsSync(target)).toBe(true);
 
       // Nothing was frozen, admitted or removed: every marker and body keeps
@@ -1542,35 +1582,6 @@ describe("store backup", () => {
 // ---------------------------------------------------------------------------
 // Collaboration lifecycle and the repository backup pair (operator verbs)
 // ---------------------------------------------------------------------------
-
-/** The user-level collaboration lane is resolved through `homedir`; isolate it. */
-const COLLAB_HOME = join(ROOT, "collab-home");
-mkdirSync(COLLAB_HOME, { recursive: true });
-let collabHomeSpy: { mockRestore(): void } | undefined;
-beforeAll(() => {
-  collabHomeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => COLLAB_HOME);
-});
-afterAll(() => {
-  collabHomeSpy?.mockRestore();
-});
-
-let repoSequence = 0;
-
-/**
- * A synthetic checkout: a real Git main worktree, an explicit origin-less
- * repository identity and the selected collaboration mode. Its harness is
- * `<checkout>/.mstar`, so the lane resolves like a real operator's.
- */
-function repoWorkspace(name: string): Fixture & { checkout: string } {
-  const root = mkdtempSync(join(ROOT, name));
-  const checkout = join(root, "checkout");
-  mkdirSync(checkout, { recursive: true });
-  execFileSync("git", ["init", "-q"], { cwd: checkout, stdio: ["ignore", "pipe", "pipe"] });
-  writeFileSync(join(checkout, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${repoSequence++}\n`);
-  const harness = join(checkout, ".mstar");
-  mkdirSync(harness, { recursive: true });
-  return { context: { harnessDir: harness, checkoutRoot: checkout }, harness, root, checkout };
-}
 
 /** One capture through the real collaboration writer. */
 async function captureOne(fixture: Fixture, operationId: string): Promise<void> {
@@ -1640,14 +1651,40 @@ describe("collaboration lifecycle", () => {
 
   test("a combined source that still owns collaboration rows directs to the reviewed cutover", async () => {
     const fixture = repoWorkspace("collab-combined-");
-    writeRegister(fixture.harness, "_default", { entries: { "plan-alpha": [entry({ id: "R1" })] } });
-    const manifest = await planStoreMigration(fixture.context);
-    await applyStoreMigration(fixture.context, manifest);
+    // A pre-cutover checkout: one combined store whose own rows ARE the
+    // issue/catalog authority. The bootstrap must not create a second one.
+    const combined = await initializeStore(fixture.context);
+    combined.db
+      .prepare(
+        "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key) " +
+          "values ('I-000001', '_default', 'Combined source finding', 'bug', 'high', 'pre-cutover authority', 'cut over', 'now', 'now', 'combined-root-cause')",
+      )
+      .run();
+    combined.close();
 
     await expect(ensureCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.cutover-required" });
     // Nothing was created for a scope whose authority arrives through the cutover.
     expect(existsSync(resolveCollaborationLocation(fixture.context).dbPath)).toBe(false);
     expect(backupArtifacts(fixture.context)).toEqual([]);
+  });
+
+  test("a reviewed file-era import stages the lane and publishes it with a single epoch bump", async () => {
+    const fixture = repoWorkspace("collab-file-era-");
+    writeRegister(fixture.harness, "_default", { entries: { "plan-alpha": [entry({ id: "R1", severity: "high" })] } });
+    const manifest = await planStoreMigration(fixture.context);
+    const apply = await applyStoreMigration(fixture.context, manifest);
+    expect((await metaOf(fixture.context)).authority_state).toBe("staged");
+
+    const activation = await activateStore(fixture.context, apply, attestation());
+    const meta = await metaOf(fixture.context);
+    expect([meta.authority_state, meta.authority_epoch]).toEqual(["active", activation.epoch]);
+    // The published lane IS the issue authority: no combined store was created.
+    expect(existsSync(join(fixture.harness, "store.db"))).toBe(false);
+    expect(activation.applyManifestHash).toBe(apply.manifestHash);
+
+    const receipt = await retireStoreSources(fixture.context, activation);
+    expect(receipt.applyManifestHash).toBe(apply.manifestHash);
+    expect(receipt.registers.length).toBe(manifest.retirement.registers.length);
   });
 });
 

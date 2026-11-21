@@ -14,12 +14,13 @@
  * receipt/safety-image cleanup and hostile filesystem state; and diagnostic
  * export redaction and stability.
  */
-import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { readDeclaredNodeFloor } from "./core.js";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as nodeFs from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -42,13 +43,14 @@ import {
 } from "./execution-store.js";
 import { recoverExecutionCoordinator, mutateExecutionWorkflow } from "./execution-workflow.js";
 import { appendDshLedgerRow, appendDshWorkflowEvent, advanceDshScanBound, recordDshStatusEmission, writeDshSessionBinding } from "./host-state-store.js";
-import { assignIssueMilestone, captureIssue, getIssue } from "./issue.js";
-import { addMilestone } from "./milestone-store.js";
+import { captureIssue, getIssue } from "./issue.js";
+import { openCollaborationStore } from "./collaboration-store.js";
 import {
   assertAuthorityCurrent,
   backupStore,
   canonicalPath,
   currentAuthorityHandle,
+  ensureCollaborationAuthority,
   type BackupReceipt,
   ACTIVATION_PROTOCOL_VERSION,
   type ActivationAttestation,
@@ -76,6 +78,16 @@ const COORDINATOR_2 = `session-${WF2}`;
 const OPERATOR = "ops-engineer";
 const AUTHORIZATION = "D29 execution recovery";
 
+/** The user-level collaboration lane is resolved through `homedir`; isolate it. */
+const LANE_HOME = join(ROOT, "lane-home");
+mkdirSync(LANE_HOME, { recursive: true });
+let laneHomeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  laneHomeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => LANE_HOME);
+});
+afterAll(() => {
+  laneHomeSpy?.mockRestore();
+});
 afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
@@ -96,12 +108,21 @@ type World = Fixture & {
   caller: ExecutionCaller;
 };
 
+let repoSequence = 0;
+
+/**
+ * A real checkout: a Git main worktree, an explicit origin-less repository
+ * identity and the collaboration mode, so the LANE resolves like an operator's.
+ * Issue and catalog authority is the lane's; the execution store owns
+ * execution and host state.
+ */
 function workspace(name: string): Fixture {
   const root = mkdtempSync(join(ROOT, `${name}-`));
   execFileSync("git", ["init", "-q"], { cwd: root });
+  writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${repoSequence++}\n`);
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const context: StoreContext = { harnessDir: harness };
+  const context: StoreContext = { harnessDir: harness, checkoutRoot: root };
   return { root, harness, context, dbPath: storeDbPath(context) };
 }
 
@@ -192,6 +213,9 @@ async function registerPlan(context: StoreContext, planId: string): Promise<void
  */
 async function recoveryWorld(name: string, planIds: readonly string[] = [PLAN_1]): Promise<World> {
   const fixture = workspace(name);
+  // Both authorities, exactly as `store init` leaves them: the lane owns
+  // issue/catalog, the execution store owns execution/host.
+  await ensureCollaborationAuthority(fixture.context);
   const handle = await initializeStore(fixture.context);
   handle.close();
   const initialized = await readExecutionState(fixture.context);
@@ -225,18 +249,23 @@ async function recoveryPoint(world: World, label: string): Promise<BackupReceipt
   return backupStore(world.context, { out: join(world.harness, "archived", "recovery", `${label}.db`) });
 }
 
-/** The identity/count facts an untouched store is compared on. */
+/**
+ * The identity/count facts an untouched store is compared on. Issue and catalog
+ * rows are the LANE's, so the execution footprint reports only what this store
+ * owns — and proves it holds no collaboration payload.
+ */
 function footprint(dbPath: string): Record<string, number> {
   return {
     epoch: rawGet<{ authority_epoch: number }>(dbPath, "select authority_epoch from store_meta where id = 1")!.authority_epoch,
     revision: rawGet<{ revision: number }>(dbPath, "select revision from store_meta where id = 1")!.revision,
     catalogRevision: rawGet<{ catalog_revision: number }>(dbPath, "select catalog_revision from store_meta where id = 1")!.catalog_revision,
     executionRevision: rawGet<{ revision: number }>(dbPath, "select revision from execution_meta where id = 1")!.revision,
-    issues: rawGet<{ n: number }>(dbPath, "select count(*) as n from issues")!.n,
-    catalogEntities: rawGet<{ n: number }>(dbPath, "select count(*) as n from catalog_entities")!.n,
+    collaborationRows: rawGet<{ n: number }>(dbPath, "select count(*) as n from issues")!.n,
+    catalogRows: rawGet<{ n: number }>(dbPath, "select count(*) as n from catalog_entities")!.n,
     workflows: rawGet<{ n: number }>(dbPath, "select count(*) as n from execution_workflows")!.n,
     plans: rawGet<{ n: number }>(dbPath, "select count(*) as n from execution_plans")!.n,
     sessions: rawGet<{ n: number }>(dbPath, "select count(*) as n from execution_sessions")!.n,
+    hostEvents: rawGet<{ n: number }>(dbPath, "select count(*) as n from dsh_ledger_events")!.n,
   };
 }
 
@@ -261,9 +290,11 @@ function issueInput(title: string) {
 }
 
 /**
- * The post-backup work of the loss cases: one change in each authority domain —
- * an issue (with its occurrence), catalog registrations, and a whole new
- * execution workflow created through the published verb.
+ * The post-backup work of the loss cases: one change in each domain an
+ * execution restore OWNS — a host ledger row, a whole new execution workflow
+ * created through the published verb, and a further execution mutation. A lane
+ * capture/registration rides along to prove the execution inventory neither
+ * lists nor replaces collaboration authority.
  */
 async function mutateEveryDomain(world: World, name: string): Promise<void> {
   await captureIssue(world.context, issueInput(`Post-backup finding ${name}`), {
@@ -282,6 +313,9 @@ async function mutateEveryDomain(world: World, name: string): Promise<void> {
     },
     { operationId: `op-document-${name}`, actor: "project-manager" },
   );
+  expect(appendDshLedgerRow(world.context, WF, JSON.stringify({ mutation: name }), `row-${name}`)).toMatchObject({
+    kind: "written",
+  });
   await registerPlan(world.context, PLAN_2);
   const root = await readExecutionState(world.context);
   await createExecutionWorkflow(contextOf(world.context, callerOf(WF2, COORDINATOR_2)), {
@@ -297,10 +331,11 @@ async function mutateEveryDomain(world: World, name: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 describe("execution-backup", () => {
-  test("execution-backup-carries-committed-wal-visible-execution-issue-and-catalog", async () => {
+  test("execution-backup-carries-committed-wal-visible-execution-and-host-rows", async () => {
     const world = workspace("backup-wal");
     // Held open for the whole case so the committed frames stay in the WAL
     // instead of being checkpointed away by the last close.
+    await ensureCollaborationAuthority(world.context);
     const held = await initializeStore(world.context);
     try {
       await registerPlan(world.context, PLAN_1);
@@ -315,29 +350,32 @@ describe("execution-backup", () => {
         expected: (await readExecutionState(world.context)).data.workflows[0]!.workflowToken,
         operationId: "backup-wal-bind",
       });
+      // The lane capture rides along to prove the execution image excludes it.
       await captureIssue(world.context, issueInput("WAL-visible finding"), {
         operationId: "op-backup-wal-issue",
         actor: "project-manager",
       });
+      expect(appendDshLedgerRow(world.context, WF, JSON.stringify({ wal: true }), "wal-row")).toMatchObject({ kind: "written" });
 
       const walPath = join(world.harness, "store.db-wal");
       expect(statSync(walPath).size).toBeGreaterThan(0);
       const receipt = await backupStore(world.context, { out: join(world.harness, "archived", "wal-point.db") });
       expect(receipt.walPending).toBe(true);
       expect(receipt.storeId).toBe((rawGet<{ store_id: string }>(world.dbPath, "select store_id from store_meta where id = 1")!).store_id);
-      // §8: the copy carries the EXECUTION identity, not only issue/catalog.
+      // §8: the copy carries the EXECUTION identity, and no collaboration payload.
       expect(receipt.execution).not.toBeNull();
       expect(receipt.execution!.authorityState).toBe("active");
       expect(receipt.execution!.manifestId).toBeNull();
-      expect(receipt.counts.issues).toBe(1);
-      expect(receipt.counts.occurrences).toBe(1);
-      expect(receipt.counts.catalogEntities).toBe(1);
+      expect(receipt.counts.issues).toBe(0);
+      expect(receipt.counts.occurrences).toBe(0);
+      expect(receipt.counts.catalogEntities).toBe(0);
 
       // …and the bytes behind it hold the committed, never-checkpointed rows.
       const copy = new DatabaseSync(receipt.backupPath, { readOnly: true });
       try {
-        const title = (copy.prepare("select title from issues").get() as { title: string }).title;
-        expect(title).toBe("WAL-visible finding");
+        expect((copy.prepare("select count(*) as n from issues").get() as { n: number }).n).toBe(0);
+        expect((copy.prepare("select count(*) as n from catalog_entities").get() as { n: number }).n).toBe(0);
+        expect((copy.prepare("select count(*) as n from dsh_ledger_events").get() as { n: number }).n).toBe(1);
         expect((copy.prepare("select count(*) as n from execution_workflows").get() as { n: number }).n).toBe(1);
         expect((copy.prepare("select count(*) as n from execution_plans").get() as { n: number }).n).toBe(1);
         expect((copy.prepare("select count(*) as n from execution_inputs").get() as { n: number }).n).toBe(1);
@@ -413,16 +451,14 @@ describe("execution-restore", () => {
     expect(footprint(world.dbPath)).toEqual(untouched);
   });
 
-  test("execution-restore-preview-lists-every-domain-and-proceeds-without-a-digest-approval", async () => {
+  test("execution-restore-preview-lists-every-execution-and-host-row-and-proceeds-without-a-digest-approval", async () => {
     const world = await recoveryWorld("restore-preview");
-    const baselineIssue = await captureIssue(world.context, issueInput("Origin-only baseline"), {
+    // A lane capture rides along: it is collaboration authority, never part of
+    // the execution inventory.
+    await captureIssue(world.context, issueInput("Origin-only baseline"), {
       operationId: "op-origin-baseline",
       actor: "project-manager",
     });
-    const provenance = rawGet<{ id: number }>(
-      world.dbPath,
-      `select id from provenance where issue_id='${baselineIssue.issueId}' and kind='capture'`,
-    )!;
     const point = await recoveryPoint(world, "preview-point");
     const clean = await previewExecutionRestore(world.context, point.backupPath);
     // An unchanged store has no loss at all: no differences, no lost receipts.
@@ -433,23 +469,11 @@ describe("execution-restore", () => {
     expect(clean.backupEpoch).toBe(world.epoch);
 
     await mutateEveryDomain(world, "preview");
-    rawRun(world.dbPath, "update provenance set origin='scoped' where id=?", provenance.id);
-    const provenanceKey = `issue:provenance:${provenance.id}`;
     const preview = await previewExecutionRestore(world.context, point.backupPath);
-    const issueId = rawGet<{ id: string }>(world.dbPath, "select id from issues where title='Post-backup finding preview'")!.id;
     const keys = preview.authorityDifferences.map((entry) => `${entry.domain}:${entry.key}`);
     for (const expected of [
-      provenanceKey,
-      "issue:store_meta",
-      "issue:issue:" + issueId,
-      "issue:occurrence:run-Post-backup finding preview",
-      "issue:issue-counter",
-      "issue:store-operation:op-issue-preview",
-      "catalog:store_meta.catalog_revision",
-      "catalog:entity:document/doc-preview",
-      "catalog:entity:plan/" + PLAN_2,
-      "catalog:catalog-operation:op-document-preview",
-      "catalog:catalog-operation:register-" + PLAN_2,
+      "execution:store_meta",
+      "host:ledger-event:" + rawGet<{ seq_rowid: number }>(world.dbPath, "select seq_rowid from dsh_ledger_events order by seq_rowid desc limit 1")!.seq_rowid,
       "execution:execution_meta",
       "execution:workflow:" + WF2,
       "execution:registry:" + WF2,
@@ -465,31 +489,24 @@ describe("execution-restore", () => {
       "execution:plan:" + WF + "/" + PLAN_1,
       "execution:session:" + WF + "/coordinator/" + COORDINATOR,
       "execution:input:" + WF + "/" + PLAN_1,
-      "issue:issue:nonexistent",
+      "operation:op-issue-preview",
     ]) {
       expect(keys).not.toContain(untouched);
     }
     // Every listed row really does differ between the two files…
-    const pointDb = point.backupPath;
     for (const entry of preview.authorityDifferences) {
-      expect(entry.domain === "issue" || entry.domain === "catalog" || entry.domain === "execution").toBe(true);
+      expect(entry.domain === "execution" || entry.domain === "host").toBe(true);
       expect(entry.key.length).toBeGreaterThan(0);
       expect(entry.liveRevision === null || Number.isSafeInteger(entry.liveRevision)).toBe(true);
       expect(entry.backupRevision === null || Number.isSafeInteger(entry.backupRevision)).toBe(true);
       // …and at least one side holds it (a listed row is never absent twice).
       expect(entry.liveRevision !== null || entry.backupRevision !== null).toBe(true);
     }
-    // …and the committed operation ids of all three domains are listed.
+    // …and the execution and host operation ids are listed; the lane's own
+    // capture is not execution authority and never appears.
     expect([...preview.lostOperationIds].sort()).toEqual(
-      [
-        "catalog:op-document-preview",
-        "catalog:register-" + PLAN_2,
-        "execution:" + world.epoch + ":op-workflow-preview",
-        "issue:op-issue-preview",
-      ].sort(),
+      [`execution:${world.epoch}:op-workflow-preview`].sort(),
     );
-    expect(pointDb.length).toBeGreaterThan(0);
-
 
     // The loss is authorized by row/operation identities, never its digest.
     preview.lossDigest = "record-only";
@@ -506,9 +523,9 @@ describe("execution-restore", () => {
     const world = await recoveryWorld("restore-new-loss");
     const point = await recoveryPoint(world, "new-loss-point");
     const preview = await previewExecutionRestore(world.context, point.backupPath);
-    await captureIssue(world.context, issueInput("New unapproved finding"), {
-      operationId: "op-new-unapproved-finding", actor: "project-manager",
-    });
+    // A post-backup HOST commit is execution-authority loss; a lane capture is
+    // not, and would legitimately not block the restore.
+    expect(appendDshLedgerRow(world.context, WF, JSON.stringify({ late: true }), "late-row")).toMatchObject({ kind: "written" });
     const before = footprint(world.dbPath);
     const staleImage = join(world.harness, `.store-restore-${randomUUID()}.db`);
     writeFileSync(staleImage, JSON.stringify({ attempt: "orphan", state: "pending" }));
@@ -522,16 +539,16 @@ describe("execution-restore", () => {
     const receipt = await restoreExecutionBackup(world.context, {
       preview: current, operator: OPERATOR, authorization: AUTHORIZATION,
     });
-    expect(footprint(world.dbPath).issues).toBe(0);
-    expect(footprint(receipt.preRestoreBackup.backupPath).issues).toBe(1);
+    expect(footprint(world.dbPath).hostEvents).toBe(0);
+    expect(footprint(receipt.preRestoreBackup.backupPath).hostEvents).toBe(1);
   });
 
   test("execution-restore-installs-the-inventoried-image-when-the-selected-path-is-replaced", async () => {
     const world = await recoveryWorld("restore-backup-swap");
     const point = await recoveryPoint(world, "selected-point");
     const selected = footprint(point.backupPath);
-    await captureIssue(world.context, issueInput("Replacement backup finding"), {
-      operationId: "op-replacement-backup", actor: "project-manager",
+    expect(appendDshLedgerRow(world.context, WF, JSON.stringify({ replacement: true }), "replacement-row")).toMatchObject({
+      kind: "written",
     });
     const replacement = await recoveryPoint(world, "replacement-point");
     const preview = await previewExecutionRestore(world.context, point.backupPath);
@@ -554,7 +571,8 @@ describe("execution-restore", () => {
       await injector;
     }
     expect(swapped).toBe(true);
-    expect(footprint(world.dbPath).issues).toBe(selected.issues);
+    // The INVENTORIED image was installed, not whatever the path held later.
+    expect(footprint(world.dbPath).hostEvents).toBe(selected.hostEvents);
     expect(footprint(world.dbPath).revision).toBe(selected.revision);
   });
 
@@ -585,10 +603,11 @@ describe("execution-restore", () => {
     expect(after.epoch).toBe(receipt.epoch);
     expect(after.revision).toBe(before.revision);
     expect(after.catalogRevision).toBe(before.catalogRevision);
-    expect(after.issues).toBe(before.issues);
-    expect(after.catalogEntities).toBe(before.catalogEntities);
+    expect(after.collaborationRows).toBe(before.collaborationRows);
+    expect(after.catalogRows).toBe(before.catalogRows);
     expect(after.workflows).toBe(before.workflows);
     expect(after.plans).toBe(before.plans);
+    expect(after.hostEvents).toBe(before.hostEvents);
     expect(rawAll<{ workflow_id: string }>(world.dbPath, "select workflow_id from execution_workflows")).toEqual([
       { workflow_id: WF },
     ]);
@@ -611,7 +630,7 @@ describe("execution-restore", () => {
     // the restore disclosed as loss.
     const safety = new DatabaseSync(receipt.preRestoreBackup.backupPath, { readOnly: true });
     try {
-      expect((safety.prepare("select count(*) as n from issues").get() as { n: number }).n).toBe(mutated.issues);
+      expect((safety.prepare("select count(*) as n from dsh_ledger_events").get() as { n: number }).n).toBe(mutated.hostEvents);
       expect((safety.prepare("select count(*) as n from execution_workflows").get() as { n: number }).n).toBe(mutated.workflows);
     } finally {
       safety.close();
@@ -687,10 +706,7 @@ describe("execution-restore", () => {
         if (injected) continue;
         if (!existsSync(safetyDir)) continue;
         if (!readdirSync(safetyDir).some((name) => name.startsWith("pre-restore-"))) continue;
-        await captureIssue(world.context, issueInput("Competitor at the admission boundary"), {
-          operationId: "op-admission-boundary-competitor",
-          actor: "project-manager",
-        });
+        appendDshLedgerRow(world.context, WF, JSON.stringify({ competitor: true }), "competitor-row");
         injected = true;
       }
     })();
@@ -715,10 +731,10 @@ describe("execution-restore", () => {
     expect(refusal!.code).toBe("execution.recovery-loss-unaccepted");
     expect(refusal!.message).toContain("outside the authorized loss inventory");
 
-    // Nothing was replaced and nothing was lost: the competitor's issue is still
-    // live, the authority generation is unmoved, and the live file is the SAME
-    // inode — this restore never renames the live database.
-    expect(footprint(world.dbPath).issues).toBe(liveFootprint.issues + 1);
+    // Nothing was replaced and nothing was lost: the competitor's host row is
+    // still live, the authority generation is unmoved, and the live file is the
+    // SAME inode — this restore never renames the live database.
+    expect(footprint(world.dbPath).hostEvents).toBe(liveFootprint.hostEvents + 1);
     expect(footprint(world.dbPath).epoch).toBe(liveFootprint.epoch);
     expect(statSync(world.dbPath).ino).toBe(liveInode);
 
@@ -731,7 +747,7 @@ describe("execution-restore", () => {
       authorization: AUTHORIZATION,
     });
     expect(receipt.epoch).toBe(Math.max(liveFootprint.epoch, point.epoch) + 1);
-    expect(footprint(world.dbPath).issues).toBe(liveFootprint.issues);
+    expect(footprint(world.dbPath).hostEvents).toBe(liveFootprint.hostEvents);
     expect(statSync(world.dbPath).ino).toBe(liveInode);
   });
 
@@ -1042,8 +1058,8 @@ describe("execution-restore", () => {
     // attempt's own store id and the point's own epoch, so its own replacement
     // provably never committed and the safety point this attempt just took is
     // reclaimed.
-    await captureIssue(world.context, issueInput("Stale-preview refusal"), {
-      operationId: "op-stale-refusal", actor: "project-manager",
+    expect(appendDshLedgerRow(world.context, WF, JSON.stringify({ stale: true }), "stale-row")).toMatchObject({
+      kind: "written",
     });
     const refusal = await refusalOf(() =>
       restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION }),
@@ -1079,14 +1095,14 @@ describe("execution-restore", () => {
     // a valid SQLite file is still incomplete when its committed-operation
     // inventory cannot be read.
     rawRun(world.dbPath, "drop table execution_operations");
-    const backupIssues = rawGet<{ n: number }>(point.backupPath, "select count(*) as n from issues")!.n;
+    const backupEvents = rawGet<{ n: number }>(point.backupPath, "select count(*) as n from dsh_ledger_events")!.n;
     const refusal = await refusalOf(() => previewExecutionRestore(world.context, point.backupPath));
     expect(refusal.code).toBe("execution.recovery-loss-unaccepted");
     expect(refusal.message).toMatch(/inventory|integrity/);
     expect(existsSync(world.dbPath)).toBe(true);
     expect(existsSync(point.backupPath)).toBe(true);
-    expect(rawGet<{ n: number }>(point.backupPath, "select count(*) as n from issues")!.n).toBe(backupIssues);
-    expect(rawGet<{ n: number }>(world.dbPath, "select count(*) as n from issues")!.n).toBe(point.counts.issues + 1);
+    expect(rawGet<{ n: number }>(point.backupPath, "select count(*) as n from dsh_ledger_events")!.n).toBe(backupEvents);
+    expect(rawGet<{ n: number }>(world.dbPath, "select count(*) as n from dsh_ledger_events")!.n).toBe(backupEvents + 1);
   });
 
   test("execution-restore-keeps-the-live-store-pathname-and-inode-and-leaves-legacy-markers-alone", async () => {
@@ -1501,16 +1517,14 @@ describe("execution-restore", () => {
   test("execution-restore-normalizes-a-malformed-live-inventory-row-to-the-loss-refusal", async () => {
     const world = await recoveryWorld("restore-malformed-row");
     const point = await recoveryPoint(world, "malformed-row-point");
-    await captureIssue(world.context, issueInput("Malformed-row finding"), {
-      operationId: "op-malformed-row",
-      actor: "project-manager",
+    expect(appendDshLedgerRow(world.context, WF, JSON.stringify({ malformed: true }), "malformed-row")).toMatchObject({
+      kind: "written",
     });
     const preview = await previewExecutionRestore(world.context, point.backupPath);
 
     // The live store still holds the row, but its own authority revision is no
     // longer a revision this build can read, so the loss cannot be inventoried.
-    const issueId = rawGet<{ id: string }>(world.dbPath, "select id from issues")!.id;
-    rawRun(world.dbPath, "update issues set revision = 1.5 where id = ?", issueId);
+    rawRun(world.dbPath, "update execution_workflows set revision = 1.5 where workflow_id = ?", WF);
 
     // "The loss inventory is incomplete" is ONE machine-readable verdict, with
     // the underlying cause kept: a caller must not have to tell it apart from an
@@ -1711,7 +1725,7 @@ describe("execution-export", () => {
 // ---------------------------------------------------------------------------
 
 describe("schema-owned loss inventory", () => {
-  test("preview inventories every authority domain, including the native host state", async () => {
+  test("preview inventories every execution and host row, including the native host state", async () => {
     const world = await recoveryWorld("inventory-host");
     const point = await recoveryPoint(world, "host-inventory-point");
     // Native Dsh host state is authority: rows written through the real
@@ -1731,17 +1745,11 @@ describe("schema-owned loss inventory", () => {
       kind: "written",
     });
     expect(recordDshStatusEmission(world.context, COORDINATOR, world.context.harnessDir, 1, '{"sv":1}')).toMatchObject({ kind: "written" });
-    // Project content authority through its real producer: the project entity
-    // is registered first, then the milestone keys off it.
-    await registerCatalogEntity(
-      world.context,
-      { kind: "project", id: PROJECT_ID, title: "Inventory project", rootKind: "projects", relativePath: `projects/${PROJECT_ID}` },
-      { operationId: "op-inventory-project", actor: OPERATOR },
-    );
-    const revision = rawGet<{ revision: number }>(world.dbPath, "select revision from store_meta where id = 1")!.revision;
-    const milestone = await addMilestone(world.context, { projectId: PROJECT_ID, name: "Inventory milestone", target: null, ordinal: 0 }, {
-      operationId: "op-inventory-milestone",
-      expectedStoreRevision: revision,
+    // A LANE capture rides along: it is collaboration authority, so the
+    // execution inventory never lists it.
+    await captureIssue(world.context, issueInput("Lane-only authority"), {
+      operationId: "op-inventory-lane",
+      actor: "project-manager",
     });
 
     const preview = await previewExecutionRestore(world.context, point.backupPath);
@@ -1752,45 +1760,34 @@ describe("schema-owned loss inventory", () => {
     expect(keys).toContain(`host:scan-bound:${WF}/${COORDINATOR}`);
     expect(keys).toContain(`host:binding:${COORDINATOR}/${world.context.harnessDir}`);
     expect(keys).toContain(`host:emission:${COORDINATOR}/${world.context.harnessDir}`);
-    expect(keys).toContain(`catalog:entity:project/${PROJECT_ID}`);
-    expect(keys).toContain(`catalog:milestone:${milestone.milestoneId}`);
-    // The committed host-state writes carry no operation receipt of their own;
-    // the milestone's does.
-    expect(preview.lostOperationIds).toContain("issue:op-inventory-milestone");
+    // Every listed row belongs to a domain this restore owns…
     for (const entry of preview.authorityDifferences) {
-      expect(entry.domain === "issue" || entry.domain === "catalog" || entry.domain === "execution" || entry.domain === "host").toBe(true);
+      expect(entry.domain === "execution" || entry.domain === "host").toBe(true);
     }
+    // …and the lane's own capture and receipt never appear in it.
+    expect(keys.some((key) => key.includes("issue:"))).toBe(false);
+    expect(preview.lostOperationIds).not.toContain("operation:op-inventory-lane");
+    expect(preview.lostOperationIds.every((id) => id.startsWith("operation:") || id.startsWith("execution:"))).toBe(true);
   });
 
-  test("preview inventories project content authority and never freezes or requires file bodies", async () => {
+  test("preview covers store rows only and never freezes, requires or deletes file bodies", async () => {
     const world = await recoveryWorld("inventory-projects");
-    // Project content authority: a registered project entity with a roadmap
-    // and a milestone, planted after the point so the restore would drop them.
     const point = await recoveryPoint(world, "project-inventory-point");
-    await registerCatalogEntity(
-      world.context,
-      { kind: "project", id: PROJECT_ID, title: "Inventory project", rootKind: "projects", relativePath: `projects/${PROJECT_ID}` },
-      { operationId: "op-inventory-project", actor: OPERATOR },
-    );
+    // A post-point EXECUTION fact, so the payload really carries this store's
+    // own difference.
     rawRun(
       world.dbPath,
-      "insert into project_roadmaps(project_id, content_markdown, content_hash, revision, updated_at) values (?, ?, ?, 1, ?)",
-      PROJECT_ID,
-      "# Inventory roadmap\n",
+      "insert into execution_migrations(manifest_id, manifest_hash, phase, manifest_json, created_at, updated_at, coverage_json) values (?, ?, 'retired', '{}', ?, ?, ?)",
+      "file-body-inventory",
       "b".repeat(64),
       TS,
+      TS,
+      '{"generation":"after"}',
     );
-    const revision = rawGet<{ revision: number }>(world.dbPath, "select revision from store_meta where id = 1")!.revision;
-    const milestone = await addMilestone(world.context, { projectId: PROJECT_ID, name: "Content milestone", target: null, ordinal: 0 }, {
-      operationId: "op-content-milestone",
-      expectedStoreRevision: revision,
-    });
 
     const preview = await previewExecutionRestore(world.context, point.backupPath);
     const keys = preview.authorityDifferences.map((entry) => `${entry.domain}:${entry.key}`);
-    expect(keys).toContain(`catalog:entity:project/${PROJECT_ID}`);
-    expect(keys).toContain(`catalog:roadmap:${PROJECT_ID}`);
-    expect(keys).toContain(`catalog:milestone:${milestone.milestoneId}`);
+    expect(keys).toContain("execution:migration:file-body-inventory");
     // The loss payload covers store rows only: it neither reads nor requires
     // any file beside the store, so notes, documents and a stale body sidecar
     // from an older build are all ignored — and none of them is deleted.
@@ -1800,6 +1797,7 @@ describe("schema-owned loss inventory", () => {
     writeFileSync(notes, '{"kind":"note","ts":"2026-10-12","text":"kept"}\n');
     writeFileSync(journal, '{"version":1}\n');
     const withFiles = await previewExecutionRestore(world.context, point.backupPath);
+    expect(withFiles.authorityDifferences).toEqual(preview.authorityDifferences);
     expect(existsSync(notes)).toBe(true);
     expect(readFileSync(notes, "utf8")).toBe('{"kind":"note","ts":"2026-10-12","text":"kept"}\n');
     expect(existsSync(journal)).toBe(true);
@@ -1836,87 +1834,49 @@ describe("schema-owned loss inventory", () => {
       backupRevision: 1,
     });
   });
-  test("inventory retains issue milestone membership, through the real assignment producer and as row content", async () => {
+  test("inventory retains execution row content and never a collaboration row", async () => {
     const world = await recoveryWorld("inventory-issue-milestone");
-    await registerCatalogEntity(
-      world.context,
-      { kind: "project", id: PROJECT_ID, title: "Membership project", rootKind: "projects", relativePath: `projects/${PROJECT_ID}` },
-      { operationId: "op-membership-project", actor: OPERATOR },
-    );
-    const storeRevision = (): number => rawGet<{ revision: number }>(world.dbPath, "select revision from store_meta where id = 1")!.revision;
-    const first = await addMilestone(world.context, { projectId: PROJECT_ID, name: "First", target: null, ordinal: 0 }, {
-      operationId: "op-membership-first",
-      expectedStoreRevision: storeRevision(),
-    });
-    const second = await addMilestone(world.context, { projectId: PROJECT_ID, name: "Second", target: null, ordinal: 1 }, {
-      operationId: "op-membership-second",
-      expectedStoreRevision: storeRevision(),
-    });
-    const membership = await captureIssue(world.context, { ...issueInput("Milestone membership finding"), projectId: PROJECT_ID }, {
+    // A LANE capture and catalog registration: collaboration authority that an
+    // execution restore neither lists nor replaces.
+    const finding = await captureIssue(world.context, issueInput("Lane membership finding"), {
       operationId: "op-membership-issue",
       actor: "project-manager",
     });
     const point = await recoveryPoint(world, "issue-milestone-point");
+    expect(rawGet<{ n: number }>(point.backupPath, "select count(*) as n from issues")!.n).toBe(0);
 
-    // A real membership move AFTER the point, through the published verb: the
-    // inventoried issue row must disclose that the association moved.
-    await assignIssueMilestone(
-      world.context,
-      membership.issueId,
-      { projectId: PROJECT_ID, milestoneId: first.milestoneId, reason: "inventory regression" },
-      { operationId: "op-membership-assign", actor: "project-manager", expectedRevision: 1, expectedStoreRevision: storeRevision() },
-    );
-    const assigned = await previewExecutionRestore(world.context, point.backupPath);
-    expect(assigned.authorityDifferences).toContainEqual({
-      domain: "issue",
-      key: `issue:${membership.issueId}`,
-      liveRevision: 2,
-      backupRevision: 1,
-    });
-    expect((await getIssue(world.context, membership.issueId)).milestoneId).toBe(first.milestoneId);
-
-    // The association is inventoried CONTENT, not the revision it happens to
-    // arrive with: a membership change that leaves the row revision alone is
-    // still a disclosed difference, so a row-replacing consumer cannot drop it
-    // without reporting the loss.
-    const assignedPoint = await recoveryPoint(world, "issue-milestone-assigned-point");
-    rawRun(world.dbPath, "update issues set milestone_id = ? where id = ?", second.milestoneId, membership.issueId);
-    expect(rawGet<{ revision: number }>(world.dbPath, `select revision from issues where id = '${membership.issueId}'`)!.revision).toBe(2);
-    const moved = await previewExecutionRestore(world.context, assignedPoint.backupPath);
-    expect(moved.authorityDifferences).toContainEqual({
-      domain: "issue",
-      key: `issue:${membership.issueId}`,
-      liveRevision: 2,
-      backupRevision: 2,
-    });
-  });
-
-  test("restore-installs-every-schema-owned-fact-of-all-four-domains", async () => {
-    const world = await recoveryWorld("restore-whole-domain");
-    await registerCatalogEntity(
-      world.context,
-      { kind: "project", id: PROJECT_ID, title: "Whole-domain project", rootKind: "projects", relativePath: `projects/${PROJECT_ID}` },
-      { operationId: "op-whole-domain-project", actor: OPERATOR },
-    );
-    const storeRevision = (): number => rawGet<{ revision: number }>(world.dbPath, "select revision from store_meta where id = 1")!.revision;
-    const milestone = await addMilestone(world.context, { projectId: PROJECT_ID, name: "Whole-domain", target: null, ordinal: 0 }, {
-      operationId: "op-whole-domain-milestone",
-      expectedStoreRevision: storeRevision(),
-    });
-    const finding = await captureIssue(world.context, { ...issueInput("Whole-domain finding"), projectId: PROJECT_ID }, {
-      operationId: "op-whole-domain-issue",
+    // Post-point work: one more lane row (invisible here) and one host row
+    // (authority).
+    await captureIssue(world.context, issueInput("Later lane finding"), {
+      operationId: "op-membership-issue-later",
       actor: "project-manager",
     });
-    // A real milestone association (migration 7's `issues.milestone_id`), a real
-    // coverage document on an execution migration row (migration 5's
-    // `coverage_json`), and a native host-state row (the fifth Dsh domain) — the
-    // three facts T4a's F1 correction named plus the host domain.
-    await assignIssueMilestone(
-      world.context,
-      finding.issueId,
-      { projectId: PROJECT_ID, milestoneId: milestone.milestoneId, reason: "whole-domain restore" },
-      { operationId: "op-whole-domain-assign", actor: "project-manager", expectedRevision: 1, expectedStoreRevision: storeRevision() },
-    );
+    expect(appendDshLedgerRow(world.context, WF, JSON.stringify({ membership: true }), "membership-row")).toMatchObject({
+      kind: "written",
+    });
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    // Only the host row is disclosed; the lane rows are not execution authority.
+    expect(preview.authorityDifferences).toContainEqual({
+      domain: "host",
+      key: `ledger-event:${rawGet<{ seq_rowid: number }>(world.dbPath, "select seq_rowid from dsh_ledger_events order by seq_rowid desc limit 1")!.seq_rowid}`,
+      liveRevision: 1,
+      backupRevision: null,
+    });
+    expect(preview.authorityDifferences.every((entry) => entry.domain === "host" || entry.domain === "execution")).toBe(true);
+    // The association the lane holds is untouched by the preview.
+    expect((await getIssue(world.context, finding.issueId)).title).toBe("Lane membership finding");
+  });
+
+  test("restore-installs-every-schema-owned-fact-of-the-execution-and-host-domains", async () => {
+    const world = await recoveryWorld("restore-whole-domain");
+    // The lane holds one row: the restore must neither replace nor lose it.
+    const laneFinding = await captureIssue(world.context, issueInput("Lane row across an execution restore"), {
+      operationId: "op-whole-domain-lane",
+      actor: "project-manager",
+    });
+    // A coverage document on an execution migration row (migration 5's
+    // `coverage_json`) and a native host-state row: the two schema-owned facts
+    // this restore owns byte-for-byte.
     rawRun(
       world.dbPath,
       "insert into execution_migrations(manifest_id, manifest_hash, phase, manifest_json, created_at, updated_at, coverage_json) values (?, ?, 'retired', '{}', ?, ?, ?)",
@@ -1937,10 +1897,6 @@ describe("schema-owned loss inventory", () => {
     // restore must discard.
     const point = await recoveryPoint(world, "whole-domain-point");
     const selected = {
-      milestoneId: rawGet<{ milestone_id: string | null }>(
-        point.backupPath,
-        `select milestone_id from issues where id = '${finding.issueId}'`,
-      )!.milestone_id,
       coverage: rawGet<{ coverage_json: string }>(
         point.backupPath,
         "select coverage_json from execution_migrations where manifest_id = 'whole-domain-migration'",
@@ -1950,9 +1906,8 @@ describe("schema-owned loss inventory", () => {
         `select next from dsh_scan_bounds where session_id = 'session-whole-domain'`,
       )!.next,
     };
-    expect(selected).toEqual({ milestoneId: milestone.milestoneId, coverage: '{"generation":"retired-coverage"}', scanNext: 7 });
+    expect(selected).toEqual({ coverage: '{"generation":"retired-coverage"}', scanNext: 7 });
     await mutateEveryDomain(world, "whole-domain");
-    rawRun(world.dbPath, "update issues set milestone_id = null where id = ?", finding.issueId);
     rawRun(
       world.dbPath,
       "update execution_migrations set coverage_json = ? where manifest_id = 'whole-domain-migration'",
@@ -1969,14 +1924,9 @@ describe("schema-owned loss inventory", () => {
     expect(receipt.epoch).toBe(Math.max(world.epoch, point.epoch) + 1);
 
     // Every schema-owned fact of the selected generation is installed, read back
-    // through the store's own schema rather than through the inventory:
-    // the membership association, the retired migration row's WHOLE coverage
-    // document, the host-state row's own stream cursor, and the four domains'
-    // row counts.
-    expect(rawGet<{ milestone_id: string | null }>(
-      world.dbPath,
-      `select milestone_id from issues where id = '${finding.issueId}'`,
-    )!.milestone_id).toBe(selected.milestoneId);
+    // through the store's own schema rather than through the inventory: the
+    // retired migration row's WHOLE coverage document, the host-state row's own
+    // stream cursor, and the execution/host row counts.
     expect(rawGet<{ coverage_json: string }>(
       world.dbPath,
       "select coverage_json from execution_migrations where manifest_id = 'whole-domain-migration'",
@@ -1986,14 +1936,21 @@ describe("schema-owned loss inventory", () => {
       "select next, stream from dsh_scan_bounds order by session_id",
     )).toEqual([{ next: selected.scanNext, stream: "agent-flow" }]);
     expect(footprint(world.dbPath)).toMatchObject({
-      issues: 1,
-      catalogEntities: rawGet<{ n: number }>(point.backupPath, "select count(*) as n from catalog_entities")!.n,
+      collaborationRows: 0,
       workflows: rawGet<{ n: number }>(point.backupPath, "select count(*) as n from execution_workflows")!.n,
       sessions: rawGet<{ n: number }>(point.backupPath, "select count(*) as n from execution_sessions")!.n,
     });
-    // …and the consumer that reads the membership still sees it.
-    const restored = await getIssue(world.context, finding.issueId);
-    expect(restored.milestoneId).toBe(milestone.milestoneId);
-    expect(restored.revision).toBe(2);
+    // …and the collaboration authority is exactly where it was: the execution
+    // restore neither copies nor replaces the lane, so both captures survive.
+    const laneHandle = await openCollaborationStore(world.context, "read");
+    try {
+      const titles = (laneHandle.db.prepare("select title from issues order by title").all() as Array<{ title: string }>).map(
+        (row) => row.title,
+      );
+      expect(titles).toEqual(["Lane row across an execution restore", "Post-backup finding whole-domain"]);
+    } finally {
+      laneHandle.close();
+    }
+    expect((await getIssue(world.context, laneFinding.issueId)).title).toBe("Lane row across an execution restore");
   });
 });

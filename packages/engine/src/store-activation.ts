@@ -56,12 +56,13 @@ import {
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
-import { resolveCollaborationLocation, type CollaborationMode } from "./collaboration-identity.js";
+import { resolveCollaborationLocation, type CollaborationLocation, type CollaborationMode } from "./collaboration-identity.js";
 import {
   COLLABORATION_COLUMNS,
   initializeCollaborationStore,
   openCollaborationStore,
   readCollaborationAuthority,
+  readCollaborationStage,
   writeCollaborationStage,
   type CollaborationAuthority,
 } from "./collaboration-store.js";
@@ -74,7 +75,16 @@ import {
 } from "./catalog-import.js";
 import { ACTIVATION_PROTOCOL_VERSION, readDeclaredNodeFloor, writeJson } from "./core.js";
 import { provisionActivationDocument, type ProvisionProcessFacts } from "./activation-provisioning.js";
-import type { MigrationManifest, MigrationReceipt } from "./store-migrate.js";
+import {
+  insertMigrationPhaseRow,
+  migrationManifestHash,
+  readMigrationPhaseRow,
+  readMigrationPhaseRows,
+  receiptOfStoredApply,
+  type MigrationManifest,
+  type MigrationReceipt,
+  type StoredApply,
+} from "./store-migrate.js";
 import {
   MIGRATIONS,
   assertStoreRuntimeSupported,
@@ -275,15 +285,27 @@ export type BackupReceipt = {
   takenAt: string;
 };
 
+/**
+ * The verified recovery point the activation barrier takes of the STAGED
+ * collaboration lane. Every fact is read from the copy itself, so a recovery
+ * point never describes a generation its bytes do not hold.
+ */
+export type ActivationRecoveryPoint = {
+  backupPath: string;
+  bytes: number;
+  takenAt: string;
+  authority: CollaborationAuthority;
+  counts: Readonly<Record<string, number>>;
+};
+
 export type ActivationReceipt = {
   receiptVersion: number;
-  receiptId: number;
   phase: "activated";
   /** True when an identical activation was already recorded (no second epoch bump). */
   replayed: boolean;
-  /** Canonical hash of this activation, stored as the receipt row's manifest hash. */
+  /** Canonical hash of this activation, recorded as provenance. */
   activationHash: string;
-  applyReceiptId: number;
+  /** The reviewed apply's manifest hash — the lane phase row this activation publishes. */
   applyManifestHash: string;
   storeId: string;
   previousEpoch: number;
@@ -293,7 +315,7 @@ export type ActivationReceipt = {
   catalogRevision: number;
   attestationHash: string;
   attestation: ActivationAttestation;
-  backup: BackupReceipt;
+  backup: ActivationRecoveryPoint;
   activatedAt: string;
 };
 
@@ -324,11 +346,11 @@ export type RetiredSection = {
 
 export type RetirementReceipt = {
   receiptVersion: number;
-  receiptId: number;
   phase: "retired";
   replayed: boolean;
   retirementHash: string;
-  activationReceiptId: number;
+  /** The reviewed apply whose activation this retirement completes. */
+  applyManifestHash: string;
   activationHash: string;
   storeId: string;
   epoch: number;
@@ -2069,148 +2091,63 @@ function revalidateSources(context: StoreContext, manifest: MigrationManifest, m
 }
 
 // ---------------------------------------------------------------------------
-// Receipt rows
+// Receipt rows (collaboration lane)
 // ---------------------------------------------------------------------------
 
-type ReceiptRow = {
-  id: number;
-  manifest_hash: string;
-  manifest_json: string;
-  mapping_json: string;
-  source_counts_json: string;
-  applied_at: string;
-  activated_at: string | null;
-  retired_at: string | null;
-};
-
-/** `source_counts_json` as the apply half writes it: the counts (incl. storeRevision). */
-type StoredCounts = MigrationReceipt["counts"];
-
-const RECEIPT_COLUMNS =
-  "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at";
-
-function readReceiptRows(db: StoreDb, where: string, param?: unknown): ReceiptRow[] {
-  const statement = db.prepare(`select ${RECEIPT_COLUMNS} from migration_receipts where ${where} order by id`);
-  return (param === undefined ? statement.all() : statement.all(param)) as ReceiptRow[];
-}
-
 /**
- * The context's CURRENT apply receipt, read-only: the last `applied` row by id.
- * `manifest` carries only the reviewed control root this manifest was signed
- * for — a real owner/scope field — never a whole-record identity. Whether that
- * receipt really is THIS manifest's, and whether the receipt belongs to this
- * store, is decided by the activation/retirement barrier from the recorded
- * `applyReceiptId`, `storeId`, `epoch` and live revision.
+ * The reviewed manifest's recorded applied phase, read-only: the lane row
+ * addressed by the manifest's OWN canonical hash. Whether that row is still the
+ * FINAL applied import, and whether it belongs to this lane generation, is
+ * decided by the activation/retirement barrier from the recorded store id,
+ * epoch and live revision.
  */
 export async function appliedReceiptFor(context: StoreContext, manifest: MigrationManifest): Promise<MigrationReceipt> {
-  const handle = await openStore(context, "read");
-  try {
-    if (resolve(manifest.controlRoot) !== resolve(context.harnessDir)) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`,
-      );
-    }
-    const row = readReceiptRows(handle.db, "phase = 'applied'").at(-1);
-    if (!row) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        "this store has no recorded apply receipt; apply the reviewed manifest first (store migrate --apply --manifest <path>).",
-      );
-    }
-    const storedMapping = JSON.parse(row.mapping_json) as {
-      source: MigrationReceipt["issueIds"][number]["source"];
-      issueId: string;
-      classification?: string;
-      rationale?: string | null;
-      legacyJson?: string;
-    }[];
-    const counts = JSON.parse(row.source_counts_json) as StoredCounts;
-    if (typeof counts.storeRevision !== "number") {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        "the recorded apply receipt carries no store revision; the staged store cannot be checked against the reviewed apply.",
-      );
-    }
-    return {
-      receiptId: row.id,
-      manifestHash: row.manifest_hash,
-      phase: "applied",
-      replayed: true,
-      issueIds: storedMapping
-        .filter((entry) => entry.issueId !== "")
-        .map((entry) => ({ source: entry.source, issueId: entry.issueId })),
-      // Pre-FW-2 receipts carried issue mappings only; a receipt recorded by
-      // the current apply stores history/excluded mappings beside them.
-      historyRows: storedMapping
-        .filter(
-          (entry): entry is typeof entry & { classification: "history" | "excluded"; rationale: string; legacyJson: string } =>
-            entry.issueId === "" && (entry.classification === "history" || entry.classification === "excluded"),
-        )
-        .map((entry) => ({
-          source: entry.source,
-          classification: entry.classification,
-          rationale: entry.rationale ?? "",
-          legacyJson: entry.legacyJson ?? "",
-        })),
-      counts: { ...counts, history: counts.history ?? 0, excluded: counts.excluded ?? 0, created: 0, updated: 0 },
-      storeRevision: counts.storeRevision,
-      appliedAt: row.applied_at,
-    };
-  } finally {
-    handle.close();
+  if (resolve(manifest.controlRoot) !== resolve(context.harnessDir)) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`,
+    );
   }
-}
-
-function activationReceiptOfRow(row: ReceiptRow, replayed: boolean): ActivationReceipt {
-  const stored = JSON.parse(row.manifest_json) as Omit<ActivationReceipt, "receiptId" | "phase" | "replayed" | "activatedAt">;
-  return { ...stored, receiptId: row.id, phase: "activated", replayed, activatedAt: row.activated_at ?? row.applied_at };
+  const manifestHash = migrationManifestHash(manifest);
+  const found = await readCollaborationStage(resolveCollaborationLocation(context), ({ db }) =>
+    readMigrationPhaseRow(db, "applied", manifestHash),
+  );
+  if (found === undefined) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      "this collaboration authority has no recorded apply receipt for the reviewed manifest; apply the reviewed manifest first " +
+        "(store migrate --apply --manifest <path>).",
+    );
+  }
+  const stored = JSON.parse(found.resultJson) as StoredApply;
+  if (typeof stored.counts?.storeRevision !== "number") {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      "the recorded apply receipt carries no store revision; the staged lane cannot be checked against the reviewed apply.",
+    );
+  }
+  return receiptOfStoredApply(stored, manifestHash, found.committedAt, true);
 }
 
 /** The recorded activation receipt of an applied manifest (§7); read-only. */
 export async function activationReceiptFor(context: StoreContext, manifest: MigrationManifest): Promise<ActivationReceipt> {
   const apply = await appliedReceiptFor(context, manifest);
-  const handle = await openStore(context, "read");
-  try {
-    const row = findActivationRow(readReceiptRows(handle.db, "phase = 'activated'"), apply.receiptId);
-    if (!row) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        `the applied receipt #${apply.receiptId} has no recorded activation; run "store activate" ` +
-          `with the reviewed manifest and attestation first.`,
-      );
-    }
-    return activationReceiptOfRow(row, true);
-  } finally {
-    handle.close();
+  const row = await readCollaborationStage(resolveCollaborationLocation(context), ({ db }) =>
+    readMigrationPhaseRow(db, "activated", apply.manifestHash),
+  );
+  if (row === undefined) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the applied manifest ${apply.manifestHash.slice(0, 16)} has no recorded activation; run "store activate" ` +
+        `with the reviewed manifest and attestation first.`,
+    );
   }
-}
-
-/**
- * The activation row one reviewed apply already produced, newest first: the
- * activation recorded for the apply receipt that committed this manifest. The
- * association is that receipt's own identity — the row the staged apply wrote
- * — so an activation recorded for a different manifest, or belonging to another
- * store, is never served as this manifest's activation.
- */
-function findActivationRow(rows: ReceiptRow[], applyReceiptId: number): ReceiptRow | undefined {
-  for (const row of [...rows].reverse()) {
-    let stored: unknown;
-    try {
-      stored = JSON.parse(row.manifest_json);
-    } catch {
-      // a malformed receipt row cannot claim this activation
-      continue;
-    }
-    if (stored === null || typeof stored !== "object" || !("applyReceiptId" in stored)) continue;
-    if (typeof stored.applyReceiptId === "number" && stored.applyReceiptId === applyReceiptId) return row;
-  }
-  return undefined;
+  const recorded = JSON.parse(row.resultJson) as Omit<ActivationReceipt, "replayed">;
+  return { ...recorded, replayed: true };
 }
 
 function activationHashOf(parts: {
   applyManifestHash: string;
-  applyReceiptId: number;
   storeId: string;
   previousEpoch: number;
   epoch: number;
@@ -2220,39 +2157,110 @@ function activationHashOf(parts: {
   return sha256Bytes(Buffer.from(`activation\u0000${JSON.stringify(parts)}`, "utf8"));
 }
 
-/**
- * The retirement row one activation already produced, newest first: the
- * retirement recorded FOR that activation receipt in the live authority
- * generation. The association is the receipt's own identity and the live
- * store/epoch it acted on — never `retirementHash` — so a retirement recorded
- * for another activation, store or epoch is never served as this one's.
- */
-function findRetirementRow(
-  rows: ReceiptRow[],
-  activationReceiptId: number,
-  live: { storeId: string; epoch: number },
-): ReceiptRow | undefined {
-  for (const row of [...rows].reverse()) {
-    let stored: unknown;
-    try {
-      stored = JSON.parse(row.manifest_json);
-    } catch {
-      // a malformed receipt row cannot claim this retirement
-      continue;
-    }
-    if (stored === null || typeof stored !== "object") continue;
-    const candidate = stored as Record<string, unknown>;
-    if (candidate.activationReceiptId !== activationReceiptId) continue;
-    if (candidate.storeId !== live.storeId || candidate.epoch !== live.epoch) continue;
-    return row;
-  }
-  return undefined;
-}
-
-
 // ---------------------------------------------------------------------------
 // Activation barrier (§7)
 // ---------------------------------------------------------------------------
+
+/**
+ * The rows statement result a CAS reports; a driver value that carries no
+ * readable count is treated as "no row changed" — the conservative side of
+ * every conditional update.
+ */
+function affectedRows(result: unknown): number {
+  if (result === null || typeof result !== "object" || !("changes" in result)) return 0;
+  return typeof result.changes === "number" ? result.changes : 0;
+}
+
+/**
+ * The recovery point of the STAGED lane, taken with the one-image primitive and
+ * verified against its own bytes. A resumed activation re-verifies the existing
+ * point at this generation's deterministic path instead of overwriting a
+ * recorded recovery point.
+ */
+async function takeLaneRecoveryPoint(
+  context: StoreContext,
+  location: CollaborationLocation,
+  authority: CollaborationAuthority,
+): Promise<ActivationRecoveryPoint> {
+  const targetPath = join(
+    dirname(storeDbPath(context)),
+    "archived",
+    "store-migration",
+    "backups",
+    `pre-activation-${authority.storeId.slice(0, 8)}-e${authority.epoch}-r${authority.revision}.db`,
+  );
+  const takenAt = new Date().toISOString();
+  if (existsSync(targetPath)) {
+    let existing: CollaborationImageInspection;
+    try {
+      existing = await inspectCollaborationImage(targetPath, location);
+    } catch (error) {
+      throw new StoreActivationError(
+        "store.activation-stale",
+        `the existing recovery point at ${targetPath} cannot be verified (${messageOf(error)}). Refusing to overwrite a ` +
+          `recorded recovery point.`,
+      );
+    }
+    if (
+      existing.authority.storeId !== authority.storeId ||
+      existing.authority.epoch !== authority.epoch ||
+      existing.authority.revision !== authority.revision ||
+      existing.authority.state !== authority.state
+    ) {
+      throw new StoreActivationError(
+        "store.activation-stale",
+        `the existing recovery point at ${targetPath} does not describe this staged lane ` +
+          `(identity/epoch/revision/state mismatch). Refusing to overwrite a recorded recovery point.`,
+      );
+    }
+    return { backupPath: targetPath, bytes: statSync(targetPath).size, takenAt, authority: existing.authority, counts: existing.counts };
+  }
+  await writeCollaborationImage(location.dbPath, targetPath);
+  const verified = await inspectCollaborationImage(targetPath, location).catch((error: unknown) => {
+    rmSync(targetPath, { force: true });
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the recovery point written to ${targetPath} could not be verified (${messageOf(error)}); the unverified copy was ` +
+        `removed. Nothing was activated.`,
+    );
+  });
+  // Same-lane: `store_id` is written once at lane creation and never changes,
+  // so it is the one live fact a fresh copy is checked against.
+  if (verified.authority.storeId !== authority.storeId || verified.authority.revision !== authority.revision) {
+    rmSync(targetPath, { force: true });
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the recovery point written to ${targetPath} describes store ${verified.authority.storeId} revision ` +
+        `${verified.authority.revision}, not this staged lane ${authority.storeId} revision ${authority.revision}; the ` +
+        `unverified copy was removed. Nothing was activated.`,
+    );
+  }
+  return { backupPath: targetPath, bytes: statSync(targetPath).size, takenAt, authority: verified.authority, counts: verified.counts };
+}
+
+/**
+ * The ACTIVE execution sessions this checkout currently holds. The execution
+ * and collaboration authorities keep independent epochs, so an activation's
+ * stop list is the active rows themselves — the running consumers that could
+ * hold the superseded state. A file-era import has no execution store, and that
+ * absence is not an error: there is nothing to stop.
+ */
+async function activeExecutionSessions(context: StoreContext): Promise<StoppedSessionAttestation[]> {
+  if (!existsSync(storeDbPath(context))) return [];
+  const handle = await openStore(context, "read");
+  try {
+    const rows = handle.db.prepare("select session_id from execution_sessions where state = 'active'").all();
+    const sessions: StoppedSessionAttestation[] = [];
+    for (const row of rows) {
+      if (row === null || typeof row !== "object" || !("session_id" in row) || typeof row.session_id !== "string") continue;
+      if (row.session_id === "") continue;
+      sessions.push({ sessionId: row.session_id, host: "local", state: "stopped" });
+    }
+    return sessions;
+  } finally {
+    handle.close();
+  }
+}
 
 /** The generated document's actor, or the coded refusal its preflight raises (same code, message and recovery as before the move). */
 function requireGeneratedOperator(operator: string | undefined): string {
@@ -2295,235 +2303,222 @@ export async function activateStore(
   if (
     !receipt ||
     receipt.phase !== "applied" ||
-    typeof receipt.receiptId !== "number" ||
     typeof receipt.manifestHash !== "string" ||
     typeof receipt.storeRevision !== "number"
   ) {
     throw new StoreActivationError(
       "store.activation-stale",
-      "the activation requires the reviewed apply receipt (receiptId, storeRevision; manifestHash is provenance); re-apply the reviewed manifest.",
+      "the activation requires the reviewed apply receipt (manifestHash, storeRevision); re-apply the reviewed manifest.",
     );
   }
   // A supplied document is the 1:1 override and is validated here, before the
-  // backup, exactly as before. An omitted one is generated inside the flip
-  // transaction below and validated at the same point — the validator stays
+  // recovery point, exactly as before. An omitted one is generated inside the
+  // flip transaction below and validated at the same point — the validator stays
   // the acceptance authority either way.
   const validated = attestation === undefined ? undefined : validateActivationAttestation(attestation);
 
-  const inspection = await openStore(context, "write");
-  let meta: LiveMeta;
-  let manifest: MigrationManifest;
-  try {
-    meta = readMetaRow(inspection.db);
-    if (meta.authorityState === "active") {
-      const row = findActivationRow(readReceiptRows(inspection.db, "phase = 'activated'"), receipt.receiptId);
-      if (!row) {
-        throw new StoreActivationError(
-          "store.activation-stale",
-          "the store is already active under a different activation; the authority generation cannot be replaced by a new receipt.",
-        );
-      }
-      const recorded = activationReceiptOfRow(row, true);
-      // The recorded activation must be THIS store's, in the live authority
-      // generation: store identity and epoch are real owner facts, so a copied
-      // store's or a superseded epoch's activation is never replayed as this
-      // one's (the recorded `activationHash` is provenance only).
-      if (recorded.storeId !== meta.storeId || recorded.epoch !== meta.epoch) {
-        throw new StoreActivationError(
-          "store.activation-stale",
-          `the recorded activation #${recorded.receiptId} belongs to store ${recorded.storeId} epoch ${recorded.epoch}, ` +
-            `not this live store ${meta.storeId} epoch ${meta.epoch}; it cannot be served as this store's activation.`,
-        );
-      }
-      return recorded;
-    }
+  const location = resolveCollaborationLocation(context);
+  const inspection = await readCollaborationStage(location, ({ db, authority }) => ({
+    authority,
+    applied: readMigrationPhaseRow(db, "applied", receipt.manifestHash),
+    lastApplied: readMigrationPhaseRows(db, "applied").at(-1),
+    recorded: readMigrationPhaseRow(db, "activated", receipt.manifestHash),
+  }));
 
-    // The applied row is addressed by the receipt's OWN recorded identity —
-    // its `id` in `migration_receipts` — never by a content digest of the
-    // manifest it applied. `manifest_hash` stays recorded provenance; it does
-    // not select the row, veto the receipt or imply identity proof.
-    const appliedRow = readReceiptRows(inspection.db, "id = ? and phase = 'applied'", receipt.receiptId)[0];
-    if (!appliedRow) {
+  if (inspection.authority.state === "active") {
+    // Published already: serve THIS manifest's recorded activation, and refuse
+    // any other outcome. The published generation is never replaced by a new
+    // receipt, and the lane's unique phase row makes a second activation of the
+    // same import impossible.
+    if (inspection.recorded === undefined) {
       throw new StoreActivationError(
         "store.activation-stale",
-        `the supplied receipt (#${receipt.receiptId}) is not a recorded apply receipt of this store; ` +
-          `re-apply the reviewed manifest and use its receipt. Nothing was activated.`,
+        `the collaboration authority is already active under a different activation; the reviewed manifest ` +
+          `${receipt.manifestHash.slice(0, 16)} is not its published import, and the authority generation cannot be ` +
+          `replaced by a new receipt.`,
       );
     }
-    const applied = readReceiptRows(inspection.db, "phase = 'applied'");
-    if (applied.at(-1)!.id !== appliedRow.id) {
+    const published = JSON.parse(inspection.recorded.resultJson) as Omit<ActivationReceipt, "replayed">;
+    // The recorded activation must be THIS authority's, in the live generation:
+    // store identity and epoch are real owner facts, so a copied lane's or a
+    // superseded epoch's activation is never replayed as this one's.
+    if (published.storeId !== inspection.authority.storeId || published.epoch !== inspection.authority.epoch) {
       throw new StoreActivationError(
         "store.activation-stale",
-        `the supplied receipt is not the FINAL applied manifest (a later apply, receipt #${applied.at(-1)!.id}, is recorded); ` +
-          `revalidate the final manifest, re-apply it and re-attest. Nothing was activated.`,
+        `the recorded activation belongs to store ${published.storeId} epoch ${published.epoch}, not this live authority ` +
+          `${inspection.authority.storeId} epoch ${inspection.authority.epoch}; it cannot be served as this store's activation.`,
       );
     }
-    manifest = JSON.parse(appliedRow.manifest_json) as MigrationManifest;
-    if (resolve(manifest.controlRoot) !== resolve(context.harnessDir)) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        `the applied manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}. Nothing was activated.`,
-      );
-    }
-    if (meta.revision !== receipt.storeRevision) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        `the staged store is at revision ${meta.revision}, but the reviewed apply committed revision ` +
-          `${receipt.storeRevision}; the staged store changed after the reviewed apply. Re-apply the final manifest first.`,
-      );
-    }
-    // First of two: this pass refuses a missing/renamed register before the
-    // recovery point is written. The decisive one runs inside the flip
-    // transaction.
-    revalidateSources(context, manifest, "activation");
-  } finally {
-    inspection.close();
+    return { ...published, replayed: true };
   }
+
+  // The applied phase is addressed by the reviewed manifest's OWN hash — the
+  // row the staged apply wrote — never by a content digest of anything else.
+  if (inspection.applied === undefined) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the reviewed manifest ${receipt.manifestHash.slice(0, 16)} has no recorded apply receipt in this collaboration ` +
+        `lane; re-apply the reviewed manifest and use its receipt. Nothing was activated.`,
+    );
+  }
+  if (inspection.recorded !== undefined) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the lane records an activation for ${receipt.manifestHash.slice(0, 16)} but is still staged; the recorded activation ` +
+        `does not describe this lane generation. Nothing was activated.`,
+    );
+  }
+  if (inspection.lastApplied === undefined || inspection.lastApplied.rowid !== inspection.applied.rowid) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the reviewed manifest is not the FINAL applied import (a later apply is recorded); revalidate the final manifest, ` +
+        `re-apply it and re-attest. Nothing was activated.`,
+    );
+  }
+  const appliedStored = JSON.parse(inspection.applied.resultJson) as StoredApply;
+  const manifest = appliedStored.manifest;
+  if (resolve(manifest.controlRoot) !== resolve(context.harnessDir)) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the applied manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}. Nothing was activated.`,
+    );
+  }
+  const meta = inspection.authority;
+  if (meta.revision !== receipt.storeRevision) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the staged lane is at revision ${meta.revision}, but the reviewed apply committed revision ` +
+        `${receipt.storeRevision}; the staged lane changed after the reviewed apply. Re-apply the final manifest first.`,
+    );
+  }
+  // First of two: this pass refuses a missing/renamed register before the
+  // recovery point is written. The decisive one runs inside the flip
+  // transaction.
+  revalidateSources(context, manifest, "activation");
 
   // The generated document records the invoking operator, so a missing one is
   // refused HERE — before the recovery point is written — and an unoperated
-  // activation never leaves an orphan backup artifact behind. Same code,
-  // message and recovery the flip used to raise; the document itself is still
-  // assembled inside the flip transaction below.
+  // activation never leaves an orphan artifact behind.
   const generatedOperator = validated === undefined ? requireGeneratedOperator(options.operator) : "";
 
-  // The recovery point is taken on its own connection, after the validations
-  // and before the barrier transaction: the staged store is quiesced (attested)
-  // and never has two writers open at once.
-  const backup = await takeVerifiedBackup(context, {
-    label: `pre-activation-${meta.storeId.slice(0, 8)}-r${meta.revision}`,
-    reuseMatchingIdentity: true,
-  });
+  // The recovery point is the STAGED LANE's own verified copy, taken before the
+  // publication: the lane is quiesced (attested) and never has two writers.
+  const backup = await takeLaneRecoveryPoint(context, location, meta);
 
   // Test seam: an old binary writes a register here — after the inspection pass
   // above and before the barrier transaction below.
   hooks.afterStage?.("inspection", 0);
 
-  const flip = await openStore(context, "write");
-  try {
+  // The active execution sessions this publication supersedes, read from the
+  // checkout's own execution authority. The two authorities keep independent
+  // epochs, so the stop list is the active rows themselves; a file-era import
+  // has no execution store and therefore nothing to stop.
+  const stoppedSessions = await activeExecutionSessions(context);
+
+  // The publication is ONE lane transaction: the state/epoch flip, the
+  // authority stamp and the activation phase row commit together, so an
+  // interrupted barrier leaves the lane staged with no activation receipt.
+  return writeCollaborationStage(location, ({ db, authority }) => {
     // ONE instant for the whole flip: the generated document attests it and
     // every activation stamp records it.
     const at = (options.now ?? (() => new Date().toISOString()))();
-    flip.db.exec("begin immediate");
-    try {
-      const current = readMetaRow(flip.db);
-      if (current.authorityState !== "staged" || current.storeId !== meta.storeId || current.revision !== meta.revision) {
-        throw new StoreActivationError(
-          "store.activation-stale",
-          "the staged store changed while the barrier was running; the activation was rolled back. Re-check and retry.",
-        );
-      }
-      // Barrier-time register-set fence. The inspection pass ran on its own
-      // connection and the recovery point was taken after it, so a legacy
-      // writer could have landed a new register in between. Revalidate the
-      // reviewed register set HERE, inside the flip transaction: the epoch never
-      // bumps against a source set that no longer matches the reviewed one,
-      // whatever appeared after the inspection.
-      //
-      // Documented trade (QC seat 3 S-001): this fence performs register-set
-      // enumeration while the `begin immediate` write lock is held, so the lock
-      // window scales with the register count. That is acceptable BY
-      // PRECONDITION: activation runs only on a QUIESCED STAGED store — the
-      // attestation validation above has stopped every registered reader/writer
-      // session before this transaction opens, so no concurrent writer can be
-      // starved and the in-window I/O is bounded by the reviewed source set, not
-      // by contention. The fence stays in-transaction deliberately: hoisting it
-      // before the lock would reopen the inspection→flip race this fence exists
-      // to close. A non-quiesced caller is already refused by the attestation
-      // gate; this note records the precondition so a future caller does not
-      // widen the window.
-      revalidateSources(context, manifest, "activation");
-      // The generated operator document, assembled inside this transaction:
-      // the invoking operator is the recorded actor, the reviewed apply
-      // receipt is the durable authorizationRef, the clock is the same
-      // instant the epoch bump is stamped with, and the stop list is exactly
-      // the active rows this epoch bump invalidates (an earlier-epoch row
-      // authorizes nothing afterwards). The narrowed meaning stays explicit:
-      // consumers attests the EXECUTING consumer only, and stoppedSessions
-      // attests row disposal, never an observed process death.
-      let activationValidated = validated;
-      if (activationValidated === undefined) {
-        // The operator was required before the backup (preflight above); this
-        // branch only runs when no document was supplied, so it is nonblank.
-        const stoppedRows = flip.db
-          .prepare("select session_id from execution_sessions where state = 'active' and epoch = ?")
-          .all(current.epoch) as Array<{ session_id?: unknown }>;
-        const provisioned = provisionActivationDocument(
-          {
-            actor: generatedOperator,
-            authorizationRef: `migration-receipt:${receipt.receiptId}`,
-            attestedAt: at,
-            stoppedSessions: stoppedRows
-              .filter((row) => typeof row.session_id === "string" && row.session_id !== "")
-              .map((row) => ({ sessionId: row.session_id as string, host: "local", state: "stopped" as const })),
-          },
-          options.processFacts,
-        );
-        if (!provisioned.ok) {
-          throw Object.assign(
-            new StoreActivationError("store.attestation-invalid", provisioned.message),
-            { recovery: "run the same verb through the installed Node CLI: mstar store activate --manifest <path> --operator <name> (an explicit --attestation <absolute-json> also overrides)" },
-          );
-        }
-        activationValidated = validateActivationAttestation(provisioned.document);
-      }
-      const attestationHash = sha256Bytes(Buffer.from(`attestation\u0000${JSON.stringify(activationValidated)}`, "utf8"));
-      const epoch = current.epoch + 1;
-      const revision = current.revision + 1;
-      const activationHash = activationHashOf({
-        applyManifestHash: receipt.manifestHash,
-        applyReceiptId: receipt.receiptId,
-        storeId: current.storeId,
-        previousEpoch: current.epoch,
-        epoch,
-        attestationHash,
-        backupPath: backup.backupPath,
-      });
-      flip.db
-        .prepare("update store_meta set authority_state = 'active', authority_epoch = ?, revision = ?, activated_at = ? where id = 1")
-        .run(epoch, revision, at);
-      flip.db.prepare("update migration_receipts set activated_at = ? where id = ?").run(at, receipt.receiptId);
-      hooks.afterStage?.("flip", 0);
-      const stored = {
-        receiptVersion: ACTIVATION_PROTOCOL_VERSION,
-        activationHash,
-        applyReceiptId: receipt.receiptId,
-        applyManifestHash: receipt.manifestHash,
-        storeId: current.storeId,
-        previousEpoch: current.epoch,
-        epoch,
-        revision,
-        catalogRevision: current.catalogRevision,
-        attestationHash,
-        attestation: activationValidated,
-        backup,
-      };
-      const result = flip.db
-        .prepare(
-          "insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at, activated_at) " +
-            "values (?, 'activated', ?, '[]', ?, ?, ?)",
-        )
-        .run(
-          activationHash,
-          JSON.stringify(stored),
-          JSON.stringify({ consumers: activationValidated.consumers.length, stoppedSessions: activationValidated.stoppedSessions.length }),
-          at,
-          at,
-        );
-      const receiptId = Number((result as { lastInsertRowid: number | bigint }).lastInsertRowid);
-      flip.db.exec("commit");
-      return { ...stored, receiptId, phase: "activated", replayed: false, activatedAt: at };
-    } catch (error) {
-      try {
-        flip.db.exec("rollback");
-      } catch {
-        // nothing committed either way
-      }
-      throw error;
+    if (authority.state !== "staged" || authority.storeId !== meta.storeId || authority.revision !== meta.revision) {
+      throw new StoreActivationError(
+        "store.activation-stale",
+        "the staged lane changed while the barrier was running; the activation was rolled back. Re-check and retry.",
+      );
     }
-  } finally {
-    flip.close();
-  }
+    // Barrier-time register-set fence. The inspection pass ran under its own
+    // read admission and the recovery point was taken after it, so a legacy
+    // writer could have landed a new register in between. Revalidate the
+    // reviewed register set HERE, inside the flip transaction: the epoch never
+    // bumps against a source set that no longer matches the reviewed one,
+    // whatever appeared after the inspection.
+    //
+    // Documented trade (QC seat 3 S-001): this fence performs register-set
+    // enumeration while the lane's write lock is held, so the lock window
+    // scales with the register count. That is acceptable BY PRECONDITION:
+    // activation runs only on a QUIESCED STAGED lane — the attestation
+    // validation above has stopped every registered reader/writer session
+    // before this transaction opens, so no concurrent writer can be starved and
+    // the in-window I/O is bounded by the reviewed source set, not by
+    // contention. The fence stays in-transaction deliberately: hoisting it
+    // before the lock would reopen the inspection→flip race this fence exists to
+    // close.
+    revalidateSources(context, manifest, "activation");
+    // The generated operator document, assembled inside this transaction: the
+    // invoking operator is the recorded actor, the reviewed apply's manifest
+    // hash is the durable authorizationRef, the clock is the same instant the
+    // epoch bump is stamped with, and the stop list is exactly the active
+    // execution rows this publication supersedes. The narrowed meaning stays
+    // explicit: consumers attests the EXECUTING consumer only, and
+    // stoppedSessions attests row disposal, never an observed process death.
+    let activationValidated = validated;
+    if (activationValidated === undefined) {
+      // The operator was required before the recovery point (preflight above);
+      // this branch only runs when no document was supplied, so it is nonblank.
+      const provisioned = provisionActivationDocument(
+        {
+          actor: generatedOperator,
+          authorizationRef: `migration-applied:${receipt.manifestHash}`,
+          attestedAt: at,
+          stoppedSessions,
+        },
+        options.processFacts,
+      );
+      if (!provisioned.ok) {
+        throw Object.assign(
+          new StoreActivationError("store.attestation-invalid", provisioned.message),
+          { recovery: "run the same verb through the installed Node CLI: mstar store activate --manifest <path> --operator <name> (an explicit --attestation <absolute-json> also overrides)" },
+        );
+      }
+      activationValidated = validateActivationAttestation(provisioned.document);
+    }
+    const attestationHash = sha256Bytes(Buffer.from(`attestation\u0000${JSON.stringify(activationValidated)}`, "utf8"));
+    const epoch = meta.epoch + 1;
+    const revision = meta.revision + 1;
+    const activationHash = activationHashOf({
+      applyManifestHash: receipt.manifestHash,
+      storeId: meta.storeId,
+      previousEpoch: meta.epoch,
+      epoch,
+      attestationHash,
+      backupPath: backup.backupPath,
+    });
+    // CAS on the reviewed generation: the publication only ever advances the
+    // exact staged revision it verified, once.
+    const changed = db
+      .prepare(
+        "update collaboration_meta set authority_state = 'active', authority_epoch = ?, revision = ?, activated_at = ? " +
+          "where id = 1 and authority_state = 'staged' and store_id = ? and authority_epoch = ? and revision = ?",
+      )
+      .run(epoch, revision, at, meta.storeId, meta.epoch, meta.revision);
+    if (affectedRows(changed) !== 1) {
+      throw new StoreActivationError(
+        "store.activation-stale",
+        "the staged lane changed inside the barrier transaction; the activation was rolled back. Re-check and retry.",
+      );
+    }
+    hooks.afterStage?.("flip", 0);
+    const stored: ActivationReceipt = {
+      receiptVersion: ACTIVATION_PROTOCOL_VERSION,
+      phase: "activated",
+      replayed: false,
+      activationHash,
+      applyManifestHash: receipt.manifestHash,
+      storeId: meta.storeId,
+      previousEpoch: meta.epoch,
+      epoch,
+      revision,
+      catalogRevision: authority.catalogRevision,
+      attestationHash,
+      attestation: activationValidated,
+      backup,
+      activatedAt: at,
+    };
+    insertMigrationPhaseRow(db, "activated", receipt.manifestHash, stored, at);
+    return stored;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2570,7 +2565,8 @@ type LedgerSectionItem = {
 
 type RetirementLedger = {
   version: number;
-  activationReceiptId: number;
+  /** The reviewed import whose activation this retirement completes. */
+  applyManifestHash: string;
   activationHash: string;
   storeId: string;
   epoch: number;
@@ -2579,7 +2575,7 @@ type RetirementLedger = {
   backupPath: string;
   startedAt: string;
   updatedAt: string;
-  retirementReceiptId: number | null;
+  retirementHash: string | null;
   registers: LedgerRegisterItem[];
   sections: LedgerSectionItem[];
 };
@@ -2616,13 +2612,13 @@ function writeLedger(path: string, ledger: RetirementLedger): void {
 
 function markerText(ledger: RetirementLedger, receipt: RetirementReceipt | null): string {
   return [
-    `# Legacy source archive \u2014 activation receipt #${ledger.activationReceiptId}`,
+    `# Legacy source archive \u2014 reviewed import \`${ledger.applyManifestHash.slice(0, 16)}\``,
     "",
     "Retired from the live control root by `mstar store retire`, after the activation barrier passed.",
     "",
     `- successor authority: \`${ledger.successorDbPath}\` (store_id \`${ledger.storeId}\`, authority epoch ${ledger.epoch})`,
-    `- activation receipt: #${ledger.activationReceiptId} (\`${ledger.activationHash}\`)`,
-    `- retirement receipt: ${receipt === null ? "pending" : `#${receipt.receiptId} (\`${receipt.retirementHash}\`)`}`,
+    `- activation receipt: \`${ledger.activationHash}\``,
+    `- retirement receipt: ${receipt === null ? "pending" : `\`${receipt.retirementHash}\``}`,
     `- recovery point: \`${ledger.backupPath}\``,
     `- archived: ${ledger.registers.length} residual register(s), ${ledger.sections.length} reviewed index section(s)`,
     `- last updated: ${ledger.updatedAt}`,
@@ -2635,11 +2631,6 @@ function markerText(ledger: RetirementLedger, receipt: RetirementReceipt | null)
     "bytes and sections were moved and verified.",
     "",
   ].join("\n");
-}
-
-function retirementReceiptOfRow(row: ReceiptRow, replayed: boolean): RetirementReceipt {
-  const stored = JSON.parse(row.manifest_json) as Omit<RetirementReceipt, "receiptId" | "phase" | "replayed" | "retiredAt">;
-  return { ...stored, receiptId: row.id, phase: "retired", replayed, retiredAt: row.retired_at ?? row.applied_at };
 }
 
 /** Write the marker disclosure; a resumed run completes a missing one. */
@@ -2837,267 +2828,234 @@ export async function retireStoreSources(
   if (
     !activationReceipt ||
     activationReceipt.phase !== "activated" ||
-    typeof activationReceipt.receiptId !== "number" ||
+    typeof activationReceipt.applyManifestHash !== "string" ||
     typeof activationReceipt.activationHash !== "string" ||
     typeof activationReceipt.storeId !== "string" ||
     typeof activationReceipt.epoch !== "number"
   ) {
     throw new StoreActivationError(
       "store.activation-stale",
-      'retirement requires the recorded activation receipt (receiptId, activationHash, storeId, epoch); run "store activate" first.',
+      'retirement requires the recorded activation receipt (applyManifestHash, activationHash, storeId, epoch); run "store activate" first.',
     );
   }
 
-  const handle = await openStore(context, "write");
-  try {
-    const meta = readMetaRow(handle.db);
-    if (meta.authorityState !== "active") {
-      throw new StoreActivationError(
-        "store.not-active",
-        `the store is ${meta.authorityState}; legacy sources are retired only after the activation barrier made the store active. ` +
-          `Nothing was retired.`,
-      );
-    }
-    refuseUnlessSameGeneration(
-      { storeId: meta.storeId, epoch: meta.epoch },
-      { storeId: activationReceipt.storeId, epoch: activationReceipt.epoch },
-      "the activation receipt",
+  const location = resolveCollaborationLocation(context);
+  const lane = await readCollaborationStage(location, ({ db, authority }) => ({
+    authority,
+    applied: readMigrationPhaseRow(db, "applied", activationReceipt.applyManifestHash),
+    activation: readMigrationPhaseRow(db, "activated", activationReceipt.applyManifestHash),
+    retired: readMigrationPhaseRow(db, "retired", activationReceipt.applyManifestHash),
+  }));
+  if (lane.authority.state !== "active") {
+    throw new StoreActivationError(
+      "store.not-active",
+      `the collaboration authority is ${lane.authority.state}; legacy sources are retired only after the activation barrier ` +
+        `made it active. Nothing was retired.`,
     );
-    // The activation row is addressed by the receipt's OWN recorded identity —
-    // its `id` in `migration_receipts` — never by `activationHash`. The hash
-    // stays recorded provenance; it does not select the row, veto the receipt
-    // or imply identity proof. The real constraints are read from the row and
-    // checked against the live store below.
-    const activationRow = readReceiptRows(handle.db, "id = ? and phase = 'activated'", activationReceipt.receiptId)[0];
-    if (!activationRow) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        `no activation receipt #${activationReceipt.receiptId} is recorded for this store; nothing was retired.`,
-      );
-    }
-    const activationRowReceipt = activationReceiptOfRow(activationRow, true);
-    if (
-      activationRowReceipt.storeId !== meta.storeId ||
-      activationRowReceipt.epoch !== meta.epoch ||
-      activationRowReceipt.applyReceiptId !== activationReceipt.applyReceiptId
-    ) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        `the recorded activation #${activationReceipt.receiptId} belongs to store ${activationRowReceipt.storeId} epoch ` +
-          `${activationRowReceipt.epoch} over apply receipt #${activationRowReceipt.applyReceiptId}, not this store ` +
-          `${meta.storeId} epoch ${meta.epoch} over apply receipt #${activationReceipt.applyReceiptId}; nothing was retired.`,
-      );
-    }
-    const appliedRow = readReceiptRows(handle.db, "id = ? and phase = 'applied'", activationReceipt.applyReceiptId)[0];
-    if (!appliedRow) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        `the applied receipt #${activationReceipt.applyReceiptId} behind this activation is missing; nothing was retired.`,
-      );
-    }
-    const manifest = JSON.parse(appliedRow.manifest_json) as MigrationManifest;
+  }
+  refuseUnlessSameGeneration(
+    { storeId: lane.authority.storeId, epoch: lane.authority.epoch },
+    { storeId: activationReceipt.storeId, epoch: activationReceipt.epoch },
+    "the activation receipt",
+  );
+  // The activation phase is addressed by the reviewed import it published.
+  // The supplied receipt's own hash must then BE the recorded activation: the
+  // lane's phase row is the identity, and a drifted hash names another
+  // activation.
+  if (lane.activation === undefined) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `no activation is recorded for the reviewed import ${activationReceipt.applyManifestHash.slice(0, 16)} in this ` +
+        `collaboration lane; nothing was retired.`,
+    );
+  }
+  const recordedActivation = JSON.parse(lane.activation.resultJson) as Omit<ActivationReceipt, "replayed">;
+  if (recordedActivation.activationHash !== activationReceipt.activationHash) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the supplied activation hash ${activationReceipt.activationHash.slice(0, 16)} is not the one recorded for this import ` +
+        `(${recordedActivation.activationHash.slice(0, 16)}); nothing was retired.`,
+    );
+  }
+  if (recordedActivation.storeId !== lane.authority.storeId || recordedActivation.epoch !== lane.authority.epoch) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the recorded activation belongs to store ${recordedActivation.storeId} epoch ${recordedActivation.epoch}, not this ` +
+        `authority ${lane.authority.storeId} epoch ${lane.authority.epoch}; nothing was retired.`,
+    );
+  }
+  if (lane.applied === undefined) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the applied import behind this activation is missing from the collaboration lane; nothing was retired.`,
+    );
+  }
+  const manifest = (JSON.parse(lane.applied.resultJson) as StoredApply).manifest;
+  const meta = lane.authority;
 
-    const registers = manifest.retirement.registers;
-    const sections = manifest.catalog.retirementSections;
-    const archiveDir = join(dirname(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
-    const ledgerPath = join(archiveDir, "ledger.json");
-    const retirementHash = sha256Bytes(
-      Buffer.from(
-        `retirement\u0000${JSON.stringify({
-          activationReceiptId: activationReceipt.receiptId,
-          activationHash: activationReceipt.activationHash,
-          storeId: meta.storeId,
-          epoch: meta.epoch,
-          registers: registers.map((register) => ({ relativePath: register.relativePath, sha256: register.sha256 })),
-          sections: sections.map((section) => ({
-            rootKind: section.rootKind,
-            relativePath: section.relativePath,
-            startLine: section.startLine,
-            endLine: section.endLine,
-            sha256: section.sha256,
+  const registers = manifest.retirement.registers;
+  const sections = manifest.catalog.retirementSections;
+  const archiveDir = join(dirname(storeDbPath(context)), "archived", "store-migration", activationReceipt.applyManifestHash);
+  const ledgerPath = join(archiveDir, "ledger.json");
+  const retirementHash = sha256Bytes(
+    Buffer.from(
+      `retirement\u0000${JSON.stringify({
+        applyManifestHash: activationReceipt.applyManifestHash,
+        activationHash: activationReceipt.activationHash,
+        storeId: meta.storeId,
+        epoch: meta.epoch,
+        registers: registers.map((register) => ({ relativePath: register.relativePath, sha256: register.sha256 })),
+        sections: sections.map((section) => ({
+          rootKind: section.rootKind,
+          relativePath: section.relativePath,
+          startLine: section.startLine,
+          endLine: section.endLine,
+          sha256: section.sha256,
           })),
         })}`,
         "utf8",
       ),
     );
 
-    const recorded = findRetirementRow(readReceiptRows(handle.db, "phase = 'retired'"), activationReceipt.receiptId, meta);
-    if (recorded) {
-      const receipt = retirementReceiptOfRow(recorded, true);
-      const existing = readLedger(ledgerPath);
-      if (existing) finalizeDisclosure(ledgerPath, existing, receipt);
-      return receipt;
-    }
-
-    const existingLedger = readLedger(ledgerPath);
-    if (existingLedger && (existingLedger.storeId !== meta.storeId || existingLedger.epoch !== meta.epoch)) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        `the retirement ledger at ${ledgerPath} belongs to a different activation generation; refusing to resume another ` +
-          `generation's partial retirement. Nothing was retired.`,
-      );
-    }
-    revalidateSources(context, manifest, "retirement");
-    const resumed = existingLedger !== undefined;
-
-    const ledger: RetirementLedger = existingLedger ?? {
-      version: ACTIVATION_PROTOCOL_VERSION,
-      activationReceiptId: activationReceipt.receiptId,
-      activationHash: activationReceipt.activationHash,
-      storeId: meta.storeId,
-      epoch: meta.epoch,
-      archiveDir,
-      successorDbPath: storeDbPath(context),
-      backupPath: activationReceipt.backup.backupPath,
-      startedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      retirementReceiptId: null,
-      registers: registers
-        .map((register) => ({
-          project: register.project,
-          relativePath: register.relativePath,
-          sha256: register.sha256,
-          archivePath: join(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
-          state: "pending" as const,
-        }))
-        .sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
-      sections: sections
-        .map((section) => ({
-          rootKind: section.rootKind,
-          relativePath: section.relativePath,
-          header: section.header,
-          startLine: section.startLine,
-          endLine: section.endLine,
-          sha256: section.sha256,
-          preservedLines: section.preservedLines,
-          family: section.family,
-          reviewedRows: section.rows,
-          retiredRows: null,
-          removedLines: null,
-          archivePath: join(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
-          expectedLiveSha256: null,
-          state: "pending" as const,
-        }))
-        .sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine),
-    };
-    // The reviewed row identities are always current: they are read from the
-    // reviewed plan in hand (the same manifest the generation/epoch already
-    // binds this run to), never from a stale recorded copy.
-    for (const item of ledger.sections) {
-      const section = sections.find(
-        (candidate) => candidate.rootKind === item.rootKind && candidate.relativePath === item.relativePath && candidate.startLine === item.startLine,
-      );
-      if (section === undefined) continue;
-      item.family = section.family;
-      item.reviewedRows = section.rows;
-    }
-    mkdirSync(archiveDir, { recursive: true });
-    writeLedger(ledgerPath, ledger);
-    let completed = 0;
-    for (const item of ledger.registers) {
-      if (item.state === "verified") {
-        verifyArchivedRegister(item);
-        continue;
-      }
-      retireRegister(context, ledgerPath, ledger, item);
-      completed += 1;
-      hooks.afterStage?.("retirement", completed);
-    }
-    for (const item of ledger.sections) {
-      retireSection(context, ledgerPath, ledger, item, hooks);
-      completed += 1;
-      hooks.afterStage?.("retirement", completed);
-    }
-
-    const at = new Date().toISOString();
-    const retiredRegisters: RetiredRegister[] = ledger.registers.map((item) => ({
-      project: item.project,
-      relativePath: item.relativePath,
-      sha256: item.sha256,
-      bytes: statSync(item.archivePath).size,
-      archivedPath: item.archivePath,
-    }));
-    const retiredSections: RetiredSection[] = ledger.sections.map((item) => ({
-      rootKind: item.rootKind,
-      relativePath: item.relativePath,
-      header: item.header,
-      startLine: item.startLine,
-      endLine: item.endLine,
-      sha256: item.sha256,
-      archivedPath: item.archivePath,
-      liveSha256: item.expectedLiveSha256!,
-      preservedLines: item.preservedLines,
-      removedLines: item.removedLines ?? item.endLine - item.startLine + 1,
-    }));
-
-    handle.db.exec("begin immediate");
-    let receiptId: number;
-    try {
-      handle.db
-        .prepare("update migration_receipts set retired_at = ? where id in (?, ?)")
-        .run(at, activationReceipt.receiptId, activationReceipt.applyReceiptId);
-      const stored = {
-        receiptVersion: ACTIVATION_PROTOCOL_VERSION,
-        retirementHash,
-        activationReceiptId: activationReceipt.receiptId,
-        activationHash: activationReceipt.activationHash,
-        storeId: meta.storeId,
-        epoch: meta.epoch,
-        archiveDir,
-        markerPath: join(archiveDir, "MARKER.md"),
-        registers: retiredRegisters,
-        sections: retiredSections,
-        resumed,
-      };
-      const result = handle.db
-        .prepare(
-          "insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at, retired_at) " +
-            "values (?, 'retired', ?, '[]', ?, ?, ?)",
-        )
-        .run(
-          retirementHash,
-          JSON.stringify(stored),
-          JSON.stringify({
-            registers: retiredRegisters.length,
-            sections: retiredSections.length,
-            bytes: retiredRegisters.reduce((total, item) => total + item.bytes, 0),
-            resumed,
-          }),
-          at,
-          at,
-        );
-      receiptId = Number((result as { lastInsertRowid: number | bigint }).lastInsertRowid);
-      handle.db.exec("commit");
-    } catch (error) {
-      try {
-        handle.db.exec("rollback");
-      } catch {
-        // nothing committed either way
-      }
-      throw error;
-    }
-
-    ledger.retirementReceiptId = receiptId;
-    const receipt: RetirementReceipt = {
-      receiptVersion: ACTIVATION_PROTOCOL_VERSION,
-      receiptId,
-      phase: "retired",
-      replayed: false,
-      retirementHash,
-      activationReceiptId: activationReceipt.receiptId,
-      activationHash: activationReceipt.activationHash,
-      storeId: meta.storeId,
-      epoch: meta.epoch,
-      archiveDir,
-      markerPath: join(archiveDir, "MARKER.md"),
-      registers: retiredRegisters,
-      sections: retiredSections,
-      resumed,
-      retiredAt: at,
-    };
-    finalizeDisclosure(ledgerPath, ledger, receipt);
-    return receipt;
-  } finally {
-    handle.close();
+  if (lane.retired !== undefined) {
+    const receipt = JSON.parse(lane.retired.resultJson) as RetirementReceipt;
+    const existing = readLedger(ledgerPath);
+    if (existing !== undefined) finalizeDisclosure(ledgerPath, existing, receipt);
+    return { ...receipt, replayed: true };
   }
+
+  const existingLedger = readLedger(ledgerPath);
+  if (existingLedger && (existingLedger.storeId !== meta.storeId || existingLedger.epoch !== meta.epoch)) {
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `the retirement ledger at ${ledgerPath} belongs to a different activation generation; refusing to resume another ` +
+        `generation's partial retirement. Nothing was retired.`,
+    );
+  }
+  revalidateSources(context, manifest, "retirement");
+  const resumed = existingLedger !== undefined;
+
+  const ledger: RetirementLedger = existingLedger ?? {
+    version: ACTIVATION_PROTOCOL_VERSION,
+    applyManifestHash: activationReceipt.applyManifestHash,
+    activationHash: activationReceipt.activationHash,
+    storeId: meta.storeId,
+    epoch: meta.epoch,
+    archiveDir,
+    successorDbPath: storeDbPath(context),
+    backupPath: activationReceipt.backup.backupPath,
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    retirementHash: null,
+    registers: registers
+      .map((register) => ({
+        project: register.project,
+        relativePath: register.relativePath,
+        sha256: register.sha256,
+        archivePath: join(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
+        state: "pending" as const,
+      }))
+      .sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
+    sections: sections
+      .map((section) => ({
+        rootKind: section.rootKind,
+        relativePath: section.relativePath,
+        header: section.header,
+        startLine: section.startLine,
+        endLine: section.endLine,
+        sha256: section.sha256,
+        preservedLines: section.preservedLines,
+        family: section.family,
+        reviewedRows: section.rows,
+        retiredRows: null,
+        removedLines: null,
+        archivePath: join(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
+        expectedLiveSha256: null,
+        state: "pending" as const,
+      }))
+      .sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine),
+  };
+  // The reviewed row identities are always current: they are read from the
+  // reviewed plan in hand (the same manifest the generation/epoch already
+  // binds this run to), never from a stale recorded copy.
+  for (const item of ledger.sections) {
+    const section = sections.find(
+      (candidate) => candidate.rootKind === item.rootKind && candidate.relativePath === item.relativePath && candidate.startLine === item.startLine,
+    );
+    if (section === undefined) continue;
+    item.family = section.family;
+    item.reviewedRows = section.rows;
+  }
+  mkdirSync(archiveDir, { recursive: true });
+  writeLedger(ledgerPath, ledger);
+  let completed = 0;
+  for (const item of ledger.registers) {
+    if (item.state === "verified") {
+      verifyArchivedRegister(item);
+      continue;
+    }
+    retireRegister(context, ledgerPath, ledger, item);
+    completed += 1;
+    hooks.afterStage?.("retirement", completed);
+  }
+  for (const item of ledger.sections) {
+    retireSection(context, ledgerPath, ledger, item, hooks);
+    completed += 1;
+    hooks.afterStage?.("retirement", completed);
+  }
+
+  const at = new Date().toISOString();
+  const retiredRegisters: RetiredRegister[] = ledger.registers.map((item) => ({
+    project: item.project,
+    relativePath: item.relativePath,
+    sha256: item.sha256,
+    bytes: statSync(item.archivePath).size,
+    archivedPath: item.archivePath,
+  }));
+  const retiredSections: RetiredSection[] = ledger.sections.map((item) => ({
+    rootKind: item.rootKind,
+    relativePath: item.relativePath,
+    header: item.header,
+    startLine: item.startLine,
+    endLine: item.endLine,
+    sha256: item.sha256,
+    archivedPath: item.archivePath,
+    liveSha256: item.expectedLiveSha256!,
+    preservedLines: item.preservedLines,
+    removedLines: item.removedLines ?? item.endLine - item.startLine + 1,
+  }));
+
+  const receipt: RetirementReceipt = {
+    receiptVersion: ACTIVATION_PROTOCOL_VERSION,
+    phase: "retired",
+    replayed: false,
+    retirementHash,
+    applyManifestHash: activationReceipt.applyManifestHash,
+    activationHash: activationReceipt.activationHash,
+    storeId: meta.storeId,
+    epoch: meta.epoch,
+    archiveDir,
+    markerPath: join(archiveDir, "MARKER.md"),
+    registers: retiredRegisters,
+    sections: retiredSections,
+    resumed,
+    retiredAt: at,
+  };
+  // The retirement phase row commits in ONE lane transaction: the receipt's
+  // presence IS the completed retirement, so a crash before it leaves the
+  // resumable ledger as the only witness.
+  const written = await writeCollaborationStage(location, ({ db, authority }) => {
+    if (authority.storeId !== meta.storeId || authority.epoch !== meta.epoch) {
+      throw new StoreActivationError(
+        "store.stale-epoch",
+        `the authority changed generation while the sources were being retired (${meta.storeId} epoch ${meta.epoch} -> ` +
+          `${authority.storeId} epoch ${authority.epoch}); nothing was recorded. Resume with the current activation receipt.`,
+      );
+    }
+    insertMigrationPhaseRow(db, "retired", activationReceipt.applyManifestHash, receipt, at);
+    return receipt;
+  });
+  ledger.retirementHash = receipt.retirementHash;
+  finalizeDisclosure(ledgerPath, ledger, written);
+  return written;
 }

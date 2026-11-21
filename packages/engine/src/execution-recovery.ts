@@ -193,7 +193,7 @@ export class ExecutionRecoveryError extends Error {
 
 /** §8: one authority row that differs between the live store and the point. */
 export type ExecutionRecoveryAuthorityDifference = {
-  domain: "issue" | "catalog" | "execution" | "host";
+  domain: "execution" | "host";
   key: string;
   liveRevision: number | null;
   backupRevision: number | null;
@@ -255,31 +255,9 @@ export type ExecutionDiagnosticExport = { format: "execution-diagnostic-v1"; can
 /** The migration that introduced the execution authority (never a magic number). */
 const EXECUTION_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
-/** The migration that introduced the catalog authority (never a magic number). */
-const CATALOG_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "catalog-authority")?.version ?? 2;
-/** The migration that introduced provenance origin. */
-const PROVENANCE_ORIGIN_MIGRATION_VERSION =
-  MIGRATIONS.find((migration) => migration.name === "issue-provenance-origin")?.version ?? Number.POSITIVE_INFINITY;
-/** The migration that introduced project content authority (roadmaps). */
-const ROADMAP_MIGRATION_VERSION =
-  MIGRATIONS.find((migration) => migration.name === "roadmap-content-authority")?.version ?? Number.POSITIVE_INFINITY;
 /** The migration that added coverage to execution migration rows. */
 const EXECUTION_COVERAGE_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "execution-coverage-column")?.version ?? Number.POSITIVE_INFINITY;
-/** The migration that introduced project milestones (both tables exist from here). */
-const MILESTONE_MIGRATION_VERSION =
-  MIGRATIONS.find((migration) => migration.name === "project-milestones")?.version ?? Number.POSITIVE_INFINITY;
-const SYNC_PENDING_TARGET_MIGRATION_VERSION =
-  MIGRATIONS.find((migration) => migration.name === "sync-pending-target")?.version ?? Number.POSITIVE_INFINITY;
-/** The migration that added the push ledger's two facts (hash, label ownership). */
-const SYNC_PUSH_LEDGER_MIGRATION_VERSION =
-  MIGRATIONS.find((migration) => migration.name === "sync-push-ledger")?.version ?? Number.POSITIVE_INFINITY;
-/** The migration that introduced the append-only project-move history. */
-const PROJECT_MOVES_MIGRATION_VERSION =
-  MIGRATIONS.find((migration) => migration.name === "issue-project-moves")?.version ?? Number.POSITIVE_INFINITY;
-/** The migration that introduced the sync ledger, bindings and cursors. */
-const SYNC_LEDGER_MIGRATION_VERSION =
-  MIGRATIONS.find((migration) => migration.name === "sync-ledger")?.version ?? Number.POSITIVE_INFINITY;
 /** The migration that introduced the native Dsh host-state domain. */
 const DSH_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers")?.version ?? Number.POSITIVE_INFINITY;
@@ -344,10 +322,10 @@ function corrupt(detail: string): ExecutionRecoveryError {
 
 
 // ---------------------------------------------------------------------------
-// Reading the three authority domains
+// Reading the execution and host authority domains
 // ---------------------------------------------------------------------------
 
-type AuthorityDomain = "issue" | "catalog" | "execution" | "host";
+type AuthorityDomain = "execution" | "host";
 
 /**
  * One enumerated authority row: its key, its own revision (or presence), its
@@ -375,7 +353,7 @@ type AuthorityTable = {
   /** The row's own authority revision column, when the table carries one. */
   revisionColumn?: string;
   /** True when the table only exists once its introducing migration applied. */
-  requires?: "catalog" | "execution" | "executionIntents" | "roadmap" | "milestone" | "projectMoves" | "host" | "syncLedger";
+  requires?: "execution" | "executionIntents" | "host";
 };
 
 function text(row: Record<string, unknown>, column: string): string {
@@ -393,14 +371,16 @@ function number(row: Record<string, unknown>, column: string): number {
 }
 
 /**
- * Every authority table of the four domains (§2 of the primary spec), in the
- * order the inventory reports them. `projection_*` is deliberately absent:
- * contract §5 makes those tables a disposable published generation, so losing
- * one is not an authority loss.
+ * Every authority table of the execution and host domains (§2 of the primary
+ * spec), in the order the inventory reports them. Issue and catalog authority
+ * live in the collaboration lane and are backed up/restored by the lane's own
+ * verified-pair verbs, so an execution restore neither inventories nor replaces
+ * them. `projection_*` is deliberately absent: contract §5 makes those tables a
+ * disposable published generation, so losing one is not an authority loss.
  */
 const AUTHORITY_TABLES: readonly AuthorityTable[] = [
   {
-    domain: "issue",
+    domain: "execution",
     table: "store_meta",
     columns: ["id", "store_id", "authority_state", "authority_epoch", "revision", "catalog_revision", "created_at", "activated_at"],
     orderBy: "id",
@@ -408,189 +388,30 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
     revisionColumn: "revision",
   },
   {
-    domain: "issue",
-    table: "issues",
-    columns: [
-      "id",
-      "project_id",
-      "title",
-      "kind",
-      "severity",
-      "disposition",
-      "impact",
-      "acceptance",
-      "owner",
-      "registered_at",
-      "closed_at",
-      "closure_note",
-      "created_at",
-      "updated_at",
-      "revision",
-      "provider",
-      "external_id",
-      "url",
-      "identity_key",
-      "milestone_id",
-    ],
-    orderBy: "id",
-    key: (row) => `issue:${text(row, "id")}`,
-    revisionColumn: "revision",
-  },
-  {
-    domain: "issue",
-    table: "occurrences",
-    columns: [
-      "id",
-      "issue_id",
-      "occurrence_key",
-      "source_kind",
-      "source_identity",
-      "root_cause_key",
-      "acceptance_key",
-      "location",
-      "observed_behavior",
-      "evidence_json",
-      "discovered_at",
-      "recorded_at",
-      "imported",
-    ],
-    orderBy: "occurrence_key",
-    key: (row) => `occurrence:${text(row, "occurrence_key")}`,
-  },
-  {
-    domain: "issue",
-    table: "relations",
-    columns: ["from_issue", "relation", "to_issue"],
-    orderBy: "from_issue, relation, to_issue",
-    key: (row) => `relation:${text(row, "from_issue")}/${text(row, "relation")}/${text(row, "to_issue")}`,
-  },
-  {
-    domain: "issue",
-    table: "provenance",
-    columns: ["id", "issue_id", "kind", "target", "source_hash", "origin", "legacy_project", "legacy_bucket", "legacy_entry_id", "legacy_json", "imported_at"],
-    orderBy: "id",
-    key: (row) => `provenance:${text(row, "id")}`,
-  },
-  {
-    domain: "issue",
-    table: "issue_transitions",
-    columns: ["id", "issue_id", "from_disposition", "to_disposition", "actor", "occurred_at", "recorded_at", "reason", "evidence_json", "imported", "issue_revision"],
-    orderBy: "id",
-    key: (row) => `transition:${text(row, "id")}`,
-  },
-  {
-    domain: "issue",
-    table: "issue_project_moves",
-    columns: ["id", "issue_id", "from_project_id", "to_project_id", "actor", "reason", "occurred_at", "recorded_at", "issue_revision"],
-    orderBy: "id",
-    key: (row) => `project-move:${text(row, "id")}`,
-    requires: "projectMoves",
-  },
-  {
-    domain: "issue",
-    table: "project_bindings",
-    columns: ["project_id", "provider", "workspace", "team", "remote_project", "revision", "updated_at"],
-    orderBy: "project_id",
-    key: (row) => `binding:${text(row, "project_id")}`,
-    requires: "syncLedger",
-  },
-  {
-    domain: "issue",
-    table: "issue_sync_state",
-    columns: [
-      "binding_id",
-      "direction",
-      "local_id",
-      "external_id",
-      "item_state",
-      "last_remote_updated_at",
-      "pending_target",
-      "last_error",
-      "last_skip_reason",
-      "last_request_hash",
-      "last_kind_label",
-      "revision",
-      "updated_at",
-    ],
-    orderBy: "local_id",
-    key: (row) => `sync:${text(row, "binding_id")}:${text(row, "direction")}:${text(row, "local_id")}`,
-    requires: "syncLedger",
-  },
-  {
-    domain: "issue",
-    table: "sync_cursor",
-    columns: ["binding_id", "direction", "cursor", "updated_at"],
-    orderBy: "binding_id",
-    key: (row) => `cursor:${text(row, "binding_id")}:${text(row, "direction")}`,
-    requires: "syncLedger",
-  },
-  {
-    domain: "issue",
+    domain: "execution",
     table: "store_operations",
     columns: ["operation_id", "request_hash", "result_json", "committed_at"],
     orderBy: "operation_id",
     key: (row) => `store-operation:${text(row, "operation_id")}`,
   },
   {
-    domain: "issue",
-    table: "issue_counter",
-    columns: ["id", "next_value"],
-    orderBy: "id",
-    key: () => "issue-counter",
-  },
-  {
-    domain: "issue",
+    domain: "execution",
     table: "migration_receipts",
+    // The legacy combined-store ledger stays execution domain: it is the
+    // historical record a pre-cutover store leaves behind, never live
+    // collaboration authority (which is the lane's own phase rows).
     columns: ["id", "manifest_hash", "phase", "manifest_json", "mapping_json", "source_counts_json", "applied_at", "activated_at", "retired_at"],
     orderBy: "id",
     key: (row) => `migration-receipt:${text(row, "manifest_hash")}`,
   },
   {
-    domain: "catalog",
-    table: "catalog_entities",
-    columns: [
-      "kind",
-      "id",
-      "title",
-      "description",
-      "root_kind",
-      "relative_path",
-      "document_kind",
-      "lifecycle",
-      "revision",
-      "registered_at",
-      "updated_at",
-      "source_hash",
-    ],
-    orderBy: "kind, id",
-    key: (row) => `entity:${text(row, "kind")}/${text(row, "id")}`,
-    revisionColumn: "revision",
-    requires: "catalog",
-  },
-  {
-    domain: "catalog",
-    table: "catalog_links",
-    columns: ["from_kind", "from_id", "relation", "to_kind", "to_id", "ordinal"],
-    orderBy: "from_kind, from_id, relation, to_kind, to_id",
-    key: (row) =>
-      `link:${text(row, "from_kind")}/${text(row, "from_id")}/${text(row, "relation")}/${text(row, "to_kind")}/${text(row, "to_id")}`,
-    requires: "catalog",
-  },
-  {
-    domain: "catalog",
-    table: "catalog_operations",
-    columns: ["operation_id", "request_hash", "phase", "catalog_delta_json", "before_versions_json", "after_versions_json", "result_json", "created_at", "updated_at"],
-    orderBy: "operation_id",
-    key: (row) => `catalog-operation:${text(row, "operation_id")}`,
-    requires: "catalog",
-  },
-  {
-    domain: "catalog",
+    domain: "execution",
     table: "catalog_execution_bindings",
+    // Execution-owned: a workflow's pin to a catalog identity travels with the
+    // execution row it authorizes, not with the catalog document itself.
     columns: ["workflow_id", "catalog_kind", "catalog_id", "workflow_root_kind", "workflow_relative_path", "catalog_revision", "input_hash", "pin_json", "operation_id"],
     orderBy: "workflow_id, catalog_kind, catalog_id",
-    key: (row) => `binding:${text(row, "workflow_id")}/${text(row, "catalog_kind")}/${text(row, "catalog_id")}`,
-    requires: "catalog",
+    key: (row) => `catalog-binding:${text(row, "workflow_id")}/${text(row, "catalog_kind")}/${text(row, "catalog_id")}`,
   },
   {
     domain: "execution",
@@ -712,24 +533,6 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
     requires: "execution",
   },
   {
-    domain: "catalog",
-    table: "project_roadmaps",
-    columns: ["project_id", "project_kind", "content_markdown", "content_hash", "revision", "updated_at"],
-    orderBy: "project_id",
-    key: (row) => `roadmap:${text(row, "project_id")}`,
-    revisionColumn: "revision",
-    requires: "roadmap",
-  },
-  {
-    domain: "catalog",
-    table: "project_milestones",
-    columns: ["milestone_id", "project_id", "project_kind", "name", "target", "status", "ordinal", "revision", "created_at", "updated_at"],
-    orderBy: "milestone_id",
-    key: (row) => `milestone:${text(row, "milestone_id")}`,
-    revisionColumn: "revision",
-    requires: "milestone",
-  },
-  {
     domain: "host",
     table: "dsh_ledger_events",
     columns: ["seq_rowid", "workflow_id", "event_id", "event_json", "recorded_at", "legacy_source_digest", "legacy_line"],
@@ -776,31 +579,15 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
  * replacement never needs `foreign_keys=OFF` and never leaves the schema's own
  * constraints half-satisfied. Deletion runs in the exact reverse.
  *
- * This is deliberately NOT the inventory's display order. `issues.milestone_id`
- * references `project_milestones` and the milestone/roadmap tables reference
- * `catalog_entities`, so the catalog parents are installed before the issue
- * rows; a table added to `AUTHORITY_TABLES` without a position here is refused
- * rather than silently left out of a replacement.
+ * This is deliberately NOT the inventory's display order: `catalog_execution_bindings`
+ * references `execution_workflows`, so the workflow rows are installed first.
+ * A table added to `AUTHORITY_TABLES` without a position here is refused rather
+ * than silently left out of a replacement.
  */
 const REPLACEMENT_ORDER: readonly string[] = [
   "store_meta",
-  "issue_counter",
-  "catalog_entities",
-  "project_milestones",
-  "project_roadmaps",
-  "issues",
-  "project_bindings",
-  "issue_sync_state",
-  "sync_cursor",
-  "issue_project_moves",
-  "occurrences",
-  "relations",
-  "provenance",
-  "issue_transitions",
   "store_operations",
   "migration_receipts",
-  "catalog_links",
-  "catalog_operations",
   "catalog_execution_bindings",
   "execution_meta",
   "execution_workflows",
@@ -851,24 +638,14 @@ type TableAvailability = {
    * from the connection, never derived from the version alone.
    */
   tables: ReadonlySet<string>;
-  catalog: boolean;
   execution: boolean;
   executionCoverage: boolean;
   /** The composite reservation ledger exists from its introducing migration. */
   executionIntents: boolean;
-  roadmap: boolean;
-  milestone: boolean;
-  projectMoves: boolean;
-  syncLedger: boolean;
   host: boolean;
-  provenanceOrigin: boolean;
   dshLegacyProvenance: boolean;
   /** False at or after the migration that made the session domain coordinator-only. */
   legacySessionPlanColumn: boolean;
-  /** The `pending_target` column exists on this store's schema. */
-  readonly syncPendingTarget: boolean;
-  /** The push ledger columns (`last_request_hash`, `last_kind_label`) exist. */
-  readonly syncPushLedger: boolean;
 };
 
 /**
@@ -880,18 +657,10 @@ type TableAvailability = {
 function availabilityOf(schemaVersion: number, tables: ReadonlySet<string>): TableAvailability {
   return {
     tables,
-    catalog: schemaVersion >= CATALOG_MIGRATION_VERSION,
     execution: schemaVersion >= EXECUTION_MIGRATION_VERSION,
     executionCoverage: schemaVersion >= EXECUTION_COVERAGE_MIGRATION_VERSION,
     executionIntents: schemaVersion >= EXECUTION_INTENTS_MIGRATION_VERSION,
-    roadmap: schemaVersion >= ROADMAP_MIGRATION_VERSION,
-    milestone: schemaVersion >= MILESTONE_MIGRATION_VERSION,
-    syncPendingTarget: schemaVersion >= SYNC_PENDING_TARGET_MIGRATION_VERSION,
-    syncPushLedger: schemaVersion >= SYNC_PUSH_LEDGER_MIGRATION_VERSION,
-    projectMoves: schemaVersion >= PROJECT_MOVES_MIGRATION_VERSION,
-    syncLedger: schemaVersion >= SYNC_LEDGER_MIGRATION_VERSION,
     host: schemaVersion >= DSH_MIGRATION_VERSION,
-    provenanceOrigin: schemaVersion >= PROVENANCE_ORIGIN_MIGRATION_VERSION,
     dshLegacyProvenance: schemaVersion >= DSH_LEGACY_PROVENANCE_MIGRATION_VERSION,
     legacySessionPlanColumn: schemaVersion < EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION,
   };
@@ -899,13 +668,8 @@ function availabilityOf(schemaVersion: number, tables: ReadonlySet<string>): Tab
 
 function available(table: AuthorityTable, availability: TableAvailability): boolean {
   if (!availability.tables.has(table.table)) return false;
-  if (table.requires === "catalog") return availability.catalog;
   if (table.requires === "execution") return availability.execution;
   if (table.requires === "executionIntents") return availability.executionIntents;
-  if (table.requires === "roadmap") return availability.roadmap;
-  if (table.requires === "milestone") return availability.milestone;
-  if (table.requires === "projectMoves") return availability.projectMoves;
-  if (table.requires === "syncLedger") return availability.syncLedger;
   if (table.requires === "host") return availability.host;
   return true;
 }
@@ -913,22 +677,12 @@ function available(table: AuthorityTable, availability: TableAvailability): bool
 /** The columns of one inventory table this store's schema actually carries. */
 function inventoryColumns(table: AuthorityTable, availability: TableAvailability): readonly string[] {
   let columns = table.columns;
-  if (table.table === "issues" && !availability.milestone) columns = columns.filter((column) => column !== "milestone_id");
   if (table.table === "execution_migrations" && !availability.executionCoverage) {
     columns = columns.filter((column) => column !== "coverage_json");
   }
   if (table.table === "execution_sessions" && !availability.legacySessionPlanColumn) {
     columns = columns.filter((column) => column !== "plan_id");
   }
-  // A store still at the previous schema has no `pending_target`: reading it
-  // would make every restore preview fail on a column the store never had.
-  if (!availability.syncPendingTarget) columns = columns.filter((column) => column !== "pending_target");
-  // Same rule for the push facts: a store written before migration 17 has no
-  // such column, and its backup inventory must not ask for one.
-  if (!availability.syncPushLedger) {
-    columns = columns.filter((column) => column !== "last_request_hash" && column !== "last_kind_label");
-  }
-  if (!availability.provenanceOrigin) columns = columns.filter((column) => column !== "origin");
   if (!availability.dshLegacyProvenance) {
     columns = columns.filter((column) => column !== "legacy_source_digest" && column !== "legacy_line");
   }
@@ -987,14 +741,7 @@ function readCommittedOperationIds(db: StoreDb, availability: TableAvailability)
   const ids: string[] = [];
   if (availability.tables.has("store_operations")) {
     for (const row of db.prepare("select operation_id from store_operations order by operation_id").all() as Array<Record<string, unknown>>) {
-      ids.push(`issue:${text(row, "operation_id")}`);
-    }
-  }
-  if (availability.catalog && availability.tables.has("catalog_operations")) {
-    for (const row of db
-      .prepare("select operation_id from catalog_operations where phase = 'committed' order by operation_id")
-      .all() as Array<Record<string, unknown>>) {
-      ids.push(`catalog:${text(row, "operation_id")}`);
+      ids.push(`operation:${text(row, "operation_id")}`);
     }
   }
   if (availability.execution) {
@@ -1012,7 +759,6 @@ type LiveAnchor = {
   storeId: string;
   epoch: number;
   revision: number;
-  catalogRevision: number;
   authorityState: "staged" | "active";
   schemaVersion: number;
   execution: BackupExecutionMeta | null;
@@ -1319,9 +1065,9 @@ async function readLiveStore(context: StoreContext, what: string): Promise<LiveR
 
 /**
  * The live authority generation, identity and rows read from ONE connection's
- * own snapshot: the `store_meta` singleton, the four domains' authority rows
- * and the committed operation receipts. The caller owns the snapshot — a read
- * handle's read transaction, or the restore's write transaction — so the
+ * own snapshot: the `store_meta` singleton, the execution and host authority
+ * rows and the committed operation receipts. The caller owns the snapshot — a
+ * read handle's read transaction, or the restore's write transaction — so the
  * restore's admission facts come from the very snapshot it is about to replace,
  * never from a second read taken beside it.
  */
@@ -1332,8 +1078,7 @@ function readLiveSide(db: StoreDb, schemaVersion: number, execution: BackupExecu
     typeof meta.storeId !== "string" ||
     (meta.authorityState !== "staged" && meta.authorityState !== "active") ||
     typeof meta.epoch !== "number" ||
-    typeof meta.revision !== "number" ||
-    typeof meta.catalogRevision !== "number"
+    typeof meta.revision !== "number"
   ) {
     throw corrupt(`${what} found store_meta missing or malformed; the live authority generation cannot be verified`);
   }
@@ -1342,7 +1087,6 @@ function readLiveSide(db: StoreDb, schemaVersion: number, execution: BackupExecu
     storeId: meta.storeId,
     epoch: meta.epoch,
     revision: meta.revision,
-    catalogRevision: meta.catalogRevision,
     authorityState: meta.authorityState,
     schemaVersion,
     execution,
@@ -1406,7 +1150,6 @@ type StagedImage = {
   path: string;
   storeId: string;
   epoch: number;
-  catalogRevision: number;
   schemaVersion: number;
   authorityState: "staged" | "active";
   execution: BackupExecutionMeta | null;
@@ -1440,7 +1183,6 @@ async function readStagedImage(path: string, pointLabel: string): Promise<Staged
         path,
         storeId: description.storeId,
         epoch: description.epoch,
-        catalogRevision: description.catalogRevision,
         schemaVersion: description.schemaVersion,
         authorityState: description.authorityState,
         execution: description.execution,
@@ -1588,19 +1330,16 @@ function recoveryPointPath(context: StoreContext, root: string, backupPath: stri
  * §8: the readable loss of one side against the other. The comparison is
  * content-based — a row is a difference unless BOTH sides hold it with the same
  * digest — because that is what makes a changed child or provenance row visible:
- * the tables §2.2 keeps outside the authority (`occurrences`, `relations`,
- * `provenance`, `issue_transitions`, `issue_project_moves`, `catalog_links`,
- * `catalog_operations`, `catalog_execution_bindings`, `execution_registry`,
- * `execution_operations`, `execution_migrations`, `migration_receipts`,
- * `store_operations`, `issue_counter`) carry no authority revision of their own,
- * so their presence marker `1` alone cannot disclose a content change. It
+ * the tables §2.2 keeps outside the authority (`catalog_execution_bindings`,
+ * `execution_registry`, `execution_operations`, `execution_migrations`,
+ * `migration_receipts`, `store_operations`) carry no authority revision of their
+ * own, so their presence marker `1` alone cannot disclose a content change. It
  * decides only whether the row is LISTED in the readable inventory; it admits
  * and refuses nothing.
  */
 function diffSides(
   live: LiveRead,
   copy: { rows: AuthorityRow[]; operationIds: string[] },
-  backup: { catalogRevision: number },
 ): { differences: ExecutionRecoveryAuthorityDifference[]; lostOperationIds: string[]; resurrectedOperationIds: string[] } {
   const differences: ExecutionRecoveryAuthorityDifference[] = [];
   const liveByKey = new Map(live.rows.map((row) => [`${row.domain}\u0000${row.key}`, row] as const));
@@ -1616,20 +1355,6 @@ function diffSides(
       liveRevision: onLive?.revision ?? null,
       backupRevision: onCopy?.revision ?? null,
     });
-  }
-  // §3.1: the catalog domain's own root revision. It is a column of
-  // `store_meta`, so it is reported as its own entry rather than folded into
-  // the issue-domain row that also carries it.
-  const liveCatalogRow = live.rows.find((row) => row.domain === "issue" && row.key === "store_meta");
-  const copyCatalogRow = copy.rows.find((row) => row.domain === "issue" && row.key === "store_meta");
-  if (live.catalogRevision !== backup.catalogRevision && liveCatalogRow !== undefined && copyCatalogRow !== undefined) {
-    differences.push({
-      domain: "catalog",
-      key: "store_meta.catalog_revision",
-      liveRevision: live.catalogRevision,
-      backupRevision: backup.catalogRevision,
-    });
-    differences.sort((a, b) => (a.domain === b.domain ? (a.key < b.key ? -1 : 1) : a.domain < b.domain ? -1 : 1));
   }
   const liveOperationIds = new Set(live.operationIds);
   const copyOperationIds = new Set(copy.operationIds);
@@ -1685,7 +1410,7 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
   }
 
   const copy = await readCopyRows(point, live.schemaVersion);
-  const { differences, lostOperationIds, resurrectedOperationIds } = diffSides(live, copy, description);
+  const { differences, lostOperationIds, resurrectedOperationIds } = diffSides(live, copy);
 
   const withoutDigest: Omit<ExecutionRecoveryPreview, "lossDigest"> = {
     version: EXECUTION_RECOVERY_PROTOCOL_VERSION,
@@ -1703,7 +1428,6 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
     storeId: live.storeId,
     epoch: live.epoch,
     revision: live.revision,
-    catalogRevision: live.catalogRevision,
     authorityState: live.authorityState,
     schemaVersion: live.schemaVersion,
     execution: live.execution,
@@ -1746,7 +1470,7 @@ type ResolvedRestoreInput = {
 function requireDifference(value: unknown, index: number): ExecutionRecoveryAuthorityDifference {
   if (!isPlainObject(value)) throw conflict(`the preview's difference ${index} is not an object`);
   const domain = value.domain;
-  if (domain !== "issue" && domain !== "catalog" && domain !== "execution" && domain !== "host") {
+  if (domain !== "execution" && domain !== "host") {
     throw conflict(`the preview's difference ${index} names domain ${JSON.stringify(domain)}`);
   }
   if (!isNonEmptyString(value.key)) throw conflict(`the preview's difference ${index} carries no row key`);
@@ -2034,7 +1758,7 @@ async function restoreInOneTransaction(
       let currentLost: string[];
       try {
         before = readLiveSide(handle.db, handle.schemaVersion, handle.execution, "the restore");
-        ({ differences: currentDifferences, lostOperationIds: currentLost } = diffSides(before, image, image));
+        ({ differences: currentDifferences, lostOperationIds: currentLost } = diffSides(before, image));
       } catch (error) {
         if (error instanceof ExecutionRecoveryError && error.code === "execution.recovery-loss-unaccepted") throw error;
         throw lossUnaccepted(
