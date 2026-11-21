@@ -829,6 +829,32 @@ export async function readCatalogFacts(harnessRoot: string, planId: string): Pro
 }
 
 /**
+ * The collaboration catalog's identity and the pinned plan ids it currently
+ * holds. `createExecutionWorkflow` and the registration finalizer need this
+ * BEFORE they open an execution write transaction, because a catalog pin names
+ * an identity the collaboration lane owns — never a row of the execution
+ * database. The read is one lane's snapshot; nothing here spans two files.
+ */
+export async function readCatalogPlanSelection(
+  harnessRoot: string,
+  planIds: readonly string[],
+): Promise<{ storeId: string; planIds: string[] }> {
+  const handle = await openCollaborationStore({ harnessDir: harnessRoot }, "read");
+  try {
+    const storeId = handle.authority.storeId;
+    if (planIds.length === 0) return { storeId, planIds: [] };
+    const rows = handle.db
+      .prepare(
+        `select id from catalog_entities where kind = 'plan' and id in (${planIds.map(() => "?").join(", ")})`,
+      )
+      .all(...planIds) as Array<{ id?: unknown }>;
+    return { storeId, planIds: rows.flatMap((row) => (typeof row.id === "string" ? [row.id] : [])) };
+  } finally {
+    handle.close();
+  }
+}
+
+/**
  * The catalog facts through a collaboration connection the caller already
  * admitted as ACTIVE: the row revision, the relation hash, and the VERIFIED
  * lineage of this exact store+epoch (an active cutover publication whose target

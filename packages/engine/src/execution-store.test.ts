@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import * as nodeOs from "node:os";
 import { join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { initializeCollaborationStore } from "./collaboration-store.js";
+import { initializeCollaborationStore, readCollaborationAuthority } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { assertExecutionSessionCurrent, resumeExecutionSession } from "./execution-session.js";
 import { registerCatalogEntity, updateCatalogEntity } from "./catalog.js";
@@ -2009,11 +2009,14 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
   test("an unrelated current catalog edit never rewrites the sealed input", async () => {
     const { context } = await freshStore("domain-sealed-input");
     const initialized = await readExecutionState(context);
+    // A pin names the COLLABORATION catalog identity, which creation verifies
+    // before its execution write transaction.
+    const catalogAuthority = await readCollaborationAuthority(context);
     const planRevision = await registerPlan(context, "p-1");
     await registerPlan(context, "p-2");
     const row = planRow("p-1");
     const pin: CatalogExecutionPin = {
-      store_id: initialized.storeId,
+      store_id: catalogAuthority.storeId,
       entity_revision: planRevision,
       document_hash: executionInputHash(row, "p-1"),
       relation_hash: "0".repeat(64),
@@ -2031,8 +2034,8 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
       return { store_id: parsed.store_id, entity_revision: parsed.entity_revision };
     };
     const before = await sealedSelection();
-    expect(before).toEqual({ store_id: initialized.storeId, entity_revision: planRevision });
-    const catalogRevisionBefore = executionFootprint(context).catalogRevision;
+    expect(before).toEqual({ store_id: catalogAuthority.storeId, entity_revision: planRevision });
+    const catalogRevisionBefore = (await readCollaborationAuthority(context)).catalogRevision;
 
     // The CURRENT catalog moves: an unrelated plan entity is renamed, which
     // bumps its entity revision and the catalog revision.
@@ -2043,7 +2046,7 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
       1,
       { operationId: "rename-p-2", actor: "execution-store.test" },
     );
-    expect(executionFootprint(context).catalogRevision).not.toBe(catalogRevisionBefore);
+    expect((await readCollaborationAuthority(context)).catalogRevision).not.toBe(catalogRevisionBefore);
 
     // The sealed selection is still the one captured at creation, and the
     // authoritative read keeps serving it beside the renamed entity.

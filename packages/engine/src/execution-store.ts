@@ -41,6 +41,7 @@ import {
   ExecutionPinConflictError,
   executionInputHash,
   executionInputSelection,
+  readCatalogPlanSelection,
   type CatalogExecutionPin,
 } from "./coordination.js";
 import {
@@ -1758,6 +1759,14 @@ export type ResolvedCreation = {
   plans: ResolvedCreationPlan[];
 };
 
+/**
+ * The catalog evidence a creation's pins are verified against: the collaboration
+ * catalog's own identity and the plan ids it held when the caller read it BEFORE
+ * the execution write transaction. A pin names a collaboration row, so the
+ * execution writer never queries its own (catalog-free) database for it.
+ */
+export type CreationCatalogSelection = Readonly<{ storeId: string | null; planIds: readonly string[] }>;
+
 /** The single carrier of all caller-input refusals (§5 retains `coordination.*`). */
 function invalidInput(detail: string): CoordinationError {
   return new CoordinationError("coordination.invalid-input", detail);
@@ -2087,24 +2096,22 @@ function assertWorkflowIdentityIsNew(db: StoreDb, workflowId: string): void {
  * is history rather than a disagreement to refuse.
  */
 function assertSelectedCatalogEntities(
-  db: StoreDb,
-  storeId: string,
+  catalog: CreationCatalogSelection,
   workflowId: string,
   plans: readonly ResolvedCreationPlan[],
 ): void {
-  const entity = db.prepare("select revision from catalog_entities where kind = 'plan' and id = ?");
   for (const plan of plans) {
     const { pin } = plan;
     if (pin === null) continue;
     const details = { workflow_id: workflowId, plan_id: plan.planId, pin };
-    if (pin.store_id !== storeId) {
+    if (catalog.storeId === null || pin.store_id !== catalog.storeId) {
       throw new ExecutionPinConflictError(
-        `plan ${plan.planId} selects catalog store ${pin.store_id}, which is not this store (${storeId}) \u2014 a foreign ` +
-          `selection is never sealed as this store's frozen input`,
+        `plan ${plan.planId} selects catalog store ${pin.store_id}, which is not the repository's collaboration catalog ` +
+          `(${catalog.storeId ?? "unavailable"}) \u2014 a foreign selection is never sealed as this repository's frozen input`,
         details,
       );
     }
-    if (entity.get(plan.planId) === undefined) {
+    if (!catalog.planIds.includes(plan.planId)) {
       throw new ExecutionPinConflictError(
         `plan ${plan.planId} is pinned to catalog plan entity ${plan.planId} at revision ${pin.entity_revision}, but the ` +
           `catalog does not hold that entity. Creation binds existing catalog identities and never fabricates one; ` +
@@ -2176,10 +2183,10 @@ function writeCreatedWorkflow(
  */
 export function writeExecutionCreation(
   tx: ExecutionTransaction,
-  input: { caller: ExecutionCaller; creation: ResolvedCreation; now: string },
+  input: { caller: ExecutionCaller; creation: ResolvedCreation; catalog: CreationCatalogSelection; now: string },
 ): void {
   assertWorkflowIdentityIsNew(tx.db, input.creation.workflowId);
-  assertSelectedCatalogEntities(tx.db, tx.storeId, input.creation.workflowId, input.creation.plans);
+  assertSelectedCatalogEntities(input.catalog, input.creation.workflowId, input.creation.plans);
   writeCreatedWorkflow(tx.db, {
     workflowId: input.creation.workflowId,
     entry: input.creation.entry,
@@ -2501,6 +2508,14 @@ export async function createExecutionWorkflow(
   const creation = resolveCreateWorkflow(context.caller, input?.entry, input?.snapshot, input?.operationId);
   const operationId = input.operationId;
   const requestHash = createWorkflowRequestHash(context.caller, creation, input.expected);
+  // A pin names a collaboration catalog row, so the evidence is read on that
+  // lane BEFORE the execution write transaction opens: no cross-file read ever
+  // runs inside it, and an unreadable catalog refuses the pinned creation.
+  const pinnedPlanIds = [...new Set(creation.plans.filter((plan) => plan.pin !== null).map((plan) => plan.planId))];
+  const catalog: CreationCatalogSelection =
+    pinnedPlanIds.length === 0
+      ? { storeId: null, planIds: [] }
+      : await readCatalogPlanSelection(context.harnessDir, pinnedPlanIds);
   return withExecutionTransaction(context, (tx) => {
     assertActiveExecutionAuthority(
       tx,
@@ -2537,7 +2552,7 @@ export async function createExecutionWorkflow(
     });
 
     const now = new Date().toISOString();
-    writeExecutionCreation(tx, { caller: context.caller, creation, now });
+    writeExecutionCreation(tx, { caller: context.caller, creation, catalog, now });
 
     const meta = readExecutionMetaRow(tx.db);
     const store: StoreIdentity = { storeId: tx.storeId, epoch: tx.epoch };

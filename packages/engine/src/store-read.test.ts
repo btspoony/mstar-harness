@@ -34,7 +34,7 @@ import { execFileSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore } from "./collaboration-store.js";
+import { initializeCollaborationStore, readCollaborationAuthority } from "./collaboration-store.js";
 import { getIssue, listIssues, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
 import { executionInputHash } from "./coordination.js";
@@ -347,6 +347,7 @@ async function projectedWorkspace(name: string): Promise<Fixture & { generation:
   // `initializeStore` already activated the execution authority (issue #428),
   // so the creation token is read back rather than re-initialized.
   const initialized = await readExecutionState(context);
+  const catalogAuthority = await readCollaborationAuthority(context);
   const caller: ExecutionCaller = { sessionId: "store-read-coordinator", role: "coordinator", workflowId: "wf-read" };
   await createExecutionWorkflow({ harnessDir: fixture.harness, caller }, {
     entry: { id: "wf-read", type: "plan", started_at: STARTED_AT, dir: "workflows/wf-read" },
@@ -356,27 +357,25 @@ async function projectedWorkspace(name: string): Promise<Fixture & { generation:
       branch: { base: "main", source: "feature/wf-read", target: "main" },
       plans: [{
         id: "wf-read", title: "Plan wf-read", file: "plans/wf-read.md", status: "InProgress",
-        metadata: { worktree_path: "/wt/wf-read", working_branch: "feature/wf-read" },
+        metadata: {
+          // The complete frozen selection a `prepare` records: creation verifies
+          // it against the COLLABORATION catalog before its write transaction.
+          catalog_pin: {
+            store_id: catalogAuthority.storeId,
+            entity_revision: plan.entity.revision,
+            document_hash: executionInputHash({ id: "wf-read", plan_id: "wf-read", title: "Plan wf-read", file: "plans/wf-read.md", status: "InProgress" }, "wf-read"),
+            relation_hash: "0".repeat(64),
+          },
+          worktree_path: "/wt/wf-read", working_branch: "feature/wf-read",
+        },
       }],
       delivery_kind: "development",
     } as never,
     expected: initialized.token,
     operationId: "store-read-create",
   });
-  const pin = {
-    store_id: initialized.storeId,
-    entity_revision: plan.entity.revision,
-    document_hash: executionInputHash({ id: "wf-read", plan_id: "wf-read", title: "Plan wf-read", file: "plans/wf-read.md", status: "InProgress" }, "wf-read"),
-    relation_hash: "0".repeat(64),
-  };
   const executionHandle = await openStore(context, "write");
   try {
-    // The frozen selection a reviewed registration records on the execution
-    // input row: creation is execution-only, so the fixture writes the sealed
-    // pin directly instead of asking the execution verb to verify the
-    // collaboration catalog.
-    executionHandle.db.prepare("update execution_inputs set catalog_pin_json = ? where workflow_id = ? and plan_id = ?")
-      .run(JSON.stringify(pin), "wf-read", "wf-read");
     executionHandle.db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?")
       .run(JSON.stringify({ progress: { status: "InProgress", summary: "half way", evidence_paths: [] } }), "wf-read", "wf-read");
     executionHandle.db.prepare(
@@ -1081,6 +1080,7 @@ describe("projection views", () => {
     // entity for the plan: the join by id finds nothing and must disclose a
     // badge instead of guessing.
     const created = await readExecutionState(context);
+    const catalogAuthority = await readCollaborationAuthority(context);
     // Creation BINDS existing catalog identities (it never fabricates one), so
     // the plan entity is registered while the workflow/plan LINK is absent --
     // the join by id then finds nothing and must disclose a badge.
@@ -1098,27 +1098,19 @@ describe("projection views", () => {
         branch: { base: "main", source: "feature/wf-read", target: "main" },
         plans: [{
           id: "wf-read", title: "Plan wf-read", file: "plans/wf-read.md", status: "InProgress",
+          metadata: {
+            catalog_pin: {
+              store_id: catalogAuthority.storeId,
+              entity_revision: 1,
+              document_hash: executionInputHash({ id: "wf-read", plan_id: "wf-read" }, "wf-read"),
+              relation_hash: "0".repeat(64),
+            },
+          },
         }],
         delivery_kind: "development",
       } as never,
       expected: created.token,
       operationId: "unlinked-create",
-    });
-    await withExecutionWrite(context, (db) => {
-      // The frozen selection a reviewed registration records on the execution
-      // input row; the fixture writes it directly because creation is
-      // execution-only and never verifies the collaboration catalog.
-      db.prepare("update execution_inputs set catalog_pin_json = ? where workflow_id = ? and plan_id = ?").run(
-        JSON.stringify({
-          store_id: created.storeId,
-          entity_revision: 1,
-          document_hash: executionInputHash({ id: "wf-read", plan_id: "wf-read" }, "wf-read"),
-          relation_hash: "0".repeat(64),
-        }),
-        "wf-read",
-        "wf-read",
-      );
-      db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
     });
     // The catalog row the workflow's plan bound at creation is gone: the join
     // by id finds nothing and must disclose a badge, never fabricate a row.
@@ -1219,9 +1211,10 @@ describe("projection views", () => {
     // pre-activation file route is retired (issue #428), so the graph is built
     // through the ACTIVE producer.
     const seeded = await readExecutionState(context);
+    const catalogAuthority = await readCollaborationAuthority(context);
     const dupPlan = await getCatalog(context, { kind: "plan", id: "wf-dup" });
     const pinFor = (revision: number) => ({
-      store_id: seeded.storeId,
+      store_id: catalogAuthority.storeId,
       entity_revision: revision,
       document_hash: executionInputHash({ id: "wf-dup", plan_id: "wf-dup", title: "Plan wf-dup" }, "wf-dup"),
       relation_hash: "0".repeat(64),
@@ -1236,7 +1229,7 @@ describe("projection views", () => {
           branch: { base: "main", source: "feature/wf-dup", target: "main" },
           plans: [{
             id: "wf-dup", title: "Plan wf-dup", file: "plans/wf-dup.md", status: "InProgress",
-            metadata: { worktree_path: "/wt/wf-dup", working_branch: "feature/wf-dup" },
+            metadata: { catalog_pin: pinFor(7), worktree_path: "/wt/wf-dup", working_branch: "feature/wf-dup" },
           }],
           delivery_kind: "development",
         } as never,
@@ -1255,7 +1248,7 @@ describe("projection views", () => {
           branch: { base: "main", source: "feature/wf-dup", integration: "integrate/iter-dup", target: "main" },
           plans: [{
             id: "wf-dup", title: "Plan wf-dup", file: "plans/wf-dup.md", status: "Blocked",
-            metadata: { worktree_path: "/wt/iter-dup", working_branch: "integrate/iter-dup" },
+            metadata: { catalog_pin: pinFor(9), worktree_path: "/wt/iter-dup", working_branch: "integrate/iter-dup" },
           }],
         } as never,
         expected: afterPlan.token,
@@ -1264,12 +1257,6 @@ describe("projection views", () => {
     );
     const dupHandle = await openStore(context, "write");
     try {
-      // The frozen selections a reviewed registration records: written on the
-      // execution input rows because direct creation never verifies the
-      // collaboration catalog.
-      const pinRow = dupHandle.db.prepare("update execution_inputs set catalog_pin_json = ? where workflow_id = ? and plan_id = ?");
-      pinRow.run(JSON.stringify(pinFor(7)), "wf-dup", "wf-dup");
-      pinRow.run(JSON.stringify(pinFor(9)), "iter-dup", "wf-dup");
       dupHandle.db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?")
         .run(JSON.stringify({ progress: { status: "InProgress", summary: "plan-workflow progress", evidence_paths: [] } }), "wf-dup", "wf-dup");
       dupHandle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
@@ -1437,6 +1424,15 @@ describe("projects view", () => {
   test("projects empty catalog returns an empty successful list", async () => {
     const { context } = await workspace("projects-empty-");
     expect((await withStoreRead(context, queryDashboard("projects"))).data).toEqual({ items: [], total: 0 });
+  });
+});
+
+describe("collaboration creation catalog authority", () => {
+  test("direct creation seals a full catalog pin through the collaboration catalog", async () => {
+    const { context, planRevision } = await projectedWorkspace("creation-pin-");
+    const state = await readExecutionState(context);
+    const flow = state.data.workflows.find((workflow) => workflow.state.id === "wf-read");
+    expect(flow?.plans[0]?.frozenInput).toMatchObject({ entity_revision: planRevision });
   });
 });
 

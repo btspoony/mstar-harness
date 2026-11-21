@@ -72,6 +72,7 @@ import {
   type CatalogExecutionWorkflow,
 } from "./catalog-registration.js";
 import { isPlainObject } from "./coordination-write.js";
+import { readCatalogPlanSelection } from "./coordination.js";
 import { canonicalRegisteredPlanPath } from "./plan-path.js";
 import { relative, sep } from "node:path";
 import {
@@ -85,6 +86,7 @@ import {
   withExecutionTransaction,
   writeExecutionCreation,
   writeOperationReceipt,
+  type CreationCatalogSelection,
   type ExecutionCaller,
   type ExecutionContext,
   type ExecutionToken,
@@ -448,6 +450,19 @@ export async function commitExecutionRegistration(
   }
 
   const { plan, creation, expectedCatalogRevision } = prepared;
+  // The pinned catalog identities live on the collaboration lane: read them
+  // BEFORE the composite's execution finalization, so no cross-file read runs
+  // inside a write transaction. Entities this delta publishes join the evidence
+  // deterministically (the apply transaction publishes exactly them).
+  const pinnedPlanIds = [...new Set(creation.plans.filter((entry) => entry.pin !== null).map((entry) => entry.planId))];
+  const selection = await readCatalogPlanSelection(context.harnessDir, pinnedPlanIds);
+  const reviewedPlanIds = (plan.request.delta.entities ?? [])
+    .filter((entity) => entity.kind === "plan")
+    .map((entity) => entity.id);
+  const creationCatalog: CreationCatalogSelection = {
+    storeId: selection.storeId,
+    planIds: [...new Set([...selection.planIds, ...reviewedPlanIds])],
+  };
   return runCollaborationComposite<CatalogExecutionReceipt>(context, prepared.intent, {
     apply(handle) {
       // §7 the reviewed catalog expectation, re-read under the writer lock so no
@@ -506,7 +521,7 @@ export async function commitExecutionRegistration(
         );
       }
       const now = new Date().toISOString();
-      writeExecutionCreation(tx, { caller: context.caller, creation, now });
+      writeExecutionCreation(tx, { caller: context.caller, creation, catalog: creationCatalog, now });
       // The binding records the row the catalog effect COMMITTED, pinned to the
       // exact catalog revision in that receipt — never a later re-read state.
       writeBinding(

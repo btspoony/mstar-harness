@@ -133,7 +133,7 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
 function escapeMarkdown(value: string): string {
   return value.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, "\\$&");
 }
-function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
+function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number | null): string {
   const lines = [
     "---",
     `project_id: ${JSON.stringify(roadmap.projectId)}`,
@@ -144,7 +144,7 @@ function exportMarkdown(roadmap: RoadmapDTO, storeRevision: number): string {
     "",
     "# Roadmap",
     "",
-    `Store revision: ${storeRevision}`,
+    `Store revision: ${storeRevision ?? "unobserved"}`,
     "",
     "## Direction",
     "",
