@@ -1114,10 +1114,16 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
         isoInDocument: /\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}/.test(document.body.textContent ?? ''),
       })`);
       expect(refusal.arm).toBe("unavailable");
-      // The named cause reaches the reader, and the refusal carries no private path
-      // or ISO timestamp (the dashboard scrubs both).
-      expect(String(refusal.reason)).toContain("collaboration.unreadable");
-      expect(String(refusal.reason)).not.toMatch(/\/(Users|home)\//);
+      // The named cause reaches the reader, and the refusal carries no private
+      // path in any absolute spelling — POSIX home prefixes, macOS/Linux temp
+      // roots (`/var/folders`, `/private/var`, `/tmp`, the fixture's own root
+      // spellings), or a Windows drive path — and no ISO timestamp (the
+      // dashboard scrubs both).
+      const reason = String(refusal.reason);
+      expect(reason).toContain("collaboration.unreadable");
+      expect(reason).not.toMatch(/\/(Users|home)\//);
+      expect(reason).not.toMatch(/\/(private\/var|var\/folders|tmp)\//);
+      expect(reason).not.toMatch(/[A-Za-z]:[\\/](Users|Windows|Temp|tmp|var)/i);
       expect(refusal.isoInDocument).toBe(false);
       // Never an empty chart: no trend line is drawn at all on the refusal arm.
       expect(Number(refusal.charts)).toBe(0);

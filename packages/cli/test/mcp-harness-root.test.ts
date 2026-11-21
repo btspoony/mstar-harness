@@ -7,7 +7,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
-import { captureIssue, ensureCollaborationAuthority, initializeStore, openStore } from "@mstar-harness/engine";
+import { captureIssue, ensureCollaborationAuthority, initializeStore, openCollaborationStore } from "@mstar-harness/engine";
 import { getCommandDefinitions, getCommandSchemas, type CommandEnvelope } from "@mstar-harness/commands";
 import { mapParserError } from "../src/command-adapter";
 import { registerMcpCommand } from "../src/mcp/command";
@@ -799,21 +799,25 @@ describe("MCP harness root", () => {
 });
 
 /**
- * The rows a write would create in a store, read without trusting file bytes:
- * SQLite sidecars and WAL contents are invisible here, a committed or pending
- * write is not.
+ * The rows a write would create in a collaboration lane, read without trusting
+ * file bytes: SQLite sidecars and WAL contents are invisible here, a committed
+ * or pending write is not. The authority's own `creation:` receipt is bootstrap
+ * evidence, not a write a consumer could make, so it is excluded.
  */
 async function storeRowCounts(harnessDir: string): Promise<{ issues: number; operations: number }> {
-  const handle = await openStore({ harnessDir }, "read");
+  const handle = await openCollaborationStore({ harnessDir }, "read");
   try {
-    const count = (table: string): number => {
-      const row: unknown = handle.db.prepare(`select count(*) as n from ${table}`).get();
+    const count = (query: string): number => {
+      const row: unknown = handle.db.prepare(query).get();
       if (row === null || typeof row !== "object" || !("n" in row) || typeof row.n !== "number") {
-        throw new Error(`count query on ${table} returned no numeric n`);
+        throw new Error(`count query returned no numeric n: ${query}`);
       }
       return row.n;
     };
-    return { issues: count("issues"), operations: count("store_operations") };
+    return {
+      issues: count("select count(*) as n from issues"),
+      operations: count("select count(*) as n from collaboration_operations where operation_id not like 'creation:%'"),
+    };
   } finally {
     handle.close();
   }
@@ -1586,7 +1590,12 @@ describe("MCP control-root admission class", () => {
       // `-wal`/`-shm` beside a store after a read, and it keeps an unflushed
       // write in the WAL, so a byte snapshot is both noisy (a read looks like a
       // diff) and incomplete (a WAL-only write looks like no diff). Row counts
-      // are exactly what "the capture did not reach A" means.
+      // are exactly what "the capture did not reach A" means, and the baseline
+      // reads A's LIVE collaboration lane — the store the issue writer actually
+      // commits to — before the call, so a capture that lands in B cannot pass
+      // by leaking a row or a receipt into A's lane.
+      const before = await storeRowCounts(launchHarness);
+      expect(before).toEqual({ issues: 0, operations: 0 });
       const added = await callRawTool(createContextResolver(), "issue.add", {
         harness: harnessB,
         payload: { ...CAPTURE_INPUT },
@@ -1594,7 +1603,7 @@ describe("MCP control-root admission class", () => {
       });
       expect(added.isError).toBe(false);
       expect(rawEnvelope(added)).toMatchObject({ status: "ok", code: "issue.add.ok" });
-      expect(await storeRowCounts(launchHarness)).toEqual({ issues: 0, operations: 0 });
+      expect(await storeRowCounts(launchHarness)).toEqual(before);
 
       const inB = await callRawTool(createContextResolver(), "status.tech-debt", { harness: harnessB });
       expect(((inB.structuredContent as CommandEnvelope).data as { total_open: number }).total_open).toBe(1);
@@ -1614,7 +1623,7 @@ describe("MCP control-root admission class", () => {
     const harness = path.join(gitMainWorktree(root, "read-only-control"), ".mstar");
     await initializeHarness(harness);
     const before = await storeRowCounts(harness);
-    const handle = await openStore({ harnessDir: harness }, "read");
+    const handle = await openCollaborationStore({ harnessDir: harness }, "read");
     handle.close();
     expect(await storeRowCounts(harness)).toEqual(before);
   });
