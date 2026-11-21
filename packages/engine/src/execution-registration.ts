@@ -45,6 +45,7 @@ import {
 } from "./catalog.js";
 import {
   advanceCollaborationRevision,
+  hasPreparedCompositeIntent,
   noteOutstandingAcknowledgement,
   repairCompositeAcknowledgement,
   reserveCompositeIntent,
@@ -716,7 +717,9 @@ export async function registerShippedCatalogExecution(
   // id keeps its single lookup plus the legacy fingerprints.
   const legacyOperationIds =
     input.operationId === undefined ? legacyDerivedOperationIds(input.actor, identity) : [];
-  const replay = await withExecutionTransaction<{ replayed: CatalogExecutionReceipt } | { expected: ExecutionToken }>(
+  const replay = await withExecutionTransaction<
+    { replayed: CatalogExecutionReceipt } | { expected: ExecutionToken; resuming: boolean }
+  >(
     context,
     (tx) => {
       const expected = executionRootTokenOf(tx);
@@ -774,15 +777,25 @@ export async function registerShippedCatalogExecution(
           );
         }
       }
-      return { expected };
+      // An operation whose catalog effect committed while its finalization was
+      // interrupted is RESOLVED here (the reservation is the durable record), so
+      // the composite adopts the expectation that attempt froze instead of the
+      // retry being judged a new attempt against the moved catalog.
+      const resuming = hasPreparedCompositeIntent(tx, {
+        executionStoreId: tx.storeId,
+        executionEpoch: tx.epoch,
+        operationId: identity.operationId,
+      });
+      return { expected, resuming };
     },
   );
   if ("replayed" in replay) return replay.replayed;
   // The reviewed catalog revision belongs to the repository's ACTIVE
   // collaboration lane, not to this execution store: a NEW attempt pins the
-  // revision it is reviewed against, and the published delta then joins it.
+  // revision it is reviewed against, and the published delta then joins it. A
+  // resumed operation keeps the expectation its first attempt admitted.
   const authority = await readCollaborationAuthority(context);
-  if (input.expectedCatalogRevision !== undefined && input.expectedCatalogRevision !== authority.catalogRevision) {
+  if (!replay.resuming && input.expectedCatalogRevision !== undefined && input.expectedCatalogRevision !== authority.catalogRevision) {
     throw new CatalogError(
       "catalog.revision-conflict",
       `the supplied catalog expectation is ${input.expectedCatalogRevision}, but the collaboration catalog is at ` +
@@ -792,7 +805,9 @@ export async function registerShippedCatalogExecution(
   }
   return commitExecutionRegistration(context, {
     ...request,
-    expectedCatalogRevision: authority.catalogRevision,
+    expectedCatalogRevision: replay.resuming
+      ? input.expectedCatalogRevision ?? authority.catalogRevision
+      : authority.catalogRevision,
     expected: replay.expected,
   });
 }

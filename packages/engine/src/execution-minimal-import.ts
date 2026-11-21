@@ -979,8 +979,6 @@ function commitExecutionImport(
     admission: Readonly<{ importable: Source[]; result: MinimalImportResult }>;
     operationId: string;
     requestHash: string;
-    /** True when the admission transaction already activated this authority. */
-    activatedAtAdmission: boolean;
     effect: CollaborationEffectReceipt;
   },
 ): MinimalImportResult {
@@ -991,10 +989,11 @@ function commitExecutionImport(
   }
   for (const row of admission.importable) writeImportedExecutionWorkflow(tx, row);
   const now = new Date().toISOString();
-  // The admission already spent this operation's one execution-revision advance
-  // on the activation; only an import into an ALREADY active authority advances
-  // it here, so one accepted import still advances the root revision once.
-  if (!input.activatedAtAdmission && admission.importable.length > 0) {
+  // The ONE execution-revision advance of this accepted import. The staged
+  // authority's promotion (before the composite) advances nothing, so a resumed
+  // finalization spends the same single advance an uninterrupted run would — an
+  // interruption can never make the token/revision move twice.
+  if (admission.importable.length > 0) {
     const execution = tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1 and revision = ?")
       .run(source.rootDoc.updated_at, tx.execution.revision) as { changes?: unknown };
     if (Number(execution.changes) !== 1) throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun `store upgrade` to enumerate current files.");
@@ -1042,11 +1041,15 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   // conversion-shaping input is hashed separately, so a stored receipt can prove
   // which declaration set produced the rows it committed.
   const conversionInput = conversionInputDigest(input.deliveryDeclarations ?? [], compassSkips);
-  const requestHash = createHash("sha256").update(JSON.stringify({
-    operation: "store.upgrade",
+  // The reviewed operands of this import. The request fingerprint binds them to
+  // the caller's operation id; the FROZEN identity (the reservation's payload)
+  // is the same set WITHOUT the id, so an operator retry whose CLI minted a
+  // fresh id still finds the operation its first attempt admitted. Every operand
+  // that shapes the converted rows is here — including the workflow
+  // acknowledgements, so a retry with a different skip set can never adopt (and
+  // reinterpret) another attempt's frozen payload.
+  const intentOperands = {
     root: source.root,
-    operator,
-    operationId,
     deliveryDeclarations: input.deliveryDeclarations ?? [],
     acknowledgedWorkflowSkips: [...workflowSkips].sort(),
     // A compass acknowledgement selects which lifecycles the conversion
@@ -1056,11 +1059,24 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     // must never vouch for bytes that were never imported, so reusing one
     // operationId across changed legacy bytes conflicts instead of replaying.
     sourceDigest: source.sourceDigest,
+  };
+  const requestHash = createHash("sha256").update(JSON.stringify({
+    operation: "store.upgrade",
+    operator,
+    operationId,
+    ...intentOperands,
   })).digest("hex");
   // The reviewed identity a retry finds, independent of the fresh operation id
-  // an operator's CLI mints per invocation: the legacy bytes actually read and
-  // the conversion-shaping input this run carries.
-  const frozenPayload = JSON.stringify({ sourceDigest: source.sourceDigest, inputDigest: conversionInput.digest, operator });
+  // an operator's CLI mints per invocation: a canonical rendering of the same
+  // operands (fixed key order, sorted set members).
+  const frozenPayload = JSON.stringify({
+    operator,
+    root: intentOperands.root,
+    deliveryDeclarations: intentOperands.deliveryDeclarations,
+    acknowledgedWorkflowSkips: intentOperands.acknowledgedWorkflowSkips,
+    acknowledgedCompassSkips: intentOperands.acknowledgedCompassSkips,
+    sourceDigest: intentOperands.sourceDigest,
+  });
   // Receipt-first replay: a lost response answers from the ledger WITHOUT
   // touching the collaboration lane.
   const preflight = await withExecutionTransaction(context, (tx) => readImportReceipt(tx, operationId, requestHash));
@@ -1068,9 +1084,29 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
     if (source.refusal !== undefined) conflict(source.refusal);
     return preflight;
   }
+  // Every deterministic admission refusal runs BEFORE the authority is promoted,
+  // so a refused import never leaves an activated store behind.
+  await withExecutionTransaction(context, (tx) => {
+    admitExecutionImport(tx, source, conversionInput, workflowSkips);
+  });
+  // The legacy import IS the operation that activates a staged execution
+  // authority, while the composite's finalization requires an active one. The
+  // promotion therefore commits in its own transaction and advances NOTHING: the
+  // finalization owns the operation's ONE execution-revision advance, so an
+  // interruption before it — at any boundary — leaves a retry that still spends
+  // that advance exactly once. Promotion is idempotent (`staged` only).
+  await withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState === "active") return;
+    tx.db
+      .prepare(
+        "update execution_meta set authority_state = 'active', root_updated_at = ?, activated_at = ? " +
+          "where id = 1 and authority_state = 'staged'",
+      )
+      .run(source.rootDoc.updated_at, new Date().toISOString());
+  });
   const target = await collaborationTargetOf(context);
   const prepared = await withExecutionTransaction<
-    { kind: "replay"; result: MinimalImportResult } | { kind: "reserved"; intent: CompositeIntent; activated: boolean }
+    { kind: "replay"; result: MinimalImportResult } | { kind: "reserved"; intent: CompositeIntent }
   >(context, (tx) => {
     const replayed = readImportReceipt(tx, operationId, requestHash);
     if (replayed !== null) return { kind: "replay" as const, result: replayed };
@@ -1085,28 +1121,6 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
       )
       .get(tx.epoch, frozenPayload) as { operation_id?: unknown; request_hash?: unknown } | undefined;
     const pendingId = typeof pending?.operation_id === "string" ? pending.operation_id : null;
-    // Every deterministic refusal is evaluated BEFORE the reservation exists, so
-    // a refused import leaves no pending composite behind to settle.
-    admitExecutionImport(tx, source, conversionInput, workflowSkips);
-    // This import IS the operation that activates a staged execution authority,
-    // while the frame's finalization requires an active one. The activation
-    // therefore commits WITH the reservation: an interruption leaves an ACTIVE
-    // execution authority plus the pending reservation this same verb resumes,
-    // never an import reported as successful. It advances the revision once, as
-    // activation always has, and the finalization then commits the rows without
-    // a second advance.
-    const activated = tx.execution.authorityState !== "active";
-    if (activated) {
-      const execution = tx.db
-        .prepare(
-          "update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, " +
-            "activated_at = ? where id = 1 and revision = ?",
-        )
-        .run(source.rootDoc.updated_at, new Date().toISOString(), tx.execution.revision) as { changes?: unknown };
-      if (Number(execution.changes) !== 1) {
-        throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun `store upgrade` to enumerate current files.");
-      }
-    }
     const intent: CompositeIntent = {
       key: { executionStoreId: tx.storeId, executionEpoch: tx.epoch, operationId: pendingId ?? operationId },
       kind: "execution-import",
@@ -1120,7 +1134,7 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
       frozenPayload,
     };
     const reservation = reserveCompositeIntent(tx, intent, { revision: tx.execution.revision });
-    return { kind: "reserved" as const, intent: { ...intent, requestHash: reservation.requestHash }, activated };
+    return { kind: "reserved" as const, intent: { ...intent, requestHash: reservation.requestHash } };
   });
   if (prepared.kind === "replay") {
     if (source.refusal !== undefined) conflict(source.refusal);
@@ -1149,7 +1163,6 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
         admission: admitExecutionImport(tx, source, conversionInput, workflowSkips),
         operationId: prepared.intent.key.operationId,
         requestHash: prepared.intent.requestHash,
-        activatedAtAdmission: prepared.activated,
         effect,
       }),
   });

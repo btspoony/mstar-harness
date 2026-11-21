@@ -4131,3 +4131,75 @@ test("collaboration legacy import replay \u2014 the lane is confirmed before suc
   });
 });
 
+test("collaboration legacy import replay \u2014 a retry with a different workflow-skip set cannot adopt the pending import", async () => {
+  const { context } = legacyWorkspace("legacy-import-skip-identity");
+  const workflowId = "wf-legacy-import-skip-identity";
+  await collaborationLane(context);
+  const receipt = async (sql: string, ...params: Array<string | number>) => {
+    const store = await openStore(context, "read");
+    try { return store.db.prepare(sql).all(...params) as Array<Record<string, unknown>>; } finally { store.close(); }
+  };
+  const first = await importStoreMinimal({ context, operator: "operator", operationId: "op-import-skips-a" });
+  expect(first).toMatchObject({ imported: 1, importedIds: [workflowId] });
+  // A second admitted attempt that never finalized: its reservation is pending
+  // and its receipt is gone, so it is exactly what a retry would resume.
+  const admitted = await importStoreMinimal({ context, operator: "operator", operationId: "op-import-skips-b" });
+  expect(admitted).toMatchObject({ verdict: "nothing-to-import" });
+  const surgery = await openStore(context, "write");
+  try {
+    surgery.db.prepare("delete from store_operations where operation_id = ?").run("op-import-skips-b");
+    surgery.db.prepare("update execution_collaboration_intents set phase = 'prepared', receipt_json = null where operation_id = ?").run("op-import-skips-b");
+  } finally { surgery.close(); }
+
+  // The retry carries a DIFFERENT acknowledgement set — legitimate, because the
+  // id is now a collision this run may dispose of. A different reviewed payload
+  // must not adopt the pending operation: it runs under its own id and leaves
+  // the pending one untouched.
+  const acked = await importStoreMinimal({
+    context, operator: "operator", operationId: "op-import-skips-c", acknowledgedWorkflowSkips: [workflowId],
+  });
+  expect(acked).toMatchObject({ verdict: "nothing-to-import", imported: 0 });
+  expect(acked.dispositions).toContainEqual(expect.stringContaining("unnecessary for that id and disposed of no import"));
+  expect(await receipt("select phase from execution_collaboration_intents where operation_id = ?", "op-import-skips-b")).toEqual([{ phase: "prepared" }]);
+  expect(await receipt("select operation_id from store_operations where operation_id like 'op-import-skips-%' and operation_id not like '%#dsh-host-state'")).toEqual([
+    { operation_id: "op-import-skips-a" },
+    { operation_id: "op-import-skips-c" },
+  ]);
+});
+
+test("collaboration legacy import replay \u2014 a staged-authority interruption spends the execution revision exactly once", async () => {
+  const { context } = legacyWorkspace("legacy-import-staged-interrupt");
+  const workflowId = "wf-legacy-import-staged-interrupt";
+  await collaborationLane(context);
+  const imported = await importStoreMinimal({ context, operator: "operator", operationId: "op-staged-interrupt" });
+  expect(imported).toMatchObject({ imported: 1, importedIds: [workflowId] });
+  // The token an UNINTERRUPTED import of these bytes produces.
+  const uninterrupted = await readExecutionState(context);
+
+  // The interrupted shape: the staged authority was promoted, the effect
+  // committed, and the finalization never ran. The admission advanced nothing,
+  // so the interrupted store still sits at the revision the admission read.
+  const surgery = await openStore(context, "write");
+  try {
+    surgery.db.prepare("delete from execution_sessions where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_inputs where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_plans where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_registry where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from execution_workflows where workflow_id = ?").run(workflowId);
+    surgery.db.prepare("delete from store_operations where operation_id = ?").run("op-staged-interrupt");
+    surgery.db.prepare("update execution_collaboration_intents set phase = 'prepared', receipt_json = null where operation_id = ?").run("op-staged-interrupt");
+    surgery.db.prepare("update execution_meta set revision = 1, authority_state = 'active' where id = 1").run();
+  } finally { surgery.close(); }
+
+  const resumed = await importStoreMinimal({ context, operator: "operator", operationId: "op-staged-interrupt-retry" });
+  expect(resumed).toEqual(imported);
+  const after = await readExecutionState(context);
+  // The same token as the uninterrupted run: the resumed finalization spent the
+  // SAME single advance, not a second one.
+  expect(after.token).toEqual(uninterrupted.token);
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select revision from execution_meta where id = 1").get()).toEqual({ revision: 2 });
+  } finally { store.close(); }
+});
+

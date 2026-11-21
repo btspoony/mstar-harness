@@ -1848,5 +1848,52 @@ describe("collaboration registration replay", () => {
     ).toEqual(accepted);
     expect(await footprint(fixture.context)).toEqual(finalized);
   });
+
+  test("collaboration registration replay \u2014 the shipped entry resolves the pending operation before enforcing a new-attempt catalog expectation", async () => {
+    const fixture = await activeFixture("replay-shipped-pending");
+    const reviewed = planRequest({ context: fixture.context, operationId: "unused-shipped-pending" });
+    const context: ExecutionContext = { ...fixture.context, caller: fixture.caller };
+    // The reviewed constraint the caller held before the lost response.
+    const accepted = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: reviewed.workflow,
+      expected: fixture.rootToken,
+      expectedCatalogRevision: 0,
+    });
+    await simulateInterruptedFinalization(fixture.context, accepted.operationId, WORKFLOW_ID);
+    // The catalog moved to 1 with no execution receipt, yet the retry with its
+    // ORIGINAL reviewed expectation must reach the frozen pending expectation
+    // and replay the committed effect instead of refusing a new-attempt CAS.
+    const pending = await readExecutionState(fixture.context);
+    const resumed = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: reviewed.workflow,
+      expected: pending.token,
+      expectedCatalogRevision: 0,
+    });
+    expect(resumed).toEqual(accepted);
+    expect(await footprint(fixture.context)).toMatchObject({
+      workflows: 1,
+      registry: 1,
+      plans: 1,
+      inputs: 1,
+      operations: 1,
+      entities: 1,
+      catalog_revision: 1,
+      collaboration_revision: 1,
+      effects: 1,
+      pending: 0,
+    });
+    // A genuinely NEW attempt still enforces its own reviewed expectation.
+    const fresh = await readExecutionState(fixture.context);
+    await expect(
+      registerShippedCatalogExecution(context, {
+        actor: "project-manager",
+        workflow: planRequest({ context: fixture.context, operationId: "unused-shipped-pending-2", workflowId: WORKFLOW_ID_ALT }).workflow,
+        expected: fresh.token,
+        expectedCatalogRevision: 0,
+      }),
+    ).rejects.toMatchObject({ code: "catalog.revision-conflict" });
+  });
 });
 
