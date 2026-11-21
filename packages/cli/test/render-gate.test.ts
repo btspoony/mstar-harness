@@ -25,7 +25,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { captureIssue, createExecutionWorkflow, initializeStore, openStore, readExecutionAuthority, registerCatalogEntity } from "@mstar-harness/engine";
+import { captureIssue, createExecutionWorkflow, ensureCollaborationAuthority, initializeStore, openStore, readExecutionAuthority, registerCatalogEntity } from "@mstar-harness/engine";
 import { startDashboard, type RunningDashboard } from "../../commands/src/dashboard/index.ts";
 
 const RECORDED_AT = "2026-10-24T09:06:22.870Z";
@@ -372,6 +372,7 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     mkdirSync(join(root, ".mstar"), { recursive: true });
     const context = { harnessDir: join(root, ".mstar") };
     (await initializeStore(context)).close();
+    await ensureCollaborationAuthority(context);
 
     const captured = await captureIssue(
       context,

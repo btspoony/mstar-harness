@@ -31,6 +31,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  ensureCollaborationAuthority,
   initializeStore,
   openStore,
   readExecutionAuthority,
@@ -41,7 +42,7 @@ import {
 import { semanticRequestHash } from "../../engine/src/execution-store.js";
 import { PLAN_OPERATION_SEMANTICS, selectSemanticFields } from "../../engine/src/recovery-intent.js";
 
-import { receiptStable, runCli, type RunResult } from "./harness";
+import { receiptStable, runCli, writeFixtureRepoId, type RunResult } from "./harness";
 
 const WORKFLOW_ID = "wf-close";
 const PLAN_ID = "plan-close";
@@ -143,12 +144,14 @@ async function activeFixture(label: string): Promise<Fixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
   roots.push(root);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   const context: StoreContext = { harnessDir: harness };
   const store = await initializeStore(context);
   store.close();
+  await ensureCollaborationAuthority(context);
   const baseSha = gitOut(["rev-parse", "HEAD"], root);
 
   const worktree = join(root, "wt-feature");

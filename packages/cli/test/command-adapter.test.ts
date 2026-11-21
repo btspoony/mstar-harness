@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import {
-  bindExecutionSession, createExecutionWorkflow, encodeExecutionSessionRef, executionContextFor,
+  bindExecutionSession, createExecutionWorkflow, encodeExecutionSessionRef, ensureCollaborationAuthority, executionContextFor,
   initializeStore, openStore, readExecutionAuthority, serializeExecutionValue,
   type ExecutionIdentity, type ExecutionSessionRef, type ExecutionToken,
 } from "@mstar-harness/engine";
@@ -705,11 +705,15 @@ describe("generated CLI adapter", () => {
   });
 test("workflow registration discloses missing plan identity and succeeds after the document correction", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "cli-workflow-registration-correction-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+  writeFileSync(path.join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-cli-adapter-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   const harness = path.join(root, ".mstar");
   const planFile = path.join(harness, "plans", "plan-public-registration.md");
   mkdirSync(path.dirname(planFile), { recursive: true });
   writeFileSync(planFile, "# Public registration plan\n");
   (await initializeStore({ harnessDir: harness })).close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   // A registered CLI invocation opens the store query-only. On Bun 1.4.0 the
   // just-closed writer's deferred cleanup can still remove the WAL sidecars
   // WHILE that read-only open runs, so its first open intermittently refuses

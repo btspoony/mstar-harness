@@ -31,8 +31,16 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { encodeExecutionSessionRef, initializeStore, openStore, readExecutionAuthority, type ExecutionSessionRef } from "@mstar-harness/engine";
-import { CLI_ROOT, cliEnv, runCli as spawnCli, type RunResult } from "./harness";
+import {
+  encodeExecutionSessionRef,
+  initializeCollaborationStore,
+  initializeStore,
+  openStore,
+  readExecutionAuthority,
+  resolveCollaborationLocation,
+  type ExecutionSessionRef,
+} from "@mstar-harness/engine";
+import { CLI_ROOT, cliEnv, runCli as spawnCli, writeFixtureRepoId, type RunResult } from "./harness";
 
 const WORKFLOW_ID = "wf-issues";
 const PLAN_ID = "plan-issues";
@@ -97,9 +105,10 @@ interface Fixture {
 }
 function initializeFixtureStore(harness: string, cwd: string): void {
   const engineEntry = join(CLI_ROOT, "../engine/src/index.ts");
-  const script = `import { createExecutionWorkflow, initializeStore, readExecutionAuthority, registerCatalogEntity } from ${JSON.stringify(engineEntry)};
+  const script = `import { createExecutionWorkflow, ensureCollaborationAuthority, initializeStore, readExecutionAuthority, registerCatalogEntity } from ${JSON.stringify(engineEntry)};
 const context = { harnessDir: ${JSON.stringify(harness)} };
 const store = await initializeStore(context); store.close();
+await ensureCollaborationAuthority(context);
 const initialized = await readExecutionAuthority(context);
 await registerCatalogEntity(context, { kind: "plan", id: ${JSON.stringify(PLAN_ID)}, title: ${JSON.stringify(`Plan ${PLAN_ID}`)}, rootKind: "plans", relativePath: ${JSON.stringify(`plans/${PLAN_ID}.md`)} }, { operationId: "register-plan", actor: "issue-cutover.test" });
 const caller = { sessionId: "fixture-coordinator", role: "coordinator", workflowId: ${JSON.stringify(WORKFLOW_ID)}, planId: null };
@@ -130,6 +139,7 @@ async function makeFixture(): Promise<Fixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-issue-cutover-")));
   roots.push(root);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], {
     cwd: root,
   });
@@ -457,50 +467,58 @@ describe("mstar issue actor-only mutations", () => {
   });
 });
 describe("mstar status — the issue authority is never read as an empty rollup (G2b)", () => {
-  test("a missing store refuses the rollup and the findings gate", () => {
+  test("a missing authority refuses the rollup and the findings gate", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-issue-nostore-")));
     roots.push(root);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    writeFixtureRepoId(root);
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
 
     const rollup = runCli(["status", "tech-debt", "--harness", harness], root);
     expect(rollup.exitCode).toBe(1);
-    expect(jsonOf(rollup).code).toBe("store.not-initialized");
+    expect(jsonOf(rollup).code).toBe("collaboration.not-initialized");
     expect(jsonOf(rollup).data).toBeUndefined();
 
     const gate = runCli(["status", "findings-cleanup", PLAN_ID, "--harness", harness], root);
     expect(gate.exitCode).toBe(1);
-    expect(jsonOf(gate).code).toBe("store.not-initialized");
+    expect(jsonOf(gate).code).toBe("collaboration.not-initialized");
     expect(jsonOf(gate).data).toBeUndefined();
   });
 
-  test("a corrupt store refuses the rollup instead of reporting no findings", () => {
+  test("a corrupt lane refuses the rollup instead of reporting no findings", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-issue-corrupt-")));
     roots.push(root);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    writeFixtureRepoId(root);
     const harness = join(root, ".mstar");
-    writeText(join(harness, "store.db"), "this is not a SQLite database");
-    // An empty WAL beside a hand-written file is what a torn copy looks like.
+    mkdirSync(harness, { recursive: true });
+    const context = { harnessDir: harness };
+    const handle = await initializeStore(context);
+    handle.close();
+    await initializeCollaborationStore(resolveCollaborationLocation(context));
+    // The issue authority is the repository lane: a torn copy of ITS database
+    // is the failure the rollup must surface, never a zeroed success.
+    writeText(resolveCollaborationLocation(context).dbPath, "this is not a SQLite database");
     const rollup = runCli(["status", "tech-debt", "--harness", harness], root);
     expect(rollup.exitCode).toBe(1);
-    expect(jsonOf(rollup).code).toBe("store.corrupt");
+    expect(jsonOf(rollup).code).toBe("collaboration.unreadable");
     expect(jsonOf(rollup).data).toBeUndefined();
   });
 
-  test("a staged store is not the authority: the rollup and the gate both refuse", async () => {
+  test("a staged lane is not the authority: the rollup and the gate both refuse", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-issue-staged-")));
     roots.push(root);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    writeFixtureRepoId(root);
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
-
-    const handle = await initializeStore({ harnessDir: harness });
+    const context = { harnessDir: harness };
+    const handle = await initializeStore(context);
     handle.close();
-    const write = await openStore({ harnessDir: harness }, "write");
-    write.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
-    write.close();
-    // A read in THIS process first: a child's first read of a store the runner
-    // just wrote intermittently fails to open (task-3 report §observations).
-    const seal = await openStore({ harnessDir: harness }, "read");
-    seal.close();
+    // A created-but-never-published lane is staged: no ACTIVE record, so no
+    // issue read may pass through it.
+    await initializeCollaborationStore(resolveCollaborationLocation(context));
 
     for (const args of [
       ["issue", "list", "--harness", harness],
@@ -508,17 +526,17 @@ describe("mstar status — the issue authority is never read as an empty rollup 
     ]) {
       const result = runCli(args, root);
       expect(result.exitCode).toBe(1);
-      expect(jsonOf(result).code).toBe("store.not-active");
+      expect(jsonOf(result).code).toBe("collaboration.not-active");
       expect(jsonOf(result).data).toBeUndefined();
     }
     const rollup = runCli(["status", "tech-debt", "--harness", harness], root);
     expect(rollup.exitCode).toBe(1);
-    expect(jsonOf(rollup).code).toBe("store.not-active");
+    expect(jsonOf(rollup).code).toBe("collaboration.not-active");
     expect(jsonOf(rollup).data).toBeUndefined();
 
     const gate = runCli(["status", "findings-cleanup", PLAN_ID, "--harness", harness], root);
     expect(gate.exitCode).toBe(1);
-    expect(jsonOf(gate).code).toBe("store.not-active");
+    expect(jsonOf(gate).code).toBe("collaboration.not-active");
   });
 
   test("no command in the cutover family leaves a residual register behind", async () => {

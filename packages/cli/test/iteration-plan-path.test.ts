@@ -9,6 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
+  ensureCollaborationAuthority,
   initializeStore,
   readExecutionAuthority,
   resolveRegisteredPlanFile,
@@ -102,6 +103,7 @@ function setupHarness(options: { mstarc?: string; planSubdir?: string } = {}): {
   const planFile = join(planDir, `${PLAN_ID}.md`);
   writeFileSync(planFile, `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
   if (options.mstarc !== undefined) writeFileSync(join(harness, ".mstarc"), options.mstarc);
+  else writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-iter-path-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   return {
     harness,
     planPath: realpathSync(planFile),
@@ -111,6 +113,7 @@ function setupHarness(options: { mstarc?: string; planSubdir?: string } = {}): {
 }
 async function initStore(harness: string): Promise<void> {
   await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
+  await ensureCollaborationAuthority({ harnessDir: harness });
   await readExecutionAuthority({ harnessDir: harness });
 }
 

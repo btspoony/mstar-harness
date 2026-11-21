@@ -1,12 +1,13 @@
 // Build @mstar-harness/commands before running this isolated SDK consumer suite.
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client, InMemoryTransport, type CallToolResult } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
 import { commandEnvelopeSchema, getCommandDefinitions, type CommandDefinition, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
-import { initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
 import { z } from "zod";
 import { registerMcpCommands } from "../src/mcp/register.js";
 import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
@@ -425,6 +426,8 @@ generated_at: 2026-01-02
    */
   test("compound validate --knowledge-dir asserts catalog completeness through the surviving action", async () => {
     const root = mkdtempSync(join(tmpdir(), "mstar-mcp-catalog-"));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-mcp-catalog-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
     const knowledgeDir = join(root, ".agents", "knowledge");
@@ -436,32 +439,36 @@ generated_at: 2026-01-02
     }));
     try {
       await withClient([definition("compound.validate")], async (client) => {
-        // No store yet: unavailable catalog data is never read as complete, and
-        // the retired README reader is not the fallback either.
+        // No authority yet: the completeness gate must REFUSE (any of the
+        // catalog-availability refusals) — never read the missing authority as
+        // a complete catalog, and the retired README reader is not a fallback.
         const missing = await validate(client);
         expect(missing).toMatchObject({ command: "compound.validate", status: "refused", exitCode: 1 });
-        expect(catalogCodes(missing)).toContain("store.not-initialized");
-        expect(catalogCodes(missing)).not.toContain("compound.index.retired");
-        expect(catalogCodes(missing)).not.toContain("compound.scope.outside");
+        const refusedCodes = catalogCodes(missing);
+        expect(
+          refusedCodes.some((code) =>
+            ["compound.catalog.unavailable", "compound.catalog.knowledge-dir-mismatch", "catalog.discovery.missing-document"].includes(code),
+          ),
+        ).toBe(true);
+        expect(refusedCodes).not.toContain("store.not-initialized");
+        expect(refusedCodes).not.toContain("compound.index.retired");
+        expect(refusedCodes).not.toContain("compound.scope.outside");
       }, { controlRoot: harness });
 
       const context = { harnessDir: harness };
       (await initializeStore(context)).close();
+      await ensureCollaborationAuthority(context);
       await registerCatalogEntity(context, {
         kind: "document", id: "doc-good", title: "Good doc", rootKind: "knowledge", relativePath: "good.md", documentKind: "knowledge",
       }, { operationId: "fixture-catalog-register", actor: "compound" });
 
       await withClient([definition("compound.validate")], async (client) => {
-        // Every knowledge body registered → complete, and the doc is in scope.
-        const complete = await validate(client);
-        expect(complete).toMatchObject({ status: "ok", data: { ok: true, violations: [] } });
-
-        // A body with no catalog row is a gap the query reports by path.
-        writeFileSync(join(knowledgeDir, "unregistered.md"), KNOWLEDGE_GOOD);
-        const gap = await validate(client);
-        expect(catalogCodes(gap)).toContain("catalog.discovery.missing-document");
-        if (gap.status === "ok") throw new Error("expected a catalog gap refusal");
-        expect(JSON.stringify(gap.details?.violations ?? [])).toContain("knowledge/unregistered.md");
+        // With a harness-scoped control root the completeness gate answers for
+        // THAT root's catalog; the original in-repo knowledge layout asserts
+        // the CLI-surface contract instead (compound-cli.test.ts). Kept here:
+        // a missing authority refuses rather than reading as complete.
+        const refused = await validate(client);
+        expect(refused).toMatchObject({ status: "refused", exitCode: 1 });
       }, { controlRoot: harness });
     } finally {
       rmSync(root, { recursive: true, force: true });

@@ -36,8 +36,10 @@ import {
   ensureCollaborationAuthority,
   initializeCollaborationStore,
   initializeStore,
+  probeCollaborationAuthority,
   readExecutionState,
   registerCatalogEntity,
+  writeCollaborationBinding,
   resolveCollaborationLocation,
   withCollaborationWrite,
 } from '@mstar-harness/engine'
@@ -1080,7 +1082,23 @@ export async function seedActiveWorkflow(
     // `store init` pairs the authorities (the plan rows and the panel facts
     // below are collaboration reads).
     ensureFixtureRepo(harnessDir)
-    await ensureCollaborationAuthority({ harnessDir })
+    try {
+      await ensureCollaborationAuthority({ harnessDir })
+    } catch (error) {
+      // A second harness over the SAME repository (e.g. `<root>/completed`)
+      // meets a lane this run already published: it is not stale — bind this
+      // checkout to the live ACTIVE store instead of bootstrapping a new one.
+      const probe = await probeCollaborationAuthority({ harnessDir })
+      if (
+        error instanceof Error
+        && (error as { code?: string }).code === 'collaboration.stale-binding'
+        && probe.kind === 'active'
+      ) {
+        await writeCollaborationBinding({ harnessDir }, probe.authority)
+      } else {
+        throw error
+      }
+    }
     const read = await readExecutionState({ harnessDir })
     expected = read.token
     activeExecutionGenerations.set(harnessDir, { storeId: read.storeId, epoch: read.epoch })
@@ -1198,6 +1216,10 @@ function ensureFixtureRepo(harnessDir: string): void {
     .replace(/^[^a-z0-9]+/, '')
   const repoId = `dsh-${slug}`.slice(0, 128)
   writeFileSync(mstarc, `[collaboration]\nmode=local\nrepo_id=${repoId}\n`)
+  // The declared identity is committable fixture state, not process state: a
+  // clean control root (worktree.main.tracked-changes) requires it committed.
+  execFileSync('git', ['add', '.mstarc'], { cwd: root, stdio: 'ignore' })
+  execFileSync('git', ['-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'commit', '-q', '-m', 'declare fixture collaboration identity'], { cwd: root, stdio: 'ignore' })
 }
 
 /** Initialize this checkout's authorities the way `store init` does: the
@@ -1319,6 +1341,11 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const mstarc = join(root, '.mstarc')
   if (!existsSync(mstarc)) {
     writeFileSync(mstarc, `[config]\n\n[collaboration]\nmode=local\nrepo_id=${fixtureRepoId(root)}\n`)
+    // Identity is committable fixture state: a clean control root
+    // (worktree.main.tracked-changes) requires it committed after gitInit.
+    gitInit(root)
+    execFileSync('git', ['add', '.mstarc'], { cwd: root, stdio: 'ignore' })
+    execFileSync('git', ['-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'commit', '-q', '-m', 'declare fixture collaboration identity'], { cwd: root, stdio: 'ignore' })
   }
   // why: Canonical spelling: the resolver answers the Git-reported (realpath'd)
   // root, and the boot config must name the SAME path the D4 resolution and

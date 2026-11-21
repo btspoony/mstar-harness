@@ -21,8 +21,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { createExecutionWorkflow, initializeStore, readExecutionState, registerCatalogEntity } from "@mstar-harness/engine";
-import { cliEnv, runCli, SRC_ENTRY, type RunResult } from "./harness";
+import { createExecutionWorkflow, ensureCollaborationAuthority, initializeStore, readExecutionState, registerCatalogEntity } from "@mstar-harness/engine";
+import { cliEnv, runCli, SRC_ENTRY, writeFixtureRepoId, type RunResult } from "./harness";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
 
 /** Built entry when the suite runs against a built CLI (CI); else the source entry. */
@@ -388,6 +388,7 @@ async function executionFixture(root: string, opts: { nested?: boolean } = {}): 
   git(["checkout", "-q", "-b", "main"], primary);
   git(["config", "user.email", "sdd-cli-test@example.com"], primary);
   git(["config", "user.name", "SDD CLI Test"], primary);
+  writeFixtureRepoId(primary);
   writeFileSync(join(primary, "src-sentinel.txt"), "primary source sentinel\n");
   // Mirror the real default: control artifacts (.mstar/) are gitignored, so
   // the causal-replay suite can assert "sources clean" via git status while
@@ -422,6 +423,7 @@ async function executionFixture(root: string, opts: { nested?: boolean } = {}): 
   // branch-alignment arm production uses.
   const storeContext = { harnessDir };
   (await initializeStore(storeContext)).close();
+  await ensureCollaborationAuthority(storeContext);
   await registerCatalogEntity(
     storeContext,
     { kind: "plan", id: PLAN_ID, title: PLAN_ID, rootKind: "plans", relativePath: `plans/${PLAN_ID}.md` },

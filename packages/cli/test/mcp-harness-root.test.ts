@@ -899,7 +899,9 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "status.workflow-close": "root", "store.activate": "root", "store.backup": "root",
   "store.execution.export": "none", "store.execution.restore": "none", "store.execution.restore-preview": "none",
   "store.collaboration.activate": "none", "store.collaboration.apply": "none",
-  "store.collaboration.plan": "none", "store.collaboration.restore": "none", "store.collaboration.adopt": "root",
+  // why: adopt is the replacement clone's binding verb — an unbound checkout
+  // has no control root yet, so it must admit on an unpinned connection.
+  "store.collaboration.plan": "none", "store.collaboration.restore": "none", "store.collaboration.adopt": "none",
   "store.init": "root", "store.migrate": "root", "store.retire": "root",
   "store.upgrade": "root", "workflow-note.append": "root", "workflow-note.coverage": "root",
   "workflow.adopt-terminal": "root", "workflow.compass-ref": "root", "workflow.delivery-anchors": "root", "workflow.evidence": "root",
@@ -976,6 +978,8 @@ const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record
   "store.collaboration.apply": null,
   "store.collaboration.plan": null,
   "store.collaboration.restore": null,
+  // adopt names its target explicitly (--harness <abs>): no launch-cwd default.
+  "store.collaboration.adopt": null,
   "worktree.qc-alignment": { args: { files: ["qc1.md", "qc2.md"] }, subject: "the assignment file" },
 };
 

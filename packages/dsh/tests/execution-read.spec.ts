@@ -22,6 +22,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
 import {
   createExecutionWorkflow,
+  ensureCollaborationAuthority,
   initializeStore,
   openStore,
   readExecutionState,
@@ -82,6 +83,7 @@ interface WorkflowSpec {
 async function seedExecutionAuthority(harnessDir: string, workflows: readonly WorkflowSpec[]): Promise<void> {
   const handle = await initializeStore({ harnessDir })
   handle.close()
+  await ensureCollaborationAuthority({ harnessDir })
   let token = (await readExecutionState({ harnessDir })).token
   for (const workflow of workflows) {
     await registerCatalogEntity(

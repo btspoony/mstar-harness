@@ -36,6 +36,7 @@ import {
   createExecutionWorkflow,
   decodeExecutionSessionRef,
   encodeExecutionSessionRef,
+  ensureCollaborationAuthority,
   initializeStore,
   readExecutionState,
   registerCatalogEntity,
@@ -185,6 +186,7 @@ async function seedBoundAuthority(harnessDir: string, sessionId: string): Promis
   // The fixture's ONE connection for this root: kept open through the case so
   // the reads below never open a just-closed store (see `storeHandles`).
   storeHandles.push(await initializeStore({ harnessDir }))
+  await ensureCollaborationAuthority({ harnessDir })
   const rootToken = (await readExecutionState({ harnessDir })).token
   await registerCatalogEntity(
     { harnessDir },
@@ -251,9 +253,15 @@ async function adoptFor(harnessDir: string, cwd: string, sessionId: string): Pro
  */
 async function seedUnboundWorkflow(harnessDir: string, coordinatorSessionId: string): Promise<void> {
   await mkdir(harnessDir, { recursive: true })
+  // Identity is declared INSIDE the harness root: adopted roots are bare temp
+  // dirs, and without a local `.mstarc` the repository probe walks up into
+  // `$TMPDIR` itself (which would git-init and label the shared root).
+  await execFileSync('git', ['init', '-q', '-b', 'main', harnessDir], { stdio: 'ignore' })
+  await writeFile(join(harnessDir, '.mstarc'), `[collaboration]\nmode=local\nrepo_id=dsh-adopted-${realpathSync(harnessDir).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(-110)}\n`)
   // The fixture's ONE connection for this root, kept open for the case (see
   // `storeHandles`): the bind's refusal path reads the slot afterwards.
   storeHandles.push(await initializeStore({ harnessDir }))
+  await ensureCollaborationAuthority({ harnessDir })
   const rootToken = (await readExecutionState({ harnessDir })).token
   await registerCatalogEntity(
     { harnessDir },
