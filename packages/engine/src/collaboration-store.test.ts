@@ -32,12 +32,14 @@ import { resolveCollaborationLocation, type CollaborationLocation } from "./coll
 import {
   initializeCollaborationStore,
   openCollaborationStore,
+  probeCollaborationAuthority,
   readCollaborationAuthority,
   withCollaborationWrite,
   type CollaborationStamp,
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
 import { MIGRATIONS, initializeStore, openStore, type StoreContext } from "./store-db.js";
+import { ensureCollaborationAuthority } from "./store-activation.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-collab-store-")));
 const HOME = join(ROOT, "home");
@@ -1132,5 +1134,66 @@ describe("collaboration store", () => {
     }
     // The collaboration database stays a separate file with its own schema.
     expect(tableNames(locationAt(repo).dbPath)).toEqual(COLLABORATION_TABLES);
+  });
+});
+
+describe("collaboration host authority", () => {
+  test("an execution-only store never answers for the collaboration lane", async () => {
+    const repo = makeRepo("https://github.com/acme/host-execution-only.git");
+    const context = contextAt(repo);
+    const handle = await initializeStore(context);
+    handle.close();
+    // The execution store is ACTIVE, but no collaboration record exists: the
+    // probe is `absent`, never a permission and never an execution inference.
+    expect(await probeCollaborationAuthority(context)).toMatchObject({
+      kind: "absent",
+      code: "collaboration.not-initialized",
+    });
+  });
+
+  test("active, staged and unreadable lanes are named as themselves", async () => {
+    const activeRepo = makeRepo("https://github.com/acme/host-active.git");
+    // The fresh-init route: create-only publication plus this checkout's own
+    // binding (a raw state flip would legitimately refuse as stale-binding).
+    await ensureCollaborationAuthority(contextAt(activeRepo));
+    const active = await probeCollaborationAuthority(contextAt(activeRepo));
+    expect(active).toMatchObject({
+      kind: "active",
+      authority: { repoKey: "github.com/acme/host-active", mode: "local", state: "active" },
+    });
+    // The probe is independent of execution: no execution store exists here.
+    expect(existsSync(join(contextAt(activeRepo).harnessDir, "store.db"))).toBe(false);
+
+    const stagedRepo = makeRepo("https://github.com/acme/host-staged.git");
+    await initializeCollaborationStore(locationAt(stagedRepo));
+    expect(await probeCollaborationAuthority(contextAt(stagedRepo))).toMatchObject({
+      kind: "staged",
+      code: "collaboration.not-active",
+    });
+
+    const brokenRepo = makeRepo("https://github.com/acme/host-broken.git");
+    mkdirSync(locationAt(brokenRepo).dbPath, { recursive: true });
+    expect(await probeCollaborationAuthority(contextAt(brokenRepo))).toMatchObject({
+      kind: "unavailable",
+      code: "collaboration.unreadable",
+    });
+  });
+
+  test("an unresolved identity or unsupported mode is unavailable, never absent", async () => {
+    const originless = join(ROOT, `repo-host-originless-${sequence++}`);
+    mkdirSync(originless, { recursive: true });
+    git(originless, "init", "-q");
+    writeFileSync(join(originless, ".mstarc"), "[collaboration]\nmode=local\n");
+    expect(await probeCollaborationAuthority(contextAt(originless))).toMatchObject({
+      kind: "unavailable",
+      code: "collaboration.repo-identity-unresolved",
+    });
+
+    const remote = makeRepo("https://github.com/acme/host-remote.git");
+    writeFileSync(join(remote, ".mstarc"), "[collaboration]\nmode=remote\n");
+    expect(await probeCollaborationAuthority(contextAt(remote))).toMatchObject({
+      kind: "unavailable",
+      code: "collaboration.mode-unavailable",
+    });
   });
 });

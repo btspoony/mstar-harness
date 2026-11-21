@@ -14,13 +14,13 @@
  * dispatch the real `@deepseek-ai/dsh-tool-fs` write/edit tools perform
  * (`ctx.waterfall('fs/write-intent', target, exec, () => undefined)`).
  */
-import { afterAll, beforeAll } from 'bun:test'
+import { afterAll, beforeAll, spyOn } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import * as nodeOs from 'node:os'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import { load as parseYaml } from 'js-yaml'
@@ -33,10 +33,13 @@ import {
   captureIssue,
   bindExecutionSession,
   createExecutionWorkflow,
+  ensureCollaborationAuthority,
+  initializeCollaborationStore,
   initializeStore,
-  openStore,
   readExecutionState,
   registerCatalogEntity,
+  resolveCollaborationLocation,
+  withCollaborationWrite,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext, ExecutionToken, CaptureInput } from '@mstar-harness/engine'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -88,6 +91,24 @@ export interface FakeJobSnapshot extends JobDoneSnapshot {
       ? `function ${this.name || 'anonymous'}() { [native code] }`
       : rendered
   }
+}
+
+/**
+ * Isolated user home for the collaboration lane: its store lives at
+ * `<home>/.mstar/repos/<repo>/collaboration.db`, so no dsh fixture may read or
+ * write the real home. One home per test process, removed on exit.
+ */
+const FIXTURE_HOME = mkdtempSync(join(tmpdir(), 'dsh-mstar-home-'))
+spyOn(nodeOs, 'homedir').mockImplementation(() => FIXTURE_HOME)
+process.on('exit', () => rmSync(FIXTURE_HOME, { recursive: true, force: true }))
+
+/** One repository identity per fixture root (its temp basename is unique). */
+function fixtureRepoId(root: string): string {
+  const slug = basename(root)
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^[^a-z0-9]+/, '')
+  return `dsh-${slug}`.slice(0, 128)
 }
 
 /**
@@ -1049,6 +1070,11 @@ export async function seedActiveWorkflow(
       const store = await initializeStore({ harnessDir })
       store.close()
     }
+    // Every fixture harness gets its repository's collaboration lane, the way
+    // `store init` pairs the authorities (the plan rows and the panel facts
+    // below are collaboration reads).
+    ensureFixtureRepo(harnessDir)
+    await ensureCollaborationAuthority({ harnessDir })
     const read = await readExecutionState({ harnessDir })
     expected = read.token
     activeExecutionGenerations.set(harnessDir, { storeId: read.storeId, epoch: read.epoch })
@@ -1152,10 +1178,43 @@ export function gitInit(root: string): void {
  * so a spec proves host behaviour against the authority instead of a mock.
  * ========================================================================== */
 
-/** Initialize an ACTIVE empty issue/catalog store at `harnessDir` (the real engine initializer). */
+/** Make the harness's owner a git checkout with a collaboration identity, so
+ * fixtures can resolve the user-level lane (resolution names the main
+ * checkout and reads its `.mstarc`). Idempotent. */
+function ensureFixtureRepo(harnessDir: string): void {
+  const root = dirname(realpathSync(harnessDir))
+  gitInit(root)
+  const mstarc = join(root, '.mstarc')
+  if (existsSync(mstarc)) return
+  const slug = basename(root)
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^[^a-z0-9]+/, '')
+  const repoId = `dsh-${slug}`.slice(0, 128)
+  writeFileSync(mstarc, `[collaboration]\nmode=local\nrepo_id=${repoId}\n`)
+}
+
+/** Initialize this checkout's authorities the way `store init` does: the
+ * repository's ACTIVE collaboration lane first, then this checkout's execution
+ * store (left alone when a fixture already created it). */
 export async function seedStore(harnessDir: string): Promise<void> {
-  const handle = await initializeStore({ harnessDir })
-  handle.close()
+  ensureFixtureRepo(harnessDir)
+  await ensureCollaborationAuthority({ harnessDir })
+  if (!existsSync(join(harnessDir, 'store.db'))) {
+    const handle = await initializeStore({ harnessDir })
+    handle.close()
+  }
+}
+
+/** Publish a STAGED-ONLY collaboration lane (built, never activated). */
+export async function seedStagedCollaboration(harnessDir: string): Promise<void> {
+  ensureFixtureRepo(harnessDir)
+  await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir }))
+}
+
+/** The collaboration database this harness resolves to (fixture corruption target). */
+export function collaborationDbPathAt(harnessDir: string): string {
+  return resolveCollaborationLocation({ harnessDir }).dbPath
 }
 
 /**
@@ -1194,14 +1253,15 @@ export async function seedOpenIssue(
     // would leave it: the `linkIssue` verb re-verifies a live engine-issued
     // session envelope (issue contract §4), which a fixture cannot mint. The
     // read gate this helper feeds is what the plan-link fixture is for.
-    const handle = await openStore({ harnessDir }, 'write')
-    try {
-      handle.db
-        .prepare("insert into provenance(issue_id, kind, target, source_hash) values (?, 'plan', ?, ?)")
-        .run(receipt.issueId, options.planId, `fixture:${options.planId}`)
-    } finally {
-      handle.close()
-    }
+    const planId = options.planId
+    const issueId = receipt.issueId
+    await withCollaborationWrite({ harnessDir }, ({ db }) => {
+      db.prepare("insert into provenance(issue_id, kind, target, source_hash) values (?, 'plan', ?, ?)").run(
+        issueId,
+        planId,
+        `fixture:${planId}`,
+      )
+    })
   }
   return receipt.issueId
 }
@@ -1247,6 +1307,13 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-mstar-boot-'))
   const harnessDir = join(root, '.mstar')
   await mkdir(harnessDir, { recursive: true })
+  // A real repository identity: collaboration resolution needs an origin or an
+  // explicit repo_id, and the fixture must never derive the ambient home's
+  // .mstarc. A test that writes its own `.mstarc` later overwrites this.
+  const mstarc = join(root, '.mstarc')
+  if (!existsSync(mstarc)) {
+    writeFileSync(mstarc, `[config]\n\n[collaboration]\nmode=local\nrepo_id=${fixtureRepoId(root)}\n`)
+  }
   // why: Canonical spelling: the resolver answers the Git-reported (realpath'd)
   // root, and the boot config must name the SAME path the D4 resolution and
   // every binding comparison use.

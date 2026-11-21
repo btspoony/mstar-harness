@@ -481,7 +481,7 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
     expect(payload.state?.plans.map((plan) => plan.status)).toEqual(['Todo', 'Done'])
   })
 
-  it('panelDigestOf ignores ONLY the self-perturbing store revision — and never mutates the payload (D2)', async () => {
+  it('panelDigestOf ignores the self-perturbing store revision and observation time — and never mutates the payload (D2)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-panelkey-'))
     const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-panelkey', [], {}, SESSION_ID, root, 'wf-panelkey')
@@ -503,6 +503,14 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
     if (bumped.state === null || bumped.state.storeFacts === undefined) throw new Error('expected store facts')
     ;(bumped.state.storeFacts as { storeRevision: number | null }).storeRevision = revision + 1
     expect(panelDigestOf(bumped)).toBe(baseline)
+
+    // `asOf` is the moment each read established its snapshot: also volatile.
+    const reobserved = copy()
+    if (reobserved.state === null || reobserved.state.storeFacts === undefined) throw new Error('expected store facts')
+    // Fixture-only: the deep copy is mutable JSON while the payload type is readonly.
+    const reobservedFacts = reobserved.state.storeFacts as { asOf: string | null }
+    reobservedFacts.asOf = '2030-01-01T00:00:00.000Z'
+    expect(panelDigestOf(reobserved)).toBe(baseline)
 
     // A panel-visible detail change IS a change, even when the rollup the text
     // renders is byte-identical (the detail rows are panel-only facts).

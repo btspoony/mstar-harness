@@ -24,11 +24,10 @@ export type WriteGateEngineApi = Pick<
  | "harnessDocKindOfTarget"
  | "isStoreAuthorityTarget"
  | "landedPathOf"
- | "queryIssueFlow"
+ | "probeCollaborationAuthority"
  | "resolveExecutionReadRoute"
  | "resolveRepoEnforcement"
  | "validateStatusWriteDoc"
- | "withStoreRead"
 >;
 
 type WriteGateServices = {
@@ -85,9 +84,9 @@ async function authorityRefusalFor(api: WriteGateEngineApi, target: GatedDocumen
  // route entirely — status/snapshot writes are vetoed while the
  // authority is ACTIVE. A pre-activation harness (`store.not-initialized`
  // / `store.not-active`) is NO verdict: the compass-governed document
- // lint below decides, mirroring the register route's legacy
- // disposition. Any other refusal leaves the authority UNKNOWN and
- // fails closed; there is no file-route fallback.
+ // lint below decides (the register route has no such pre-activation
+ // permission any more). Any other refusal leaves the authority UNKNOWN
+ // and fails closed; there is no file-route fallback.
  await api.resolveExecutionReadRoute({ harnessDir: target.harnessDir });
  return authorityError("execution.direct-write-refused", "The ACTIVE execution authority retires this file as a persistence route");
  } catch (error) {
@@ -98,12 +97,13 @@ async function authorityRefusalFor(api: WriteGateEngineApi, target: GatedDocumen
  }
 
  try {
- await api.withStoreRead({ harnessDir: target.harnessDir }, api.queryIssueFlow());
- return authorityError("project.register.retired", "The ACTIVE issue/catalog authority retires project residual registers");
+ const probe = await api.probeCollaborationAuthority({ harnessDir: target.harnessDir });
+ if (probe.kind === "active") {
+ return authorityError("project.register.retired", "The ACTIVE collaboration authority retires project residual registers");
+ }
+ return authorityError("store.authority-unavailable", `The collaboration authority is ${probe.kind} (${probe.code}: ${probe.message})`);
  } catch (error) {
- const code = errorCode(error);
- if (code !== undefined && PRE_ACTIVATION_CODES.has(code)) return null;
- return authorityError("store.authority-unavailable", `The issue/catalog authority could not be read (${code ?? "unknown"}: ${error instanceof Error ? error.message : String(error)})`);
+ return authorityError("store.authority-unavailable", `The collaboration authority could not be read (${errorCode(error) ?? "unknown"}: ${error instanceof Error ? error.message : String(error)})`);
  }
 }
 

@@ -22,17 +22,22 @@
  *    never Bun's emulated `process.versions.node`): the injected below-floor
  *    case pins the actionable Node floor of the same code path.
  */
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createExecutionWorkflow,
+  ensureCollaborationAuthority,
+  initializeCollaborationStore,
   initializeStore,
   openStore,
+  probeCollaborationAuthority,
   readExecutionAuthority,
   registerCatalogEntity,
+  resolveCollaborationLocation,
 } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext, StoreRuntimeInfo } from "@mstar-harness/engine";
 import mstarGates, { storeRuntimeProbe as hookRuntimeProbe } from "../src/hooks/pre/mstar-gates";
@@ -57,12 +62,20 @@ const bunGlobal = (globalThis as unknown as { Bun?: { version: string } }).Bun;
 const realHookProbeInfo = hookRuntimeProbe.info;
 const roots: string[] = [];
 
+/**
+ * Isolated user home for the collaboration lane (its store lives under
+ * `<home>/.mstar/repos/...`); one per test process, removed on exit.
+ */
+const FIXTURE_HOME = mkdtempSync(join(tmpdir(), "omp-g4b-home-"));
+spyOn(nodeOs, "homedir").mockImplementation(() => FIXTURE_HOME);
+
 afterEach(() => {
   hookRuntimeProbe.info = realHookProbeInfo;
 });
 
 afterAll(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  rmSync(FIXTURE_HOME, { recursive: true, force: true });
 });
 
 interface Fixture {
@@ -85,7 +98,12 @@ function makeHarness(id: string, enforcement?: "hard" | "soft"): Fixture {
   mkdirSync(join(harness, "workflows"), { recursive: true });
   mkdirSync(join(harness, "projects", "_default"), { recursive: true });
   writeFileSync(join(harness, "status.json"), VALID_STATUS);
-  if (enforcement !== undefined) writeFileSync(join(root, ".mstarc"), `[config]\nenforcement=${enforcement}\n`);
+  // A configurable collaboration identity: the register route reads that lane,
+  // and the fixture home keeps the store out of the real home.
+  writeFileSync(
+    join(root, ".mstarc"),
+    `${enforcement === undefined ? "" : `[config]\nenforcement=${enforcement}\n\n`}[collaboration]\nmode=local\nrepo_id=omp-${id}\n`,
+  );
   return {
     root,
     harness,
@@ -95,19 +113,24 @@ function makeHarness(id: string, enforcement?: "hard" | "soft"): Fixture {
   };
 }
 
-/** REAL active store (engine initializer, real migrations). */
+/** REAL ACTIVE authorities (the `store init` pair): the repository's
+ * collaboration lane, then this checkout's execution store. */
 async function seedActiveStore(harnessDir: string): Promise<void> {
+  await ensureCollaborationAuthority({ harnessDir });
   const handle = await initializeStore({ harnessDir });
   handle.close();
 }
 
-/** REAL staged store: initialized, then flipped back to `staged` through the
- * engine's own write handle (pre-activation, issue contract §7). */
+/** REAL staged-only collaboration lane (built, never activated). */
 async function seedStagedStore(harnessDir: string): Promise<void> {
-  await seedActiveStore(harnessDir);
-  const write = await openStore({ harnessDir }, "write");
-  write.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
-  write.close();
+  await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir }));
+}
+
+/** Unreadable COLLABORATION authority through the REAL engine channel. */
+async function corruptCollaboration(harnessDir: string): Promise<void> {
+  const dbPath = resolveCollaborationLocation({ harnessDir }).dbPath;
+  rmSync(dbPath, { force: true });
+  mkdirSync(dbPath, { recursive: true });
 }
 
 const EXECUTION_WORKFLOW = "wf-execution-authority";
@@ -132,6 +155,9 @@ async function seedActiveExecutionStore(harnessDir: string, statusPath: string):
     // `initializeExecutionAuthority` refuses `execution.not-empty`.
     const handle = await initializeStore({ harnessDir });
     handle.close();
+    // The catalog registration writes the collaboration lane, so this fixture
+    // needs the `store init` pair, not the execution half alone.
+    await ensureCollaborationAuthority({ harnessDir });
     const initialized = await readExecutionAuthority({ harnessDir });
     await registerCatalogEntity(
       { harnessDir },
@@ -244,15 +270,16 @@ describe("omp write gate — authority paths refuse, documents keep their valida
     }
   });
 
-  test("an unreadable authority refuses fail-closed (corrupt store), never a silent pass", async () => {
+  test("an unreadable collaboration authority refuses fail-closed (corrupt lane), never a silent pass", async () => {
     const fixture = makeHarness("corrupt", "soft");
-    await corruptStore(fixture.harness);
+    await seedActiveStore(fixture.harness);
+    await corruptCollaboration(fixture.harness);
     const handler = loadHandler();
 
     const blocked = await runWrite(handler, fixture.register, VALID_REGISTER);
     expect(blocked?.block).toBe(true);
     expect(blocked?.reason).toContain("store.authority-unavailable");
-    expect(blocked?.reason).toContain("store.corrupt");
+    expect(blocked?.reason).toContain("collaboration.unreadable");
   });
 
   // retired file-route subject (T7a/T21): the JSON register route is retired; a
@@ -490,6 +517,70 @@ describe("omp write gate — authority paths refuse, documents keep their valida
     // The register target is the one path that DOES consult the authority.
     await runWrite(handler, fixture.register, VALID_REGISTER);
     expect(storeRouteCalls()).toBeGreaterThan(0);
+  });
+});
+
+describe("collaboration host authority — source combinations and parity", () => {
+  test("execution-only: the register is refused by the collaboration lane, never a legacy permission", async () => {
+    const fixture = makeHarness("host-execution-only", "soft");
+    // The execution authority alone (`initializeStore`), exactly a cutover
+    // clone that has not yet created its collaboration lane.
+    const handle = await initializeStore({ harnessDir: fixture.harness });
+    handle.close();
+    expect(await probeCollaborationAuthority({ harnessDir: fixture.harness })).toMatchObject({
+      kind: "absent",
+      code: "collaboration.not-initialized",
+    });
+
+    const blocked = await runWrite(loadHandler(), fixture.register, VALID_REGISTER);
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.reason).toContain("store.authority-unavailable");
+    expect(blocked?.reason).toContain("collaboration.not-initialized");
+    expect(blocked?.reason).not.toContain("status.invalid-json");
+  });
+
+  test("collaboration-only: the register is retired and no execution authority is implied", async () => {
+    const fixture = makeHarness("host-collaboration-only", "hard");
+    await ensureCollaborationAuthority({ harnessDir: fixture.harness });
+    expect(existsSync(fixture.storeDb)).toBe(false);
+
+    const blocked = await runWrite(loadHandler(), fixture.register, VALID_REGISTER);
+    expect(blocked?.block).toBe(true);
+    expect(blocked?.reason).toContain("project.register.retired");
+  });
+
+  test("a staged collaboration lane refuses the register identically in hard AND soft mode", async () => {
+    for (const enforcement of ["hard", "soft"] as const) {
+      const fixture = makeHarness(`host-staged-${enforcement}`, enforcement);
+      await seedStagedStore(fixture.harness);
+
+      const blocked = await runWrite(loadHandler(), fixture.register, VALID_REGISTER);
+      expect(blocked?.block, enforcement).toBe(true);
+      expect(blocked?.reason).toContain("store.authority-unavailable");
+      expect(blocked?.reason).toContain("collaboration.not-active");
+      expect(blocked?.reason).not.toContain("status.invalid-json");
+    }
+  });
+
+  test("a case-variant register and a symlink alias take the same collaboration route in both modes", async () => {
+    for (const enforcement of ["hard", "soft"] as const) {
+      const fixture = makeHarness(`host-path-parity-${enforcement}`, enforcement);
+      await seedActiveStore(fixture.harness);
+      const handler = loadHandler();
+
+      const caseVariant = join(fixture.harness, "projects", "_default", "RESIDUALS.json");
+      const cased = await runWrite(handler, caseVariant, VALID_REGISTER);
+      expect(cased?.block).toBe(true);
+      expect(cased?.reason).toContain("project.register.retired");
+
+      const aliases = join(fixture.root, "aliases");
+      mkdirSync(aliases, { recursive: true });
+      const registerAlias = join(aliases, "carry-over.json");
+      symlinkSync(fixture.register, registerAlias);
+      const aliased = await runWrite(handler, registerAlias, VALID_REGISTER);
+      expect(aliased?.block).toBe(true);
+      expect(aliased?.reason).toContain("project.register.retired");
+    }
   });
 });
 

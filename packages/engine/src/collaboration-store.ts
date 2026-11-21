@@ -511,6 +511,16 @@ export type CollaborationAuthority = CollaborationStamp &
   }>;
 
 /**
+ * The collaboration lane's own verdict for a host authority gate: the ACTIVE
+ * record, or the named reason no record can authorize a register write.
+ * `staged`, `absent` and `unavailable` are all refusals — none of them is a
+ * permission and none of them is inferred from the execution lane.
+ */
+export type CollaborationAuthorityProbe =
+  | Readonly<{ kind: "active"; authority: CollaborationAuthority }>
+  | Readonly<{ kind: "staged" | "absent" | "unavailable"; code: string; message: string }>;
+
+/**
  * One admitted store handle. For every public entry (`openCollaborationStore`
  * in either mode) `db` is a read-only inspection connection: it cannot mutate,
  * so a retained handle never authorizes a write after the selection, state or
@@ -1746,6 +1756,47 @@ export async function readCollaborationAuthority(context: StoreContext): Promise
   const handle = await openCollaborationStore(context, "read");
   handle.close();
   return handle.authority;
+}
+
+/** One refusal's stable code (anything without one is the lane's generic cause). */
+function probeRefusal(error: unknown): { code: string; message: string } {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return {
+    code: typeof code === "string" && code !== "" ? code : "collaboration.unreadable",
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+/**
+ * The collaboration lane's authority probe for host gates: it reads ONLY this
+ * lane, so the execution store can be absent, staged or corrupt without
+ * changing the verdict. A missing database is `absent`, a published but inert
+ * one is `staged`, and an identity/mode/runtime/byte refusal is `unavailable` —
+ * the original cause is preserved so every host names the same reason.
+ */
+export async function probeCollaborationAuthority(context: StoreContext): Promise<CollaborationAuthorityProbe> {
+  try {
+    assertStoreRuntimeSupported();
+  } catch (error) {
+    return { kind: "unavailable", ...probeRefusal(error) };
+  }
+  let location: CollaborationLocation;
+  try {
+    location = resolveCollaborationLocation(context);
+  } catch (error) {
+    return { kind: "unavailable", ...probeRefusal(error) };
+  }
+  if (!existsSync(location.dbPath)) {
+    return { kind: "absent", code: "collaboration.not-initialized", message: notInitialized(location.dbPath).message };
+  }
+  try {
+    return { kind: "active", authority: await readCollaborationAuthority(context) };
+  } catch (error) {
+    const refusal = probeRefusal(error);
+    return refusal.code === "collaboration.not-active"
+      ? { kind: "staged", ...refusal }
+      : { kind: "unavailable", ...refusal };
+  }
 }
 
 /**

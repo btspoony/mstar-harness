@@ -51,6 +51,19 @@ async function expectAuthorityRefusal(promise: Promise<unknown>, code: string) {
   expect((error as Tool.Error).message).toContain("mstar store upgrade/migrate");
   expect((error as Tool.Error).message).toContain("project maintainer");
 }
+/** A fake engine whose collaboration probe answers the named verdict. */
+function collaborationApi(
+  probe: { kind: "active" } | { kind: "staged" | "absent" | "unavailable"; code: string; message: string },
+): WriteGateEngineApi {
+  return {
+    ...Engine,
+    probeCollaborationAuthority: async () =>
+      probe.kind === "active"
+        ? ({ kind: "active", authority: {} } as never)
+        : (probe as never),
+  } as WriteGateEngineApi;
+}
+
 function makeBody(onAllowed: () => void = () => {}) {
   let calls = 0;
   return {
@@ -158,10 +171,7 @@ describe("OpenCode V2 structured-write gate", () => {
 
 
   test("classifies case-variant store sidecars and retired registers in both modes", async () => {
-    const activeApi = {
-      ...Engine,
-      withStoreRead: async () => ({}),
-    } as WriteGateEngineApi;
+    const activeApi = collaborationApi({ kind: "active" });
 
     for (const mode of ["hard", "soft"] as const) {
       const { harnessDir } = harness(mode);
@@ -190,6 +200,51 @@ describe("OpenCode V2 structured-write gate", () => {
       expect(registerBody.calls()).toBe(0);
       expect(JSON.parse(readFileSync(register, "utf8")).retained).toBe(true);
     }
+  });
+
+  test("collaboration source combinations refuse registers by their own cause in both modes", async () => {
+    const verdicts = [
+      { probe: { kind: "absent", code: "collaboration.not-initialized", message: "no lane" }, cause: "collaboration.not-initialized" },
+      { probe: { kind: "staged", code: "collaboration.not-active", message: "staged lane" }, cause: "collaboration.not-active" },
+      { probe: { kind: "unavailable", code: "collaboration.unreadable", message: "broken lane" }, cause: "collaboration.unreadable" },
+    ] as const;
+
+    for (const mode of ["hard", "soft"] as const) {
+      for (const verdict of verdicts) {
+        const { harnessDir } = harness(mode);
+        const register = join(harnessDir, "projects", "_default", "residuals.json");
+        writeFileSync(register, JSON.stringify({ entries: {} }));
+        const body = makeBody(() => writeFileSync(register, "unauthorized"));
+
+        await expectAuthorityRefusal(
+          body.run(event("write", { filePath: register, content: "unauthorized" }), collaborationApi(verdict.probe)),
+          "store.authority-unavailable",
+        );
+        expect(body.calls()).toBe(0);
+        const message = await body.run(
+          event("write", { filePath: register, content: "unauthorized" }),
+          collaborationApi(verdict.probe),
+        ).catch((error: Tool.Error) => error.message);
+        expect(message).toContain(verdict.cause);
+      }
+    }
+  });
+
+  test("a register reached through a symlink alias is judged by the bytes it lands on", async () => {
+    const { root, harnessDir } = harness("hard");
+    const register = join(harnessDir, "projects", "_default", "residuals.json");
+    writeFileSync(register, JSON.stringify({ entries: {} }));
+    const alias = join(root, "aliases");
+    mkdirSync(alias, { recursive: true });
+    const aliasPath = join(alias, "carry-over.json");
+    symlinkSync(register, aliasPath);
+    const body = makeBody(() => writeFileSync(register, "unauthorized"));
+
+    await expectAuthorityRefusal(
+      body.run(event("write", { filePath: aliasPath, content: "unauthorized" }), collaborationApi({ kind: "active" })),
+      "project.register.retired",
+    );
+    expect(body.calls()).toBe(0);
   });
 
   test("refuses ACTIVE status and snapshot writes in both enforcement modes", async () => {

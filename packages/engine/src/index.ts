@@ -94,6 +94,7 @@ export { CollaborationIdentityError, resolveCollaborationLocation } from "./coll
 export type {
   CollaborationAdoption,
   CollaborationAuthority,
+  CollaborationAuthorityProbe,
   CollaborationBinding,
   CollaborationStamp,
   CollaborationStoreHandle,
@@ -102,6 +103,7 @@ export {
   adoptCollaborationBinding,
   initializeCollaborationStore,
   openCollaborationStore,
+  probeCollaborationAuthority,
   readCollaborationAuthority,
   readCollaborationBinding,
   withCollaborationWrite,
