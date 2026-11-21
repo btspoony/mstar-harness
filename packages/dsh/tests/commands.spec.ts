@@ -91,7 +91,7 @@ const mirrorDir = packagedCommandsDir()
 /** why: the mirror is a bundle-assets sync product (gitignored), so an absent
  * mirror skips the parity case — printed ALWAYS, never a silent green. */
 const mirrorSkipReason = mirrorDir === undefined
-  ? 'bundled-commands parity: SKIPPED — harness-commands mirror not synced (run `bun run bundle-assets` in packages/dsh)'
+  ? 'bundled-commands parity: SKIPPED — harness-commands mirror not synced (monorepo: run `bun run bundle-assets` in packages/dsh; a published package ships the mirror)'
   : undefined
 if (mirrorSkipReason !== undefined) console.log(mirrorSkipReason)
 
