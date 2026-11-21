@@ -38,10 +38,10 @@
  *   projection-derived views while the authority is active and keeps serving
  *   the issue views.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import * as nodeOs from "node:os";
 import { dirname, join } from "node:path";
 import {
   bindExecutionSession,
@@ -63,6 +63,29 @@ const TS = "2026-09-21T00:00:00.000Z";
 
 const roots: string[] = [];
 
+/** why: The collaboration binding registry lives under `<homedir>/.mstar/repos`,
+ * so the fixture's in-process binding and the spawned CLI must agree on HOME.
+ * A sibling suite member that leaves ambient HOME state behind can otherwise
+ * split them: the CLI then cannot see the binding, ownership is unproven, and
+ * the corrupt-execution probe escapes as `collaboration.unreadable` instead of
+ * the store's own `store.corrupt`. Pin BOTH spellings to one private root for
+ * this file — `process.env.HOME` (what the spawned CLI inherits) and
+ * `os.homedir()` (what in-process engine calls resolve) — and restore both.
+ */
+const FILE_HOME = mkdtempSync(join(nodeOs.tmpdir(), "execution-read-home-"));
+const AMBIENT_HOME = process.env.HOME;
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  process.env.HOME = FILE_HOME;
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => FILE_HOME);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  if (AMBIENT_HOME === undefined) delete process.env.HOME;
+  else process.env.HOME = AMBIENT_HOME;
+  rmSync(FILE_HOME, { recursive: true, force: true });
+});
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -76,7 +99,7 @@ interface Fixture {
 
 /** A temp workspace shaped like a real one: a Git main worktree with `.mstar`. */
 function workspace(label: string): Fixture {
-  const root = mkdtempSync(join(tmpdir(), `${label}-`));
+  const root = mkdtempSync(join(nodeOs.tmpdir(), `${label}-`));
   roots.push(root);
   execFileSync("git", ["init", "-q"], { cwd: root });
   writeFixtureRepoId(root);
@@ -92,11 +115,14 @@ function writeJson(path: string, value: unknown): void {
 
 /** why: Run the real CLI entry from the fixture root. The shared spawn env pins out
  * the ambient harness and identity vars; per-case extras go on top. The root
- * itself comes from the fixture checkout — the env pin is retired. */
+ * itself comes from the fixture checkout — the env pin is retired. `HOME` is
+ * pinned to this file's private root explicitly, so the spawned CLI reads the
+ * same binding registry the fixture's in-process writes landed in, even if a
+ * sibling file's ambient HOME is leaking through `process.env`. */
 function runCli(args: string[], fixture: Fixture, extraEnv: Record<string, string> = {}): RunResult {
   return harnessRunCli(args, {
     cwd: fixture.root,
-    env: { ...cliEnv(), ...extraEnv },
+    env: { ...cliEnv(), HOME: FILE_HOME, ...extraEnv },
   });
 }
 
