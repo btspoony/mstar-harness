@@ -37,16 +37,17 @@ import {
   assertFeatureCheckout,
   assertIntegrationCheckout,
   assertViolationFree,
-  bindingFactsOn,
   captureGitProofWitness,
   catalogFactsOn,
   gitObjectExists,
   gitRead,
   integrationProof,
+  pinIdentityIsProven,
   planAreaRoots,
   readCatalogFacts,
   revalidateGitProofWitness,
   selectCatalogPinOn,
+  type CatalogExecutionPin,
   type CatalogFacts,
   type GitProofWitness,
 } from "./coordination.js";
@@ -831,7 +832,7 @@ export async function prepareExecutionPlan(
       }
     },
     (witness, tx, at) => writePreparedConfig(context, resolved.read, inputs, witness, tx, at, catalogFacts),
-    (witness, tx) => alreadyPrepared(witness.view, inputs, witness.token, tx),
+    (witness, tx) => alreadyPrepared(witness.view, inputs, witness.token, tx, resolved.read, catalogFacts),
   );
 }
 
@@ -850,9 +851,21 @@ function alreadyPrepared(
   inputs: PreparedInputs,
   token: ExecutionToken,
   tx: ExecutionTransaction,
+  read: ResolvedPlanRead,
+  catalogFacts: CatalogFacts,
 ): ExecutionRead<ExecutionPlanView> | undefined {
   const prior = view.coordination?.prepared;
   if (prior === undefined) return undefined;
+  // The already-satisfied shortcut still owns a pin decision: an unchanged
+  // prepare may not keep an identity that cannot be proven against the active
+  // catalog. Validation happens BEFORE the equality comparison.
+  assertPinIdentityProven(
+    read.planId,
+    read.workflowId,
+    readExecutionSealedInput(tx, read.workflowId, read.planId).pin,
+    catalogFacts,
+    tx.storeId,
+  );
   if (prior.qa_gate !== inputs.config.acceptanceGate || (inputs.findingsCleanupSupplied && prior.findings_cleanup !== inputs.config.findingsCleanup)) {
     return undefined;
   }
@@ -887,6 +900,32 @@ function effectiveScope(
   };
 }
 
+/**
+ * A recorded pin must name the active catalog store or a VERIFIED migration
+ * source of this exact execution store. Nothing is written when the identity is
+ * unproven: the discrepancy names both sides and leaves them untouched.
+ */
+function assertPinIdentityProven(
+  planId: string,
+  workflowId: string,
+  pin: CatalogExecutionPin | null,
+  catalogFacts: CatalogFacts,
+  executionStoreId: string,
+): void {
+  if (pin === null || catalogFacts.store !== "active" || catalogFacts.storeId === null) return;
+  if (pinIdentityIsProven(pin, catalogFacts, executionStoreId)) return;
+  throw new ExecutionPinConflictError(
+    `plan ${planId}'s recorded catalog identity cannot be proven as the migration source of the active catalog`,
+    {
+      workflow_id: workflowId,
+      plan_id: planId,
+      pin_store_id: pin.store_id,
+      catalog_store_id: catalogFacts.storeId,
+      verified_source_stores: [...catalogFacts.lineage],
+    },
+  );
+}
+
 /** The writing half of `prepare`, once the preflight admitted it. */
 function writePreparedConfig(
   context: ExecutionContext,
@@ -910,34 +949,11 @@ function writePreparedConfig(
   // The catalog side is the collaboration lane's; the binding is the execution
   // lane's own row. Neither is read through the other's connection.
   const catalogActive = catalogFacts.store === "active" && catalogFacts.storeId !== null;
-  if (catalogActive && sealed.pin !== null) {
-    // A new pin names the collaboration store that owns the catalog.
-    const namesCurrentCatalog = sealed.pin.store_id === catalogFacts.storeId;
-    // A historical pin names the combined store this execution row kept as its
-    // own identity. Accepting it requires the VERIFIED migration lineage — an
-    // active cutover publication for this exact catalog store+epoch whose
-    // source is this source store. Id equality alone proves nothing, and a
-    // changed prepare must never rebind onto an unrelated active catalog.
-    const provenMigrationSource =
-      sealed.pin.store_id === tx.storeId && catalogFacts.lineage.includes(tx.storeId);
-    if (!namesCurrentCatalog && !provenMigrationSource) {
-      throw new ExecutionPinConflictError(
-        `plan ${planId}'s recorded catalog identity cannot be proven as the migration source of the active catalog`,
-        {
-          workflow_id: workflowId,
-          plan_id: planId,
-          pin_store_id: sealed.pin.store_id,
-          catalog_store_id: catalogFacts.storeId,
-          verified_source_stores: [...catalogFacts.lineage],
-        },
-      );
-    }
-  }
+  // Every pin path — unchanged, reselect or clear — validates the recorded
+  // identity and its verified migration lineage first.
+  assertPinIdentityProven(planId, workflowId, sealed.pin, catalogFacts, tx.storeId);
   const selected = catalogActive
-    ? selectCatalogPinOn(
-        { ...catalogFacts, binding: bindingFactsOn(tx.db, workflowId, planId) },
-        sealed.inputHash,
-      )
+    ? selectCatalogPinOn(catalogFacts, sealed.inputHash)
     // No readable catalog: prepare preserves the recorded pin instead of
     // clearing lineage it cannot verify.
     : sealed.pin;

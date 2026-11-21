@@ -81,6 +81,7 @@ import {
 import { resolveSddDir } from "./path.js";
 import { registerCatalogEntity } from "./catalog.js";
 import type { CatalogExecutionPin } from "./coordination.js";
+import { readExecutionCatalogPin } from "./coordination.js";
 import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import type { WorkflowSnapshot } from "./workflow.js";
 import type { WorkflowEntry } from "./status.js";
@@ -1847,6 +1848,109 @@ describe("catalog pin \u2014 prepare source lineage and replay", () => {
     const stored = JSON.parse((await sealedPinFacts(fixture.context)).pinJson!) as CatalogExecutionPin;
     expect(stored.store_id).toBe(authority.storeId);
     expect(stored.entity_revision).toBe(1);
+  });
+
+  test("catalog pin: an unchanged prepare under a new operation id still validates historical lineage", async () => {
+    const fixture = await completionFixture("pin-unchanged-lineage");
+    const execution = await readExecutionState(fixture.context);
+    const sealed = await sealedPinFacts(fixture.context);
+    const historical: CatalogExecutionPin = {
+      store_id: execution.storeId,
+      entity_revision: 1,
+      document_hash: sealed.inputHash,
+      relation_hash: "0".repeat(64),
+    };
+    await seedSealedPin(fixture.context, historical);
+
+    // The requested config equals the fixture's recorded one, so a naive
+    // already-satisfied shortcut would never revisit the pin.
+    const refusal = await refusalOf(async () =>
+      prepareExecutionPlan(fixture.planContext, {
+        operationId: "prepare-unchanged-unproven",
+        session: fixture.session,
+        expected: await fixture.token(),
+        planId: fixture.planId,
+        operation: {
+          kind: "prepare",
+          config: {
+            worktreePath: fixture.worktreePath,
+            workingBranch: `feature/${COMPLETION_PLAN}`,
+            findingsCleanup: "allow-residual",
+          },
+        },
+      }),
+    );
+    expect(refusal.code).toBe("catalog.execution-pin-conflict");
+    expect(detailsOf(refusal).verified_source_stores).toEqual([]);
+    expect((await sealedPinFacts(fixture.context)).pinJson).toBe(JSON.stringify(historical));
+
+    // With the verified publication the same unchanged prepare is satisfied and
+    // leaves the recorded lineage untouched (no reselect happens).
+    await recordActiveCutover(fixture.context, execution.storeId);
+    const satisfied = await prepareExecutionPlan(fixture.planContext, {
+      operationId: "prepare-unchanged-verified",
+      session: fixture.session,
+      expected: await fixture.token(),
+      planId: fixture.planId,
+      operation: {
+        kind: "prepare",
+        config: {
+          worktreePath: fixture.worktreePath,
+          workingBranch: `feature/${COMPLETION_PLAN}`,
+          findingsCleanup: "allow-residual",
+        },
+      },
+    });
+    expect(satisfied.recovery?.outcome).toBe("already-satisfied");
+    expect((await sealedPinFacts(fixture.context)).pinJson).toBe(JSON.stringify(historical));
+  });
+
+  test("catalog pin: the read path refuses an unproven historical pin and accepts a verified migration", async () => {
+    const fixture = await completionFixture("pin-read-lineage");
+    const execution = await readExecutionState(fixture.context);
+    const sealed = await sealedPinFacts(fixture.context);
+    await registerCatalogEntity(
+      fixture.context,
+      {
+        kind: "plan",
+        id: fixture.planId,
+        title: `Plan ${fixture.planId}`,
+        rootKind: "plans",
+        relativePath: `plans/${fixture.planId}.md`,
+      },
+      { operationId: "register-read-lineage", actor: ACTOR },
+    );
+    const historical: CatalogExecutionPin = {
+      store_id: execution.storeId,
+      entity_revision: 1,
+      document_hash: sealed.inputHash,
+      relation_hash: "0".repeat(64),
+    };
+    const row = {
+      id: fixture.planId,
+      title: `Plan ${fixture.planId}`,
+      file: `plans/${fixture.planId}.md`,
+      status: "Todo",
+      metadata: { catalog_pin: historical },
+    };
+    const read = () =>
+      readExecutionCatalogPin({
+        harnessRoot: fixture.context.harnessDir,
+        workflowId: COMPLETION_WORKFLOW,
+        planId: fixture.planId,
+        row,
+      });
+
+    const unproven = await read();
+    expect(unproven.source).toBe("row");
+    expect(unproven.conflict).not.toBeNull();
+    expect(unproven.conflict).toContain("verified migration source");
+
+    await recordActiveCutover(fixture.context, execution.storeId);
+    const verified = await read();
+    expect(verified.conflict).toBeNull();
+    expect(verified.pin).toEqual(historical);
+    expect(verified.catalog_moved).toBe(false);
   });
 
   test("catalog pin: an exact prepare retry replays after the collaboration store becomes unreadable", async () => {

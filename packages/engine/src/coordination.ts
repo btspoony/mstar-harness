@@ -749,6 +749,12 @@ export type CatalogFacts = {
 export type CatalogPinFacts = CatalogFacts & {
   /** The workflow's registration binding (contract §3), when one is committed. */
   binding: { catalogId: string; relativePath: string | null } | null;
+  /**
+   * The execution store that owns the sealed input this pin was read for, or
+   * `null` when no execution store exists. A historical pin's lineage is
+   * proven only against THIS identity.
+   */
+  executionStoreId: string | null;
 };
 
 /**
@@ -900,24 +906,30 @@ export function bindingFactsOn(
 /**
  * The registration binding of one workflow/plan, read from the execution lane.
  * A missing or non-active execution store carries no committed binding; the
- * catalog side is read separately, never joined in one transaction.
+ * catalog side is read separately, never joined in one transaction. The
+ * execution store identity itself is returned so a pin can prove its lineage
+ * against the exact source store.
  */
 async function readBindingFacts(
   harnessRoot: string,
   workflowId: string,
   planId: string,
-): Promise<CatalogPinFacts["binding"]> {
+): Promise<{ storeId: string | null; binding: CatalogPinFacts["binding"] }> {
   const context: StoreContext = { harnessDir: harnessRoot };
   let handle: StoreHandle;
   try {
     handle = await openStore(context, "read");
   } catch (error) {
-    if (error instanceof StoreError && error.code === "store.not-initialized") return null;
+    if (error instanceof StoreError && error.code === "store.not-initialized") {
+      return { storeId: null, binding: null };
+    }
     throw error;
   }
   try {
-    if (readStoreAuthority(handle.db).authorityState !== "active") return null;
-    return bindingFactsOn(handle.db, workflowId, planId);
+    if (readStoreAuthority(handle.db).authorityState !== "active") {
+      return { storeId: handle.storeId, binding: null };
+    }
+    return { storeId: handle.storeId, binding: bindingFactsOn(handle.db, workflowId, planId) };
   } finally {
     handle.close();
   }
@@ -930,8 +942,8 @@ async function readCatalogPinFacts(
   planId: string,
 ): Promise<CatalogPinFacts> {
   const catalog = await readCatalogFacts(harnessRoot, planId);
-  const binding = await readBindingFacts(harnessRoot, workflowId, planId);
-  return { ...catalog, binding };
+  const execution = await readBindingFacts(harnessRoot, workflowId, planId);
+  return { ...catalog, binding: execution.binding, executionStoreId: execution.storeId };
 }
 
 /**
@@ -970,6 +982,16 @@ export async function readExecutionCatalogPin(input: {
     state.source = "row";
     state.pin = recorded;
     if (facts.store !== "active" || facts.storeId === null) return state;
+    // Reading a pin is also a verification: an identity that names neither the
+    // active catalog nor a VERIFIED migration source of this execution store is
+    // a conflict, never silently served as this catalog's selection.
+    if (!pinIdentityIsProven(recorded, facts, facts.executionStoreId)) {
+      state.conflict =
+        `plan ${planId} is pinned to catalog store ${recorded.store_id}, which is neither the active catalog store ` +
+        `${facts.storeId} nor a verified migration source of execution store ${facts.executionStoreId ?? "unknown"} \u2014 ` +
+        "resolve the catalog registration explicitly; the pin and the frozen input are both left untouched";
+      return state;
+    }
     if (facts.revision === null) {
       state.conflict =
         `plan ${planId} is pinned to catalog revision ${recorded.entity_revision}, but the catalog no longer holds that plan ` +
@@ -1042,18 +1064,36 @@ export async function assertExecutionCatalogPin(input: {
 }
 
 /**
+ * Whether one recorded pin identity is proven against the active catalog: it
+ * either names the current collaboration catalog store, or it names the exact
+ * execution store whose VERIFIED active cutover publication targets this
+ * catalog store+epoch. Id equality alone never proves lineage. When no catalog
+ * is active there is nothing to verify (the reader discloses that absence and
+ * preserve semantics apply).
+ */
+export function pinIdentityIsProven(
+  pin: CatalogExecutionPin,
+  catalog: CatalogFacts,
+  executionStoreId: string | null,
+): boolean {
+  if (catalog.store !== "active" || catalog.storeId === null) return true;
+  if (pin.store_id === catalog.storeId) return true;
+  return (
+    executionStoreId !== null &&
+    pin.store_id === executionStoreId &&
+    catalog.lineage.includes(executionStoreId)
+  );
+}
+
+/**
  * The same §1 selection decided from facts the caller already read: the
  * catalog identity a `prepare` freezes is that row's current revision and
  * relation hash, and the document half is the frozen input's own hash — never a
  * hash recomputed from a row that may have moved. `null` when the catalog
- * cannot select this plan, and then the caller clears any stale pin instead of
- * leaving it behind.
- *
- * The DB transport reads the facts through its OWN handle inside the
- * transaction that writes them (`catalogPinFactsOn`), so the revision recorded
- * is the one no concurrent catalog write can change before commit.
+ * cannot select this plan, and then the caller decides whether that is a stale
+ * lineage (refuse) or an unbound plan.
  */
-export function selectCatalogPinOn(facts: CatalogPinFacts, documentHash: string): CatalogExecutionPin | null {
+export function selectCatalogPinOn(facts: CatalogFacts, documentHash: string): CatalogExecutionPin | null {
   if (facts.store !== "active" || facts.storeId === null || facts.revision === null) return null;
   return {
     store_id: facts.storeId,
