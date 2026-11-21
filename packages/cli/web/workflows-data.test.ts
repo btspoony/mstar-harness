@@ -17,6 +17,7 @@ import {
   WORKFLOWS_PATH,
   readWorkflowDetail,
   readWorkflows,
+  workflowDetailCatalogNotice,
   workflowDetailCopy,
   workflowDetailOutcome,
   workflowDetailPath,
@@ -244,6 +245,62 @@ describe("the detail read", () => {
     expect(outcome.model.kind).toBe("absent");
     // The one shape every detail pair uses for "there is no record here".
     expect(workflowDetailModel({ data: null, projection: ABSENT_PROJECTION }).kind).toBe("absent");
+  });
+
+  test("a detail catalog gap is stated above the preserved execution record", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify({
+          data: row(),
+          storeRevision: 1224,
+          catalogRevision: 9,
+          projection,
+          collaboration: {
+            scope: { kind: "query", key: "workflow:issue-project-move" },
+            completeness: "unavailable",
+            asOf: null,
+            authority: null,
+            code: "collaboration.not-initialized",
+          },
+          execution: { asOf: "2026-11-21T00:00:00.000Z", storeId: "store-a", epoch: 1, revision: 4 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readWorkflowDetail(gapped, "issue-project-move");
+    if (result.status !== "ready") throw new Error("expected a ready detail");
+    const outcome = workflowDetailOutcome(result);
+    if (outcome.kind !== "ready") throw new Error("expected a ready outcome");
+    expect(outcome.catalogNotice).toEqual({ completeness: "unavailable", code: "collaboration.not-initialized" });
+    const notice = workflowDetailCatalogNotice(outcome, copyFor("en"));
+    expect(notice).not.toBeNull();
+    if (notice === null) return;
+    expect(notice.reason).toContain("collaboration.not-initialized");
+    const html = renderToStaticMarkup(
+      createElement(
+        "div",
+        null,
+        createElement(Notice, { lead: notice.lead, reason: notice.reason }),
+        createElement(WorkflowDetail, { model: outcome.model, copy: workflowDetailCopy(copyFor("en")) }),
+      ),
+    );
+    // The gap is stated and the execution record is preserved.
+    expect(html).toContain('data-ms-notice-tone="warning"');
+    expect(html).toContain("collaboration.not-initialized");
+    expect(html).toContain("issue-project-move");
+  });
+
+  test("a complete detail states no catalog gap", async () => {
+    const complete = (async () =>
+      new Response(
+        JSON.stringify({ data: row(), storeRevision: 1224, catalogRevision: 9, projection, collaboration: null, execution: null }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readWorkflowDetail(complete, "issue-project-move");
+    if (result.status !== "ready") throw new Error("expected a ready detail");
+    const outcome = workflowDetailOutcome(result);
+    if (outcome.kind !== "ready") throw new Error("expected a ready outcome");
+    expect(outcome.catalogNotice).toBeNull();
+    expect(workflowDetailCatalogNotice(outcome, copyFor("en"))).toBeNull();
   });
 
   test("every other refusal is a failure, not an absence", async () => {

@@ -94,6 +94,7 @@ import {
 import {
   readWorkflowDetail,
   readWorkflows,
+  workflowDetailCatalogNotice,
   workflowDetailCopy,
   workflowDetailOutcome,
   workflowsCatalogNotice,
@@ -521,15 +522,22 @@ function WorkflowDetailDestination(props: { id: string }) {
     );
   }
 
+  // The execution record stays; an unavailable catalog association is stated
+  // above it, exactly as the list states the same optional gap.
+  const catalogNotice = workflowDetailCatalogNotice(outcome, copy);
+
   return (
-    <WorkflowDetail
-      model={outcome.model}
-      copy={workflowDetailCopy(copy)}
-      onBack={() => {
-        const target = detailReturnTarget(parseRoute(window.location.hash));
-        if (target !== null) navigate(target.route, target.query, "push");
-      }}
-    />
+    <>
+      {catalogNotice === null ? null : <Notice lead={catalogNotice.lead} reason={catalogNotice.reason} />}
+      <WorkflowDetail
+        model={outcome.model}
+        copy={workflowDetailCopy(copy)}
+        onBack={() => {
+          const target = detailReturnTarget(parseRoute(window.location.hash));
+          if (target !== null) navigate(target.route, target.query, "push");
+        }}
+      />
+    </>
   );
 }
 

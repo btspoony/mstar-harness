@@ -56,6 +56,9 @@ export function workflowDetailCopy(copy: Copy): WorkflowDetailCopy {
   return copy.workflowDetail;
 }
 
+/** The optional catalog association's named gap, from the collaboration observation. */
+type CatalogGap = { completeness: "partial" | "unavailable"; code: string };
+
 /** What the list is handed. */
 export type WorkflowsOutcome =
   | { kind: "loading" }
@@ -66,14 +69,14 @@ export type WorkflowsOutcome =
        * The optional catalog association's named gap. The rows are execution data
        * and stay; the page must state this gap rather than draw a healthy join cell.
        */
-      catalogNotice: { completeness: "partial" | "unavailable"; code: string } | null;
+      catalogNotice: CatalogGap | null;
     }
   | { kind: "failed"; message: string };
 
 /** What the detail is handed. */
 export type WorkflowDetailOutcome =
   | { kind: "loading" }
-  | { kind: "ready"; model: Resolved<WorkflowDetailModel> }
+  | { kind: "ready"; model: Resolved<WorkflowDetailModel>; catalogNotice: CatalogGap | null }
   | { kind: "failed"; message: string };
 
 /** One list read: every page, so the screen's local search sees the whole list. */
@@ -162,10 +165,22 @@ export function workflowsCatalogNotice(
   outcome: WorkflowsOutcome,
   copy: Copy,
 ): { lead: string; reason: string } | null {
-  if (outcome.kind !== "ready" || outcome.catalogNotice === null) return null;
+  return outcome.kind === "ready" ? catalogNoticeText(outcome.catalogNotice, copy) : null;
+}
+
+/** The detail's counterpart: the same warning, above the preserved execution record. */
+export function workflowDetailCatalogNotice(
+  outcome: WorkflowDetailOutcome,
+  copy: Copy,
+): { lead: string; reason: string } | null {
+  return outcome.kind === "ready" ? catalogNoticeText(outcome.catalogNotice, copy) : null;
+}
+
+function catalogNoticeText(gap: CatalogGap | null, copy: Copy): { lead: string; reason: string } | null {
+  if (gap === null) return null;
   return {
     lead: copy.state.unavailable.labelWord,
-    reason: `${copy.state.unavailable.body} (${outcome.catalogNotice.code})`,
+    reason: `${copy.state.unavailable.body} (${gap.code})`,
   };
 }
 
@@ -184,7 +199,7 @@ export function workflowDetailOutcome(
       // No envelope exists for a record that is not there; the model still needs a
       // `read`, so the shared constant supplies the published generation, and the
       // resolver turns the null payload into the `absent` arm.
-      return { kind: "ready", model: workflowDetailModel({ data: null, projection: ABSENT_PROJECTION }) };
+      return { kind: "ready", model: workflowDetailModel({ data: null, projection: ABSENT_PROJECTION }), catalogNotice: null };
     case "ready":
       return {
         kind: "ready",
@@ -192,6 +207,9 @@ export function workflowDetailOutcome(
           data: result.envelope.data,
           projection: result.envelope.projection,
         }),
+        // The catalog association is optional: a gap keeps the execution record
+        // visible and is stated by the host instead of being silently dropped.
+        catalogNotice: collaborationGap(result.envelope),
       };
     case "error":
       return { kind: "failed", message: result.message };
