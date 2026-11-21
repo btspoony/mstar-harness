@@ -869,6 +869,8 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "status.findings-cleanup": "root", "status.tech-debt": "root", "status.validate": "root",
   "status.workflow-close": "root", "store.activate": "root", "store.backup": "root",
   "store.execution.export": "none", "store.execution.restore": "none", "store.execution.restore-preview": "none",
+  "store.collaboration.activate": "none", "store.collaboration.apply": "none",
+  "store.collaboration.plan": "none", "store.collaboration.restore": "none",
   "store.init": "root", "store.migrate": "root", "store.retire": "root",
   "store.upgrade": "root", "workflow-note.append": "root", "workflow-note.coverage": "root",
   "workflow.adopt-terminal": "root", "workflow.compass-ref": "root", "workflow.delivery-anchors": "root", "workflow.evidence": "root",
@@ -939,6 +941,12 @@ const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record
   "store.execution.export": null,
   "store.execution.restore": null,
   "store.execution.restore-preview": null,
+  // Every collaboration verb takes an ABSOLUTE operation target and manifest
+  // path, so no path it reads resolves against the invocation directory.
+  "store.collaboration.activate": null,
+  "store.collaboration.apply": null,
+  "store.collaboration.plan": null,
+  "store.collaboration.restore": null,
   "worktree.qc-alignment": { args: { files: ["qc1.md", "qc2.md"] }, subject: "the assignment file" },
 };
 

@@ -6,18 +6,25 @@ import {
   SddScriptError,
   StoreError,
   WORKFLOW_DELIVERY_KINDS,
+  activateCollaborationCutover,
   activateStore,
   activationReceiptFor,
   appliedReceiptFor,
+  applyCollaborationCutover,
   applyStoreMigration,
-  backupStore,
+  backupRepositoryStores,
+  ensureCollaborationAuthority,
   initializeStore,
+  planCollaborationCutover,
   planStoreMigration,
   resolveProcessHarnessDir,
+  restoreCollaborationBackup,
   retireStoreSources,
   upgradeStoreMinimal,
   type ActivationAttestation,
+  type CutoverManifest,
   type MigrationManifest,
+  type RepositoryBackupReceipt,
   type StoreContext,
 } from "@mstar-harness/engine";
 import { z } from "zod";
@@ -47,6 +54,7 @@ const inputSchema = z.object({
   manifest: z.string().optional(),
   attestation: z.string().optional(),
   out: z.string().optional(),
+  backup: z.string().optional(),
   operator: z.string().optional(),
   ackSkipDsh: z.array(z.string()).optional(),
   ackSkipWorkflow: z.array(z.string()).optional(),
@@ -55,6 +63,18 @@ const inputSchema = z.object({
 });
 type StoreInput = z.infer<typeof inputSchema>;
 const verbs = ["init", "upgrade", "migrate", "backup", "activate", "retire"] as const;
+const collaborationVerbs = ["plan", "apply", "activate", "restore"] as const;
+
+/** The one flag table both store families publish. */
+const optionFlags: Record<keyof StoreInput, string> = {
+  harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <absolute-json>", out: "--out <path>",
+  backup: "--backup <path>",
+  operator: "--operator <name>",
+  ackSkipDsh: "--ack-skip-dsh <selector...>",
+  ackSkipWorkflow: "--ack-skip-workflow <id...>",
+  ackSkipCompass: "--ack-skip-compass <iteration-id...>",
+  delivery: "--delivery <json...>",
+};
 
 function ok(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -83,7 +103,25 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
         // consumer, and the supported route is the installed Node CLI (or an
         // explicit document that overrides the generated one).
         ? "Rerun the same verb through the installed Node CLI: mstar store upgrade --operator <name> --attestation <absolute-json> for an upgrade, or mstar store activate --manifest <path> --operator <name> for an activation."
-        : code === "store.upgrade-attestation-missing"
+        : code === "collaboration.repo-identity-unresolved" || code === "collaboration.mode-required" || code === "collaboration.mode-invalid" || code === "collaboration.mode-unavailable"
+          // Every repository-scoped store verb needs the checkout's collaboration identity and mode.
+          ? "Set the repository identity in the checkout's .mstarc — [collaboration] mode=local|mirror, plus repo_id=<lower-case-id> for a genuinely origin-less repository — then rerun the same store verb."
+          : code === "collaboration.cutover-required" || code === "collaboration.cutover-conflict"
+            // A combined source or a competing target is settled by the reviewed cutover, never by a guessed merge.
+            ? "Run mstar store collaboration plan --harness <abs> --out <abs-manifest>, have the manifest reviewed, then mstar store collaboration apply and activate with that exact manifest. A source or target another activation owns is preserved, never overwritten."
+            : code === "collaboration.cutover-not-quiescent"
+              ? "Settle the pending mirror batches or catalog registrations the refusal names with their own verbs, stop the remaining writers, then retry the same reviewed manifest."
+              : code === "collaboration.cutover-unconfirmed"
+                ? "Do not retry blindly and do not treat the source as unchanged: inspect the persisted fence record, the retained pre-fence image and the source's schema and tables, then recover from that verified evidence."
+                : code === "collaboration.backup-incomplete"
+                  ? "Take or supply a new verified pair with mstar store backup --out <abs-manifest>; settle any pending composite operation with its own verb first, because one surviving image is not a repository backup."
+                  : code === "collaboration.not-active"
+                    ? "The collaboration authority is staged, not published: run mstar store collaboration activate --manifest <abs> --operator <name> --attestation <abs-json> for its reviewed activation."
+                    : code === "collaboration.not-initialized"
+                      ? "This checkout has no collaboration authority yet: run mstar store init for a fresh scope, mstar store upgrade --operator <name> for file-era execution state, or mstar store collaboration restore --backup <abs-manifest> for a verified pair."
+                      : code === "collaboration.unreadable" || code === "collaboration.stale-binding"
+                        ? "Resolve the scope again with mstar path resolve, correct the configured origin or .mstarc mode, then retry; never retarget a bound checkout by editing its mode."
+                        : code === "store.upgrade-attestation-missing"
           // A held retired claim needs stop evidence at or after the claim instant.
           ? "Rerun the same upgrade with an explicit document whose attestedAt is at or after the claim instant: mstar store upgrade --operator <name> --attestation <absolute-json>."
           : code === "store.runtime-unsupported"
@@ -160,6 +198,15 @@ function absoluteFile(value: string, flag: string): string {
 function outputPath(value: string | undefined, cwd: string): string | undefined {
   return value === undefined ? undefined : resolveCliPath(value, cwd);
 }
+/**
+ * The create-only default manifest below the selected harness's recovery folder.
+ * The receipt discloses it, so an operator who omitted `--out` still knows
+ * exactly which two images and which manifest now exist.
+ */
+function defaultBackupManifestPath(harnessDir: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return path.join(harnessDir, "archived", "recovery", `repository-${stamp}-${randomUUID().slice(0, 8)}.json`);
+}
 function jsonFile<T>(value: string, flag: string): T {
   // The absolute-path boundary is decided BEFORE the read: a relative value is
   // caller input, and its own diagnostic must not be masked by the I/O error
@@ -188,18 +235,42 @@ function requireInputs(input: StoreInput, fields: readonly (keyof StoreInput)[])
 }
 
 async function execute(id: string, input: StoreInput, invocation: InvocationContext): Promise<CommandEnvelope> {
+  if (id.startsWith("store.collaboration.")) return executeCollaboration(id, input, invocation);
   try {
     const context = contextOf(input, invocation);
     switch (id) {
       case "store.init": {
         const fact = findLegacyWorkspaceFact(context.harnessDir);
         if (fact !== null) throw new StoreError("store.already-exists", `${fact}. Nothing was created.`);
+        // The repository's collaboration authority comes first: a fresh init
+        // creates or reuses it WITHOUT clearing it, and only this checkout's
+        // execution is initialized here.
+        const collaboration = await ensureCollaborationAuthority(context);
         const handle = await initializeStore(context);
-        try { return ok(id, { storeId: handle.storeId, epoch: handle.epoch, schemaVersion: handle.schemaVersion, authorityState: "active" }); }
-        finally { handle.close(); }
+        try {
+          return ok(id, {
+            storeId: handle.storeId,
+            epoch: handle.epoch,
+            schemaVersion: handle.schemaVersion,
+            authorityState: "active",
+            collaboration: {
+              repoKey: collaboration.repoKey,
+              mode: collaboration.mode,
+              storeId: collaboration.storeId,
+              epoch: collaboration.epoch,
+              state: collaboration.state,
+            },
+          });
+        } finally { handle.close(); }
       }
       case "store.upgrade": {
         requireInputs(input, ["operator"]);
+        // The two owners meet here: this checkout's collaboration authority is
+        // established (create/reuse, never cleared) before the execution half
+        // can report any imported state. A combined source with collaboration
+        // rows refuses with the cutover route, and the import itself refuses a
+        // staged lane.
+        await ensureCollaborationAuthority(context);
         // The schema cutover's safety disposal needs the existing operator/stop
         // attestation when a retired plan-PM claim is present. The engine's own
         // validator is the authority; the CLI reads the absolute JSON file and
@@ -230,9 +301,11 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         }));
       }
       case "store.backup": {
-        const out = outputPath(input.out, invocation.cwd);
-        const receipt = await backupStore(context, out === undefined ? {} : { out });
-        return ok(id, { ...receipt, out: out ?? null });
+        // A repository backup is the verified PAIR of both domains, never one
+        // execution image sold as a full backup.
+        const out = outputPath(input.out, invocation.cwd) ?? defaultBackupManifestPath(context.harnessDir);
+        const receipt: RepositoryBackupReceipt = await backupRepositoryStores(context, { out: absoluteFile(out, "--out") });
+        return ok(id, receipt);
       }
       case "store.migrate": {
         if (input.apply !== true && input.manifest !== undefined) throw new SddScriptError("--manifest is only meaningful with --apply", 2);
@@ -289,16 +362,106 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
  * a file path and is never an inline JSON input.
  */
 
+/**
+ * The one operator lifecycle of the collaboration authority. `--harness` names
+ * an absolute operation TARGET (this checkout's harness), never a discovered
+ * root, so every verb here runs against the scope the operator named and no
+ * other.
+ */
+async function executeCollaboration(id: string, input: StoreInput, invocation: InvocationContext): Promise<CommandEnvelope> {
+  const verb = id.slice("store.collaboration.".length) as (typeof collaborationVerbs)[number];
+  try {
+    const target = absoluteFile(required(input.harness, "--harness"), "--harness");
+    const context: StoreContext = { harnessDir: path.resolve(target) };
+    const out = outputPath(input.out, invocation.cwd);
+    const writeReceipt = (value: unknown): string | null => {
+      if (out === undefined) return null;
+      writeFileSync(absoluteFile(out, "--out"), `${JSON.stringify(value, null, 2)}\n`);
+      return out;
+    };
+    if (verb === "plan") {
+      const manifest = await planCollaborationCutover(context);
+      const manifestFile = writeReceipt(manifest);
+      return ok(id, { ...manifest, manifestFile });
+    }
+    if (verb === "apply") {
+      const manifest = jsonFile<CutoverManifest>(required(input.manifest, "--manifest"), "--manifest");
+      const receipt = await applyCollaborationCutover(context, manifest);
+      return ok(id, { ...receipt, receiptFile: writeReceipt(receipt) });
+    }
+    if (verb === "activate") {
+      requireInputs(input, ["manifest", "operator", "attestation"]);
+      const manifest = jsonFile<CutoverManifest>(input.manifest!, "--manifest");
+      const attestation = jsonFile<ActivationAttestation>(input.attestation!, "--attestation");
+      const receipt = await activateCollaborationCutover(context, manifest, {
+        operator: required(input.operator, "--operator"),
+        attestation,
+      });
+      return ok(id, { ...receipt, receiptFile: writeReceipt(receipt) });
+    }
+    if (verb === "restore") {
+      requireInputs(input, ["backup", "operator", "attestation"]);
+      const receipt = jsonFile<RepositoryBackupReceipt>(input.backup!, "--backup");
+      const attestation = jsonFile<ActivationAttestation>(input.attestation!, "--attestation");
+      const authority = await restoreCollaborationBackup(context, receipt, {
+        operator: required(input.operator, "--operator"),
+        attestation,
+      });
+      return ok(id, { authority, manifestPath: receipt.manifestPath, receiptFile: writeReceipt(authority) });
+    }
+    throw new SddScriptError(`unknown store collaboration verb ${verb}`, 2);
+  } catch (error) {
+    return refused(id, error);
+  }
+}
+
+function collaborationDefinition(verb: (typeof collaborationVerbs)[number]): CommandDefinition<StoreInput, unknown> {
+  const id = `store.collaboration.${verb}`;
+  const optionsByVerb: Record<(typeof collaborationVerbs)[number], (keyof StoreInput)[]> = {
+    plan: ["harness", "out"],
+    apply: ["harness", "manifest", "out"],
+    activate: ["harness", "manifest", "operator", "attestation", "out"],
+    restore: ["harness", "backup", "operator", "attestation", "out"],
+  };
+  const optionKeys = optionsByVerb[verb];
+  const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
+  const optionHelp: Partial<Record<keyof StoreInput, string>> = {
+    harness: "absolute path to this checkout's harness (the operation target, never discovered from the working directory)",
+    manifest: verb === "apply"
+      ? "absolute path to the reviewed cutover manifest `store collaboration plan` wrote"
+      : "absolute path to the reviewed cutover manifest this activation addresses",
+    backup: "absolute path to the repository backup manifest `store backup` published (both verified images must still match it)",
+    operator: "the invoking operator, recorded as the approving actor of this activation or restore",
+    attestation: "absolute path to the operator's full ActivationAttestation JSON (a collaboration fence additionally requires its cutover block)",
+    out: "optional absolute path for the receipt or manifest this verb writes",
+  };
+  const options = optionKeys.map((key) => ({
+    key,
+    flags: optionFlags[key],
+    required: key === "harness" || (key === "backup" && verb === "restore"),
+    ...(optionHelp[key] === undefined ? {} : { help: optionHelp[key] }),
+  }));
+  const descriptions: Record<(typeof collaborationVerbs)[number], string> = {
+    plan: "Inspect the combined source read-only and write a reviewable cutover manifest. Reports unsupported or ambiguous legacy facts; it guesses no adoption.",
+    apply: "Stage and verify the reviewed manifest in the canonical collaboration target. An identical staged receipt is reused; a target that progressed past verification is never restaged.",
+    activate: "Publish the verified target for this exact manifest after the operator's stop evidence: this resumes its own durable fence or replays its already committed activation, and never republishes another source's authority.",
+    restore: "Restore the collaboration image of a verified pair into an ABSENT canonical target, create-only, with a bumped collaboration epoch and a recorded restore receipt. Never overwrites, quarantines or deletes an existing authority.",
+  };
+  return {
+    id,
+    cli: { path: ["store", "collaboration", verb], aliases: [], arguments: [], options },
+    input: inputSchema.pick(shape),
+    // `harness` names the operation's target, so the connection pin must not rewrite it.
+    rootInputs: [],
+    output: commandEnvelopeSchema,
+    effects: ["read", "write"],
+    description: descriptions[verb],
+    execute: (input, invocation) => execute(id, input, invocation),
+  };
+}
+
 function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
   const verb = id.slice("store.".length) as (typeof verbs)[number];
-  const optionFlags: Record<keyof StoreInput, string> = {
-    harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <absolute-json>", out: "--out <path>",
-    operator: "--operator <name>",
-    ackSkipDsh: "--ack-skip-dsh <selector...>",
-    ackSkipWorkflow: "--ack-skip-workflow <id...>",
-    ackSkipCompass: "--ack-skip-compass <iteration-id...>",
-    delivery: "--delivery <json...>",
-  };
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
     init: ["harness"],
     upgrade: ["harness", "operator", "attestation", "ackSkipDsh", "ackSkipWorkflow", "ackSkipCompass", "delivery"],
@@ -352,5 +515,8 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
 }
 
 export function getStoreCommandDefinitions(): readonly CommandDefinition[] {
-  return verbs.map((verb) => cliDefinition(`store.${verb}`));
+  return [
+    ...verbs.map((verb) => cliDefinition(`store.${verb}`)),
+    ...collaborationVerbs.map((verb) => collaborationDefinition(verb)),
+  ];
 }

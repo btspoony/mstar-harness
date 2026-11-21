@@ -1,13 +1,28 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as nodeFs from "node:fs";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { captureIssue, createExecutionWorkflow, getIssue, initializeStore, openStore, readExecutionState } from "@mstar-harness/engine";
+import { execFileSync } from "node:child_process";
+import { captureIssue, createExecutionWorkflow, initializeStore, openStore, readExecutionState } from "@mstar-harness/engine";
 import { getCommandDefinitions, getExecutionCommandDefinitions, getStoreCommandDefinitions } from "../src/index.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
+/**
+ * The collaboration lane is user-level, so every fixture's `homedir` is a
+ * private temp tree: no case reads or writes the real user home.
+ */
+const HOME = mkdtempSync(join(tmpdir(), "mstar-command-home-"));
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(HOME, { recursive: true, force: true });
+});
 // The default invocation control root: allocated per test and registered in the
 // same `roots` array, so teardown only ever removes a directory this run made.
 // It is a real directory because `invocation.controlRoot` names the Git-derived
@@ -22,9 +37,18 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+let fixtureSequence = 0;
+
+/**
+ * A synthetic checkout: a real Git main worktree and an explicit origin-less
+ * collaboration identity, because every repository-scoped store verb now owns a
+ * repository-level collaboration authority beside this checkout's execution.
+ */
 function fixture(label: string): string {
   const root = mkdtempSync(join(tmpdir(), `mstar-${label}-`));
   roots.push(root);
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+  writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${fixtureSequence++}\n`);
   return root;
 }
 
@@ -76,13 +100,25 @@ async function storeSnapshot(harnessDir: string): Promise<{ revision: number; ep
 }
 
 describe("store and execution command surface", () => {
-  test("registers six surviving store verbs and three independent execution utilities", () => {
+  test("registers six surviving store verbs, the four collaboration lifecycle verbs and three independent execution utilities", () => {
     expect(getStoreCommandDefinitions().map(({ id }) => id)).toEqual([
       "store.init", "store.upgrade", "store.migrate", "store.backup", "store.activate", "store.retire",
+      "store.collaboration.plan", "store.collaboration.apply", "store.collaboration.activate", "store.collaboration.restore",
     ]);
     expect(getExecutionCommandDefinitions().map(({ id }) => id)).toEqual([
       "store.execution.restore-preview", "store.execution.restore", "store.execution.export",
     ]);
+  });
+  test("a collaboration verb refuses an omitted or relative target before any store is touched", async () => {
+    const root = fixture("collab-target");
+    const missing = await invoke(definition("store.collaboration.plan"), {}, root);
+    expect(missing).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    const relative = await invoke(definition("store.collaboration.plan"), { harness: ".mstar" }, root);
+    expect(relative).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    // The restore verb names its pair explicitly and never discovers one.
+    const noBackup = await invoke(definition("store.collaboration.restore"), { harness: join(root, ".mstar"), operator: "ops" }, root);
+    expect(noBackup).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    expect(noBackup.status === "usage" ? noBackup.message : "").toContain("--backup");
   });
   test("execution restore-preview preserves usage code, status, and authored message", async () => {
     const root = fixture("execution-usage");
@@ -200,17 +236,26 @@ describe("store and execution command surface", () => {
     expect(upgraded.status).toBe("ok");
     expect(dataOf(upgraded)).toMatchObject({ verdict: "upgraded", authorityState: "active" });
 
-    const backup = await invoke(definition("store.backup"), { harness, out: join(root, "recovery.db") }, root);
-    expect(backup.status).toBe("ok");
-    expect(existsSync(join(root, "recovery.db"))).toBe(true);
-    expect(typeof dataOf(backup).storeId).toBe("string");
+    const manifest = join(root, "recovery.json");
+    const backup = await invoke(definition("store.backup"), { harness, out: manifest }, root);
+    if (backup.status !== "ok") throw new Error(JSON.stringify(backup));
+    const pair = dataOf(backup) as {
+      version: number;
+      execution: { backupPath: string };
+      collaboration: { path: string; counts: Record<string, number> };
+    };
+    // One published pair: the manifest names BOTH verified images.
+    expect(pair.version).toBe(1);
+    expect(existsSync(manifest)).toBe(true);
+    expect(existsSync(pair.execution.backupPath)).toBe(true);
+    expect(existsSync(pair.collaboration.path)).toBe(true);
   });
   test("backs up the explicitly selected control-root store without changing its content", async () => {
     const root = fixture("store-admin-backup");
     const harness = join(root, ".mstar");
     mkdirSync(harness);
-    const initialized = await initializeStore({ harnessDir: harness });
-    initialized.close();
+    const initialized = await invoke(definition("store.init"), { harness }, root);
+    expect(initialized.status).toBe("ok");
     const finding = await captureIssue({ harnessDir: harness }, {
       projectId: "_default",
       title: "Canonical store finding",
@@ -229,19 +274,24 @@ describe("store and execution command surface", () => {
       discoveredAt: "2026-10-07T00:00:00Z",
     }, { operationId: "canonical-backup-issue", actor: "project-manager" });
     const before = await storeSnapshot(harness);
-    const out = join(root, "recovery.db");
+    const out = join(root, "recovery.json");
     const caller = fixture("store-admin-caller");
     const backup = await invoke(definition("store.backup"), { harness, out }, caller, harness);
-    expect(backup.status).toBe("ok");
+    if (backup.status !== "ok") throw new Error(JSON.stringify(backup));
     expect(await storeSnapshot(harness)).toEqual(before);
 
-    const recoveryHarness = fixture("store-admin-recovery");
-    copyFileSync(out, join(recoveryHarness, "store.db"));
-    expect(await getIssue({ harnessDir: recoveryHarness }, finding.issueId)).toMatchObject({
-      id: finding.issueId,
-      title: "Canonical store finding",
-      disposition: "open",
-    });
+    // The receipt keeps the finding: the collaboration half of the pair holds it.
+    const pair = dataOf(backup) as {
+      manifestPath: string;
+      execution: { backupPath: string; counts: { issues: number } };
+      collaboration: { path: string; counts: Record<string, number> };
+    };
+    expect(pair.manifestPath).toBe(out);
+    expect(pair.collaboration.counts.issues).toBe(1);
+    expect(finding.issueId).toMatch(/^I-\d+$/);
+    expect(pair.execution.counts.issues).toBe(0);
+    expect(existsSync(pair.execution.backupPath)).toBe(true);
+    expect(existsSync(pair.collaboration.path)).toBe(true);
   });
 
   test("store init refuses catalog migration inputs", async () => {
@@ -294,7 +344,19 @@ describe("store and execution command surface", () => {
     expect(initialized.status).toBe("ok");
     const backupPath = join(harness, "point.db");
     const backup = await invoke(definition("store.backup"), { harness, out: backupPath }, root);
-    expect(backup.status).toBe("ok");
+    if (backup.status !== "ok") throw new Error(JSON.stringify(backup));
+    // The execution restore route addresses the pair's EXECUTION image; the
+    // collaboration half is restored only by `store collaboration restore`.
+    const executionReceipt = dataOf(backup).execution;
+    if (
+      executionReceipt === null
+      || typeof executionReceipt !== "object"
+      || !("backupPath" in executionReceipt)
+      || typeof executionReceipt.backupPath !== "string"
+    ) {
+      throw new Error("the pair receipt names no execution image");
+    }
+    const executionImage = executionReceipt.backupPath;
     await captureIssue({ harnessDir: harness }, {
       projectId: "_default",
       title: "A finding created after the recovery point",
@@ -314,7 +376,7 @@ describe("store and execution command surface", () => {
     }, { operationId: "post-backup-issue", actor: "project-manager" });
 
     const previewPath = join(root, "loss-preview.json");
-    const restorePreview = await invoke(definition("store.execution.restore-preview"), { harness, backup: backupPath, out: previewPath }, root);
+    const restorePreview = await invoke(definition("store.execution.restore-preview"), { harness, backup: executionImage, out: previewPath }, root);
     if (restorePreview.status !== "ok") throw new Error(JSON.stringify(restorePreview));
     const previewData = dataOf(restorePreview);
     expect(typeof previewData.lossDigest).toBe("string");
@@ -354,9 +416,20 @@ describe("store and execution command surface", () => {
     mkdirSync(harness, { recursive: true });
     expect((await invoke(definition("store.init"), { harness }, root)).status).toBe("ok");
     const backupPath = join(harness, "point.db");
-    expect((await invoke(definition("store.backup"), { harness, out: backupPath }, root)).status).toBe("ok");
+    const backup = await invoke(definition("store.backup"), { harness, out: backupPath }, root);
+    if (backup.status !== "ok") throw new Error(JSON.stringify(backup));
+    const executionReceipt = dataOf(backup).execution;
+    if (
+      executionReceipt === null
+      || typeof executionReceipt !== "object"
+      || !("backupPath" in executionReceipt)
+      || typeof executionReceipt.backupPath !== "string"
+    ) {
+      throw new Error("the pair receipt names no execution image");
+    }
+    const executionImage = executionReceipt.backupPath;
     const firstPreview = join(root, "first-preview.json");
-    const first = await invoke(definition("store.execution.restore-preview"), { harness, backup: backupPath, out: firstPreview }, root);
+    const first = await invoke(definition("store.execution.restore-preview"), { harness, backup: executionImage, out: firstPreview }, root);
     expect(first.status).toBe("ok");
     expect(dataOf(first).version).toBe(3);
     // An older loss-payload generation than the build's own protocol: the
@@ -381,7 +454,7 @@ describe("store and execution command surface", () => {
     // The recovery the refusal names is a real public verb on this build: it
     // regenerates a current preview that a retry accepts.
     const regenerated = await invoke(definition("store.execution.restore-preview"), {
-      harness, backup: backupPath, out: join(root, "regenerated-preview.json"),
+      harness, backup: executionImage, out: join(root, "regenerated-preview.json"),
     }, root);
     expect(regenerated.status).toBe("ok");
     expect(dataOf(regenerated).version).toBe(3);
