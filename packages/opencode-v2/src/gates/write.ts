@@ -64,10 +64,8 @@ function malformedPath(field: "filePath" | "path"): Tool.Error {
  );
 }
 
-function classifyDocument(api: WriteGateEngineApi, inputPath: string, landedPath: string): GatedDocument | null {
- return api.harnessDocKindOfTarget(inputPath)
- ?? api.caseFoldedDocKind(inputPath)
- ?? (landedPath === inputPath ? null : api.harnessDocKindOfTarget(landedPath) ?? api.caseFoldedDocKind(landedPath));
+function classifyOne(api: WriteGateEngineApi, path: string): GatedDocument | null {
+ return api.harnessDocKindOfTarget(path) ?? api.caseFoldedDocKind(path);
 }
 
 function authorityError(code: string, message: string): AuthorityRefusal {
@@ -201,11 +199,32 @@ async function executeBefore(event: WriteBeforeEvent, services: WriteGateService
  );
  }
 
- const target = classifyDocument(api, requested, landed);
- if (target === null) return;
+ const requestedDoc = classifyOne(api, requested);
+ const landedDoc = landed === requested ? null : classifyOne(api, landed);
+ // The bytes a write lands on carry their own authority: a requested
+ // execution document that resolves to a register must face the register
+ // gate, and a requested register that resolves elsewhere must still face
+ // its own. Both distinct classifications are decided (register first), so
+ // neither direction can mask the other's authority.
+ const documents: GatedDocument[] = [];
+ for (const doc of [landedDoc, requestedDoc]) {
+ if (doc === null) continue;
+ if (documents.some((seen) => seen.harnessDir === doc.harnessDir && seen.kind === doc.kind)) continue;
+ documents.push(doc);
+ }
+ if (documents.length === 0) return;
 
- const authorityRefusal = await authorityRefusalFor(api, target);
+ const ordered = [
+ ...documents.filter((doc) => doc.kind === "register"),
+ ...documents.filter((doc) => doc.kind !== "register"),
+ ];
+ for (const doc of ordered) {
+ const authorityRefusal = await authorityRefusalFor(api, doc);
  if (authorityRefusal !== null) throw refusal(authorityRefusal.code, authorityRefusal.message);
+ }
+
+ const target = requestedDoc ?? landedDoc;
+ if (target === null) return;
  await validateDocument(api, event, input, requested, target, logger);
 }
 

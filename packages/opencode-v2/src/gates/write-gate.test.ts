@@ -230,6 +230,64 @@ describe("OpenCode V2 structured-write gate", () => {
     }
   });
 
+  test("a requested execution document that lands on a register faces the collaboration gate", async () => {
+    for (const mode of ["hard", "soft"] as const) {
+      const { harnessDir } = harness(mode);
+      const register = join(harnessDir, "projects", "_default", "residuals.json");
+      writeFileSync(register, JSON.stringify({ entries: {} }));
+      const statusPath = join(harnessDir, "status.json");
+      rmSync(statusPath);
+      symlinkSync(register, statusPath);
+
+      // A missing collaboration lane refuses by its own cause: the requested
+      // `status.json` shape must not hide the register the bytes land on.
+      const unavailable = makeBody(() => writeFileSync(register, "unauthorized"));
+      await expectAuthorityRefusal(
+        unavailable.run(event("write", { filePath: statusPath, content: "unauthorized" })),
+        "store.authority-unavailable",
+      );
+      expect(unavailable.calls()).toBe(0);
+
+      const active = makeBody(() => writeFileSync(register, "unauthorized"));
+      await expectAuthorityRefusal(
+        active.run(
+          event("write", { filePath: statusPath, content: "unauthorized" }),
+          collaborationApi({ kind: "active" }),
+        ),
+        "project.register.retired",
+      );
+      expect(active.calls()).toBe(0);
+    }
+  });
+
+  test("a non-document request that lands on an execution document still faces the execution gate", async () => {
+    const { root, harnessDir } = harness("hard");
+    const statusPath = join(harnessDir, "status.json");
+    const alias = join(root, "requested-content.json");
+    symlinkSync(statusPath, alias);
+    const executionApi = {
+      ...Engine,
+      resolveExecutionReadRoute: async () => "execution",
+    } as WriteGateEngineApi;
+
+    const blocked = makeBody(() => writeFileSync(statusPath, "unauthorized"));
+    await expectAuthorityRefusal(
+      blocked.run(event("write", { filePath: alias, content: "unauthorized" }), executionApi),
+      "execution.direct-write-refused",
+    );
+    expect(blocked.calls()).toBe(0);
+    expectPreservedStatus(statusPath);
+
+    // Negative control: an alias landing on a non-document passes.
+    const notes = join(root, "notes.md");
+    writeFileSync(notes, "# notes\n");
+    const notesAlias = join(root, "notes-alias.md");
+    symlinkSync(notes, notesAlias);
+    const allowed = makeBody(() => writeFileSync(notesAlias, "# changed\n"));
+    await allowed.run(event("write", { filePath: notesAlias, content: "# changed\n" }), executionApi);
+    expect(allowed.calls()).toBe(1);
+  });
+
   test("a register reached through a symlink alias is judged by the bytes it lands on", async () => {
     const { root, harnessDir } = harness("hard");
     const register = join(harnessDir, "projects", "_default", "residuals.json");
