@@ -1,6 +1,7 @@
 ---
 module: collaboration store, execution store, repository identity, host write gates
 date: 2026-11-21
+last_updated: 2026-11-21
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
@@ -71,6 +72,43 @@ copy of the same authority, and a host write gate cannot protect only the execut
   the execution transaction. Persist intent and expected effects, apply one side, record a receipt, then
   finalize the other; a partial result is not success. This document covers the local authority foundation;
   remote authority and outbox semantics are separate decisions.
+
+## Cutover, operations and recovery
+
+- **Cut over as one authority switch.** Stage a transactionally consistent snapshot, verify stable IDs, foreign-key
+  closure, revisions and catalog/history closure through the copied image, and keep the reviewed manifest bytes as
+  the activation identity. Serialize plan/apply/activate/adopt/restore through one local lock; a stale same-host
+  lock is recoverable only from a dead PID, never by an elapsed-time takeover.
+- **Fence the source before publishing.** A reviewed activation requires an operator attestation bound to the exact
+  repository, mode, control root, source store/epoch and stopped handles, plus an explicit `allHandlesStopped`
+  assertion. The fence transaction moves collaboration tables out of the live schema and advances the execution
+  schema so an old reader cannot reopen it. A rollback or commit whose outcome is unprovable reports
+  `collaboration.cutover-unconfirmed`; it never claims the source is unchanged or retries blindly.
+- **Cross-domain effects use intents and receipts, not one transaction.** Reserve the execution facts and frozen
+  payload first, commit the collaboration effect with one durable receipt, then finalize/release execution. Replay
+  reads receipts before CAS. A failed acknowledgement or decline settlement is an explicit `operation-partial` with
+  the original cause and a same-identity recovery; it is never a clean terminal result. Keep operation-id namespaces
+  and revision/CAS lanes separate; a shared `store_meta.revision` is not a cross-domain token.
+- **Backups are verified pairs.** Publish an execution image and a collaboration image with a manifest only after
+  each image is re-verified against its own bytes and the causal boundary is quiescent (no prepared intent, no
+  unacknowledged effect, no lane mutation during copy). Attempt-owned create-only credentials and private images
+  prevent a failed attempt from deleting or adopting a winner's files; resume reuses a verified private image and
+  never re-copies an unpublished side from the live authority. A missing original refuses rather than inventing a
+  pair.
+- **Restore is scoped and create-only.** Restore only into an absent target, verify the runtime's exact schema,
+  migration inventory and lineage before staging, run the target checkout/canonical private-path guard first, and
+  publish with a fresh authority identity/epoch. A post-publication binding/sync failure returns a named partial
+  with the published authority and a resumable instruction. The same request repairs it without issuing a second
+  generation.
+- **Replacement clones adopt explicitly.** A checkout with no binding does not silently adopt an active lane. The
+  supported `store collaboration adopt` verb verifies canonical repository/mode, lane metadata, an ordinary-init
+  creation receipt, reviewed-cutover activation or restore lineage, and the exact live store/epoch; only a unique
+  match writes the active binding. Missing, mismatched, ambiguous or foreign lineage refuses. Ordinary reads and
+  writes remain `collaboration.stale-binding` until adoption; a claim file is never a binding and never promotes
+  without a recorded publication.
+- **Read from the source that owns the fact.** Execute and collaboration reads use separate source-local snapshots
+  and keyed composition; required sources refuse, optional sources disclose absence, and neither null revision nor
+  stale projection becomes zero or success. Timestamp each source at its own snapshot, not before either open.
 
 ## Why This Matters
 
