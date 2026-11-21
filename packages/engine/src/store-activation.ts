@@ -1639,6 +1639,7 @@ async function resumeInterruptedPair(
     }
     // The existing image must BE the attempt's verified bytes: it is reused
     // unchanged, never re-copied, so its replacement cannot slip in here.
+    // hash-gate: authorized — Reuse the destination image only when its bytes equal the digest this pair attempt verified; a replaced image never shared the attempt's snapshot window.
     if (sha256Bytes(readFileSync(path)) !== side.sha256) {
       throw incompletePair(
         `The image at ${path} is not the one this attempt copied (its bytes differ from the recorded attempt), so the two ` +
@@ -1772,7 +1773,7 @@ function ownsPrivateImage(side: PairAttemptClaim["execution"], attempt: string, 
     return false;
   }
   if (!stats.isFile() || stats.size === 0) return false;
-  return sha256Bytes(readFileSync(side.privatePath)) === side.sha256;
+  return sha256Bytes(readFileSync(side.privatePath)) === side.sha256; // hash-gate: authorized — Adopt the retained private image as this attempt's evidence only when its bytes match the digest the attempt verified.
 }
 
 /**
@@ -1794,6 +1795,7 @@ function reusePrivateImage(
     return false;
   }
   if (!stats.isFile() || stats.size === 0) return false;
+  // hash-gate: authorized — Re-verify the private image bytes immediately before linking it into the public name so bytes changed after the ownership check are never published.
   if (sha256Bytes(readFileSync(side.privatePath)) !== side.sha256) {
     throw incompletePair(
       `The attempt's retained private image ${side.privatePath} no longer matches the digest this attempt verified, so it ` +
@@ -3790,6 +3792,7 @@ export async function retireStoreSources(
     );
   }
   const recordedActivation = JSON.parse(lane.activation.resultJson) as Omit<ActivationReceipt, "replayed">;
+  // hash-gate: authorized — Retire the lane's sources only against the recorded activation receipt; a hash naming another activation must refuse instead of retiring foreign evidence.
   if (recordedActivation.activationHash !== activationReceipt.activationHash) {
     throw new StoreActivationError(
       "store.activation-stale",

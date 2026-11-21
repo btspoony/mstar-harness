@@ -587,7 +587,7 @@ async function applyCollaborationEffect(
     (handle) => {
       const existing = readEffect(handle.db, intent.key);
       if (existing !== null) {
-        if (existing.requestHash !== intent.requestHash) throw intentConflict(intent, existing.requestHash);
+        if (existing.requestHash !== intent.requestHash) throw intentConflict(intent, existing.requestHash); // hash-gate: authorized — Replay a committed composite effect recorded under this operation id only for the same request hash; a differing hash under the same id is a conflicting intent, not a replay.
         return existing.outcome;
       }
       const facts = apply(handle);
@@ -647,7 +647,7 @@ async function declineEffect(context: StoreContext, intent: CompositeIntent, err
     (handle) => {
       const existing = readEffect(handle.db, intent.key);
       if (existing !== null) {
-        if (existing.requestHash !== intent.requestHash) throw intentConflict(intent, existing.requestHash);
+        if (existing.requestHash !== intent.requestHash) throw intentConflict(intent, existing.requestHash); // hash-gate: authorized — Replay a recorded composite decline under this operation id only for the same request hash; a differing hash under the same id is a conflicting intent, not a replay.
         return existing.outcome;
       }
       const meta = handle.db
