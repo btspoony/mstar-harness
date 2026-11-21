@@ -1689,10 +1689,16 @@ function executionProbeRefusal(dbPath: string, error: unknown): StoreError {
  * instead of admitting it: `openStore` refuses a damaged `execution_meta` or
  * schema ledger as `store.corrupt` before any table is visible, which would
  * hide a readable legacy owner's collaboration rows. A genuinely absent file
- * has no local rows to inspect; an existing file this probe cannot inspect
- * proves nothing and fails closed.
+ * has no local rows to inspect.
+ *
+ * `ownershipProven` says this checkout's finalized binding already names the
+ * resolved repository and mode. Such a checkout was ADOPTED, so it is not a
+ * legacy owner: an execution file it cannot inspect at all proves nothing and
+ * is left to the execution domain (whose own `store.corrupt`/`store.busy` is
+ * the actionable answer) instead of becoming a collaboration refusal. Readable
+ * legacy rows are still refused — the binding never licenses a bypass.
  */
-async function assertNoLegacyCollaborationOwner(context: StoreContext): Promise<void> {
+async function assertNoLegacyCollaborationOwner(context: StoreContext, ownershipProven: boolean): Promise<void> {
   const dbPath = storeDbPath(context);
   if (!existsSync(dbPath)) return;
   let probe: StoreDb;
@@ -1706,6 +1712,7 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext): Promise<
     if (!existsSync(dbPath)) return;
     // Bounded contention is transient and keeps its own retryable refusal.
     if (error instanceof StoreError && error.code === "store.busy") throw error;
+    if (ownershipProven) return;
     throw executionProbeRefusal(dbPath, error);
   }
   try {
@@ -1735,6 +1742,7 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext): Promise<
   } catch (error) {
     // A lazy driver may only reject the header when the first statement runs.
     if (error instanceof StoreError) throw error;
+    if (ownershipProven) return;
     throw executionProbeRefusal(dbPath, error);
   } finally {
     probe.close();
@@ -1742,18 +1750,14 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext): Promise<
 }
 
 /**
- * Refuse when THIS checkout cannot own the resolved authority, regardless of what
- * the lane currently holds: an unfenced combined store with collaboration rows is
- * the legacy owner, and a recorded binding that names another repository/mode was
- * retargeted. This is the pre-publication half — a restore runs it before it
- * stages, links or binds anything, so it never publishes an authority the
- * addressed checkout would then refuse.
+ * Refuse a retargeted checkout: an origin or `.mstarc` change never re-points a
+ * binding. Returns the checkout's finalized binding (or `null`), so an admission
+ * caller reads it once.
  */
-export async function assertControlCheckoutScope(context: StoreContext, location: CollaborationLocation): Promise<void> {
-  await assertNoLegacyCollaborationOwner(context);
+function assertBoundScope(context: StoreContext, location: CollaborationLocation): CollaborationBinding | null {
   const binding = readCollaborationBinding(context);
   // A claim is attempt-scoped evidence, not this checkout's binding: readers ignore it.
-  if (binding === null || binding.state !== "active") return;
+  if (binding === null || binding.state !== "active") return null;
   if (binding.repoKey !== location.repoKey || binding.mode !== location.mode) {
     throw new StoreError(
       "collaboration.stale-binding",
@@ -1762,6 +1766,26 @@ export async function assertControlCheckoutScope(context: StoreContext, location
         `the scope deliberately (mstar path resolve) and start a new checkout for the other repository. Nothing was modified.`,
     );
   }
+  return binding;
+}
+
+/** The checkout scope guard: the legacy-owner probe plus the retarget refusal. */
+export async function assertControlCheckoutScope(context: StoreContext, location: CollaborationLocation): Promise<void> {
+  const binding = assertBoundScope(context, location);
+  // A binding that names this repository and mode is proof of ADOPTION, not of an
+  // unreadable execution lane's innocence; it only keeps an uninspectable file
+  // from becoming a collaboration refusal.
+  await assertNoLegacyCollaborationOwner(context, binding !== null);
+}
+
+/** The scope guard's fuller form: the finalized binding is returned for the generation check. */
+async function checkoutScopeBinding(
+  context: StoreContext,
+  location: CollaborationLocation,
+): Promise<CollaborationBinding | null> {
+  const binding = assertBoundScope(context, location);
+  await assertNoLegacyCollaborationOwner(context, binding !== null);
+  return binding;
 }
 
 /**
@@ -1785,11 +1809,9 @@ async function assertControlBinding(
   authority: CollaborationAuthority,
   requirement: "read" | "write",
 ): Promise<void> {
-  await assertControlCheckoutScope(context, location);
-  const recorded = readCollaborationBinding(context);
-  // Only a finalized binding speaks for this checkout; a claim belongs to the
-  // activation attempt that wrote it and is ignored here.
-  const binding = recorded !== null && recorded.state === "active" ? recorded : null;
+  // ONE scope pass returns the finalized binding: the retarget refusal, the
+  // legacy-owner probe and the generation comparison share one read.
+  const binding = await checkoutScopeBinding(context, location);
   if (binding === null) {
     if (requirement === "read") return;
     // A LIVE authority with no recorded binding is NOT a fresh clone: it may be a
@@ -1866,10 +1888,11 @@ function probeRefusal(error: unknown): { code: string; message: string } {
 /**
  * The collaboration lane's authority probe for host gates: it reads ONLY this
  * lane, so the execution store may be absent, staged, or damaged in its
- * execution metadata without changing the verdict. An execution store that
- * cannot be inspected at all is `unavailable`: it cannot be proven innocent of
- * legacy collaboration rows. Classification comes from ONE admission call's typed
- * refusal — `collaboration.not-initialized` is `absent`,
+ * execution metadata without changing the verdict. An execution store an
+ * UNBOUND checkout cannot inspect is `unavailable` (it cannot be proven
+ * innocent of legacy collaboration rows); a bound checkout leaves that file to
+ * the execution domain's own refusal. Classification comes from ONE admission
+ * call's typed refusal — `collaboration.not-initialized` is `absent`,
  * `collaboration.not-active` is `staged`, and every other cause (identity,
  * mode, runtime, a rejected storage path, corrupt bytes, a stale binding) is
  * `unavailable` with its original recovery — so a symlinked or non-private

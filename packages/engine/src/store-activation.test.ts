@@ -2155,15 +2155,29 @@ describe("collaboration lifecycle", () => {
     expect(lane).toEqual({ issues: { n: 1 } });
   });
 
-  test("an execution store that cannot be inspected refuses instead of reading as empty", async () => {
-    const fixture = repoWorkspace("collab-uninspectable-execution-");
+  test("a bound checkout leaves an uninspectable execution store to the execution domain", async () => {
+    const fixture = repoWorkspace("collab-bound-uninspectable-");
     await ensureCollaborationAuthority(fixture.context);
-    const live = readCollaborationBinding(fixture.context);
+    const bound = readCollaborationBinding(fixture.context);
+    writeFileSync(join(fixture.harness, "store.db"), "not a sqlite database\n");
+    // The finalized binding proves this checkout was ADOPTED, so it is not a
+    // legacy owner: the lane keeps answering and a legitimate write lands…
+    expect((await readCollaborationAuthority(fixture.context)).state).toBe("active");
+    await captureOne(fixture, "op-bound-uninspectable");
+    // …while the execution store keeps its own actionable refusal.
+    await expect(openStore(fixture.context, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    expect(readCollaborationBinding(fixture.context)).toEqual(bound);
+  });
+
+  test("an unbound checkout fails closed on an execution store it cannot inspect", async () => {
+    const fixture = repoWorkspace("collab-unbound-uninspectable-");
+    await ensureCollaborationAuthority(fixture.context);
+    rmSync(join(fixture.harness, "collaboration-binding.json"), { force: true });
     writeFileSync(join(fixture.harness, "store.db"), "not a sqlite database\n");
     await expect(readCollaborationAuthority(fixture.context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
     await expect(adoptCollaborationBinding(fixture.context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
-    // The lane and this checkout's binding were not touched by the refused probe.
-    expect(readCollaborationBinding(fixture.context)).toEqual(live);
+    // Neither refusal invented a binding for the unprovable scope.
+    expect(readCollaborationBinding(fixture.context)).toBeNull();
   });
 
   test("a reviewed file-era import stages the lane and publishes it with a single epoch bump", async () => {
