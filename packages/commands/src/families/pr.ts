@@ -53,9 +53,10 @@ const failure = (error: unknown): CommandEnvelope<never> => {
     recovery: "Install the GitHub CLI and authenticate it, then rerun the gate. Run mstar pr merge-gate --pr <n>.",
   });
   if (code === undefined) {
-    // why: refusalEnvelope cannot build an `error` envelope, so this path puts
-    // the hint in `message` for text readers and mirrors it at
-    // `details.recovery`, where refusal consumers look.
+    // why: the refusal builder admits only usage/refused, and an error envelope
+    // is returned before the refusal normalizer reads details.recovery — so
+    // `message` is the only channel a reader sees here, and details.recovery is
+    // a compatibility mirror.
     const hint = "Correct the reported condition, then rerun the gate. Run mstar pr merge-gate --pr <n>.";
     return {
       version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1,
