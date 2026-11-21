@@ -22,8 +22,9 @@
  * protocol; `fenceCollaborationCutoverSource` is the durable fence step they
  * drive (also the resume entry a fenced-but-unpublished source needs).
  */
-import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   resolveCollaborationLocation,
@@ -104,6 +105,11 @@ export type CutoverActivationOptions = Readonly<{
 
 /** The single claim slot on the canonical target: one activation at a time. */
 const CLAIM_KEY = "collaboration-cutover-claim";
+
+/** The one local OS cutover lock, under the control harness root. */
+const CUTOVER_LOCK_BASENAME = "collaboration-cutover.lock";
+/** Bounded retries after recovering a stale lock another attempt just replaced. */
+const STALE_LOCK_ATTEMPTS = 3;
 
 /** The oldest source schema this build can extract (the combined store's cutover base). */
 const SOURCE_SCHEMA_FLOOR = MIGRATIONS[MIGRATIONS.length - 2]!.version;
@@ -207,6 +213,125 @@ function backupIncomplete(detail: string): StoreError {
   );
 }
 
+type CutoverLockOwner = Readonly<{ pid: number; host: string; startedAt: string; token: string }>;
+
+/** The one local cutover lock file, under the control harness root. */
+function cutoverLockPath(context: StoreContext): string {
+  return join(context.harnessDir, CUTOVER_LOCK_BASENAME);
+}
+
+/** The recorded owner, or `null` when the file is unreadable or malformed. */
+function readCutoverLock(path: string): CutoverLockOwner | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isReceiptObject(parsed)) return null;
+  const { pid, host, startedAt, token } = parsed;
+  if (!isCount(pid) || !Number.isInteger(pid) || pid < 1) return null;
+  if (!isText(host) || !isText(startedAt) || !isText(token)) return null;
+  return { pid, host, startedAt, token };
+}
+
+/** Signal 0 probes existence; only a permission verdict means the PID is alive. */
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as { code?: string }).code === "EPERM";
+  }
+}
+
+function cutoverLockRefusal(path: string, owner: CutoverLockOwner | null): StoreError {
+  const header = "Nothing was inspected, claimed, fenced or published.";
+  if (owner === null) {
+    return new StoreError(
+      "collaboration.cutover-conflict",
+      `The collaboration cutover lock at ${path} is unreadable or malformed. Confirm that no cutover process is running ` +
+        `on any host that shares this harness, remove that file, and retry. ${header}`,
+    );
+  }
+  if (owner.host === hostname()) {
+    return new StoreError(
+      "collaboration.cutover-conflict",
+      `Another collaboration cutover is running on this host (pid ${String(owner.pid)}, started at ${owner.startedAt}) ` +
+        `and holds ${path}. Wait for it to finish; a stuck run must be stopped before retrying. ${header}`,
+    );
+  }
+  return new StoreError(
+    "collaboration.cutover-conflict",
+    `The collaboration cutover lock at ${path} is held on host ${owner.host} (pid ${String(owner.pid)}, started at ` +
+      `${owner.startedAt}), which cannot be probed from here. Confirm that the cutover is not running on that host, ` +
+      `remove the lock file only then, and retry. ${header}`,
+  );
+}
+
+/**
+ * The one local OS cutover lock. Scope: `plan`, `apply`, `activate` (and the
+ * durable fence entry) serialize their whole inspect/claim/fence/publish
+ * critical section across processes of this host, and across hosts that share
+ * the control harness. Ordinary collaboration writers do not take it: the
+ * operator's complete-stop assertion covers them.
+ *
+ * Acquisition is an exclusive create carrying `{pid, host, startedAt, token}`.
+ * A same-host lock whose PID is gone is a supported stale-lock recovery (the
+ * host probe is authoritative); a live or foreign-host lock refuses with a
+ * named recovery. Release removes the file only when it still carries this
+ * attempt's token, in `finally`, so a throwing step never leaves the lock held.
+ */
+async function withCutoverLock<T>(context: StoreContext, work: () => Promise<T>): Promise<T> {
+  const path = cutoverLockPath(context);
+  const owner: CutoverLockOwner = {
+    pid: process.pid,
+    host: hostname(),
+    startedAt: new Date().toISOString(),
+    token: randomUUID(),
+  };
+  for (let attempt = 1; ; attempt++) {
+    try {
+      writeFileSync(path, `${JSON.stringify(owner)}\n`, { flag: "wx", mode: 0o600 });
+      break;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code !== "EEXIST") {
+        throw new StoreError(
+          "collaboration.cutover-conflict",
+          `The collaboration cutover lock at ${path} could not be created (${error instanceof Error ? error.message : String(error)}). ` +
+            `Fix the control harness directory and retry. Nothing was inspected, claimed, fenced or published.`,
+        );
+      }
+      const held = readCutoverLock(path);
+      if (held === null) throw cutoverLockRefusal(path, null);
+      const stale = held.host === owner.host && !processIsAlive(held.pid);
+      if (!stale || attempt >= STALE_LOCK_ATTEMPTS) throw cutoverLockRefusal(path, held);
+      try {
+        unlinkSync(path);
+      } catch (unlinkError) {
+        if ((unlinkError as { code?: string }).code !== "ENOENT") throw cutoverLockRefusal(path, held);
+      }
+    }
+  }
+  try {
+    return await work();
+  } finally {
+    try {
+      const held = readCutoverLock(path);
+      if (held !== null && held.token === owner.token) unlinkSync(path);
+    } catch {
+      // best effort: a lock left by a live process is a same-host stale lock once it exits
+    }
+  }
+}
+
 function tableExists(db: StoreDb, table: string): boolean {
   const row = db
     .prepare("select count(*) as n from sqlite_master where type = 'table' and name = ?")
@@ -277,48 +402,221 @@ function digestOfSource(source: CutoverSource, rows: Record<string, unknown[][]>
 }
 
 /**
- * Classify one combined-store receipt as execution-owned by its PAYLOAD, never
- * by its id: the legacy issue API accepts any non-empty operation id, so a
- * receipt whose id happens to read `restore-attempt:...` can be a perfectly
- * valid issue operation. Each execution-lane writer records a shape nothing in
- * this table produces otherwise - the recovery replacement record
- * (`recoveryVersion` + terminal `phase`), the execution importer report
- * (`importedIds`) and the host-state importer report (`merged`) - so exactly
- * those are excluded. Everything else, including anything unreadable or
- * ambiguous, is preserved: replay history is never silently dropped.
+ * One combined-store receipt's provenance. The table is shared today, so each
+ * row must be PROVEN to be collaboration- or execution-owned by its recorded
+ * result shape; anything else refuses the cutover instead of being silently
+ * promoted or dropped. Operation ids are caller-supplied and prove nothing.
  */
-function isExecutionReceipt(row: unknown[]): boolean {
-  if (typeof row[2] !== "string" || row[2] === "") return false;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(row[2]);
-  } catch {
-    return false;
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return false;
-  const record = parsed as Record<string, unknown>;
-  const replaced =
-    typeof record.recoveryVersion === "number" &&
-    record.phase === "replaced" &&
-    typeof record.storeId === "string" &&
-    record.verified !== null &&
-    typeof record.verified === "object";
-  const executionImport =
-    typeof record.verdict === "string" && typeof record.sourceDigest === "string" && Array.isArray(record.importedIds);
-  const hostStateImport =
-    typeof record.verdict === "string" &&
-    typeof record.sourceDigest === "string" &&
-    record.imported !== null &&
-    typeof record.imported === "object" &&
-    record.merged !== null &&
-    typeof record.merged === "object";
-  return replaced || executionImport || hostStateImport;
+type ReceiptOwnership = "collaboration" | "execution" | { unproven: string };
+
+function isReceiptObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** The combined store's collaboration receipts, in their recorded order. */
+function isText(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function onlyKnownKeys(record: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(record).every((key) => allowed.includes(key));
+}
+
+/** issue.ts `IssueReceipt`. */
+function isIssueReceipt(record: Record<string, unknown>): boolean {
+  return (
+    isText(record.issueId) &&
+    isCount(record.revision) &&
+    isCount(record.storeRevision) &&
+    typeof record.created === "boolean" &&
+    (record.occurrenceId === undefined || isCount(record.occurrenceId)) &&
+    (record.fromProject === undefined || isText(record.fromProject)) &&
+    (record.toProject === undefined || isText(record.toProject)) &&
+    (record.clearedMilestoneId === undefined || record.clearedMilestoneId === null || isText(record.clearedMilestoneId)) &&
+    onlyKnownKeys(record, [
+      "issueId",
+      "occurrenceId",
+      "revision",
+      "storeRevision",
+      "created",
+      "fromProject",
+      "toProject",
+      "clearedMilestoneId",
+    ])
+  );
+}
+
+/** milestone-store.ts `MilestoneReceipt`. */
+function isMilestoneReceipt(record: Record<string, unknown>): boolean {
+  return (
+    isText(record.projectId) &&
+    isText(record.milestoneId) &&
+    isCount(record.revision) &&
+    isCount(record.storeRevision) &&
+    typeof record.changed === "boolean" &&
+    onlyKnownKeys(record, ["projectId", "milestoneId", "revision", "storeRevision", "changed"])
+  );
+}
+
+/** project.ts `ProjectBindingReceipt`. */
+function isProjectBindingReceipt(record: Record<string, unknown>): boolean {
+  return (
+    isText(record.projectId) &&
+    isText(record.provider) &&
+    isText(record.remoteProject) &&
+    isCount(record.revision) &&
+    isCount(record.storeRevision) &&
+    typeof record.changed === "boolean" &&
+    onlyKnownKeys(record, ["projectId", "provider", "remoteProject", "revision", "storeRevision", "changed"])
+  );
+}
+
+/** roadmap-store.ts `RoadmapWriteReceipt`. */
+function isRoadmapReceipt(record: Record<string, unknown>): boolean {
+  return (
+    isText(record.projectId) &&
+    isCount(record.revision) &&
+    isText(record.contentHash) &&
+    isCount(record.storeRevision) &&
+    onlyKnownKeys(record, ["projectId", "revision", "contentHash", "storeRevision"])
+  );
+}
+
+/** issue-sync.ts `SyncItem` (the item-transition receipt). */
+function isSyncItemReceipt(record: Record<string, unknown>): boolean {
+  const nullableText = (value: unknown): boolean => value === null || isText(value);
+  return (
+    isText(record.bindingId) &&
+    (record.direction === "import" || record.direction === "push") &&
+    isText(record.localId) &&
+    nullableText(record.externalId) &&
+    typeof record.itemState === "string" &&
+    ["unbound", "pending", "applied", "failed", "skipped"].includes(record.itemState) &&
+    nullableText(record.lastRemoteUpdatedAt) &&
+    nullableText(record.pendingTarget) &&
+    nullableText(record.lastError) &&
+    nullableText(record.lastSkipReason) &&
+    nullableText(record.lastRequestHash) &&
+    Array.isArray(record.lastKindLabels) &&
+    record.lastKindLabels.every((label) => typeof label === "string") &&
+    isCount(record.revision) &&
+    isText(record.updatedAt) &&
+    onlyKnownKeys(record, [
+      "bindingId",
+      "direction",
+      "localId",
+      "externalId",
+      "itemState",
+      "lastRemoteUpdatedAt",
+      "pendingTarget",
+      "lastError",
+      "lastSkipReason",
+      "lastRequestHash",
+      "lastKindLabels",
+      "revision",
+      "updatedAt",
+    ])
+  );
+}
+
+/** issue-sync.ts cursor receipts. */
+function isSyncCursorReceipt(record: Record<string, unknown>): boolean {
+  return (
+    onlyKnownKeys(record, ["cursor"]) &&
+    Object.hasOwn(record, "cursor") &&
+    (record.cursor === null || isText(record.cursor))
+  );
+}
+
+/** execution-recovery.ts replacement record. */
+function isRecoveryRecord(record: Record<string, unknown>): boolean {
+  const verified = record.verified;
+  return (
+    isCount(record.recoveryVersion) &&
+    record.phase === "replaced" &&
+    isText(record.storeId) &&
+    isReceiptObject(verified) &&
+    verified.integrity === "ok" &&
+    verified.foreignKeys === "ok"
+  );
+}
+
+/** execution-minimal-import.ts `MinimalImportResult`. */
+function isExecutionImportResult(record: Record<string, unknown>): boolean {
+  return (
+    (record.verdict === "upgraded" || record.verdict === "nothing-to-import") &&
+    isCount(record.imported) &&
+    Array.isArray(record.importedIds) &&
+    record.importedIds.every((id) => typeof id === "string") &&
+    Array.isArray(record.skipped) &&
+    Array.isArray(record.dispositions) &&
+    record.dispositions.every((entry) => typeof entry === "string") &&
+    isText(record.sourceDigest) &&
+    isText(record.inputDigest)
+  );
+}
+
+/** host-state-import.ts `DshHostStateImportReport`. */
+function isHostStateImportReport(record: Record<string, unknown>): boolean {
+  return (
+    (record.verdict === "imported" || record.verdict === "partially-imported" || record.verdict === "nothing-to-import") &&
+    isReceiptObject(record.imported) &&
+    isReceiptObject(record.merged) &&
+    Array.isArray(record.findings) &&
+    isText(record.sourceDigest)
+  );
+}
+
+/**
+ * Classify one receipt by a KNOWN producer plus its validated result shape.
+ * The execution lane and the collaboration domains each record a shape no
+ * other producer writes, so a proven execution record is excluded, a proven
+ * collaboration record is preserved, and everything unknown, incomplete,
+ * malformed or ambiguous refuses the cutover rather than being promoted (or
+ * lost) on a guess.
+ */
+function receiptOwnership(row: unknown[]): ReceiptOwnership {
+  const raw = row[2];
+  if (typeof raw !== "string" || raw === "") return { unproven: "the receipt records no result payload" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { unproven: "the result payload is not JSON" };
+  }
+  if (!isReceiptObject(parsed)) return { unproven: "the result payload is not an object" };
+  if (isRecoveryRecord(parsed)) return "execution";
+  if (isExecutionImportResult(parsed)) return "execution";
+  if (isHostStateImportReport(parsed)) return "execution";
+  if (isIssueReceipt(parsed)) return "collaboration";
+  if (isMilestoneReceipt(parsed)) return "collaboration";
+  if (isProjectBindingReceipt(parsed)) return "collaboration";
+  if (isRoadmapReceipt(parsed)) return "collaboration";
+  if (isSyncItemReceipt(parsed)) return "collaboration";
+  if (isSyncCursorReceipt(parsed)) return "collaboration";
+  return { unproven: "the result payload matches no known collaboration or execution producer" };
+}
+
+/** The combined store's PROVEN collaboration receipts, in their recorded order. */
 function readSourceLedger(db: StoreDb): unknown[][] {
   if (!tableExists(db, "store_operations")) return [];
-  return readRows(db, "store_operations", LEDGER_COLUMNS).filter((row) => !isExecutionReceipt(row));
+  const ledger: unknown[][] = [];
+  for (const row of readRows(db, "store_operations", LEDGER_COLUMNS)) {
+    const ownership = receiptOwnership(row);
+    if (ownership === "execution") continue;
+    if (ownership !== "collaboration") {
+      throw conflict(
+        `The combined store's operation receipt ${JSON.stringify(String(row[0]))} cannot be proven collaboration- or ` +
+          `execution-owned (${ownership.unproven}). The cutover refuses to guess: inspect that receipt, resolve or ` +
+          `remove it with the domain that owns it, then re-plan. Nothing was staged, fenced or published.`,
+      );
+    }
+    ledger.push(row);
+  }
+  return ledger;
 }
 
 /**
@@ -930,6 +1228,10 @@ function ensureFenceSchema(db: StoreDb): number {
 }
 
 export async function planCollaborationCutover(context: StoreContext): Promise<CutoverManifest> {
+  return withCutoverLock(context, () => planUnderCutoverLock(context));
+}
+
+async function planUnderCutoverLock(context: StoreContext): Promise<CutoverManifest> {
   const location = resolveCollaborationLocation(context);
   const state = await readSourceState(context);
   if (state.fence !== null) {
@@ -976,6 +1278,13 @@ async function receiptFromFencedSource(
 }
 
 export async function applyCollaborationCutover(
+  context: StoreContext,
+  manifest: CutoverManifest,
+): Promise<CutoverReceipt> {
+  return withCutoverLock(context, () => applyUnderCutoverLock(context, manifest));
+}
+
+async function applyUnderCutoverLock(
   context: StoreContext,
   manifest: CutoverManifest,
 ): Promise<CutoverReceipt> {
@@ -1533,6 +1842,14 @@ export async function fenceCollaborationCutoverSource(
   manifest: CutoverManifest,
   options: CutoverActivationOptions,
 ): Promise<CutoverReceipt> {
+  return withCutoverLock(context, () => fenceUnderCutoverLock(context, manifest, options));
+}
+
+async function fenceUnderCutoverLock(
+  context: StoreContext,
+  manifest: CutoverManifest,
+  options: CutoverActivationOptions,
+): Promise<CutoverReceipt> {
   const prepared = await prepareActivation(context, manifest, options);
   if (prepared.replay !== null) return prepared.replay;
   if (prepared.source.fence !== null) {
@@ -1559,6 +1876,14 @@ export async function fenceCollaborationCutoverSource(
 }
 
 export async function activateCollaborationCutover(
+  context: StoreContext,
+  manifest: CutoverManifest,
+  options: CutoverActivationOptions,
+): Promise<CutoverReceipt> {
+  return withCutoverLock(context, () => activateUnderCutoverLock(context, manifest, options));
+}
+
+async function activateUnderCutoverLock(
   context: StoreContext,
   manifest: CutoverManifest,
   options: CutoverActivationOptions,

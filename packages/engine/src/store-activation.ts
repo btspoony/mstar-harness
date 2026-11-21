@@ -186,6 +186,13 @@ export type CutoverAttestation = {
   sourceEpoch: number;
   schemaVersion: number;
   stoppedHandles: CutoverStoppedHandle[];
+  /**
+   * The operator's explicit assertion that EVERY process, host, CLI and
+   * consumer that could hold the combined store is stopped. This is an operator
+   * statement: this slice has no OS-level handle inventory, so the fence cannot
+   * derive it from rows or from the handle list alone.
+   */
+  allHandlesStopped: true;
 };
 
 /**
@@ -1043,7 +1050,11 @@ function attestationString(object: Record<string, unknown>, key: string, what: s
 function cutoverAttestation(raw: unknown): CutoverAttestation {
   const what = "the attestation.cutover";
   const block = attestationObject(raw, what);
-  attestationKeys(block, ["repoKey", "mode", "controlRoot", "sourceStoreId", "sourceEpoch", "schemaVersion", "stoppedHandles"], what);
+  attestationKeys(
+    block,
+    ["repoKey", "mode", "controlRoot", "sourceStoreId", "sourceEpoch", "schemaVersion", "stoppedHandles", "allHandlesStopped"],
+    what,
+  );
   const mode = block.mode;
   if (mode !== "local" && mode !== "mirror") attestationRefusal(`${what}.mode must be "local" or "mirror"`);
   const positive = (key: "sourceEpoch" | "schemaVersion"): number => {
@@ -1069,6 +1080,12 @@ function cutoverAttestation(raw: unknown): CutoverAttestation {
     }
     return { kind: kind as CutoverStoppedHandle["kind"], id: attestationString(handle, "id", handleWhat) };
   });
+  if (block.allHandlesStopped !== true) {
+    attestationRefusal(
+      `${what}.allHandlesStopped must be the literal true: the operator asserts that EVERY process, host, CLI and ` +
+        `consumer that could hold the combined store is stopped, and the fence cannot be undone`,
+    );
+  }
   return {
     repoKey: attestationString(block, "repoKey", what),
     mode,
@@ -1077,6 +1094,7 @@ function cutoverAttestation(raw: unknown): CutoverAttestation {
     sourceEpoch: positive("sourceEpoch"),
     schemaVersion: positive("schemaVersion"),
     stoppedHandles,
+    allHandlesStopped: true,
   };
 }
 

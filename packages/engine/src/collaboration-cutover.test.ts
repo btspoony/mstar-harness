@@ -9,9 +9,10 @@
  * runtime boundary the identity resolver calls (`node:os` `homedir`), so no case
  * reads the real home or the control harness store.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
+import { hostname } from "node:os";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -107,6 +108,7 @@ function cutoverOptions(
     controlRoot?: string;
     sourceStoreId?: string;
     sourceEpoch?: number;
+    allHandlesStopped?: boolean | "missing";
     omitCutover?: boolean;
   } = {},
 ): { operator: string; attestation: ActivationAttestation } {
@@ -135,7 +137,8 @@ function cutoverOptions(
     stoppedSessions: stopped.map((sessionId) => ({ sessionId, host: "omp", state: "stopped" as const })),
   };
   if (variant.omitCutover !== true) {
-    attestation.cutover = {
+    // A raw document so a negative case can carry `false` for the validator.
+    const block: Record<string, unknown> = {
       repoKey: variant.repoKey ?? location.repoKey,
       mode: variant.mode ?? location.mode,
       controlRoot: variant.controlRoot ?? resolve(context.harnessDir),
@@ -144,6 +147,8 @@ function cutoverOptions(
       schemaVersion: source.schemaVersion,
       stoppedHandles: [...handles],
     };
+    if (variant.allHandlesStopped !== "missing") block.allHandlesStopped = variant.allHandlesStopped ?? true;
+    attestation.cutover = block as unknown as ActivationAttestation["cutover"];
   }
   return { operator: "ops-engineer", attestation };
 }
@@ -202,7 +207,7 @@ values ('restore-attempt:customer-request', 'customer-hash', '{"issueId":"I-0000
 insert into store_operations(operation_id, request_hash, result_json, committed_at)
 values ('restore-attempt:abc', 'restore-hash', '{"recoveryVersion":1,"phase":"replaced","storeId":"restored-store","verified":{"integrity":"ok","foreignKeys":"ok","schemaVersion":20}}', '2026-11-21T00:00:02.000Z');
 insert into store_operations(operation_id, request_hash, result_json, committed_at)
-values ('upgrade-op', 'upgrade-hash', '{"verdict":"upgraded","imported":1,"importedIds":["wf-imported"],"sourceDigest":"source-digest","inputDigest":"input-digest"}', '2026-11-21T00:00:03.000Z');
+values ('upgrade-op', 'upgrade-hash', '{"verdict":"upgraded","imported":1,"importedIds":["wf-imported"],"skipped":[],"dispositions":[],"sourceDigest":"source-digest","inputDigest":"input-digest"}', '2026-11-21T00:00:03.000Z');
 update issue_counter set next_value = 3 where id = 1;
 update store_meta set revision = 7, catalog_revision = 3 where id = 1;
 `);
@@ -270,6 +275,23 @@ async function cutoverState(location: CollaborationLocation): Promise<{
       )
       .all() as Array<Record<string, unknown>>,
   }));
+}
+
+const LOCK_BASENAME = "collaboration-cutover.lock";
+
+function lockPathOf(context: StoreContext): string {
+  return join(context.harnessDir, LOCK_BASENAME);
+}
+
+/** Run an operation that must refuse; return its stable code and message. */
+async function refusalOf(work: () => Promise<unknown>): Promise<{ code?: string; message: string }> {
+  try {
+    await work();
+    return { message: "no refusal" };
+  } catch (error) {
+    const typed = error as { code?: string; message?: string };
+    return { ...(typed.code === undefined ? {} : { code: typed.code }), message: String(typed.message) };
+  }
 }
 
 function ids(rows: Array<Record<string, unknown>>, column: string): string[] {
@@ -657,6 +679,8 @@ values ('I-000003', 'p-one', 'Late finding', 'bug', 'low', 'open', 'late', 'stay
         handles: [{ kind: "session", id: "session-elsewhere" }],
       }),
       cutoverOptions(source.context, manifest.source, { stopped: [], handles: [{ kind: "process", id: "mstar-cli" }] }),
+      cutoverOptions(source.context, manifest.source, { allHandlesStopped: "missing" }),
+      cutoverOptions(source.context, manifest.source, { allHandlesStopped: false }),
     ];
     for (const options of refusals) {
       await expect(activateCollaborationCutover(source.context, manifest, options)).rejects.toMatchObject({
@@ -969,10 +993,170 @@ values ('I-000004', 'p-one', 'Racing finding', 'bug', 'low', 'open', 'race', 'st
     ]);
     expect(results.some((result) => result.status === "fulfilled")).toBe(true);
     for (const result of results) {
-      if (result.status === "rejected") expect(["store.busy"]).toContain(result.reason?.code);
+      // A loser refuses either on the local cutover lock or on the source writer slot.
+      if (result.status === "rejected") {
+        expect(["collaboration.cutover-conflict", "store.busy"]).toContain(result.reason?.code);
+      }
     }
     const staged = await stagedRows(locationAt(repo));
     expect(staged.rows.issues).toHaveLength(2);
     expect(staged.authority.state).toBe("staged");
   }, 20000);
+
+  test("the cutover holds one local lock for its whole critical section", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-lock.git");
+    const source = await seedSource(repo);
+    const lockPath = lockPathOf(source.context);
+    const manifest = await planCollaborationCutover(source.context);
+    expect(existsSync(lockPath)).toBe(false);
+    await applyCollaborationCutover(source.context, manifest);
+    expect(existsSync(lockPath)).toBe(false);
+
+    // A live lock (this host, a running process) refuses every entry before it
+    // inspects, claims, fences or publishes anything.
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({ pid: process.pid, host: hostname(), startedAt: "2026-11-21T00:00:00.000Z", token: "held" })}\n`,
+    );
+    try {
+      for (const entry of [
+        () => planCollaborationCutover(source.context),
+        () => applyCollaborationCutover(source.context, manifest),
+        () => activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source)),
+      ]) {
+        const refusal = await refusalOf(entry);
+        expect(refusal.code).toBe("collaboration.cutover-conflict");
+        expect(refusal.message).toContain("Another collaboration cutover is running on this host");
+      }
+    } finally {
+      rmSync(lockPath, { force: true });
+    }
+
+    // Released: the same manifest activates and its fence replays, with no lock
+    // file left behind.
+    expect((await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).phase).toBe("active");
+    expect(existsSync(lockPath)).toBe(false);
+    expect((await applyCollaborationCutover(source.context, manifest)).phase).toBe("active");
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("a stale lock from a dead local process is recovered", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-lock-stale.git");
+    const source = await seedSource(repo);
+    const lockPath = lockPathOf(source.context);
+    const child = spawn(process.execPath, ["-e", "process.exit(0)"]);
+    const deadPid = child.pid;
+    await new Promise<void>((settle) => child.on("exit", () => settle()));
+    expect(typeof deadPid).toBe("number");
+
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({ pid: deadPid, host: hostname(), startedAt: "2026-11-21T00:00:00.000Z", token: "dead" })}\n`,
+    );
+    const manifest = await planCollaborationCutover(source.context);
+    expect(manifest.counts.issues).toBe(2);
+    // The recovered stale lock is retired, and this attempt's own lock is released.
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("a foreign-host or unreadable lock refuses with its recovery", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-lock-foreign.git");
+    const source = await seedSource(repo);
+    const lockPath = lockPathOf(source.context);
+
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({ pid: 1, host: "another-host", startedAt: "2026-11-21T00:00:00.000Z", token: "foreign" })}\n`,
+    );
+    const foreign = await refusalOf(() => planCollaborationCutover(source.context));
+    expect(foreign.code).toBe("collaboration.cutover-conflict");
+    expect(foreign.message).toContain("another-host");
+    expect(foreign.message).toContain("remove the lock file only then");
+
+    writeFileSync(lockPath, "not a lock document\n");
+    const malformed = await refusalOf(() => planCollaborationCutover(source.context));
+    expect(malformed.code).toBe("collaboration.cutover-conflict");
+    expect(malformed.message).toContain("unreadable or malformed");
+    expect(malformed.message).toContain("remove that file");
+
+    rmSync(lockPath, { force: true });
+    expect((await planCollaborationCutover(source.context)).counts.issues).toBe(2);
+  });
+
+  test("a cutover lock held by another process refuses this process", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-lock-cross.git");
+    const source = await seedSource(repo);
+    const lockPath = lockPathOf(source.context);
+    const script = join(ROOT, `child-plan-${sequence++}.ts`);
+    writeFileSync(
+      script,
+      [
+        `import { planCollaborationCutover } from ${JSON.stringify(join(import.meta.dir, "collaboration-cutover.ts"))};`,
+        "const [harnessDir, checkoutRoot] = process.argv.slice(2);",
+        "try {",
+        "  const manifest = await planCollaborationCutover({ harnessDir, checkoutRoot });",
+        '  console.log("ok:" + manifest.manifestId);',
+        "} catch (error) {",
+        '  console.log("code:" + String((error as { code?: string }).code));',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const child = (): { stdout: string } =>
+      spawnSync(process.execPath, [script, source.context.harnessDir, source.context.checkoutRoot!], {
+        env: { ...process.env, HOME: resolvedHome },
+        encoding: "utf8",
+      }) as { stdout: string };
+
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({ pid: process.pid, host: hostname(), startedAt: "2026-11-21T00:00:00.000Z", token: "parent" })}\n`,
+    );
+    try {
+      expect(child().stdout).toContain("code:collaboration.cutover-conflict");
+    } finally {
+      rmSync(lockPath, { force: true });
+    }
+    expect(child().stdout).toContain("ok:");
+  }, 20000);
+
+  test("an unproven legacy receipt refuses the cutover instead of being guessed", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-receipts-unproven.git");
+    const source = await seedSource(repo);
+    const manifest = await planCollaborationCutover(source.context);
+
+    const injected = await openStore(source.context, "write");
+    try {
+      injected.db.exec(`
+insert into store_operations(operation_id, request_hash, result_json, committed_at)
+values ('mystery-op', 'mystery-hash', '{"note":"hand written"}', '2026-11-21T00:00:04.000Z');
+insert into store_operations(operation_id, request_hash, result_json, committed_at)
+values ('malformed-op', 'malformed-hash', 'not-json', '2026-11-21T00:00:05.000Z');
+insert into store_operations(operation_id, request_hash, result_json, committed_at)
+values ('incomplete-op', 'incomplete-hash', '{"verdict":"upgraded","importedIds":[]}', '2026-11-21T00:00:06.000Z');
+`);
+    } finally {
+      injected.close();
+    }
+
+    const refused = await refusalOf(() => planCollaborationCutover(source.context));
+    expect(refused.code).toBe("collaboration.cutover-conflict");
+    expect(refused.message).toContain("cannot be proven collaboration- or execution-owned");
+    expect(existsSync(locationAt(repo).dbPath)).toBe(false);
+    await expect(applyCollaborationCutover(source.context, manifest)).rejects.toMatchObject({
+      code: "collaboration.cutover-conflict",
+    });
+
+    // The supported recovery: resolve or remove the unproven receipts, then
+    // re-plan. The reviewed collaboration receipts are still all that moves.
+    const cleaned = await openStore(source.context, "write");
+    try {
+      cleaned.db.exec("delete from store_operations where operation_id in ('mystery-op','malformed-op','incomplete-op')");
+    } finally {
+      cleaned.close();
+    }
+    const replanned = await planCollaborationCutover(source.context);
+    expect(replanned.counts.store_operations).toBe(2);
+    expect(replanned.manifestId).toBe(manifest.manifestId);
+  });
 });
