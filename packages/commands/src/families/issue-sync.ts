@@ -379,10 +379,11 @@ function linearStampOf(linear: LinearBinding): string {
 
 /**
  * The complete destination one run is opened under: the collaboration generation
- * it belongs to, the repository's effective `[linear]` connection, and the project
- * binding row. A run's proof is this whole line, so a changed workspace, a
- * different mapping, a rebind, or a restored image (new epoch) all refuse
- * continuation instead of recording a cached result under a new destination.
+ * it belongs to, the marker identity its payloads carry, the repository's effective
+ * `[linear]` connection, and the project binding row. A run's proof is this whole
+ * line, so a changed workspace, a different mapping, a changed git author or
+ * repository, a rebind, or a restored image (new epoch) all refuse continuation
+ * instead of recording a cached result under a new destination.
  */
 function runStampOf(target: Target, authority: CollaborationAuthority): string {
   return (
@@ -390,6 +391,9 @@ function runStampOf(target: Target, authority: CollaborationAuthority): string {
     JSON.stringify({
       storeId: authority.storeId,
       epoch: authority.epoch,
+      // why: the marker's repo and author are stamped into every payload, so a new
+      // author or repository would confirm a write the planned marker never named.
+      marker: { repo: target.identity.repo, author: target.identity.author },
       linear: linearStampOf(target.linear),
       project: projectStampOf(target.project),
     })
@@ -808,11 +812,14 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
         "result list (\`--results -\` carrying \`[]\`), then record these results under the run id the takeover returns",
     );
   }
-  if (!recordsResults && adoptions.length === 0 && released.size === 0 && !takeRun) {
+  // why: an ordinary cycle that planned nothing (empty project, every item skipped or
+  // unresolved) is completed by naming its own run with an empty list; that is a
+  // completion, not a borrow. Anything unnamed must name what it records instead.
+  if (!recordsResults && adoptions.length === 0 && released.size === 0 && !takeRun && namedRun === undefined) {
     throw new UsageError(
       "--results carries no entries and no operator verb was given, so there is nothing to record. Pass the results your " +
-        "Linear tools returned, or `--adopt <localId>=<issueUrl|externalId>` / `--release <localId>`; `--take-run` with an " +
-        "empty result list retires a dead holder's run",
+        "Linear tools returned, `--adopt <localId>=<issueUrl|externalId>` / `--release <localId>`, or `--run <runId>` with " +
+        "an empty list to complete the run `pending` returned when it planned no work",
     );
   }
   if (recordsResults && namedRun === undefined) {

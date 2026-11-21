@@ -88,7 +88,14 @@ type Fixture = {
  */
 async function fixture(
   name: string,
-  options: { enabled?: boolean; bind?: boolean; email?: string; collaborationMode?: "local" | "mirror" } = {},
+  options: {
+    enabled?: boolean;
+    bind?: boolean;
+    email?: string;
+    collaborationMode?: "local" | "mirror";
+    /** The local issues this project holds; an empty list is a project with no work. */
+    localIds?: readonly string[];
+  } = {},
 ): Promise<Fixture> {
   const dir = mkdtempSync(join(ROOT, name));
   const repoRoot = join(dir, "repo");
@@ -127,7 +134,7 @@ async function fixture(
       "insert into project_bindings(project_id, provider, workspace, team, remote_project, revision, updated_at)" +
         " values (?, 'linear', 'acme', 'ENG', 'Remote', 1, ?)",
     ).run(PROJECT, new Date().toISOString());
-    for (const [index, localId] of LOCAL_IDS.entries()) {
+    for (const [index, localId] of (options.localIds ?? LOCAL_IDS).entries()) {
       db.prepare(
         "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)" +
           " values (?, ?, ?, ?, 'high', 'open', 'impact body', 'acceptance body', 'now', 'now', ?)",
@@ -738,6 +745,70 @@ describe("mirror stale run", () => {
     const result = await run("apply", { results: bodyFile(f, "none.json", []), run: "x", takeRun: true }, f.context);
     expect(result.status).toBe("usage");
     expect(result.message).toContain("--take-run");
+  });
+
+  test("a changed git author between pending and apply refuses", async () => {
+    const f = await fixture("run-author-change");
+    const pending = await run("pending", {}, f.context);
+    // The marker's author is stamped into every payload this run planned; a
+    // different git author would confirm a write that marker never named.
+    git(f.repoRoot, ["config", "user.email", "someone-else@example.com"]);
+    const stale = await run(
+      "apply",
+      {
+        results: bodyFile(f, "author.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-97" }]),
+        run: pending.data.runId,
+      },
+      f.context,
+    );
+    expect(stale.status).toBe("refused");
+    expect(stale.code).toBe("collaboration.stale-binding");
+    expect(stale.message).toContain("different destination or collaboration generation");
+    expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "pending", externalId: null });
+  });
+
+  test("an empty project completes its own run with an empty result list", async () => {
+    const f = await fixture("run-empty-project", { localIds: [] });
+    const pending = await run("pending", {}, f.context);
+    expect(pending.status).toBe("ok");
+    expect(pending.data.items).toEqual([]);
+    // No work was planned, so its own run is the completion: naming it (and only it)
+    // ends the cycle instead of leaving the direction held.
+    const completed = await run(
+      "apply",
+      { results: bodyFile(f, "no-work.json", []), run: pending.data.runId },
+      f.context,
+    );
+    expect(completed.status).toBe("ok");
+    expect(completed.data.counts).toEqual({ applied: 0, unconfirmed: 0, refused: 0 });
+    expect(completed.data.lease).toBe("released");
+    expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
+    expect((await run("pending", {}, f.context)).status).toBe("ok");
+  });
+
+  test("an all-skipped cycle completes its own run with an empty result list", async () => {
+    const f = await fixture("run-all-skipped", { localIds: ["I-000101"] });
+    const first = await run("pending", {}, f.context);
+    await run(
+      "apply",
+      {
+        results: bodyFile(f, "settled.json", [{ localId: "I-000101", outcome: "confirmed", externalId: "LIN-98" }]),
+        run: first.data.runId,
+      },
+      f.context,
+    );
+    // The remote already says exactly this, so the next cycle is skipped, not planned.
+    const second = await run("pending", {}, f.context);
+    expect(second.data.items).toEqual([]);
+    expect(second.data.skipped).toHaveLength(1);
+    const completed = await run(
+      "apply",
+      { results: bodyFile(f, "skipped.json", []), run: second.data.runId },
+      f.context,
+    );
+    expect(completed.status).toBe("ok");
+    expect(completed.data.lease).toBe("released");
+    expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
   });
 
   test("a changed [linear] connection between pending and apply refuses", async () => {
