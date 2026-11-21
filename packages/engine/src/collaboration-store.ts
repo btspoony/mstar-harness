@@ -1241,7 +1241,14 @@ export function assertCollaborationTargetAdmission(location: CollaborationLocati
  * change, and an unfenced legacy owner is refused before any I/O.
  */
 export type CollaborationBinding = Readonly<{
-  version: 1;
+  version: 2;
+  /**
+   * `claimed` while an activation holds the authority publication open: the
+   * checkout is already committed to that generation, so a crash leaves evidence
+   * instead of an unbound checkout that looks fresh. `active` once the authority
+   * is published (or a supported adoption recorded it).
+   */
+  state: "claimed" | "active";
   repoKey: string;
   mode: CollaborationMode;
   storeId: string;
@@ -1258,32 +1265,47 @@ export function readCollaborationBinding(context: StoreContext): CollaborationBi
   let text: string;
   try {
     text = readFileSync(bindingPath(context), "utf8");
-  } catch {
-    return null;
+  } catch (error) {
+    const code = error !== null && typeof error === "object" && "code" in error ? String(error.code) : "";
+    if (code === "ENOENT") return null;
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `The collaboration binding at ${bindingPath(context)} exists but cannot be read (${code || "unknown"}); this checkout ` +
+        `cannot be proven to belong to the authority it would use, so it is never treated as fresh. Repair the file or ` +
+        `re-record the binding with the supported authority verb. Nothing was modified.`,
+    );
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
+    // Unreadable is NOT fresh: the checkout cannot be proven to own the authority
+    // it would use, and the supported route is an explicit re-bind.
     throw new StoreError(
-      "collaboration.unreadable",
-      `The collaboration binding at ${bindingPath(context)} is not readable JSON; the checkout cannot be proven to belong to ` +
-        `the authority it would use. Nothing was modified.`,
+      "collaboration.stale-binding",
+      `The collaboration binding at ${bindingPath(context)} is not readable JSON; this checkout cannot be proven to belong ` +
+        `to the authority it would use, so it is never treated as a fresh clone. Repair the file or re-record the binding ` +
+        `with the supported authority verb. Nothing was modified.`,
     );
   }
   if (
     parsed === null ||
     typeof parsed !== "object" ||
-    (parsed as { version?: unknown }).version !== 1 ||
+    (parsed as { version?: unknown }).version !== 2 ||
+    ((parsed as { state?: unknown }).state !== "claimed" && (parsed as { state?: unknown }).state !== "active") ||
     typeof (parsed as { repoKey?: unknown }).repoKey !== "string" ||
     ((parsed as { mode?: unknown }).mode !== "local" && (parsed as { mode?: unknown }).mode !== "mirror") ||
     typeof (parsed as { storeId?: unknown }).storeId !== "string" ||
     typeof (parsed as { epoch?: unknown }).epoch !== "number"
   ) {
+    // An unreadable binding is never treated as "fresh": the checkout cannot be
+    // proven to belong to the authority it would use, and the supported route is
+    // to re-bind it deliberately.
     throw new StoreError(
-      "collaboration.unreadable",
-      `The collaboration binding at ${bindingPath(context)} is malformed; the checkout cannot be proven to belong to the ` +
-        `authority it would use. Nothing was modified.`,
+      "collaboration.stale-binding",
+      `The collaboration binding at ${bindingPath(context)} is malformed, so this checkout cannot be proven to belong to the ` +
+        `authority it would use. Re-record it deliberately with the supported authority verb (store init / store activate) ` +
+        `or restore the recorded binding; nothing was read or modified.`,
     );
   }
   const binding = parsed as CollaborationBinding;
@@ -1293,12 +1315,13 @@ export function readCollaborationBinding(context: StoreContext): CollaborationBi
 /** Persist this checkout's binding. Atomic replace; the file carries no authority bytes. */
 export function writeCollaborationBinding(
   context: StoreContext,
-  authority: Pick<CollaborationAuthority, "repoKey" | "mode" | "storeId" | "epoch">,
+  authority: Pick<CollaborationAuthority, "repoKey" | "mode" | "storeId" | "epoch"> & { binding?: "claimed" | "active" },
 ): void {
   const path = bindingPath(context);
   mkdirSync(dirname(path), { recursive: true });
   const body: CollaborationBinding = {
-    version: 1,
+    version: 2,
+    state: authority.binding ?? "active",
     repoKey: authority.repoKey,
     mode: authority.mode,
     storeId: authority.storeId,
@@ -1311,6 +1334,38 @@ export function writeCollaborationBinding(
     renameSync(tmp, path);
   } finally {
     rmSync(tmp, { force: true });
+  }
+}
+
+/**
+ * Adopt or finalize this checkout's binding for the authority the bootstrap or a
+ * supported verb resolved. This is the ONE supported adoption point: a fresh
+ * replacement clone (no binding) and an interrupted activation (a `claimed`
+ * binding for the same generation) both acquire/refresh the ACTIVE binding here,
+ * deliberately. A binding for a DIFFERENT store is never adopted by drift.
+ */
+export function adoptResolvedBinding(
+  context: StoreContext,
+  location: CollaborationLocation,
+  authority: CollaborationAuthority,
+): void {
+  const binding = readCollaborationBinding(context);
+  if (binding !== null && binding.storeId !== authority.storeId) {
+    throw new StoreError(
+      "collaboration.stale-binding",
+      `This control checkout was bound to authority store ${binding.storeId}, but the lane at ${location.dbPath} is store ` +
+        `${authority.storeId}. A replaced authority is adopted deliberately by its own activation or restore, never by ` +
+        `drift; inspect it with mstar path resolve. Nothing was modified.`,
+    );
+  }
+  if (binding === null || binding.state === "claimed") {
+    writeCollaborationBinding(context, {
+      repoKey: location.repoKey,
+      mode: location.mode,
+      storeId: authority.storeId,
+      epoch: authority.epoch,
+      binding: "active",
+    });
   }
 }
 
@@ -1377,7 +1432,21 @@ async function assertControlBinding(
 ): Promise<void> {
   await assertControlCheckoutScope(context, location);
   const binding = readCollaborationBinding(context);
-  if (binding === null) return;
+  if (binding === null) {
+    // A LIVE authority with no recorded binding is NOT a fresh clone: it may be a
+    // switched checkout or a lost/interrupted binding write, and silently adopting
+    // it would let one repository's verbs reach another's data.
+    if (authority.state === "active") {
+      throw new StoreError(
+        "collaboration.stale-binding",
+        `This checkout holds no collaboration binding for the ACTIVE authority store ${authority.storeId} at ` +
+          `${location.dbPath}, so it cannot be proven to own it. Acquire the binding through the supported path \u2014 ` +
+          `mstar store init (adopts an active authority for this checkout) or the activation that publishes it \u2014 never by ` +
+          `reading it as a fresh clone. Nothing was modified.`,
+      );
+    }
+    return;
+  }
   if (binding.storeId !== authority.storeId) {
     throw new StoreError(
       "collaboration.stale-binding",

@@ -11,6 +11,7 @@ import { WORKFLOW_SNAPSHOT_FILE, consultDeliveryEvidence, type WorkflowSnapshot 
 import { upgradeStoreMinimal as importStoreMinimal, importExecutionMinimal as importLegacyExecution, type MinimalStoreUpgradeResult } from "./execution-minimal-import.js";
 import { initializeCollaborationStore } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { writeCollaborationBinding } from "./collaboration-store.js";
 import { bindExecutionSession, createExecutionWorkflow, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
 import { ACTIVATION_PROTOCOL_VERSION, backupStore, type ActivationAttestation } from "./store-activation.js";
 import { createLocalExecutionIdentity, executionContextFor, resumeExecutionSession } from "./execution-session.js";
@@ -77,11 +78,29 @@ async function collaborationLane(context: StoreContext): Promise<void> {
   const location = resolveCollaborationLocation(context);
   if (!existsSync(location.dbPath)) await initializeCollaborationStore(location);
   const lane = new DatabaseSync(location.dbPath);
+  let authority: { storeId: string; epoch: number } | null = null;
   try {
     lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1 and authority_state = 'staged'")
       .run(new Date().toISOString());
+    const row = lane.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string" && typeof row.authority_epoch === "number") {
+      authority = { storeId: row.store_id, epoch: row.authority_epoch };
+    }
   } finally {
     lane.close();
+  }
+  // A published authority is bound to its checkout by the activation it went
+  // through; the fixture records that binding, exactly as the supported verb does.
+  if (authority !== null) {
+    writeCollaborationBinding(context, {
+      repoKey: location.repoKey,
+      mode: location.mode,
+      storeId: authority.storeId,
+      epoch: authority.epoch,
+      binding: "active",
+    });
   }
 }
 

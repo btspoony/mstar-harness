@@ -60,6 +60,7 @@ import { resolveCollaborationLocation, type CollaborationLocation, type Collabor
 import {
   COLLABORATION_COLUMNS,
   admitCollaborationImage,
+  adoptResolvedBinding,
   assertCollaborationTargetAdmission,
   assertControlCheckoutScope,
   initializeCollaborationStore,
@@ -1248,6 +1249,72 @@ function assertNoOutstandingComposite(handle: { db: StoreDb }): void {
 }
 
 /**
+ * Finish (or refuse) a restore whose previous attempt already published its
+ * generation: the published authority carries a `restore:` receipt naming THIS
+ * request's image digest, store identity and source, so the same request is
+ * idempotent — it repairs the binding and directory entry and serves the
+ * authority instead of leaving an unrecoverable create-only conflict. Any other
+ * live authority is not this request's, and the caller refuses it.
+ */
+async function repairOwnRestorePublication(
+  context: StoreContext,
+  dbPath: string,
+  collaborationImagePath: string,
+): Promise<CollaborationAuthority | null> {
+  const imageSha = sha256Bytes(readFileSync(collaborationImagePath));
+  const db = await connect(dbPath, "read", busyTimeoutMs());
+  let recorded: { storeId: string; epoch: number; restoredFrom: string } | null = null;
+  try {
+    const meta = db.prepare("select store_id, authority_epoch, repository_key, mode from collaboration_meta where id = 1").get();
+    if (meta === null || typeof meta !== "object" || !("store_id" in meta) || typeof meta.store_id !== "string") return null;
+    const rows = db
+      .prepare(
+        "select result_json from collaboration_operations where key_space = 'standalone' and operation_id like 'restore:%'",
+      )
+      .all() as Array<{ result_json?: unknown }>;
+    for (const row of rows) {
+      if (typeof row.result_json !== "string") continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(row.result_json);
+      } catch {
+        continue;
+      }
+      if (parsed === null || typeof parsed !== "object") continue;
+      const record = parsed as Record<string, unknown>;
+      const restoredFrom = record.restoredFrom;
+      if (record.imageSha256 !== imageSha) continue;
+      const authority = record.authority;
+      if (authority === null || typeof authority !== "object") continue;
+      const storeId = (authority as Record<string, unknown>).storeId;
+      const epoch = (authority as Record<string, unknown>).epoch;
+      if (typeof storeId !== "string" || storeId !== meta.store_id || typeof epoch !== "number") continue;
+      recorded = {
+        storeId,
+        epoch,
+        restoredFrom: restoredFrom !== null && typeof restoredFrom === "object" ? JSON.stringify(restoredFrom) : "{}",
+      };
+      break;
+    }
+  } finally {
+    db.close();
+  }
+  if (recorded === null) return null;
+  // This IS the generation this request published: finish the post-publication
+  // steps (directory durability and the checkout binding) and serve it.
+  const location = resolveCollaborationLocation(context);
+  syncDirectoryEntry(dirname(dbPath));
+  writeCollaborationBinding(context, {
+    repoKey: location.repoKey,
+    mode: location.mode,
+    storeId: recorded.storeId,
+    epoch: recorded.epoch,
+    binding: "active",
+  });
+  return readCollaborationAuthority(context);
+}
+
+/**
  * The pair's execution-side quiescence boundary, proved against the FROZEN
  * bytes: the verified execution image must carry the reservation ledger (it is a
  * current-schema image) and hold no prepared composite. A reservation that
@@ -1333,7 +1400,7 @@ export async function backupRepositoryStores(
   // images (a stale execution image beside a fresh collaboration image, or two
   // hand-assembled siblings) are never blessed as a mixed-time pair.
   const claimPath = `${manifestPath}.pair-attempt.json`;
-  if (existsSync(executionImagePath) || existsSync(collaborationImagePath)) {
+  if (existsSync(executionImagePath) || existsSync(collaborationImagePath) || existsSync(claimPath)) {
     if (!existsSync(claimPath)) {
       throw incompletePair(
         `Image names exist at ${executionImagePath} / ${collaborationImagePath} without a manifest and without this attempt's ` +
@@ -1470,9 +1537,9 @@ export async function backupRepositoryStores(
     linkSync(privateCollaborationImage, collaborationImagePath);
     linked.push(collaborationImagePath);
   } catch (error) {
-    // Nothing of this attempt survives as resumable evidence: without a linked
-    // image the claim would describe bytes that never existed.
-    if (linked.length === 0) rmSync(claimPath, { force: true });
+    // Only THIS attempt's credential is ours to remove: a loser must never unlink
+    // the claim a competing winner published.
+    if (linked.length === 0) removeOwnedPairClaim(claimPath, attempt);
     for (const path of [...privatePaths, ...linked]) rmSync(path, { force: true });
     for (const path of privatePaths) {
       rmSync(`${path}-wal`, { force: true });
@@ -1527,6 +1594,8 @@ async function resumeInterruptedPair(
   for (const side of [claim.execution, claim.collaboration]) {
     const path = side === claim.execution ? paths.executionImagePath : paths.collaborationImagePath;
     if (!existsSync(path)) continue;
+    // The existing image must BE the attempt's verified bytes: it is reused
+    // unchanged, never re-copied, so its replacement cannot slip in here.
     if (sha256Bytes(readFileSync(path)) !== side.sha256) {
       throw incompletePair(
         `The image at ${path} is not the one this attempt copied (its bytes differ from the recorded attempt), so the two ` +
@@ -1535,8 +1604,9 @@ async function resumeInterruptedPair(
       );
     }
   }
-  // A missing side is copied again ONLY at the generation the attempt recorded:
-  // an authority that moved on is a new generation, not a resume.
+  // A missing side is copied again ONLY at the generation the attempt recorded,
+  // and an existing side is REUSED exactly as verified: an authority that moved
+  // on is a new generation, not a resume.
   if (!existsSync(paths.executionImagePath)) {
     const copy = await backupStore(context, { out: paths.executionImagePath });
     if (
@@ -1623,6 +1693,16 @@ type PairAttemptClaim = {
   execution: { name: string; sha256: string; storeId: string; epoch: number; revision: number; catalogRevision: number };
   collaboration: { name: string; sha256: string; storeId: string; epoch: number; revision: number; catalogRevision: number };
 };
+
+/** Remove the attempt credential only when this attempt wrote it. */
+function removeOwnedPairClaim(path: string, attempt: string): void {
+  try {
+    const claimed = requirePairAttemptClaim(path);
+    if (claimed.attempt === attempt) rmSync(path, { force: true });
+  } catch {
+    // an absent or foreign credential is not ours to touch
+  }
+}
 
 function publishPairClaim(path: string, claim: PairAttemptClaim): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -1892,6 +1972,12 @@ export async function restoreCollaborationBackup(
 
   const dbPath = location.dbPath;
   if (existsSync(dbPath)) {
+    // Idempotency: a previous attempt of THIS request may have published and then
+    // failed before it recorded the binding or synced the directory. The published
+    // generation carries this request's own image digest, so it is repaired and
+    // served instead of being reported as an unrecoverable create-only conflict.
+    const repaired = await repairOwnRestorePublication(context, dbPath, collaborationImagePath);
+    if (repaired !== null) return repaired;
     throw new StoreError(
       "collaboration.cutover-conflict",
       `A collaboration authority already exists at ${dbPath}. A restore is create-only: it never overwrites, quarantines or ` +
@@ -2020,7 +2106,7 @@ export async function restoreCollaborationBackup(
     }
   }
   if (!staged) throw incompletePair(`The restore did not publish ${dbPath}.`);
-  const target = { repoKey: location.repoKey, mode: location.mode, storeId: newStoreId, epoch: nextEpoch };
+  const target = { repoKey: location.repoKey, mode: location.mode, storeId: newStoreId, epoch: nextEpoch, binding: "active" as const };
   // This checkout now owns the restored generation; persist the binding before
   // the final read proves it (a binding mismatch would otherwise refuse the
   // generation this same call just published).
@@ -2164,7 +2250,7 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
   }
   const authority = await initializeCollaborationStore(location);
   if (authority.state === "active") {
-    writeCollaborationBinding(context, authority);
+    adoptResolvedBinding(context, location, authority);
     return authority;
   }
   return writeCollaborationStage(location, ({ db, authority: current }) => {
@@ -2198,7 +2284,7 @@ export async function ensureCollaborationAuthority(context: StoreContext): Promi
       );
     }
     const published = { ...current, state: "active" as const };
-    writeCollaborationBinding(context, published);
+    adoptResolvedBinding(context, location, published);
     return published;
   });
 }
@@ -2959,6 +3045,7 @@ export async function activateStore(
       mode: location.mode,
       storeId: published.storeId,
       epoch: published.epoch,
+      binding: "active",
     });
     return { ...published, replayed: true };
   }
@@ -3025,6 +3112,18 @@ export async function activateStore(
   // epochs, so the stop list is the active rows themselves; a file-era import
   // has no execution store and therefore nothing to stop.
   const stoppedSessions = await activeExecutionSessions(context);
+
+  // The checkout CLAIMS this generation BEFORE the publication commits: an
+  // interruption from here on leaves evidence (a `claimed` binding for that store
+  // and epoch), so the checkout is never mistaken for a fresh clone that may
+  // adopt whatever authority it finds. The publication below finalizes it.
+  writeCollaborationBinding(context, {
+    repoKey: location.repoKey,
+    mode: location.mode,
+    storeId: meta.storeId,
+    epoch: meta.epoch + 1,
+    binding: "claimed",
+  });
 
   // The publication is ONE lane transaction: the state/epoch flip, the
   // authority stamp and the activation phase row commit together, so an
@@ -3137,6 +3236,7 @@ export async function activateStore(
       mode: location.mode,
       storeId: activated.storeId,
       epoch: activated.epoch,
+      binding: "active",
     });
     return activated;
   });

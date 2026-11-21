@@ -30,6 +30,7 @@ import type { CompletionEvidence } from "./coordination-write.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import {
   initializeCollaborationStore,
+  writeCollaborationBinding,
   openCollaborationStore,
   readCollaborationAuthority,
   withCollaborationWrite,
@@ -142,15 +143,36 @@ function collaborationLocation(context: StoreContext) {
   return location;
 }
 
-/** Flip a staged collaboration record to active: this plan ships no public activator. */
-function activate(dbPath: string): void {
-  const db = new DatabaseSync(dbPath);
+/**
+ * Flip a staged collaboration record to active: this plan ships no public
+ * activator. The fixture also records the checkout binding the real activation
+ * writes — an ACTIVE authority is never usable from an unbound checkout.
+ */
+function activate(context: StoreContext): void {
+  const location = collaborationLocation(context);
+  const db = new DatabaseSync(location.dbPath);
+  let authority: { storeId: string; epoch: number } | null = null;
   try {
     db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
       new Date().toISOString(),
     );
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string" && typeof row.authority_epoch === "number") {
+      authority = { storeId: row.store_id, epoch: row.authority_epoch };
+    }
   } finally {
     db.close();
+  }
+  if (authority !== null) {
+    writeCollaborationBinding(context, {
+      repoKey: location.repoKey,
+      mode: location.mode,
+      storeId: authority.storeId,
+      epoch: authority.epoch,
+      binding: "active",
+    });
   }
 }
 
@@ -159,7 +181,7 @@ async function activeStore(name: string): Promise<StoreContext> {
   const fixture = checkout(name);
   (await initializeStore(fixture.context)).close();
   await initializeCollaborationStore(collaborationLocation(fixture.context));
-  activate(collaborationLocation(fixture.context).dbPath);
+  activate(fixture.context);
   return fixture.context;
 }
 
@@ -179,7 +201,7 @@ async function executionPlanFixture(
   const context: StoreContext = fixture.context;
   (await initializeStore(context)).close();
   await initializeCollaborationStore(collaborationLocation(context));
-  if ((options.collaboration ?? "active") === "active") activate(collaborationLocation(context).dbPath);
+  if ((options.collaboration ?? "active") === "active") activate(context);
   const initialized = await readExecutionState(context);
   const workflowId = "wf-issue-batch";
   const planIds = options.plans ?? ["plan-issue-batch"];
@@ -1547,7 +1569,7 @@ async function completionFixture(
   const { root, harnessDir, context } = fixture;
   (await initializeStore(context)).close();
   await initializeCollaborationStore(collaborationLocation(context));
-  activate(collaborationLocation(context).dbPath);
+  activate(context);
   const initialized = await readExecutionState(context);
   const worktreePath = join(root, "wt-completion-findings");
   git(root, ["worktree", "add", "-q", "-b", `feature/${COMPLETION_PLAN}`, worktreePath]);

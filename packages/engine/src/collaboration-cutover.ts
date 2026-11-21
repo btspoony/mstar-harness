@@ -2044,6 +2044,18 @@ export async function activateCollaborationCutover(
   manifest: CutoverManifest,
   options: CutoverActivationOptions,
 ): Promise<CutoverReceipt> {
+  // The checkout CLAIMS the target generation before the publication commit: an
+  // interruption leaves a `claimed` binding naming that store and epoch, so the
+  // source never looks like a fresh clone that may adopt another authority.
+  const location = resolveCollaborationLocation(context);
+  const before = await readCollaborationStage(location, ({ authority }) => authority);
+  writeCollaborationBinding(context, {
+    repoKey: location.repoKey,
+    mode: location.mode,
+    storeId: before.storeId,
+    epoch: before.epoch + 1,
+    binding: "claimed",
+  });
   const receipt = await withCollaborationCutoverLock(context, () => activateUnderCutoverLock(context, manifest, options));
   // A successful ACTIVE publication (fresh or replayed) makes this checkout the
   // owner of that generation: the control binding is recorded before the verb
@@ -2055,6 +2067,7 @@ export async function activateCollaborationCutover(
       mode: receipt.target.mode,
       storeId: receipt.target.storeId,
       epoch: receipt.target.epoch,
+      binding: "active",
     });
   }
   return receipt;
