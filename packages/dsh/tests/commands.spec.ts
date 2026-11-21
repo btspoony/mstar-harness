@@ -72,11 +72,21 @@ function bootErrorRecords(booted: BootResult): BootLogRecord[] {
   return (logger?.buffer ?? []).filter((record) => record.type === 'error')
 }
 
-/** why: derived from the repo mirror, so a newly shipped command needs no edit here. */
-const MSTAR_COMMANDS = readdirSync(fileURLToPath(new URL('../../../commands', import.meta.url)))
-  .filter((file) => file.endsWith('.md'))
-  .map((file) => file.replace(/\.md$/, ''))
-  .sort()
+/**
+ * why: read lazily and never at module scope, so a package-scoped checkout
+ * (no sibling repo `commands/`) still collects this file; derived from the
+ * repo, so a newly shipped command needs no edit here.
+ */
+function repoCommands(): string[] | undefined {
+  try {
+    return readdirSync(fileURLToPath(new URL('../../../commands', import.meta.url)))
+      .filter((file) => file.endsWith('.md'))
+      .map((file) => file.replace(/\.md$/, ''))
+      .sort()
+  } catch {
+    return undefined
+  }
+}
 
 /** A minimal fake receiving agent capturing steered messages. */
 function fakeAgent(): { agent: Agent; steered: UserMessage[] } {
@@ -106,10 +116,14 @@ describe('bundled mstar commands (omp parity)', () => {
     // The missing-mirror boot is covered by the fail-loud case below; this
     // probe only guards the mirror-present steering contract.
     if (dir === undefined) return
+    const expected = repoCommands()
+    // why: a package-scoped checkout has no sibling repo `commands/`, so skip
+    // only the parity assertion (and its per-command loop), never collection.
+    if (expected === undefined) return
     booted = await bootApp()
     const { agent, steered } = fakeAgent()
-    expect(booted.ctx.commands.list(agent).map((descriptor) => descriptor.name)).toEqual(MSTAR_COMMANDS)
-    for (const name of MSTAR_COMMANDS) {
+    expect(booted.ctx.commands.list(agent).map((descriptor) => descriptor.name)).toEqual(expected)
+    for (const name of expected) {
       const result = await booted.ctx.commands.execute(agent, `/${name}`, [], new AbortController().signal)
       expect(result?.result.kind).toBe('success')
       // Scheduling as user-source work is a role boundary, not injected context.
