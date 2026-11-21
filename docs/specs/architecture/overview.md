@@ -56,7 +56,7 @@ A harness operation travels through fixed layers, each with one responsibility:
 | Host write gates | `packages/engine/src/host-gate-paths.ts` plus each host's gate module |
 | Behavioral contracts | `docs/adr/` for decisions, `docs/specs/` for current state, `docs/knowledge/` for methodology |
 
-This repository's `.mstarc` pins `specs_dir=docs/specs`, `adr_dir=docs/adr`, and `knowledge_dir=docs/knowledge`, so those directories are used as declared and the candidate chains are skipped. The harness root itself is fixed at `<main worktree>/.mstar` and is not declared in `.mstarc`. The collaboration mode is declared separately under `[collaboration] mode=local|mirror`; resolution and the operator commands are in [collaboration-authority.md](collaboration-authority.md).
+This repository's `.mstarc` pins `specs_dir=docs/specs`, `adr_dir=docs/adr`, and `knowledge_dir=docs/knowledge`, so those directories are used as declared and the candidate chains are skipped. The harness root itself is fixed at `<main worktree>/.mstar` and is not declared in `.mstarc`. The same file declares the collaboration mode in a `[collaboration]` section (`mode=local`), which selects the repository's local user-level authority; resolution and the operator commands are in [collaboration-authority.md](collaboration-authority.md).
 
 ## Change obligations
 
