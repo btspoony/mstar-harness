@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
@@ -48,11 +48,11 @@ const roadmap = Object.fromEntries(getRoadmapCommandDefinitions().map((definitio
 const markdown = (title: string) => `---\nproject_id: proj\ntitle: ${JSON.stringify(title)}\nstatus: active\ncreated_at: 2026-09-26\n---\n\n## Direction\n\nReviewed roadmap content.\n`;
 
 /** A synthetic checkout whose origin names the collaboration repository. */
-function checkout(name: string): { cwd: string; harness: string } {
+function checkout(name: string, originSlug = name): { cwd: string; harness: string } {
   const cwd = join(root, name);
   mkdirSync(cwd, { recursive: true });
   execFileSync("git", ["init", "-q"], { cwd, stdio: ["ignore", "ignore", "ignore"] });
-  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${name}.git`], { cwd, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${originSlug}.git`], { cwd, stdio: ["ignore", "ignore", "ignore"] });
   writeFileSync(join(cwd, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(cwd, ".mstar");
   mkdirSync(harness, { recursive: true });
@@ -171,6 +171,26 @@ describe("catalog and roadmap command families", () => {
     if (listed.status === "ok") expect(JSON.stringify(listed.data)).toContain("proj");
     if (shown.status === "ok") expect(JSON.stringify(shown.data)).toContain("Project");
     if (exported.status === "ok") expect(JSON.stringify(exported.data)).toContain("proj");
+
+    // A replacement clone with the same repository identity but no local
+    // catalog content and no execution store reads the same logical rows: the
+    // project location resolves against THIS checkout and is disclosed absent.
+    const clone = checkout("catalog-read-data-clone", "catalog-read-data");
+    const cloneList = await catalog["catalog.list"]!.execute({ harness: clone.harness, kind: "project" }, invocation(clone.cwd));
+    expect(cloneList.status).toBe("ok");
+    const cloneShow = await catalog["catalog.show"]!.execute({ harness: clone.harness, kind: "project", id: "proj" }, invocation(clone.cwd));
+    expect(cloneShow.status).toBe("ok");
+    if (cloneShow.status === "ok") {
+      expect(cloneShow.data).toMatchObject({ entity: { relativePath: "proj", present: false } });
+    }
+    // A sparse plan registration whose document is missing here is a named
+    // refusal; it never mints or rebinds the registered execution location.
+    const missingPlan = await catalog["catalog.register"]!.execute({
+      harness: clone.harness, kind: "plan", file: join(clone.harness, "plans", "plan-missing.md"), operationId: "clone-plan", actor: "test",
+    }, invocation(clone.cwd));
+    expect(missingPlan.status).toBe("refused");
+    expect(missingPlan.code).toBe("plan-path.not-a-file");
+    expect(existsSync(join(clone.harness, "store.db"))).toBe(false);
   });
 
   test("sparse catalog register derives a plan row's identity, title and location from its document", async () => {
