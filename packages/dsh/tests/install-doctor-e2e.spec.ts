@@ -35,7 +35,8 @@
  *     re-installs the pin → doctor exit 0, `mounted`.
  */
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
@@ -52,8 +53,12 @@ const REPO_ROOT = resolve(import.meta.dir, '../../..')
 /** The real CLI entry (plan 001 surface) run as a subprocess. */
 const CLI_ENTRY = join(REPO_ROOT, 'packages/cli/src/index.ts')
 /** why: Neutral cwd for CLI subprocesses: harness resolution must answer from the
- * disposable home, never from the ambient control checkout's own `.mstarc`. */
+ * disposable home, never from the ambient control checkout's own `.mstarc`. The
+ * cwd is itself a declared git repo, or the init bootstrap's upward identity
+ * probe escapes it and writes a `.mstarc` into `$TMPDIR` itself. */
 const cliCwd = mkdtempSync(join(tmpdir(), 'dsh-cli-cwd-'))
+execFileSync('git', ['init', '-q', '-b', 'main', cliCwd], { stdio: 'ignore' })
+writeFileSync(join(cliCwd, '.mstarc'), `[collaboration]\nmode=local\nrepo_id=dsh-cli-cwd-${cliCwd.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(-110)}\n`)
 /** The profile the dsh CLI fixes for installs (dsh adapter `web`). */
 const DSH_PROFILE = 'web'
 /** The mstar plugin spec (doctor capability words). */
@@ -132,6 +137,11 @@ function runCliInit(dshHome: string, extraArgs: string[] = [], timeoutMs = 300_0
   if (proc.exitCode !== 0) {
     throw new Error(`mstar-harness init --target dsh failed (${proc.exitCode}): ${stdout}\n${proc.stderr.toString()}`)
   }
+  // No post-init pin here: the drift-repair cell asserts the PUBLISHED CLI's
+  // repair behavior (4.8.2), which a repo-pinned 4.8.1 CLI does not perform.
+  // The npm-lag boot mismatch is recorded as an environment residual in the
+  // task report (published plugin imports engine exports this branch's dist
+  // does not carry: `decideThreadGate`).
   return stdout
 }
 
@@ -254,18 +264,30 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
     // --- Setup: temp DSH_HOME; CELL-1 install form: `--no-fallbacks`
     // (the mstar row only — the fallbacks row is uninstalled). ---
     dshHome = await mkdtemp(join(tmpdir(), 'dsh-doctor-home-'))
-    const initNoFallbacks = runCliInit(dshHome, ['--no-fallbacks'])
+    const initNoFallbacks = await runCliInit(dshHome, ['--no-fallbacks'])
     for (const line of initNoFallbacks.split('\n').filter((line) => line.trim() !== '')) console.log(`install-doctor-e2e: cli(no-fallbacks) | ${line}`)
 
     // Version/surface pin (Task 1 deviation, reused): the dsh CLI writes the
     // profile dependency as `^2.2.0`; pnpm's minimumReleaseAge gate can land
     // the default add on a seeds-less version. The doctor reads loader rows
     // only, but the dsh-side boots exercise the bundled gates — pin the
-    // repo-shipped version when the surface is missing.
-    if (!hasShippedSurface(installedMstarDir(dshHome))) {
+    // repo-shipped version. UNCONDITIONAL: the boot resolves the local
+    // worktree's engine dist (single-instance cordis), and a published plugin
+    // newer than this branch (npm lag) imports engine exports this dist does
+    // not carry (`decideThreadGate`).
+    {
       const repoVersion = await readVersion(join(packageRoot, 'package.json'))
-      console.log(`install-doctor-e2e: default add lacks the shipped surface (native role-preset channel) — re-adding pinned @${repoVersion} (Task 1 deviation)`)
-      runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', `${MSTAR_SPEC}@${repoVersion}`], 300_000)
+      if (!hasShippedSurface(installedMstarDir(dshHome))) {
+        console.log(`install-doctor-e2e: default add lacks the shipped surface (native role-preset channel) — re-adding pinned @${repoVersion} (Task 1 deviation)`)
+      } else {
+        const installedVersion = await readVersion(join(installedMstarDir(dshHome), 'package.json'))
+        if (installedVersion !== repoVersion) {
+          console.log(`install-doctor-e2e: installed @${installedVersion} is newer than this branch's engine — re-adding pinned @${repoVersion} (npm lag; the boot resolves the local engine dist)`)
+        }
+      }
+      if (await readVersion(join(installedMstarDir(dshHome), 'package.json')) !== repoVersion) {
+        runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', `${MSTAR_SPEC}@${repoVersion}`], 300_000)
+      }
       // Post-pin dump probe (fix wave S-002 belt-and-suspenders): the
       // re-add must not duplicate the mstar loader row (the --no-fallbacks
       // shape keeps exactly one row).
@@ -345,7 +367,7 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
     // --- CELL 2: fallbacks installed then DISABLED via the REAL patch
     // mechanism (cordis.patch.yml — the shape plan 001 probe-pinned). ---
     {
-      const initFull = runCliInit(dshHome)
+      const initFull = await runCliInit(dshHome)
       for (const line of initFull.split('\n').filter((line) => line.trim() !== '')) console.log(`install-doctor-e2e: cli(full) | ${line}`)
       await writeFile(join(profileDir(dshHome), 'cordis.patch.yml'), `- id: llm-fallbacks\n  disabled: true\n`)
       const dump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
@@ -463,7 +485,7 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
       expect(doctor.stdout).toContain(`${FALLBACKS_SPEC} is drifted`)
       expect(doctor.stdout).toContain('Run: mstar-harness init --target dsh')
 
-      const initRepair = runCliInit(dshHome)
+      const initRepair = await runCliInit(dshHome)
       for (const line of initRepair.split('\n').filter((line) => line.trim() !== '')) console.log(`install-doctor-e2e: cli(repair) | ${line}`)
       expect(initRepair).not.toContain(`skipped-existing: ${FALLBACKS_SPEC}`)
       expect(initRepair).toContain(`installed: ${FALLBACKS_SPEC}`)

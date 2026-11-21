@@ -41,7 +41,9 @@ describe("unreadable store — refusal boundary and the documented fresh-clone b
       writeFileSync(storePath, CORRUPT_BYTES);
       const bytesBefore = readFileSync(storePath);
       const mstarc = join(root, ".mstarc");
-      const declared = "[config]\nspecs_dir=custom/specs\n";
+      // The declared layout carries the repository's collaboration identity
+      // too: `store init` pairs the lane and refuses without it.
+      const declared = "[config]\nspecs_dir=custom/specs\n[collaboration]\nmode=local\nrepo_id=fixture-unreadable-recovery\n";
       writeFileSync(mstarc, declared);
 
       // (a) The unreadable store keeps its typed refusal and names supported routes.
