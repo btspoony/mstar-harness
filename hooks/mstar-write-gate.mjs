@@ -11155,27 +11155,47 @@ function readCollaborationBinding(context) {
   const binding = parsed;
   return { ...binding, boundAt: typeof binding.boundAt === "string" ? binding.boundAt : "" };
 }
-async function assertControlCheckoutScope(context, location) {
-  if (existsSync16(storeDbPath(context))) {
-    const legacy = await openStore(context, "read").catch((error) => {
-      if (error instanceof StoreError2 && (error.code === "store.not-initialized" || error.code === "store.corrupt")) {
-        return;
-      }
+function executionProbeRefusal(dbPath, error) {
+  return new StoreError2("collaboration.unreadable", `The execution store at ${dbPath} exists but cannot be inspected, so it cannot be proven to hold no legacy ` + `collaboration rows: ${error instanceof Error ? error.message : String(error)} Repair that store ` + `(mstar store upgrade) or move its authority with the reviewed cutover before using the repository lane. ` + `Nothing was read or modified.`);
+}
+async function assertNoLegacyCollaborationOwner(context) {
+  const dbPath = storeDbPath(context);
+  if (!existsSync16(dbPath))
+    return;
+  let probe;
+  try {
+    probe = await connectAt(dbPath, "read", busyTimeoutMs());
+  } catch (error) {
+    if (!existsSync16(dbPath))
+      return;
+    if (error instanceof StoreError2 && error.code === "store.busy")
       throw error;
-    });
-    if (legacy !== undefined) {
-      try {
-        if (readCollaborationFence(legacy.db) === null) {
-          const held = heldCollaborationTables(legacy.db);
-          if (held.length > 0) {
-            throw new StoreError2("collaboration.cutover-required", `This checkout still owns a combined store with collaboration rows (${held.join(", ")}), so it is not the ` + `authority's owner: move that authority with the reviewed cutover (mstar store collaboration plan, apply, then ` + `activate) before using the repository lane. Nothing was read or modified.`);
-          }
-        }
-      } finally {
-        legacy.close();
+    throw executionProbeRefusal(dbPath, error);
+  }
+  try {
+    try {
+      validateAppliedMigrations(readAppliedMigrations(probe, false));
+    } catch (error) {
+      if (error instanceof StoreError2 && (error.code === "store.schema-unsupported" || error.code === "store.schema-drift")) {
+        throw error;
       }
     }
+    if (readCollaborationFence(probe) !== null)
+      return;
+    const held = heldCollaborationTables(probe);
+    if (held.length === 0)
+      return;
+    throw new StoreError2("collaboration.cutover-required", `This checkout still owns a combined store with collaboration rows (${held.join(", ")}), so it is not the ` + `authority's owner: move that authority with the reviewed cutover (mstar store collaboration plan, apply, then ` + `activate) before using the repository lane. Nothing was read or modified.`);
+  } catch (error) {
+    if (error instanceof StoreError2)
+      throw error;
+    throw executionProbeRefusal(dbPath, error);
+  } finally {
+    probe.close();
   }
+}
+async function assertControlCheckoutScope(context, location) {
+  await assertNoLegacyCollaborationOwner(context);
   const binding = readCollaborationBinding(context);
   if (binding === null || binding.state !== "active")
     return;
@@ -11183,18 +11203,17 @@ async function assertControlCheckoutScope(context, location) {
     throw new StoreError2("collaboration.stale-binding", `This control checkout is bound to repository ${binding.repoKey} (${binding.mode}), but now resolves to ` + `${location.repoKey} (${location.mode}); an origin or .mstarc retarget never re-points a bound checkout. Re-resolve ` + `the scope deliberately (mstar path resolve) and start a new checkout for the other repository. Nothing was modified.`);
   }
 }
-async function assertControlBinding(context, location, authority) {
+async function assertControlBinding(context, location, authority, requirement) {
   await assertControlCheckoutScope(context, location);
   const recorded = readCollaborationBinding(context);
   const binding = recorded !== null && recorded.state === "active" ? recorded : null;
   if (binding === null) {
-    if (authority.state === "active") {
-      throw new StoreError2("collaboration.stale-binding", `This checkout holds no collaboration binding for the ACTIVE authority store ${authority.storeId} at ` + `${location.dbPath}, so it cannot be proven to own it. Acquire it with the supported adoption verb: ` + `mstar store collaboration adopt --harness ${context.harnessDir} --expect-store ${authority.storeId} ` + `(or re-run the activation/restore that published this generation). store init never adopts an active authority, ` + `so it is not the recovery. Nothing was modified.`);
-    }
-    return;
+    if (requirement === "read")
+      return;
+    throw new StoreError2("collaboration.stale-binding", `This checkout holds no collaboration binding for the ACTIVE authority store ${authority.storeId} at ` + `${location.dbPath}, so it cannot be proven to own it. Acquire it with the supported adoption verb: ` + `mstar store collaboration adopt --harness ${context.harnessDir} --expect-store ${authority.storeId} ` + `(or re-run the activation/restore that published this generation). store init never adopts an active authority, ` + `so it is not the recovery. Nothing was modified.`);
   }
-  if (binding.storeId !== authority.storeId) {
-    throw new StoreError2("collaboration.stale-binding", `This control checkout was bound to authority store ${binding.storeId}, but the lane at ${location.dbPath} is store ` + `${authority.storeId}. A replaced authority is adopted deliberately by its own activation or restore, never by drift; ` + `inspect it with mstar path resolve. Nothing was modified.`);
+  if (binding.repoKey !== location.repoKey || binding.mode !== location.mode || binding.storeId !== authority.storeId || binding.epoch !== authority.epoch) {
+    throw new StoreError2("collaboration.stale-binding", `This control checkout was bound to repository ${binding.repoKey} (${binding.mode}) store ${binding.storeId} epoch ` + `${String(binding.epoch)}, but the lane at ${location.dbPath} is repository ${authority.repoKey} (${authority.mode}) ` + `store ${authority.storeId} epoch ${String(authority.epoch)}. A replaced authority is adopted deliberately by its own ` + `activation, restore or "store collaboration adopt", never by drift; inspect it with mstar path resolve. Nothing was modified.`);
   }
 }
 async function openCollaborationStore(context, mode, expected) {
@@ -11209,9 +11228,7 @@ async function openCollaborationStore(context, mode, expected) {
   }
   const handle = await openAdmission(location, "active", expected, busyTimeoutMs());
   try {
-    await assertControlCheckoutScope(context, location);
-    if (mode === "write")
-      await assertControlBinding(context, location, handle.authority);
+    await assertControlBinding(context, location, handle.authority, mode);
   } catch (error) {
     handle.close();
     throw error;
