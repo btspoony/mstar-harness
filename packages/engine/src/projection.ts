@@ -278,6 +278,8 @@ function asCatalogLifecycle(value: unknown): CatalogLifecycle {
 
 type CatalogInputs = {
   catalogRevision: number | null;
+  /** The execution revision the bindings were read at (same transaction). */
+  executionRevision: number | null;
   bindings: Array<{ workflowId: string; rootKind: CatalogRootKind; relativePath: string }>;
   compassDocs: Array<{
     iterationId: string;
@@ -311,13 +313,17 @@ function catalogRefusalCode(error: unknown): string {
  * unavailable so the capture blocks instead of publishing guessed rows.
  */
 async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> {
-  const empty: CatalogInputs = { catalogRevision: null, bindings: [], compassDocs: [], unavailable: null };
+  const empty: CatalogInputs = { catalogRevision: null, executionRevision: null, bindings: [], compassDocs: [], unavailable: null };
 
   let collaboration: { catalogRevision: number; documents: CatalogDocumentRow[]; links: Array<Record<string, unknown>>; owners: Array<Record<string, unknown>> };
   try {
     const handle = await openCollaborationStore(context, "read");
     try {
       const db = handle.db;
+      // One source-local snapshot: the revision and every catalog row this
+      // capture renders come from the same instant, so a competing catalog
+      // write cannot pair old rows with a newer revision.
+      db.exec("begin deferred");
       const meta = db.prepare("select catalog_revision from collaboration_meta where id = 1").get() as
         | { catalog_revision?: unknown }
         | undefined;
@@ -354,6 +360,7 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
       const owners = db
         .prepare("select id, lifecycle from catalog_entities where kind = 'iteration'")
         .all() as Array<Record<string, unknown>>;
+      db.exec("commit");
       collaboration = { catalogRevision: meta.catalog_revision, documents, links, owners };
     } finally {
       handle.close();
@@ -363,7 +370,8 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
     return { ...empty, unavailable: { code, message: `collaboration catalog unavailable (${code})` } };
   }
 
-  const bindings = await readExecutionBindings(context);
+  const executionFacts = await readExecutionBindings(context);
+  const bindings = executionFacts.bindings;
   const byId = new Map(collaboration.documents.map((doc) => [doc.id, doc]));
   const pick = (ownerId: string): CatalogDocumentRow | null => {
     const candidates = collaboration.links
@@ -399,30 +407,55 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
     }
   }
 
-  return { catalogRevision: collaboration.catalogRevision, bindings, compassDocs, unavailable: null };
+  return {
+    catalogRevision: collaboration.catalogRevision,
+    executionRevision: executionFacts.revision,
+    bindings,
+    compassDocs,
+    unavailable: null,
+  };
 }
 
 /**
- * The checkout-specific bindings stay in the execution store. A read failure
- * here is a capture source problem, not a silent empty binding set.
+ * The checkout-specific bindings AND the execution revision stay in the
+ * execution store, read in ONE source-local transaction: the revision a capture
+ * reports is the revision the bindings were read at, so a binding that moves
+ * cannot be published under a newer stamp.
  */
-async function readExecutionBindings(context: StoreContext): Promise<CatalogInputs["bindings"]> {
+async function readExecutionBindings(
+  context: StoreContext,
+): Promise<{ bindings: CatalogInputs["bindings"]; revision: number | null }> {
   const handle = await openStore(context, "read");
   try {
-    return (
-      handle.db
-        .prepare(
-          "select workflow_id, workflow_root_kind, workflow_relative_path from catalog_execution_bindings order by workflow_id asc",
-        )
-        .all() as Array<Record<string, unknown>>
-    ).flatMap((row) => {
-      const workflowId = text(row.workflow_id);
-      const rootKind = asCatalogRootKind(row.workflow_root_kind);
-      const relativePath = text(row.workflow_relative_path);
-      return workflowId !== null && rootKind !== null && relativePath !== null
-        ? [{ workflowId, rootKind, relativePath: relativePath.replace(/\/+$/, "") }]
-        : [];
-    });
+    handle.db.exec("begin deferred");
+    try {
+      const bindings = (
+        handle.db
+          .prepare(
+            "select workflow_id, workflow_root_kind, workflow_relative_path from catalog_execution_bindings order by workflow_id asc",
+          )
+          .all() as Array<Record<string, unknown>>
+      ).flatMap((row) => {
+        const workflowId = text(row.workflow_id);
+        const rootKind = asCatalogRootKind(row.workflow_root_kind);
+        const relativePath = text(row.workflow_relative_path);
+        return workflowId !== null && rootKind !== null && relativePath !== null
+          ? [{ workflowId, rootKind, relativePath: relativePath.replace(/\/+$/, "") }]
+          : [];
+      });
+      const row = handle.db.prepare("select revision from store_meta where id = 1").get() as
+        | { revision?: unknown }
+        | undefined;
+      handle.db.exec("commit");
+      return { bindings, revision: typeof row?.revision === "number" ? row.revision : null };
+    } catch (error) {
+      try {
+        handle.db.exec("rollback");
+      } catch {
+        // connection-level failure during rollback -- nothing was committed
+      }
+      throw error;
+    }
   } finally {
     handle.close();
   }
@@ -549,16 +582,7 @@ function safeExecutionAuthorityError(error: unknown): string {
 
 async function captureExecutionProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
   const inputs = await readCatalogInputs(context);
-  const revisionHandle = await openStore(context, "read");
-  let capturedExecutionRevision: number | null;
-  try {
-    const row = revisionHandle.db.prepare("select revision from store_meta where id = 1").get() as
-      | { revision?: unknown }
-      | undefined;
-    capturedExecutionRevision = typeof row?.revision === "number" ? row.revision : null;
-  } finally {
-    revisionHandle.close();
-  }
+  const capturedExecutionRevision = inputs.executionRevision;
   if (inputs.unavailable !== null) {
     // The collaboration catalog is a declared input: an unreadable one blocks
     // publication with its own code instead of publishing rows whose compass

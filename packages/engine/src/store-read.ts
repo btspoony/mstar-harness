@@ -620,27 +620,28 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
 
   const asOf = new Date().toISOString();
   let collaborationHandle: CollaborationStoreHandle | null = null;
-  let collaborationCode: string | null = null;
-  if (scope !== null) {
-    try {
-      collaborationHandle = await openCollaborationStore(context, "read");
-    } catch (error) {
-      if (query.collaboration?.required !== false) throw error;
-      collaborationCode = errorCode(error);
-    }
-  }
   let executionHandle: StoreHandle | null = null;
-  let executionCode: string | null = null;
-  if (query.execution !== "not-requested") {
-    try {
-      executionHandle = await openStore(context, "read");
-    } catch (error) {
-      if (query.execution === "required") throw error;
-      executionCode = errorCode(error);
-    }
-  }
-
+  // Both opens sit INSIDE the cleanup scope: a required execution open that
+  // throws must not strand the collaboration handle it already acquired.
   try {
+    let collaborationCode: string | null = null;
+    let executionCode: string | null = null;
+    if (scope !== null) {
+      try {
+        collaborationHandle = await openCollaborationStore(context, "read");
+      } catch (error) {
+        if (query.collaboration?.required !== false) throw error;
+        collaborationCode = errorCode(error);
+      }
+    }
+    if (query.execution !== "not-requested") {
+      try {
+        executionHandle = await openStore(context, "read");
+      } catch (error) {
+        if (query.execution === "required") throw error;
+        executionCode = errorCode(error);
+      }
+    }
     if (collaborationHandle !== null) collaborationHandle.db.exec("begin deferred");
     if (executionHandle !== null) executionHandle.db.exec("begin deferred");
     try {
@@ -839,10 +840,14 @@ function viewSources(view: DashboardView, filters: DashboardFilters): ViewSource
       return { collaboration: { scope: { kind: "query", key: `workflow:${requireId(filters, "workflow-detail")}` }, required: false }, execution: "required" };
     case "iterations": {
       const { limit, offset } = page();
-      return { collaboration: { scope: { kind: "query", key: `iterations:${projectId ?? "*"}:${limit}:${offset}` }, required: projectId !== null }, execution: "required" };
+      // Membership, attribution and the unpaged total are catalog facts: an
+      // unavailable catalog cannot be answered as an empty list.
+      return { collaboration: { scope: { kind: "query", key: `iterations:${projectId ?? "*"}:${limit}:${offset}` }, required: true }, execution: "required" };
     }
     case "iteration-detail":
-      return { collaboration: { scope: { kind: "query", key: `iteration:${requireId(filters, "iteration-detail")}` }, required: false }, execution: "required" };
+      // The subject itself is a catalog row: without the catalog no id can be
+      // called absent.
+      return { collaboration: { scope: { kind: "query", key: `iteration:${requireId(filters, "iteration-detail")}` }, required: true }, execution: "required" };
     case "overview":
       return { collaboration: { scope: { kind: "query", key: `overview:${projectId ?? "*"}` }, required: true }, execution: "required" };
   }
@@ -1828,10 +1833,9 @@ function composeIteration(
   documentIds: readonly string[],
   identities: Map<string, CatalogIdentityDTO>,
   projects: readonly string[],
-  catalogKnown: boolean,
 ): IterationDTO {
   const badges: DashboardBadge[] = [];
-  if (catalogKnown && catalog === null) badges.push("catalog-missing");
+  if (catalog === null) badges.push("catalog-missing");
   if (generated.generation === null) badges.push("execution-unavailable");
   const workflowRow = generated.workflows.find((row) => row.id === iterationId && row.type === "iteration");
 
@@ -1846,7 +1850,7 @@ function composeIteration(
       generated.plans.find((plan) => plan.plan_id === planId && plan.workflow_id === iterationId) ??
       generated.plans.find((plan) => plan.plan_id === planId && plan.workflow_id === planId);
     const planBadges: DashboardBadge[] = [];
-    if (catalogKnown && planCatalog === null) planBadges.push("catalog-missing");
+    if (planCatalog === null) planBadges.push("catalog-missing");
     if (executionRow === undefined) {
       planBadges.push("execution-unavailable");
       return { planId, catalog: planCatalog, execution: null, catalogPinRevision: null, badges: planBadges };
@@ -1941,18 +1945,16 @@ function gateStepOf(
 
 function readIterationList(sources: StoreReadSources, filters: DashboardFilters): IterationListDTO {
   const db = executionSource(sources);
-  const catalogDb = sources.collaboration?.db ?? null;
+  const catalogDb = collaborationSource(sources);
   const { limit, offset } = paging(filters.limit, filters.offset);
   const generated = readGeneratedRows(db);
   const projectId = text(filters.projectId);
   const membership = projectMembership(catalogDb);
-  const catalogRows =
-    catalogDb === null
-      ? []
-      : (catalogDb
-          .prepare(`select ${IDENTITY_COLUMNS} from catalog_entities where kind = 'iteration' order by title asc, id asc`)
-          .all() as IdentityRow[]
-        ).filter((row) => projectId === null || belongsTo(membership, "iteration", row.id, projectId));
+  const catalogRows = (
+    catalogDb
+      .prepare(`select ${IDENTITY_COLUMNS} from catalog_entities where kind = 'iteration' order by title asc, id asc`)
+      .all() as IdentityRow[]
+  ).filter((row) => projectId === null || belongsTo(membership, "iteration", row.id, projectId));
 
   const linkPlanIds = iterationPlanIds(catalogDb);
   const compassByIteration = compassesByIteration(generated);
@@ -1977,7 +1979,6 @@ function readIterationList(sources: StoreReadSources, filters: DashboardFilters)
         // The list filter already matches ANY linked project (C4): the same
         // belongs-to membership is disclosed per row, sorted.
         [...(membership.get(identityToken("iteration", row.id)) ?? [])].sort(),
-        catalogDb !== null,
       ),
     ),
     total: catalogRows.length,
@@ -1989,7 +1990,7 @@ function readIterationList(sources: StoreReadSources, filters: DashboardFilters)
 
 function readIterationDetail(sources: StoreReadSources, filters: DashboardFilters): IterationDTO | null {
   const db = executionSource(sources);
-  const catalogDb = sources.collaboration?.db ?? null;
+  const catalogDb = collaborationSource(sources);
   const iterationId = requireId(filters, "iteration-detail");
   const generated = readGeneratedRows(db);
   const compassByIteration = compassesByIteration(generated);
@@ -2004,17 +2005,7 @@ function readIterationDetail(sources: StoreReadSources, filters: DashboardFilter
   const catalog = identities.get(identityToken("iteration", iterationId)) ?? null;
   if (catalog === null && compassRow === undefined) return null;
   const projects = [...(projectMembership(catalogDb).get(identityToken("iteration", iterationId)) ?? [])].sort();
-  return composeIteration(
-    iterationId,
-    catalog,
-    generated,
-    compassRow,
-    planIds,
-    documentIds,
-    identities,
-    projects,
-    catalogDb !== null,
-  );
+  return composeIteration(iterationId, catalog, generated, compassRow, planIds, documentIds, identities, projects);
 }
 
 // ---------------------------------------------------------------------------

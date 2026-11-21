@@ -1079,6 +1079,26 @@ describe("projection publication and last-good handling", () => {
   });
 
 
+  test("a catalog write between capture and publication cannot be published as current", async () => {
+    const f = await fixture("forked-snapshot-");
+    // The hook lands a catalog write AFTER the first capture released its
+    // source-local snapshot. Publication must refuse that capture and publish
+    // the re-captured source set, never the forked one under a current stamp.
+    const report = await refreshProjections(f.context, {
+      beforePublish: async (attempt) => {
+        if (attempt !== 1) return;
+        await seedIteration(f, "iter-fork");
+      },
+    });
+    expect(report.published).toBe(true);
+    expect(report.freshness).toBe("current");
+    expect(report.sources.map((source) => source.sourceKey)).toContain(
+      "compass:iterations:iter-fork/delivery-compass.md",
+    );
+    const rows = await projections(f);
+    expect(rows.compasses.map((compass) => compass.iteration_id)).toContain("iter-fork");
+  });
+
   test("an unchanged refresh writes nothing at all", async () => {
     const f = await fixture("publish-");
     await seedStandard(f);

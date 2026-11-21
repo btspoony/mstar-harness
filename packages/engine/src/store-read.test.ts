@@ -1436,6 +1436,96 @@ describe("collaboration creation catalog authority", () => {
   });
 });
 
+
+  test("iteration views refuse when the collaboration catalog is unavailable", async () => {
+    const { context } = await projectedWorkspace("iteration-refusal-");
+    rmSync(resolveCollaborationLocation(context).dbPath, { force: true });
+    // Membership, attribution and the subject itself are catalog facts: the
+    // read refuses instead of answering an empty page or an absent record.
+    await expect(withStoreRead(context, queryDashboard("iterations"))).rejects.toMatchObject({
+      code: "collaboration.not-initialized",
+    });
+    await expect(withStoreRead(context, queryDashboard("iteration-detail", { id: "iter-read" }))).rejects.toMatchObject({
+      code: "collaboration.not-initialized",
+    });
+  });
+
+  test("a pinned creation replays its receipt after the collaboration catalog becomes unavailable", async () => {
+    const { context, harness } = await workspace("creation-replay-");
+    await registerProject(context, "proj-a");
+    await registerCatalogEntity(
+      context,
+      { kind: "plan", id: "p-replay", title: "Replay plan", rootKind: "plans", relativePath: "plans/p-replay.md" },
+      op("replay-plan"),
+    );
+    const authority = await readCollaborationAuthority(context);
+    const plan = await getCatalog(context, { kind: "plan", id: "p-replay" });
+    const state = await readExecutionState(context);
+    const row = { id: "p-replay", title: "Replay plan", file: "plans/p-replay.md", status: "InProgress" };
+    const snapshot = {
+      schema_version: 1,
+      id: "wf-replay",
+      type: "plan",
+      status: "running",
+      started_at: STARTED_AT,
+      updated_at: STARTED_AT,
+      phase: "phase-2-execute",
+      plans: [
+        {
+          ...row,
+          metadata: {
+            catalog_pin: {
+              store_id: authority.storeId,
+              entity_revision: plan.entity.revision,
+              document_hash: executionInputHash(row, "p-replay"),
+              relation_hash: "0".repeat(64),
+            },
+          },
+        },
+      ],
+      delivery_kind: "development",
+    } as never;
+    const caller: ExecutionCaller = { sessionId: "replay-coordinator", role: "coordinator", workflowId: "wf-replay" };
+    const input = {
+      entry: { id: "wf-replay", type: "plan" as const, started_at: STARTED_AT, dir: "workflows/wf-replay" },
+      snapshot,
+      expected: state.token,
+      operationId: "replay-pinned",
+    };
+    const first = await createExecutionWorkflow({ harnessDir: harness, caller }, input);
+    rmSync(resolveCollaborationLocation(context).dbPath, { force: true });
+    // The lost-response retry answers from its committed execution receipt; it
+    // no longer depends on a fresh collaboration preflight.
+    const replay = await createExecutionWorkflow({ harnessDir: harness, caller }, input);
+    expect(replay.replayed).toBe(true);
+    expect(replay.storeId).toBe(first.storeId);
+    expect(replay.token).toEqual(first.token);
+  });
+
+  test("a failed required execution open leaves the collaboration lane usable", async () => {
+    const { context } = await workspace("mixed-open-failure-");
+    writeFileSync(storeDbPath(context), "not a database");
+    const probe = {
+      view: "mixed-open-probe",
+      needsProjection: false,
+      collaboration: { scope: { kind: "query" as const, key: "mixed-open-probe" }, required: true },
+      execution: "required" as const,
+      run: () => ({ data: 0 }),
+    };
+    // The collaboration handle opens first; the required execution open then
+    // fails. Repeating the failed read must not accumulate handles, so the lane
+    // stays readable afterwards.
+    for (const attempt of [1, 2, 3]) {
+      const failure = await withStoreRead(context, probe).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(String((failure as { code?: unknown }).code)).toStartWith("store.");
+      expect(attempt).toBeGreaterThan(0);
+    }
+    await withWrite(context, (db) => seedIssue(db, { id: "I-1", title: "still usable", registeredAt: "2026-09-01" }));
+    const issues = await withStoreRead(context, queryDashboard("issues"));
+    expect(issues.data.total).toBe(1);
+  });
+
 describe("collaboration read boundary", () => {
   test("a pure collaboration view never opens the execution lane", async () => {
     const { context } = await workspace("boundary-pure-");

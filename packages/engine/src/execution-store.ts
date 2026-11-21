@@ -2508,6 +2508,33 @@ export async function createExecutionWorkflow(
   const creation = resolveCreateWorkflow(context.caller, input?.entry, input?.snapshot, input?.operationId);
   const operationId = input.operationId;
   const requestHash = createWorkflowRequestHash(context.caller, creation, input.expected);
+  // A committed operation replays FIRST, under the current execution identity:
+  // a lost response must still answer from its receipt even when the
+  // collaboration lane has since become unavailable, and a different payload on
+  // the same id is a conflict rather than a second creation.
+  const replay = await withExecutionTransaction(context, (tx) => {
+    assertActiveExecutionAuthority(
+      tx,
+      `the execution authority is ${tx.execution.authorityState}; domain creation requires an active authority. ` +
+        `A staged store is inspectable only through migration diagnostics.`,
+    );
+    const recorded = readCommittedOperation(tx.db, tx.epoch, operationId);
+    if (recorded === null) return null;
+    if (recorded.requestHash !== requestHash) {
+      throw new ExecutionError(
+        "execution.operation-conflict",
+        `operation id ${JSON.stringify(operationId)} is already committed on this store epoch for a different request ` +
+          `(kind, scope, expected token, caller or payload). An operation id is an idempotency key, not a reusable ` +
+          `slot \u2014 retry the committed request unchanged or use a new id. Nothing was created.`,
+      );
+    }
+    return {
+      ...readCommittedReceipt<ExecutionState>(recorded, tx, operationId, creation.workflowId, { kind: "root", key: [] }),
+      operationId,
+      replayed: true,
+    };
+  });
+  if (replay !== null) return replay;
   // A pin names a collaboration catalog row, so the evidence is read on that
   // lane BEFORE the execution write transaction opens: no cross-file read ever
   // runs inside it, and an unreadable catalog refuses the pinned creation.

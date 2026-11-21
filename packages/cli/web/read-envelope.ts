@@ -8,15 +8,26 @@
  */
 import type { ReadEnvelope } from "@mstar-harness/engine";
 
-/** The envelope a JSON body is, or `null` when it is not one. */
+/**
+ * The envelope a JSON body is, or `null` when it is not one. The source
+ * observations are normalized at this boundary: an absent `collaboration` /
+ * `execution` member means "not disclosed", which is `null`, and a projection
+ * without the `observed` flag was read (the pre-split transport always read it).
+ */
 export function asEnvelope<T>(body: unknown): ReadEnvelope<T> | null {
   if (body === null || typeof body !== "object") return null;
-  const candidate = body as { data?: unknown; projection?: unknown };
+  const candidate = body as Partial<ReadEnvelope<T>> & { data?: unknown; projection?: unknown };
   if (candidate.data === undefined || candidate.projection === undefined) return null;
-  const projection = candidate.projection as { generation?: unknown; freshness?: unknown };
+  const projection = candidate.projection as { generation?: unknown; freshness?: unknown; observed?: unknown };
   if (typeof projection.generation !== "number" && projection.generation !== null) return null;
   if (typeof projection.freshness !== "string") return null;
-  return body as ReadEnvelope<T>;
+  const envelope = body as ReadEnvelope<T>;
+  return {
+    ...envelope,
+    projection: { ...envelope.projection, observed: typeof projection.observed === "boolean" ? projection.observed : true },
+    collaboration: candidate.collaboration ?? null,
+    execution: candidate.execution ?? null,
+  };
 }
 
 /** A refusal's message, or the generic one when the body carries none. */
@@ -70,13 +81,73 @@ export async function readAllListPages<T extends ListPayload>(
   };
 }
 
-/** The version members that make two pages the same store state. */
+/**
+ * Every source fact that must agree for two pages to be one list: the
+ * collaboration observation (authority identity/epoch, completeness, scope,
+ * revision, catalog revision and gap code) and the execution observation
+ * (identity/epoch/revision), beside the projection generation. Numeric
+ * counters alone cannot tell a restored or replaced authority apart.
+ */
+function sourceStamp(envelope: ReadEnvelope<unknown>): string {
+  const { collaboration, execution, projection, storeRevision, catalogRevision } = envelope;
+  return JSON.stringify({
+    // The top-level counters stay part of the comparison: they are the
+    // collaboration revisions the transport states, and a server that predates
+    // the source observations still moves them.
+    storeRevision,
+    catalogRevision,
+    collaboration:
+      collaboration === null
+        ? null
+        : collaboration.completeness === "unavailable"
+          ? { completeness: collaboration.completeness, scope: collaboration.scope, code: collaboration.code }
+          : {
+              completeness: collaboration.completeness,
+              scope: collaboration.scope,
+              authority: collaboration.authority,
+              revision: collaboration.revision,
+              catalogRevision: collaboration.catalogRevision,
+              code: collaboration.completeness === "partial" ? collaboration.code : null,
+            },
+    execution:
+      execution === null
+        ? null
+        : execution.asOf === null
+          ? { asOf: null, code: execution.code }
+          : { storeId: execution.storeId, epoch: execution.epoch, revision: execution.revision },
+    projection: { observed: projection.observed, generation: projection.generation },
+  });
+}
+
+/** The version members that make two pages the same source observations. */
 function sameStoreState(a: ReadEnvelope<unknown>, b: ReadEnvelope<unknown>): boolean {
-  return (
-    a.storeRevision === b.storeRevision &&
-    a.catalogRevision === b.catalogRevision &&
-    a.projection.generation === b.projection.generation
-  );
+  return sourceStamp(a) === sourceStamp(b);
+}
+
+/**
+ * The assembled list's own collaboration scope: the pages share one source
+ * snapshot, but their row set is no longer any single page's filter set, so the
+ * scope says so instead of claiming the first page's bounds.
+ */
+function assembledEnvelope<T extends ListPayload>(pages: ReadEnvelope<ListPayload>, rows: unknown[]): ReadEnvelope<T> {
+  const collaboration = pages.collaboration;
+  return {
+    ...pages,
+    data: { ...pages.data, items: rows } as T,
+    collaboration:
+      collaboration === null
+        ? null
+        : { ...collaboration, scope: { kind: collaboration.scope.kind, key: `assembled:${collaboration.scope.key}` } },
+  };
+}
+
+/** A page read against a partial snapshot cannot be assembled as one list. */
+function partialRefusal(envelope: ReadEnvelope<unknown>): string | null {
+  const collaboration = envelope.collaboration;
+  return collaboration !== null && collaboration.completeness === "partial"
+    ? `A page of this list was read against a partial collaboration snapshot (${collaboration.code}). ` +
+      "The list is not one authoritative snapshot; reload to read it again."
+    : null;
 }
 
 /** One pass over the pages; `mixed` means the caller should start again. */
@@ -104,6 +175,8 @@ async function readAllListPagesOnce<T extends ListPayload>(
       if (page === null || !Array.isArray(page.items)) {
         return { status: "error", message: "The list answered without its rows." };
       }
+      const partial = partialRefusal(envelope);
+      if (partial !== null) return { status: "error", message: partial };
       if (first === null) first = envelope;
       else if (!sameStoreState(first, envelope)) return { status: "mixed" };
       rows.push(...page.items);
@@ -114,7 +187,7 @@ async function readAllListPagesOnce<T extends ListPayload>(
       offset += page.items.length;
     }
     if (first === null) return { status: "error", message: UNREACHABLE };
-    return { status: "ready", envelope: { ...first, data: { ...first.data, items: rows } as T } };
+    return { status: "ready", envelope: assembledEnvelope<T>(first, rows) };
   } catch {
     return { status: "error", message: UNREACHABLE };
   }
