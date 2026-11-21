@@ -82,5 +82,11 @@
     "justification": "The family's refusal forwards recovery text chosen at runtime (engine facts, a documented per-code map, a literal fallback); strict static proof cannot evaluate the expression.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
+  },
+  {
+    "signature": "missing-recovery:packages/commands/src/families/pr.ts:4678d5fb22d1",
+    "justification": "Engine-supplied recovery text forwarded through this family's refusal adapter after family-refusal.ts type-checks it; strict static proof cannot evaluate the `recovery ?? literal` expression, the same class as pr-review.ts — see I-000872.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
   }
 ]

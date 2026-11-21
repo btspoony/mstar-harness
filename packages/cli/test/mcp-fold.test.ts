@@ -10,19 +10,24 @@ import { inputFields } from "../src/schema-branches";
 import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } from "../src/mcp/fold";
 
 /**
- * Budget for the folded published surface — every folded tool's description
- * plus its input JSON schema, read back from `tools/list`. `tools/list` is paid
- * on every request of every session, so the ceiling is a deliberate product
- * budget for the fold, not a measurement to re-pin: a future raise is a product
- * decision, and a mechanical re-measure is not a reason to edit it.
+ * why: the folded published surface — every folded tool's description plus its
+ * input JSON schema, read back from `tools/list` — is a deliberate product
+ * budget, not a measurement to re-pin: `tools/list` is paid on every request of
+ * every session, so a future raise is a product decision and a mechanical
+ * re-measure is not a reason to edit it.
  *
  * The regression the guard catches: republishing per-command contracts inside
  * family descriptions, or per-action tools creeping back. A published discovery
  * example must carry every field the tool REQUIRES (`"action":"schema"`), and a
  * family that publishes an identity selector also publishes the per-action
  * `x-mstar-selectors` index a host-side injector reads.
+ *
+ * Re-taken once for the `pr` family: the §5.3a review-thread gate publishes as
+ * its own tool rather than folding into `mstar_pr_review`, so a pre-merge check
+ * does not read as a review action (measured 33_935; later prose stays inside
+ * this budget rather than re-taking it).
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 33_797;
+const PUBLISHED_SURFACE_CEILING_CHARS = 33_935;
 
 type PublishedTool = Readonly<{
   name: string;

@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   computePrTally,
+  decideThreadGate,
+  parseReviewThreads,
   renderReviewMarkdown,
   synthesizeReview,
+  threadGateDigest,
   validateMstarReviewV1,
 } from "./prreview.js";
-import type { MergeClass, MstarReviewFinding, MstarReviewTally, MstarReviewV1 } from "./prreview.js";
+import type { MergeClass, MstarReviewFinding, MstarReviewTally, MstarReviewV1, ReviewThreadFacts } from "./prreview.js";
 
 /**
  * Compile-level regression: `MstarReviewV1.tally` keeps `band` OPTIONAL, so a
@@ -560,5 +563,69 @@ describe("summary_md is an optional seat narrative", () => {
     expect("summary_md" in absent).toBe(false);
     expect(validateMstarReviewV1(absent).ok).toBe(true);
     expect(renderReviewMarkdown(absent).endsWith("\n\n## \u{1F4CB} Review")).toBe(true);
+  });
+});
+
+describe("thread gate (\u00a75.3a)", () => {
+  const page = (nodes: unknown[], pageInfo: Record<string, unknown> = { hasNextPage: false, endCursor: null }, headRefOid: string | null = "abcdef0123456") => ({
+    data: { repository: { pullRequest: { headRefOid, reviewThreads: { pageInfo, nodes } } } },
+  });
+  const thread = (id: string, isResolved = false, body?: string): ReviewThreadFacts => ({ id, isResolved, isOutdated: false, ...(body === undefined ? {} : { body }) });
+  const head = "abc1234";
+
+  test("a page becomes thread facts, and a node without an id is skipped", () => {
+    const parsed = parseReviewThreads(page([
+      { id: "T1", isResolved: false, isOutdated: true, path: "src/a.ts", line: 42, comments: { nodes: [{ author: { login: "greptile" }, body: "should-fix here" }] } },
+      { isResolved: false },
+    ], { hasNextPage: true, endCursor: "cursor-2" }));
+    expect(parsed.threads).toEqual([{ id: "T1", isResolved: false, isOutdated: true, path: "src/a.ts", line: 42, author: "greptile", body: "should-fix here" }]);
+    expect(parsed).toMatchObject({ hasNextPage: true, endCursor: "cursor-2", readable: true, headRefOid: "abcdef0123456" });
+  });
+
+  test("a payload without a thread connection is unreadable, never an empty clean page", () => {
+    expect(parseReviewThreads({ data: { repository: { pullRequest: { headRefOid: "abcdef0123456" } } } })).toMatchObject({ readable: false, threads: [] });
+    expect(parseReviewThreads({ data: { repository: { pullRequest: { headRefOid: "abcdef0123456", reviewThreads: {} } } } })).toMatchObject({ readable: false, threads: [] });
+    expect(parseReviewThreads(page([]))).toMatchObject({ readable: true, threads: [] });
+  });
+
+  test("the digest is a relation over its input, not a pinned value", () => {
+    // why: asserting the RELATION (same set in any order; a different set
+    // differs) never pins a hash literal, which the maintenance rules forbid.
+    const a = thread("T1", false, "first");
+    const b = thread("T2", false, "second");
+    expect(threadGateDigest([a, b])).toBe(threadGateDigest([b, a]));
+    expect(threadGateDigest([a, b])).not.toBe(threadGateDigest([a]));
+  });
+
+  test("an unresolved thread refuses the merge without a confirmation", () => {
+    expect(decideThreadGate({ head, threads: [thread("T1"), thread("T2", true)] })).toEqual({
+      ok: false,
+      code: "pr.merge-gate.unresolved",
+      head,
+      unresolved: [thread("T1")],
+      problems: [],
+    });
+    expect(decideThreadGate({ head, threads: [thread("T1", true)] })).toEqual({ ok: true, head, unresolved: [] });
+  });
+
+  test("a confirmation must bind the head, carry two confirmations, name exactly the open threads and match their digest", () => {
+    const threads = [thread("T1", false, "should-fix"), thread("T2"), thread("T3", true)];
+    const digest = threadGateDigest(threads.filter((entry) => !entry.isResolved));
+    const accepted = decideThreadGate({ head, threads, confirmation: { head, confirmations: 2, threads: ["T2", "T1"], digest } });
+    expect(accepted.ok).toBe(true);
+
+    const problemsOf = (confirmation: { head: string; confirmations: number; threads: string[]; digest?: string }) => {
+      const decision = decideThreadGate({ head, threads, confirmation });
+      return decision.ok ? [] : decision.problems;
+    };
+    expect(problemsOf({ head: "def5678", confirmations: 2, threads: ["T1", "T2"], digest })).toContain("confirmation head def5678 is not the current head abc1234");
+    expect(problemsOf({ head, confirmations: 1, threads: ["T1", "T2"], digest })).toContain("confirmation records 1 confirmation(s); 2 are required");
+    expect(problemsOf({ head, confirmations: 2, threads: ["T1"], digest })).toContain("thread T2 is unresolved but not named in the confirmation");
+    expect(problemsOf({ head, confirmations: 2, threads: ["T1", "T2", "T3"], digest })).toContain("thread T3 is named in the confirmation but is resolved or absent");
+    expect(problemsOf({ head, confirmations: 2, threads: ["T1", "T2"] })).toContain("confirmation digest does not match the unresolved threads on abc1234; re-enumerate and confirm again");
+    // why: the id survives an edit, so the digest is what makes a rewritten
+    // opening comment invalidate the confirmation the user actually gave.
+    const edited = [thread("T1", false, "now a behaviour bug"), thread("T2"), thread("T3", true)];
+    expect(decideThreadGate({ head, threads: edited, confirmation: { head, confirmations: 2, threads: ["T1", "T2"], digest } }).ok).toBe(false);
   });
 });
