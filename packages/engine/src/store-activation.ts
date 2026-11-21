@@ -931,7 +931,7 @@ type CollaborationImageInspection = Readonly<{
     operationId: string;
     executionStoreId: string | null;
     executionEpoch: number | null;
-    acknowledged: boolean;
+    state: EffectState;
   }>[];
 }>;
 
@@ -939,23 +939,34 @@ type CollaborationImageInspection = Readonly<{
 const COLLABORATION_CLAIM_KEY = "collaboration-cutover-claim";
 
 /**
- * Whether one operation row's composite effect was acknowledged by its execution
- * root. A standalone row has no execution half, so it is always "acknowledged";
- * a composite row is acknowledged only once its `result_json.acknowledgedAt`
- * carries the instant (a confirmed effect whose acknowledgement write failed is
- * the supported unacknowledged state).
+ * What one lane operation row says about the repository's causal boundary:
+ *
+ * - `acknowledged`: a standalone marker (no execution half) or a composite whose
+ *   `result_json.acknowledgedAt` instant landed.
+ * - `declined`: a composite whose deterministic refusal is recorded instead of an
+ *   effect (`{ declined: ... }`). The execution side deliberately keeps that as
+ *   terminal state, so a decline is settled history, never an outstanding effect
+ *   — treating it as one would block every future repository backup.
+ * - `unacknowledged`: a committed effect whose acknowledgement never landed (the
+ *   supported two-transaction window).
+ * - `unreadable`: no parseable receipt/decline, so the row proves nothing.
  */
-function acknowledgementOf(row: Record<string, unknown>): boolean {
-  if (row.key_space !== "composite") return true;
+type EffectState = "acknowledged" | "declined" | "unacknowledged" | "unreadable";
+
+function effectStateOf(row: Record<string, unknown>): EffectState {
+  if (row.key_space !== "composite") return "acknowledged";
   const raw = row.result_json;
-  if (typeof raw !== "string") return false;
+  if (typeof raw !== "string") return "unreadable";
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return false;
+    return "unreadable";
   }
-  return parsed !== null && typeof parsed === "object" && "acknowledgedAt" in parsed && typeof parsed.acknowledgedAt === "string";
+  if (parsed === null || typeof parsed !== "object") return "unreadable";
+  if ("declined" in parsed && parsed.declined !== null && typeof parsed.declined === "object") return "declined";
+  if (!("receipt" in parsed) || parsed.receipt === null || typeof parsed.receipt !== "object") return "unreadable";
+  return "acknowledgedAt" in parsed && typeof parsed.acknowledgedAt === "string" ? "acknowledged" : "unacknowledged";
 }
 
 /** One lane operation row as the quiescence and causal-boundary checks read it. */
@@ -964,7 +975,7 @@ type LaneOperation = {
   operationId: string;
   executionStoreId: string | null;
   executionEpoch: number | null;
-  acknowledged: boolean;
+  state: EffectState;
 };
 
 /**
@@ -984,20 +995,21 @@ function assertNoPendingClaim(operations: readonly LaneOperation[], where: strin
 
 /**
  * The REQUIRED quiescent causal boundary of a repository PAIR: beyond the claim
- * slot, the lane may hold no composite effect whose execution half never
- * acknowledged it. An unacknowledged effect is a supported state — the execution
- * commit and its acknowledgement are two transactions — but freezing it into a
- * pair would publish a generation whose two halves disagree, so the pair is
- * refused until the owning verb's replay repairs it.
+ * slot, the lane may hold no committed effect whose execution half never
+ * acknowledged it, and no composite row whose receipt cannot be interpreted. A
+ * recorded DECLINE is settled history (a deterministic refusal the execution side
+ * keeps as terminal state), so it never blocks a pair — treating it as an
+ * outstanding effect would make one ordinary business refusal stop every future
+ * backup.
  */
 function assertLaneQuiescent(operations: readonly LaneOperation[], where: string): void {
   assertNoPendingClaim(operations, where);
-  const unacknowledged = operations.filter((row) => row.keySpace === "composite" && !row.acknowledged);
-  if (unacknowledged.length > 0) {
+  const outstanding = operations.filter((row) => row.state === "unacknowledged" || row.state === "unreadable");
+  if (outstanding.length > 0) {
     throw incompletePair(
-      `The collaboration authority ${where} holds ${unacknowledged.length} confirmed composite effect(s) whose execution ` +
-        `half never acknowledged them (${unacknowledged.map((row) => row.operationId).join(", ")}). Replay each owning verb so ` +
-        `its acknowledgement lands, then take the pair against a quiescent authority.`,
+      `The collaboration authority ${where} holds ${outstanding.length} composite effect(s) that are not settled ` +
+        `(${outstanding.map((row) => `${row.operationId}: ${row.state}`).join(", ")}). Replay each owning verb so its ` +
+        `acknowledgement lands (or its refusal is recorded), then take the pair against a quiescent authority.`,
     );
   }
 }
@@ -1185,6 +1197,51 @@ function assertNoOutstandingComposite(handle: { db: StoreDb }): void {
 }
 
 /**
+ * The pair's execution-side quiescence boundary, proved against the FROZEN
+ * bytes: the verified execution image must carry the reservation ledger (it is a
+ * current-schema image) and hold no prepared composite. A reservation that
+ * started before the snapshot is therefore visible here, deterministically — the
+ * copy is refused, never published with half of an in-flight composite.
+ */
+function assertNoPreparedCompositeOnImage(path: string): void {
+  assertStoreRuntimeSupported();
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
+    DatabaseSync: new (p: string, options?: { readOnly?: boolean }) => StoreDb;
+  };
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    db.exec("pragma query_only=ON");
+    if (!tableNamesOn(db).has("execution_collaboration_intents")) {
+      throw incompletePair(
+        `The execution image ${path} records this build's schema but carries no composite reservation ledger, so a pending ` +
+          `reservation cannot be ruled out; the pair is not taken from an unreadable authority.`,
+      );
+    }
+    const prepared = db
+      .prepare("select operation_id from execution_collaboration_intents where phase = 'prepared' order by operation_id")
+      .all() as Array<{ operation_id?: unknown }>;
+    if (prepared.length > 0) {
+      throw incompletePair(
+        `The execution image ${path} holds ${prepared.length} prepared composite operation(s) ` +
+          `(${prepared.map((row) => String(row.operation_id)).join(", ")}); a pair is only taken of a settled root.`,
+      );
+    }
+  } finally {
+    db.close();
+  }
+}
+
+/** The live selected root still holds no prepared composite: the second half of the publication boundary. */
+async function assertNoPreparedCompositeLive(context: StoreContext): Promise<void> {
+  const handle = await openStore(context, "read");
+  try {
+    assertNoOutstandingComposite(handle);
+  } finally {
+    handle.close();
+  }
+}
+
+/**
  * `backupRepositoryStores` — the verified PAIR.
  *
  * Preconditions, all proved before anything is published: the selected execution
@@ -1306,6 +1363,14 @@ export async function backupRepositoryStores(
     }
     // The verified images must also clear the same boundary the live lane did.
     assertLaneQuiescent(collaborationInspection.operations, `at ${privateCollaborationImage}`);
+
+    // THE publication boundary: the frozen execution bytes hold no prepared
+    // composite, and the live root still holds none. A reservation that started
+    // before the snapshot is in the image; one that started after it is in the
+    // live read. Either way this attempt refuses instead of publishing a pair
+    // with half of an in-flight composite, and the retry succeeds once settled.
+    assertNoPreparedCompositeOnImage(privateExecutionImage);
+    await assertNoPreparedCompositeLive(context);
 
     // Publish both images create-only: a link either creates this attempt's name
     // or fails, so a competitor's image is never overwritten or adopted.
@@ -1634,10 +1699,16 @@ function assertCausalBoundary(
   assertNoPendingClaim(collaboration.operations, `at ${receipt.collaboration.path}`);
   for (const row of collaboration.operations) {
     if (row.keySpace !== "composite") continue;
-    // Another root's history: acknowledged or not, it belongs to a checkout this
-    // restore neither replaces nor can complete.
+    if (row.state === "unreadable") {
+      throw incompletePair(
+        `The collaboration image records composite row ${row.operationId} whose result is neither a receipt nor a recorded ` +
+          `refusal; an uninterpretable effect is never restored as history.`,
+      );
+    }
+    // Another root's history: acknowledged effect or recorded decline, it belongs
+    // to a checkout this restore neither replaces nor can complete.
     if (row.executionStoreId !== execution.storeId) continue;
-    if (!row.acknowledged) {
+    if (row.state === "unacknowledged") {
       throw incompletePair(
         `The collaboration image records composite effect ${row.operationId} for the paired execution store ` +
           `${execution.storeId} without its acknowledgement; that root's owning verb must replay it before this pair can be ` +

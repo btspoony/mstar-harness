@@ -75,10 +75,12 @@ import {
 } from "./store-activation.js";
 import { provisionRecoveryDocument } from "./activation-provisioning.js";
 import {
+  MIGRATIONS,
   openStore,
   readStoreAuthority,
   StoreError,
   storeDbPath,
+  tableNamesOn,
   type ExecutionMeta,
   type StoreContext,
   type StoreDb,
@@ -3363,15 +3365,25 @@ function receiptFacts(receipt: ExecutionRead<unknown>): Record<string, unknown> 
 }
 
 /**
- * The composite reservation ledger this build reserves into, present or not.
- * Migrations run in version order, so a store below the ledger's own migration
- * has nothing to consult; presence — never a recorded version — decides.
+ * The composite reservation ledger this receipt writer must consult, classified
+ * by the store's OWN recorded migration history:
+ *
+ * - `present`: the ledger exists and the reservation probe runs.
+ * - `pre-intent`: the store's recorded schema predates the ledger's migration, so
+ *   no reservation capability exists yet. This is the supported window in which
+ *   the version-9 normalizer writes receipts — a ledger that does not exist
+ *   reserves nothing.
+ * - `drift`: the store RECORDS the ledger's migration but the table is missing.
+ *   Skipping the probe there would let a receipt commit an operation a pending
+ *   composite already reserved, so the writer refuses instead of failing open.
  */
-function reservationLedgerPresent(db: StoreDb): boolean {
-  const row = db
-    .prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'execution_collaboration_intents'")
-    .get();
-  return row !== null && typeof row === "object" && "n" in row && row.n === 1;
+function reservationLedgerState(db: StoreDb): "present" | "pre-intent" | "drift" {
+  if (tableNamesOn(db).has("execution_collaboration_intents")) return "present";
+  const ledgerVersion = MIGRATIONS.find((migration) => migration.name === "execution-collaboration-intents")?.version;
+  if (ledgerVersion === undefined) return "pre-intent";
+  const row = db.prepare("select max(version) as n from schema_version").get();
+  const recorded = row !== null && typeof row === "object" && "n" in row && typeof row.n === "number" ? row.n : 0;
+  return recorded >= ledgerVersion ? "drift" : "pre-intent";
 }
 
 /**
@@ -3412,9 +3424,19 @@ export function writeOperationReceipt(
   //
   // The reservation ledger arrives with its own migration, and a schema-8 store's
   // version-9 normalizer writes receipts BEFORE that migration runs: a ledger
-  // that does not exist yet reserves nothing, so the probe is gated on its
-  // presence instead of failing the supported upgrade.
-  if (input.allowReservedIntent !== true && reservationLedgerPresent(tx.db)) {
+  // that does not exist yet reserves nothing. A store that RECORDS the ledger's
+  // migration without carrying it is drift, and the writer refuses rather than
+  // committing an id a lost reservation may already own.
+  const ledger = reservationLedgerState(tx.db);
+  if (ledger === "drift") {
+    throw new StoreError(
+      "store.schema-drift",
+      "This store records the composite reservation migration but its ledger execution_collaboration_intents is missing, so a " +
+        "pending reservation cannot be checked; refusing the operation rather than committing an id a reservation may own. " +
+        "Nothing was written.",
+    );
+  }
+  if (input.allowReservedIntent !== true && ledger === "present") {
     const pending = tx.db
       .prepare(
         "select kind from execution_collaboration_intents where execution_store_id = ? and execution_epoch = ? " +

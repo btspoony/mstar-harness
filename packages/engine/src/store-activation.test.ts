@@ -1841,6 +1841,111 @@ describe("repository backup pair", () => {
     expect(existsSync(out)).toBe(false);
     // The refusal names the outstanding effect, so the operator knows what to replay.
     await expect(backupRepositoryStores(fixture.context, { out })).rejects.toThrow(/op-unacknowledged/);
+
+    // …and it is a RECOVERABLE refusal: once the owning verb's replay records the
+    // acknowledgement, the very next attempt publishes the pair.
+    await writeCollaborationStage(location, ({ db }) => {
+      db.prepare(
+        "update collaboration_operations set result_json = ? where key_space = 'composite' and operation_id = 'op-unacknowledged'",
+      ).run(JSON.stringify({ receipt: { operationId: "op-unacknowledged" }, acknowledgedAt: "2026-11-21T00:00:02.000Z" }));
+    });
+    const recovered = await backupRepositoryStores(fixture.context, { out });
+    expect(recovered.manifestPath).toBe(out);
+    expect(existsSync(recovered.execution.backupPath)).toBe(true);
+  });
+
+  test("a recorded decline never blocks a pair, and the pair restores it as settled history", async () => {
+    const fixture = await pairedWorkspace("pair-declined-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const location = resolveCollaborationLocation(fixture.context);
+    // A deterministic business refusal is durable in the same key space, with no
+    // acknowledgedAt and no receipt: the execution side keeps it as terminal
+    // state. It is settled history, not an outstanding effect.
+    const declined = {
+      declined: { code: "issue.scope-refused", message: "Actor does not hold the project-manager seat", details: null, at: "2026-11-21T00:00:00.000Z" },
+    };
+    await writeCollaborationStage(location, ({ db }) => {
+      db.prepare(
+        "insert into collaboration_operations(key_space, operation_id, execution_store_id, execution_epoch, request_hash, " +
+          "result_json, collaboration_revision, catalog_revision, committed_at) " +
+          "values ('composite', 'op-declined', 'store-other', 1, 'hash', ?, 0, 0, ?)",
+      ).run(JSON.stringify(declined), "2026-11-21T00:00:00.000Z");
+    });
+
+    const receipt = await backupRepositoryStores(fixture.context, { out });
+    expect(receipt.collaboration.authority.state).toBe("active");
+    expect(existsSync(out)).toBe(true);
+
+    // Restore accepts the decline as history of another root.
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) rmSync(`${location.dbPath}${suffix}`, { force: true });
+    const restored = await restoreCollaborationBackup(fixture.context, receipt, {
+      operator: "ops-engineer",
+      attestation: attestation(),
+    });
+    expect(restored.state).toBe("active");
+    const handle = await openCollaborationStore(fixture.context, "read");
+    try {
+      expect(handle.db.prepare("select result_json from collaboration_operations where operation_id = 'op-declined'").get()).toEqual({
+        result_json: JSON.stringify(declined),
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
+  test("a reservation that starts during the copy refuses the pair and the retry succeeds", async () => {
+    const fixture = await pairedWorkspace("pair-reservation-race-");
+    const out = join(fixture.harness, "archived", "recovery", "pair.json");
+    const realOpen = collaborationStore.openCollaborationStore;
+    let calls = 0;
+    const spy = spyOn(collaborationStore, "openCollaborationStore").mockImplementation(async (context, mode, expected) => {
+      calls += 1;
+      // The second live read happens after the execution snapshot, so a
+      // reservation committed here is NOT in the copied bytes: the publication
+      // boundary's live re-read must catch it.
+      if (calls === 2) {
+        const writer = await openStore(context, "write");
+        try {
+          writer.db
+            .prepare(
+              "insert into execution_collaboration_intents(execution_store_id, execution_epoch, operation_id, kind, request_hash, " +
+                "actor, expected_token, reserved_revision, target_json, frozen_payload, phase, created_at, updated_at) " +
+                "values (?, 1, 'op-raced-reservation', 'residual-add', 'hash', 'project-manager', 'token', 1, '{}', '{}', 'prepared', ?, ?)",
+            )
+            .run(
+              (writer.db.prepare("select store_id from store_meta where id = 1").get() as { store_id: string }).store_id,
+              "2026-11-21T00:00:00.000Z",
+              "2026-11-21T00:00:00.000Z",
+            );
+        } finally {
+          writer.close();
+        }
+      }
+      return realOpen(context, mode, expected);
+    });
+    try {
+      await expect(backupRepositoryStores(fixture.context, { out })).rejects.toMatchObject({
+        code: "collaboration.backup-incomplete",
+      });
+      // The LIVE re-check refused it (the reservation is absent from the frozen
+      // bytes), naming the pending operation.
+      await expect(backupRepositoryStores(fixture.context, { out })).rejects.toThrow(/still pending/);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(existsSync(out)).toBe(false);
+    expect(existsSync(`${out}.execution.db`)).toBe(false);
+
+    // Once the reservation settles, the SAME attempt path publishes the pair.
+    const handle = await openStore(fixture.context, "write");
+    try {
+      handle.db.prepare("delete from execution_collaboration_intents where operation_id = 'op-raced-reservation'").run();
+    } finally {
+      handle.close();
+    }
+    const retried = await backupRepositoryStores(fixture.context, { out });
+    expect(retried.manifestPath).toBe(out);
   });
 
   test("a lane mutation during the copy refuses the pair and keeps the previous generation", async () => {

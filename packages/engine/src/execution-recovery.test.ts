@@ -1725,6 +1725,30 @@ describe("execution-export", () => {
 // ---------------------------------------------------------------------------
 
 describe("schema-owned loss inventory", () => {
+  test("a current store missing its reservation ledger refuses receipt writes instead of failing open", async () => {
+    const world = await recoveryWorld("intents-drift");
+    // The store RECORDS the ledger's migration; deleting the table is drift, not
+    // a legacy pre-intent store. A receipt writer must refuse rather than commit
+    // an id a lost reservation may already own.
+    const handle = await openStore(world.context, "write");
+    try {
+      handle.db.exec("drop table execution_collaboration_intents");
+    } finally {
+      handle.close();
+    }
+    const refusal = await refusalOf(() =>
+      mutateExecutionWorkflow(contextOf(world.context, world.caller), {
+        operationId: "op-after-ledger-drift",
+        session: world.sessionRef,
+        expected: world.workflowToken,
+        workflowId: WF,
+        operation: { kind: "lifecycle", status: "running", reason: "after ledger drift" },
+      }),
+    );
+    expect(refusal.code).toBe("store.schema-drift");
+    expect(refusal.message).toContain("execution_collaboration_intents");
+  });
+
   test("preview inventories every execution and host row, including the native host state", async () => {
     const world = await recoveryWorld("inventory-host");
     const point = await recoveryPoint(world, "host-inventory-point");
